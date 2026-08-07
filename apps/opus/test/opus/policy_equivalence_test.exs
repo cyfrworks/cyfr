@@ -12,13 +12,21 @@ defmodule Opus.PolicyEquivalenceTest do
   is the redesign working (a grant that was implicit becomes explicit),
   and an oracle that cannot tell those apart from regressions is worth
   nothing. Anything not on the list is a regression.
+
+  Coverage spans every resolver source the legacy cascade knows — exact
+  rows, name-level rows, type defaults, manifest setup.policy — and both
+  consent-minting paths (bootstrap and the plan/preview/commit walk),
+  because the drop deletes the whole cascade, not one branch of it.
   """
 
   use ExUnit.Case, async: false
 
   alias Opus.AuthorityShim
   alias Sanctum.Consent.Bootstrap
+  alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
+  alias Sanctum.Consent.Plan
+  alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.Source
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
@@ -34,7 +42,12 @@ defmodule Opus.PolicyEquivalenceTest do
     # explicitly (freeze amendment 19).
     allowed_schemes: :nil_unchecked_vs_explicit,
     # Public-ness moved from a policy field to profiles.kind (§3.1).
-    is_public: :moved_to_profile_kind
+    is_public: :moved_to_profile_kind,
+    # A stored row with no rate_limit resolved to nil = unchecked in the
+    # legacy path; blob node limits are total by frozen decision 4 (a nil
+    # rate limit is unrepresentable — it could not be ceiling-clamped), so
+    # the authority side carries the ceiling default instead of unlimited.
+    rate_limit: :nil_unlimited_vs_ceiling
   }
 
   @all_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_schemes
@@ -58,6 +71,12 @@ defmodule Opus.PolicyEquivalenceTest do
     on_exit(fn ->
       File.rm_rf!(test_path)
 
+      # Policy rows are cached in ETS, which outlives the SQL sandbox.
+      # Type-default keys are global (not test-unique like component
+      # names), so a leaked entry poisons whichever test resolves that
+      # type next.
+      Arca.Cache.delete_match({:policy, :_, :_, :_})
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -67,31 +86,103 @@ defmodule Opus.PolicyEquivalenceTest do
         else: Application.delete_env(:cyfr, :consent_source)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(), test_path: test_path}
   end
 
-  defp publish!(ctx, name, manifest \\ nil) do
-    attrs = %{name: name, version: "1.0.0", type: "reagent"}
+  defp publish!(ctx, name, manifest \\ nil, attrs_over \\ %{}) do
+    attrs = Map.merge(%{name: name, version: "1.0.0", type: "reagent"}, attrs_over)
     attrs = if manifest, do: Map.put(attrs, :manifest, Jason.encode!(manifest)), else: attrs
 
     {:ok, component} = Compendium.Registry.publish_bytes(ctx, @wasm, attrs)
     component
   end
 
-  defp authority_policy!(ctx, name) do
-    source_ref = "reagent:local.#{name}"
-    {:ok, [profile]} = Source.DB.profiles(ctx, source_ref)
-    {:ok, component} = Compendium.Registry.get_latest(ctx, name, "local", "reagent")
-    {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+  # A tincture enters through the directory-register ingress, the way real
+  # ones do — publish_bytes is a wasm path and tinctures are asset trees.
+  defp register_tincture!(ctx, name, base) do
+    dir =
+      Path.join([
+        base,
+        "src",
+        "components",
+        ctx.org_id,
+        ctx.project_id,
+        "tinctures",
+        "local",
+        name,
+        "1.0.0"
+      ])
 
-    {:ok, authority, _stamp} =
-      Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+    File.mkdir_p!(dir)
 
-    AuthorityShim.policy_from_edge(authority)
+    manifest = %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "description" => "equivalence fixture",
+      "tincture" => %{"entry" => "index.html"},
+      "schema" => %{"tables" => %{}, "queries" => %{}}
+    }
+
+    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+    File.write!(Path.join(dir, "index.html"), "<html></html>")
+
+    {:ok, _} = Compendium.Registry.register_from_directory(ctx, dir)
   end
 
-  defp legacy_policy!(ctx, name) do
-    {:ok, policy, _meta} = Sanctum.Policy.get_effective(ctx, "reagent:local.#{name}")
+  # The consent walk, exactly as the operator surfaces drive it.
+  defp walk!(ctx, ref, decisions_over \\ %{}) do
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    decisions = Map.merge(%{ref: ref}, decisions_over)
+    {:ok, preview} = Commit.preview(ctx, decisions)
+
+    {:ok, _committed} =
+      Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    :ok
+  end
+
+  defp authority_load(ctx, name, type \\ "reagent") do
+    source_ref = "#{type}:local.#{name}"
+    {:ok, [profile]} = Source.DB.profiles(ctx, source_ref)
+    {:ok, component} = Compendium.Registry.get_latest(ctx, name, "local", type)
+    {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+
+    # Mirror Opus.Chain.load_authority: the live shape digest is what lets
+    # a versionless consent survive an unchanged release and refuse a
+    # changed one — loading without it would refuse both.
+    live_shape =
+      case ShapeDerivation.live_digest(ctx, source_ref) do
+        {:ok, digest} -> digest
+        {:error, _} -> nil
+      end
+
+    Loader.load_root(ctx, profile,
+      source: Source.DB,
+      live: {:ok, live},
+      live_shape_digest: live_shape
+    )
+  end
+
+  defp authority_policy!(ctx, name, type \\ "reagent") do
+    case authority_load(ctx, name, type) do
+      {:ok, authority, _stamp} ->
+        AuthorityShim.policy_from_edge(authority)
+
+      other ->
+        flunk("authority load failed for #{type}:local.#{name}: #{inspect(other)}")
+    end
+  end
+
+  defp legacy_policy!(ctx, name, type \\ "reagent") do
+    {:ok, policy, _meta} = Sanctum.Policy.get_effective(ctx, "#{type}:local.#{name}")
     policy
   end
 
@@ -112,25 +203,32 @@ defmodule Opus.PolicyEquivalenceTest do
 
   defp equivalent?(_field, old, new), do: old == new
 
+  defp assert_only_intended(legacy, authority) do
+    divergences = compare(legacy, authority)
+    unexpected = Map.drop(divergences, Map.keys(@intended_dewidenings))
+
+    assert unexpected == %{}, """
+    The authority path diverged from the legacy resolver on fields that
+    are NOT known intended de-widenings:
+
+    #{inspect(unexpected, pretty: true)}
+
+    Either this is a regression, or the divergence is intended — in
+    which case name it in @intended_dewidenings with the reason.
+    """
+
+    divergences
+  end
+
   describe "bootstrap-minted consents grant what the legacy resolver granted" do
     test "a plain component diverges only where intended", %{ctx: ctx} do
       publish!(ctx, "equiv-plain")
       {:ok, _} = Bootstrap.run(ctx)
 
-      divergences =
-        compare(legacy_policy!(ctx, "equiv-plain"), authority_policy!(ctx, "equiv-plain"))
-
-      unexpected = Map.drop(divergences, Map.keys(@intended_dewidenings))
-
-      assert unexpected == %{}, """
-      The authority path diverged from the legacy resolver on fields that
-      are NOT known intended de-widenings:
-
-      #{inspect(unexpected, pretty: true)}
-
-      Either this is a regression, or the divergence is intended — in
-      which case name it in @intended_dewidenings with the reason.
-      """
+      assert_only_intended(
+        legacy_policy!(ctx, "equiv-plain"),
+        authority_policy!(ctx, "equiv-plain")
+      )
     end
 
     test "a component with real capabilities carries them across", %{ctx: ctx} do
@@ -158,10 +256,7 @@ defmodule Opus.PolicyEquivalenceTest do
       assert Enum.sort(authority.allowed_actions) == Enum.sort(legacy.allowed_actions)
       assert authority.timeout == legacy.timeout
 
-      unexpected =
-        legacy |> compare(authority) |> Map.drop(Map.keys(@intended_dewidenings))
-
-      assert unexpected == %{}, inspect(unexpected, pretty: true)
+      assert_only_intended(legacy, authority)
     end
 
     test "every numeric limit survives the round trip", %{ctx: ctx} do
@@ -180,6 +275,191 @@ defmodule Opus.PolicyEquivalenceTest do
     end
   end
 
+  describe "type defaults and name-level rows travel like exact rows" do
+    test "a catalyst under an operator type default", %{ctx: ctx} do
+      :ok =
+        Sanctum.PolicyStore.put_type_default(ctx, :catalyst, %{
+          component_type: "catalyst",
+          allowed_domains: ["typedefault.example"],
+          allowed_methods: ["GET"],
+          timeout: "20s"
+        })
+
+      publish!(ctx, "equiv-cat-default", nil, %{type: "catalyst"})
+      {:ok, _} = Bootstrap.run(ctx)
+
+      legacy = legacy_policy!(ctx, "equiv-cat-default", "catalyst")
+      authority = authority_policy!(ctx, "equiv-cat-default", "catalyst")
+
+      # Non-vacuous: the type default actually resolved on both sides.
+      assert legacy.allowed_domains == ["typedefault.example"]
+      assert authority.allowed_domains == ["typedefault.example"]
+      assert authority.timeout == legacy.timeout
+
+      assert_only_intended(legacy, authority)
+    end
+
+    test "a formula under an operator type default", %{ctx: ctx} do
+      :ok =
+        Sanctum.PolicyStore.put_type_default(ctx, :formula, %{
+          component_type: "formula",
+          allowed_tools: ["execution.run"],
+          timeout: "40s"
+        })
+
+      publish!(ctx, "equiv-form-default", nil, %{type: "formula"})
+      {:ok, _} = Bootstrap.run(ctx)
+
+      legacy = legacy_policy!(ctx, "equiv-form-default", "formula")
+      authority = authority_policy!(ctx, "equiv-form-default", "formula")
+
+      # An exact action expands to itself, so even the whitelisted tools
+      # field must agree here — asserted outside the whitelist on purpose.
+      assert authority.allowed_tools == ["execution.run"]
+      assert legacy.allowed_tools == ["execution.run"]
+      assert authority.timeout == legacy.timeout
+
+      assert_only_intended(legacy, authority)
+    end
+
+    test "a name-level policy row", %{ctx: ctx} do
+      # A capability field is name-level-configurable only when the
+      # manifest's setup.policy declares it; the operator row then sets
+      # the value. This is the realistic shape for a catalyst.
+      publish!(
+        ctx,
+        "equiv-name",
+        %{
+          "setup" => %{
+            "policy" => %{
+              "allowed_domains" => ["manifest-default.example"],
+              "allowed_methods" => ["GET"]
+            }
+          }
+        },
+        %{type: "catalyst"}
+      )
+
+      :ok =
+        Sanctum.PolicyStore.put(ctx, "catalyst:local.equiv-name", %{
+          component_type: "catalyst",
+          allowed_domains: ["namelevel.example"],
+          allowed_methods: ["POST"],
+          timeout: "35s"
+        })
+
+      {:ok, _} = Bootstrap.run(ctx)
+
+      legacy = legacy_policy!(ctx, "equiv-name", "catalyst")
+      authority = authority_policy!(ctx, "equiv-name", "catalyst")
+
+      assert legacy.allowed_domains == ["namelevel.example"]
+      assert authority.allowed_domains == ["namelevel.example"]
+      assert authority.timeout == legacy.timeout
+
+      assert_only_intended(legacy, authority)
+    end
+  end
+
+  describe "walk-minted consents grant what the legacy resolver granted" do
+    test "a plan/preview/commit revision matches the resolver", %{ctx: ctx} do
+      publish!(ctx, "equiv-walk", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => ["walk.example"],
+            "allowed_paths" => ["data/"],
+            "allowed_actions" => ["read"],
+            "timeout" => "50s"
+          }
+        }
+      })
+
+      :ok = walk!(ctx, "reagent:local.equiv-walk")
+
+      legacy = legacy_policy!(ctx, "equiv-walk")
+      authority = authority_policy!(ctx, "equiv-walk")
+
+      assert Enum.sort(authority.allowed_domains) == Enum.sort(legacy.allowed_domains)
+      assert Enum.sort(authority.allowed_paths) == Enum.sort(legacy.allowed_paths)
+      assert authority.timeout == legacy.timeout
+
+      assert_only_intended(legacy, authority)
+    end
+
+    test "a tincture under a type default, minted through the walk", %{
+      ctx: ctx,
+      test_path: test_path
+    } do
+      :ok =
+        Sanctum.PolicyStore.put_type_default(ctx, :tincture, %{
+          component_type: "tincture",
+          rate_limit: %{requests: 42, window: "1m"},
+          timeout: "25s"
+        })
+
+      register_tincture!(ctx, "equiv-tin", test_path)
+      :ok = walk!(ctx, "tincture:local.equiv-tin")
+
+      legacy = legacy_policy!(ctx, "equiv-tin", "tincture")
+      authority = authority_policy!(ctx, "equiv-tin", "tincture")
+
+      assert legacy.rate_limit == %{requests: 42, window: "1m"}
+      assert authority.rate_limit == legacy.rate_limit
+      assert authority.timeout == legacy.timeout
+
+      assert_only_intended(legacy, authority)
+    end
+  end
+
+  describe "the manifest auto-merge path is a named de-widening, not a regression" do
+    test "a setup.policy tool pattern lands in the allowed_tools bucket", %{ctx: ctx} do
+      publish!(ctx, "equiv-merge", %{
+        "setup" => %{"policy" => %{"allowed_tools" => ["component.*"]}}
+      })
+
+      {:ok, _} = Bootstrap.run(ctx)
+
+      legacy = legacy_policy!(ctx, "equiv-merge")
+      authority = authority_policy!(ctx, "equiv-merge")
+
+      divergences = assert_only_intended(legacy, authority)
+
+      # The divergence is present and has the documented shape: the legacy
+      # side carries the raw pattern (re-merged at every read), the blob
+      # side carries the consent-time expansion — concrete actions only.
+      assert {legacy_tools, authority_tools} = divergences[:allowed_tools]
+      assert "component.*" in legacy_tools
+      refute "component.*" in authority_tools
+      assert Enum.any?(authority_tools, &String.starts_with?(&1, "component."))
+      assert Enum.all?(authority_tools, &(not String.contains?(&1, "*")))
+    end
+
+    test "an action added upstream after consent widens legacy but never the authority",
+         %{ctx: ctx} do
+      publish!(ctx, "equiv-widen", %{
+        "setup" => %{"policy" => %{"allowed_tools" => ["execution.run"]}}
+      })
+
+      {:ok, _} = Bootstrap.run(ctx)
+      assert %{} = authority_policy!(ctx, "equiv-widen")
+
+      # A new release asks for more. The legacy resolver hands it over at
+      # the next read; the frozen consent refuses to load until re-consent.
+      publish!(
+        ctx,
+        "equiv-widen",
+        %{"setup" => %{"policy" => %{"allowed_tools" => ["execution.run", "component.list"]}}},
+        %{version: "1.1.0"}
+      )
+
+      legacy = legacy_policy!(ctx, "equiv-widen")
+      assert "component.list" in legacy.allowed_tools
+
+      assert {:error, {:consent_required, %{current_revision: 1}}} =
+               authority_load(ctx, "equiv-widen")
+    end
+  end
+
   describe "the whitelist itself" do
     test "every named de-widening still has a reason" do
       for {field, reason} <- @intended_dewidenings do
@@ -188,10 +468,14 @@ defmodule Opus.PolicyEquivalenceTest do
       end
     end
 
-    test "it covers exactly the three known divergences" do
+    test "it covers exactly the four known divergences" do
       # Growing this list is a decision: it means the redesign narrowed
-      # something else, and the migration guide should say so.
-      assert map_size(@intended_dewidenings) == 3
+      # something else, and the migration guide should say so. The fourth
+      # entry (rate_limit) was that decision, made when widening this
+      # oracle beyond reagents surfaced it: stored rows without a rate
+      # limit were unlimited; blob limits are total, so they get the
+      # ceiling. The upgrade guide's "intentionally narrows" list names it.
+      assert map_size(@intended_dewidenings) == 4
     end
   end
 end
