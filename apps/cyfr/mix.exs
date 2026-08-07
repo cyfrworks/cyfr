@@ -98,7 +98,8 @@ defmodule Cyfr.App.MixProject do
       # Security
       {:sobelow, "~> 0.13", only: :dev, runtime: false},
       # Test-only
-      {:bypass, "~> 2.1", only: :test}
+      {:bypass, "~> 2.1", only: :test},
+      {:stream_data, "~> 1.1", only: [:test, :dev]}
     ]
   end
 
