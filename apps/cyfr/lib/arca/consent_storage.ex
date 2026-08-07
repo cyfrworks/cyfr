@@ -112,4 +112,38 @@ defmodule Arca.ConsentStorage do
       Logger.error("[Arca.ConsentStorage] profiles_referencing failed: #{Exception.message(e)}")
       {:error, :database_error}
   end
+
+  @doc """
+  Profiles whose **head** revision references a vault entry.
+
+  `profiles_referencing/2` counts every historical revision — right for
+  "who ever touched this", wrong for "who is affected right now": a
+  profile that dropped the entry two revisions ago would be over-reported.
+  """
+  @spec head_profiles_referencing(String.t(), String.t()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def head_profiles_referencing(org_id, vault_entry_id) do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+
+    ids =
+      Arca.Repo.all(
+        from r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.org_id == r.org_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.org_id == c.org_id,
+          where: r.vault_entry_id == ^vault_entry_id and r.org_id == ^org_id,
+          distinct: true,
+          select: p.id
+      )
+
+    {:ok, ids}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[Arca.ConsentStorage] head_profiles_referencing failed: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
+  end
 end

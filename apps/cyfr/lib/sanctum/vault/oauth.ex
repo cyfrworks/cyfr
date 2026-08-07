@@ -135,8 +135,10 @@ defmodule Sanctum.Vault.OAuth do
 
         {:error, reason} ->
           emit_telemetry(entry, provider, :error)
-          {:error, "authorization_required: refresh failed for vault entry " <>
-            "#{entry.id}: #{reason}"}
+
+          {:error,
+           "authorization_required: refresh failed for vault entry " <>
+             "#{entry.id}: #{reason}"}
       end
     end
   end

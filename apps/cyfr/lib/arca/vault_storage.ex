@@ -71,6 +71,121 @@ defmodule Arca.VaultStorage do
       {:error, :database_error}
   end
 
+  @doc "Living entries in a tenant. `include_tombstoned: true` widens to all."
+  @spec list(String.t(), String.t(), keyword()) :: {:ok, [VaultEntry.t()]} | {:error, term()}
+  def list(org_id, project_id, opts \\ []) do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
+
+    query =
+      from v in VaultEntry,
+        where: v.org_id == ^org_id and v.project_id == ^project_id,
+        order_by: v.name
+
+    query =
+      if Keyword.get(opts, :include_tombstoned, false),
+        do: query,
+        else: where(query, [v], v.status != "tombstoned")
+
+    {:ok, Arca.Repo.all(query)}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.VaultStorage] list failed: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc "Update the mutable label. Everything else has its own verb."
+  @spec update_meta(String.t(), String.t(), %{name: String.t()}) :: :ok | {:error, term()}
+  def update_meta(org_id, id, %{name: name}) when is_binary(name) and name != "" do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+
+    case Arca.Repo.update_all(
+           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           set: [name: name, updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)]
+         ) do
+      {1, _} -> :ok
+      {0, _} -> {:error, :not_found}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.VaultStorage] update_meta failed: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @spec set_status(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def set_status(org_id, id, status) when is_binary(status) do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+
+    case Arca.Repo.update_all(
+           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           set: [
+             status: status,
+             updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+           ]
+         ) do
+      {1, _} -> :ok
+      {0, _} -> {:error, :not_found}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.VaultStorage] set_status failed: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
+  Tombstone an entry: status flip and material erasure in one update.
+  The partial unique index ignores tombstoned rows, so the name is
+  immediately reusable.
+  """
+  @spec tombstone(String.t(), String.t()) :: :ok | {:error, term()}
+  def tombstone(org_id, id) do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+
+    case Arca.Repo.update_all(
+           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           set: [
+             status: "tombstoned",
+             sealed_payload: nil,
+             updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+           ]
+         ) do
+      {1, _} -> :ok
+      {0, _} -> {:error, :not_found}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.VaultStorage] tombstone failed: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
+  Update the binding fields (`field_names`, `oauth_endpoints`,
+  `oauth_scopes`) plus the cached `binding_digest`. `provider_hint` is
+  absent by design — it sits in the AEAD AAD and is immutable per row.
+  """
+  @spec update_binding(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def update_binding(org_id, id, changes) when is_map(changes) do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+
+    set =
+      changes
+      |> Map.take([:field_names, :oauth_endpoints, :oauth_scopes, :binding_digest, :status])
+      |> Map.to_list()
+      |> Keyword.put(:updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond))
+
+    case Arca.Repo.update_all(
+           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           set: set
+         ) do
+      {1, _} -> :ok
+      {0, _} -> {:error, :not_found}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.VaultStorage] update_binding failed: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
   @doc """
   Replace the sealed payload iff `payload_rev` still equals `expected_rev`
   (compare-and-swap). The winning writer bumps the revision; a loser gets

@@ -95,6 +95,24 @@ defmodule Sanctum.Consent.Authz do
 
   def authorize(_ctx, _request, _now), do: {:error, :invalid_request}
 
+  @doc """
+  The interactive arm alone, for mutations that have no commit digest to
+  bind — vault CRUD, profile revocation. Same plane and authentication
+  gates; only an `:oidc` surface passes, and no key capability can
+  substitute (a digest-pinned capability is meaningless without a
+  digest-shaped act).
+  """
+  @spec authorize_interactive(Context.t()) :: {:ok, :interactive} | {:error, refusal()}
+  def authorize_interactive(%Context{} = ctx) do
+    with :ok <- check_plane(ctx),
+         :ok <- check_authenticated(ctx) do
+      case ctx.auth_method do
+        :oidc -> {:ok, :interactive}
+        method -> {:error, {:surface_not_permitted, method}}
+      end
+    end
+  end
+
   # ============================================================================
   # Private
   # ============================================================================

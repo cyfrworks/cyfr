@@ -22,6 +22,7 @@ defmodule Sanctum.Vault.PayloadTest do
 
     test "refuses unknown versions, unknown keys and malformed shapes" do
       assert {:error, {:invalid_payload, _}} = Payload.decode(~s({"v":3,"fields":{}}))
+
       assert {:error, {:invalid_payload, {:unknown_keys, ["x"]}}} =
                Payload.decode(~s({"v":2,"fields":{},"x":1}))
 
