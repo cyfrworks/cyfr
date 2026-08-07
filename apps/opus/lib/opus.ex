@@ -57,6 +57,22 @@ defmodule Opus do
   defdelegate run(ctx, reference, input, opts \\ []), to: Opus.Executor
 
   @doc """
+  Root an execution chain under a profile's consent — the external-ingress
+  entry of the root/child split. See `Opus.Chain.run_root/5`.
+  """
+  @spec run_root(Context.t(), String.t() | nil, String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defdelegate run_root(ctx, profile_selector, reference, input, opts \\ []), to: Opus.Chain
+
+  @doc """
+  Advance a running chain's authority through one invocation and execute
+  the target — the in-chain entry. See `Opus.Chain.run_child/5`.
+  """
+  @spec run_child(Sanctum.Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defdelegate run_child(authority, reference, need, input, opts), to: Opus.Chain
+
+  @doc """
   List execution records for the current user.
 
   ## Options

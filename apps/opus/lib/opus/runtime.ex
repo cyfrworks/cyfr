@@ -97,7 +97,12 @@ defmodule Opus.Runtime do
       :telemetry.execute(
         [:opus, :runtime, :authority_entered],
         %{},
-        %{authority: authority, execution_id: execution_id, reference: reference}
+        %{
+          authority: authority,
+          execution_id: execution_id,
+          reference: reference,
+          plane: ctx && ctx.plane
+        }
       )
     end
 

@@ -179,19 +179,38 @@ defmodule Opus.Executor do
   # component predating release digests, an uninstalled dependency) records
   # nothing rather than recording a partial graph, and never fails a run.
   defp stamp_activation(record, ctx, component, opts) do
-    if is_nil(opts[:parent_execution_id]) do
-      case Compendium.Activation.resolve(ctx, component) do
-        {:ok, %{digest: digest, graph: graph}} ->
-          case Compendium.Activation.encode_graph(graph) do
-            {:ok, encoded} -> %{record | activation_digest: digest, activation_graph: encoded}
-            {:error, _} -> record
-          end
+    cond do
+      # An authority-rooted execution already resolved and verified its
+      # activation in the consent loader; re-resolving here could disagree
+      # with what was authorized.
+      stamp = opts[:activation_stamp] ->
+        case Compendium.Activation.encode_graph(stamp.activation_graph) do
+          {:ok, encoded} ->
+            %{record | activation_digest: stamp.activation_digest, activation_graph: encoded}
 
-        {:error, _reason} ->
-          record
-      end
-    else
-      record
+          {:error, _} ->
+            record
+        end
+
+      # A child under an authority carries its root's digest; its graph is a
+      # subgraph of the root's and is not repeated.
+      digest = opts[:activation_digest] ->
+        %{record | activation_digest: digest}
+
+      is_nil(opts[:parent_execution_id]) ->
+        case Compendium.Activation.resolve(ctx, component) do
+          {:ok, %{digest: digest, graph: graph}} ->
+            case Compendium.Activation.encode_graph(graph) do
+              {:ok, encoded} -> %{record | activation_digest: digest, activation_graph: encoded}
+              {:error, _} -> record
+            end
+
+          {:error, _reason} ->
+            record
+        end
+
+      true ->
+        record
     end
   rescue
     e ->
@@ -247,17 +266,30 @@ defmodule Opus.Executor do
     end
   end
 
-  # Stage 4: Resolve secrets for the component
+  # Stage 4: Resolve secrets for the component.
+  # Under an authority the callee-keyed grant plane is never consulted:
+  # credentials come only from the consent edge (the vault reader), and
+  # until that reader exists the closure receives nothing — an ungranted
+  # secret read denies exactly as an empty resolution does today.
   defp stage_resolve_secrets(%ExecutionPipeline{} = p) do
-    with {:ok, preloaded_secrets} <- resolve_secrets(p.ctx, p.component_ref) do
-      {:ok, %{p | preloaded_secrets: preloaded_secrets}}
+    if p.opts[:authority] do
+      {:ok, %{p | preloaded_secrets: %{}}}
+    else
+      with {:ok, preloaded_secrets} <- resolve_secrets(p.ctx, p.component_ref) do
+        {:ok, %{p | preloaded_secrets: preloaded_secrets}}
+      end
     end
   end
 
-  # Stage 5: Resolve OAuth config from manifest (lightweight — no DB/network)
+  # Stage 5: Resolve OAuth config from manifest (lightweight — no DB/network).
+  # Same rule as secrets: authority executions get no callee-keyed OAuth.
   defp stage_resolve_oauth(%ExecutionPipeline{} = p) do
-    manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
-    {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
+    if p.opts[:authority] do
+      {:ok, p}
+    else
+      manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
+      {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
+    end
   end
 
   # Stage 6: Execute WASM with all accumulated state
@@ -410,7 +442,9 @@ defmodule Opus.Executor do
   # Resolve a component reference string via Compendium.
   # Returns {:ok, component_ref, component_type, component_map}.
   # Results are cached for 5 minutes to avoid repeated lookups.
-  defp inspect_component(ctx, reference) do
+  # Public (undocumented) so Opus.Chain shares the same cache entries.
+  @doc false
+  def inspect_component(ctx, reference) do
     org_id = ctx.org_id
     project_id = ctx.project_id
     cache_key = {:component_meta, org_id, project_id, reference}
@@ -681,6 +715,18 @@ defmodule Opus.Executor do
               :authority,
               :authority_required
             ])
+
+          # The plane flips exactly at the WASM boundary: pipeline stages ran
+          # with the caller's external-plane context, but a context captured
+          # into guest closures must never authorize an external-plane call
+          # again. One-way; there is no inverse.
+          runtime_opts =
+            with auth when not is_nil(auth) <- runtime_opts[:authority],
+                 %Sanctum.Context{} = c <- runtime_opts[:ctx] do
+              Keyword.put(runtime_opts, :ctx, Sanctum.Context.enter_guest(c))
+            else
+              _ -> runtime_opts
+            end
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
