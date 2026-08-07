@@ -227,24 +227,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # Tool grants are stored expanded: a pattern is not a stable capability,
   # so an action added upstream later is correctly outside this consent.
   defp expand_tools(patterns) do
-    all = all_tool_actions()
-
-    patterns
-    |> Enum.flat_map(fn pattern ->
-      cond do
-        pattern == "*" -> all
-        String.ends_with?(pattern, ".*") -> prefix_matches(all, pattern)
-        pattern in all -> [pattern]
-        true -> []
-      end
-    end)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
-
-  defp prefix_matches(all, pattern) do
-    prefix = String.trim_trailing(pattern, "*")
-    Enum.filter(all, &String.starts_with?(&1, prefix))
+    Sanctum.ToolPattern.expand(patterns, all_tool_actions())
   end
 
   defp all_tool_actions do

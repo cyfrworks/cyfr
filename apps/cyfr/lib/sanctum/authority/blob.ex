@@ -380,13 +380,21 @@ defmodule Sanctum.Authority.Blob do
   defp validate_tool_server(raw) when is_map(raw) do
     with :ok <- keys_or_reason(raw, ["server_digest", "tool_patterns"]),
          {:ok, digest} <- required_string(raw, "server_digest"),
-         {:ok, patterns} <- required_string_list(raw, "tool_patterns") do
+         {:ok, patterns} <- required_string_list(raw, "tool_patterns"),
+         :ok <- validate_tool_patterns(patterns) do
       {:ok, %{server_digest: digest, tool_patterns: patterns}}
     end
   end
 
   defp validate_tool_server(raw),
     do: {:error, "tool server must be an object, got: #{inspect(raw)}"}
+
+  defp validate_tool_patterns(patterns) do
+    case Enum.reject(patterns, &Sanctum.ToolPattern.valid?/1) do
+      [] -> :ok
+      bad -> {:error, "invalid tool patterns: #{inspect(bad)}"}
+    end
+  end
 
   defp validate_projection(nil), do: {:ok, nil}
 

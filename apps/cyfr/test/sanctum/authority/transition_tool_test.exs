@@ -80,7 +80,7 @@ defmodule Sanctum.Authority.TransitionToolTest do
       digest = Fixtures.server_digest()
 
       assert {:allow_tool, {:tool_server, ^digest}} =
-               Transition.step(auth, :call, external(digest, "issues_list"))
+               Transition.step(auth, :call, external(digest, "issues.list"))
 
       assert {:allow_tool, {:tool_server, ^digest}} =
                Transition.step(auth, :call, external(digest, "repo_get"))
@@ -97,7 +97,7 @@ defmodule Sanctum.Authority.TransitionToolTest do
       auth = Fixtures.root!()
 
       assert {:deny, :tool_server_not_granted} =
-               Transition.step(auth, :call, external("sha256:other-server", "issues_list"))
+               Transition.step(auth, :call, external("sha256:other-server", "issues.list"))
     end
   end
 

@@ -375,23 +375,11 @@ defmodule Sanctum.Authority.Transition do
         {:deny, :tool_server_not_granted}
 
       %{tool_patterns: patterns} ->
-        if Enum.any?(patterns, &pattern_match?(&1, tool)) do
+        if Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool)) do
           {:allow_tool, {:tool_server, digest}}
         else
           {:deny, :tool_server_not_granted}
         end
-    end
-  end
-
-  # Provisional glob — exact, "*", or "prefix*" — until the consolidated
-  # tool-pattern module replaces the scattered implementations.
-  defp pattern_match?("*", _tool), do: true
-
-  defp pattern_match?(pattern, tool) do
-    case String.split(pattern, "*", parts: 2) do
-      [exact] -> exact == tool
-      [prefix, ""] -> String.starts_with?(tool, prefix)
-      [_prefix, _rest] -> false
     end
   end
 
