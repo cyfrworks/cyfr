@@ -1,20 +1,25 @@
 /**
  * Tier classification for outbound MCP tool calls.
  *
- * Used by Phase 5's approval gate to decide whether a tool call from Porta's
- * UI should pause for user approval before being forwarded to cyfr.
+ * Used by the approval gate to decide whether a tool call from Porta's UI
+ * should pause for user approval before being forwarded to cyfr.
  *
  * Tiers:
- *   tier0 — UI-only (dispatched client-side; never reaches the proxy)
+ *   tier0 — Never gated (auth/onboarding/chat-loop flows; see RULES)
  *   tier1 — Read-only data (forward silently)
- *   tier2 — Reversible writes (lightweight inline confirmation)
- *   tier3 — External or irreversible (explicit approval card every time)
+ *   tier2 — Writes (approval card)
+ *   tier3 — External or irreversible (approval card, high risk)
  *
  * Cyfr's MCP convention puts the sub-action in `args.action` (e.g.
  * `client.callTool("policy", { action: "set", ... })`), so tier entries are
  * (tool name, optional action) pairs. Omitting `action` matches any action
- * on that tool — use sparingly, only for tools whose every sub-action is
- * mutating.
+ * on that tool.
+ *
+ * Classification is DEFAULT-DENY: an action is forwarded silently only when
+ * an explicit rule or the read-verb allowlist says so; everything else —
+ * including unknown tools and external `server:tool` calls — requires
+ * approval. Unlisted writes previously forwarded silently; that was the
+ * hole, not a feature.
  */
 
 export type Tier = "tier0" | "tier1" | "tier2" | "tier3";
@@ -26,36 +31,45 @@ interface ToolRule {
   tier: Tier;
 }
 
-/**
- * Keep this list narrow. Over-gating reads stalls the UI with approval
- * prompts for benign work (e.g. listing apps to populate the Apps page).
- */
 const RULES: ToolRule[] = [
-  // Tincture visibility — mutating actions only. `get` / `list` pass through.
+  // Never gated: these run during login/first-run onboarding, before the
+  // approval tray is mounted — gating them deadlocks the flow. All are
+  // explicit user gestures on dedicated screens.
+  { name: "session", tier: "tier0" },
+  { name: "registry", action: "probe", tier: "tier0" },
+  { name: "registry", action: "whoami", tier: "tier0" },
+  { name: "registry", action: "legal_version", tier: "tier0" },
+  { name: "registry", action: "legal_page", tier: "tier0" },
+  { name: "registry", action: "legal_accept", tier: "tier0" },
+  { name: "registry", action: "claim_personal", tier: "tier0" },
+
+  // The chat loop itself: submitting or stopping the agent is the explicit
+  // user gesture. What the agent may do while running is governed
+  // server-side by the formula's tool_policy, not by this client gate.
+  { name: "execution", action: "run_stream", tier: "tier0" },
+  { name: "execution", action: "cancel", tier: "tier0" },
+
+  // Irreversible / externally visible — high-risk approval card.
   { name: "tincture_visibility", action: "set", tier: "tier3" },
-  { name: "tincture_visibility", action: "make_public", tier: "tier3" },
-  { name: "tincture_visibility", action: "make_private", tier: "tier2" },
-
-  // Component lifecycle
   { name: "component", action: "delete", tier: "tier3" },
-  { name: "component", action: "uninstall", tier: "tier3" },
-
-  // Policy mutation
-  { name: "policy", action: "set", tier: "tier2" },
-  { name: "policy", action: "patch", tier: "tier2" },
   { name: "policy", action: "delete", tier: "tier3" },
-  { name: "policy", action: "clear", tier: "tier3" },
-
-  // Secret management
-  { name: "secret", action: "set", tier: "tier2" },
-  { name: "secret", action: "delete", tier: "tier2" },
-  { name: "secret", action: "grant", tier: "tier2" },
-  { name: "secret", action: "revoke", tier: "tier2" },
-
-  // MCP server config
-  { name: "mcp_servers", action: "create", tier: "tier2" },
-  { name: "mcp_servers", action: "delete", tier: "tier2" },
 ];
+
+/**
+ * Actions that only read state, on any tool. A write-shaped action name
+ * never belongs here — when in doubt, leave it out and let it gate.
+ */
+const READ_ACTIONS = new Set([
+  "get",
+  "list",
+  "search",
+  "inspect",
+  "status",
+  "logs",
+  "setup_plan",
+  "whoami",
+  "probe",
+]);
 
 export function classifyTool(
   name: string,
@@ -67,7 +81,8 @@ export function classifyTool(
     if (rule.action === undefined) return rule.tier;
     if (rule.action === action) return rule.tier;
   }
-  return "tier1";
+  if (action !== undefined && READ_ACTIONS.has(action)) return "tier1";
+  return "tier2";
 }
 
 export function requiresApproval(

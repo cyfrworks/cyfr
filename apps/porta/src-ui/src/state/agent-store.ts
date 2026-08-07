@@ -27,8 +27,38 @@ interface SubAgentDef {
   description: string;
   prompt: string;
   visible_tools: string[] | null;
+  tool_policy?: Record<string, unknown>;
   catalyst_ref: string | null;
   model: string | null;
+}
+
+/**
+ * Attach the formula's tool-surface fields from a `tool_policy` allowlist
+ * (`{"tool.action" | "tool.*" => "ask" | "auto"}`), mirroring Prism's
+ * `Prism.AgentConfig.put_formula_tool_surface/2`:
+ *
+ * - Native-tool-only agents (allowlist names a native tool such as
+ *   `native_search`) get `visible_tools: ["native_search"]` and no
+ *   `tool_policy` — model-side native tools can't coexist with custom MCP
+ *   tools.
+ * - Everyone else gets `tool_policy` (empty object when the guide carries
+ *   none — the formula treats an absent policy as everything-callable, so
+ *   the empty allowlist is the fail-closed default, never omission).
+ */
+function applyToolSurface<T extends object>(
+  target: T,
+  toolPolicy: Record<string, unknown> | null | undefined,
+): T {
+  const t = target as Record<string, unknown>;
+  const policy = toolPolicy && typeof toolPolicy === "object" ? toolPolicy : {};
+  if (Object.keys(policy).some((k) => k === "native_search")) {
+    delete t.tool_policy;
+    t.visible_tools = ["native_search"];
+  } else {
+    t.tool_policy = policy;
+    t.visible_tools = null;
+  }
+  return target;
 }
 
 export interface ToolEntry {
@@ -303,9 +333,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     });
 
     try {
-      // Build system prompt from orchestrator config
+      // Build system prompt + tool_policy from orchestrator config. The
+      // policy defaults to the empty allowlist so a failed guide fetch runs
+      // the agent with no callable tools rather than with everything —
+      // absent tool_policy makes the formula treat every tool as directly
+      // callable.
       let systemPrompt =
         "You are an agent running inside CYFR, a governed computation platform.";
+      let orchestratorToolPolicy: Record<string, unknown> = {};
       try {
         const guideResult = await client.callTool("aqua", {
           action: "get",
@@ -313,6 +348,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         if (guideResult.content && typeof guideResult.content === "string") {
           systemPrompt = guideResult.content;
+        }
+        if (
+          guideResult.tool_policy &&
+          typeof guideResult.tool_policy === "object" &&
+          !Array.isArray(guideResult.tool_policy)
+        ) {
+          orchestratorToolPolicy = guideResult.tool_policy as Record<string, unknown>;
         }
       } catch {
         // Use fallback
@@ -400,14 +442,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
       // Build execution input
       const task = parsedTask || (hasAttachments ? "Describe the attached file(s)." : parsedTask);
-      const input: Record<string, unknown> = {
-        catalyst_ref: execCatalystRef,
-        model: execModel || undefined,
-        task,
-        system: systemPrompt,
-        messages: history,
-        sub_agents: subAgents,
-      };
+      const input: Record<string, unknown> = applyToolSurface(
+        {
+          catalyst_ref: execCatalystRef,
+          model: execModel || undefined,
+          task,
+          system: systemPrompt,
+          messages: history,
+          sub_agents: subAgents,
+        },
+        orchestratorToolPolicy,
+      );
 
       if (hasAttachments) {
         input.attachments = state.pendingAttachments.map((a) => ({
@@ -1458,15 +1503,27 @@ async function fetchSubAgents(
         const parent = detail.parent as string | null;
         if (parent && parent !== orchestratorName) continue;
 
-        subAgents.push({
-          name: (detail.name as string) ?? (g.name as string),
-          title: (detail.title as string) ?? (g.name as string),
-          description: (detail.description as string) ?? "",
-          prompt: (detail.content as string) ?? "",
-          visible_tools: (detail.visible_tools as string[] | null) ?? null,
-          catalyst_ref: (detail.catalyst_ref as string | null) ?? fallbackCatalystRef,
-          model: (detail.model as string | null) ?? fallbackModel ?? null,
-        });
+        const toolPolicy =
+          detail.tool_policy &&
+          typeof detail.tool_policy === "object" &&
+          !Array.isArray(detail.tool_policy)
+            ? (detail.tool_policy as Record<string, unknown>)
+            : {};
+
+        subAgents.push(
+          applyToolSurface(
+            {
+              name: (detail.name as string) ?? (g.name as string),
+              title: (detail.title as string) ?? (g.name as string),
+              description: (detail.description as string) ?? "",
+              prompt: (detail.content as string) ?? "",
+              visible_tools: (detail.visible_tools as string[] | null) ?? null,
+              catalyst_ref: (detail.catalyst_ref as string | null) ?? fallbackCatalystRef,
+              model: (detail.model as string | null) ?? fallbackModel ?? null,
+            },
+            toolPolicy,
+          ),
+        );
       } catch {
         // Skip agents that fail to load
       }

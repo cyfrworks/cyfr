@@ -59,26 +59,14 @@ function summaryFor(name: string, args: Record<string, unknown>): string {
   if (name === "tincture_visibility" && action === "set") {
     return "Change app sharing settings.";
   }
-  if (name === "tincture_visibility" && action === "make_public") {
-    return "Make this app publicly accessible.";
-  }
-  if (name === "tincture_visibility" && action === "make_private") {
-    return "Stop sharing this app publicly.";
-  }
   if (name === "component" && action === "delete") {
     return "Permanently remove this item.";
-  }
-  if (name === "component" && action === "uninstall") {
-    return "Uninstall this item.";
   }
   if (name === "policy" && (action === "set" || action === "patch")) {
     return "Change a permission value.";
   }
   if (name === "policy" && action === "delete") {
     return "Remove permissions entirely.";
-  }
-  if (name === "policy" && action === "clear") {
-    return "Clear all custom permissions.";
   }
   if (name === "secret" && action === "set") return "Store a credential.";
   if (name === "secret" && action === "delete") {
