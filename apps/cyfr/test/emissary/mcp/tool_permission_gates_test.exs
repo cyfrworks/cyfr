@@ -69,6 +69,58 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
     end
   end
 
+  describe "mcp_servers.create rejects plaintext credential headers" do
+    defp create_args(headers) do
+      %{
+        "action" => "create",
+        "name" => "hdr-test-#{System.unique_integer([:positive])}",
+        "config" => %{"url" => "https://example.com/mcp", "headers" => headers}
+      }
+    end
+
+    test "a literal authorization header is rejected with an actionable error" do
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, message} =
+               Emissary.MCP.ExternalProvider.handle(
+                 "mcp_servers",
+                 ctx,
+                 create_args(%{"Authorization" => "Bearer sk-live-plaintext"})
+               )
+
+      assert message =~ "secret:NAME"
+      assert message =~ "Authorization"
+    end
+
+    test "credential-shaped custom headers are rejected too" do
+      ctx = Sanctum.TestContext.local()
+
+      for header <- ["X-Api-Key", "X-Access-Token", "My-Secret"] do
+        assert {:error, _} =
+                 Emissary.MCP.ExternalProvider.handle(
+                   "mcp_servers",
+                   ctx,
+                   create_args(%{header => "literal-value"})
+                 )
+      end
+    end
+
+    test "secret references and innocuous literals are accepted" do
+      ctx = Sanctum.TestContext.local()
+
+      assert {:ok, _} =
+               Emissary.MCP.ExternalProvider.handle(
+                 "mcp_servers",
+                 ctx,
+                 create_args(%{
+                   "Authorization" => "secret:MY_TOKEN",
+                   "Content-Type" => "application/json",
+                   "X-Client-Version" => "1.2.3"
+                 })
+               )
+    end
+  end
+
   describe "system.notify requires :admin" do
     test "denied for an execute-only context" do
       ctx = execute_only_ctx()

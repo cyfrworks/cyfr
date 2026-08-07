@@ -303,16 +303,50 @@ defmodule Emissary.MCP.ExternalProvider do
         {:error, "Missing required parameter: config.url"}
 
       true ->
-        case Cyfr.Network.validate_redirect_url(config["url"],
-               allow_private: not Sanctum.auth_configured?()
-             ) do
-          {:error, reason} ->
-            {:error, "Invalid URL: #{reason}"}
-
-          :ok ->
-            handle_create_validated(ctx, name, config)
+        with :ok <- validate_header_credentials(config["headers"]),
+             :ok <- validate_create_url(config["url"]) do
+          handle_create_validated(ctx, name, config)
         end
     end
+  end
+
+  defp validate_create_url(url) do
+    case Cyfr.Network.validate_redirect_url(url, allow_private: not Sanctum.auth_configured?()) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "Invalid URL: #{reason}"}
+    end
+  end
+
+  # A literal value in a credential-shaped header would be persisted
+  # UNENCRYPTED in mcp_servers.config_json. Reject it instead of sealing —
+  # `secret:NAME` references resolve host-side from the encrypted secret
+  # store (writer-independently, across both scope partitions).
+  defp validate_header_credentials(headers) when is_map(headers) do
+    offending =
+      Enum.find(headers, fn {key, value} ->
+        is_binary(value) and not String.starts_with?(value, "secret:") and
+          credential_shaped_header_name?(key)
+      end)
+
+    case offending do
+      nil ->
+        :ok
+
+      {key, _value} ->
+        {:error,
+         "Header '#{key}' looks like a credential and must reference a stored secret — " <>
+           "run secret.set NAME <value>, then use \"secret:NAME\" as the header value"}
+    end
+  end
+
+  defp validate_header_credentials(_headers), do: :ok
+
+  defp credential_shaped_header_name?(key) do
+    k = key |> to_string() |> String.downcase()
+
+    k in ["authorization", "proxy-authorization", "cookie", "x-api-key"] or
+      String.contains?(k, "token") or String.contains?(k, "secret") or
+      String.contains?(k, "auth") or String.contains?(k, "key")
   end
 
   defp handle_create_validated(ctx, name, config) do
