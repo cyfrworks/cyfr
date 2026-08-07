@@ -434,17 +434,20 @@ defmodule EmissaryWeb.TinctureController do
     |> System.convert_time_unit(:native, :millisecond)
   end
 
-  # For unauthenticated (public) requests, key rate limits by IP so each
-  # client gets its own bucket. Without this, all public users would share
-  # a single rate limit bucket (the context has no user_id).
+  # The policy rate limiter buckets on {org, project, component_ref} only —
+  # every public caller of one tincture shares a single bucket, and the
+  # transport-level per-IP plug beneath this is what bounds an individual
+  # client. The IP rewrite below does NOT create per-client buckets; it
+  # exists so rate-limit denial audit rows attribute the denied request to
+  # a client IP instead of an anonymous context.
   defp check_policy_rate_limit(conn, policy, ctx, tincture_ref) do
     rate_ctx =
       if ctx.authenticated do
         ctx
       else
         # Same client-IP resolution (and XFF trust boundary) as the API-key
-        # allowlist, so the public rate-limit bucket and the allowlist agree
-        # on client identity behind a proxy.
+        # allowlist, so audit attribution and the allowlist agree on client
+        # identity behind a proxy.
         ip = Sanctum.ClientIp.resolve(conn)
         %{ctx | user_id: "ip:#{ip}"}
       end

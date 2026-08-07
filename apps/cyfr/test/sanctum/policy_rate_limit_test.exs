@@ -151,6 +151,49 @@ defmodule Sanctum.PolicyRateLimitTest do
       Opus.RateLimiter.reset("local", "proj_b", "local.shared-component:1.0.0")
     end
 
+    test "different user_ids in one project share a single bucket", %{ctx: ctx} do
+      # The limiter keys on {org, project, component_ref} and ignores
+      # ctx.user_id entirely — all public callers of one tincture share one
+      # bucket. The tincture controller's "ip:<addr>" user_id rewrite is
+      # audit attribution only, never per-client bucketing; this test locks
+      # that in so the rewrite can't silently be mistaken for isolation.
+      policy = %Policy{rate_limit: %{requests: 2, window: "1m"}}
+      ref = "local.shared-bucket:1.0.0"
+
+      ip_a_ctx = %Context{ctx | user_id: "ip:198.51.100.1"}
+      ip_b_ctx = %Context{ctx | user_id: "ip:203.0.113.9"}
+
+      {:ok, _} = Policy.check_rate_limit(policy, ip_a_ctx, ref)
+      {:ok, _} = Policy.check_rate_limit(policy, ip_a_ctx, ref)
+
+      # A different "client" draws from the same exhausted bucket
+      assert {:error, :rate_limited, _} = Policy.check_rate_limit(policy, ip_b_ctx, ref)
+
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, ref)
+    end
+
+    test "denial audit rows carry the caller's user_id for attribution", %{ctx: ctx} do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+      ref = "local.attributed-rl:1.0.0"
+      policy = %Policy{rate_limit: %{requests: 1, window: "1m"}}
+      ip_ctx = %Context{ctx | user_id: "ip:198.51.100.7"}
+
+      {:ok, 0} = Policy.check_rate_limit(policy, ip_ctx, ref)
+      assert {:error, :rate_limited, _} = Policy.check_rate_limit(policy, ip_ctx, ref)
+
+      rows =
+        [org_id: ctx.org_id, project_id: ctx.project_id, limit: 50]
+        |> Arca.PolicyLog.list()
+        |> Enum.filter(&(&1.component_ref == ref))
+
+      assert [row] = rows
+      assert row.user_id == "ip:198.51.100.7"
+
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, ref)
+    end
+
     test "respects different window sizes", %{ctx: ctx} do
       # Use a very short window for testing
       policy = %Policy{rate_limit: %{requests: 2, window: "100ms"}}
