@@ -1,0 +1,168 @@
+{
+  "defaults": {},
+  "description": "HTTP catalyst \u2014 read pages as clean Markdown, raw HTTP fetch, discover links, and extract metadata. Works with localhost and internal URLs.",
+  "examples": [
+    {
+      "description": "Extract readable content as clean Markdown",
+      "input": {
+        "operation": "read",
+        "params": {
+          "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        }
+      },
+      "name": "Read page as Markdown"
+    },
+    {
+      "description": "Direct HTTP request with full control",
+      "input": {
+        "operation": "fetch",
+        "params": {
+          "url": "https://httpbin.org/get"
+        }
+      },
+      "name": "Raw HTTP fetch"
+    },
+    {
+      "description": "Send a POST request with JSON body",
+      "input": {
+        "operation": "fetch",
+        "params": {
+          "body": "{\"key\": \"value\"}",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "method": "POST",
+          "url": "https://httpbin.org/post"
+        }
+      },
+      "name": "POST request"
+    },
+    {
+      "description": "Extract all hyperlinks from a page",
+      "input": {
+        "operation": "links",
+        "params": {
+          "url": "https://example.com"
+        }
+      },
+      "name": "Discover links"
+    },
+    {
+      "description": "Extract title, description, canonical URL, and OpenGraph tags",
+      "input": {
+        "operation": "metadata",
+        "params": {
+          "url": "https://example.com"
+        }
+      },
+      "name": "Page metadata"
+    },
+    {
+      "description": "Check URL status and headers without downloading the body",
+      "input": {
+        "operation": "head",
+        "params": {
+          "url": "https://example.com"
+        }
+      },
+      "name": "HEAD request"
+    }
+  ],
+  "name": "http",
+  "publisher": "local",
+  "schema": {
+    "input": {
+      "properties": {
+        "operation": {
+          "description": "Operation to perform",
+          "enum": [
+            "read",
+            "fetch",
+            "links",
+            "metadata",
+            "head"
+          ]
+        },
+        "params": {
+          "description": "Operation-specific parameters",
+          "properties": {
+            "body": {
+              "description": "Request body (fetch only)",
+              "type": "string"
+            },
+            "headers": {
+              "description": "Custom HTTP headers (fetch, read, links, metadata)",
+              "type": "object"
+            },
+            "max": {
+              "description": "Maximum items to return (links only, default 500)",
+              "type": "integer"
+            },
+            "method": {
+              "description": "HTTP method (fetch only, default GET)",
+              "enum": [
+                "GET",
+                "POST"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "description": "Target URL (required for all operations)",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "type": "object"
+    },
+    "output": {
+      "properties": {
+        "data": {
+          "description": "Operation result data",
+          "type": "object"
+        },
+        "error": {
+          "description": "Error details (present on failure)",
+          "type": "object"
+        },
+        "status": {
+          "description": "HTTP-like status code (200 for success)",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "catalyst",
+  "version": "1.1.0",
+  "caps": {
+    "egress": {
+      "domains": [
+        "*"
+      ],
+      "methods": [
+        "GET",
+        "POST",
+        "HEAD"
+      ],
+      "schemes": [
+        "https",
+        "http"
+      ]
+    },
+    "limits": {
+      "max_memory_bytes": 67108864,
+      "max_request_size": 1048576,
+      "max_response_size": 5242880,
+      "rate_limit": {
+        "requests": 60,
+        "window": "1m"
+      },
+      "timeout": "30s"
+    }
+  }
+}
