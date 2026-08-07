@@ -158,6 +158,18 @@ defmodule Compendium.Registry do
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_oauth(manifest_map),
+         # Before store_wasm: a refused republish must leave no bytes behind
+         # for the scanner to pick up.
+         :ok <-
+           check_release_immutable(
+             ctx,
+             name,
+             version,
+             validation.digest,
+             manifest_bytes,
+             publisher,
+             component_type
+           ),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
@@ -207,7 +219,21 @@ defmodule Compendium.Registry do
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_oauth(manifest_map),
          {:ok, validation} <-
-           extract_and_store_tincture(ctx, archive_bytes, publisher, name, version),
+           extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
+             # Runs after validation, before any Arca write — same ordering
+             # guarantee as the WASM path, where the check precedes store_wasm.
+             before_store: fn validation ->
+               check_release_immutable(
+                 ctx,
+                 name,
+                 version,
+                 validation.digest,
+                 manifest_bytes,
+                 publisher,
+                 "tincture"
+               )
+             end
+           ),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
              source: "oci",
@@ -624,7 +650,11 @@ defmodule Compendium.Registry do
   # as a regular shipped asset.
   @tincture_excluded_on_pull ~w(data.db-wal data.db-shm)
 
-  defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version) do
+  defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version, opts) do
+    # Hook between validation and the first Arca write. Callers use it to
+    # refuse a publish without leaving extracted files behind.
+    before_store = Keyword.get(opts, :before_store, fn _validation -> :ok end)
+
     # The components/ root bypasses the tenant_segments fail-closed guard, so an
     # unresolved (org-less) non-platform context must be rejected before write.
     Context.require_tenant!(ctx)
@@ -644,22 +674,19 @@ defmodule Compendium.Registry do
         {:ok, tar_binary} ->
           case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
             :ok ->
-              case Compendium.TinctureValidator.validate(tmp_dir) do
-                {:ok, validation} ->
-                  version_dir =
-                    Compendium.ComponentPath.version_dir(
-                      "tincture",
-                      publisher,
-                      name,
-                      version,
-                      ctx
-                    )
+              with {:ok, validation} <- Compendium.TinctureValidator.validate(tmp_dir),
+                   :ok <- before_store.(validation) do
+                version_dir =
+                  Compendium.ComponentPath.version_dir(
+                    "tincture",
+                    publisher,
+                    name,
+                    version,
+                    ctx
+                  )
 
-                  store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
-                  {:ok, validation}
-
-                error ->
-                  error
+                store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
+                {:ok, validation}
               end
 
             {:error, reason} ->
@@ -1281,12 +1308,68 @@ defmodule Compendium.Registry do
 
   defp reject_tincture_publish_bytes(_type), do: :ok
 
-  defp content_matches?(ctx, name, version, digest, manifest_json, publisher, component_type) do
+  @doc false
+  # A published release is immutable: the same (publisher, name, version,
+  # type) may never come to mean different code or different declared
+  # capability. Re-publishing identical content is allowed — an OCI re-pull
+  # is idempotent and legitimately refreshes signature metadata — but
+  # anything else is refused.
+  #
+  # Deliberately compares artifact bytes AND the manifest verbatim rather
+  # than the release digest: the release digest covers only the
+  # security-relevant manifest subset, so a digest-keyed check would let a
+  # republish silently rewrite a release's description or schema in place.
+  #
+  # The directory/scanner ingress does not call this. That exemption is
+  # keyed on the ingress path, never on the publisher string: a local
+  # rebuild legitimately produces new bytes at an unchanged version, and it
+  # takes a new activation identity to say so.
+  defp check_release_immutable(
+         ctx,
+         name,
+         version,
+         digest,
+         manifest_json,
+         publisher,
+         component_type
+       ) do
+    case release_status(ctx, name, version, digest, manifest_json, publisher, component_type) do
+      :absent ->
+        :ok
+
+      :identical ->
+        :ok
+
+      :differs ->
+        {:error,
+         {:release_immutable,
+          %{
+            publisher: publisher,
+            name: name,
+            version: version,
+            type: component_type
+          }}}
+    end
+  end
+
+  defp release_status(ctx, name, version, digest, manifest_json, publisher, component_type) do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do
       {:ok, existing} ->
-        existing.digest == digest && existing.manifest == manifest_json
+        if existing.digest == digest and existing.manifest == manifest_json,
+          do: :identical,
+          else: :differs
 
       {:error, _} ->
+        :absent
+    end
+  end
+
+  defp content_matches?(ctx, name, version, digest, manifest_json, publisher, component_type) do
+    case release_status(ctx, name, version, digest, manifest_json, publisher, component_type) do
+      :identical ->
+        true
+
+      _ ->
         false
     end
   end
