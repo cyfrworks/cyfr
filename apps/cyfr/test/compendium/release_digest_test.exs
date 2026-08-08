@@ -23,7 +23,7 @@ defmodule Compendium.ReleaseDigestTest do
     end
 
     test "presentational manifest fields never change the identity" do
-      base = %{"setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}}}
+      base = %{"caps" => %{"egress" => %{"domains" => ["a.example"]}}}
 
       described =
         Map.merge(base, %{
@@ -44,13 +44,10 @@ defmodule Compendium.ReleaseDigestTest do
         "needs" => %{
           "api_key" => %{"type" => "api_key:anthropic.com", "reason" => "to call the API"}
         },
-        "caps" => %{"egress" => %{"domains" => ["a.example"]}},
-        "setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}},
-        "oauth" => %{"google" => %{"scopes" => ["email"]}},
-        "wasi" => %{"http" => true}
+        "caps" => %{"egress" => %{"domains" => ["a.example"]}}
       }
 
-      assert ReleaseDigest.security_blocks() == ~w(dependencies needs caps setup oauth wasi)
+      assert ReleaseDigest.security_blocks() == ~w(dependencies needs caps)
 
       for {block, value} <- blocks do
         assert compute!(%{}) != compute!(%{block => value}),
@@ -59,25 +56,25 @@ defmodule Compendium.ReleaseDigestTest do
     end
 
     test "a widened capability changes the identity even at identical bytes" do
-      narrow = %{"setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}}}
-      wide = %{"setup" => %{"policy" => %{"allowed_domains" => ["*"]}}}
+      narrow = %{"caps" => %{"egress" => %{"domains" => ["a.example"]}}}
+      wide = %{"caps" => %{"egress" => %{"domains" => ["*"]}}}
 
       assert compute!(narrow) != compute!(wide)
     end
 
     test "key order and absent-vs-empty are handled canonically" do
-      a = %{"setup" => %{"policy" => %{"x" => 1, "y" => 2}}, "wasi" => %{"http" => true}}
-      b = %{"wasi" => %{"http" => true}, "setup" => %{"policy" => %{"y" => 2, "x" => 1}}}
+      a = %{"caps" => %{"limits" => %{"timeout" => "1m"}}, "needs" => %{}}
+      b = %{"needs" => %{}, "caps" => %{"limits" => %{"timeout" => "1m"}}}
 
       assert compute!(a) == compute!(b)
       # Absent block and empty-map block are deliberately distinct: an empty
-      # `wasi` block is a declaration, not silence.
-      assert compute!(%{}) != compute!(%{"wasi" => %{}})
+      # `needs` block is a declaration, not silence.
+      assert compute!(%{}) != compute!(%{"needs" => %{}})
     end
 
     test "floats in a security block are refused, floats elsewhere are ignored" do
-      assert {:error, {:invalid_manifest, {:invalid_value, ["setup", "t"], :float_not_permitted}}} =
-               ReleaseDigest.compute(@artifact, %{"setup" => %{"t" => 1.5}})
+      assert {:error, {:invalid_manifest, {:invalid_value, ["caps", "t"], :float_not_permitted}}} =
+               ReleaseDigest.compute(@artifact, %{"caps" => %{"t" => 1.5}})
 
       # Presentational floats never reach the canonicalizer.
       assert {:ok, _} = ReleaseDigest.compute(@artifact, %{"examples" => [%{"score" => 0.5}]})
@@ -85,8 +82,8 @@ defmodule Compendium.ReleaseDigestTest do
 
     test "a nil inside a security block is refused" do
       assert {:error,
-              {:invalid_manifest, {:invalid_value, ["oauth", "google"], :nil_not_permitted}}} =
-               ReleaseDigest.compute(@artifact, %{"oauth" => %{"google" => nil}})
+              {:invalid_manifest, {:invalid_value, ["needs", "google"], :nil_not_permitted}}} =
+               ReleaseDigest.compute(@artifact, %{"needs" => %{"google" => nil}})
     end
 
     test "rejects a missing or malformed artifact digest" do

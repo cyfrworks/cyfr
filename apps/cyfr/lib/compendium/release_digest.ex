@@ -19,9 +19,9 @@ defmodule Compendium.ReleaseDigest do
   | `dependencies` | which components this one may reach |
   | `needs` | named roles the operator satisfies with Connections |
   | `caps` | the declared capability ask the operator consents to |
-  | `setup` | legacy: `setup.policy` / `setup.secrets` (rejected at registration once deleted) |
-  | `oauth` | legacy: provider endpoints, scopes and credential references |
-  | `wasi` | legacy: never runtime-parsed; covered while old manifests carry it |
+
+  The retired `setup`/`oauth`/`wasi` blocks are rejected at registration,
+  so they can never reach a digest.
 
   Everything else — description, schema, examples, tags — is presentational
   and deliberately excluded, so re-describing a release does not change its
@@ -35,10 +35,12 @@ defmodule Compendium.ReleaseDigest do
 
   alias Sanctum.JCS
 
-  # Additive first (existing rows carry neither needs nor caps, so their
-  # digests are unchanged); the legacy trio leaves the subset only after
-  # registration rejects it, shipped with a backfill re-run.
-  @security_blocks ~w(dependencies needs caps setup oauth wasi)
+  # Registration rejects the retired setup/oauth/wasi blocks, so the
+  # subset is exactly what a publishable manifest can carry. Historical
+  # rows that still name the legacy trio get recomputed digests via
+  # `mix cyfr.backfill_release_digests`; consents pinned to the old
+  # digests go needs_consent and are re-granted by hand.
+  @security_blocks ~w(dependencies needs caps)
 
   @type error :: {:invalid_manifest, JCS.error()} | {:invalid_artifact_digest, term()}
 
@@ -60,8 +62,8 @@ defmodule Compendium.ReleaseDigest do
       iex> String.starts_with?(digest, "sha256:")
       true
 
-      iex> Compendium.ReleaseDigest.compute("sha256:abc", %{"setup" => %{"policy" => %{"timeout" => 1.5}}})
-      {:error, {:invalid_manifest, {:invalid_value, ["setup", "policy", "timeout"], :float_not_permitted}}}
+      iex> Compendium.ReleaseDigest.compute("sha256:abc", %{"caps" => %{"limits" => %{"timeout" => 1.5}}})
+      {:error, {:invalid_manifest, {:invalid_value, ["caps", "limits", "timeout"], :float_not_permitted}}}
 
   """
   @spec compute(String.t(), map() | nil) :: {:ok, String.t()} | {:error, error()}

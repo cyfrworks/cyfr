@@ -172,16 +172,15 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert with_caps != with_needs
     end
 
-    test "a manifest without the new blocks keeps its digest (additive change)" do
-      legacy = %{"setup" => %{"policy" => %{"timeout" => "30s"}}}
-      {:ok, digest} = Compendium.ReleaseDigest.compute("sha256:abc", legacy)
+    test "the retired blocks no longer contribute to the digest (subtractive change)" do
+      legacy = %{"setup" => %{"policy" => %{"timeout" => "30s"}}, "wasi" => %{"http" => true}}
 
-      # The subset widened, but this manifest carries none of the new
-      # blocks — Map.take of absent keys contributes nothing, so the
-      # canonical bytes (and the digest) are what they were before.
-      subset_before = Map.take(legacy, ~w(dependencies setup oauth wasi))
-      {:ok, canonical} = Sanctum.JCS.encode(subset_before)
-      assert digest == Sanctum.JCS.hash_binary("sha256:abc" <> canonical)
+      # Registration rejects these blocks, so only historical rows carry
+      # them — and the backfill recomputes those rows to the block-free
+      # digest below, converging old and new identities.
+      {:ok, with_legacy} = Compendium.ReleaseDigest.compute("sha256:abc", legacy)
+      {:ok, without} = Compendium.ReleaseDigest.compute("sha256:abc", %{})
+      assert with_legacy == without
     end
   end
 
