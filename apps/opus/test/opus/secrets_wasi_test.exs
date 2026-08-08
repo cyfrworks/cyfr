@@ -16,7 +16,6 @@ defmodule Opus.SecretsWasiTest do
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.Context
   alias Sanctum.Secrets
 
   setup do
@@ -76,30 +75,8 @@ defmodule Opus.SecretsWasiTest do
   describe "SecretMasker" do
     alias Opus.SecretMasker
 
-    test "get_granted_secrets returns empty list for nil context" do
-      assert [] = SecretMasker.get_granted_secrets(nil, "local.component:1.0.0")
-    end
-
-    test "get_granted_secrets returns empty list for nil component_ref", %{ctx: ctx} do
-      assert [] = SecretMasker.get_granted_secrets(ctx, nil)
-    end
-
-    test "get_granted_secrets returns secret values for granted secrets", %{ctx: ctx} do
-      # Set up secrets
-      :ok = Secrets.set(ctx, "KEY1", "value1")
-      :ok = Secrets.set(ctx, "KEY2", "value2")
-      :ok = Secrets.set(ctx, "KEY3", "value3")
-
-      # Grant access to KEY1 and KEY2 only
-      :ok = Secrets.grant(ctx, "KEY1", "catalyst:local.my-component:1.0.0")
-      :ok = Secrets.grant(ctx, "KEY2", "catalyst:local.my-component:1.0.0")
-
-      secrets = SecretMasker.get_granted_secrets(ctx, "catalyst:local.my-component:1.0.0")
-
-      assert "value1" in secrets
-      assert "value2" in secrets
-      refute "value3" in secrets
-    end
+    # Masking is sourced from the pipeline's preloaded (vault-projected)
+    # secrets; the legacy grant-plane lookup is gone.
 
     test "mask replaces secret values with [REDACTED]" do
       output = %{"message" => "Your API key is sk-secret123", "data" => "other"}

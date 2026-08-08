@@ -3,9 +3,9 @@
 defmodule Opus.Test.NestedExecution do
   @moduledoc """
   Builds real nested WASM executions from the checked-in `nested-probe`
-  formula fixture (`test_wasm/nested_probe/`) — the first fixture in the
-  tree that actually executes as a Component Model binary rather than
-  asserting failure paths.
+  formula fixture (`test_wasm/nested_probe/`) — a fixture that actually
+  executes as a Component Model binary rather than asserting failure
+  paths.
 
   The probe is input-driven: `op` selects which `cyfr:formula/invoke`
   functions it exercises (`echo` / `call` / `spawn_await` /
@@ -13,12 +13,11 @@ defmodule Opus.Test.NestedExecution do
   `execution.run` for an N-deep nested execution. Raw host responses are
   echoed back verbatim for characterization.
 
-  `allowed_tools` matters: `Sanctum.Policy` is deny-by-default for MCP
-  tools, and the probe's dispatches go through real policy resolution.
-  `publish_probe!/2` grants them the way bundled formulas do — a manifest
-  `setup.policy.allowed_tools` block, auto-merged into the effective
-  policy at read time by `Policy.Resolver` (the manifest-widening path the
-  redesign deletes; using it here characterizes it).
+  `allowed_tools` matters: the probe's dispatches run under a
+  consent-rooted authority, and a tool outside the consented edge is
+  denied. `publish_probe!/2` declares them the way re-released bundles
+  do — a manifest `caps.tools` block that `Sanctum.Consent.Bootstrap`
+  expands into the minted consent's ingress edge.
   """
 
   @probe_wasm Path.join(__DIR__, "test_wasm/nested_probe/nested_probe.wasm")
@@ -28,30 +27,22 @@ defmodule Opus.Test.NestedExecution do
   def probe_ref, do: @probe_ref
 
   @doc """
-  Publish the probe into the current (sandboxed) registry and grant its
-  tool allowlist. Call from a setup block that has already pointed
-  `:cyfr, :base_path` at a temp dir and checked out the SQL sandbox.
+  Publish the probe into the current (sandboxed) registry with its
+  declared tool asks. Call from a setup block that has already pointed
+  `:cyfr, :base_path` at a temp dir and checked out the SQL sandbox;
+  run `Sanctum.Consent.Bootstrap.run/1` afterwards to mint the consent
+  the probe executes under.
   """
   def publish_probe!(ctx, opts \\ []) do
     tools = Keyword.get(opts, :allowed_tools, @default_allowed_tools)
 
-    # :caps is the shape the re-released bundle speaks — a declared ask
-    # the consent grants. :setup_policy is the legacy auto-merge path,
-    # kept for the legacy characterization twin until it retires with
-    # the plane it documents.
-    grant_block =
-      case Keyword.get(opts, :grant, :caps) do
-        :caps -> %{"caps" => %{"tools" => tools}}
-        :setup_policy -> %{"setup" => %{"policy" => %{"allowed_tools" => tools}}}
-      end
-
     manifest =
-      Jason.encode!(
-        Map.merge(
-          %{"name" => "nested-probe", "version" => "0.1.0", "type" => "formula"},
-          grant_block
-        )
-      )
+      Jason.encode!(%{
+        "name" => "nested-probe",
+        "version" => "0.1.0",
+        "type" => "formula",
+        "caps" => %{"tools" => tools}
+      })
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@probe_wasm), %{
@@ -66,41 +57,14 @@ defmodule Opus.Test.NestedExecution do
   end
 
   @doc """
-  Execute the probe through the real path (`Opus.run/4`). Returns
-  `{:ok, decoded_probe_output, raw_result}`.
+  Execute the probe through the consent-rooted path (`Opus.run_root/5`).
+  Returns `{:ok, decoded_probe_output, raw_result}`.
   """
   def run_probe(ctx, input, opts \\ []) do
-    case Opus.run(ctx, @probe_ref, input, opts) do
+    case Opus.run_root(ctx, nil, @probe_ref, input, opts) do
       {:ok, result} -> {:ok, decode(result.output), result}
       other -> other
     end
-  end
-
-  @doc "A real N-deep nested execution via the probe's `chain` op."
-  def run_chain(ctx, depth, leaf \\ nil) do
-    run_probe(ctx, %{"op" => "chain", "depth" => depth, "leaf" => leaf})
-  end
-
-  @doc """
-  Walk a decoded `chain` output down to depth 0, returning one entry per
-  level: `%{depth:, execution_id:, user_id:}` (the root level has neither
-  id — they come from each `execution.run` response envelope).
-  """
-  def unwrap_chain(%{"op" => "chain", "depth" => 0} = leaf), do: [%{depth: 0, leaf: leaf}]
-
-  def unwrap_chain(%{"op" => "chain", "depth" => depth, "result_raw" => raw}) do
-    %{"status" => "completed", "output" => run_response} = Jason.decode!(raw)
-
-    child_output = run_response["result"]
-
-    entry = %{
-      depth: depth,
-      child_execution_id: run_response["execution_id"],
-      child_user_id: run_response["user_id"],
-      child_status: run_response["status"]
-    }
-
-    [entry | unwrap_chain(child_output)]
   end
 
   defp decode(output) when is_binary(output) do

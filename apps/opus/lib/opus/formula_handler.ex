@@ -71,7 +71,6 @@ defmodule Opus.FormulaHandler do
 
   alias Sanctum.Context
   alias Sanctum.Policy
-  alias Sanctum.Policy.RestrictedTools
 
   # ============================================================================
   # Public API
@@ -234,23 +233,21 @@ defmodule Opus.FormulaHandler do
   def execute(json_request, %Context{} = ctx, opts \\ []) do
     case authority_execution_request(json_request, opts) do
       {:intercept, action, args} -> dispatch_child_call(action, args, ctx, opts)
-      :legacy -> execute_legacy(json_request, ctx, opts)
+      :registry -> dispatch_via_registry(json_request, ctx, opts)
     end
   end
 
-  # Under an authority, execution dispatch never rides the tool registry:
-  # the invocation is decided by the transition relation and executed by
-  # Opus.Chain with host-threaded lineage. Everything else — including a
-  # parse failure — falls through to the legacy body, whose guest-planed
-  # context fails closed at every provider permission gate until the
-  # in-chain dispatch entry exists.
+  # Execution dispatch never rides the tool registry: the invocation is
+  # decided by the transition relation and executed by Opus.Chain with
+  # host-threaded lineage. Everything else — including a parse failure —
+  # goes to the in-chain registry chokepoint.
   defp authority_execution_request(json_request, opts) do
     with authority when not is_nil(authority) <- opts[:authority],
          {:ok, %{tool: "execution", action: action, args: args}}
          when action in ["run", "run_stream"] <- parse_mcp_request(json_request) do
       {:intercept, action, args}
     else
-      _ -> :legacy
+      _ -> :registry
     end
   end
 
@@ -339,10 +336,9 @@ defmodule Opus.FormulaHandler do
   defp encode_child_error(reason),
     do: encode_error(:dispatch_error, stringify_reason(reason))
 
-  defp execute_legacy(json_request, %Context{} = ctx, opts) do
+  defp dispatch_via_registry(json_request, %Context{} = ctx, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
-    policy = opts[:policy]
     emit_counter = opts[:emit_counter]
 
     start_time = System.monotonic_time(:millisecond)
@@ -352,43 +348,32 @@ defmodule Opus.FormulaHandler do
         tool_action =
           if String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}"
 
-        case check_tool_access(policy, tool_action) do
-          :allowed ->
-            args_with_context =
-              maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
+        args_with_action = Map.put(args, "action", action)
 
-            args_with_action = Map.put(args_with_context, "action", action)
+        case dispatch_tool(tool, ctx, args_with_action, opts, :call) do
+          {:ok, result} ->
+            emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+            encode_success(normalize_keys(result))
 
-            case dispatch_tool(tool, ctx, args_with_action, opts, :call) do
-              {:ok, result} ->
-                emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
-                result = maybe_filter_tools_list(tool_action, result, policy)
-                encode_success(normalize_keys(result))
-
-              {:error, reason} ->
-                emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-                reason_str = stringify_reason(reason)
-
-                case Opus.Remediation.analyze(ctx, reason_str) do
-                  {:setup_required, remediation} ->
-                    maybe_emit_setup_event(
-                      root_execution_id,
-                      emit_counter,
-                      remediation,
-                      reason_str,
-                      ctx
-                    )
-
-                    encode_error_with_remediation(:setup_required, reason_str, remediation)
-
-                  :not_setup_error ->
-                    encode_error(:dispatch_error, reason_str)
-                end
-            end
-
-          {:denied, reason} ->
+          {:error, reason} ->
             emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-            encode_error(:tool_denied, reason)
+            reason_str = stringify_reason(reason)
+
+            case Opus.Remediation.analyze(ctx, reason_str) do
+              {:setup_required, remediation} ->
+                maybe_emit_setup_event(
+                  root_execution_id,
+                  emit_counter,
+                  remediation,
+                  reason_str,
+                  ctx
+                )
+
+                encode_error_with_remediation(:setup_required, reason_str, remediation)
+
+              :not_setup_error ->
+                encode_error(:dispatch_error, reason_str)
+            end
         end
 
       {:error, type, message} ->
@@ -405,7 +390,7 @@ defmodule Opus.FormulaHandler do
     case authority_execution_request(json_request, opts) do
       {:intercept, "run", args} -> spawn_child_async(args, ctx, tracker, opts)
       {:intercept, "run_stream", args} -> dispatch_child_call("run_stream", args, ctx, opts)
-      :legacy -> handle_spawn_legacy(json_request, ctx, tracker, opts)
+      :registry -> spawn_via_registry(json_request, ctx, tracker, opts)
     end
   end
 
@@ -468,77 +453,62 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  # Non-execution tools from the shared legacy body: under an authority they
-  # go through the in-chain chokepoint (plane annotation + transition step +
-  # identity conjunct); without one, through the shim's legacy dispatch.
+  # Non-execution tools go through the in-chain chokepoint: plane
+  # annotation + transition step + identity conjunct. The authority is
+  # required — every execution roots under one.
   defp dispatch_tool(tool, ctx, args, opts, guest_fn) do
-    case opts[:authority] do
-      nil ->
-        Opus.AuthorityShim.legacy_tool_call(tool, ctx, args)
+    authority = Keyword.fetch!(opts, :authority)
 
-      authority ->
-        # Lineage rides the opts channel, never the guest's args — the
-        # in-chain entry strips guest-supplied lineage keys before it
-        # re-injects these, so a guest cannot claim another chain's root.
-        lineage = %{
-          parent_execution_id: opts[:parent_execution_id],
-          root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id]
-        }
+    # Lineage rides the opts channel, never the guest's args — the
+    # in-chain entry strips guest-supplied lineage keys before it
+    # re-injects these, so a guest cannot claim another chain's root.
+    lineage = %{
+      parent_execution_id: opts[:parent_execution_id],
+      root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id]
+    }
 
-        Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority,
-          guest_fn: guest_fn,
-          lineage: lineage
-        )
-    end
+    Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority,
+      guest_fn: guest_fn,
+      lineage: lineage
+    )
   end
 
-  defp handle_spawn_legacy(json_request, ctx, tracker, opts) do
+  defp spawn_via_registry(json_request, ctx, tracker, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
-    root_execution_id = opts[:root_execution_id] || parent_execution_id
-    policy = opts[:policy]
 
     case parse_mcp_request(json_request) do
       {:ok, %{tool: tool, action: action, args: args}} ->
         tool_action =
           if String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}"
 
-        case check_tool_access(policy, tool_action) do
-          {:denied, reason} ->
-            encode_error(:tool_denied, reason)
+        args_with_action = Map.put(args, "action", action)
 
-          :allowed ->
-            fun = fn ->
-              start_time = System.monotonic_time(:millisecond)
+        fun = fn ->
+          start_time = System.monotonic_time(:millisecond)
 
-              args_with_context =
-                maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
+          case dispatch_tool(tool, ctx, args_with_action, opts, :spawn) do
+            {:ok, result} ->
+              emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+              {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
 
-              args_with_action = Map.put(args_with_context, "action", action)
+            {:error, reason} ->
+              emit_telemetry(parent_execution_id, tool_action, :error, start_time)
 
-              case dispatch_tool(tool, ctx, args_with_action, opts, :spawn) do
-                {:ok, result} ->
-                  emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
-                  {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
+              {encode_error(:dispatch_error, stringify_reason(reason)),
+               %{tool: tool, action: action}}
+          end
+        end
 
-                {:error, reason} ->
-                  emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+        case Opus.AsyncTracker.spawn_task(tracker, fun, tool_action) do
+          {:ok, task_id} ->
+            Opus.Telemetry.formula_spawn(parent_execution_id, task_id, tool_action)
+            safe_encode(%{"task_id" => task_id})
 
-                  {encode_error(:dispatch_error, stringify_reason(reason)),
-                   %{tool: tool, action: action}}
-              end
-            end
+          {:error, :max_tasks_exceeded} ->
+            encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
 
-            case Opus.AsyncTracker.spawn_task(tracker, fun, tool_action) do
-              {:ok, task_id} ->
-                Opus.Telemetry.formula_spawn(parent_execution_id, task_id, tool_action)
-                safe_encode(%{"task_id" => task_id})
-
-              {:error, :max_tasks_exceeded} ->
-                encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
-
-              {:error, reason} ->
-                encode_error(:spawn_failed, inspect(reason))
-            end
+          {:error, reason} ->
+            encode_error(:spawn_failed, inspect(reason))
         end
 
       {:error, type, message} ->
@@ -791,33 +761,10 @@ defmodule Opus.FormulaHandler do
 
   # When a formula calls tools.list, filter the result to only show
   # tools and actions that the formula can actually use.
-  defp maybe_filter_tools_list("tools.list", %{tools: tools} = result, policy)
-       when is_list(tools) do
-    %{result | tools: RestrictedTools.filter_tool_list(:formula, tools, policy)}
-  end
-
-  defp maybe_filter_tools_list(_tool_action, result, _policy), do: result
 
   # ============================================================================
   # Private: Tool Access Check
   # ============================================================================
-
-  defp check_tool_access(policy, tool_action) do
-    # Hard block: restricted tools are never allowed for formulas
-    case RestrictedTools.check(:formula, tool_action) do
-      {:restricted, pattern} ->
-        {:denied,
-         "Tool '#{tool_action}' is restricted for formula components (matches '#{pattern}')"}
-
-      :allowed ->
-        # Soft check: policy allowlist (nil policy = allow all)
-        if policy == nil or Policy.allows_tool?(policy, tool_action) do
-          :allowed
-        else
-          {:denied, "Tool '#{tool_action}' not in allowed_tools"}
-        end
-    end
-  end
 
   # ============================================================================
   # Private: Request Parsing (MCP format)
@@ -842,17 +789,6 @@ defmodule Opus.FormulaHandler do
         {:error, :invalid_json, "Invalid JSON request"}
     end
   end
-
-  # ============================================================================
-  # Private: Context Threading
-  # ============================================================================
-
-  defp maybe_add_parent_id("execution", args, parent_id, root_id) do
-    args = Map.put(args, "parent_execution_id", parent_id)
-    if root_id, do: Map.put(args, "root_execution_id", root_id), else: args
-  end
-
-  defp maybe_add_parent_id(_tool, args, _parent_id, _root_id), do: args
 
   # ============================================================================
   # Private: Response Encoding

@@ -57,10 +57,10 @@ defmodule Opus.OAuthHandler do
   @spec build_oauth_imports(Context.t(), String.t(), String.t(), map(), keyword()) :: map()
   def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, oauth_config, opts \\ [])
       when is_map(oauth_config) do
-    resolver =
-      Keyword.get(opts, :resolver, fn provider ->
-        Sanctum.OAuth.get_access_token(ctx, component_ref, provider)
-      end)
+    # The resolver is edge-supplied (vault-reader-backed) — the
+    # callee-keyed default died with the legacy execution path.
+    resolver = Keyword.fetch!(opts, :resolver)
+    _ = ctx
 
     %{
       "cyfr:oauth/token@0.1.0" => %{

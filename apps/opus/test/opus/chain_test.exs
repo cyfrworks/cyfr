@@ -490,8 +490,9 @@ defmodule Opus.ChainTest do
     test "a consented catalyst with no legacy policy rows executes under its blob", %{
       ctx: ctx
     } do
-      # The legacy path refuses a catalyst with no configured capabilities;
-      # the authority path never consults that resolver — the blob is the
+      # No policy rows exist for this catalyst, and the callee-keyed
+      # resolver is gone: a direct run without an authority fails closed,
+      # while the authority path executes under the blob — the blob is the
       # policy. Reaching the runtime witness proves it.
       admin_ctx = Sanctum.TestContext.local()
       wasm_bytes = File.read!(@math_wasm_path)
@@ -542,11 +543,13 @@ defmodule Opus.ChainTest do
 
       seed(ctx, profile, consent)
 
-      # Legacy refusal first, proving the catalyst really has no policy.
-      assert {:error, legacy_error} =
+      # Authority-less refusal first: without a consent-rooted authority
+      # nothing executes, so the blob below is provably the only policy in
+      # play.
+      assert {:error, no_authority_error} =
                Opus.Executor.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
 
-      assert legacy_error =~ "has no capabilities configured"
+      assert no_authority_error =~ "without an authority is not a thing"
 
       attach_witness()
 

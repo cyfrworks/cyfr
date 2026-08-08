@@ -4,10 +4,12 @@
 defmodule Opus.ResourceLimitsTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Context
+  alias Sanctum.Authority
+  alias Sanctum.Authority.Blob
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
+  @test_node "reagent:local.test-math"
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "opus_limits_test_#{:rand.uniform(100_000)}")
@@ -41,18 +43,51 @@ defmodule Opus.ResourceLimitsTest do
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
-  # ============================================================================
-  # High-Level API (Opus.run) — tests Component Model path
-  # ============================================================================
+  # Limits are the blob's node limits, frozen at consent time — the
+  # authority carries them, the executor enforces them.
+  defp authority_with_limits(max_memory_bytes) do
+    blob_map = %{
+      "canonical" => "jcs-1",
+      "nodes" => %{
+        @test_node => %{
+          "limits" => %{
+            "timeout" => "1m",
+            "max_memory_bytes" => max_memory_bytes,
+            "max_request_size" => 1_048_576,
+            "max_response_size" => 5_242_880,
+            "rate_limit" => %{"requests" => 100, "window" => "1m"},
+            "max_concurrent_tasks" => 5,
+            "batch_timeout" => "1m"
+          },
+          "edges" => %{"@ingress" => %{}}
+        }
+      }
+    }
 
-  describe "Opus.run with limits" do
+    {:ok, blob} = Blob.parse(blob_map)
+
+    profile = %{
+      profile_id: "prof-limits",
+      consent_id: "consent-limits",
+      source_ref: @test_node,
+      kind: :owner,
+      invoke_mode: :open_inert,
+      activation: %{@test_node => "sha256:act-limits"}
+    }
+
+    {:ok, auth} = Authority.root(profile, blob)
+    auth
+  end
+
+  describe "execution under the blob's node limits" do
     test "passes memory limit to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
+      auth = authority_with_limits(8 * 1024 * 1024)
+      assert Authority.limits(auth).max_memory_bytes == 8 * 1024 * 1024
+
       {:error, error_msg} =
-        Opus.run(
-          ctx,
-          ref,
-          %{"a" => 10, "b" => 10},
-          max_memory_bytes: 8 * 1024 * 1024
+        Opus.Executor.run(ctx, ref, %{"a" => 10, "b" => 10},
+          type: :reagent,
+          authority: auth
         )
 
       assert error_msg =~ "Component"
@@ -61,12 +96,12 @@ defmodule Opus.ResourceLimitsTest do
     end
 
     test "passes both limits to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
+      auth = authority_with_limits(16 * 1024 * 1024)
+
       {:error, error_msg} =
-        Opus.run(
-          ctx,
-          ref,
-          %{"a" => 3, "b" => 7},
-          max_memory_bytes: 16 * 1024 * 1024
+        Opus.Executor.run(ctx, ref, %{"a" => 3, "b" => 7},
+          type: :reagent,
+          authority: auth
         )
 
       assert error_msg =~ "Component"

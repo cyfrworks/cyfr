@@ -29,54 +29,13 @@ defmodule Opus.PolicyEnforcer do
 
   """
 
-  require Logger
-
-  alias Sanctum.{Context, Policy}
-  alias Sanctum.Policy.Enforcement
+  alias Sanctum.Policy
 
   @type component_type :: :catalyst | :reagent | :formula
 
   # ============================================================================
   # Public API
   # ============================================================================
-
-  @doc """
-  Validate that a component can be executed with the current policy.
-
-  For Catalysts, this checks that:
-  1. A policy exists for the component
-  2. The policy has at least one capability (`allowed_domains` or `allowed_paths`)
-
-  Returns `:ok` or `{:error, reason}`.
-
-  ## Examples
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Opus.PolicyEnforcer.validate_execution(ctx, "stripe-catalyst", :catalyst)
-      {:ok, %Sanctum.Policy{}}
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Opus.PolicyEnforcer.validate_execution(ctx, "unknown", :catalyst)
-      {:error, "Catalyst 'unknown' has no allowed_domains configured. ..."}
-
-  """
-  @spec validate_execution(Context.t(), String.t(), component_type()) ::
-          {:ok, Policy.t()} | {:error, String.t()}
-  def validate_execution(%Context{} = ctx, component_ref, component_type) do
-    case component_type do
-      :reagent ->
-        # Reagents have no network access - always allowed, fetch policy for caller
-        get_policy(ctx, component_ref)
-
-      :formula ->
-        # Formulas have no network access - always allowed, fetch policy for caller
-        get_policy(ctx, component_ref)
-
-      :catalyst ->
-        # Catalysts need explicit policy — returns {:ok, policy} to avoid re-fetching
-        validate_catalyst_policy(ctx, component_ref)
-    end
-  end
 
   @doc """
   Check if a specific domain is allowed by the policy.
@@ -177,109 +136,7 @@ defmodule Opus.PolicyEnforcer do
     end
   end
 
-  @doc """
-  Get the effective policy for a component.
-  """
-  @spec get_policy(Context.t(), String.t()) :: {:ok, Policy.t()} | {:error, term()}
-  def get_policy(%Context{} = ctx, component_ref) do
-    case Sanctum.Policy.get_effective(ctx, component_ref) do
-      {:ok, policy, meta} ->
-        case Map.get(meta, :uncovered_capabilities) do
-          nil ->
-            :ok
-
-          [] ->
-            :ok
-
-          caps when is_list(caps) ->
-            Logger.warning(
-              "[PolicyEnforcer] Component #{component_ref} has uncovered capabilities: #{Enum.join(caps, ", ")}. " <>
-                "Review policy with: cyfr policy get_effective #{component_ref}"
-            )
-        end
-
-        {:ok, policy}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Build execution options with policy constraints.
-
-  Returns options to pass to `Opus.Runtime.execute_component/3`,
-  including policy-derived settings like timeout and memory limits.
-
-  ## Examples
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> {:ok, opts} = Opus.PolicyEnforcer.build_execution_opts(ctx, "stripe-catalyst", :catalyst)
-      iex> opts[:timeout_ms]
-      30000
-
-  """
-  @spec build_execution_opts(Context.t(), String.t(), component_type()) ::
-          {:ok, keyword()} | {:error, String.t()}
-  def build_execution_opts(%Context{} = ctx, component_ref, component_type) do
-    with {:ok, policy} <- validate_execution(ctx, component_ref, component_type) do
-      ceiling = Sanctum.Policy.Ceiling.effective_ceiling(ctx)
-      clamped = Sanctum.Policy.Ceiling.clamp(policy, ceiling)
-
-      case Policy.timeout_ms(clamped) do
-        {:ok, timeout} ->
-          {:ok,
-           [
-             component_type: component_type,
-             timeout_ms: timeout,
-             max_memory_bytes: clamped.max_memory_bytes,
-             policy: clamped
-           ]}
-
-        {:error, _} = err ->
-          err
-      end
-    end
-  end
-
   # ============================================================================
   # Private Functions
   # ============================================================================
-
-  defp validate_catalyst_policy(ctx, component_ref) do
-    case get_policy(ctx, component_ref) do
-      {:ok, %Policy{} = policy} ->
-        has_domains = is_list(policy.allowed_domains) and policy.allowed_domains != []
-        has_storage = is_list(policy.allowed_paths) and policy.allowed_paths != []
-
-        if has_domains or has_storage do
-          {:ok, policy}
-        else
-          Enforcement.record(%{
-            ctx: ctx,
-            component_ref: component_ref,
-            component_type: :catalyst,
-            event_type: :policy_unconfigured,
-            decision: :denied,
-            decision_reason: "Catalyst '#{component_ref}' has no capabilities configured"
-          })
-
-          {:error,
-           """
-           Catalyst '#{component_ref}' has no capabilities configured.
-
-           Catalysts require at least one of:
-             - allowed_domains (for HTTP access)
-             - allowed_paths (for file storage access)
-
-           Configure with:
-             cyfr policy set #{component_ref} allowed_domains '["api.example.com"]'
-             cyfr policy set #{component_ref} allowed_paths '["data/"]'
-           """}
-        end
-
-      {:error, reason} ->
-        {:error, "Failed to load policy for '#{component_ref}': #{inspect(reason)}"}
-    end
-  end
 end

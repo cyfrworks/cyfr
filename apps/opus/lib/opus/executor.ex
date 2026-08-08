@@ -219,11 +219,17 @@ defmodule Opus.Executor do
       record
   end
 
-  # Stage 1: Policy enforcement, dependency checks, input validation, rate limiting
+  # Stage 1: capability enforcement. Every execution roots under an
+  # authority — a missing one is a caller bug, and the raise names it
+  # rather than running with ambient permissions.
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
     case p.opts[:authority] do
-      nil -> enforce_legacy_policy(p, input)
-      %Sanctum.Authority{} = authority -> enforce_authority(p, authority, input)
+      %Sanctum.Authority{} = authority ->
+        enforce_authority(p, authority, input)
+
+      other ->
+        raise ArgumentError,
+              "execution without an authority is not a thing: #{inspect(other)}"
     end
   end
 
@@ -295,31 +301,6 @@ defmodule Opus.Executor do
 
   defp value_source(_resources), do: nil
 
-  defp enforce_legacy_policy(%ExecutionPipeline{} = p, input) do
-    with {:ok, exec_opts} <-
-           Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
-         :ok <-
-           check_dependency_satisfaction(p.ctx, p.component_type, p.component, p.component_ref),
-         {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
-         :ok <- check_rate_limit(p.ctx, p.component_ref, exec_opts) do
-      # One consultation row per execution, capturing the policy snapshot that
-      # allowed it. The execution row itself is persisted later (stage 3), so
-      # execution_id here may not correspond to a stored execution if a later
-      # stage fails — it is a plain string, never joined via FK.
-      Enforcement.record(%{
-        ctx: p.ctx,
-        component_ref: p.component_ref,
-        component_type: p.component_type,
-        event_type: :policy_consultation,
-        decision: :allowed,
-        execution_id: p.record.id,
-        host_policy_snapshot: build_host_policy_snapshot(exec_opts)
-      })
-
-      {:ok, %{p | exec_opts: exec_opts, policy: Keyword.get(exec_opts, :policy)}}
-    end
-  end
-
   # Stage 2: Fetch WASM bytes, compute digest, verify integrity + signature
   defp stage_fetch_and_verify(%ExecutionPipeline{} = p) do
     with {:ok, wasm_bytes} <- fetch_component_bytes(p.ctx, p.component),
@@ -342,35 +323,27 @@ defmodule Opus.Executor do
     end
   end
 
-  # Stage 4: Resolve secrets for the component.
-  # Under an authority the callee-keyed grant plane is never consulted:
-  # credentials come only from the current edge's vault resource, projected
-  # by the vault reader. No vault edge means no secrets — an ungranted
-  # read denies exactly as an empty resolution does today.
+  # Stage 4: resolve credentials. The callee-keyed grant plane is never
+  # consulted: credentials come only from the current edge's vault
+  # resource, projected by the vault reader. No vault edge means no
+  # secrets — an ungranted read denies exactly as an empty resolution.
   defp stage_resolve_secrets(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
-      nil ->
-        with {:ok, preloaded_secrets} <- resolve_secrets(p.ctx, p.component_ref) do
-          {:ok, %{p | preloaded_secrets: preloaded_secrets}}
-        end
-
       %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} ->
         case Sanctum.VaultReader.fetch(p.ctx, vault) do
           {:ok, secrets} -> {:ok, %{p | preloaded_secrets: secrets}}
           {:error, reason} -> {:error, "Vault resolution failed: #{inspect(reason)}"}
         end
 
-      %Sanctum.Authority{} ->
+      _ ->
         {:ok, %{p | preloaded_secrets: %{}}}
     end
   end
 
   # Stage 5: Resolve OAuth config from manifest (lightweight — no DB/network).
-  # The manifest block is validation data (declared providers, token URLs),
-  # not credentials — both paths read it. Which credential a provider name
-  # resolves to differs: the runtime gives authority executions a
-  # vault-reader-backed resolver, the legacy path keeps the callee-keyed
-  # lookup.
+  # The legacy oauth block is validation data (declared providers, token
+  # URLs), never credentials; the runtime's resolver is vault-reader-backed.
+  # Dies with the manifest block's deletion.
   defp stage_resolve_oauth(%ExecutionPipeline{} = p) do
     manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
     {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
@@ -634,49 +607,6 @@ defmodule Opus.Executor do
     end
   end
 
-  # Check that all required static dependencies are satisfied for formula components.
-  # Non-formula types skip this check. Formulas with no static deps declared also pass
-  # (supports dynamic-discovery pattern).
-  defp check_dependency_satisfaction(_ctx, component_type, _component, _component_ref)
-       when component_type != :formula,
-       do: :ok
-
-  defp check_dependency_satisfaction(_ctx, :formula, nil, _component_ref), do: :ok
-
-  defp check_dependency_satisfaction(ctx, :formula, component, component_ref) do
-    manifest = Compendium.Manifest.decode(component[:manifest] || component["manifest"])
-
-    case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
-      {:ok, []} ->
-        :ok
-
-      {:ok, deps} ->
-        availability = Compendium.DependencyResolver.classify_availability(ctx, deps)
-
-        if availability.all_satisfied do
-          :ok
-        else
-          missing_refs = Enum.map(availability.missing, & &1[:dependency_ref])
-
-          Enforcement.record(%{
-            ctx: ctx,
-            component_ref: component_ref,
-            component_type: :formula,
-            event_type: :dependency_unsatisfied,
-            decision: :denied,
-            decision_reason: "missing required dependencies: #{Enum.join(missing_refs, ", ")}"
-          })
-
-          {:error,
-           "Missing required dependencies: #{Enum.join(missing_refs, ", ")}. " <>
-             "Run 'cyfr pull <ref>' to resolve."}
-        end
-
-      {:error, reason} ->
-        {:error, "Failed to parse formula dependencies: #{inspect(reason)}"}
-    end
-  end
-
   # Public profiles enforce both buckets: per caller IP for fairness, and
   # per (profile, node) so an address-hopping crowd cannot multiply the
   # credential and spend exposure. The transport per-IP plug stays beneath
@@ -709,45 +639,6 @@ defmodule Opus.Executor do
 
       {:error, reason} ->
         {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}."}
-    end
-  end
-
-  defp check_rate_limit(ctx, component_ref, _exec_opts) do
-    with {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, component_ref) do
-      case Sanctum.Policy.check_rate_limit(policy, ctx, component_ref) do
-        {:ok, _remaining} ->
-          :ok
-
-        {:error, :rate_limited, retry_after} ->
-          {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
-
-        {:error, reason} ->
-          {:error,
-           "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
-      end
-    else
-      {:error, reason} ->
-        {:error,
-         "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
-    end
-  end
-
-  # Resolve all granted secrets for a component into a map,
-  # or return empty map if component_ref is unavailable (reagents without secrets).
-  defp resolve_secrets(_ctx, nil), do: {:ok, %{}}
-
-  defp resolve_secrets(ctx, component_ref) do
-    case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
-      {:ok, %{secrets: secrets}} ->
-        {:ok, secrets}
-
-      {:error, {:partial_decrypt, failed}} ->
-        {:error,
-         "Failed to resolve #{length(failed)} secret(s) for #{component_ref}: #{Enum.join(failed, ", ")}. " <>
-           "Grant access with: cyfr secret grant <secret-name> #{component_ref}"}
-
-      {:error, reason} ->
-        {:error, "Failed to resolve secrets: #{inspect(reason)}"}
     end
   end
 

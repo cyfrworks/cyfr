@@ -5,10 +5,14 @@ defmodule Opus.FormulaHandlerTest do
   use ExUnit.Case, async: false
 
   alias Opus.FormulaHandler
+  alias Sanctum.Authority
+  alias Sanctum.Authority.Blob
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
+  @test_node "reagent:local.test-math"
+  @fh_node "formula:local.fh-root"
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "formula_handler_test_#{:rand.uniform(100_000)}")
@@ -53,6 +57,83 @@ defmodule Opus.FormulaHandlerTest do
       "input" => input,
       "type" => type
     })
+  end
+
+  defp limits_map do
+    %{
+      "timeout" => "1m",
+      "max_memory_bytes" => 67_108_864,
+      "max_request_size" => 1_048_576,
+      "max_response_size" => 5_242_880,
+      "rate_limit" => %{"requests" => 100, "window" => "1m"},
+      "max_concurrent_tasks" => 10,
+      "batch_timeout" => "5m"
+    }
+  end
+
+  # A root authority bound at @fh_node. `tools` grants ride the ingress
+  # edge; `edges` are the consented invoke targets; `invoke_mode`
+  # distinguishes inert dynamic dispatch from edge_only containment.
+  defp authority(opts \\ []) do
+    edges = Keyword.get(opts, :edges, %{})
+    tools = Keyword.get(opts, :tools, [])
+    invoke_mode = Keyword.get(opts, :invoke_mode, :open_inert)
+
+    extra_nodes =
+      edges
+      |> Map.keys()
+      |> Map.new(fn target -> {target, %{"limits" => limits_map(), "edges" => %{}}} end)
+
+    blob_map = %{
+      "canonical" => "jcs-1",
+      "nodes" =>
+        Map.merge(
+          %{
+            @fh_node => %{
+              "limits" => limits_map(),
+              "edges" => Map.merge(%{"@ingress" => %{"tools" => tools}}, edges)
+            }
+          },
+          extra_nodes
+        )
+    }
+
+    {:ok, blob} = Blob.parse(blob_map)
+
+    profile = %{
+      profile_id: "prof-fh",
+      consent_id: "consent-fh",
+      source_ref: @fh_node,
+      kind: if(invoke_mode == :edge_only, do: :public, else: :owner),
+      invoke_mode: invoke_mode,
+      activation: %{@fh_node => "sha256:act-fh"}
+    }
+
+    {:ok, auth} = Authority.root(profile, blob)
+    auth
+  end
+
+  # The opts an execute/3 closure carries under an authority, with the
+  # guest-planed context the runtime would hand it.
+  defp auth_opts(auth, parent_id, extra \\ []) do
+    Keyword.merge([parent_execution_id: parent_id, authority: auth], extra)
+  end
+
+  defp fork_imports(ctx, auth, parent_id, overrides \\ []) do
+    FormulaHandler.build_formula_imports(
+      Context.enter_guest(ctx),
+      parent_id,
+      Keyword.merge(
+        [
+          root_execution_id: parent_id,
+          policy: Opus.AuthorityShim.policy_from_edge(auth),
+          authority: auth,
+          declared_needs: [],
+          activation_digest: "sha256:act-fh"
+        ],
+        overrides
+      )
+    )
   end
 
   # ============================================================================
@@ -146,25 +227,30 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "execute/3 - MCP dispatch" do
-    test "dispatches execution.run through ToolRegistry", %{ctx: ctx, ref: ref} do
+    test "dispatches execution.run through the chain on a consented edge", %{ctx: ctx, ref: ref} do
       parent_exec_id = "exec_formula-parent-#{:rand.uniform(100_000)}"
+      auth = authority(edges: %{@test_node => %{}})
 
       json = execution_run_request(ref, %{"a" => 5, "b" => 3})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id)
+
+      result =
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
+
       parsed = Jason.decode!(result)
 
-      # math.wasm is a core module; execution fails with Component Model error
-      # But it dispatches correctly through MCP
-      assert Map.has_key?(parsed, "status") or Map.has_key?(parsed, "error")
+      # math.wasm is a core module, so the bound child fails at component
+      # compile — after the edge decision, never as a denial.
+      assert parsed["error"]["type"] == "dispatch_error"
+      refute parsed["error"]["type"] == "tool_denied"
     end
 
     test "dispatches to non-execution tools", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["tools.list"]}
+      auth = authority(tools: ["tools.list"])
 
       json = mcp_request("tools", "list")
 
       result =
-        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_tools_test", policy: policy)
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_tools_test"))
 
       parsed = Jason.decode!(result)
 
@@ -173,193 +259,158 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "returns dispatch error for unregistered component", %{ctx: ctx} do
-      # An unregistered component has no profile, so the run is refused by
-      # the consent gate before resolution is attempted.
+      # Dynamic dispatch to a ref the registry cannot resolve keeps its
+      # error shape: the zero child reaches the executor and fails there.
+      auth = authority()
       json = execution_run_request("reagent:local.missing:0.1.0", %{"a" => 1})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent-123")
+
+      result =
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_parent-123"))
+
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "consent_required: "
+      assert parsed["error"]["message"] =~ "resolve"
     end
   end
 
   # ============================================================================
-  # execute/4 - Policy Enforcement
+  # execute/4 - Invoke containment
   # ============================================================================
 
-  describe "execute/3 - policy enforcement" do
-    test "denies tool not in allowed_tools", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["storage.read"]}
+  describe "execute/3 - invoke containment" do
+    test "an edge_only authority denies an off-edge invoke", %{ctx: ctx, ref: ref} do
+      auth = authority(invoke_mode: :edge_only)
 
-      json = mcp_request("execution", "run", %{"reference" => "reagent:test:0.1.0"})
+      json = execution_run_request(ref, %{"a" => 1, "b" => 2})
 
       result =
-        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent", policy: policy)
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_parent"))
 
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "execution.run"
+      assert parsed["error"]["message"] =~ "edge_only"
     end
 
-    test "allows all tools when policy is nil", %{ctx: ctx, ref: ref} do
-      json = execution_run_request(ref, %{"a" => 1, "b" => 2})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent")
-      parsed = Jason.decode!(result)
-
-      # Should not be tool_denied
-      refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
-    end
-
-    test "allows tool with wildcard match", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"]}
+    test "an open_inert authority runs an off-edge invoke inert, not denied", %{
+      ctx: ctx,
+      ref: ref
+    } do
+      auth = authority()
 
       json = execution_run_request(ref, %{"a" => 1, "b" => 2})
 
       result =
-        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent", policy: policy)
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_parent"))
 
       parsed = Jason.decode!(result)
 
+      # The zero child carries nothing but is not a refusal.
       refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
     end
   end
 
   # ============================================================================
-  # execute/4 - tools.list filtering
+  # execute/4 - In-chain plane containment
   # ============================================================================
 
-  describe "execute/3 - tools.list filtering" do
-    test "tools.list filters out restricted tools for formulas", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["tools.list", "execution.*", "guide.*"]}
+  describe "execute/3 - in-chain plane containment" do
+    # session/key/policy mutation actions are external-plane only: the
+    # reachability gate refuses them from a running chain before any
+    # grant is consulted, so even a consented edge cannot open them.
 
-      json = mcp_request("tools", "list")
+    test "blocks an external-only tool with no grant", %{ctx: ctx} do
+      auth = authority()
+
+      json = mcp_request("session", "login", %{"user" => "admin"})
 
       result =
-        FormulaHandler.execute(json, ctx,
-          parent_execution_id: "exec_tools_filtered",
-          policy: policy
+        FormulaHandler.execute(
+          json,
+          Context.enter_guest(ctx),
+          auth_opts(auth, "exec_restricted_nil")
         )
 
       parsed = Jason.decode!(result)
 
-      assert parsed["status"] == "completed"
-      tool_names = Enum.map(parsed["output"]["tools"], & &1["name"])
-
-      # Restricted namespaces should be removed
-      refute "session" in tool_names
-      refute "key" in tool_names
-      refute "permission" in tool_names
-      refute "secret_store" in tool_names
-      refute "policy_store" in tool_names
-
-      # Safe tools that are in policy should be present
-      # (execution and guide are in allowed_tools)
+      assert parsed["error"]["type"] == "dispatch_error"
+      assert parsed["error"]["message"] =~ "not reachable from a running chain"
     end
 
-    test "tools.list with nil policy shows all non-restricted tools", %{ctx: ctx} do
-      json = mcp_request("tools", "list")
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_tools_nil_policy")
-      parsed = Jason.decode!(result)
-
-      assert parsed["status"] == "completed"
-      tool_names = Enum.map(parsed["output"]["tools"], & &1["name"])
-
-      # Restricted namespaces should still be removed even with nil policy
-      refute "session" in tool_names
-      refute "key" in tool_names
-    end
-  end
-
-  # ============================================================================
-  # execute/4 - Restricted tools enforcement
-  # ============================================================================
-
-  describe "execute/3 - restricted tools enforcement" do
-    test "blocks restricted tool even with nil policy", %{ctx: ctx} do
-      json = mcp_request("session", "login", %{"user" => "admin"})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_restricted_nil")
-      parsed = Jason.decode!(result)
-
-      assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "restricted for formula"
-      assert parsed["error"]["message"] =~ "session.*"
-    end
-
-    test "blocks restricted tool even when policy explicitly allows it", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["session.*", "policy.set"]}
+    test "blocks an external-only tool even when the edge grants it", %{ctx: ctx} do
+      auth = authority(tools: ["policy.set"])
 
       json = mcp_request("policy", "set", %{"ref" => "test:1.0.0"})
 
       result =
-        FormulaHandler.execute(json, ctx,
-          parent_execution_id: "exec_restricted_allowed",
-          policy: policy
+        FormulaHandler.execute(
+          json,
+          Context.enter_guest(ctx),
+          auth_opts(auth, "exec_restricted_allowed")
         )
 
       parsed = Jason.decode!(result)
 
-      assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "restricted for formula"
-      assert parsed["error"]["message"] =~ "policy.set"
+      assert parsed["error"]["type"] == "dispatch_error"
+      assert parsed["error"]["message"] =~ "not reachable from a running chain"
     end
 
-    test "blocks restricted tool with '*' wildcard policy", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["*"]}
+    test "blocks key.create in-chain regardless of grants", %{ctx: ctx} do
+      auth = authority(tools: ["key.create"])
 
       json = mcp_request("key", "create", %{})
 
       result =
-        FormulaHandler.execute(json, ctx,
-          parent_execution_id: "exec_restricted_star",
-          policy: policy
+        FormulaHandler.execute(
+          json,
+          Context.enter_guest(ctx),
+          auth_opts(auth, "exec_restricted_star")
         )
 
       parsed = Jason.decode!(result)
 
-      assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "restricted for formula"
-      assert parsed["error"]["message"] =~ "key.*"
+      assert parsed["error"]["type"] == "dispatch_error"
+      assert parsed["error"]["message"] =~ "not reachable from a running chain"
     end
 
-    test "allows safe tools through normally", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["tools.list"]}
+    test "allows granted in-chain tools through normally", %{ctx: ctx} do
+      auth = authority(tools: ["tools.list"])
 
       json = mcp_request("tools", "list")
 
       result =
-        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_safe_tool", policy: policy)
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_safe_tool"))
 
       parsed = Jason.decode!(result)
 
-      refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
+      refute match?(%{"error" => _}, parsed)
+      assert parsed["status"] == "completed"
     end
   end
 
   # ============================================================================
-  # spawn - restricted tools enforcement
+  # spawn - in-chain plane containment
   # ============================================================================
 
-  describe "spawn - restricted tools enforcement" do
-    test "spawn blocks restricted tools", %{ctx: ctx} do
-      policy = %Sanctum.Policy{
-        allowed_tools: ["*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
+  describe "spawn - in-chain plane containment" do
+    test "a spawned external-only tool call is refused in the task result", %{ctx: ctx} do
+      auth = authority(tools: ["secret.delete"])
 
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_spawn_restricted", policy: policy)
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_restricted")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
+      await_fn = elem(invoke_ns["await"], 1)
 
-      result = spawn_fn.(mcp_request("secret", "delete", %{"key" => "test"}))
-      parsed = Jason.decode!(result)
+      spawn_result = spawn_fn.(mcp_request("secret", "delete", %{"key" => "test"}))
+      %{"task_id" => task_id} = Jason.decode!(spawn_result)
 
-      assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "restricted for formula"
+      awaited = Jason.decode!(await_fn.(task_id))
+
+      assert awaited["status"] == "error"
+      assert awaited["error"]["type"] == "dispatch_error"
+      assert awaited["error"]["message"] =~ "not reachable from a running chain"
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -383,9 +434,10 @@ defmodule Opus.FormulaHandlerTest do
       )
 
       parent_exec_id = "exec_formula-telem-#{:rand.uniform(100_000)}"
+      auth = authority(edges: %{@test_node => %{}})
 
       json = execution_run_request(ref, %{"a" => 2, "b" => 3})
-      FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id)
+      FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
 
       assert_receive {:mcp_tool_call, metadata}, 5000
       assert metadata.execution_id == parent_exec_id
@@ -395,7 +447,7 @@ defmodule Opus.FormulaHandlerTest do
       :telemetry.detach("test-formula-mcp-tool-success")
     end
 
-    test "emits telemetry with error status for denied tool", %{ctx: ctx} do
+    test "emits telemetry with error status for denied invoke", %{ctx: ctx, ref: ref} do
       test_pid = self()
 
       :telemetry.attach(
@@ -407,9 +459,9 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      policy = %Sanctum.Policy{allowed_tools: []}
-      json = mcp_request("execution", "run")
-      FormulaHandler.execute(json, ctx, parent_execution_id: "exec_denied", policy: policy)
+      auth = authority(invoke_mode: :edge_only)
+      json = execution_run_request(ref, %{})
+      FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, "exec_denied"))
 
       assert_receive {:mcp_tool_status, :error}, 5000
 
@@ -423,14 +475,8 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "spawn + await integration" do
     test "spawn returns task_id, await returns result", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{
-        allowed_tools: ["execution.*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_spawn_test", policy: policy)
+      auth = authority(edges: %{@test_node => %{}})
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_test")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
 
@@ -455,10 +501,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "spawn returns error when request is invalid", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_spawn_err", policy: policy)
+      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_spawn_err")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -470,22 +513,19 @@ defmodule Opus.FormulaHandlerTest do
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
-    test "spawn denies tool not in allowed_tools", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{
-        allowed_tools: ["storage.read"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_spawn_denied", policy: policy)
+    test "spawn denies an off-edge invoke under edge_only, synchronously", %{ctx: ctx, ref: ref} do
+      auth = authority(invoke_mode: :edge_only)
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_denied")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
 
+      # The transition decides before any task exists: a denied spawn
+      # consumes no task slot and no budget.
       result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
       parsed = Jason.decode!(result)
       assert parsed["error"]["type"] == "tool_denied"
+      assert Authority.budget(auth).in_flight == 0
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -497,14 +537,8 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "spawn + await-all integration" do
     test "spawns multiple tasks and awaits all results", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{
-        allowed_tools: ["execution.*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_await_all", policy: policy)
+      auth = authority(edges: %{@test_node => %{}})
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_await_all")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -534,10 +568,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "await-all returns error for invalid JSON", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_aa_err", policy: policy)
+      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_aa_err")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       await_all_fn = elem(invoke_ns["await-all"], 1)
@@ -556,14 +587,8 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "poll integration" do
     test "poll returns pending for running task, then completed", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{
-        allowed_tools: ["execution.*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_poll", policy: policy)
+      auth = authority(edges: %{@test_node => %{}})
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_poll")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -585,10 +610,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "poll returns error for unknown task_id", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_poll_err", policy: policy)
+      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_poll_err")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       poll_fn = elem(invoke_ns["poll"], 1)
@@ -608,14 +630,8 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "cancel integration" do
     test "cancel returns cancelled response for running task", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{
-        allowed_tools: ["execution.*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cancel_test", policy: policy)
+      auth = authority(edges: %{@test_node => %{}})
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_cancel_test")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -636,10 +652,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "cancel returns error for unknown task_id", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cancel_unknown", policy: policy)
+      {imports, tracker_pid} = fork_imports(ctx, authority(), "exec_cancel_unknown")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       cancel_fn = elem(invoke_ns["cancel"], 1)
@@ -685,14 +698,8 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      policy = %Sanctum.Policy{
-        allowed_tools: ["execution.*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cancel_telem", policy: policy)
+      auth = authority(edges: %{@test_node => %{}})
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_cancel_telem")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -729,14 +736,8 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      policy = %Sanctum.Policy{
-        allowed_tools: ["execution.*"],
-        max_concurrent_tasks: 10,
-        batch_timeout: "5m"
-      }
-
-      {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_telem_spawn", policy: policy)
+      auth = authority(edges: %{@test_node => %{}})
+      {imports, tracker_pid} = fork_imports(ctx, auth, "exec_telem_spawn")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -1046,14 +1047,13 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "execute/3 - setup error remediation" do
-    test "enriches setup errors with remediation field", %{ctx: ctx} do
-      # Trigger a setup error by running a catalyst with no policy
-      # Use a non-existent catalyst to get a dispatch_error (not a setup error)
-      # Then test with a known setup error pattern
+    test "an unsatisfiable consented dependency is setup_required with remediation", %{ctx: ctx} do
+      # The consent names an edge to a component the installed world
+      # cannot resolve: the bound invoke refuses with a remediation the
+      # surface can act on, instead of a bare dispatch failure.
       parent_exec_id = "exec_remediation_#{:rand.uniform(100_000)}"
+      auth = authority(edges: %{"catalyst:local.no-policy-test" => %{}})
 
-      # The policy enforcer produces this error for catalysts with no capabilities
-      # We test by calling execution.run on a catalyst that has no policy set
       json =
         mcp_request("execution", "run", %{
           "reference" => "catalyst:local.no-policy-test:0.1.0",
@@ -1061,74 +1061,31 @@ defmodule Opus.FormulaHandlerTest do
           "type" => "catalyst"
         })
 
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id)
-      parsed = Jason.decode!(result)
-
-      # The component doesn't exist, so we get a dispatch_error (not setup)
-      # This verifies non-setup errors are unchanged
-      assert parsed["error"]["type"] in ["dispatch_error", "setup_required"]
-    end
-
-    test "emits setup_required event to ExecutionEventBuffer", %{ctx: ctx} do
-      parent_exec_id = "exec_setup_event_#{:rand.uniform(100_000)}"
-      emit_counter = :atomics.new(1, signed: false)
-
-      # Subscribe to events for the parent execution
-      Opus.ExecutionEventBuffer.subscribe(parent_exec_id)
-
-      # Simulate: create a catalyst reference that will trigger
-      # "has no capabilities configured" error. We need a real registered
-      # catalyst for this to work.
-      wasm_bytes = File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
-
-      {:ok, _component} =
-        Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-          name: "setup-test-catalyst",
-          version: "0.1.0",
-          type: "catalyst",
-          description: "Catalyst for setup remediation test"
-        })
-
-      json =
-        mcp_request("execution", "run", %{
-          "reference" => "catalyst:local.setup-test-catalyst:0.1.0",
-          "input" => %{},
-          "type" => "catalyst"
-        })
-
       result =
-        FormulaHandler.execute(json, ctx,
-          parent_execution_id: parent_exec_id,
-          emit_counter: emit_counter
-        )
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
 
       parsed = Jason.decode!(result)
 
-      # This catalyst has no policy, so it should produce a setup error
-      if parsed["error"]["type"] == "setup_required" do
-        assert parsed["error"]["remediation"]
-        assert parsed["error"]["remediation"]["component_ref"] =~ "setup-test-catalyst"
-
-        # Verify event was emitted
-        assert_receive {:execution_event, event}, 2000
-        assert event.data["kind"] == "setup_required"
-        assert event.data["component_ref"] =~ "setup-test-catalyst"
-      end
-
-      Opus.ExecutionEventBuffer.unsubscribe(parent_exec_id)
+      assert parsed["error"]["type"] == "setup_required"
+      assert parsed["error"]["remediation"]["node_ref"] == "catalyst:local.no-policy-test:0.1.0"
+      assert parsed["error"]["remediation"]["reason"] == "unresolvable_target"
     end
 
     test "normal errors remain unchanged when not a setup issue", %{ctx: ctx} do
       parent_exec_id = "exec_normal_err_#{:rand.uniform(100_000)}"
+      auth = authority()
 
-      # A missing component reference gives dispatch_error, not setup_required
+      # A missing component off the consent graph gives dispatch_error,
+      # not setup_required
       json =
         mcp_request("execution", "run", %{
           "reference" => "reagent:local.does-not-exist:0.1.0",
           "input" => %{}
         })
 
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id)
+      result =
+        FormulaHandler.execute(json, Context.enter_guest(ctx), auth_opts(auth, parent_exec_id))
+
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "dispatch_error"

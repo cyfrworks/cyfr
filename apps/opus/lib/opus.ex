@@ -18,7 +18,7 @@ defmodule Opus do
       reference = "catalyst:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
-      {:ok, result} = Opus.run(ctx, reference, input)
+      {:ok, result} = Opus.run_root(ctx, nil, reference, input)
 
   ## Component Types
 
@@ -35,26 +35,6 @@ defmodule Opus do
 
   alias Sanctum.Context
   alias Opus.ExecutionRecord
-
-  @doc """
-  Execute a WASM component.
-
-  ## Options
-
-  - `:type` - Component type: `:catalyst`, `:reagent`, or `:formula`
-  - `:verify` - Signature verification requirements
-  - `:max_memory_bytes` - Memory limit (default: 64MB)
-  - `:fuel_limit` - CPU instruction limit (default: 100M)
-
-  ## Examples
-
-      ctx = Sanctum.TestContext.local()
-      {:ok, result} = Opus.run(ctx, "reagent:local.my-tool:0.1.0", %{"a" => 1})
-      result.status  # => :completed
-
-  """
-  @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
-  defdelegate run(ctx, reference, input, opts \\ []), to: Opus.Executor
 
   @doc """
   Root an execution chain under a profile's consent — the external-ingress

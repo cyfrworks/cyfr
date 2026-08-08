@@ -317,8 +317,6 @@ defmodule Opus.Runtime do
   defp public_storage_opts(%Sanctum.Authority{profile_kind: :public}), do: [public?: true]
   defp public_storage_opts(_authority), do: []
 
-  defp oauth_resolver_opts(nil, _ctx), do: []
-
   defp oauth_resolver_opts(%Sanctum.Authority{resources: resources}, ctx) do
     case resources do
       %Sanctum.Authority.Blob.Edge{vault: %{} = vault} ->

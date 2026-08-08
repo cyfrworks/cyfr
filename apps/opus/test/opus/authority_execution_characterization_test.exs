@@ -2,11 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.AuthorityExecutionCharacterizationTest do
-  # The twin of nested_execution_characterization_test.exs: the same real
-  # probe binary, executed under a bootstrap-minted consent through the
-  # production DB source. Where the legacy suite pins the confused-deputy
-  # behavior, this one pins the authority path's intended differences by
-  # name. Diffs between the two suites are deliberate, one by one.
+  # The surviving characterization: a real probe binary executed under a
+  # bootstrap-minted consent through the production DB source. Its legacy
+  # twin (the profile-less path's characterization) retired with that
+  # path; every property here is the authority path's intended behavior.
   use ExUnit.Case, async: false
 
   alias Opus.Test.NestedExecution, as: Probe
@@ -163,10 +162,10 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
   end
 
   test "an in-chain tool outside the consent's edge is denied", %{ctx: ctx} do
-    # secret.list is outside the probe's expanded tools. Two layers refuse
-    # it on the authority path — the shim policy's allowlist (first, while
-    # it exists) and the chain authority's tool grant — and the guest sees
-    # the same tool_denied vocabulary either way.
+    # secret.list is outside the probe's expanded tools, so the chain
+    # authority's transition relation refuses the dispatch — with the
+    # shim allowlist gone this is the only layer, and its verdict reaches
+    # the guest as an encoded error naming the authority denial.
     {:ok, run_result} =
       Opus.run_root(ctx, nil, Probe.probe_ref(), %{
         "op" => "call",
@@ -175,7 +174,9 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     assert run_result.status == :completed
 
-    assert %{"error" => %{"type" => "tool_denied"}} =
+    assert %{"error" => %{"type" => "dispatch_error", "message" => message}} =
              Jason.decode!(run_result.output["result_raw"])
+
+    assert message =~ "Denied by chain authority"
   end
 end

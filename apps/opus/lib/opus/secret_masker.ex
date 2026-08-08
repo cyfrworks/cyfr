@@ -27,41 +27,7 @@ defmodule Opus.SecretMasker do
 
   require Logger
 
-  alias Sanctum.Context
-
   @redacted "[REDACTED]"
-
-  @doc """
-  Get the list of secret values a component has access to.
-
-  Returns a list of secret values (not names) that the component can read.
-  This is used to know which values to mask in output.
-
-  ## Examples
-
-      iex> Opus.SecretMasker.get_granted_secrets(ctx, "my-component:1.0")
-      ["sk-secret123", "api-key-456"]
-
-  """
-  @spec get_granted_secrets(Context.t() | nil, String.t() | nil) ::
-          [String.t()] | {:error, :masking_failed}
-  def get_granted_secrets(nil, _component_ref), do: []
-  def get_granted_secrets(_ctx, nil), do: []
-
-  def get_granted_secrets(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
-      {:ok, %{secrets: secrets}} when is_map(secrets) ->
-        Map.values(secrets)
-
-      {:error, reason} ->
-        Logger.error(
-          "[Opus.SecretMasker] Failed to resolve granted secrets for #{component_ref}: #{inspect(reason)}. " <>
-            "Output masking cannot proceed safely."
-        )
-
-        {:error, :masking_failed}
-    end
-  end
 
   @doc """
   Mask secret values in output.

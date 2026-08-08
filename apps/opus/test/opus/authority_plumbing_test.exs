@@ -94,26 +94,29 @@ defmodule Opus.AuthorityPlumbingTest do
     assert metadata.execution_id == execution_id
   end
 
-  test "no witness fires when no authority is passed (legacy path stays dark)", %{ctx: ctx} do
+  test "a run without an authority fails closed, executing nothing", %{ctx: ctx} do
     attach_witness()
 
-    _result = Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
+    # The enforcement stage raises for a missing authority; the pipeline
+    # rescue converts that into a failed execution that never reached the
+    # runtime.
+    assert {:error, message} =
+             Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
 
+    assert message =~ "without an authority is not a thing"
     refute_receive {:authority_entered, _}, 500
   end
 
   test "authority_required without an authority fails closed, executing nothing", %{ctx: ctx} do
     attach_witness()
 
-    # The pipeline rescue converts the ArgumentError into a failed execution —
-    # the run must fail with the authority message and never reach the runtime.
     assert {:error, message} =
              Opus.Executor.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
                type: :reagent,
                authority_required: true
              )
 
-    assert message =~ "requires an authority"
+    assert message =~ "without an authority"
     refute_receive {:authority_entered, _}, 100
   end
 
