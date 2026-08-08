@@ -234,37 +234,30 @@ defmodule Emissary.MCP.ExternalServerTest do
       :ok
     end
 
-    defp partition_ctx(scope) do
-      Sanctum.Context.build(
-        user_id: "partition-writer",
-        org_id: "local",
-        project_id: "default",
-        scope: scope,
-        permissions: [:secrets_read, :secrets_write],
-        authenticated: true
-      )
-    end
+    test "secret: references are retired — even a live row cannot resolve" do
+      # The secrets plane is going; a stale header reference fails closed
+      # with an opaque outward error, never a value.
+      writer =
+        Sanctum.Context.build(
+          user_id: "partition-writer",
+          org_id: "local",
+          project_id: "default",
+          scope: :project,
+          permissions: [:secrets_read, :secrets_write],
+          authenticated: true
+        )
 
-    test "resolves secrets written into the project partition" do
-      :ok = Sanctum.Secrets.set(partition_ctx(:project), "EXT_PROJ_TOKEN", "proj-value")
+      :ok = Sanctum.Secrets.set(writer, "EXT_PROJ_TOKEN", "proj-value")
 
-      assert {:ok, %{"authorization" => "proj-value"}} =
+      assert {:error, message} =
                ExternalServer.resolve_headers(
                  %{"authorization" => "secret:EXT_PROJ_TOKEN"},
                  "local",
                  "default"
                )
-    end
 
-    test "resolves secrets written into the org partition" do
-      :ok = Sanctum.Secrets.set(partition_ctx(:org), "EXT_ORG_TOKEN", "org-value")
-
-      assert {:ok, %{"authorization" => "org-value"}} =
-               ExternalServer.resolve_headers(
-                 %{"authorization" => "secret:EXT_ORG_TOKEN"},
-                 "local",
-                 "default"
-               )
+      assert message =~ "authorization"
+      refute message =~ "proj-value"
     end
 
     test "reports only the header name on a missing secret" do

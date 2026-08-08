@@ -459,50 +459,15 @@ defmodule Emissary.MCP.ExternalServer do
 
   def resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
 
-  defp resolve_value("secret:" <> secret_name, org_id, project_id) do
-    # The secret may sit in either scope partition depending on who wrote it
-    # (console org-scope users vs API-key/MCP-session project-scope writers),
-    # so resolution cascades the partitions in a fixed order instead of
-    # keying on the writer's identity — the old :org hardcode silently
-    # failed for project-partition rows.
-    #
-    # Return opaque errors — the caller (resolve_headers) must not surface
-    # the secret name. Logged here (server-side) for operator debugging only.
-    [:project, :org]
-    |> Enum.reduce_while({:error, :secret_not_found}, fn scope, acc ->
-      ctx =
-        Sanctum.Context.build(
-          user_id: "system:external_mcp",
-          org_id: org_id,
-          project_id: project_id,
-          permissions: [:secrets_read],
-          scope: scope,
-          authenticated: true
-        )
+  # The secrets plane is gone: a stale `secret:` header reference fails
+  # closed with a server-side hint. Errors stay opaque outward.
+  defp resolve_value("secret:" <> _name, org_id, _project_id) do
+    Logger.warning(
+      "[ExternalServer] secret: header references are no longer resolvable — " <>
+        "rebind the header to vault:CONNECTION (org=#{org_id})"
+    )
 
-      case Sanctum.Secrets.get(ctx, secret_name) do
-        {:ok, value} ->
-          {:halt, {:ok, value}}
-
-        {:error, :not_found} ->
-          {:cont, acc}
-
-        {:error, reason} ->
-          Logger.debug("[ExternalServer] secret resolution failed: #{inspect(reason)}")
-          {:cont, {:error, :secret_unavailable}}
-      end
-    end)
-    |> case do
-      {:ok, value} ->
-        {:ok, value}
-
-      {:error, reason} = error ->
-        Logger.debug(
-          "[ExternalServer] referenced secret unresolved (#{reason}) for org=#{org_id}"
-        )
-
-        error
-    end
+    {:error, :secret_ref_retired}
   end
 
   # A vault-backed header: `vault:<entry name>` resolves the entry's single
@@ -544,7 +509,7 @@ defmodule Emissary.MCP.ExternalServer do
   # An upstream server can echo request headers back in its result (debug
   # endpoints, error bodies, proxies). External responses never pass through
   # the executor's SecretMasker, so the credentials THIS plane injected are
-  # masked here: every resolved `secret:` header value plus the value of any
+  # masked here: every resolved `vault:` header value plus the value of any
   # credential-shaped literal header.
   @doc false
   def mask_credentials(term, state) do
@@ -561,7 +526,7 @@ defmodule Emissary.MCP.ExternalServer do
 
       cond do
         not is_binary(resolved) -> []
-        is_binary(raw) and String.starts_with?(raw, "secret:") -> with_bare_token(resolved)
+        is_binary(raw) and String.starts_with?(raw, "vault:") -> with_bare_token(resolved)
         credential_shaped_header?(key) -> with_bare_token(resolved)
         true -> []
       end

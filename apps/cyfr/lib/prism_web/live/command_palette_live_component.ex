@@ -100,7 +100,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
       nav_item("Builds", "/builds", "wrench"),
       nav_item("Registry", "/registry", "globe"),
       nav_item("Tinctures", "/tinctures", "palette"),
-      nav_item("Secrets", "/secrets", "key"),
+      nav_item("Connections", "/connections", "key"),
       nav_item("API Keys", "/api-keys", "lock"),
       nav_item("MCP Servers", "/mcp-servers", "globe"),
       nav_item("Settings", "/settings", "cog"),

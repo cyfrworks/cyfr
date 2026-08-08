@@ -78,7 +78,7 @@ defmodule Emissary.MCP.ExternalProvider do
                 "headers" => %{
                   "type" => "object",
                   "description" =>
-                    "HTTP headers. Use 'secret:SECRET_NAME' to reference stored secrets."
+                    "HTTP headers. Use 'vault:CONNECTION' to reference a single-field Connection."
                 },
                 "timeout_ms" => %{
                   "type" => "integer",
@@ -443,13 +443,12 @@ defmodule Emissary.MCP.ExternalProvider do
 
   # A literal value in a credential-shaped header would be persisted
   # UNENCRYPTED in mcp_servers.config_json. Reject it instead of sealing —
-  # `secret:NAME` and `vault:NAME` references resolve host-side from the
-  # encrypted stores (writer-independently).
+  # `vault:NAME` references resolve host-side from the sealed vault
+  # (writer-independently). `secret:` references retired with that plane.
   defp validate_header_credentials(headers) when is_map(headers) do
     offending =
       Enum.find(headers, fn {key, value} ->
-        is_binary(value) and not String.starts_with?(value, "secret:") and
-          not String.starts_with?(value, "vault:") and
+        is_binary(value) and not String.starts_with?(value, "vault:") and
           credential_shaped_header_name?(key)
       end)
 
@@ -459,8 +458,8 @@ defmodule Emissary.MCP.ExternalProvider do
 
       {key, _value} ->
         {:error,
-         "Header '#{key}' looks like a credential and must reference a stored secret — " <>
-           "use \"vault:CONNECTION\" (a single-field vault entry) or \"secret:NAME\""}
+         "Header '#{key}' looks like a credential and must reference a Connection — " <>
+           "use \"vault:CONNECTION\" (a single-field vault entry)"}
     end
   end
 

@@ -88,7 +88,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  create_args(%{"Authorization" => "Bearer sk-live-plaintext"})
                )
 
-      assert message =~ "secret:NAME"
+      assert message =~ "vault:CONNECTION"
       assert message =~ "Authorization"
     end
 
@@ -105,7 +105,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       end
     end
 
-    test "secret references and innocuous literals are accepted" do
+    test "vault references and innocuous literals are accepted; secret: refs are not" do
       ctx = Sanctum.TestContext.local()
 
       assert {:ok, _} =
@@ -113,10 +113,19 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  "mcp_servers",
                  ctx,
                  create_args(%{
-                   "Authorization" => "secret:MY_TOKEN",
+                   "Authorization" => "vault:my-token",
                    "Content-Type" => "application/json",
                    "X-Client-Version" => "1.2.3"
                  })
+               )
+
+      # The secrets plane is retired: a secret: reference is just a
+      # literal now, and a credential-shaped literal is rejected.
+      assert {:error, _} =
+               Emissary.MCP.ExternalProvider.handle(
+                 "mcp_servers",
+                 ctx,
+                 create_args(%{"Authorization" => "secret:MY_TOKEN"})
                )
     end
   end
