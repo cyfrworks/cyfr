@@ -862,20 +862,18 @@ defmodule Compendium.MCPTest do
       comp_dir
     end
 
-    test "returns setup plan for a catalyst with secrets", %{ctx: ctx, test_dir: test_dir} do
+    test "returns setup plan for a catalyst with declared needs", %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
         setup_plan_component(test_dir, "catalyst", "setup-claude", "0.2.0", %{
           "type" => "catalyst",
           "version" => "0.2.0",
           "description" => "Claude catalyst for setup plan test",
-          "setup" => %{
-            "secrets" => [
-              %{"name" => "ANTHROPIC_API_KEY", "description" => "API key", "required" => true}
-            ],
-            "policy" => %{
-              "allowed_domains" => ["api.anthropic.com"],
-              "allowed_methods" => ["GET", "POST"],
-              "rate_limit" => %{"requests" => 100, "window" => "1m"}
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:anthropic.com",
+              "reason" => "to call the Anthropic API with your key",
+              "fields" => ["ANTHROPIC_API_KEY"],
+              "required" => true
             }
           }
         })
@@ -890,21 +888,26 @@ defmodule Compendium.MCPTest do
 
       assert result.component_ref =~ "setup-claude"
       assert result.type in ["catalyst", :catalyst]
-      assert is_list(result.secrets)
-      assert length(result.secrets) == 1
-      assert is_boolean(result.ready)
-      assert is_list(result.dependencies)
 
-      # Should have the setup policy recommendation
-      assert result.policy_recommended["allowed_domains"] == ["api.anthropic.com"]
+      assert [need] = result.needs
+      assert need.name == "api_key"
+      assert need.kind == "api_key"
+      assert need.qualifier == "anthropic.com"
+      assert need.required == true
+      assert need.reason =~ "Anthropic"
+
+      # No profile yet: a required need means the consent walk is pending.
+      assert result.consent == nil
+      assert result.ready == false
+      assert is_list(result.dependencies)
     end
 
-    test "returns setup plan for a catalyst without secrets", %{ctx: ctx, test_dir: test_dir} do
+    test "a component with no needs and no profile is ready", %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
         setup_plan_component(test_dir, "catalyst", "setup-web", "0.2.0", %{
           "type" => "catalyst",
           "version" => "0.2.0",
-          "description" => "Web catalyst with no setup block"
+          "description" => "Web catalyst with no needs block"
         })
 
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
@@ -916,7 +919,9 @@ defmodule Compendium.MCPTest do
         })
 
       assert result.component_ref =~ "setup-web"
-      assert result.secrets == []
+      assert result.needs == []
+      assert result.consent == nil
+      assert result.ready == true
     end
 
     test "returns setup plan for a formula with dependencies", %{ctx: ctx, test_dir: test_dir} do
@@ -959,56 +964,31 @@ defmodule Compendium.MCPTest do
       assert result.dependencies != []
     end
 
-    test "ready is true when name-level policy exists", %{ctx: ctx, test_dir: test_dir} do
+    test "an optional need leaves the plan ready", %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
-        setup_plan_component(test_dir, "catalyst", "ready-nl", "0.2.0", %{
+        setup_plan_component(test_dir, "catalyst", "ready-opt", "0.2.0", %{
           "type" => "catalyst",
           "version" => "0.2.0",
-          "description" => "Readiness test (name-level policy)",
-          "setup" => %{
-            "policy" => %{"allowed_domains" => ["example.com"]}
+          "description" => "Readiness test (optional need)",
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:example.com",
+              "reason" => "optional enrichment",
+              "required" => false
+            }
           }
         })
 
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      # Store policy at name-level (no version)
-      :ok =
-        Sanctum.PolicyStore.put(ctx, "catalyst:local.ready-nl", %{
-          "allowed_domains" => ["example.com"]
-        })
-
       {:ok, result} =
         MCP.handle("component", ctx, %{
           "action" => "setup_plan",
-          "reference" => "catalyst:local.ready-nl:0.2.0"
+          "reference" => "catalyst:local.ready-opt:0.2.0"
         })
 
+      assert [%{required: false}] = result.needs
       assert result.ready == true
-      assert result.policy_stored == true
-    end
-
-    test "ready is false with only hardcoded default policy", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        setup_plan_component(test_dir, "catalyst", "ready-hc", "0.2.0", %{
-          "type" => "catalyst",
-          "version" => "0.2.0",
-          "description" => "Readiness test (no stored policy)",
-          "setup" => %{
-            "policy" => %{"allowed_domains" => ["example.com"]}
-          }
-        })
-
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
-
-      {:ok, result} =
-        MCP.handle("component", ctx, %{
-          "action" => "setup_plan",
-          "reference" => "catalyst:local.ready-hc:0.2.0"
-        })
-
-      assert result.ready == false
-      assert result.policy_stored == false
     end
 
     test "returns error for missing reference", %{ctx: ctx} do

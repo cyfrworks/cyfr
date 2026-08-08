@@ -354,7 +354,9 @@ defmodule Opus.Runtime do
                  )
 
                  Logger.warning(
-                   "Secret '#{name}' not granted to component '#{component_ref}'. Grant with: cyfr secret grant #{component_ref} #{name}"
+                   "Field '#{name}' is outside the consent's projection for " <>
+                     "'#{component_ref}'. Re-grant via the consent walk: " <>
+                     "cyfr profile grant #{component_ref}"
                  )
 
                  {:error, "access-denied: #{name} not granted to #{component_ref}"}

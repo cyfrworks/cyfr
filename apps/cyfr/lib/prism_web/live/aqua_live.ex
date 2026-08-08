@@ -31,7 +31,6 @@ defmodule PrismWeb.AquaLive do
   require Logger
 
   alias PrismWeb.AquaLive.AgentState
-  alias PrismWeb.MCPHelpers
   alias PrismWeb.AquaLive.View
 
   @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer, Opus.Chain]}
@@ -53,11 +52,6 @@ defmodule PrismWeb.AquaLive do
 
           if connected?(socket) and sid do
             Phoenix.PubSub.subscribe(Emissary.PubSub, PrismWeb.ActiveContext.topic(sid))
-
-            Phoenix.PubSub.subscribe(
-              Emissary.PubSub,
-              Sanctum.PubSub.topic("prism:setup_complete", ctx)
-            )
           end
 
           socket
@@ -96,7 +90,6 @@ defmodule PrismWeb.AquaLive do
      |> assign(:orchestrators_loaded, false)
      |> assign(:tool_activity, [])
      |> assign(:token_usage, %{input: 0, output: 0})
-     |> assign(:pending_setup, nil)
      |> assign(:consent_sheet_ref, nil)
      |> assign(:restart_prompt, nil)
      |> assign(:conversation_id, Emissary.UUID7.generate_id("conv"))
@@ -243,41 +236,6 @@ defmodule PrismWeb.AquaLive do
     {:noreply, cancel_upload(socket, :attachments, ref)}
   end
 
-  def handle_event("dismiss_setup", _params, socket) do
-    {:noreply, assign(socket, :pending_setup, nil)}
-  end
-
-  # Mirror form changes back into pending_setup so the inputs stay sticky
-  # if the user toggles other UI before submitting.
-  def handle_event("setup_form_change", params, socket) do
-    case socket.assigns.pending_setup do
-      nil ->
-        {:noreply, socket}
-
-      setup ->
-        secret_inputs = Map.merge(setup.secret_inputs, params["secret"] || %{})
-        policy_inputs = Map.merge(setup.policy_inputs, params["policy"] || %{})
-
-        {:noreply,
-         assign(socket, :pending_setup, %{
-           setup
-           | secret_inputs: secret_inputs,
-             policy_inputs: policy_inputs
-         })}
-    end
-  end
-
-  def handle_event("complete_setup", params, socket) do
-    setup = socket.assigns.pending_setup
-    ctx = socket.assigns.context
-
-    if setup == nil or ctx == nil do
-      {:noreply, socket}
-    else
-      do_complete_setup(socket, setup, ctx, params)
-    end
-  end
-
   def handle_event("toggle_history", _params, socket) do
     {:noreply, assign(socket, :history_open, !socket.assigns.history_open)}
   end
@@ -290,7 +248,6 @@ defmodule PrismWeb.AquaLive do
      |> assign(:streaming_text, "")
      |> assign(:tool_activity, [])
      |> assign(:token_usage, %{input: 0, output: 0})
-     |> assign(:pending_setup, nil)
      |> assign(:pending_approvals, %{})
      |> assign(:conversation_grants, MapSet.new())
      |> assign(:current_execution_id, nil)
@@ -566,13 +523,11 @@ defmodule PrismWeb.AquaLive do
   # ============================================================================
 
   @impl true
-  # The consent sheet closes itself; a granted profile also clears any
-  # legacy setup panel that was up for the same component.
+  # The consent sheet closes itself once the grant lands.
   def handle_info({:consent_granted, _ref, result}, socket) do
     socket =
       socket
       |> assign(:consent_sheet_ref, nil)
-      |> assign(:pending_setup, nil)
       |> restart_turn_for_consent(result)
 
     {:noreply, socket}
@@ -807,13 +762,6 @@ defmodule PrismWeb.AquaLive do
      socket
      |> assign(:messages, messages)
      |> assign(:running, false)}
-  end
-
-  # External setup completion (e.g., user filled the setup form in /components).
-  # Clear the pending banner so the user can retry from AQUA without the
-  # stale "setup required" warning.
-  def handle_info({:setup_complete, _component_ref}, socket) do
-    {:noreply, assign(socket, :pending_setup, nil)}
   end
 
   # Async conversation index load result (kicked off in mount/3).
@@ -1151,21 +1099,12 @@ defmodule PrismWeb.AquaLive do
     )
   end
 
+  # Whatever the component still needs, the consent walk is the one
+  # place it gets granted — open the sheet on the asking ref.
   defp handle_emit(socket, kind, data) when kind in ["setup_required", "request_setup"] do
-    ref = data["component_ref"] || data[:component_ref] || ""
-
-    cond do
-      ref == "" ->
-        socket
-
-      # Same fork as the execution cutover: a component with a profile
-      # is granted through the consent walk; one without still uses the
-      # legacy setup form until Phase 5 retires it.
-      has_profile?(socket, ref) ->
-        assign(socket, :consent_sheet_ref, ref)
-
-      true ->
-        build_full_setup(socket, ref)
+    case data["component_ref"] || data[:component_ref] || "" do
+      "" -> socket
+      ref -> assign(socket, :consent_sheet_ref, ref)
     end
   end
 
@@ -1196,13 +1135,6 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp handle_emit(socket, _kind, _data), do: socket
-
-  defp has_profile?(socket, ref) do
-    match?(
-      {:ok, %{profiles: [_ | _]}},
-      MCPHelpers.call_tool(socket, "profile.list", %{"ref" => ref})
-    )
-  end
 
   # §4.4: a delta consent applies to future roots. The turn already
   # running may have taken side effects under the authority it started
@@ -1439,242 +1371,6 @@ defmodule PrismWeb.AquaLive do
 
     assign(socket, :sheet_state, state)
   end
-
-  # ---------------------------------------------------------------------------
-  # Setup interception — port from AgentLive's build_full_setup + complete_setup.
-  # The form is rendered inline above the composer when @pending_setup is set;
-  # auto-retry of the prior user input is omitted vs AgentLive (the user can
-  # resend the prompt themselves once setup completes).
-  # ---------------------------------------------------------------------------
-
-  @setup_policy_fields [
-    {"allowed_domains", "Allowed Domains", :array},
-    {"allowed_methods", "Allowed Methods", :array},
-    {"allowed_paths", "Allowed Paths", :array},
-    {"allowed_actions", "Allowed Actions", :array},
-    {"allowed_tools", "Allowed Tools", :array},
-    {"allowed_private_ips", "Allowed Private IPs", :array},
-    {"rate_limit", "Rate Limit", :json},
-    {"timeout", "Timeout", :string},
-    {"max_memory_bytes", "Max Memory", :bytes},
-    {"max_request_size", "Max Request Size", :bytes},
-    {"max_response_size", "Max Response Size", :bytes},
-    {"max_concurrent_tasks", "Max Concurrent Tasks", :string},
-    {"batch_timeout", "Batch Timeout", :string}
-  ]
-
-  @array_setup_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_tools allowed_paths allowed_actions)
-
-  defp build_full_setup(socket, component_ref) do
-    ctx = socket.assigns.context
-
-    plan =
-      case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-             "action" => "setup_plan",
-             "reference" => component_ref
-           }) do
-        {:ok, result} -> result
-        _ -> nil
-      end
-
-    secrets = plan_field(plan, :secrets) || []
-
-    secret_inputs =
-      Enum.reduce(secrets, %{}, fn s, acc ->
-        name = setup_field(s, :name)
-
-        if setup_field(s, :already_set) == true do
-          grant = if setup_field(s, :already_granted) == true, do: "true", else: "false"
-          Map.put(acc, name, grant)
-        else
-          Map.put(acc, name, "")
-        end
-      end)
-
-    recommended = plan_field(plan, :policy_recommended) || %{}
-    current = plan_field(plan, :policy_current) || %{}
-    comp_type = plan_field(plan, :type)
-    configurable = plan_field(plan, :configurable_fields)
-    policy_fields = setup_policy_fields_for(comp_type, configurable)
-
-    policy_inputs =
-      Enum.reduce(policy_fields, %{}, fn {field, _label, field_type}, acc ->
-        value = setup_policy_value(recommended, field) || setup_policy_value(current, field)
-        if value, do: Map.put(acc, field, format_setup_policy(value, field_type)), else: acc
-      end)
-
-    pending = %{
-      component_ref: component_ref,
-      plan: plan,
-      secrets: secrets,
-      secret_inputs: secret_inputs,
-      policy_fields: policy_fields,
-      policy_inputs: policy_inputs
-    }
-
-    assign(socket, :pending_setup, pending)
-  end
-
-  defp do_complete_setup(socket, setup, ctx, params) do
-    ref = setup.component_ref
-    secrets_map = params["secret"] || %{}
-    policy_map = params["policy"] || %{}
-
-    secret_errors =
-      Enum.reduce(secrets_map, [], fn {name, value}, errors ->
-        secret_status = Enum.find(setup.secrets || [], fn s -> setup_field(s, :name) == name end)
-        already_set? = secret_status && setup_field(secret_status, :already_set) == true
-
-        cond do
-          already_set? and value == "true" ->
-            apply_secret_action(
-              ctx,
-              "grant",
-              %{"name" => name, "component_ref" => ref},
-              name,
-              errors
-            )
-
-          already_set? ->
-            errors
-
-          String.trim(value) != "" ->
-            case Emissary.MCP.ToolRegistry.call_external("secret", ctx, %{
-                   "action" => "set",
-                   "name" => name,
-                   "value" => value
-                 }) do
-              {:ok, _} ->
-                apply_secret_action(
-                  ctx,
-                  "grant",
-                  %{"name" => name, "component_ref" => ref},
-                  name,
-                  errors
-                )
-
-              {:error, reason} ->
-                ["#{name}: #{inspect(reason)}" | errors]
-            end
-
-          true ->
-            errors
-        end
-      end)
-
-    policy_errors =
-      Enum.reduce(policy_map, [], fn {field, value}, errors ->
-        if String.trim(value) != "" do
-          encoded = parse_setup_policy_for_save(value, field)
-
-          case Emissary.MCP.ToolRegistry.call_external("policy", ctx, %{
-                 "action" => "patch",
-                 "component_ref" => ref,
-                 "field" => field,
-                 "value" => encoded
-               }) do
-            {:ok, _} -> errors
-            {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
-          end
-        else
-          errors
-        end
-      end)
-
-    all_errors = secret_errors ++ policy_errors
-
-    confirm =
-      if all_errors == [],
-        do: "Setup complete for #{ref}.",
-        else: "Setup partially complete for #{ref}. Errors: #{Enum.join(all_errors, "; ")}"
-
-    {:noreply,
-     socket
-     |> assign(
-       :messages,
-       socket.assigns.messages ++
-         [%{role: "assistant", content: confirm, timestamp: DateTime.utc_now()}]
-     )
-     |> assign(:pending_setup, nil)}
-  end
-
-  defp apply_secret_action(ctx, action, args, name, errors) do
-    case Emissary.MCP.ToolRegistry.call_external("secret", ctx, Map.put(args, "action", action)) do
-      {:ok, _} -> errors
-      {:error, reason} -> ["#{name} #{action}: #{inspect(reason)}" | errors]
-    end
-  end
-
-  defp setup_policy_fields_for(_type, configurable) when is_list(configurable) do
-    Enum.filter(@setup_policy_fields, fn {f, _, _} -> f in configurable end)
-  end
-
-  defp setup_policy_fields_for(type, _) when is_binary(type) do
-    case Sanctum.Policy.FieldSchema.default_configurable_fields(type) do
-      {:ok, fields} -> Enum.filter(@setup_policy_fields, fn {f, _, _} -> f in fields end)
-      {:error, _} -> @setup_policy_fields
-    end
-  end
-
-  defp setup_policy_fields_for(_, _), do: @setup_policy_fields
-
-  defp setup_policy_value(policy, field) when is_map(policy) do
-    policy[field] || policy[String.to_existing_atom(field)]
-  rescue
-    ArgumentError -> policy[field]
-  end
-
-  defp setup_policy_value(_, _), do: nil
-
-  defp format_setup_policy(value, :array) when is_list(value), do: Enum.join(value, ", ")
-
-  defp format_setup_policy(value, :json) when is_map(value) do
-    case Jason.encode(value) do
-      {:ok, json} -> json
-      _ -> inspect(value)
-    end
-  end
-
-  defp format_setup_policy(value, _type), do: to_string(value)
-
-  defp setup_field(c, key) when is_map(c), do: c[key] || c[to_string(key)]
-  defp setup_field(_, _), do: nil
-
-  defp plan_field(nil, _key), do: nil
-  defp plan_field(plan, key), do: plan[key] || plan[to_string(key)]
-
-  defp parse_setup_policy_for_save(value, field) when field in @array_setup_fields do
-    case Jason.decode(value) do
-      {:ok, list} when is_list(list) ->
-        Jason.encode!(list)
-
-      _ ->
-        list =
-          value
-          |> String.split(",")
-          |> Enum.map(&String.trim/1)
-          |> Enum.reject(&(&1 == ""))
-
-        Jason.encode!(list)
-    end
-  end
-
-  defp parse_setup_policy_for_save(value, _field), do: value
-
-  defp setup_policy_placeholder("allowed_domains"), do: "api.example.com, api.other.com"
-  defp setup_policy_placeholder("allowed_methods"), do: "GET, POST, PUT"
-  defp setup_policy_placeholder("allowed_paths"), do: "data/, components/"
-  defp setup_policy_placeholder("allowed_actions"), do: "read, write, list, delete"
-  defp setup_policy_placeholder("allowed_private_ips"), do: "10.0.0.0/8, 172.16.0.0/12"
-  defp setup_policy_placeholder("allowed_tools"), do: "tool1, tool2"
-  defp setup_policy_placeholder("rate_limit"), do: ~s({"requests": 100, "window": "1m"})
-  defp setup_policy_placeholder("timeout"), do: "3m"
-  defp setup_policy_placeholder("max_memory_bytes"), do: "67108864"
-  defp setup_policy_placeholder("max_request_size"), do: "1048576"
-  defp setup_policy_placeholder("max_response_size"), do: "5242880"
-  defp setup_policy_placeholder("max_concurrent_tasks"), do: "10"
-  defp setup_policy_placeholder("batch_timeout"), do: "5m"
-  defp setup_policy_placeholder(_), do: ""
 
   # ---------------------------------------------------------------------------
   # Editor helpers — orchestrator + sub-agent CRUD
@@ -1936,7 +1632,6 @@ defmodule PrismWeb.AquaLive do
             |> assign(:streaming_text, "")
             |> assign(:tool_activity, [])
             |> assign(:token_usage, %{input: 0, output: 0})
-            |> assign(:pending_setup, nil)
             |> assign(:pending_approvals, %{})
             |> assign(:conversation_grants, MapSet.new())
             |> assign(:current_execution_id, nil)
@@ -2547,96 +2242,6 @@ defmodule PrismWeb.AquaLive do
             ref={@consent_sheet_ref}
             context={@context}
           />
-        </div>
-
-        <div
-          :if={@pending_setup && @sheet_state in ["half", "full"]}
-          class="border-t border-amber-800/60 bg-amber-900/10 px-3 py-3 max-h-[40vh] overflow-y-auto"
-        >
-          <div class="flex items-center justify-between mb-2">
-            <div class="flex items-center gap-2 text-xs">
-              <span class="text-amber-300 font-medium">Setup required</span>
-              <code class="font-mono text-gray-400 truncate">{@pending_setup.component_ref}</code>
-            </div>
-            <button
-              type="button"
-              phx-click="dismiss_setup"
-              class="text-gray-500 hover:text-gray-300 text-xs"
-              aria-label="Dismiss"
-            >
-              Dismiss
-            </button>
-          </div>
-          <p class="text-[11px] text-gray-500 mb-3">
-            Stored encrypted on this device. Values never leave the host.
-          </p>
-
-          <form phx-change="setup_form_change" phx-submit="complete_setup" class="space-y-3">
-            <div :if={@pending_setup.secrets != []} class="space-y-2">
-              <h4 class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                Secrets
-              </h4>
-              <%= for secret <- @pending_setup.secrets do %>
-                <% secret_name = setup_field(secret, :name) %>
-                <% already_set = setup_field(secret, :already_set) == true %>
-                <div class="text-xs">
-                  <label class="block text-gray-400 mb-1 font-mono">
-                    {secret_name}
-                    <span :if={setup_field(secret, :required)} class="text-red-400 ml-1">*</span>
-                  </label>
-                  <%= if already_set do %>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input type="hidden" name={"secret[#{secret_name}]"} value="false" />
-                      <input
-                        type="checkbox"
-                        name={"secret[#{secret_name}]"}
-                        value="true"
-                        checked={(@pending_setup.secret_inputs[secret_name] || "") == "true"}
-                        class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 text-amber-500"
-                      />
-                      <span class="text-gray-300">Grant access</span>
-                    </label>
-                  <% else %>
-                    <input
-                      type="password"
-                      name={"secret[#{secret_name}]"}
-                      value={@pending_setup.secret_inputs[secret_name] || ""}
-                      placeholder={setup_field(secret, :description) || "Enter value…"}
-                      autocomplete="off"
-                      class="w-full rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                    />
-                  <% end %>
-                </div>
-              <% end %>
-            </div>
-
-            <div :if={@pending_setup.policy_fields != []} class="space-y-2">
-              <h4 class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Policy</h4>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <%= for {field, label, _type} <- @pending_setup.policy_fields do %>
-                  <div class="text-xs">
-                    <label class="block text-gray-400 mb-1">{label}</label>
-                    <input
-                      type="text"
-                      name={"policy[#{field}]"}
-                      value={@pending_setup.policy_inputs[field] || ""}
-                      placeholder={setup_policy_placeholder(field)}
-                      class="w-full rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                    />
-                  </div>
-                <% end %>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2 pt-1">
-              <button
-                type="submit"
-                class="px-3 py-1 text-xs font-medium rounded bg-amber-600 text-white hover:bg-amber-500"
-              >
-                Save & continue
-              </button>
-            </div>
-          </form>
         </div>
 
         <form

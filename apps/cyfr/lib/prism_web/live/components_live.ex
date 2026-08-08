@@ -7,36 +7,6 @@ defmodule PrismWeb.ComponentsLive do
 
   alias PrismWeb.ComponentsLive.Editor
 
-  @policy_fields [
-    {"allowed_domains", "Allowed Domains", :array},
-    {"allowed_methods", "Allowed Methods", :array},
-    {"allowed_paths", "Allowed Paths", :array},
-    {"allowed_actions", "Allowed Actions", :array},
-    {"allowed_private_ips", "Allowed Private IPs", :array},
-    {"allowed_tools", "Allowed Tools", :array},
-    {"rate_limit", "Rate Limit", :json},
-    {"timeout", "Timeout", :string},
-    {"max_memory_bytes", "Max Memory", :bytes},
-    {"max_request_size", "Max Request Size", :bytes},
-    {"max_response_size", "Max Response Size", :bytes},
-    {"max_concurrent_tasks", "Max Concurrent Tasks", :string},
-    {"batch_timeout", "Batch Timeout", :string},
-    {"is_public", "Public", :boolean}
-  ]
-
-  defp policy_fields_for_type(_type, configurable_fields) when is_list(configurable_fields) do
-    Enum.filter(@policy_fields, fn {f, _, _} -> f in configurable_fields end)
-  end
-
-  defp policy_fields_for_type(type, _no_configurable_fields) when is_binary(type) do
-    case Sanctum.Policy.FieldSchema.default_configurable_fields(type) do
-      {:ok, fields} -> Enum.filter(@policy_fields, fn {f, _, _} -> f in fields end)
-      {:error, _} -> @policy_fields
-    end
-  end
-
-  defp policy_fields_for_type(_type, _no_configurable_fields), do: @policy_fields
-
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
@@ -55,13 +25,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:expanded_ref, nil)
       |> assign(:expanded_detail, nil)
       |> assign(:expanded_plan, nil)
-      |> assign(:expanded_type, nil)
-      |> assign(:editing, false)
-      |> assign(:secret_inputs, %{})
-      |> assign(:policy_inputs, %{})
-      |> assign(:policy_prefilled, MapSet.new())
-      |> assign(:policy_placeholders, %{})
-      |> assign(:saving, false)
+      |> assign(:consent_sheet_ref, nil)
       |> assign(:pushing, false)
       |> assign(:setup_readiness, %{})
       |> assign(:component_groups, [])
@@ -78,7 +42,6 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:register_id, nil)
       |> assign(:progress_log, [])
       |> assign(:progress_id, nil)
-      |> assign(:setup_from, nil)
 
     {:ok, socket}
   end
@@ -251,11 +214,7 @@ defmodule PrismWeb.ComponentsLive do
          |> assign(:expanded_ref, name_ref)
          |> assign(:expanded_detail, detail)
          |> assign(:expanded_plan, plan)
-         |> assign(:expanded_type, plan_field(plan, :type))
          |> assign(:expanded_versions, group.versions)
-         |> assign(:editing, false)
-         |> assign(:secret_inputs, %{})
-         |> assign(:policy_inputs, %{})
          |> assign(:pushing, false)
          |> assign(:progress_log, [])
          |> assign(:progress_id, nil)}
@@ -265,289 +224,10 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  def handle_event("edit_setup", _params, socket) do
-    # Re-fetch fresh plan to pick up any external changes (CLI, other tabs)
-    ref = latest_versioned_ref(socket)
-
-    plan =
-      case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-        {:ok, result} ->
-          result
-
-        other ->
-          Logger.warning("[ComponentsLive] setup_plan refresh failed: #{inspect(other)}")
-          socket.assigns.expanded_plan
-      end
-
-    # For already-set secrets, track grant status; for unset, empty string for text input
-    secret_inputs =
-      (plan_field(plan, :secrets) || [])
-      |> Enum.reduce(%{}, fn s, acc ->
-        name = comp_field(s, :name)
-
-        if comp_field(s, :already_set) == true do
-          grant = if comp_field(s, :already_granted) == true, do: "true", else: "false"
-          Map.put(acc, name, grant)
-        else
-          Map.put(acc, name, "")
-        end
-      end)
-
-    # Build policy view and dynamic placeholders
-    policy_view =
-      merge_policy_view(
-        plan_field(plan, :policy_current),
-        plan_field(plan, :policy_recommended),
-        socket.assigns.expanded_type,
-        plan_field(plan, :configurable_fields)
-      )
-
-    # Only pre-fill inputs when there's a stored policy (user previously configured).
-    # Otherwise leave empty — recommended/effective values show as placeholders.
-    policy_stored? = plan_field(plan, :policy_stored) == true
-
-    policy_inputs =
-      if policy_stored? do
-        Enum.reduce(policy_view, %{}, fn {field, _label, type, value, _source}, acc ->
-          if value do
-            Map.put(acc, field, Editor.format_policy_for_edit(value, type))
-          else
-            acc
-          end
-        end)
-      else
-        %{}
-      end
-
-    policy_placeholders = build_policy_placeholders(policy_view)
-
-    {:noreply,
-     socket
-     |> assign(:expanded_plan, plan)
-     |> assign(:editing, true)
-     |> assign(:secret_inputs, secret_inputs)
-     |> assign(:policy_inputs, policy_inputs)
-     |> assign(:policy_prefilled, MapSet.new(Map.keys(policy_inputs)))
-     |> assign(:policy_placeholders, policy_placeholders)}
-  end
-
-  def handle_event("fill_defaults", _params, socket) do
-    plan = socket.assigns.expanded_plan
-    recommended = plan_field(plan, :policy_recommended) || %{}
-    current = plan_field(plan, :policy_current) || %{}
-    type = socket.assigns.expanded_type
-    configurable = plan_field(plan, :configurable_fields)
-    fields = policy_fields_for_type(type, configurable)
-
-    {policy_inputs, new_prefilled} =
-      Enum.reduce(fields, {socket.assigns.policy_inputs, socket.assigns.policy_prefilled}, fn
-        {field, _label, field_type}, {inputs, prefilled} ->
-          current_value = inputs[field]
-
-          rec_value =
-            Editor.policy_value(recommended, field) || Editor.policy_value(current, field)
-
-          if (current_value == nil || current_value == "") && rec_value != nil do
-            {Map.put(inputs, field, Editor.format_policy_for_edit(rec_value, field_type)),
-             MapSet.put(prefilled, field)}
-          else
-            {inputs, prefilled}
-          end
-      end)
-
-    {:noreply,
-     socket
-     |> assign(:policy_inputs, policy_inputs)
-     |> assign(:policy_prefilled, new_prefilled)}
-  end
-
-  def handle_event("cancel_edit", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:editing, false)
-     |> assign(:secret_inputs, %{})
-     |> assign(:policy_inputs, %{})
-     |> assign(:policy_prefilled, MapSet.new())
-     |> assign(:policy_placeholders, %{})}
-  end
-
-  def handle_event("setup_change", params, socket) do
-    secret_inputs =
-      (params["secret"] || %{})
-      |> Enum.into(socket.assigns.secret_inputs)
-
-    policy_inputs =
-      (params["policy"] || %{})
-      |> Enum.into(socket.assigns.policy_inputs)
-
-    {:noreply,
-     socket
-     |> assign(:secret_inputs, secret_inputs)
-     |> assign(:policy_inputs, policy_inputs)}
-  end
-
-  def handle_event("save_setup", _params, socket) do
-    # expanded_ref is already name-level
-    name_ref = socket.assigns.expanded_ref
-    ref = latest_versioned_ref(socket)
-
-    socket = assign(socket, :saving, true)
-
-    # Save secrets (grants use name-level ref to cover all versions)
-    plan = socket.assigns.expanded_plan
-
-    secret_errors =
-      socket.assigns.secret_inputs
-      |> Enum.reduce([], fn {name, value}, errors ->
-        secret_status =
-          Enum.find(plan_field(plan, :secrets) || [], fn s ->
-            comp_field(s, :name) == name
-          end)
-
-        already_set? = secret_status && comp_field(secret_status, :already_set) == true
-
-        if already_set? do
-          # Checkbox mode: grant or skip
-          if value == "true" do
-            case call_tool(socket, "secret", %{
-                   "action" => "grant",
-                   "name" => name,
-                   "component_ref" => name_ref
-                 }) do
-              {:ok, _} -> errors
-              {:error, reason} -> ["Secret #{name}: #{inspect(reason)}" | errors]
-            end
-          else
-            errors
-          end
-        else
-          # Text input mode: set value and grant
-          if String.trim(value) != "" do
-            case call_tool(socket, "secret", %{
-                   "action" => "set",
-                   "name" => name,
-                   "value" => value
-                 }) do
-              {:ok, _} ->
-                case call_tool(socket, "secret", %{
-                       "action" => "grant",
-                       "name" => name,
-                       "component_ref" => name_ref
-                     }) do
-                  {:ok, _} -> errors
-                  {:error, reason} -> ["Secret #{name} grant: #{inspect(reason)}" | errors]
-                end
-
-              {:error, reason} ->
-                ["Secret #{name}: #{inspect(reason)}" | errors]
-            end
-          else
-            errors
-          end
-        end
-      end)
-
-    # Save policy fields (use name-level ref to cover all versions):
-    # - non-empty: save the value
-    # - empty + was pre-filled: user cleared it, save as empty to override stored value
-    # - empty + was NOT pre-filled: skip (untouched field)
-    prefilled = socket.assigns.policy_prefilled
-
-    policy_errors =
-      socket.assigns.policy_inputs
-      |> Enum.reduce([], fn {field, value}, errors ->
-        cond do
-          String.trim(value) != "" ->
-            parsed = Editor.parse_policy_for_save(value, field)
-
-            case call_tool(socket, "policy", %{
-                   "action" => "patch",
-                   "component_ref" => name_ref,
-                   "field" => field,
-                   "value" => parsed
-                 }) do
-              {:ok, _} -> errors
-              {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
-            end
-
-          MapSet.member?(prefilled, field) ->
-            parsed = Editor.parse_policy_for_save_empty(field)
-
-            case call_tool(socket, "policy", %{
-                   "action" => "patch",
-                   "component_ref" => name_ref,
-                   "field" => field,
-                   "value" => parsed
-                 }) do
-              {:ok, _} -> errors
-              {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
-            end
-
-          true ->
-            errors
-        end
-      end)
-
-    all_errors = secret_errors ++ policy_errors
-
-    # Refresh the plan
-    plan =
-      case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-        {:ok, result} ->
-          result
-
-        other ->
-          Logger.warning(
-            "[ComponentsLive] setup_plan refresh after save failed: #{inspect(other)}"
-          )
-
-          socket.assigns.expanded_plan
-      end
-
-    readiness =
-      Map.put(socket.assigns.setup_readiness, name_ref, plan_field(plan, :ready) == true)
-
-    socket =
-      socket
-      |> assign(:saving, false)
-      |> assign(:editing, false)
-      |> assign(:expanded_plan, plan)
-      |> assign(:setup_readiness, readiness)
-      |> assign(:secret_inputs, %{})
-      |> assign(:policy_inputs, %{})
-      |> assign(:policy_prefilled, MapSet.new())
-      |> assign(:policy_placeholders, %{})
-
-    socket =
-      if all_errors == [] do
-        # Broadcast setup completion so AquaLive can clear its pending banner
-        ctx = socket.assigns[:context]
-
-        if ctx do
-          Phoenix.PubSub.broadcast(
-            Emissary.PubSub,
-            Sanctum.PubSub.topic("prism:setup_complete", ctx),
-            {:setup_complete, name_ref}
-          )
-
-          # If we came from another app, navigate back after setup
-          if socket.assigns.setup_from == "agent" do
-            Phoenix.PubSub.broadcast(
-              Emissary.PubSub,
-              Sanctum.PubSub.topic("prism:shell_navigate", ctx),
-              {:navigate_to, "agent", %{}}
-            )
-          end
-        end
-
-        socket
-        |> assign(:setup_from, nil)
-        |> put_flash(:info, "Setup saved for #{name_ref} (all versions)")
-      else
-        put_flash(socket, :error, Enum.join(all_errors, "; "))
-      end
-
-    {:noreply, socket}
+  def handle_event("open_consent", %{"ref" => _ref}, socket) do
+    # The consent sheet plans against the latest versioned ref; the walk
+    # itself decides what the grant covers.
+    {:noreply, assign(socket, :consent_sheet_ref, latest_versioned_ref(socket))}
   end
 
   def handle_event("push", %{"ref" => ref}, socket) do
@@ -614,9 +294,7 @@ defmodule PrismWeb.ComponentsLive do
       socket =
         case params do
           %{"ref" => ref, "setup" => "true"} ->
-            socket
-            |> assign(:setup_from, params["from"])
-            |> tap(fn _ -> send(self(), {:deep_link_setup, ref}) end)
+            tap(socket, fn _ -> send(self(), {:deep_link_setup, ref}) end)
 
           _ ->
             socket
@@ -631,43 +309,15 @@ defmodule PrismWeb.ComponentsLive do
   # --- PubSub handlers ---
 
   @impl true
-  def handle_info({:policy_changed, metadata, _measurements}, socket) do
-    _changed_ref = metadata[:component_ref]
-    expanded_ref = socket.assigns.expanded_ref
+  def handle_info({:consent_granted, _ref, _result}, socket) do
+    {:noreply,
+     socket
+     |> assign(:consent_sheet_ref, nil)
+     |> refresh_expanded_plan()}
+  end
 
-    socket =
-      if expanded_ref && !socket.assigns.editing do
-        # Re-fetch plan if we're viewing the affected component (or any, since
-        # type defaults affect all components of that type)
-        versioned_ref = latest_versioned_ref(socket)
-
-        plan =
-          case call_tool(socket, "component", %{
-                 "action" => "setup_plan",
-                 "reference" => versioned_ref
-               }) do
-            {:ok, result} ->
-              result
-
-            other ->
-              Logger.warning(
-                "[ComponentsLive] setup_plan refresh on policy change failed: #{inspect(other)}"
-              )
-
-              socket.assigns.expanded_plan
-          end
-
-        readiness =
-          Map.put(socket.assigns.setup_readiness, expanded_ref, plan_field(plan, :ready) == true)
-
-        socket
-        |> assign(:expanded_plan, plan)
-        |> assign(:setup_readiness, readiness)
-      else
-        socket
-      end
-
-    {:noreply, socket}
+  def handle_info({:consent_sheet_closed, _ref}, socket) do
+    {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
   def handle_info(:components_changed, socket) do
@@ -824,7 +474,8 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:deep_link_setup, ref}, socket) do
-    # Find the component group matching the ref and auto-expand + enter edit mode
+    # Find the component group matching the ref, auto-expand it, and open
+    # the consent sheet so the operator can grant access straight away.
     socket = fetch_components(socket)
     groups = socket.assigns.component_groups
 
@@ -854,32 +505,13 @@ defmodule PrismWeb.ComponentsLive do
           _ -> nil
         end
 
-      policy_placeholders =
-        if plan do
-          policy_view =
-            merge_policy_view(
-              plan_field(plan, :policy_current),
-              plan_field(plan, :policy_recommended),
-              plan_field(plan, :type),
-              plan_field(plan, :configurable_fields)
-            )
-
-          build_policy_placeholders(policy_view)
-        else
-          %{}
-        end
-
       {:noreply,
        socket
        |> assign(:expanded_ref, group.name_ref)
        |> assign(:expanded_detail, detail)
        |> assign(:expanded_plan, plan)
-       |> assign(:expanded_type, plan_field(plan, :type))
        |> assign(:expanded_versions, group.versions)
-       |> assign(:editing, true)
-       |> assign(:secret_inputs, %{})
-       |> assign(:policy_inputs, %{})
-       |> assign(:policy_placeholders, policy_placeholders)
+       |> assign(:consent_sheet_ref, latest_ref)
        |> assign(:loading, false)}
     else
       {:noreply,
@@ -926,15 +558,45 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:expanded_ref, nil)
     |> assign(:expanded_detail, nil)
     |> assign(:expanded_plan, nil)
-    |> assign(:expanded_type, nil)
     |> assign(:expanded_versions, [])
-    |> assign(:editing, false)
-    |> assign(:secret_inputs, %{})
-    |> assign(:policy_inputs, %{})
-    |> assign(:policy_placeholders, %{})
     |> assign(:pushing, false)
     |> assign(:progress_log, [])
     |> assign(:progress_id, nil)
+  end
+
+  # Re-fetch the expanded component's setup plan after a grant so the
+  # needs list and readiness badge reflect the new consent.
+  defp refresh_expanded_plan(socket) do
+    expanded_ref = socket.assigns.expanded_ref
+
+    if expanded_ref do
+      versioned_ref = latest_versioned_ref(socket)
+
+      plan =
+        case call_tool(socket, "component", %{
+               "action" => "setup_plan",
+               "reference" => versioned_ref
+             }) do
+          {:ok, result} ->
+            result
+
+          other ->
+            Logger.warning(
+              "[ComponentsLive] setup_plan refresh after grant failed: #{inspect(other)}"
+            )
+
+            socket.assigns.expanded_plan
+        end
+
+      readiness =
+        Map.put(socket.assigns.setup_readiness, expanded_ref, plan_field(plan, :ready) == true)
+
+      socket
+      |> assign(:expanded_plan, plan)
+      |> assign(:setup_readiness, readiness)
+    else
+      socket
+    end
   end
 
   defp do_registry_search(socket, query) do
@@ -1219,69 +881,6 @@ defmodule PrismWeb.ComponentsLive do
   defp plan_field(nil, _key), do: nil
   defp plan_field(plan, key), do: plan[key] || plan[to_string(key)]
 
-  defp merge_policy_view(current, recommended, type, configurable_fields) do
-    current = current || %{}
-    recommended = recommended || %{}
-    fields = policy_fields_for_type(type, configurable_fields)
-
-    Enum.map(fields, fn {field, label, field_type} ->
-      cur = Editor.policy_value(current, field)
-      rec = Editor.policy_value(recommended, field)
-      value = cur || rec
-
-      source =
-        cond do
-          cur != nil -> :current
-          rec != nil -> :recommended
-          true -> nil
-        end
-
-      {field, label, field_type, value, source}
-    end)
-  end
-
-  defp build_policy_placeholders(policy_view) do
-    Enum.reduce(policy_view, %{}, fn {field, _label, type, value, source}, acc ->
-      hint =
-        case {source, value} do
-          {:recommended, v} when v != nil ->
-            "#{Editor.format_policy_for_edit(v, type)} (recommended)"
-
-          {:current, v} when v != nil ->
-            "#{Editor.format_policy_for_edit(v, type)} (default)"
-
-          _ ->
-            policy_placeholder(field)
-        end
-
-      Map.put(acc, field, hint)
-    end)
-  end
-
-  defp has_recommended_defaults?(nil), do: false
-
-  defp has_recommended_defaults?(plan) do
-    rec = plan_field(plan, :policy_recommended)
-    cur = plan_field(plan, :policy_current)
-    (is_map(rec) && rec != %{}) || (is_map(cur) && cur != %{})
-  end
-
-  defp format_policy_display(nil, _type), do: "not configured"
-  defp format_policy_display([], :array), do: "not configured"
-  defp format_policy_display(value, :array) when is_list(value), do: Enum.join(value, ", ")
-
-  defp format_policy_display(value, :json) when is_map(value) do
-    case Jason.encode(value) do
-      {:ok, json} -> json
-      {:error, _} -> inspect(value)
-    end
-  end
-
-  defp format_policy_display(value, :bytes) when is_integer(value), do: format_bytes(value)
-  defp format_policy_display(true, :boolean), do: "yes"
-  defp format_policy_display(_, :boolean), do: "no"
-  defp format_policy_display(value, _type), do: to_string(value)
-
   # --- Display helpers ---
 
   defp type_label("catalyst"), do: "Catalysts"
@@ -1344,24 +943,6 @@ defmodule PrismWeb.ComponentsLive do
   defp comp_field(c, key) when is_map(c), do: c[key] || c[to_string(key)]
   defp comp_field(_, _), do: nil
 
-  defp badge_color_for("Allowed Domains"), do: "blue"
-  defp badge_color_for("Allowed Methods"), do: "green"
-  defp badge_color_for("Allowed Paths"), do: "purple"
-  defp badge_color_for("Allowed Actions"), do: "green"
-  defp badge_color_for("Allowed Tools"), do: "yellow"
-  defp badge_color_for(_), do: "blue"
-
-  defp secret_status_class(secret) do
-    set? = comp_field(secret, :already_set) == true
-    granted? = comp_field(secret, :already_granted) == true
-
-    cond do
-      set? && granted? -> {"Set & Granted", "bg-green-900 text-green-300"}
-      set? -> {"Set (not granted)", "bg-yellow-900 text-yellow-300"}
-      true -> {"Not configured", "bg-red-900 text-red-300"}
-    end
-  end
-
   # --- Render ---
 
   @impl true
@@ -1384,25 +965,11 @@ defmodule PrismWeb.ComponentsLive do
         if ref != "-", do: Map.put(acc, ref, digest), else: acc
       end)
 
-    # Build merged policy view for expanded component (filtered by type)
-    policy_view =
-      if assigns.expanded_plan do
-        merge_policy_view(
-          plan_field(assigns.expanded_plan, :policy_current),
-          plan_field(assigns.expanded_plan, :policy_recommended),
-          assigns.expanded_type,
-          plan_field(assigns.expanded_plan, :configurable_fields)
-        )
-      else
-        []
-      end
-
     assigns =
       assigns
       |> assign(:sorted_groups, sorted_groups)
       |> assign(:installed_refs, inst_refs)
       |> assign(:installed_digests, inst_digests)
-      |> assign(:policy_view, policy_view)
 
     ~H"""
     <div class="space-y-6">
@@ -1858,282 +1425,75 @@ defmodule PrismWeb.ComponentsLive do
                             </div>
                           </div>
                           
-    <!-- Setup section -->
+    <!-- Consent section -->
                           <div class="border-t border-gray-800 pt-4">
                             <div class="flex items-center justify-between mb-3">
                               <div class="flex items-center gap-2">
                                 <h4 class="text-xs font-semibold text-gray-400 uppercase">
-                                  Setup
+                                  Consent
                                 </h4>
-                                <span class="text-[10px] text-gray-600 normal-case">
-                                  applies to all versions
-                                </span>
                                 <span
-                                  :if={
-                                    @expanded_plan && plan_field(@expanded_plan, :ready) == true &&
-                                      @expanded_type != "tincture"
-                                  }
+                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) == true}
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300"
                                 >
                                   Ready
                                 </span>
                                 <span
-                                  :if={
-                                    @expanded_plan && plan_field(@expanded_plan, :ready) != true &&
-                                      @expanded_type != "tincture"
-                                  }
+                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) != true}
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
                                 >
-                                  Setup Required
+                                  Needs grant
                                 </span>
                               </div>
+                              <.button
+                                :if={@expanded_plan}
+                                variant="primary"
+                                class="text-xs px-3 py-1"
+                                phx-click="open_consent"
+                                phx-value-ref={@expanded_ref}
+                              >
+                                Grant access
+                              </.button>
                             </div>
                             
-    <!-- No manifest -->
+    <!-- No plan -->
                             <div :if={!@expanded_plan} class="text-sm text-gray-500 p-4">
-                              No setup manifest found for this component.
+                              No setup plan available for this component.
                             </div>
                             
-    <!-- Edit mode -->
-                            <form
-                              :if={@expanded_plan && @editing}
-                              phx-change="setup_change"
-                              phx-submit="save_setup"
-                            >
-                              <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
-                                <dl class="space-y-4">
-                                  <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
-                                    <% secret_name = comp_field(secret, :name) %>
-                                    <% {status_text, status_class} = secret_status_class(secret) %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
-                                        {secret_name}
-                                        <span
-                                          :if={comp_field(secret, :required)}
-                                          class="text-red-400 normal-case"
-                                        >
-                                          required
-                                        </span>
-                                        <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium normal-case #{status_class}"}>
-                                          {status_text}
-                                        </span>
-                                      </dt>
-                                      <dd class="mt-1">
-                                        <%= if comp_field(secret, :already_set) == true do %>
-                                          <label class="flex items-center gap-2 cursor-pointer">
-                                            <input
-                                              type="hidden"
-                                              name={"secret[#{secret_name}]"}
-                                              value="false"
-                                            />
-                                            <input
-                                              type="checkbox"
-                                              name={"secret[#{secret_name}]"}
-                                              value="true"
-                                              checked={@secret_inputs[secret_name] == "true"}
-                                              class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
-                                            />
-                                            <span class="text-sm text-gray-300">Grant access</span>
-                                          </label>
-                                        <% else %>
-                                          <input
-                                            type="password"
-                                            name={"secret[#{secret_name}]"}
-                                            value={@secret_inputs[secret_name] || ""}
-                                            placeholder={
-                                              comp_field(secret, :description) || "Enter value..."
-                                            }
-                                            phx-debounce="blur"
-                                            class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                          />
-                                        <% end %>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                  <% all_fields =
-                                    merge_policy_view(
-                                      plan_field(@expanded_plan, :policy_current),
-                                      plan_field(@expanded_plan, :policy_recommended),
-                                      @expanded_type,
-                                      plan_field(@expanded_plan, :configurable_fields)
-                                    ) %>
-                                  <% {left, right} =
-                                    Enum.split(all_fields, div(length(all_fields) + 1, 2)) %>
-                                  <%= for {field, label, type, _value, _source} <- left do %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase">{label}</dt>
-                                      <dd class="mt-1">
-                                        <%= if type == :boolean do %>
-                                          <label class="flex items-center gap-2 cursor-pointer">
-                                            <input
-                                              type="hidden"
-                                              name={"policy[#{field}]"}
-                                              value="false"
-                                            />
-                                            <input
-                                              type="checkbox"
-                                              name={"policy[#{field}]"}
-                                              value="true"
-                                              checked={@policy_inputs[field] in ["true", true]}
-                                              class="rounded bg-gray-900 border-gray-600 text-blue-500 focus:ring-blue-500"
-                                            />
-                                            <span class="text-sm text-gray-300">Enabled</span>
-                                          </label>
-                                        <% else %>
-                                          <input
-                                            type="text"
-                                            name={"policy[#{field}]"}
-                                            value={@policy_inputs[field] || ""}
-                                            placeholder={
-                                              @policy_placeholders[field] || policy_placeholder(field)
-                                            }
-                                            phx-debounce="blur"
-                                            class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                          />
-                                        <% end %>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                </dl>
-                                <dl class="space-y-4">
-                                  <%= for {field, label, type, _value, _source} <- right do %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase">{label}</dt>
-                                      <dd class="mt-1">
-                                        <%= if type == :boolean do %>
-                                          <label class="flex items-center gap-2 cursor-pointer">
-                                            <input
-                                              type="hidden"
-                                              name={"policy[#{field}]"}
-                                              value="false"
-                                            />
-                                            <input
-                                              type="checkbox"
-                                              name={"policy[#{field}]"}
-                                              value="true"
-                                              checked={@policy_inputs[field] in ["true", true]}
-                                              class="rounded bg-gray-900 border-gray-600 text-blue-500 focus:ring-blue-500"
-                                            />
-                                            <span class="text-sm text-gray-300">Enabled</span>
-                                          </label>
-                                        <% else %>
-                                          <input
-                                            type="text"
-                                            name={"policy[#{field}]"}
-                                            value={@policy_inputs[field] || ""}
-                                            placeholder={
-                                              @policy_placeholders[field] || policy_placeholder(field)
-                                            }
-                                            phx-debounce="blur"
-                                            class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                          />
-                                        <% end %>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                </dl>
-                              </div>
-                            </form>
-                            
-    <!-- View mode -->
-                            <div :if={@expanded_plan && !@editing}>
-                              <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
-                                <dl class="space-y-4">
-                                  <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
-                                    <% {status_text, status_class} = secret_status_class(secret) %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
-                                        {comp_field(secret, :name)}
-                                        <span
-                                          :if={comp_field(secret, :required)}
-                                          class="text-red-400 normal-case"
-                                        >
-                                          required
-                                        </span>
-                                      </dt>
-                                      <dd class="text-sm text-white mt-1 flex items-center gap-2">
-                                        <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium #{status_class}"}>
-                                          {status_text}
-                                        </span>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                  <%= for provider_status <- plan_field(@expanded_plan, :oauth) || [] do %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
-                                        OAuth: {comp_field(provider_status, :provider)}
-                                      </dt>
-                                      <dd class="text-sm text-white mt-1 flex items-center gap-2">
-                                        <%= if comp_field(provider_status, :component_authorized) == true do %>
-                                          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300">
-                                            Authorized
-                                          </span>
-                                        <% else %>
-                                          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300">
-                                            Authorization pending
-                                          </span>
-                                        <% end %>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                  <% {left_view, right_view} =
-                                    Enum.split(@policy_view, div(length(@policy_view) + 1, 2)) %>
-                                  <%= for {_field, label, type, value, source} <- left_view do %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase">{label}</dt>
-                                      <dd
-                                        class={"text-sm mt-1 #{if source == :recommended, do: "text-gray-400 italic", else: "text-white"}"}
-                                        title={
-                                          if source == :recommended,
-                                            do: "Recommended by manifest",
-                                            else: ""
-                                        }
-                                      >
-                                        <%= if is_list(value) && value != [] do %>
-                                          <div class="flex flex-wrap gap-1">
-                                            <.badge
-                                              :for={item <- value}
-                                              color={badge_color_for(label)}
-                                            >
-                                              {item}
-                                            </.badge>
-                                          </div>
-                                        <% else %>
-                                          {format_policy_display(value, type)}
-                                        <% end %>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                </dl>
-                                <dl class="space-y-4">
-                                  <%= for {_field, label, type, value, source} <- right_view do %>
-                                    <div>
-                                      <dt class="text-xs text-gray-500 uppercase">{label}</dt>
-                                      <dd
-                                        class={"text-sm mt-1 #{if source == :recommended, do: "text-gray-400 italic", else: "text-white"}"}
-                                        title={
-                                          if source == :recommended,
-                                            do: "Recommended by manifest",
-                                            else: ""
-                                        }
-                                      >
-                                        <%= if is_list(value) && value != [] do %>
-                                          <div class="flex flex-wrap gap-1">
-                                            <.badge
-                                              :for={item <- value}
-                                              color={badge_color_for(label)}
-                                            >
-                                              {item}
-                                            </.badge>
-                                          </div>
-                                        <% else %>
-                                          {format_policy_display(value, type)}
-                                        <% end %>
-                                      </dd>
-                                    </div>
-                                  <% end %>
-                                </dl>
-                              </div>
+    <!-- Declared needs -->
+                            <div :if={@expanded_plan} class="px-4 pb-4">
+                              <p
+                                :if={(plan_field(@expanded_plan, :needs) || []) == []}
+                                class="text-sm text-gray-500"
+                              >
+                                This component asks for no Connections.
+                              </p>
+                              <dl
+                                :if={(plan_field(@expanded_plan, :needs) || []) != []}
+                                class="space-y-3"
+                              >
+                                <div :for={need <- plan_field(@expanded_plan, :needs) || []}>
+                                  <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
+                                    {comp_field(need, :name)}
+                                    <span class="font-mono normal-case text-gray-600">
+                                      {comp_field(need, :kind)}:{comp_field(need, :qualifier)}
+                                    </span>
+                                    <span
+                                      :if={comp_field(need, :required)}
+                                      class="text-red-400 normal-case"
+                                    >
+                                      required
+                                    </span>
+                                  </dt>
+                                  <dd
+                                    :if={comp_field(need, :reason)}
+                                    class="text-sm text-gray-300 mt-1"
+                                  >
+                                    {comp_field(need, :reason)}
+                                  </dd>
+                                </div>
+                              </dl>
                             </div>
                             
     <!-- Dependencies -->
@@ -2155,27 +1515,6 @@ defmodule PrismWeb.ComponentsLive do
                               </dd>
                             </div>
                           </div>
-                          
-    <!-- Action buttons -->
-                          <div class="border-t border-gray-800 pt-4 flex items-center justify-end gap-2">
-                            <%= if @editing do %>
-                              <.button
-                                :if={has_recommended_defaults?(@expanded_plan)}
-                                variant="ghost"
-                                phx-click="fill_defaults"
-                              >
-                                Fill Recommended
-                              </.button>
-                              <.button variant="secondary" phx-click="cancel_edit">Cancel</.button>
-                              <.button variant="primary" phx-click="save_setup">
-                                {if @saving, do: "Saving...", else: "Save"}
-                              </.button>
-                            <% else %>
-                              <.button :if={@expanded_plan} variant="secondary" phx-click="edit_setup">
-                                Edit
-                              </.button>
-                            <% end %>
-                          </div>
                         </div>
                         <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">
                           Loading...
@@ -2189,22 +1528,20 @@ defmodule PrismWeb.ComponentsLive do
           </.card>
         </section>
       </div>
+      
+    <!-- Consent sheet overlay -->
+      <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60"></div>
+        <div class="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">
+          <.live_component
+            module={PrismWeb.ConsentSheetComponent}
+            id={"consent-#{@consent_sheet_ref}"}
+            ref={@consent_sheet_ref}
+            context={@context}
+          />
+        </div>
+      </div>
     </div>
     """
   end
-
-  defp policy_placeholder("allowed_domains"), do: "api.example.com, api.other.com"
-  defp policy_placeholder("allowed_methods"), do: "GET, POST, PUT"
-  defp policy_placeholder("allowed_paths"), do: "data/, components/"
-  defp policy_placeholder("allowed_actions"), do: "read, write, list, delete, exists"
-  defp policy_placeholder("allowed_private_ips"), do: "10.0.0.0/8, 172.16.0.0/12"
-  defp policy_placeholder("allowed_tools"), do: "tool1, tool2"
-  defp policy_placeholder("rate_limit"), do: ~s({"requests": 100, "window": "1m"})
-  defp policy_placeholder("timeout"), do: "3m"
-  defp policy_placeholder("max_memory_bytes"), do: "67108864"
-  defp policy_placeholder("max_request_size"), do: "1048576"
-  defp policy_placeholder("max_response_size"), do: "5242880"
-  defp policy_placeholder("max_concurrent_tasks"), do: "10"
-  defp policy_placeholder("batch_timeout"), do: "5m"
-  defp policy_placeholder(_), do: ""
 end

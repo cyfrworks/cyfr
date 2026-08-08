@@ -67,16 +67,14 @@ defmodule Compendium.ConsentSetupPlanTest do
     committed
   end
 
-  test "a component with no profile keeps the legacy plan", %{ctx: ctx} do
-    publish!(ctx, "plan-legacy")
+  test "a component with no profile and no needs is ready", %{ctx: ctx} do
+    publish!(ctx, "plan-no-profile")
 
-    {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-legacy")
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-no-profile")
 
     assert plan.consent == nil
-    # Legacy fields still answer, and ready still comes from them.
-    assert is_boolean(plan.ready)
-    assert Map.has_key?(plan, :secrets)
-    assert Map.has_key?(plan, :policy_stored)
+    assert plan.needs == []
+    assert plan.ready == true
   end
 
   test "a granted profile reports ready from its consent", %{ctx: ctx} do

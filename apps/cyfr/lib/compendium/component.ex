@@ -76,8 +76,8 @@ defmodule Compendium.Component do
   @doc """
   Generate a setup plan for a component.
 
-  Returns a map with secrets status, policy status, dependencies,
-  and overall readiness.
+  Returns the component's declared needs, its dependencies, the consent
+  section (when a profile exists), and overall readiness.
   """
   @spec setup_plan(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def setup_plan(%Context{} = ctx, reference) when is_binary(reference) do
@@ -94,58 +94,34 @@ defmodule Compendium.Component do
 
           manifest = component[:manifest] || component["manifest"] || %{}
           manifest = decode_manifest(manifest)
-          setup = manifest["setup"] || %{}
 
-          secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
-          oauth_status = check_oauth_status(ctx, canonical_ref, manifest["oauth"])
-          {policy_effective, policy_source} = get_effective_policy_with_source(ctx, canonical_ref)
+          needs = declared_needs(manifest)
           deps = extract_dependency_refs(manifest)
 
           description =
             component[:description] || component["description"] || manifest["description"]
 
-          configurable_fields =
-            case Sanctum.Policy.FieldSchema.configurable_fields(setup["policy"]) do
-              {:ok, fields} ->
-                fields
-
-              {:error, _} ->
-                case Sanctum.Policy.FieldSchema.default_configurable_fields(ref.type) do
-                  {:ok, fields} -> fields
-                  {:error, _} -> nil
-                end
-            end
-
-          # Tinctures use the policy system for rate_limit/timeout/is_public
-          # (no host capabilities like allowed_domains). Policy-ready if setup.policy
-          # is declared OR type is tincture (tincture fields are all optional).
-          policy_ok = setup["policy"] != nil or ref.type in ~w(tincture)
-
-          legacy_ready =
-            all_configured?(secrets_status, policy_source, policy_ok) and
-              oauth_ready?(oauth_status)
-
           # A component with a profile answers "ready" from its consent:
-          # every bound need still live and digest-matching. The legacy
-          # fields stay truthful beside it so the old setup surfaces
-          # no-op rather than loop while both paths coexist.
+          # every bound need still live and digest-matching. Without a
+          # profile, only a component that requires nothing reads ready —
+          # anything with a required need is waiting on the consent walk.
           consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
+
+          ready =
+            case consent do
+              nil -> not Enum.any?(needs, & &1.required)
+              consent -> consent.ready
+            end
 
           {:ok,
            %{
              component_ref: canonical_ref,
              description: description,
              type: ref.type,
-             setup: setup,
-             secrets: secrets_status,
-             oauth: oauth_status,
-             policy_recommended: setup["policy"],
-             policy_current: policy_effective,
-             policy_stored: policy_source in [:exact_ref, :name_level, :manifest_setup],
-             configurable_fields: configurable_fields,
+             needs: needs,
              dependencies: deps,
              consent: consent,
-             ready: if(consent, do: consent.ready, else: legacy_ready)
+             ready: ready
            }}
 
         {:error, reason} ->
@@ -262,79 +238,9 @@ defmodule Compendium.Component do
   # Private — Setup Plan Helpers
   # ============================================================================
 
-  # The secrets plane is retired: a legacy setup.secrets spec can no
-  # longer be satisfied — the component declares needs and the operator
-  # binds a Connection. Rows keep their shape so old surfaces render.
-  defp check_secrets_status(_ctx, _canonical_ref, secret_specs) do
-    Enum.map(secret_specs, fn spec ->
-      %{
-        name: spec["name"],
-        description: spec["description"],
-        required: spec["required"] || false,
-        already_set: false,
-        already_granted: false,
-        warning: "the secrets plane is retired — declare needs and grant a Connection"
-      }
-    end)
+  defp declared_needs(manifest) do
+    Compendium.Manifest.Needs.from_manifest(manifest) || []
   end
-
-  defp get_effective_policy_with_source(ctx, canonical_ref) do
-    case Sanctum.Policy.get_effective(ctx, canonical_ref) do
-      {:ok, policy, meta} when is_struct(policy) ->
-        {Map.from_struct(policy), meta[:source]}
-
-      {:ok, policy, meta} when is_map(policy) ->
-        {policy, meta[:source]}
-
-      _ ->
-        {nil, nil}
-    end
-  end
-
-  defp all_configured?(secrets_status, policy_source, has_policy_requirements) do
-    secrets_ready =
-      Enum.all?(secrets_status, fn s ->
-        !s.required || (s.already_set && s.already_granted)
-      end)
-
-    policy_ready =
-      if has_policy_requirements do
-        policy_source in [:exact_ref, :name_level, :manifest_setup]
-      else
-        true
-      end
-
-    secrets_ready && policy_ready
-  end
-
-  defp check_oauth_status(_ctx, _canonical_ref, nil), do: []
-  defp check_oauth_status(_ctx, _canonical_ref, oauth) when not is_map(oauth), do: []
-
-  defp check_oauth_status(ctx, _canonical_ref, oauth) do
-    Enum.map(oauth, fn {provider, config} ->
-      creds_configured = provider_creds_configured?(ctx, provider)
-
-      %{
-        provider: provider,
-        scopes: config["scopes"] || [],
-        provider_configured: creds_configured,
-        # Component-keyed tokens are gone; authorization is a Connection
-        # bound through the consent walk, reported by the consent section.
-        component_authorized: false,
-        ready: false
-      }
-    end)
-  end
-
-  defp provider_creds_configured?(ctx, provider) do
-    case Sanctum.ProviderCredentials.configured?(ctx, provider) do
-      true -> true
-      _ -> false
-    end
-  end
-
-  defp oauth_ready?([]), do: true
-  defp oauth_ready?(oauth_status), do: Enum.all?(oauth_status, & &1.ready)
 
   defp extract_dependency_refs(component) do
     deps = component["dependencies"] || component[:dependencies] || %{}
