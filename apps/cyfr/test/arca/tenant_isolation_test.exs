@@ -634,62 +634,9 @@ defmodule Arca.TenantIsolationTest do
     end
   end
 
-  # ============================================================================
-  # SecretStorage.delete_grants_for_component Isolation (1c)
-  # ============================================================================
-
-  describe "SecretStorage.delete_grants_for_component tenant isolation" do
-    test "delete scoped to tenant — other tenant's grants survive" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
-
-      component_ref = "reagent:local.shared-comp:1.0.0"
-
-      # Grant for tenant A
-      :ok =
-        Arca.SecretStorage.put_grant(
-          "secret_a",
-          component_ref,
-          "project",
-          ctx_a.org_id,
-          ctx_a.project_id || "default"
-        )
-
-      # Grant for tenant B
-      :ok =
-        Arca.SecretStorage.put_grant(
-          "secret_b",
-          component_ref,
-          "project",
-          ctx_b.org_id,
-          ctx_b.project_id || "default"
-        )
-
-      # Delete grants for tenant A only
-      :ok = Arca.SecretStorage.delete_grants_for_component(ctx_a, component_ref)
-
-      # A's grant is gone
-      {:ok, grants_a} =
-        Arca.SecretStorage.grants_for_component(
-          component_ref,
-          "project",
-          ctx_a.org_id,
-          ctx_a.project_id
-        )
-
-      assert grants_a == []
-
-      # B's grant survives
-      {:ok, grants_b} =
-        Arca.SecretStorage.grants_for_component(
-          component_ref,
-          "project",
-          ctx_b.org_id,
-          ctx_b.project_id
-        )
-
-      assert grants_b == ["secret_b"]
-    end
-  end
+  # (1c) retired with the legacy secrets plane: SecretStorage grant
+  # cleanup no longer exists; vault entries are the only credential store
+  # and their tenant scoping is covered by vault_storage_test.exs.
 
   # ============================================================================
   # MCP Log Retention Isolation (1d)

@@ -165,11 +165,7 @@ defmodule Sanctum.VaultReaderTest do
   end
 
   describe "v1 legacy pointers" do
-    test "a secrets pointer still resolves through the legacy store", %{ctx: ctx} do
-      secret_aad = CipherAAD.secret("project", ctx.org_id, ctx.project_id, "PTR_KEY")
-      {:ok, enc} = Sanctum.Cipher.encrypt("pointer-value", secret_aad)
-      :ok = Arca.SecretStorage.put_secret("PTR_KEY", enc, "project", ctx.org_id, ctx.project_id)
-
+    test "a pointer fails closed as retired — nothing dispenses", %{ctx: ctx} do
       id = Emissary.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "legacy")
 
@@ -189,7 +185,7 @@ defmodule Sanctum.VaultReaderTest do
 
       {:ok, digest} = VaultReader.binding_digest(entry)
 
-      assert {:ok, %{"PTR_KEY" => "pointer-value"}} =
+      assert {:error, :legacy_pointer_retired} =
                VaultReader.fetch(ctx, %{entry_id: id, binding_digest: digest})
     end
   end

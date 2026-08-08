@@ -85,78 +85,9 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert {"reagent:local.boot-idem", :already_bootstrapped} in skipped
   end
 
-  test "granted secrets become a sealed pointer the vault reader projects", %{ctx: ctx} do
-    publish!(ctx, "boot-secret", "catalyst")
-
-    :ok = Sanctum.Secrets.set(ctx, "BOOT_KEY", "boot-value")
-    :ok = Sanctum.Secrets.set(ctx, "OTHER_KEY", "other-value")
-    :ok = Sanctum.Secrets.grant(ctx, "BOOT_KEY", "catalyst:local.boot-secret")
-
-    assert {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert "catalyst:local.boot-secret" in minted
-
-    {:ok, [profile]} = Source.DB.profiles(ctx, "catalyst:local.boot-secret")
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
-
-    assert [%{vault_entry_id: entry_id, binding_digest: binding}] = consent.vault_refs
-
-    {:ok, blob} = Blob.parse(consent.resolved_policy)
-    {:ok, edge} = Blob.ingress(blob, "catalyst:local.boot-secret")
-
-    assert edge.vault.entry_id == entry_id
-    assert edge.vault.binding_digest == binding
-    assert edge.vault.projection.fields == ["BOOT_KEY"]
-
-    # The reader unseals the pointer and resolves only the projected name.
-    assert {:ok, secrets} = VaultReader.fetch(ctx, edge.vault)
-    assert secrets == %{"BOOT_KEY" => "boot-value"}
-
-    # A projection cannot reach past itself even if the edge asked.
-    narrowed = %{edge.vault | projection: %{fields: [], scopes: []}}
-    assert {:ok, %{}} = VaultReader.fetch(ctx, narrowed)
-  end
-
-  test "a rebound entry refuses at the derived binding digest", %{ctx: ctx} do
-    publish!(ctx, "boot-rebind", "catalyst")
-    :ok = Sanctum.Secrets.set(ctx, "REBIND_KEY", "value")
-    :ok = Sanctum.Secrets.grant(ctx, "REBIND_KEY", "catalyst:local.boot-rebind")
-    {:ok, _} = Bootstrap.run(ctx)
-
-    {:ok, [profile]} = Source.DB.profiles(ctx, "catalyst:local.boot-rebind")
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
-    [%{vault_entry_id: entry_id}] = consent.vault_refs
-    {:ok, blob} = Blob.parse(consent.resolved_policy)
-    {:ok, edge} = Blob.ingress(blob, "catalyst:local.boot-rebind")
-
-    # Rebinding: the binding fields change but the cached column is
-    # hand-restored — the derived digest must catch it anyway.
-    import Ecto.Query
-
-    {1, _} =
-      Arca.Repo.update_all(
-        from(v in Arca.Schemas.VaultEntry, where: v.id == ^entry_id),
-        set: [field_names: Jason.encode!(["REBIND_KEY", "SMUGGLED"])]
-      )
-
-    assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, edge.vault)
-  end
-
-  test "an anonymous caller never reaches vault material", %{ctx: ctx} do
-    publish!(ctx, "boot-anon", "catalyst")
-    :ok = Sanctum.Secrets.set(ctx, "ANON_KEY", "value")
-    :ok = Sanctum.Secrets.grant(ctx, "ANON_KEY", "catalyst:local.boot-anon")
-    {:ok, _} = Bootstrap.run(ctx)
-
-    {:ok, [profile]} = Source.DB.profiles(ctx, "catalyst:local.boot-anon")
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
-    {:ok, blob} = Blob.parse(consent.resolved_policy)
-    {:ok, edge} = Blob.ingress(blob, "catalyst:local.boot-anon")
-
-    anon = %{ctx | anonymous: true}
-    assert {:error, :anonymous_denied} = VaultReader.fetch(anon, edge.vault)
-  end
-
-  test "a manifest oauth block becomes a pointer the reader resolves by provider", %{ctx: ctx} do
+  test "a legacy oauth block mints no vault resource — connections bind through the walk", %{
+    ctx: ctx
+  } do
     manifest =
       Jason.encode!(%{
         "name" => "boot-oauth",
@@ -188,13 +119,8 @@ defmodule Sanctum.Consent.BootstrapTest do
     {:ok, blob} = Blob.parse(consent.resolved_policy)
     {:ok, edge} = Blob.ingress(blob, "catalyst:local.boot-oauth")
 
-    assert edge.vault != nil
-    assert "oauth:google" in edge.vault.projection.fields
-
-    # The callee-keyed token plane is gone: a legacy OAuth pointer fails
-    # closed with the re-auth hint, whatever provider is asked for.
-    assert {:error, :legacy_pointer_retired} =
-             VaultReader.oauth_token(ctx, edge.vault, "google")
+    assert edge.vault == nil
+    assert consent.vault_refs == []
   end
 
   test "consents are insert-only by export list" do

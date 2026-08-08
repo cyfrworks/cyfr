@@ -8,7 +8,6 @@ defmodule Sanctum.MCP do
   ## Tools
 
   - `session` - Session management (login, logout, whoami)
-  - `secret` - Secret management (set, get, delete, list, grant, revoke)
   - `permission` - Permission management (get, set, list)
   - `key` - API key management (create, get, list, revoke, rotate)
   - `policy` - Host Policy management (get, set, patch, delete, list)
@@ -174,63 +173,6 @@ defmodule Sanctum.MCP do
             "device_code" => %{
               "type" => "string",
               "description" => "Device code from device_init (for device_poll action)"
-            }
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "secret",
-        title: "Secret Management",
-        description: "Manage encrypted secrets - set, get, delete, list, grant, or revoke access",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: true,
-          actions: %{
-            "set" => %{kind: :write, planes: [:external]},
-            "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "delete" => %{kind: :destructive, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external, :in_chain]},
-            "grant" => %{kind: :write, planes: [:external]},
-            "revoke" => %{kind: :write, planes: [:external]},
-            "can_access" => %{kind: :read, planes: [:external, :in_chain]},
-            "list_component_grants" => %{kind: :read, planes: [:external, :in_chain]}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => [
-                "set",
-                "get",
-                "delete",
-                "list",
-                "grant",
-                "revoke",
-                "can_access",
-                "list_component_grants"
-              ],
-              "description" => "Action to perform"
-            },
-            "name" => %{
-              "type" => "string",
-              "description" => "Name of the secret"
-            },
-            "value" => %{
-              "type" => "string",
-              "description" => "Secret value (for set action)"
-            },
-            "component_ref" => %{
-              "type" => "string",
-              "description" =>
-                "Component reference (e.g., 'catalyst:local.stripe-catalyst' for all versions, or 'catalyst:local.stripe-catalyst:1.0.0' for specific version). Grants default to name-level unless pin_version is true."
-            },
-            "pin_version" => %{
-              "type" => "boolean",
-              "description" =>
-                "When true, store version-specific grant instead of promoting to name-level (default: false)"
             }
           },
           "required" => ["action"]
@@ -701,7 +643,6 @@ defmodule Sanctum.MCP do
   # ============================================================================
 
   def handle("session", ctx, args), do: Sanctum.MCP.SessionTool.handle(ctx, args)
-  def handle("secret", ctx, args), do: Sanctum.MCP.SecretTool.handle(ctx, args)
   def handle("oauth", ctx, args), do: Sanctum.MCP.OAuthTool.handle(ctx, args)
   def handle("permission", ctx, args), do: Sanctum.MCP.PermissionTool.handle(ctx, args)
   def handle("key", ctx, args), do: Sanctum.MCP.KeyTool.handle(ctx, args)

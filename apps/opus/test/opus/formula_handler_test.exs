@@ -395,7 +395,9 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "spawn - in-chain plane containment" do
     test "a spawned external-only tool call is refused in the task result", %{ctx: ctx} do
-      auth = authority(tools: ["secret.delete"])
+      # vault.delete is external-plane only: even a consented edge grant
+      # cannot make credential mutation reachable from a running chain.
+      auth = authority(tools: ["vault.delete"])
 
       {imports, tracker_pid} = fork_imports(ctx, auth, "exec_spawn_restricted")
 
@@ -403,7 +405,7 @@ defmodule Opus.FormulaHandlerTest do
       spawn_fn = elem(invoke_ns["spawn"], 1)
       await_fn = elem(invoke_ns["await"], 1)
 
-      spawn_result = spawn_fn.(mcp_request("secret", "delete", %{"key" => "test"}))
+      spawn_result = spawn_fn.(mcp_request("vault", "delete", %{"id" => "vlt_test"}))
       %{"task_id" => task_id} = Jason.decode!(spawn_result)
 
       awaited = Jason.decode!(await_fn.(task_id))

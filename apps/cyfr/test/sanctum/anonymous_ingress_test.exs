@@ -5,7 +5,6 @@ defmodule Sanctum.AnonymousIngressTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Sanctum.Secrets
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -23,35 +22,12 @@ defmodule Sanctum.AnonymousIngressTest do
   end
 
   describe "credential plane denies anonymous contexts" do
-    test "by-name secret reads and writes are denied" do
-      anon = anonymous_exec_ctx()
-
-      assert {:error, :anonymous_denied} = Secrets.get(anon, "ANY")
-      assert {:error, :anonymous_denied} = Secrets.list(anon)
-      assert {:error, :anonymous_denied} = Secrets.set(anon, "ANY", "v")
-      assert {:error, :anonymous_denied} = Secrets.delete(anon, "ANY")
-      assert {:error, :anonymous_denied} = Secrets.grant(anon, "ANY", "c:local.x:1.0.0")
-      assert {:error, :anonymous_denied} = Secrets.list_grants(anon, "ANY")
-    end
-
-    test "a secret-less component still resolves an empty map anonymously" do
-      anon = anonymous_exec_ctx()
-
-      assert {:ok, %{secrets: %{}}} =
-               Secrets.resolve_granted_secrets(anon, "catalyst:local.no-secrets:1.0.0")
-    end
-
-    test "a granted component fails loudly at preload instead of leaking", %{ctx: ctx} do
-      :ok = Secrets.set(ctx, "PUBLIC_LEAK", "sensitive")
-      :ok = Secrets.grant(ctx, "PUBLIC_LEAK", "catalyst:local.granted-cat:1.0.0")
-
-      anon = anonymous_exec_ctx()
-
-      assert {:error, message} =
-               Secrets.resolve_granted_secrets(anon, "catalyst:local.granted-cat:1.0.0")
-
-      assert message =~ "anonymous_denied"
-    end
+    # Retired with the legacy secrets plane: by-name secret access,
+    # empty-map resolution for secret-less components, and the loud
+    # preload failure for granted components. The surviving property —
+    # anonymous execution never receives credential material — is pinned
+    # on the vault path (credentialed_ingress_gate_test + the VaultReader
+    # anonymity denials here and in vault_reader_test).
 
     test "delegated OAuth tokens are never dispensed anonymously" do
       anon = anonymous_exec_ctx()
@@ -70,9 +46,10 @@ defmodule Sanctum.AnonymousIngressTest do
       invoked = Sanctum.build_tincture_context(ctx, %{publisher: "alice", name: "widget"})
 
       refute invoked.anonymous
-      # Carries the invoker's own permissions, so their granted reads work
-      :ok = Secrets.set(ctx, "OWNER_SECRET", "v")
-      assert {:ok, "v"} = Secrets.get(invoked, "OWNER_SECRET")
+      assert invoked.authenticated
+      # Carries the invoker's own identity and permission set, not a minted one.
+      assert invoked.user_id == ctx.user_id
+      assert MapSet.equal?(invoked.permissions, ctx.permissions)
     end
   end
 

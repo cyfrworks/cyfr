@@ -172,17 +172,28 @@ defmodule MultiTenantIsolationTest do
     end
   end
 
-  describe "Sanctum.Secrets tenant isolation" do
-    test "tenant_a cannot read or enumerate tenant_b's secrets", %{a: ctx_a, b: ctx_b} do
-      :ok = Sanctum.Secrets.set(ctx_a, "SHARED_NAME", "value_a")
-      :ok = Sanctum.Secrets.set(ctx_b, "SHARED_NAME", "value_b")
-      :ok = Sanctum.Secrets.set(ctx_b, "B_ONLY", "secret_b")
+  # The legacy Sanctum.Secrets plane retired; vault entries are the only
+  # credential store, so the credential-store isolation smoke lives there now.
+  describe "Sanctum.Vault tenant isolation" do
+    test "tenant_a cannot read or enumerate tenant_b's vault entries", %{a: ctx_a, b: ctx_b} do
+      # Vault mutations are interactive-class (:oidc surface); the shared
+      # contexts authenticate via API key, so re-surface them for this test.
+      ctx_a = %{ctx_a | auth_method: :oidc}
+      ctx_b = %{ctx_b | auth_method: :oidc}
 
-      assert {:ok, "value_a"} = Sanctum.Secrets.get(ctx_a, "SHARED_NAME")
-      assert {:error, :not_found} = Sanctum.Secrets.get(ctx_a, "B_ONLY")
+      {:ok, _} = Sanctum.Vault.create(ctx_a, %{name: "shared-name", kind: "api_key"})
+      {:ok, _} = Sanctum.Vault.create(ctx_b, %{name: "shared-name", kind: "api_key"})
+      {:ok, b_only} = Sanctum.Vault.create(ctx_b, %{name: "b-only", kind: "api_key"})
 
-      {:ok, names_a} = Sanctum.Secrets.list(ctx_a)
-      refute "B_ONLY" in names_a
+      {:ok, list_a} = Sanctum.Vault.list(ctx_a)
+      names_a = Enum.map(list_a, & &1.name)
+      assert "shared-name" in names_a
+      refute "b-only" in names_a
+
+      # Storage-level get is org-scoped: tenant_b's entry id is invisible
+      # through tenant_a's org.
+      assert {:error, :not_found} = Arca.VaultStorage.get(ctx_a.org_id, b_only.id)
+      assert {:ok, _} = Arca.VaultStorage.get(ctx_b.org_id, b_only.id)
     end
   end
 
@@ -222,10 +233,32 @@ defmodule MultiTenantIsolationTest do
          )}
     end
 
-    test "Sanctum.Secrets.set raises (S5 chokepoint)", %{orgless: ctx} do
+    # The credential store (vault) has no in-module tenant gate: every
+    # ingress that can reach Sanctum.Vault (the MCP session plug, the web
+    # surface) must pass the require_tenant!/tenant_ok chokepoint first.
+    # Pin both halves: the chokepoint refuses the org-less shape, and the
+    # storage backstop canonicalizes a nil org to the seeded "local"
+    # sentinel — an org-less write can never land in a shared org_id == ""
+    # bucket (the historic collapse bug).
+    test "an org-less context is refused at the vault ingress chokepoint", %{orgless: ctx} do
+      assert {:error, :missing_tenant} = Sanctum.Context.tenant_ok(ctx)
+
       assert_raise Sanctum.UnauthorizedError, fn ->
-        Sanctum.Secrets.set(ctx, "K", "v")
+        Sanctum.Context.require_tenant!(ctx)
       end
+
+      {:ok, entry} =
+        Arca.VaultStorage.put(%{
+          org_id: nil,
+          project_id: nil,
+          name: "orgless-probe",
+          kind: "api_key",
+          status: "active",
+          sealed_payload: <<3, 2, "k1", 0>>
+        })
+
+      assert entry.org_id == Arca.Tenant.local_org()
+      refute entry.org_id == ""
     end
 
     test "Sanctum.PolicyStore writes raise (A5 chokepoint)", %{orgless: ctx} do
@@ -251,37 +284,36 @@ defmodule MultiTenantIsolationTest do
 
     test "an org-scoped context is still allowed" do
       ctx = %{Sanctum.TestContext.local() | org_id: "org_pos", scope: :org}
-      assert :ok = Sanctum.Secrets.set(ctx, "OK_KEY", "v")
-      assert {:ok, "v"} = Sanctum.Secrets.get(ctx, "OK_KEY")
+      assert ^ctx = Sanctum.Context.require_tenant!(ctx)
+
+      assert {:ok, view} = Sanctum.Vault.create(ctx, %{name: "ok-entry", kind: "api_key"})
+      {:ok, listed} = Sanctum.Vault.list(ctx)
+      assert Enum.any?(listed, &(&1.id == view.id))
     end
 
     # A6: the require_tenant! chokepoint must EXEMPT scope: :platform. System
     # tasks (retention, audit, the registry CredentialStore that backs
     # Sanctum.Namespace.lookup/1) carry no org by design. Without the bypass
-    # the S5 Secrets chokepoint *raises* for every system-context op in the
+    # the chokepoint *raises* for every system-context op in the
     # multi-tenant — which broke Namespace.lookup → context_from_metadata
     # → ALL production MCP-plug API-key auth.
     #
-    # A6 is strictly "must not RAISE for platform scope". It is NOT about read
-    # visibility: R6's where_org_id/2 still fail-closes an org-less *read* in
-    # ext (keyed on org_id=="" , not scope) — pre-existing, intentional, and
-    # orthogonal. (org-less *user* writes — scope :project — must still raise;
-    # the A5/S5 invariant asserted above.)
+    # A6 is strictly "must not RAISE for platform scope". (org-less *user*
+    # writes — scope :project — must still be refused; the A5 invariant
+    # asserted above.)
     test "a platform/system context bypasses the require_tenant! chokepoint" do
-      # Secrets now enforces its own permission gates, so the system context
-      # must carry them explicitly (matching the CredentialStore precedent).
-      sys = Sanctum.internal_context(permissions: [:execute, :secrets_read, :secrets_write])
+      sys = Sanctum.internal_context(permissions: [:execute])
       assert sys.scope == :platform
 
-      # The core A6 invariant: no raise; context returned unchanged in ext.
+      # The core A6 invariant: no raise; context returned unchanged.
       assert ^sys = Sanctum.Context.require_tenant!(sys)
 
-      # The system Secrets path must not raise in ext (it did under S5).
-      assert {:ok, _names} = Sanctum.Secrets.list(sys)
-      assert :ok = Sanctum.Secrets.set(sys, "SYS_KEY", "v")
+      # A system-context read of the living credential store must not raise
+      # (the org-less org normalizes to the local sentinel at storage).
+      assert {:ok, _entries} = Sanctum.Vault.list(sys)
 
       # The exact regression that broke API-key auth: Namespace.lookup
-      # (CredentialStore → Secrets.list under system_context) must not raise.
+      # (CredentialStore under system context) must not raise.
       result = Sanctum.Namespace.lookup("nobody|x|y")
       assert is_nil(result) or is_binary(result)
     end

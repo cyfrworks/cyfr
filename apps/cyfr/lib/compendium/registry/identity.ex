@@ -105,11 +105,11 @@ defmodule Compendium.Registry.Identity do
   # Internal
   # ============================================================================
 
-  # Prefer the org's tenant credential; fall back to the user's personal
-  # credentials. The same path serves every deployment — a single-operator
-  # install resolves to the seeded "local" org and its personal creds.
+  # The user's personal credentials (registry push tokens) are the only
+  # credential source — the org-level "tenant credential" rode the retired
+  # legacy secret store. The same path serves every deployment.
   defp list_user_credentials(%Sanctum.Context{} = ctx, oci_host) do
-    resolve_tenant_credentials(ctx, oci_host)
+    resolve_local_credentials(ctx, oci_host)
   end
 
   defp resolve_local_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
@@ -118,44 +118,6 @@ defmodule Compendium.Registry.Identity do
   end
 
   defp resolve_local_credentials(_ctx, _oci_host), do: []
-
-  # Tenant-cred path. Tenant creds are stored in Arca.SecretStorage as JSON
-  # with {token, namespace}. Single-cred semantics today; multi-namespace
-  # tenant creds are not yet supported. Falls back to personal creds.
-  defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id} = ctx, oci_host) do
-    tenant_cred =
-      if is_binary(org_id) and org_id != "" do
-        case Arca.SecretStorage.get_secret("registry_credentials", "global", org_id) do
-          {:ok, json} ->
-            case Jason.decode(json) do
-              {:ok, %{"token" => token, "namespace" => ns}}
-              when is_binary(token) and is_binary(ns) ->
-                [
-                  %{
-                    type: :push_token,
-                    token: token,
-                    namespace: ns,
-                    issued_at: nil,
-                    label: "tenant"
-                  }
-                ]
-
-              _ ->
-                []
-            end
-
-          {:error, _} ->
-            []
-        end
-      else
-        []
-      end
-
-    case tenant_cred do
-      [] -> resolve_local_credentials(ctx, oci_host)
-      _ -> tenant_cred
-    end
-  end
 
   # Best-effort per-token probe. Transient errors keep the entry with nil
   # `last_used_at`; 401/403 drops it (token revoked or namespace ownership

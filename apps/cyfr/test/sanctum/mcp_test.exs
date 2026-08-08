@@ -33,13 +33,15 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 10 action-based tools" do
+    test "returns 9 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 10
+      assert length(tools) == 9
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
-      assert "secret" in tool_names
+      # No "secret" tool: the legacy secrets plane retired; vault entries
+      # are the only credential store.
+      refute "secret" in tool_names
       assert "permission" in tool_names
       assert "key" in tool_names
       assert "vault" in tool_names
@@ -194,94 +196,15 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
-  # Secret Tool
+  # Retired: the "secret" tool. The legacy secrets plane is gone — vault
+  # entries (sealed, consent-bound) are the only credential store, managed
+  # through the "vault" tool (covered in mcp_vault_profile_test.exs).
   # ============================================================================
 
-  describe "secret tool" do
-    test "list returns empty initially", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("secret", ctx, %{"action" => "list"})
-      assert result.secrets == []
-      assert result.count == 0
-    end
-
-    test "set and get a secret returns masked value", %{ctx: ctx} do
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "set",
-          "name" => "API_KEY",
-          "value" => "secret123"
-        })
-
-      assert result.stored == true
-      assert result.name == "API_KEY"
-
-      # Get returns masked value, not the actual secret
-      {:ok, result} = MCP.handle("secret", ctx, %{"action" => "get", "name" => "API_KEY"})
-      assert result.name == "API_KEY"
-      # First 4 chars + masked
-      assert result.value == "secr...****"
-      # Length of "secret123"
-      assert result.length == 9
-    end
-
-    test "get short secret returns fully masked value", %{ctx: ctx} do
-      {:ok, _} =
-        MCP.handle("secret", ctx, %{
-          "action" => "set",
-          "name" => "SHORT",
-          "value" => "abc"
-        })
-
-      {:ok, result} = MCP.handle("secret", ctx, %{"action" => "get", "name" => "SHORT"})
-      # Fully masked for short secrets
-      assert result.value == "****"
-      assert result.length == 3
-    end
-
-    test "get missing secret returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "get", "name" => "MISSING"})
-      assert msg =~ "not found"
-    end
-
-    test "delete a secret", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "TO_DELETE", "value" => "val"})
-
-      {:ok, result} = MCP.handle("secret", ctx, %{"action" => "delete", "name" => "TO_DELETE"})
-      assert result.deleted == true
-
-      {:error, _} = MCP.handle("secret", ctx, %{"action" => "get", "name" => "TO_DELETE"})
-    end
-
-    test "grant and revoke access", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "GRANT_TEST", "value" => "val"})
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "grant",
-          "name" => "GRANT_TEST",
-          "component_ref" => "catalyst:local.my-component:1.0.0"
-        })
-
-      assert result.granted == true
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "revoke",
-          "name" => "GRANT_TEST",
-          "component_ref" => "catalyst:local.my-component:1.0.0"
-        })
-
-      assert result.status == :revoked
-    end
-
-    test "set without value returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "set", "name" => "TEST"})
-      assert msg =~ "Missing required"
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid secret action"
+  describe "secret tool retired" do
+    test "the secret tool is no longer routable", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list"})
+      assert msg =~ "Unknown tool"
     end
   end
 
@@ -843,307 +766,6 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
-  # Secret Tool - MCP Boundary Actions
-  # ============================================================================
-
-  describe "secret.resolve_granted removed from MCP surface" do
-    test "resolve_granted returns explicit block error", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "resolve_granted",
-          "component_ref" => "catalyst:local.no-secrets:1.0.0"
-        })
-
-      assert msg =~ "not permitted via MCP"
-    end
-  end
-
-  describe "secret.can_access action" do
-    test "returns allowed false when not granted", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "ACCESS_TEST", "value" => "val"})
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "can_access",
-          "name" => "ACCESS_TEST",
-          "component_ref" => "catalyst:local.no-access:1.0.0"
-        })
-
-      assert result.allowed == false
-    end
-
-    test "returns allowed true when granted", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "GRANTED_TEST", "value" => "val"})
-
-      MCP.handle("secret", ctx, %{
-        "action" => "grant",
-        "name" => "GRANTED_TEST",
-        "component_ref" => "catalyst:local.has-access:1.0.0"
-      })
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "can_access",
-          "name" => "GRANTED_TEST",
-          "component_ref" => "catalyst:local.has-access:1.0.0"
-        })
-
-      assert result.allowed == true
-    end
-
-    test "returns error without required args", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "can_access"})
-      assert msg =~ "Missing required"
-    end
-  end
-
-  # ============================================================================
-  # Secret - list_component_grants
-  # ============================================================================
-
-  describe "secret.list_component_grants action" do
-    test "returns empty list when no grants", %{ctx: ctx} do
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "list_component_grants",
-          "component_ref" => "catalyst:local.no-grants:1.0.0"
-        })
-
-      assert result.granted_secrets == []
-    end
-
-    test "returns granted secret names", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "GRANT_TEST", "value" => "val"})
-
-      MCP.handle("secret", ctx, %{
-        "action" => "grant",
-        "name" => "GRANT_TEST",
-        "component_ref" => "catalyst:local.grant-test:1.0.0"
-      })
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "list_component_grants",
-          "component_ref" => "catalyst:local.grant-test:1.0.0"
-        })
-
-      assert "GRANT_TEST" in result.granted_secrets
-    end
-
-    test "returns error without component_ref", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list_component_grants"})
-      assert msg =~ "Missing required"
-    end
-  end
-
-  # ============================================================================
-  # Secret Tool - System Secret Protection
-  # ============================================================================
-
-  describe "secret tool - system secret protection" do
-    setup %{ctx: ctx} do
-      # Create a system secret directly (bypassing MCP, simulating CredentialStore)
-      :ok = Sanctum.Secrets.set(ctx, "_registry.example.com.12345", "registry-token")
-      :ok = Sanctum.Secrets.set(ctx, "USER_SECRET", "user-value")
-      :ok
-    end
-
-    test "list excludes system secrets", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("secret", ctx, %{"action" => "list"})
-      assert "USER_SECRET" in result.secrets
-      refute Enum.any?(result.secrets, &String.starts_with?(&1, "_"))
-    end
-
-    test "get rejects system secret name", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{"action" => "get", "name" => "_registry.example.com.12345"})
-
-      assert msg =~ "Access denied"
-      assert msg =~ "system secrets"
-    end
-
-    test "set rejects system secret name", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "set",
-          "name" => "_registry.evil.com.fake",
-          "value" => "injected"
-        })
-
-      assert msg =~ "Access denied"
-      assert msg =~ "system secrets"
-    end
-
-    test "delete rejects system secret name", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "delete",
-          "name" => "_registry.example.com.12345"
-        })
-
-      assert msg =~ "Access denied"
-      assert msg =~ "system secrets"
-    end
-
-    test "grant rejects system secret name", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "grant",
-          "name" => "_registry.example.com.12345",
-          "component_ref" => "catalyst:local.my-component:1.0.0"
-        })
-
-      assert msg =~ "Access denied"
-      assert msg =~ "system secrets"
-    end
-
-    test "revoke rejects system secret name", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "revoke",
-          "name" => "_registry.example.com.12345",
-          "component_ref" => "catalyst:local.my-component:1.0.0"
-        })
-
-      assert msg =~ "Access denied"
-      assert msg =~ "system secrets"
-    end
-
-    test "can_access rejects system secret name", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "can_access",
-          "name" => "_registry.example.com.12345",
-          "component_ref" => "catalyst:local.my-component:1.0.0"
-        })
-
-      assert msg =~ "Access denied"
-      assert msg =~ "system secrets"
-    end
-
-    test "list_component_grants filters system secrets from output", %{ctx: ctx} do
-      # Grant both a system secret and a user secret to the same component
-      Sanctum.Secrets.grant(
-        ctx,
-        "_registry.example.com.12345",
-        "catalyst:local.grant-filter:1.0.0"
-      )
-
-      Sanctum.Secrets.grant(ctx, "USER_SECRET", "catalyst:local.grant-filter:1.0.0")
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "list_component_grants",
-          "component_ref" => "catalyst:local.grant-filter:1.0.0"
-        })
-
-      assert "USER_SECRET" in result.granted_secrets
-      refute Enum.any?(result.granted_secrets, &String.starts_with?(&1, "_"))
-    end
-  end
-
-  # ============================================================================
-  # Secret Grant/Revoke Auto-Promotion
-  # ============================================================================
-
-  describe "secret grant auto-promotes versioned ref to name-level" do
-    test "grant with versioned ref stores at name-level", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "PROMO_KEY", "value" => "val"})
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "grant",
-          "name" => "PROMO_KEY",
-          "component_ref" => "catalyst:local.promo-test:1.0.0"
-        })
-
-      assert result.granted == true
-      assert result.component == "catalyst:local.promo-test"
-      assert result.promoted_from == "catalyst:local.promo-test:1.0.0"
-    end
-
-    test "grant with pin_version preserves versioned ref", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "PIN_KEY", "value" => "val"})
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "grant",
-          "name" => "PIN_KEY",
-          "component_ref" => "catalyst:local.pin-test:1.0.0",
-          "pin_version" => true
-        })
-
-      assert result.granted == true
-      assert result.component == "catalyst:local.pin-test:1.0.0"
-      refute Map.has_key?(result, :promoted_from)
-    end
-
-    test "grant with name-level ref has no promoted_from", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "NL_KEY", "value" => "val"})
-
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "grant",
-          "name" => "NL_KEY",
-          "component_ref" => "catalyst:local.nl-grant-test"
-        })
-
-      assert result.granted == true
-      assert result.component == "catalyst:local.nl-grant-test"
-      refute Map.has_key?(result, :promoted_from)
-    end
-  end
-
-  describe "secret revoke auto-promotes versioned ref to name-level" do
-    test "revoke with versioned ref targets name-level", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "REV_KEY", "value" => "val"})
-
-      # Grant at name-level first
-      MCP.handle("secret", ctx, %{
-        "action" => "grant",
-        "name" => "REV_KEY",
-        "component_ref" => "catalyst:local.rev-test"
-      })
-
-      # Revoke using versioned ref — should find the name-level grant
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "revoke",
-          "name" => "REV_KEY",
-          "component_ref" => "catalyst:local.rev-test:1.0.0"
-        })
-
-      assert result.status == :revoked
-      assert result.component == "catalyst:local.rev-test"
-      assert result.promoted_from == "catalyst:local.rev-test:1.0.0"
-    end
-
-    test "revoke with pin_version targets versioned ref", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "PINREV_KEY", "value" => "val"})
-
-      # Grant at versioned level
-      MCP.handle("secret", ctx, %{
-        "action" => "grant",
-        "name" => "PINREV_KEY",
-        "component_ref" => "catalyst:local.pinrev-test:1.0.0",
-        "pin_version" => true
-      })
-
-      # Revoke with pin_version
-      {:ok, result} =
-        MCP.handle("secret", ctx, %{
-          "action" => "revoke",
-          "name" => "PINREV_KEY",
-          "component_ref" => "catalyst:local.pinrev-test:1.0.0",
-          "pin_version" => true
-        })
-
-      assert result.status == :revoked
-      assert result.component == "catalyst:local.pinrev-test:1.0.0"
-    end
-  end
-
-  # ============================================================================
   # Permission Gate Tests
   # ============================================================================
 
@@ -1188,35 +810,6 @@ defmodule Sanctum.MCPTest do
 
       assert msg =~ "Unauthorized"
       assert msg =~ "policy_read"
-    end
-
-    test "secret:list requires secrets_read permission", %{restricted_ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list"})
-      assert msg =~ "Unauthorized"
-      assert msg =~ "secrets_read"
-    end
-
-    test "secret:can_access requires secrets_read permission", %{restricted_ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "can_access",
-          "name" => "TEST",
-          "component_ref" => "catalyst:local.test:1.0.0"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "secrets_read"
-    end
-
-    test "secret:list_component_grants requires secrets_read permission", %{restricted_ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("secret", ctx, %{
-          "action" => "list_component_grants",
-          "component_ref" => "catalyst:local.test:1.0.0"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "secrets_read"
     end
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
@@ -1496,20 +1089,6 @@ defmodule Sanctum.MCPTest do
         )
 
       {:ok, org_ctx: org_ctx, orgless: orgless}
-    end
-
-    test "secret.set: org-scoped succeeds, org-less is fail-closed under strict policy",
-         %{org_ctx: org_ctx, orgless: orgless} do
-      assert {:ok, _} =
-               MCP.handle("secret", org_ctx, %{
-                 "action" => "set",
-                 "name" => "EXT_OK",
-                 "value" => "v"
-               })
-
-      assert_fail_closed(fn ->
-        MCP.handle("secret", orgless, %{"action" => "set", "name" => "EXT_NO", "value" => "v"})
-      end)
     end
 
     test "key.create: org-scoped succeeds, org-less is fail-closed under strict policy",

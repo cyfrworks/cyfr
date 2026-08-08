@@ -229,20 +229,21 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "execute/3 - dispatch via ToolRegistry" do
-    test "secret.list routes to the provider, whose identity conjunct still refuses", %{
+    test "policy.list routes to the provider, whose identity conjunct still refuses", %{
       ctx: ctx,
       execution_id: eid
     } do
-      # The edge grant clears the authority conjunct, but secret material
-      # is external-plane: a guest-planed context cannot authorize the
-      # read, so the provider refuses. Credentials only ever arrive via
-      # the edge's vault projection, never by in-chain listing.
-      request = Jason.encode!(%{"tool" => "secret", "action" => "list", "args" => %{}})
-      result = execute(request, ctx, eid, authority(tools: ["secret.list"]))
+      # The edge grant clears the authority conjunct, but the dispatch
+      # still carries the caller's identity: an identity without
+      # :policy_read is refused by the provider itself. Reaching the
+      # provider through the registry never bypasses the identity conjunct.
+      restricted = %{ctx | permissions: MapSet.new([:execute])}
+      request = Jason.encode!(%{"tool" => "policy", "action" => "list", "args" => %{}})
+      result = execute(request, restricted, eid, authority(tools: ["policy.list"]))
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
-      assert decoded["error"]["message"] =~ "Failed to list secrets"
+      assert decoded["error"]["message"] =~ "policy_read"
     end
 
     test "routes execution.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do

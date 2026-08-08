@@ -75,12 +75,10 @@ defmodule Sanctum.Cipher.Rotation do
     ensure_started()
     dry = Keyword.get(opts, :dry_run, false)
 
-    with {:ok, s} <- rotate_table(:secrets, opts),
-         {:ok, w} <- rotate_table(:webhooks, opts),
+    with {:ok, w} <- rotate_table(:webhooks, opts),
          {:ok, v} <- rotate_table(:vault_entries, opts),
          {:ok, r} <- rotate_table(:registry_tokens, opts) do
       result = %{
-        secrets: s,
         webhooks: w,
         vault_entries: v,
         registry_tokens: r,
@@ -106,7 +104,6 @@ defmodule Sanctum.Cipher.Rotation do
     report =
       Map.new(
         [
-          {:secrets, :encrypted_value},
           {:webhooks, :secret_encrypted},
           {:vault_entries, :sealed_payload},
           {:registry_tokens, :credential_ciphertext}
@@ -178,14 +175,6 @@ defmodule Sanctum.Cipher.Rotation do
   # ==========================================================================
   # Per-row rotation
   # ==========================================================================
-
-  defp rotate_row(:secrets, row, opts) do
-    aad = Sanctum.CipherAAD.secret(row.scope, row.org_id, row.project_id, row.name)
-
-    rotate_columns(:secrets, row.id, [{:encrypted_value, row.ct, aad}], opts, fn ->
-      Arca.Cache.invalidate({:secret, {row.name, row.scope, row.org_id, row.project_id}})
-    end)
-  end
 
   defp rotate_row(:webhooks, row, opts) do
     aad = Sanctum.CipherAAD.webhook_secret(row.scope_type, row.org_id, row.project_id, row.name)
@@ -314,19 +303,6 @@ defmodule Sanctum.Cipher.Rotation do
   # Queries
   # ==========================================================================
 
-  defp fetch_page(:secrets, cursor, batch) do
-    base(cursor, batch, Arca.Schemas.Secret)
-    |> select([r], %{
-      id: r.id,
-      name: r.name,
-      scope: r.scope,
-      org_id: r.org_id,
-      project_id: r.project_id,
-      ct: r.encrypted_value
-    })
-    |> Arca.Repo.all()
-  end
-
   defp fetch_page(:webhooks, cursor, batch) do
     base(cursor, batch, Arca.Schemas.Webhook)
     |> select([r], %{
@@ -374,7 +350,6 @@ defmodule Sanctum.Cipher.Rotation do
     from(r in schema, where: r.id > ^cursor, order_by: [asc: r.id], limit: ^batch)
   end
 
-  defp schema_for(:secrets), do: Arca.Schemas.Secret
   defp schema_for(:webhooks), do: Arca.Schemas.Webhook
   defp schema_for(:vault_entries), do: Arca.Schemas.VaultEntry
   defp schema_for(:registry_tokens), do: Arca.Schemas.RegistryToken

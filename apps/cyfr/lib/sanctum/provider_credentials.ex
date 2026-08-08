@@ -22,12 +22,7 @@ defmodule Sanctum.ProviderCredentials do
 
   `fetch_for_oauth/4` falls back to the legacy secret names a manifest's
   oauth block declares (`client_id_secret` / `client_secret_secret`) and
-  copies a hit forward into this store, so existing installs keep working
-  without re-entry. `mix cyfr.migrate_provider_creds` performs the eager
-  copy and deletes the legacy rows.
   """
-
-  require Logger
 
   alias Sanctum.CipherAAD
   alias Sanctum.Context
@@ -86,19 +81,13 @@ defmodule Sanctum.ProviderCredentials do
 
   Deliberately takes tenant coordinates instead of a `Context` — no caller
   permission set can reach the client secret through this function, and the
-  executing component's context never touches it. `legacy_names` is the
-  manifest oauth block's `{client_id_secret, client_secret_secret}` pair;
-  a legacy hit is copied forward into this store.
+  executing component's context never touches it.
 
   Returns `{:ok, %{"client_id" => ..., "client_secret" => ... | nil}}`.
   """
-  @spec fetch_for_oauth(
-          String.t() | nil,
-          String.t() | nil,
-          String.t(),
-          {String.t() | nil, String.t() | nil} | nil
-        ) :: {:ok, map()} | {:error, String.t()}
-  def fetch_for_oauth(org_id, project_id, provider, legacy_names \\ nil) do
+  @spec fetch_for_oauth(String.t() | nil, String.t() | nil, String.t()) ::
+          {:ok, map()} | {:error, String.t()}
+  def fetch_for_oauth(org_id, project_id, provider) do
     with :ok <- validate_provider(provider) do
       case Arca.ProviderCredentialStorage.get(org_id, project_id, provider) do
         {:ok, row} ->
@@ -106,15 +95,7 @@ defmodule Sanctum.ProviderCredentials do
           unseal(row)
 
         {:error, :not_found} ->
-          case legacy_lookup(org_id, project_id, legacy_names) do
-            {:ok, creds} ->
-              emit_fetch(provider, :legacy)
-              copy_forward(org_id, project_id, provider, creds)
-              {:ok, creds}
-
-            nil ->
-              {:error, not_configured_message(provider, legacy_names)}
-          end
+          {:error, not_configured_message(provider)}
 
         {:error, reason} ->
           {:error, "failed to read OAuth provider credentials: #{inspect(reason)}"}
@@ -140,80 +121,7 @@ defmodule Sanctum.ProviderCredentials do
     end
   end
 
-  # The legacy rows were written under whatever scope partition the writer's
-  # context carried (console users :project or :org, platform admins
-  # :platform), so the lookup cascades the partitions in fixed order.
-  defp legacy_lookup(org_id, project_id, {id_name, secret_name}) when is_binary(id_name) do
-    Enum.find_value([:project, :org, :platform], fn scope ->
-      ctx = legacy_ctx(org_id, project_id, scope)
-
-      case Sanctum.Secrets.get(ctx, id_name) do
-        {:ok, client_id} ->
-          client_secret =
-            if is_binary(secret_name) do
-              case Sanctum.Secrets.get(ctx, secret_name) do
-                {:ok, val} -> val
-                _ -> nil
-              end
-            end
-
-          {:ok, %{"client_id" => client_id, "client_secret" => client_secret}}
-
-        _ ->
-          nil
-      end
-    end)
-  end
-
-  defp legacy_lookup(_org_id, _project_id, _names), do: nil
-
-  defp legacy_ctx(org_id, project_id, scope) do
-    Context.internal(
-      user_id: "system:provider_creds",
-      org_id: org_id,
-      project_id: project_id,
-      scope: scope,
-      permissions: [:secrets_read]
-    )
-  end
-
-  defp copy_forward(org_id, project_id, provider, %{"client_id" => client_id} = creds) do
-    payload = Jason.encode!(Map.take(creds, ["client_id", "client_secret"]))
-
-    {:ok, ciphertext} =
-      Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(org_id, project_id, provider))
-
-    result =
-      Arca.ProviderCredentialStorage.put(%{
-        org_id: org_id,
-        project_id: project_id,
-        provider: provider,
-        payload_ciphertext: ciphertext,
-        created_by: "system:legacy_migration"
-      })
-
-    case result do
-      :ok ->
-        Logger.info(
-          "[ProviderCredentials] migrated legacy client credentials for provider '#{provider}' " <>
-            "into the provider-credential store (client_id #{String.slice(client_id, 0, 6)}…)"
-        )
-
-      {:error, reason} ->
-        Logger.warning(
-          "[ProviderCredentials] failed to copy legacy credentials forward for '#{provider}': #{inspect(reason)}"
-        )
-    end
-
-    :ok
-  end
-
-  defp not_configured_message(provider, {id_name, _}) when is_binary(id_name) do
-    "OAuth provider credentials not configured for '#{provider}' — " <>
-      "run oauth.set_client (or set legacy secret '#{id_name}')"
-  end
-
-  defp not_configured_message(provider, _legacy) do
+  defp not_configured_message(provider) do
     "OAuth provider credentials not configured for '#{provider}' — run oauth.set_client"
   end
 

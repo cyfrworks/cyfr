@@ -234,21 +234,7 @@ defmodule Emissary.MCP.ExternalServerTest do
       :ok
     end
 
-    test "secret: references are retired — even a live row cannot resolve" do
-      # The secrets plane is going; a stale header reference fails closed
-      # with an opaque outward error, never a value.
-      writer =
-        Sanctum.Context.build(
-          user_id: "partition-writer",
-          org_id: "local",
-          project_id: "default",
-          scope: :project,
-          permissions: [:secrets_read, :secrets_write],
-          authenticated: true
-        )
-
-      :ok = Sanctum.Secrets.set(writer, "EXT_PROJ_TOKEN", "proj-value")
-
+    test "secret: references are retired — the reference form itself refuses" do
       assert {:error, message} =
                ExternalServer.resolve_headers(
                  %{"authorization" => "secret:EXT_PROJ_TOKEN"},
@@ -257,7 +243,7 @@ defmodule Emissary.MCP.ExternalServerTest do
                )
 
       assert message =~ "authorization"
-      refute message =~ "proj-value"
+      refute message =~ "EXT_PROJ_TOKEN"
     end
 
     test "reports only the header name on a missing secret" do

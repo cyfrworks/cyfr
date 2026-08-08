@@ -24,21 +24,6 @@ defmodule Sanctum.CipherAAD do
   alias Arca.QueryHelpers
 
   @doc """
-  AAD for a secret row (`:secret` purpose).
-  """
-  @spec secret(String.t(), String.t() | nil, String.t() | nil, String.t()) :: map()
-  def secret(scope, org_id, project_id, name) do
-    %{
-      purpose: :secret,
-      scope: scope,
-      org: QueryHelpers.normalize_org_id(org_id),
-      project: QueryHelpers.normalize_project_id(project_id),
-      name: name
-    }
-  end
-
-
-  @doc """
   AAD for a vault entry's sealed payload (`:vault_entry` purpose).
 
   Bound to the entry id and provider hint — both immutable per row, which

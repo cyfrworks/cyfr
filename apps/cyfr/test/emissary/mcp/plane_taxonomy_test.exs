@@ -108,7 +108,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       # Guards the standalone-run hole: if this runs with the full provider
       # set it must see the whole taxonomy.
       if length(loaded_providers()) == 8 do
-        assert length(annotated_actions()) == 138
+        assert length(annotated_actions()) == 130
       else
         assert length(loaded_providers()) >= 5
       end

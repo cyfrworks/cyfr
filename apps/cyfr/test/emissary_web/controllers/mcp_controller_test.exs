@@ -1092,7 +1092,6 @@ defmodule EmissaryWeb.MCPControllerTest do
       {"retention", "arca"},
       {"session", "sanctum"},
       {"permission", "sanctum"},
-      {"secret", "sanctum"},
       {"key", "sanctum"},
       {"system", "emissary"}
     ]

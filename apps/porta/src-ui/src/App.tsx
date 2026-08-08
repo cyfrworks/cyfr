@@ -128,35 +128,11 @@ export default function App() {
               // Skip fully-configured components
               if (plan.ready) continue;
 
-              setSetupStatus(`Setting up ${comp.name}...`);
-              const nameRef = comp.component_ref.replace(/:[^:]+$/, "");
-
-              // Apply recommended policies only if no stored policy exists yet
-              if (!plan.policy_stored) {
-                const recommended = (plan.policy_recommended ?? {}) as Record<string, unknown>;
-
-                for (const [field, value] of Object.entries(recommended)) {
-                  if (value == null) continue;
-                  const valueStr = typeof value === "string" ? value : JSON.stringify(value);
-                  try {
-                    await cyfrMcp.updatePolicyField(client, nameRef, field, valueStr);
-                  } catch {
-                    // Individual field failure is non-fatal
-                  }
-                }
-              }
-
-              // Grant secrets that are set but not yet granted
-              const secrets = (plan.secrets ?? []) as { name: string; already_set: boolean; already_granted: boolean }[];
-              for (const secret of secrets) {
-                if (secret.already_set && !secret.already_granted) {
-                  try {
-                    await cyfrMcp.grantSecret(client, nameRef, secret.name);
-                  } catch {
-                    // Non-fatal
-                  }
-                }
-              }
+              // Granting is a consent decision now — the boot auto-grant
+              // (auto-applied policies, auto-granted secrets) is retired.
+              // A not-ready component surfaces setup_required at use, and
+              // the operator grants through the console or CLI walk.
+              setSetupStatus(`${comp.name} needs a grant — see the console`);
             } catch {
               // Individual setup failure is non-fatal
             }

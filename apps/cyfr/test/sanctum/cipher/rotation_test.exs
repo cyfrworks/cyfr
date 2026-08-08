@@ -40,30 +40,15 @@ defmodule Sanctum.Cipher.RotationTest do
   @proj "default"
   @scope "project"
 
-  defp put_secret_row(name, plaintext) do
-    aad = %{purpose: :secret, scope: @scope, org: @org, project: @proj, name: name}
-    {:ok, ct} = Cipher.encrypt(plaintext, aad)
-    id = uuid()
-
-    Arca.Repo.insert_all(Arca.Schemas.Secret, [
-      %{
-        id: id,
-        name: name,
-        encrypted_value: ct,
-        scope: @scope,
-        org_id: @org,
-        project_id: @proj,
-        inserted_at: now(),
-        updated_at: now()
-      }
-    ])
-
-    id
-  end
-
-  defp put_webhook_row(name, secret, prev) do
+  defp put_webhook_row(name, secret, prev, over \\ %{}) do
     aad = %{purpose: :webhook_secret, scope: @scope, org: @org, project: @proj, name: name}
-    {:ok, sec} = Cipher.encrypt(secret, aad)
+
+    sec =
+      case Map.get(over, :secret_encrypted, :seal) do
+        :seal -> elem(Cipher.encrypt(secret, aad), 1)
+        other -> other
+      end
+
     prev_ct = if prev, do: elem(Cipher.encrypt(prev, aad), 1)
     id = uuid()
 
@@ -152,31 +137,31 @@ defmodule Sanctum.Cipher.RotationTest do
 
   describe "T-REENCRYPT: happy path + idempotency" do
     test "migrates every table onto the new primary; plaintext preserved" do
-      s = put_secret_row("API_KEY", "sk-live-123")
       w = put_webhook_row("hook1", "whsec_aaa", "whsec_old")
+      v = put_vault_row("legacy:probe", ~s({"v":2,"fields":{}}))
+
+      rt_aad = Sanctum.CipherAAD.registry_token("user_1", "registry.test", "alice")
+      {:ok, rt_ct} = Cipher.encrypt(~s({"token":"cyfr_pt_x"}), rt_aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: "user_1",
+          registry: "registry.test",
+          namespace_slug: "alice",
+          credential_ciphertext: rt_ct
+        })
+
+      {:ok, rt_row} = Arca.RegistryTokenStorage.get("user_1", "registry.test", "alice")
 
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
       assert {:ok, summary} = Rotation.reencrypt_all()
-      assert summary.secrets == %{scanned: 1, rotated: 1, skipped: 0}
       assert summary.webhooks == %{scanned: 1, rotated: 1, skipped: 0}
+      assert summary.vault_entries == %{scanned: 1, rotated: 1, skipped: 0}
+      assert summary.registry_tokens == %{scanned: 1, rotated: 1, skipped: 0}
       refute summary.dry_run
 
       # Every column is now on k2 and still decrypts to the original plaintext.
-      assert {:ok, "k2"} = Cipher.label(col("secrets", s, :encrypted_value))
-
-      assert {:ok, "sk-live-123"} =
-               Cipher.decrypt(
-                 col("secrets", s, :encrypted_value),
-                 %{
-                   purpose: :secret,
-                   scope: "project",
-                   org: "org_a",
-                   project: "default",
-                   name: "API_KEY"
-                 }
-               )
-
       assert {:ok, "k2"} = Cipher.label(col("webhooks", w, :secret_encrypted))
       assert {:ok, "k2"} = Cipher.label(col("webhooks", w, :previous_secret_encrypted))
 
@@ -192,70 +177,82 @@ defmodule Sanctum.Cipher.RotationTest do
 
       assert {:ok, "whsec_old"} =
                Cipher.decrypt(col("webhooks", w, :previous_secret_encrypted), wh_aad)
+
+      assert {:ok, "k2"} = Cipher.label(col("vault_entries", v, :sealed_payload))
+
+      vault_aad = Sanctum.CipherAAD.vault_entry(@org, @proj, v, "legacy")
+
+      assert {:ok, ~s({"v":2,"fields":{}})} =
+               Cipher.decrypt(col("vault_entries", v, :sealed_payload), vault_aad)
+
+      assert {:ok, "k2"} = Cipher.label(col("registry_tokens", rt_row.id, :credential_ciphertext))
+
+      assert {:ok, ~s({"token":"cyfr_pt_x"})} =
+               Cipher.decrypt(col("registry_tokens", rt_row.id, :credential_ciphertext), rt_aad)
     end
 
     test "re-running is a no-op (idempotent / resumable)" do
-      put_secret_row("S", "v")
+      put_vault_row("legacy:s", "v")
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
-      assert {:ok, %{secrets: %{rotated: 1, skipped: 0}}} = Rotation.reencrypt_all()
+      assert {:ok, %{vault_entries: %{rotated: 1, skipped: 0}}} = Rotation.reencrypt_all()
 
-      assert {:ok, %{secrets: %{scanned: 1, rotated: 0, skipped: 1}}} =
+      assert {:ok, %{vault_entries: %{scanned: 1, rotated: 0, skipped: 1}}} =
                Rotation.reencrypt_all()
     end
 
     test "rows already on the primary are skipped, byte-unchanged" do
-      s = put_secret_row("S", "v")
-      before = col("secrets", s, :encrypted_value)
+      v = put_vault_row("legacy:s", "v")
+      before = col("vault_entries", v, :sealed_payload)
 
       # primary is still k1 (what the row was written under)
-      assert {:ok, %{secrets: %{scanned: 1, rotated: 0, skipped: 1}}} =
+      assert {:ok, %{vault_entries: %{scanned: 1, rotated: 0, skipped: 1}}} =
                Rotation.reencrypt_all()
 
-      assert col("secrets", s, :encrypted_value) == before
+      assert col("vault_entries", v, :sealed_payload) == before
     end
   end
 
   describe "T-REENCRYPT: dry-run" do
     test "reports work but writes nothing" do
-      s = put_secret_row("S", "v")
-      before = col("secrets", s, :encrypted_value)
+      v = put_vault_row("legacy:s", "v")
+      before = col("vault_entries", v, :sealed_payload)
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
-      assert {:ok, %{secrets: %{scanned: 1, rotated: 1, skipped: 0}, dry_run: true}} =
+      assert {:ok, %{vault_entries: %{scanned: 1, rotated: 1, skipped: 0}, dry_run: true}} =
                Rotation.reencrypt_all(dry_run: true)
 
-      assert col("secrets", s, :encrypted_value) == before
-      assert {:ok, "k1"} = Cipher.label(col("secrets", s, :encrypted_value))
+      assert col("vault_entries", v, :sealed_payload) == before
+      assert {:ok, "k1"} = Cipher.label(col("vault_entries", v, :sealed_payload))
     end
   end
 
   describe "T-REENCRYPT: fail-closed" do
     test "aborts the table run on an undecryptable row (never silently skips)" do
-      id = put_secret_row("S", "v")
+      id = put_vault_row("legacy:s", "v")
       # Retire k1 entirely: the row can no longer be decrypted → must abort.
       put_keyring(%{primary: "k2", keys: %{"k2" => @k2}})
 
       assert {:error,
-              {:secrets,
-               {:decrypt_failed, :encrypted_value, {:decrypt, {:unknown_key_label, "k1"}}}, ^id}} =
+              {:vault_entries,
+               {:decrypt_failed, :sealed_payload, {:decrypt, {:unknown_key_label, "k1"}}}, ^id}} =
                Rotation.reencrypt_all()
     end
   end
 
   describe "T-REENCRYPT: audit/0" do
     test "reports the key-label distribution without decrypting" do
-      put_secret_row("A", "1")
-      put_secret_row("B", "2")
+      put_webhook_row("hook_a", "1", nil)
+      put_webhook_row("hook_b", "2", nil)
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
-      put_secret_row("C", "3")
+      put_webhook_row("hook_c", "3", nil)
 
       assert {:ok, report} = Rotation.audit()
-      sec = report.secrets
-      assert sec.total == 3
-      assert sec.on_primary == 1
-      assert sec.on_other == %{"k1" => 2}
-      assert sec.unknown == 0
+      wh = report.webhooks
+      assert wh.total == 3
+      assert wh.on_primary == 1
+      assert wh.on_other == %{"k1" => 2}
+      assert wh.unknown == 0
     end
 
     test "covers vault_entries and excludes tombstoned rows" do
@@ -271,33 +268,20 @@ defmodule Sanctum.Cipher.RotationTest do
 
   describe "T-REENCRYPT-V3: envelope upgrade" do
     test "a v2 row on the PRIMARY key is re-sealed to v3, not skipped" do
-      aad = %{purpose: :secret, scope: @scope, org: @org, project: @proj, name: "V2ROW"}
+      aad = %{purpose: :webhook_secret, scope: @scope, org: @org, project: @proj, name: "V2ROW"}
       v2_ct = seal_v2("legacy-plain", aad, "k1", @k1)
-      id = uuid()
-
-      Arca.Repo.insert_all(Arca.Schemas.Secret, [
-        %{
-          id: id,
-          name: "V2ROW",
-          encrypted_value: v2_ct,
-          scope: @scope,
-          org_id: @org,
-          project_id: @proj,
-          inserted_at: now(),
-          updated_at: now()
-        }
-      ])
+      id = put_webhook_row("V2ROW", "ignored", nil, %{secret_encrypted: v2_ct})
 
       # primary is still k1 — the label matches, the envelope version does not.
-      assert {:ok, %{secrets: %{scanned: 1, rotated: 1, skipped: 0}}} =
+      assert {:ok, %{webhooks: %{scanned: 1, rotated: 1, skipped: 0}}} =
                Rotation.reencrypt_all()
 
-      new_ct = col("secrets", id, :encrypted_value)
+      new_ct = col("webhooks", id, :secret_encrypted)
       assert {:ok, {3, "k1"}} = Cipher.envelope(new_ct)
       assert {:ok, "legacy-plain"} = Cipher.decrypt(new_ct, aad)
 
       # Second pass: now genuinely finished.
-      assert {:ok, %{secrets: %{scanned: 1, rotated: 0, skipped: 1}}} =
+      assert {:ok, %{webhooks: %{scanned: 1, rotated: 0, skipped: 1}}} =
                Rotation.reencrypt_all()
     end
 

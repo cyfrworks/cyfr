@@ -10,8 +10,6 @@ defmodule Compendium.Component do
   internal callers (e.g., Opus executor).
   """
 
-  require Logger
-
   alias Sanctum.Context
   alias Compendium.Registry
 
@@ -264,44 +262,19 @@ defmodule Compendium.Component do
   # Private — Setup Plan Helpers
   # ============================================================================
 
-  defp check_secrets_status(ctx, canonical_ref, secret_specs) do
-    {existing_secrets, secrets_error} =
-      case Sanctum.Secrets.list(ctx) do
-        {:ok, names} ->
-          {MapSet.new(names), nil}
-
-        other ->
-          Logger.warning("[Compendium.Component] Failed to list secrets: #{inspect(other)}")
-          {MapSet.new(), "Unable to check secret status (Sanctum unavailable)"}
-      end
-
-    {granted_secrets, grants_error} =
-      case Sanctum.Secrets.resolve_granted_secrets(ctx, canonical_ref) do
-        {:ok, %{secrets: secrets}} when is_map(secrets) ->
-          {MapSet.new(Map.keys(secrets)), nil}
-
-        other ->
-          Logger.warning(
-            "[Compendium.Component] Failed to resolve granted secrets for #{canonical_ref}: #{inspect(other)}"
-          )
-
-          {MapSet.new(), "Unable to check grant status (Sanctum unavailable)"}
-      end
-
-    warning = secrets_error || grants_error
-
+  # The secrets plane is retired: a legacy setup.secrets spec can no
+  # longer be satisfied — the component declares needs and the operator
+  # binds a Connection. Rows keep their shape so old surfaces render.
+  defp check_secrets_status(_ctx, _canonical_ref, secret_specs) do
     Enum.map(secret_specs, fn spec ->
-      name = spec["name"]
-
-      entry = %{
-        name: name,
+      %{
+        name: spec["name"],
         description: spec["description"],
         required: spec["required"] || false,
-        already_set: MapSet.member?(existing_secrets, name),
-        already_granted: MapSet.member?(granted_secrets, name)
+        already_set: false,
+        already_granted: false,
+        warning: "the secrets plane is retired — declare needs and grant a Connection"
       }
-
-      if warning, do: Map.put(entry, :warning, warning), else: entry
     end)
   end
 
@@ -337,44 +310,18 @@ defmodule Compendium.Component do
   defp check_oauth_status(_ctx, _canonical_ref, nil), do: []
   defp check_oauth_status(_ctx, _canonical_ref, oauth) when not is_map(oauth), do: []
 
-  defp check_oauth_status(ctx, canonical_ref, oauth) do
-    {_scope, org_id, project_id} =
-      case ctx.scope do
-        :org -> {"org", ctx.org_id, ctx.project_id}
-        _ -> {"project", ctx.org_id, ctx.project_id}
-      end
-
+  defp check_oauth_status(ctx, _canonical_ref, oauth) do
     Enum.map(oauth, fn {provider, config} ->
-      # Client creds live in the provider-credential store; the manifest's
-      # legacy secret names still count for un-migrated installs.
-      creds_configured =
-        provider_creds_configured?(ctx, provider) or legacy_creds_configured?(ctx, config)
-
-      # Cascade: versioned ref → name-level ref (matches Sanctum.OAuth pattern)
-      component_authorized =
-        case Arca.OAuthStorage.get_token(canonical_ref, provider, org_id, project_id) do
-          {:ok, _} ->
-            true
-
-          _ ->
-            case Sanctum.ComponentRef.to_name_ref(canonical_ref) do
-              {:ok, name_ref} when name_ref != canonical_ref ->
-                match?(
-                  {:ok, _},
-                  Arca.OAuthStorage.get_token(name_ref, provider, org_id, project_id)
-                )
-
-              _ ->
-                false
-            end
-        end
+      creds_configured = provider_creds_configured?(ctx, provider)
 
       %{
         provider: provider,
         scopes: config["scopes"] || [],
         provider_configured: creds_configured,
-        component_authorized: component_authorized,
-        ready: creds_configured and component_authorized
+        # Component-keyed tokens are gone; authorization is a Connection
+        # bound through the consent walk, reported by the consent section.
+        component_authorized: false,
+        ready: false
       }
     end)
   end
@@ -383,17 +330,6 @@ defmodule Compendium.Component do
     case Sanctum.ProviderCredentials.configured?(ctx, provider) do
       true -> true
       _ -> false
-    end
-  end
-
-  defp legacy_creds_configured?(ctx, config) do
-    case {config["client_id_secret"], config["client_secret_secret"]} do
-      {id, sec} when is_binary(id) and is_binary(sec) ->
-        match?({:ok, _}, Sanctum.Secrets.get(ctx, id)) and
-          match?({:ok, _}, Sanctum.Secrets.get(ctx, sec))
-
-      _ ->
-        false
     end
   end
 

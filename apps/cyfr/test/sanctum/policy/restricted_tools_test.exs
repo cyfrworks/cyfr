@@ -20,7 +20,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert "policy.set" in list
       assert "policy.patch" in list
       assert "policy.migrate" in list
-      assert "secret.set" in list
+      assert "vault.create" in list
       assert "webhook.create" in list
       assert "schedule.create" in list
       assert "tincture_visibility.set" in list
@@ -72,7 +72,6 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert :allowed = RestrictedTools.check(:formula, "aqua.get")
       assert :allowed = RestrictedTools.check(:formula, "tools.list")
       assert :allowed = RestrictedTools.check(:formula, "policy.get")
-      assert :allowed = RestrictedTools.check(:formula, "secret.get")
     end
 
     test "blocks exact restricted matches" do
@@ -80,8 +79,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert {:restricted, "policy.patch"} = RestrictedTools.check(:formula, "policy.patch")
       assert {:restricted, "policy.migrate"} = RestrictedTools.check(:formula, "policy.migrate")
       assert {:restricted, "policy.delete"} = RestrictedTools.check(:formula, "policy.delete")
-      assert {:restricted, "secret.set"} = RestrictedTools.check(:formula, "secret.set")
-      assert {:restricted, "secret.delete"} = RestrictedTools.check(:formula, "secret.delete")
+      assert {:restricted, "vault.create"} = RestrictedTools.check(:formula, "vault.create")
 
       assert {:restricted, "component.push"} =
                RestrictedTools.check(:formula, "component.push")

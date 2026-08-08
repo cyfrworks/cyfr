@@ -17,20 +17,10 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   alias Sanctum.MCP
 
-  @tool_names ~w(session secret oauth permission key policy tincture_visibility webhook vault profile)
+  @tool_names ~w(session oauth permission key policy tincture_visibility webhook vault profile)
 
   @action_enums %{
     "session" => ["login", "logout", "whoami", "device_init", "device_poll"],
-    "secret" => [
-      "set",
-      "get",
-      "delete",
-      "list",
-      "grant",
-      "revoke",
-      "can_access",
-      "list_component_grants"
-    ],
     "oauth" => ["set_client"],
     "permission" => ["get", "set", "list"],
     "key" => ["create", "get", "list", "revoke", "rotate"],
@@ -58,8 +48,6 @@ defmodule Sanctum.MCPDispatchContractTest do
   @invalid_action_errors %{
     "session" =>
       "Invalid session action. Use: login, logout, whoami, device_init, or device_poll",
-    "secret" =>
-      "Invalid secret action. Use: set, get, delete, list, grant, revoke, can_access, or list_component_grants",
     "oauth" => "Invalid oauth action. Use: set_client",
     "permission" => "Invalid permission action. Use: get, set, or list",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",

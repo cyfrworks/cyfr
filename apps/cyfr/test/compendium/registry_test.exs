@@ -438,7 +438,10 @@ defmodule Compendium.RegistryTest do
       assert {:error, :not_found} = Registry.get(ctx, "delete-test", "1.0.0")
     end
 
-    test "cleans up policies and grants on delete", %{ctx: ctx} do
+    # Legacy secret grants retired with the secrets plane; delete cleanup
+    # now covers policies (and, via the cascade test file, profiles and
+    # webhook registrations).
+    test "cleans up policies on delete", %{ctx: ctx} do
       {:ok, _} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
           name: "del-cleanup",
@@ -462,35 +465,17 @@ defmodule Compendium.RegistryTest do
           updated_at: now
         })
 
-      # Create a secret grant
-      :ok =
-        Arca.SecretStorage.put_secret(
-          "DEL_CLEANUP_SECRET",
-          Base.encode64("secret_val"),
-          "project",
-          nil
-        )
-
-      :ok = Arca.SecretStorage.put_grant("DEL_CLEANUP_SECRET", component_ref, "project", nil)
-
-      # Verify they exist
+      # Verify it exists
       {:ok, _} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-
-      {:ok, names} = Arca.SecretStorage.grants_for_component(component_ref, "project", nil)
-      assert "DEL_CLEANUP_SECRET" in names
 
       # Delete the component
       assert :ok = Registry.delete(ctx, "del-cleanup", "1.0.0")
 
       # Verify policy was cleaned up
       assert {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-
-      # Verify grant was cleaned up
-      {:ok, names2} = Arca.SecretStorage.grants_for_component(component_ref, "project", nil)
-      assert names2 == []
     end
 
-    test "cleans up name-level grants and policies when last version removed", %{ctx: ctx} do
+    test "cleans up name-level policies when last version removed", %{ctx: ctx} do
       {:ok, _} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
           name: "namelevel-cleanup",
@@ -513,34 +498,17 @@ defmodule Compendium.RegistryTest do
           updated_at: now
         })
 
-      # Create a name-level secret grant
-      :ok =
-        Arca.SecretStorage.put_secret(
-          "NAMELEVEL_SECRET",
-          Base.encode64("secret_val"),
-          "project",
-          nil
-        )
-
-      :ok = Arca.SecretStorage.put_grant("NAMELEVEL_SECRET", name_ref, "project", nil)
-
-      # Verify they exist
+      # Verify it exists
       {:ok, _} = Arca.PolicyStorage.get_policy(ctx, name_ref)
-      {:ok, names} = Arca.SecretStorage.grants_for_component(name_ref, "project", nil)
-      assert "NAMELEVEL_SECRET" in names
 
       # Delete the last (only) version
       assert :ok = Registry.delete(ctx, "namelevel-cleanup", "1.0.0")
 
       # Verify name-level policy was cleaned up
       assert {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx, name_ref)
-
-      # Verify name-level grant was cleaned up
-      {:ok, names2} = Arca.SecretStorage.grants_for_component(name_ref, "project", nil)
-      assert names2 == []
     end
 
-    test "preserves name-level grants when other versions remain", %{ctx: ctx} do
+    test "preserves name-level policies when other versions remain", %{ctx: ctx} do
       {:ok, _} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
           name: "multiversion",
@@ -556,28 +524,28 @@ defmodule Compendium.RegistryTest do
         })
 
       name_ref = "catalyst:local.multiversion"
+      now = DateTime.utc_now()
 
-      # Create a name-level secret grant
-      :ok =
-        Arca.SecretStorage.put_secret(
-          "MULTI_SECRET",
-          Base.encode64("secret_val"),
-          "project",
-          nil
-        )
+      # Create a name-level policy
+      {:ok, _} =
+        Arca.PolicyStorage.put_policy(ctx, %{
+          id: "pol_multiversion",
+          component_ref: name_ref,
+          component_type: "catalyst",
+          allowed_domains: "[\"api.example.com\"]",
+          timeout: "30s",
+          inserted_at: now,
+          updated_at: now
+        })
 
-      :ok = Arca.SecretStorage.put_grant("MULTI_SECRET", name_ref, "project", nil)
-
-      # Verify grant exists
-      {:ok, names} = Arca.SecretStorage.grants_for_component(name_ref, "project", nil)
-      assert "MULTI_SECRET" in names
+      # Verify it exists
+      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, name_ref)
 
       # Delete only one version — other version remains
       assert :ok = Registry.delete(ctx, "multiversion", "1.0.0")
 
-      # Verify name-level grant is preserved
-      {:ok, names2} = Arca.SecretStorage.grants_for_component(name_ref, "project", nil)
-      assert "MULTI_SECRET" in names2
+      # Verify name-level policy is preserved
+      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, name_ref)
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
@@ -871,16 +839,8 @@ defmodule Compendium.RegistryTest do
           updated_at: now
         })
 
-      # Create a secret grant for the stale component
-      :ok = Arca.SecretStorage.put_secret("PRUNE_SECRET", Base.encode64("test"), "project", nil)
-
-      :ok = Arca.SecretStorage.put_grant("PRUNE_SECRET", component_ref, "project", nil)
-
-      # Verify policy and grant exist
+      # Verify policy exists
       {:ok, _} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-
-      {:ok, names} = Arca.SecretStorage.grants_for_component(component_ref, "project", nil)
-      assert "PRUNE_SECRET" in names
 
       # Get all current filesystem entries so we can exclude them from discovered
       # (we only want to prune our specific entry)
@@ -901,10 +861,6 @@ defmodule Compendium.RegistryTest do
 
       # Verify policy was cleaned up
       assert {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-
-      # Verify grant was cleaned up
-      {:ok, names2} = Arca.SecretStorage.grants_for_component(component_ref, "project", nil)
-      assert names2 == []
     end
 
     test "preserves entries in discovered set", %{ctx: ctx} do

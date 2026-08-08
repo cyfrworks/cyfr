@@ -100,42 +100,6 @@ defmodule Sanctum.ProviderCredentialsTest do
     end
   end
 
-  describe "legacy secret fallback" do
-    test "reads manifest-named secrets and copies them forward", %{ctx: ctx} do
-      :ok = Sanctum.Secrets.set(ctx, "LEGACY_CLIENT_ID", "legacy-id")
-      :ok = Sanctum.Secrets.set(ctx, "LEGACY_CLIENT_SECRET", "legacy-secret")
-
-      assert {:ok, %{"client_id" => "legacy-id", "client_secret" => "legacy-secret"}} =
-               ProviderCredentials.fetch_for_oauth(
-                 "local",
-                 "default",
-                 "legacyprov",
-                 {"LEGACY_CLIENT_ID", "LEGACY_CLIENT_SECRET"}
-               )
-
-      # Copied forward: a second fetch with no legacy hint hits the store
-      assert {:ok, %{"client_id" => "legacy-id"}} =
-               ProviderCredentials.fetch_for_oauth("local", "default", "legacyprov")
-    end
-
-    test "legacy client_secret is optional", %{ctx: ctx} do
-      :ok = Sanctum.Secrets.set(ctx, "PUBONLY_CLIENT_ID", "pub-id")
-
-      assert {:ok, %{"client_id" => "pub-id", "client_secret" => nil}} =
-               ProviderCredentials.fetch_for_oauth(
-                 "local",
-                 "default",
-                 "pubonly",
-                 {"PUBONLY_CLIENT_ID", "PUBONLY_CLIENT_SECRET"}
-               )
-    end
-
-    test "no legacy names means no fallback" do
-      assert {:error, _} =
-               ProviderCredentials.fetch_for_oauth("local", "default", "nolegacy", nil)
-    end
-  end
-
   describe "oauth.set_client MCP action" do
     test "stores credentials via the tool surface", %{ctx: ctx} do
       assert {:ok, %{status: "ok"}} =

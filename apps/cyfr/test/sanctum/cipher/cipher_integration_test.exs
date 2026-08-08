@@ -3,12 +3,12 @@
 
 defmodule Sanctum.CipherIntegrationTest do
   @moduledoc """
-  B2 (OAuth version cascade) and B3 (webhook rotation grace) AAD-stability
-  under the real tenant-binding cipher.
+  B3 (webhook rotation grace) and registry-token AAD-stability under the
+  real tenant-binding cipher.
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.{Context, OAuth, Webhook}
+  alias Sanctum.{Context, Webhook}
   alias Sanctum.Cipher
 
   @key :crypto.strong_rand_bytes(32)
@@ -89,19 +89,21 @@ defmodule Sanctum.CipherIntegrationTest do
   end
 
   describe "T-REGISTRY-CRED" do
-    test "a registry blob is crypto-bound to its principal via the name AAD" do
-      # The exact AAD Sanctum.Secrets builds for a platform-scoped registry
-      # secret (system context → scope "platform", org "", project "default").
-      name_a = "_registry.reg.test.github|https://github.com|111.alice"
-      name_b = "_registry.reg.test.github|https://github.com|222.bob"
-      aad_a = Sanctum.CipherAAD.secret("platform", nil, "default", name_a)
-      aad_b = Sanctum.CipherAAD.secret("platform", nil, "default", name_b)
+    test "a registry blob is crypto-bound to its principal via the user AAD" do
+      # The exact AAD the registry-token store builds — the owning user
+      # rides the `user` frame, so a row repointed at another principal
+      # fails decryption.
+      aad_a =
+        Sanctum.CipherAAD.registry_token("github|https://github.com|111", "reg.test", "alice")
+
+      aad_b =
+        Sanctum.CipherAAD.registry_token("github|https://github.com|222", "reg.test", "alice")
 
       {:ok, ct} = Cipher.encrypt(~s({"token":"cyfr_pt_alice"}), aad_a)
 
       # Same principal → decrypts.
       assert {:ok, ~s({"token":"cyfr_pt_alice"})} = Cipher.decrypt(ct, aad_a)
-      # Another user's row (only `name` differs) → GCM tag mismatch, fail closed.
+      # Another user's row (only `user` differs) → GCM tag mismatch, fail closed.
       assert {:error, {:decrypt, :aad_or_key_mismatch}} = Cipher.decrypt(ct, aad_b)
     end
 
@@ -137,22 +139,5 @@ defmodule Sanctum.CipherIntegrationTest do
                  "alice"
                )
     end
-  end
-
-  defp put_oauth(ref, provider, ct) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-    Arca.Repo.insert_all(Arca.Schemas.OauthCredential, [
-      %{
-        id: Ecto.UUID.generate(),
-        provider: provider,
-        component_ref: ref,
-        encrypted_data: ct,
-        org_id: "org_a",
-        project_id: "default",
-        inserted_at: now,
-        updated_at: now
-      }
-    ])
   end
 end

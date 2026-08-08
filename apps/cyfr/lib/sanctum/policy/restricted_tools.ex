@@ -34,10 +34,6 @@ defmodule Sanctum.Policy.RestrictedTools do
     "policy.migrate",
 
     # Secret mutation — reading granted secrets OK, managing never
-    "secret.set",
-    "secret.delete",
-    "secret.grant",
-    "secret.revoke",
 
     # Audit/log surfaces — internal observability, never guest-readable
     "mcp_log.*",

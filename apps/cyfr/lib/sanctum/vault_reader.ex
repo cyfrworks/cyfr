@@ -38,7 +38,7 @@ defmodule Sanctum.VaultReader do
                        "oauth":[{"component_ref":"catalyst:local.gmail",
                                  "provider":"google"}]}}
 
-  Pointer resolution reads `Arca.SecretStorage` and decrypts directly —
+  Legacy v1 pointers fail closed as retired —
   deliberately not through `Sanctum.Secrets`' permission-gated grant
   plane, which serves a different authorization model. OAuth pointers
   resolve through `Sanctum.OAuth.get_access_token/3` by the pointer's own
@@ -181,39 +181,12 @@ defmodule Sanctum.VaultReader do
     {:ok, projected}
   end
 
-  defp resolve_secrets(ctx, _entry, %{"legacy" => %{"secrets" => pointers}}, fields)
-       when is_list(pointers) do
-    pointers
-    |> Enum.filter(fn p -> fields == :all or p["name"] in fields end)
-    |> Enum.reduce_while({:ok, %{}}, fn pointer, {:ok, acc} ->
-      case resolve_legacy_secret(ctx, pointer) do
-        {:ok, name, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp resolve_secrets(_ctx, _entry, %{"legacy" => _}, _fields), do: {:ok, %{}}
+  # The legacy stores are gone; a v1 pointer cannot dispense anything.
+  # vault.rotate with fresh material is the converter.
+  defp resolve_secrets(_ctx, _entry, %{"legacy" => _}, _fields),
+    do: {:error, :legacy_pointer_retired}
 
   defp resolve_secrets(_ctx, _entry, payload, _fields), do: {:error, {:invalid_payload, payload}}
-
-  defp resolve_legacy_secret(ctx, %{"name" => name, "scope" => scope})
-       when is_binary(name) and is_binary(scope) do
-    case Arca.SecretStorage.get_secret(name, scope, ctx.org_id, ctx.project_id) do
-      {:ok, encrypted} ->
-        aad = CipherAAD.secret(scope, ctx.org_id, ctx.project_id, name)
-
-        case Sanctum.Cipher.decrypt(encrypted, aad) do
-          {:ok, value} -> {:ok, name, value}
-          {:error, _} -> {:error, {:legacy_secret_unreadable, name}}
-        end
-
-      {:error, _} ->
-        {:error, {:legacy_secret_missing, name}}
-    end
-  end
-
-  defp resolve_legacy_secret(_ctx, pointer), do: {:error, {:invalid_payload, pointer}}
 
   # ---------------------------------------------------------------------------
   # OAuth

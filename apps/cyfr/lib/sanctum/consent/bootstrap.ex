@@ -10,8 +10,7 @@ defmodule Sanctum.Consent.Bootstrap do
   policy's limits, the ingress edge carries the source's own resources,
   and every edge into a node carries **that node's** resources — the
   behavior-equivalence of the callee-keyed model, frozen into
-  source-keyed form. Legacy credentials become sealed vault pointers so
-  the vault reader can serve them until re-entry.
+  source-keyed form.
 
   Deliberately included: the manifest auto-merge widening inside
   `Sanctum.Policy.get_effective/2` — equivalence first, de-widening is a
@@ -21,14 +20,11 @@ defmodule Sanctum.Consent.Bootstrap do
   Machine-minted revisions record `granted_via: "bootstrap"`.
   """
 
-  require Logger
-
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
   alias Sanctum.JCS
-  alias Sanctum.VaultReader
 
   @type result :: %{minted: [String.t()], skipped: [{String.t(), term()}]}
 
@@ -70,7 +66,9 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp bootstrap_component(ctx, component, source_ref) do
-    vault_fn = fn node_key, row, manifest -> vault_pointer(ctx, node_key, row, manifest) end
+    # Nothing legacy exists to point at: connections bind through the
+    # walk, so machine-minted revisions carry no vault resource.
+    vault_fn = fn _node_key, _row, _manifest -> nil end
 
     with :ok <- check_unclaimed(ctx, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),
@@ -95,104 +93,6 @@ defmodule Sanctum.Consent.Bootstrap do
       {:ok, activation} -> {:ok, activation}
       {:error, reason} -> {:skip, {:activation_unresolvable, reason}}
     end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Vault pointers
-  # ---------------------------------------------------------------------------
-
-  defp vault_pointer(ctx, node_key, _row, manifest) do
-    secrets = granted_secret_pointers(ctx, node_key)
-    oauth = oauth_pointers(node_key, manifest)
-
-    if secrets == [] and oauth == [] do
-      nil
-    else
-      mint_entry(ctx, node_key, secrets, oauth)
-    end
-  end
-
-  defp granted_secret_pointers(ctx, node_key) do
-    # Grants list as plain secret names; the storage scope is the tenant
-    # scope the rows were written under, which is what the pointer must
-    # record for the reader's decrypt to find the same AAD.
-    {scope, _org, _project} = Sanctum.TenantScope.extract(ctx)
-
-    case Sanctum.Secrets.list_component_grants(ctx, node_key) do
-      {:ok, names} ->
-        names
-        |> Enum.filter(&is_binary/1)
-        |> Enum.uniq()
-        |> Enum.sort()
-        |> Enum.map(fn name -> %{"name" => name, "scope" => scope} end)
-
-      _ ->
-        []
-    end
-  end
-
-  defp oauth_pointers(node_key, manifest) do
-    manifest
-    |> Map.get("oauth", %{})
-    |> Map.keys()
-    |> Enum.map(fn provider -> %{"component_ref" => node_key, "provider" => provider} end)
-  end
-
-  defp mint_entry(ctx, node_key, secrets, oauth) do
-    entry_id = Emissary.UUID7.generate_id("vlt")
-
-    payload =
-      Jason.encode!(%{"v" => 1, "legacy" => %{"secrets" => secrets, "oauth" => oauth}})
-
-    provider_hint = "legacy"
-    aad = Sanctum.CipherAAD.vault_entry(ctx.org_id, ctx.project_id, entry_id, provider_hint)
-
-    {:ok, sealed} = Sanctum.Cipher.encrypt(payload, aad)
-
-    field_names =
-      Enum.map(secrets, & &1["name"]) ++ Enum.map(oauth, &"oauth:#{&1["provider"]}")
-
-    attrs = %{
-      id: entry_id,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
-      name: "legacy:#{node_key}",
-      provider_hint: provider_hint,
-      kind: "bundle",
-      provenance: "user",
-      field_names: Jason.encode!(Enum.sort(field_names)),
-      oauth_scopes: nil,
-      oauth_endpoints: nil,
-      status: "active",
-      sealed_payload: sealed
-    }
-
-    {:ok, binding} = VaultReader.binding_digest(struct_like(attrs))
-
-    case Arca.VaultStorage.put(Map.put(attrs, :binding_digest, binding)) do
-      {:ok, entry} ->
-        %{
-          "entry_id" => entry.id,
-          "binding_digest" => binding,
-          "projection" => %{"fields" => Enum.sort(field_names)}
-        }
-
-      {:error, reason} ->
-        Logger.error(
-          "[Consent.Bootstrap] vault entry mint failed for #{node_key}: #{inspect(reason)}"
-        )
-
-        nil
-    end
-  end
-
-  defp struct_like(attrs) do
-    %{
-      provider_hint: attrs.provider_hint,
-      field_names: attrs.field_names,
-      oauth_endpoints: attrs.oauth_endpoints,
-      oauth_scopes: attrs.oauth_scopes
-    }
   end
 
   # ---------------------------------------------------------------------------

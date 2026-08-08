@@ -273,8 +273,8 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "probe succeeds but personal CredentialStore.put fails: reauth bounce",
          %{conn: conn, bypass: bypass} do
       # Force at-rest encryption to fail by clearing the resolved keyring.
-      # CredentialStore.put → Sanctum.Secrets.set → Sanctum.Cipher.encrypt
-      # fetches `:crypto_keyring`; without it, encrypt raises. Every put_cred in
+      # CredentialStore.put → Sanctum.Cipher.encrypt fetches
+      # `:crypto_keyring`; without it, encrypt raises. Every put_cred in
       # the test scope fails, driving the phantom-gate branch end-to-end.
       original_keyring = Application.get_env(:cyfr, :crypto_keyring)
       Application.delete_env(:cyfr, :crypto_keyring)

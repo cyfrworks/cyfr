@@ -1421,9 +1421,6 @@ defmodule Compendium.Registry do
     # Delete policy
     Arca.PolicyStorage.delete_policy(ctx, component_ref)
 
-    # Delete all secret grants
-    Arca.SecretStorage.delete_grants_for_component(ctx, component_ref)
-
     # Delete dependencies
     Arca.DependencyStorage.delete_dependencies(ctx, component_id)
 
@@ -1431,8 +1428,8 @@ defmodule Compendium.Registry do
   end
 
   # Called AFTER delete_component to check if the removed version was the last one.
-  # If no versions remain, cleans up name-level (versionless) grants and policies
-  # that would otherwise be inherited by any future component with the same name.
+  # If no versions remain, cleans up name-level (versionless) policies that
+  # would otherwise be inherited by any future component with the same name.
   defp maybe_cleanup_name_level(ctx, comp) do
     publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 
@@ -1441,12 +1438,11 @@ defmodule Compendium.Registry do
       name_ref = "#{component_type}:#{publisher}.#{comp.name}"
 
       Arca.PolicyStorage.delete_policy(ctx, name_ref)
-      Arca.SecretStorage.delete_grants_for_component(ctx, name_ref)
       revoke_profiles(ctx, name_ref)
       disable_registrations(ctx, name_ref)
 
       Logger.debug(
-        "[Compendium.Registry] Cleaned up name-level grants/policies for #{name_ref} (last version removed)"
+        "[Compendium.Registry] Cleaned up name-level policies for #{name_ref} (last version removed)"
       )
     end
   end
