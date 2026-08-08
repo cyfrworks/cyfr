@@ -438,116 +438,9 @@ defmodule Compendium.RegistryTest do
       assert {:error, :not_found} = Registry.get(ctx, "delete-test", "1.0.0")
     end
 
-    # Legacy secret grants retired with the secrets plane; delete cleanup
-    # now covers policies (and, via the cascade test file, profiles and
-    # webhook registrations).
-    test "cleans up policies on delete", %{ctx: ctx} do
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "del-cleanup",
-          version: "1.0.0",
-          type: "catalyst"
-        })
-
-      component_ref = "catalyst:local.del-cleanup:1.0.0"
-
-      # Create a policy
-      now = DateTime.utc_now()
-
-      {:ok, _} =
-        Arca.PolicyStorage.put_policy(ctx, %{
-          id: "pol_del_cleanup",
-          component_ref: component_ref,
-          component_type: "catalyst",
-          allowed_domains: "[\"api.example.com\"]",
-          timeout: "30s",
-          inserted_at: now,
-          updated_at: now
-        })
-
-      # Verify it exists
-      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-
-      # Delete the component
-      assert :ok = Registry.delete(ctx, "del-cleanup", "1.0.0")
-
-      # Verify policy was cleaned up
-      assert {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-    end
-
-    test "cleans up name-level policies when last version removed", %{ctx: ctx} do
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "namelevel-cleanup",
-          version: "1.0.0",
-          type: "catalyst"
-        })
-
-      name_ref = "catalyst:local.namelevel-cleanup"
-      now = DateTime.utc_now()
-
-      # Create a name-level policy (no version in ref)
-      {:ok, _} =
-        Arca.PolicyStorage.put_policy(ctx, %{
-          id: "pol_namelevel",
-          component_ref: name_ref,
-          component_type: "catalyst",
-          allowed_domains: "[\"api.example.com\"]",
-          timeout: "30s",
-          inserted_at: now,
-          updated_at: now
-        })
-
-      # Verify it exists
-      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, name_ref)
-
-      # Delete the last (only) version
-      assert :ok = Registry.delete(ctx, "namelevel-cleanup", "1.0.0")
-
-      # Verify name-level policy was cleaned up
-      assert {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx, name_ref)
-    end
-
-    test "preserves name-level policies when other versions remain", %{ctx: ctx} do
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "multiversion",
-          version: "1.0.0",
-          type: "catalyst"
-        })
-
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "multiversion",
-          version: "2.0.0",
-          type: "catalyst"
-        })
-
-      name_ref = "catalyst:local.multiversion"
-      now = DateTime.utc_now()
-
-      # Create a name-level policy
-      {:ok, _} =
-        Arca.PolicyStorage.put_policy(ctx, %{
-          id: "pol_multiversion",
-          component_ref: name_ref,
-          component_type: "catalyst",
-          allowed_domains: "[\"api.example.com\"]",
-          timeout: "30s",
-          inserted_at: now,
-          updated_at: now
-        })
-
-      # Verify it exists
-      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, name_ref)
-
-      # Delete only one version — other version remains
-      assert :ok = Registry.delete(ctx, "multiversion", "1.0.0")
-
-      # Verify name-level policy is preserved
-      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, name_ref)
-    end
-
+    # Delete cleanup for profiles and webhook registrations is covered by
+    # the cascade test file; policy rows are unreferenced and drop with
+    # their table.
     test "returns error for non-existent component", %{ctx: ctx} do
       assert {:error, :not_found} = Registry.delete(ctx, "nonexistent", "1.0.0")
     end
@@ -824,24 +717,6 @@ defmodule Compendium.RegistryTest do
       {:ok, result} = Registry.search(ctx, %{query: "stale-tool"})
       assert result.total == 1
 
-      # Create a policy for the stale component
-      component_ref = "reagent:local.stale-tool:0.1.0"
-      now = DateTime.utc_now()
-
-      {:ok, _} =
-        Arca.PolicyStorage.put_policy(ctx, %{
-          id: "pol_stale_test",
-          component_ref: component_ref,
-          component_type: "reagent",
-          allowed_domains: "[\"example.com\"]",
-          timeout: "30s",
-          inserted_at: now,
-          updated_at: now
-        })
-
-      # Verify policy exists
-      {:ok, _} = Arca.PolicyStorage.get_policy(ctx, component_ref)
-
       # Get all current filesystem entries so we can exclude them from discovered
       # (we only want to prune our specific entry)
       {:ok, all_fs} = Arca.ComponentStorage.list_components(ctx, source: "filesystem")
@@ -858,9 +733,6 @@ defmodule Compendium.RegistryTest do
       # Verify stale-tool is gone
       {:ok, result2} = Registry.search(ctx, %{query: "stale-tool"})
       assert result2.total == 0
-
-      # Verify policy was cleaned up
-      assert {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx, component_ref)
     end
 
     test "preserves entries in discovered set", %{ctx: ctx} do

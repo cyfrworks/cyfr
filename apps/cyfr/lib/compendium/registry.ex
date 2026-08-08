@@ -1413,13 +1413,9 @@ defmodule Compendium.Registry do
     component_type = Map.get(comp, :component_type, "")
     name = comp.name
     version = comp.version
-    component_ref = "#{component_type}:#{publisher}.#{name}:#{version}"
 
     component_id =
       generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id)
-
-    # Delete policy
-    Arca.PolicyStorage.delete_policy(ctx, component_ref)
 
     # Delete dependencies
     Arca.DependencyStorage.delete_dependencies(ctx, component_id)
@@ -1428,8 +1424,8 @@ defmodule Compendium.Registry do
   end
 
   # Called AFTER delete_component to check if the removed version was the last one.
-  # If no versions remain, cleans up name-level (versionless) policies that
-  # would otherwise be inherited by any future component with the same name.
+  # If no versions remain, revokes profiles and disables registrations so
+  # a future component with the same name inherits nothing.
   defp maybe_cleanup_name_level(ctx, comp) do
     publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 
@@ -1437,12 +1433,11 @@ defmodule Compendium.Registry do
       component_type = Map.get(comp, :component_type, "")
       name_ref = "#{component_type}:#{publisher}.#{comp.name}"
 
-      Arca.PolicyStorage.delete_policy(ctx, name_ref)
       revoke_profiles(ctx, name_ref)
       disable_registrations(ctx, name_ref)
 
       Logger.debug(
-        "[Compendium.Registry] Cleaned up name-level policies for #{name_ref} (last version removed)"
+        "[Compendium.Registry] Cleaned up name-level state for #{name_ref} (last version removed)"
       )
     end
   end
