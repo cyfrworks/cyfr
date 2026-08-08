@@ -240,7 +240,7 @@ defmodule Opus.Executor do
   # loader's all-or-nothing activation resolution.
   defp enforce_authority(%ExecutionPipeline{} = p, authority, input) do
     limits = Sanctum.Authority.limits(authority)
-    shim_policy = Opus.AuthorityShim.policy_from_edge(authority)
+    shim_policy = edge_policy(authority, limits)
 
     timeout_ms =
       case Sanctum.Limits.timeout_ms(limits) do
@@ -291,6 +291,48 @@ defmodule Opus.Executor do
       value_source: value_source(authority.resources)
     }
   end
+
+  # The current edge + node limits as the legacy policy container the
+  # handlers still consume. Resource semantics are the edge's, verbatim —
+  # empty lists deny, schemes are always explicit. Dies with the
+  # %Sanctum.Policy{} struct, when the handlers read Blob.Edge directly.
+  defp edge_policy(%Sanctum.Authority{} = authority, %Sanctum.Limits{} = limits) do
+    edge = edge_resources(authority)
+
+    %Sanctum.Policy{
+      allowed_domains: edge_egress(edge, :domains),
+      allowed_methods: edge_egress(edge, :methods),
+      allowed_private_ips: edge_egress(edge, :private_ips),
+      allowed_schemes: edge_egress(edge, :schemes),
+      allowed_paths: edge_storage(edge, :paths),
+      allowed_actions: edge_storage(edge, :actions),
+      allowed_tools: edge_tools(edge),
+      timeout: limits.timeout,
+      max_memory_bytes: limits.max_memory_bytes,
+      max_request_size: limits.max_request_size,
+      max_response_size: limits.max_response_size,
+      rate_limit: limits.rate_limit,
+      max_concurrent_tasks: limits.max_concurrent_tasks,
+      batch_timeout: limits.batch_timeout,
+      is_public: false
+    }
+  end
+
+  defp edge_resources(%Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{} = edge}),
+    do: edge
+
+  defp edge_resources(%Sanctum.Authority{resources: :none}), do: nil
+
+  defp edge_egress(nil, _key), do: []
+  defp edge_egress(%{egress: nil}, _key), do: []
+  defp edge_egress(%{egress: egress}, key), do: Map.get(egress, key, [])
+
+  defp edge_storage(nil, _key), do: []
+  defp edge_storage(%{storage: nil}, _key), do: []
+  defp edge_storage(%{storage: storage}, key), do: Map.get(storage, key, [])
+
+  defp edge_tools(nil), do: []
+  defp edge_tools(%{tools: tools}), do: tools
 
   defp cursor_state({:bound, node}), do: "bound:" <> node
   defp cursor_state(:unbound), do: "unbound"

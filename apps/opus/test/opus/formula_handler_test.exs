@@ -126,7 +126,7 @@ defmodule Opus.FormulaHandlerTest do
       Keyword.merge(
         [
           root_execution_id: parent_id,
-          policy: Opus.AuthorityShim.policy_from_edge(auth),
+          policy: Opus.Test.EdgePolicy.policy_from_edge(auth),
           authority: auth,
           declared_needs: [],
           activation_digest: "sha256:act-fh"

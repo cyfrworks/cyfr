@@ -21,7 +21,6 @@ defmodule Opus.PolicyEquivalenceTest do
 
   use ExUnit.Case, async: false
 
-  alias Opus.AuthorityShim
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
@@ -174,7 +173,7 @@ defmodule Opus.PolicyEquivalenceTest do
   defp authority_policy!(ctx, name, type \\ "reagent") do
     case authority_load(ctx, name, type) do
       {:ok, authority, _stamp} ->
-        AuthorityShim.policy_from_edge(authority)
+        Opus.Test.EdgePolicy.policy_from_edge(authority)
 
       other ->
         flunk("authority load failed for #{type}:local.#{name}: #{inspect(other)}")
