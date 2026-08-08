@@ -141,7 +141,7 @@ defmodule Emissary.MCP.Router do
 
     case component_ref do
       ref when is_binary(ref) ->
-        filter_tools_for_component(tools, session.context, ref)
+        filter_tools_for_component(tools, ref)
 
       _ ->
         paginate(tools, "tools", params)
@@ -398,16 +398,10 @@ defmodule Emissary.MCP.Router do
     Base.url_encode64(Integer.to_string(offset), padding: false)
   end
 
-  defp filter_tools_for_component(tools, ctx, component_ref) do
+  defp filter_tools_for_component(tools, component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
-        policy =
-          case Sanctum.Policy.get_effective(ctx, component_ref) do
-            {:ok, policy, _meta} -> policy
-            _ -> nil
-          end
-
-        filtered = Sanctum.Policy.RestrictedTools.filter_tool_list(:formula, tools, policy)
+        filtered = ToolRegistry.in_chain_view(tools)
 
         {:ok,
          %{

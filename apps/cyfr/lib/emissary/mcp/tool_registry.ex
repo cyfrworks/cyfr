@@ -78,6 +78,48 @@ defmodule Emissary.MCP.ToolRegistry do
     |> Enum.sort_by(& &1["name"])
   end
 
+  @doc """
+  Prune a tools/list payload to what a component running in a chain can
+  reach: actions whose plane annotation includes `:in_chain`. Proxied
+  `server:tool` entries are in-chain by wiring and pass through whole;
+  anything without an annotation fails closed, mirroring `call_in_chain/5`.
+  This is a discovery view — per-call enforcement stays with the chain
+  authority's transition relation.
+  """
+  def in_chain_view(tool_defs) when is_list(tool_defs) do
+    tool_defs
+    |> Enum.map(&prune_to_in_chain/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp prune_to_in_chain(%{"name" => name} = tool_def) do
+    if String.contains?(name, ":") do
+      tool_def
+    else
+      actions = get_in(tool_def, ["annotations", :actions]) || %{}
+
+      reachable =
+        for {action, %{planes: planes}} <- actions, :in_chain in planes, do: action
+
+      case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
+        {[], _} ->
+          nil
+
+        {_, listed} when is_list(listed) ->
+          case Enum.filter(listed, &(&1 in reachable)) do
+            [] -> nil
+            ^listed -> tool_def
+            pruned -> put_in(tool_def, ["inputSchema", "properties", "action", "enum"], pruned)
+          end
+
+        {_, _} ->
+          tool_def
+      end
+    end
+  end
+
+  defp prune_to_in_chain(_tool_def), do: nil
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 

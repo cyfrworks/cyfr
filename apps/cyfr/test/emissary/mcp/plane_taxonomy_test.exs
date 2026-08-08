@@ -45,7 +45,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.ToolRegistry
   alias Prism.AquaVirtualTools
-  alias Sanctum.Policy.RestrictedTools
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
   # The root suite loads all eight; assert the count so a standalone run
@@ -120,21 +119,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
 
   describe "derivation" do
-    test "in-chain reachability tracks the formula restriction list" do
-      # The taxonomy describes what is reachable, and what a formula may
-      # reach is decided by RestrictedTools. If someone restricts an action
-      # without updating its planes (or vice versa), the two disagree and
-      # the taxonomy stops describing reality — so they are locked together
-      # until the authority tool-action check replaces RestrictedTools.
-      for {tool, verb, %{planes: planes}} <- annotated_actions() do
-        action = "#{tool}.#{verb}"
-        restricted? = match?({:restricted, _}, RestrictedTools.check(:formula, action))
-
-        assert :in_chain in planes == not restricted?,
-               "#{action}: planes=#{inspect(planes)} but formula-restricted=#{restricted?}"
-      end
-    end
-
     test "every registered action is externally reachable" do
       # Every registered tool is served over the MCP HTTP surface; nothing
       # here is in-chain-only today.

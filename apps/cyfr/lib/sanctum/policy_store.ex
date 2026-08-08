@@ -91,7 +91,6 @@ defmodule Sanctum.PolicyStore do
     with {:ok, component_ref} <- normalize_component_ref(component_ref),
          raw_type = Map.get(policy_map, :component_type, "reagent"),
          {:ok, component_type} <- validate_component_type(raw_type),
-         :ok <- validate_restricted_tools(component_type, policy_map),
          {:ok, setup_policy} <- fetch_setup_policy_for_type(ctx, component_ref, component_type),
          :ok <- FieldSchema.validate_fields(policy_map, setup_policy),
          :ok <-
@@ -275,8 +274,7 @@ defmodule Sanctum.PolicyStore do
     Context.require_tenant!(ctx)
     policy_map = normalize_policy_keys(policy_map)
 
-    with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
-         :ok <-
+    with :ok <-
            Sanctum.Policy.Ceiling.validate(
              policy_map,
              Sanctum.Policy.Ceiling.effective_ceiling(ctx)
@@ -710,32 +708,6 @@ defmodule Sanctum.PolicyStore do
   end
 
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
-
-  defp validate_restricted_tools("formula", policy_map) do
-    # policy_map is key-normalized by put/3 and put_type_default/3 before this runs.
-    tools =
-      case Map.get(policy_map, :allowed_tools) do
-        nil -> []
-        tools when is_list(tools) -> tools
-        tool when is_binary(tool) -> [tool]
-      end
-
-    case Sanctum.Policy.RestrictedTools.validate_allowed_tools(:formula, tools) do
-      :ok ->
-        :ok
-
-      {:error, violations} ->
-        tool_list =
-          violations
-          |> Enum.map(fn {tool, _pattern} -> tool end)
-          |> Enum.uniq()
-          |> Enum.join(", ")
-
-        {:error, "Formula policies cannot include restricted tools: #{tool_list}"}
-    end
-  end
-
-  defp validate_restricted_tools(_component_type, _policy_map), do: :ok
 
   defp validate_component_type(type) when is_atom(type) do
     validate_component_type(Atom.to_string(type))

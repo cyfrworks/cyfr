@@ -153,7 +153,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         {:ok, %{tools: all_tools}}
 
       component_ref when is_binary(component_ref) ->
-        handle_tools_list_for(all_tools, ctx, component_ref)
+        handle_tools_list_for(all_tools, component_ref)
     end
   end
 
@@ -277,16 +277,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # Tools List Filtering
   # ============================================================================
 
-  defp handle_tools_list_for(tools, ctx, component_ref) do
+  defp handle_tools_list_for(tools, component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
-        policy =
-          case Sanctum.Policy.get_effective(ctx, component_ref) do
-            {:ok, policy, _meta} -> policy
-            _ -> nil
-          end
-
-        filtered = Sanctum.Policy.RestrictedTools.filter_tool_list(:formula, tools, policy)
+        filtered = Emissary.MCP.ToolRegistry.in_chain_view(tools)
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
 
       {:ok, %{type: type}} ->

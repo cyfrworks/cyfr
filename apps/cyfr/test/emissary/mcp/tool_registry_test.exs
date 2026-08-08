@@ -469,4 +469,52 @@ defmodule Emissary.MCP.ToolRegistryTest do
       assert length(results) == 40
     end
   end
+
+  describe "in_chain_view/1" do
+    defp tool_def(name, actions_with_planes) do
+      %{
+        "name" => name,
+        "inputSchema" => %{
+          "properties" => %{"action" => %{"enum" => Map.keys(actions_with_planes)}}
+        },
+        "annotations" => %{
+          actions:
+            Map.new(actions_with_planes, fn {action, planes} ->
+              {action, %{kind: :read, planes: planes}}
+            end)
+        }
+      }
+    end
+
+    test "prunes to actions whose planes include :in_chain" do
+      defs = [tool_def("mixed", %{"get" => [:external, :in_chain], "set" => [:external]})]
+
+      [pruned] = Emissary.MCP.ToolRegistry.in_chain_view(defs)
+      assert get_in(pruned, ["inputSchema", "properties", "action", "enum"]) == ["get"]
+    end
+
+    test "drops a tool with no in-chain actions" do
+      defs = [tool_def("external_only", %{"plan" => [:external], "commit" => [:external]})]
+
+      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == []
+    end
+
+    test "keeps a fully in-chain tool untouched" do
+      defs = [tool_def("chained", %{"run" => [:external, :in_chain]})]
+
+      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == defs
+    end
+
+    test "proxied server:tool entries pass through whole" do
+      defs = [%{"name" => "notion:create_page"}]
+
+      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == defs
+    end
+
+    test "a tool without annotations fails closed" do
+      defs = [%{"name" => "bare", "inputSchema" => %{}}]
+
+      assert Emissary.MCP.ToolRegistry.in_chain_view(defs) == []
+    end
+  end
 end

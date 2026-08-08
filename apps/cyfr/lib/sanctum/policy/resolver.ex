@@ -223,7 +223,7 @@ defmodule Sanctum.Policy.Resolver do
   # Merge manifest's setup.policy.allowed_tools into the effective policy.
   # This ensures components always have access to the tools their manifest declares,
   # even when the stored policy predates new tool additions.
-  # RestrictedTools still hard-blocks dangerous tools at runtime regardless.
+  # The chain authority's transition relation gates actual dispatch regardless.
   defp merge_manifest_tools(policy, ctx, component_ref) do
     case fetch_manifest_allowed_tools(ctx, component_ref) do
       {:ok, manifest_tools} when manifest_tools != [] ->
