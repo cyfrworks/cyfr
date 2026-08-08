@@ -251,15 +251,11 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp resolve_oauth(ctx, _entry, %{"legacy" => %{"oauth" => pointers}}, provider)
+  defp resolve_oauth(_ctx, _entry, %{"legacy" => %{"oauth" => pointers}}, _provider)
        when is_list(pointers) do
-    case Enum.find(pointers, fn p -> p["provider"] == provider end) do
-      %{"component_ref" => ref} when is_binary(ref) ->
-        Sanctum.OAuth.get_access_token(ctx, ref, provider)
-
-      _ ->
-        {:error, {:provider_mismatch, provider}}
-    end
+    # The callee-keyed token plane is gone; a legacy OAuth pointer cannot
+    # dispense. Re-authorize the Connection (vault.authorize) to convert.
+    {:error, :legacy_pointer_retired}
   end
 
   defp resolve_oauth(_ctx, _entry, payload, _provider), do: {:error, {:invalid_payload, payload}}

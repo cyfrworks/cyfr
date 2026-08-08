@@ -88,66 +88,6 @@ defmodule Sanctum.CipherIntegrationTest do
     end
   end
 
-  # ==========================================================================
-  # T-OAUTH-CASCADE (B2): a token stored under the name-level ref must decrypt
-  # when looked up via a versioned ref (cascade), because the AAD binds the
-  # *storage* ref — never the caller's versioned lookup ref.
-  # ==========================================================================
-
-  describe "T-OAUTH-CASCADE" do
-    test "name-level-stored token decrypts via versioned-ref cascade", %{ctx: ctx} do
-      name_ref = "catalyst:local.cascade_ok"
-      provider = "google"
-      json = ~s({"access_token":"ya29-cascade","expires_at":null})
-
-      aad = %{
-        purpose: :oauth_token,
-        org: "org_a",
-        project: "default",
-        name: name_ref,
-        sub: provider
-      }
-
-      {:ok, ct} = Cipher.encrypt(json, aad)
-      put_oauth(name_ref, provider, ct)
-
-      assert {:ok, "ya29-cascade"} =
-               OAuth.get_access_token(ctx, name_ref <> ":0.1.0", provider)
-    end
-
-    test "AAD bound to the wrong (versioned) ref would not decrypt — proves the binding is real",
-         %{ctx: ctx} do
-      name_ref = "catalyst:local.cascade_bad"
-      provider = "google"
-      json = ~s({"access_token":"nope","expires_at":null})
-      # Encrypt with the WRONG name (the versioned lookup ref) but store under
-      # the name-level key the cascade actually reads.
-      wrong_aad = %{
-        purpose: :oauth_token,
-        org: "org_a",
-        project: "default",
-        name: name_ref <> ":9.9.9",
-        sub: provider
-      }
-
-      {:ok, ct} = Cipher.encrypt(json, wrong_aad)
-      put_oauth(name_ref, provider, ct)
-
-      assert {:error, msg} = OAuth.get_access_token(ctx, name_ref <> ":0.1.0", provider)
-      assert msg =~ "authorization_required"
-    end
-  end
-
-  # ==========================================================================
-  # T-REGISTRY-CRED: registry push-token credentials are stored platform-scoped
-  # (system context), so the AAD's scope/org/project are identical for every
-  # user — the per-user crypto binding rests SOLELY on the `name` field, which
-  # embeds the globally-unique user_id (`_registry.{registry}.{user_id}.{slug}`)
-  # and is unconditionally framed into the cipher AAD. These tests lock that
-  # property: a blob is bound to its principal and cannot be reused across
-  # users even though they share the platform partition.
-  # ==========================================================================
-
   describe "T-REGISTRY-CRED" do
     test "a registry blob is crypto-bound to its principal via the name AAD" do
       # The exact AAD Sanctum.Secrets builds for a platform-scoped registry

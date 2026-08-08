@@ -287,35 +287,6 @@ defmodule MultiTenantIsolationTest do
     end
   end
 
-  describe "Sanctum.OAuth / Arca.OAuthStorage tenant isolation" do
-    test "a token stored for tenant_a is not visible to tenant_b", %{a: ctx_a, b: ctx_b} do
-      ref = "catalyst:local.oauthiso"
-      :ok = Arca.OAuthStorage.put_token(ref, "github", "blob_a", ctx_a.org_id, ctx_a.project_id)
-
-      assert {:ok, "blob_a"} =
-               Arca.OAuthStorage.get_token(ref, "github", ctx_a.org_id, ctx_a.project_id)
-
-      assert {:error, :not_found} =
-               Arca.OAuthStorage.get_token(ref, "github", ctx_b.org_id, ctx_b.project_id)
-    end
-
-    test "revoke/3 from tenant_b does not delete tenant_a's token", %{a: ctx_a, b: ctx_b} do
-      ref = "catalyst:local.oauthrev"
-      :ok = Arca.OAuthStorage.put_token(ref, "github", "blob_a", ctx_a.org_id, ctx_a.project_id)
-      :ok = Arca.OAuthStorage.put_token(ref, "github", "blob_b", ctx_b.org_id, ctx_b.project_id)
-
-      assert :ok = Sanctum.OAuth.revoke(ctx_b, ref, "github")
-
-      assert {:ok, "blob_a"} =
-               Arca.OAuthStorage.get_token(ref, "github", ctx_a.org_id, ctx_a.project_id)
-
-      assert {:error, :not_found} =
-               Arca.OAuthStorage.get_token(ref, "github", ctx_b.org_id, ctx_b.project_id)
-    end
-  end
-
-  # Pins Sanctum.Permission as tenant-scoped (org_id/project_id are threaded to
-  # Arca.PermissionStorage) so the Phase 3 split cannot silently change scoping.
   describe "Sanctum.Permission tenant isolation (tenant-scoped by design)" do
     test "permissions set by tenant_a are not visible to tenant_b", %{a: ctx_a, b: ctx_b} do
       :ok = Sanctum.Permission.set(ctx_a, "alice", ["execute", "storage_read"])

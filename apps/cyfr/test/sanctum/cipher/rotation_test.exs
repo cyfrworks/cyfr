@@ -61,27 +61,6 @@ defmodule Sanctum.Cipher.RotationTest do
     id
   end
 
-  defp put_oauth_row(ref, provider, plaintext) do
-    aad = %{purpose: :oauth_token, org: @org, project: @proj, name: ref, sub: provider}
-    {:ok, ct} = Cipher.encrypt(plaintext, aad)
-    id = uuid()
-
-    Arca.Repo.insert_all(Arca.Schemas.OauthCredential, [
-      %{
-        id: id,
-        provider: provider,
-        component_ref: ref,
-        encrypted_data: ct,
-        org_id: @org,
-        project_id: @proj,
-        inserted_at: now(),
-        updated_at: now()
-      }
-    ])
-
-    id
-  end
-
   defp put_webhook_row(name, secret, prev) do
     aad = %{purpose: :webhook_secret, scope: @scope, org: @org, project: @proj, name: name}
     {:ok, sec} = Cipher.encrypt(secret, aad)
@@ -174,14 +153,12 @@ defmodule Sanctum.Cipher.RotationTest do
   describe "T-REENCRYPT: happy path + idempotency" do
     test "migrates every table onto the new primary; plaintext preserved" do
       s = put_secret_row("API_KEY", "sk-live-123")
-      o = put_oauth_row("catalyst:local.gmail", "google", ~s({"access_token":"ya29"}))
       w = put_webhook_row("hook1", "whsec_aaa", "whsec_old")
 
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
       assert {:ok, summary} = Rotation.reencrypt_all()
       assert summary.secrets == %{scanned: 1, rotated: 1, skipped: 0}
-      assert summary.oauth_credentials == %{scanned: 1, rotated: 1, skipped: 0}
       assert summary.webhooks == %{scanned: 1, rotated: 1, skipped: 0}
       refute summary.dry_run
 
@@ -197,20 +174,6 @@ defmodule Sanctum.Cipher.RotationTest do
                    org: "org_a",
                    project: "default",
                    name: "API_KEY"
-                 }
-               )
-
-      assert {:ok, "k2"} = Cipher.label(col("oauth_credentials", o, :encrypted_data))
-
-      assert {:ok, ~s({"access_token":"ya29"})} =
-               Cipher.decrypt(
-                 col("oauth_credentials", o, :encrypted_data),
-                 %{
-                   purpose: :oauth_token,
-                   org: "org_a",
-                   project: "default",
-                   name: "catalyst:local.gmail",
-                   sub: "google"
                  }
                )
 

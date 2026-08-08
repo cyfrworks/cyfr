@@ -37,22 +37,6 @@ defmodule Sanctum.CipherAAD do
     }
   end
 
-  @doc """
-  AAD for an OAuth token bundle (`:oauth_token` purpose).
-
-  The `oauth_credentials` table has no scope column, so the tuple carries the
-  storage key (`component_ref`, `provider`) instead.
-  """
-  @spec oauth_token(String.t(), String.t(), String.t() | nil, String.t() | nil) :: map()
-  def oauth_token(component_ref, provider, org_id, project_id) do
-    %{
-      purpose: :oauth_token,
-      org: QueryHelpers.normalize_org_id(org_id),
-      project: QueryHelpers.normalize_project_id(project_id),
-      name: component_ref,
-      sub: provider
-    }
-  end
 
   @doc """
   AAD for a vault entry's sealed payload (`:vault_entry` purpose).

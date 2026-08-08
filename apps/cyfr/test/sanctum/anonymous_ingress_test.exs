@@ -56,11 +56,14 @@ defmodule Sanctum.AnonymousIngressTest do
     test "delegated OAuth tokens are never dispensed anonymously" do
       anon = anonymous_exec_ctx()
 
-      assert {:error, message} =
-               Sanctum.OAuth.get_access_token(anon, "catalyst:local.gmailish", "google")
+      resource = %{
+        entry_id: "vlt_anon_probe",
+        binding_digest: "sha256:x",
+        projection: %{fields: [], scopes: []}
+      }
 
-      assert message =~ "authorization_required"
-      assert message =~ "public invocations"
+      assert {:error, reason} = Sanctum.VaultReader.oauth_token(anon, resource, "google")
+      assert reason == :anonymous_denied or match?({:anonymous_denied, _}, reason)
     end
 
     test "an authenticated invoker's tincture context is not anonymous", %{ctx: ctx} do

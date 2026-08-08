@@ -53,7 +53,7 @@ defmodule Opus.ComponentType do
       Sanctum.Secrets.set(ctx, "google_client_secret", client_secret)
 
       # 2. Authorize component (one-time per component+provider)
-      {:ok, %{url: url}} = Sanctum.OAuth.authorize_url(ctx, ref, "google")
+      {:ok, %{url: url}} = Sanctum.Vault.OAuthGrant.authorize_url(ctx, %{entry_id: id})
       # User visits url, grants consent, callback stores tokens
 
       # 3. Catalysts call cyfr:oauth/token.get-access-token("google") at runtime

@@ -191,14 +191,10 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert edge.vault != nil
     assert "oauth:google" in edge.vault.projection.fields
 
-    # A provider the pointer names resolves through the legacy OAuth plane
-    # (no stored credential here, so it errors past the pointer)...
-    assert {:error, reason} = VaultReader.oauth_token(ctx, edge.vault, "google")
-    refute match?({:provider_mismatch, _}, reason)
-
-    # ...and a provider it does not name never leaves this module.
-    assert {:error, {:provider_mismatch, "github"}} =
-             VaultReader.oauth_token(ctx, edge.vault, "github")
+    # The callee-keyed token plane is gone: a legacy OAuth pointer fails
+    # closed with the re-auth hint, whatever provider is asked for.
+    assert {:error, :legacy_pointer_retired} =
+             VaultReader.oauth_token(ctx, edge.vault, "google")
   end
 
   test "consents are insert-only by export list" do

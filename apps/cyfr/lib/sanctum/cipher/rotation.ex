@@ -76,13 +76,11 @@ defmodule Sanctum.Cipher.Rotation do
     dry = Keyword.get(opts, :dry_run, false)
 
     with {:ok, s} <- rotate_table(:secrets, opts),
-         {:ok, o} <- rotate_table(:oauth_credentials, opts),
          {:ok, w} <- rotate_table(:webhooks, opts),
          {:ok, v} <- rotate_table(:vault_entries, opts),
          {:ok, r} <- rotate_table(:registry_tokens, opts) do
       result = %{
         secrets: s,
-        oauth_credentials: o,
         webhooks: w,
         vault_entries: v,
         registry_tokens: r,
@@ -109,7 +107,6 @@ defmodule Sanctum.Cipher.Rotation do
       Map.new(
         [
           {:secrets, :encrypted_value},
-          {:oauth_credentials, :encrypted_data},
           {:webhooks, :secret_encrypted},
           {:vault_entries, :sealed_payload},
           {:registry_tokens, :credential_ciphertext}
@@ -187,28 +184,6 @@ defmodule Sanctum.Cipher.Rotation do
 
     rotate_columns(:secrets, row.id, [{:encrypted_value, row.ct, aad}], opts, fn ->
       Arca.Cache.invalidate({:secret, {row.name, row.scope, row.org_id, row.project_id}})
-    end)
-  end
-
-  defp rotate_row(:oauth_credentials, %{component_ref: ""} = row, _opts) do
-    # Token bundles are always written with a non-empty `component_ref`. An
-    # empty ref is an unexpected legacy shape — surface it, never silently
-    # skip (it would become undecryptable once the old key is retired).
-    {:error, {:unexpected_empty_component_ref, row.id}}
-  end
-
-  defp rotate_row(:oauth_credentials, row, opts) do
-    aad =
-      Sanctum.CipherAAD.oauth_token(row.component_ref, row.provider, row.org_id, row.project_id)
-
-    rotate_columns(:oauth_credentials, row.id, [{:encrypted_data, row.ct, aad}], opts, fn ->
-      Arca.Cache.invalidate(
-        {:oauth_token, {row.component_ref, row.provider, row.org_id, row.project_id}}
-      )
-
-      Arca.Cache.invalidate(
-        {:oauth_token_dec, {row.component_ref, row.provider, row.org_id, row.project_id}}
-      )
     end)
   end
 
@@ -352,19 +327,6 @@ defmodule Sanctum.Cipher.Rotation do
     |> Arca.Repo.all()
   end
 
-  defp fetch_page(:oauth_credentials, cursor, batch) do
-    base(cursor, batch, Arca.Schemas.OauthCredential)
-    |> select([r], %{
-      id: r.id,
-      component_ref: r.component_ref,
-      provider: r.provider,
-      org_id: r.org_id,
-      project_id: r.project_id,
-      ct: r.encrypted_data
-    })
-    |> Arca.Repo.all()
-  end
-
   defp fetch_page(:webhooks, cursor, batch) do
     base(cursor, batch, Arca.Schemas.Webhook)
     |> select([r], %{
@@ -413,7 +375,6 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   defp schema_for(:secrets), do: Arca.Schemas.Secret
-  defp schema_for(:oauth_credentials), do: Arca.Schemas.OauthCredential
   defp schema_for(:webhooks), do: Arca.Schemas.Webhook
   defp schema_for(:vault_entries), do: Arca.Schemas.VaultEntry
   defp schema_for(:registry_tokens), do: Arca.Schemas.RegistryToken

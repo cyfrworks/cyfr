@@ -20,15 +20,16 @@ defmodule EmissaryWeb.OAuthCallbackController do
   def callback(conn, %{"code" => code, "state" => state}) do
     redirect_uri = EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
 
-    # Connection-keyed grants first — their states live in a separate
-    # pending namespace, so an unknown state here (and only that error)
-    # falls through to the legacy component-keyed exchange.
     case Sanctum.Vault.OAuthGrant.complete(state, code, redirect_uri) do
       {:ok, result} ->
         send_callback_html(conn, 200, success_html(result.provider, result.name))
 
       {:error, :unknown_state} ->
-        legacy_callback(conn, state, code, redirect_uri)
+        send_callback_html(
+          conn,
+          400,
+          error_html("Authorization failed", "invalid or expired state parameter")
+        )
 
       {:error, reason} ->
         send_callback_html(conn, 400, error_html("Authorization failed", fmt_reason(reason)))
@@ -45,16 +46,6 @@ defmodule EmissaryWeb.OAuthCallbackController do
       400,
       error_html("Invalid callback", "Missing authorization parameters. Please try again.")
     )
-  end
-
-  defp legacy_callback(conn, state, code, redirect_uri) do
-    case Sanctum.OAuth.exchange_code(state, code, redirect_uri) do
-      {:ok, result} ->
-        send_callback_html(conn, 200, success_html(result.provider, result.component_ref))
-
-      {:error, reason} ->
-        send_callback_html(conn, 400, error_html("Authorization failed", fmt_reason(reason)))
-    end
   end
 
   defp fmt_reason(reason) when is_binary(reason), do: reason
