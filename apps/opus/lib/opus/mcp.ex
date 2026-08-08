@@ -562,18 +562,20 @@ defmodule Opus.MCP do
   # Private Helpers
   # ============================================================================
 
-  # The data-driven cutover: a profile roots the execution under its
-  # consent; no profile falls back to the legacy path, explicitly and
-  # logged. An explicit selector never falls back — the caller named a
-  # profile, so a missing one is their error — and every other selection
-  # failure surfaces rather than guessing.
+  # Every execution roots under a profile's consent — there is no other
+  # path. No profile means nothing was granted: the §4.3 vocabulary names
+  # the fix instead of running with the caller's ambient authority.
   defp run_with_cutover(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
     case Opus.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when is_nil(selector) ->
-        Logger.info("[Opus.MCP] no profile for #{reference} — legacy execution path")
-        Opus.run(ctx, reference, input, opts)
+        {:error,
+         "consent_required: " <>
+           Jason.encode!(%{
+             "ref" => reference,
+             "detail" => "no profile — grant it first (profile.plan, or cyfr profile grant)"
+           })}
 
       other ->
         format_root_result(other)

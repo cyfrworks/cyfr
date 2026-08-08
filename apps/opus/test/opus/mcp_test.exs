@@ -17,6 +17,10 @@ defmodule Opus.MCPTest do
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
+    # Every execution roots under a profile's consent: bootstrap mints one
+    # through the production DB source, and the loader reads it back.
+    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
+
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -48,8 +52,11 @@ defmodule Opus.MCPTest do
         description: "Test math component"
       })
 
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
     on_exit(fn ->
       File.rm_rf!(test_path)
+      Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.Memory)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
@@ -167,6 +174,8 @@ defmodule Opus.MCPTest do
     end
 
     test "returns error for unregistered component", %{ctx: ctx} do
+      # An unregistered component has no profile, so the consent gate
+      # refuses before resolution is attempted.
       {:error, msg} =
         MCP.handle("execution", ctx, %{
           "action" => "run",
@@ -174,7 +183,7 @@ defmodule Opus.MCPTest do
           "input" => %{"a" => 1, "b" => 2}
         })
 
-      assert msg =~ "not found" or msg =~ "resolve"
+      assert msg =~ "consent_required: "
     end
 
     test "respects component type parameter", %{ctx: ctx, ref: ref} do
@@ -635,7 +644,8 @@ defmodule Opus.MCPTest do
 
   describe "execution tool - error handling" do
     test "handles unregistered component gracefully", %{ctx: ctx} do
-      # Unregistered component should return a clear error
+      # Unregistered component should return a clear error — no profile
+      # exists for it, so the consent gate names the fix.
       result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
@@ -645,7 +655,7 @@ defmodule Opus.MCPTest do
 
       assert {:error, msg} = result
       assert is_binary(msg)
-      assert msg =~ "not found" or msg =~ "resolve"
+      assert msg =~ "consent_required: "
     end
 
     test "handles empty reference gracefully", %{ctx: ctx} do

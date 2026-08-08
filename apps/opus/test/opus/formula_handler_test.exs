@@ -173,12 +173,14 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "returns dispatch error for unregistered component", %{ctx: ctx} do
+      # An unregistered component has no profile, so the run is refused by
+      # the consent gate before resolution is attempted.
       json = execution_run_request("reagent:local.missing:0.1.0", %{"a" => 1})
       result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent-123")
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "not found"
+      assert parsed["error"]["message"] =~ "consent_required: "
     end
   end
 

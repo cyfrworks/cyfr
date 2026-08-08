@@ -82,24 +82,22 @@ defmodule Opus.NestedExecutionCharacterizationTest do
     assert %{"error" => %{"type" => "tool_denied"}} = Jason.decode!(output["result_raw"])
   end
 
-  test "a chain is a real nested execution and the SAME identity reaches every level",
+  test "a chain self-invoke through execution.run is refused without a profile",
        %{ctx: ctx} do
     {:ok, output, result} = Probe.run_chain(ctx, 2)
 
+    # The probe itself still runs end to end on the legacy path, but its
+    # nested execution.run dispatch lands on the consent-gated MCP ingress:
+    # with no profile, nothing nests under the caller's ambient authority.
+    # The confused-deputy chain this suite used to pin is unreachable from
+    # here; the authority twin pins what a consented chain does instead.
     assert result.status == :completed
+    assert output["depth"] == 2
 
-    levels = Probe.unwrap_chain(output)
-    assert [%{depth: 2} = l2, %{depth: 1} = l1, %{depth: 0}] = levels
+    assert %{"error" => %{"type" => "dispatch_error", "message" => message}} =
+             Jason.decode!(output["result_raw"])
 
-    # Three distinct executions really ran…
-    assert l2.child_execution_id != l1.child_execution_id
-    assert l2.child_status == "completed"
-    assert l1.child_status == "completed"
-
-    # …every one of them as the ORIGINAL caller. This is the confused-deputy
-    # baseline the run_root/run_child split replaces.
-    assert l2.child_user_id == ctx.user_id
-    assert l1.child_user_id == ctx.user_id
+    assert message =~ "consent_required: "
   end
 
   test "spawned dispatches run inside the AsyncTracker closure with the captured context",
@@ -123,14 +121,13 @@ defmodule Opus.NestedExecutionCharacterizationTest do
     # await-all responds bare — no {"status","output"} wrapper, unlike call.
     assert %{"count" => 2, "results" => results} = Jason.decode!(output["result_raw"])
 
-    # Both spawned children executed for real, as the captured caller.
+    # Both spawned dispatches ran inside the tracker closure with the
+    # captured context — far enough to reach the consent-gated MCP ingress,
+    # which refuses the profile-less nested run.
     for wrapped <- results do
-      assert wrapped["status"] == "completed"
-
-      run_response = wrapped["output"]
-      assert run_response["status"] == "completed"
-      assert run_response["user_id"] == ctx.user_id
-      assert run_response["result"]["op"] == "echo"
+      assert wrapped["status"] == "error"
+      assert wrapped["error"]["type"] == "dispatch_error"
+      assert wrapped["error"]["message"] =~ "consent_required: "
     end
   end
 

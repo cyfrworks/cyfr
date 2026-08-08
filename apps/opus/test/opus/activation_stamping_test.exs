@@ -54,12 +54,16 @@ defmodule Opus.ActivationStampingTest do
   end
 
   test "a nested child execution records no activation", %{ctx: ctx} do
-    {:ok, output, result} = Probe.run_chain(ctx, 1)
+    # The MCP ingress refuses profile-less nesting, so the child is driven
+    # the way every spawn layer ultimately does: the legacy path with the
+    # parent id threaded through.
+    {:ok, _output, result} = Probe.run_probe(ctx, %{"op" => "echo"})
 
-    [%{depth: 1, child_execution_id: child_id} | _] = Probe.unwrap_chain(output)
+    {:ok, _child_output, child_result} =
+      Probe.run_probe(ctx, %{"op" => "echo"}, parent_execution_id: result.metadata.execution_id)
 
     root = execution_row(result.metadata.execution_id)
-    child = execution_row(child_id)
+    child = execution_row(child_result.metadata.execution_id)
 
     assert root.activation_digest != nil
     # A child's graph is a subgraph of its root's, and a child cannot be

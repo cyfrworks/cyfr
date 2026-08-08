@@ -128,11 +128,12 @@ defmodule Opus.MCPCutoverTest do
     )
   end
 
-  test "no profile runs the legacy path", %{ctx: ctx} do
+  test "no profile refuses with consent guidance — nothing runs", %{ctx: ctx} do
     attach_witness()
     assert {:error, message} = run(ctx, %{})
-    # math.wasm fails at component compile on the legacy path too.
-    assert message =~ "Component compilation failed"
+    assert message =~ "consent_required: "
+    assert %{"detail" => detail} = decode_payload(message)
+    assert detail =~ "profile.plan"
     refute_receive {:authority_entered, _}, 200
   end
 

@@ -19,6 +19,10 @@ defmodule Opus.TimeoutTest do
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
+    # Every execution roots under a profile's consent: bootstrap mints one
+    # through the production DB source, and the loader reads it back.
+    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
+
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -36,8 +40,11 @@ defmodule Opus.TimeoutTest do
         description: "Test math component"
       })
 
+    {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
     on_exit(fn ->
       File.rm_rf!(test_path)
+      Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.Memory)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
