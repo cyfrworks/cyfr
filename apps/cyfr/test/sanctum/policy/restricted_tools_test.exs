@@ -17,9 +17,6 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert "session.*" in list
       assert "key.*" in list
       assert "permission.*" in list
-      assert "policy.set" in list
-      assert "policy.patch" in list
-      assert "policy.migrate" in list
       assert "vault.create" in list
       assert "webhook.create" in list
       assert "schedule.create" in list
@@ -71,15 +68,12 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert :allowed = RestrictedTools.check(:formula, "component.inspect")
       assert :allowed = RestrictedTools.check(:formula, "aqua.get")
       assert :allowed = RestrictedTools.check(:formula, "tools.list")
-      assert :allowed = RestrictedTools.check(:formula, "policy.get")
     end
 
     test "blocks exact restricted matches" do
-      assert {:restricted, "policy.set"} = RestrictedTools.check(:formula, "policy.set")
-      assert {:restricted, "policy.patch"} = RestrictedTools.check(:formula, "policy.patch")
-      assert {:restricted, "policy.migrate"} = RestrictedTools.check(:formula, "policy.migrate")
-      assert {:restricted, "policy.delete"} = RestrictedTools.check(:formula, "policy.delete")
       assert {:restricted, "vault.create"} = RestrictedTools.check(:formula, "vault.create")
+      assert {:restricted, "webhook.create"} = RestrictedTools.check(:formula, "webhook.create")
+      assert {:restricted, "profile.commit"} = RestrictedTools.check(:formula, "profile.commit")
 
       assert {:restricted, "component.push"} =
                RestrictedTools.check(:formula, "component.push")
@@ -150,9 +144,9 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
 
     test "catches exact restricted tool violations" do
       assert {:error, violations} =
-               RestrictedTools.validate_allowed_tools(:formula, ["policy.set"])
+               RestrictedTools.validate_allowed_tools(:formula, ["vault.create"])
 
-      assert {"policy.set", "policy.set"} in violations
+      assert {"vault.create", "vault.create"} in violations
     end
 
     test "catches wildcard overlap violations" do
@@ -174,13 +168,13 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
                RestrictedTools.validate_allowed_tools(:formula, [
                  "execution.run",
                  "session.login",
-                 "policy.set",
+                 "vault.create",
                  "component.search"
                ])
 
       violating_tools = Enum.map(violations, &elem(&1, 0)) |> Enum.uniq()
       assert "session.login" in violating_tools
-      assert "policy.set" in violating_tools
+      assert "vault.create" in violating_tools
       refute "execution.run" in violating_tools
       refute "component.search" in violating_tools
     end

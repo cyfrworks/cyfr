@@ -17,28 +17,13 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   alias Sanctum.MCP
 
-  @tool_names ~w(session oauth permission key policy tincture_visibility webhook vault profile)
+  @tool_names ~w(session oauth permission key tincture_visibility webhook vault profile)
 
   @action_enums %{
     "session" => ["login", "logout", "whoami", "device_init", "device_poll"],
     "oauth" => ["set_client"],
     "permission" => ["get", "set", "list"],
     "key" => ["create", "get", "list", "revoke", "rotate"],
-    "policy" => [
-      "get",
-      "set",
-      "patch",
-      "delete",
-      "list",
-      "get_effective",
-      "get_ceiling",
-      "check_rate_limit",
-      "get_type_default",
-      "set_type_default",
-      "delete_type_default",
-      "list_type_defaults",
-      "migrate"
-    ],
     "tincture_visibility" => ["set", "get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
     "vault" => ["list", "create", "rename", "rotate", "rebind", "authorize", "revoke", "delete"],
@@ -51,8 +36,6 @@ defmodule Sanctum.MCPDispatchContractTest do
     "oauth" => "Invalid oauth action. Use: set_client",
     "permission" => "Invalid permission action. Use: get, set, or list",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
-    "policy" =>
-      "Invalid policy action. Use: get, set, patch, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, list_type_defaults, or migrate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: set, get",
     "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
     "vault" =>
@@ -172,11 +155,6 @@ defmodule Sanctum.MCPDispatchContractTest do
     test "unknown tool → exact error string", %{ctx: ctx} do
       assert MCP.handle("totally_unknown", ctx, %{"action" => "x"}) ==
                {:error, "Unknown tool: totally_unknown"}
-    end
-
-    test "non-%Context{} policy get_ceiling → \"Authentication required\"" do
-      assert MCP.handle("policy", nil, %{"action" => "get_ceiling"}) ==
-               {:error, "Authentication required"}
     end
   end
 end

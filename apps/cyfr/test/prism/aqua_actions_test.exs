@@ -13,9 +13,9 @@ defmodule Prism.AquaActionsTest do
   @policy %{
     "key.revoke" => "ask",
     "key.create" => "ask",
-    "policy.set" => "ask",
-    "policy.delete" => "ask",
-    "secret.set" => "ask",
+    "webhook.create" => "ask",
+    "webhook.revoke" => "ask",
+    "vault.create" => "ask",
     "component.*" => "ask",
     "files.read" => "auto",
     "files.write" => "auto"
@@ -337,9 +337,9 @@ defmodule Prism.AquaActionsTest do
       assert prelude =~ "## Actions that need approval"
       assert prelude =~ "key.create"
       assert prelude =~ "key.revoke"
-      assert prelude =~ "policy.set"
-      assert prelude =~ "policy.delete"
-      assert prelude =~ "secret.set"
+      assert prelude =~ "webhook.create"
+      assert prelude =~ "webhook.revoke"
+      assert prelude =~ "vault.create"
       # `tool.*` globs are listed verbatim
       assert prelude =~ "component.*"
       # 'auto' actions are directly callable — they don't appear here

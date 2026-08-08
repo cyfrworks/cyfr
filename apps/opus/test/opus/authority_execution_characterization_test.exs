@@ -162,7 +162,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
   end
 
   test "an in-chain tool outside the consent's edge is denied", %{ctx: ctx} do
-    # policy.list is in-chain-annotated but outside the probe's expanded
+    # webhook.list is in-chain-annotated but outside the probe's expanded
     # tools, so the chain authority's transition relation refuses the
     # dispatch — with the shim allowlist gone this is the only layer, and
     # its verdict reaches the guest as an encoded error naming the
@@ -170,7 +170,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     {:ok, run_result} =
       Opus.run_root(ctx, nil, Probe.probe_ref(), %{
         "op" => "call",
-        "request" => %{"tool" => "policy", "action" => "list", "args" => %{}}
+        "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
       })
 
     assert run_result.status == :completed

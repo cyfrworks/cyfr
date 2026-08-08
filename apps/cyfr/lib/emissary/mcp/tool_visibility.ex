@@ -59,18 +59,6 @@ defmodule Emissary.MCP.ToolVisibility do
     # tool-discovery breaks LLMs calling them. The identity MUTATIONS are
     # listed under :component_manage below, mirroring RegistryTool's gate.
 
-    # :secrets_read
-    "secret.list" => :secrets_read,
-    "secret.get" => :secrets_read,
-    "secret.can_access" => :secrets_read,
-    "secret.list_component_grants" => :secrets_read,
-
-    # :secrets_write
-    "secret.set" => :secrets_write,
-    "secret.delete" => :secrets_write,
-    "secret.grant" => :secrets_write,
-    "secret.revoke" => :secrets_write,
-
     # :component_read
     "component.get_blob" => :component_read,
     "component.discover" => :component_read,
@@ -84,23 +72,6 @@ defmodule Emissary.MCP.ToolVisibility do
     "component.delete" => :component_manage,
     "component.deprecate" => :component_manage,
     "component.yank" => :component_manage,
-
-    # :policy_read
-    "policy.get" => :policy_read,
-    "policy.list" => :policy_read,
-    "policy.get_effective" => :policy_read,
-    "policy.get_ceiling" => :policy_read,
-    "policy.check_rate_limit" => :policy_read,
-    "policy.get_type_default" => :policy_read,
-    "policy.list_type_defaults" => :policy_read,
-
-    # :policy_manage
-    "policy.set" => :policy_manage,
-    "policy.patch" => :policy_manage,
-    "policy.delete" => :policy_manage,
-    "policy.set_type_default" => :policy_manage,
-    "policy.delete_type_default" => :policy_manage,
-    "policy.migrate" => :policy_manage,
 
     # :component_manage — registry identity mutations (mirrors RegistryTool's
     # @identity_mutations gate; bootstrap actions stay public)

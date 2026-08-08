@@ -12,7 +12,7 @@ var groupCommandOrder = map[string][]string{
 	"server":    {"init", "up", "down", "upgrade", "update"},
 	"identity":  {"login", "logout", "whoami", "status"},
 	"component": {"search", "list", "inspect", "pull", "register", "run", "remove", "push"},
-	"security":  {"policy", "key", "permission", "profile"},
+	"security":  {"key", "permission", "profile"},
 	"admin":     {"log", "aqua", "registry", "context", "call", "notify"},
 }
 

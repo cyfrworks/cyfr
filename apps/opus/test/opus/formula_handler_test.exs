@@ -339,9 +339,9 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "blocks an external-only tool even when the edge grants it", %{ctx: ctx} do
-      auth = authority(tools: ["policy.set"])
+      auth = authority(tools: ["vault.create"])
 
-      json = mcp_request("policy", "set", %{"ref" => "test:1.0.0"})
+      json = mcp_request("vault", "create", %{"name" => "n", "fields" => %{}})
 
       result =
         FormulaHandler.execute(

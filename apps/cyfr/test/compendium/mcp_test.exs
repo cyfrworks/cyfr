@@ -1209,42 +1209,6 @@ defmodule Compendium.MCPTest do
 
       assert msg =~ "not found" or msg =~ "Invalid reference"
     end
-
-    test "verifies cleanup removes associated policies", %{ctx: ctx} do
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "remove-policy-test",
-          version: "1.0.0",
-          type: "catalyst",
-          description: "Component with policy"
-        })
-
-      # Set a policy
-      Sanctum.MCP.handle("policy", ctx, %{
-        "action" => "set",
-        "component_ref" => "catalyst:local.remove-policy-test:1.0.0",
-        "allowed_domains" => ["example.com"]
-      })
-
-      # Remove the component
-      {:ok, _} =
-        MCP.handle("component", ctx, %{
-          "action" => "delete",
-          "reference" => "c:local.remove-policy-test:1.0.0"
-        })
-
-      # Policy should be gone too — either returns {:error, "not found"} or {:ok, %{policy: nil}}
-      result =
-        Sanctum.MCP.handle("policy", ctx, %{
-          "action" => "get",
-          "component_ref" => "catalyst:local.remove-policy-test:1.0.0"
-        })
-
-      case result do
-        {:error, msg} -> assert msg =~ "not found" or msg =~ "Policy"
-        {:ok, %{policy: policy}} -> assert policy == nil or policy == %{}
-      end
-    end
   end
 
   # ============================================================================

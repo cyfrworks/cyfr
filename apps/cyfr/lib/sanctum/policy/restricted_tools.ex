@@ -25,14 +25,6 @@ defmodule Sanctum.Policy.RestrictedTools do
     "key.*",
     "permission.*",
 
-    # Policy mutation — reads OK, writes never
-    "policy.set",
-    "policy.patch",
-    "policy.delete",
-    "policy.set_type_default",
-    "policy.delete_type_default",
-    "policy.migrate",
-
     # Secret mutation — reading granted secrets OK, managing never
 
     # Audit/log surfaces — internal observability, never guest-readable

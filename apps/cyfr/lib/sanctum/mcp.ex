@@ -10,7 +10,6 @@ defmodule Sanctum.MCP do
   - `session` - Session management (login, logout, whoami)
   - `permission` - Permission management (get, set, list)
   - `key` - API key management (create, get, list, revoke, rotate)
-  - `policy` - Host Policy management (get, set, patch, delete, list)
   - `tincture_visibility` - Tincture public/private visibility (set, get)
 
   ## Resources
@@ -309,82 +308,6 @@ defmodule Sanctum.MCP do
         }
       },
       %{
-        name: "policy",
-        title: "Host Policy Management",
-        description: "Manage host policies - get, set, patch, delete, or list policies",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: true,
-          actions: %{
-            "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "set" => %{kind: :write, planes: [:external]},
-            "patch" => %{kind: :write, planes: [:external]},
-            "delete" => %{kind: :destructive, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external, :in_chain]},
-            "get_effective" => %{kind: :read, planes: [:external, :in_chain]},
-            "get_ceiling" => %{kind: :read, planes: [:external, :in_chain]},
-            "check_rate_limit" => %{kind: :read, planes: [:external, :in_chain]},
-            "get_type_default" => %{kind: :read, planes: [:external, :in_chain]},
-            "set_type_default" => %{kind: :write, planes: [:external]},
-            "delete_type_default" => %{kind: :destructive, planes: [:external]},
-            "list_type_defaults" => %{kind: :read, planes: [:external, :in_chain]},
-            "migrate" => %{kind: :write, planes: [:external]}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => [
-                "get",
-                "set",
-                "patch",
-                "delete",
-                "list",
-                "get_effective",
-                "get_ceiling",
-                "check_rate_limit",
-                "get_type_default",
-                "set_type_default",
-                "delete_type_default",
-                "list_type_defaults",
-                "migrate"
-              ],
-              "description" => "Action to perform"
-            },
-            "component_ref" => %{
-              "type" => "string",
-              "description" =>
-                "Component reference (e.g., 'catalyst:local.stripe-catalyst' for name-level or 'catalyst:local.stripe-catalyst:1.0.0' for version-specific). Policies default to name-level (identity-based) unless pin_version is true."
-            },
-            "pin_version" => %{
-              "type" => "boolean",
-              "description" =>
-                "When true, store version-specific policy instead of promoting to name-level (default: false)"
-            },
-            "field" => %{
-              "type" => "string",
-              "description" => "Policy field to update (for patch action)"
-            },
-            "value" => %{
-              "type" => "string",
-              "description" => "Value to set (for patch action)"
-            },
-            "policy" => %{
-              "type" => "object",
-              "description" => "Full policy map (for set/set_type_default action)"
-            },
-            "component_type" => %{
-              "type" => "string",
-              "enum" => Sanctum.ComponentRef.valid_types(),
-              "description" => "Component type (for type default actions)"
-            }
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
         name: "tincture_visibility",
         title: "Tincture Visibility",
         description:
@@ -646,7 +569,6 @@ defmodule Sanctum.MCP do
   def handle("oauth", ctx, args), do: Sanctum.MCP.OAuthTool.handle(ctx, args)
   def handle("permission", ctx, args), do: Sanctum.MCP.PermissionTool.handle(ctx, args)
   def handle("key", ctx, args), do: Sanctum.MCP.KeyTool.handle(ctx, args)
-  def handle("policy", ctx, args), do: Sanctum.MCP.PolicyTool.handle(ctx, args)
 
   def handle("tincture_visibility", ctx, args),
     do: Sanctum.MCP.TinctureVisibilityTool.handle(ctx, args)

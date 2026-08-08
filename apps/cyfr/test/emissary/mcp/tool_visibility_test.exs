@@ -65,16 +65,6 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "force_release"
       ]),
       make_tool("key", ["create", "get", "list", "revoke", "rotate"]),
-      make_tool("secret", [
-        "list",
-        "get",
-        "can_access",
-        "list_component_grants",
-        "set",
-        "delete",
-        "grant",
-        "revoke"
-      ]),
       make_tool("component", [
         "search",
         "inspect",
@@ -107,21 +97,6 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "resume",
         "delete",
         "re_resolve"
-      ]),
-      make_tool("policy", [
-        "get",
-        "list",
-        "get_effective",
-        "get_ceiling",
-        "check_rate_limit",
-        "get_type_default",
-        "list_type_defaults",
-        "set",
-        "patch",
-        "delete",
-        "set_type_default",
-        "delete_type_default",
-        "migrate"
       ]),
       make_tool("permission", ["get", "list", "set"]),
       make_tool("record", ["get", "list"]),
@@ -224,7 +199,6 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       refute "key" in names
       refute "execution" in names
       refute "schedule" in names
-      refute "secret" in names
       refute "permission" in names
       refute "record" in names
     end
@@ -280,22 +254,19 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   end
 
   describe "mixed permissions" do
-    test "execute + secrets_read sees union" do
-      ctx = ctx_with([:execute, :secrets_read])
+    test "execute + storage_read sees union" do
+      ctx = ctx_with([:execute, :storage_read])
       filtered = ToolVisibility.filter_for_context(sample_tools(), ctx)
       names = Enum.map(filtered, & &1["name"])
 
       assert "execution" in names
       assert "schedule" in names
 
-      secret = Enum.find(filtered, &(&1["name"] == "secret"))
-      assert secret
-      actions = action_enum(secret)
+      record = Enum.find(filtered, &(&1["name"] == "record"))
+      assert record
+      actions = action_enum(record)
       assert "list" in actions
       assert "get" in actions
-      assert "can_access" in actions
-      refute "set" in actions
-      refute "delete" in actions
     end
   end
 
@@ -347,33 +318,6 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       ctx = ctx_with([])
       ext = make_tool_no_actions("custom_tool")
       assert ToolVisibility.filter_for_context([ext], ctx) == [ext]
-    end
-  end
-
-  describe "policy tool filtering" do
-    test "policy_read sees read actions only" do
-      ctx = ctx_with([:policy_read])
-      tools = [sample_tools() |> Enum.find(&(&1["name"] == "policy"))]
-      [policy] = ToolVisibility.filter_for_context(tools, ctx)
-      actions = action_enum(policy)
-
-      assert "get" in actions
-      assert "list" in actions
-      assert "get_effective" in actions
-      refute "set" in actions
-      refute "delete" in actions
-    end
-
-    test "policy_manage sees manage actions only (not read)" do
-      ctx = ctx_with([:policy_manage])
-      tools = [sample_tools() |> Enum.find(&(&1["name"] == "policy"))]
-      [policy] = ToolVisibility.filter_for_context(tools, ctx)
-      actions = action_enum(policy)
-
-      assert "set" in actions
-      assert "delete" in actions
-      refute "get" in actions
-      refute "list" in actions
     end
   end
 

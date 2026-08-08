@@ -229,21 +229,21 @@ defmodule Opus.FormulaHandlerMcpTest do
   # ============================================================================
 
   describe "execute/3 - dispatch via ToolRegistry" do
-    test "policy.list routes to the provider, whose identity conjunct still refuses", %{
+    test "webhook.list routes to the provider, whose identity conjunct still refuses", %{
       ctx: ctx,
       execution_id: eid
     } do
       # The edge grant clears the authority conjunct, but the dispatch
       # still carries the caller's identity: an identity without
-      # :policy_read is refused by the provider itself. Reaching the
+      # :storage_read is refused by the provider itself. Reaching the
       # provider through the registry never bypasses the identity conjunct.
       restricted = %{ctx | permissions: MapSet.new([:execute])}
-      request = Jason.encode!(%{"tool" => "policy", "action" => "list", "args" => %{}})
-      result = execute(request, restricted, eid, authority(tools: ["policy.list"]))
+      request = Jason.encode!(%{"tool" => "webhook", "action" => "list", "args" => %{}})
+      result = execute(request, restricted, eid, authority(tools: ["webhook.list"]))
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
-      assert decoded["error"]["message"] =~ "policy_read"
+      assert decoded["error"]["message"] =~ "storage_read"
     end
 
     test "routes execution.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
