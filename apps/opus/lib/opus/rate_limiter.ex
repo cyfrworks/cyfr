@@ -5,7 +5,7 @@ defmodule Opus.RateLimiter do
   @moduledoc """
   Rate limiting for WASM component executions.
 
-  Enforces policy-defined rate limits using a sliding window algorithm
+  Enforces consented rate limits using a sliding window algorithm
   backed by a dedicated ETS table.
 
   ## Algorithm
@@ -21,8 +21,8 @@ defmodule Opus.RateLimiter do
 
   - Counters reset if the limiter process restarts (the table dies with its
     owner). A dead table fails CLOSED: ETS raises, which the API converts to
-    the same `:exit` a dead GenServer used to produce, so
-    `Sanctum.Policy.check_rate_limit/3` denies exactly as before.
+    the same `:exit` a dead GenServer used to produce, so the executor's
+    rate-limit chokepoint (`Opus.Executor`) denies exactly as before.
   - Concurrent checks at the limit boundary can overshoot by up to the number
     of simultaneous callers (non-atomic count-then-insert) — the same
     acceptance already documented in the transport-limit plugs.
@@ -30,7 +30,9 @@ defmodule Opus.RateLimiter do
   ## Usage
 
       # Check if request is allowed (rate limits are scoped per org+project)
-      case Opus.RateLimiter.check("org_1", "project_1", "stripe-catalyst", policy) do
+      case Opus.RateLimiter.check("org_1", "project_1", "stripe-catalyst", %{
+             rate_limit: %{requests: 50, window: "1m"}
+           }) do
         {:ok, remaining} -> proceed_with_execution()
         {:error, :rate_limited, retry_after_ms} -> return_rate_limit_error()
       end
@@ -38,14 +40,12 @@ defmodule Opus.RateLimiter do
       # Reset rate limit (for testing or administrative purposes)
       :ok = Opus.RateLimiter.reset("org_1", "project_1", "stripe-catalyst")
 
-  ## Policy Integration
+  ## Limit Source
 
-  Rate limits are defined in Host Policy:
-
-      rate_limit:
-        requests: 50
-        window: "1m"
-
+  The fourth argument is any map carrying a `:rate_limit` key of
+  `%{requests: n, window: "1m"}` — callers pass the node's consented
+  `Sanctum.Limits.rate_limit` (or a platform-config bucket like the emit
+  cap). A nil map or nil `:rate_limit` means unlimited.
   """
 
   use GenServer
@@ -91,9 +91,9 @@ defmodule Opus.RateLimiter do
           {:ok, non_neg_integer() | :unlimited}
           | {:error, :rate_limited, non_neg_integer()}
           | {:error, :missing_tenant}
-  def check(org_id, project_id, component_ref, policy) do
+  def check(org_id, project_id, component_ref, limit_source) do
     with :ok <- reject_empty_org_id(org_id, "check") do
-      case get_rate_limit_config(policy) do
+      case get_rate_limit_config(limit_source) do
         nil ->
           # No rate limit configured - allow unlimited
           {:ok, :unlimited}
@@ -152,9 +152,9 @@ defmodule Opus.RateLimiter do
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
           | {:ok, :unlimited}
           | {:error, :missing_tenant}
-  def status(org_id, project_id, component_ref, policy) do
+  def status(org_id, project_id, component_ref, limit_source) do
     with :ok <- reject_empty_org_id(org_id, "status") do
-      case get_rate_limit_config(policy) do
+      case get_rate_limit_config(limit_source) do
         nil ->
           {:ok, :unlimited}
 
@@ -220,9 +220,9 @@ defmodule Opus.RateLimiter do
   # ============================================================================
 
   # A missing table means the owner process is dead (or never started). Raise
-  # the same :exit shape a GenServer.call to a dead process produces, so
-  # Sanctum.Policy.check_rate_limit's fail-closed `catch :exit` branch denies —
-  # a plain ArgumentError would escape it and surface as a 500 instead.
+  # the same :exit shape a GenServer.call to a dead process produces, so the
+  # executor's fail-closed `catch :exit` branch denies — a plain
+  # ArgumentError would escape it and surface as a 500 instead.
   defp with_table(op, fun) do
     fun.()
   rescue

@@ -5,7 +5,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
   use ExUnit.Case, async: false
 
   alias Opus.HttpHandler
-  alias Sanctum.Policy
+  alias Opus.Test.EdgeFixtures
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -20,11 +20,11 @@ defmodule Opus.HttpHandlerEnforcementTest do
   end
 
   test "blocked egress domain records a domain_blocked enforcement row", %{ctx: ctx} do
-    policy = %Policy{allowed_domains: ["api.example.com"], allowed_methods: ["GET"]}
+    edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
     ref = "catalyst:local.audited-egress:1.0.0"
 
     request = Jason.encode!(%{"method" => "GET", "url" => "https://evil.example.net/data"})
-    result = HttpHandler.execute(request, policy, ctx, ref)
+    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, ref)
 
     assert %{"error" => %{"type" => "domain_blocked"}} = Jason.decode!(result)
 
@@ -35,11 +35,11 @@ defmodule Opus.HttpHandlerEnforcementTest do
   end
 
   test "blocked egress method records a method_blocked enforcement row", %{ctx: ctx} do
-    policy = %Policy{allowed_domains: ["api.example.com"], allowed_methods: ["GET"]}
+    edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
     ref = "catalyst:local.audited-method:1.0.0"
 
     request = Jason.encode!(%{"method" => "DELETE", "url" => "https://api.example.com/data"})
-    result = HttpHandler.execute(request, policy, ctx, ref)
+    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, ref)
 
     assert %{"error" => %{"type" => "method_blocked"}} = Jason.decode!(result)
 
@@ -49,13 +49,13 @@ defmodule Opus.HttpHandlerEnforcementTest do
   end
 
   test "transport-level failures record nothing", %{ctx: ctx} do
-    policy = %Policy{allowed_domains: ["*"], allowed_methods: ["GET"]}
+    edge = EdgeFixtures.edge(domains: ["*"], methods: ["GET"])
     ref = "catalyst:local.audited-dns:1.0.0"
 
     request =
       Jason.encode!(%{"method" => "GET", "url" => "https://nonexistent.invalid/data"})
 
-    result = HttpHandler.execute(request, policy, ctx, ref)
+    result = HttpHandler.execute(request, edge, EdgeFixtures.limits(), ctx, ref)
 
     assert %{"error" => %{"type" => type}} = Jason.decode!(result)
     assert type in ["dns_error", "http_error"]

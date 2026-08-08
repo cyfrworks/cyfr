@@ -27,7 +27,7 @@ defmodule Compendium.ProjectSeederTest do
       "name" => "foo",
       "version" => "1.0.0",
       "type" => "catalyst",
-      "setup" => %{"policy" => %{}}
+      "caps" => %{"egress" => %{"domains" => []}}
     }
 
     File.write!(Path.join(src, "cyfr-manifest.json"), Jason.encode!(manifest))

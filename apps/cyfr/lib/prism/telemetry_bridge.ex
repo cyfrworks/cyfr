@@ -17,7 +17,7 @@ defmodule Prism.TelemetryBridge do
   - `prism:executions` — Execution lifecycle events
   - `prism:system` — System status changes
   - `prism:requests` — MCP request events
-  - `prism:components` — Component/policy change events
+  - `prism:components` — Component install/remove events
   - `prism:builds` — Locus build lifecycle events
   - `prism:schedules` — Cron schedule firing events
   - `prism:secrets` — Secret grant/revoke events
@@ -48,7 +48,6 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :opus, :execute, :exception], :execution_exception},
       {[:cyfr, :emissary, :request], :request},
       {[:cyfr, :sanctum, :auth], :auth},
-      {[:cyfr, :sanctum, :policy], :policy},
       {[:cyfr, :sanctum, :policy, :decision], :policy_decision},
       {[:cyfr, :locus, :build, :start], :build_start},
       {[:cyfr, :locus, :build, :progress], :build_progress},
@@ -91,10 +90,6 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :sanctum, :auth], measurements, metadata, _config) do
     safe_broadcast("prism:system", metadata, {:auth_event, metadata, measurements})
-  end
-
-  def handle_event([:cyfr, :sanctum, :policy], measurements, metadata, _config) do
-    safe_broadcast("prism:components", metadata, {:policy_changed, metadata, measurements})
   end
 
   def handle_event([:cyfr, :sanctum, :policy, :decision], measurements, metadata, _config) do

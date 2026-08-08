@@ -126,7 +126,7 @@ defmodule Opus.FormulaHandlerTest do
       Keyword.merge(
         [
           root_execution_id: parent_id,
-          policy: Opus.Test.EdgePolicy.policy_from_edge(auth),
+          limits: Sanctum.Authority.limits(auth),
           authority: auth,
           declared_needs: [],
           activation_digest: "sha256:act-fh"
@@ -142,10 +142,10 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "build_formula_imports/3" do
     test "returns {imports, tracker_pid} tuple with all eight functions", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_parent-123", policy: policy)
+        FormulaHandler.build_formula_imports(ctx, "exec_parent-123", limits: limits)
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -172,7 +172,7 @@ defmodule Opus.FormulaHandlerTest do
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
-    test "works without policy (defaults)", %{ctx: ctx} do
+    test "works without limits (defaults)", %{ctx: ctx} do
       {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_parent-123")
 
       assert is_map(imports)
@@ -669,10 +669,10 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "build_formula_imports includes cancel function", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cancel_check", policy: policy)
+        FormulaHandler.build_formula_imports(ctx, "exec_cancel_check", limits: limits)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       assert Map.has_key?(invoke_ns, "cancel")
@@ -761,10 +761,10 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "cleanup_registry/1" do
     test "stops tracker and returns :ok", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {_imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cleanup", policy: policy)
+        FormulaHandler.build_formula_imports(ctx, "exec_cleanup", limits: limits)
 
       assert Process.alive?(tracker_pid)
       assert :ok == FormulaHandler.cleanup_registry(tracker_pid)
@@ -783,10 +783,10 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "emit integration" do
     test "emit returns ok with sequence number", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_test", policy: policy)
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_test", limits: limits)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -801,10 +801,10 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "emit sequence increments across calls", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_seq", policy: policy)
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_seq", limits: limits)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -821,10 +821,10 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "emit handles invalid JSON gracefully", %{ctx: ctx} do
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_bad", policy: policy)
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_bad", limits: limits)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -839,10 +839,10 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit delivers events via PubSub", %{ctx: ctx} do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
+        FormulaHandler.build_formula_imports(ctx, execution_id, limits: limits)
 
       # Subscribe to the execution events topic
       Opus.ExecutionEventBuffer.subscribe(execution_id)
@@ -865,10 +865,10 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit buffers events for replay via since/2", %{ctx: ctx} do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
+        FormulaHandler.build_formula_imports(ctx, execution_id, limits: limits)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -908,10 +908,10 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
+        FormulaHandler.build_formula_imports(ctx, execution_id, limits: limits)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -935,12 +935,12 @@ defmodule Opus.FormulaHandlerTest do
     test "emit delivers events to root execution buffer, not parent", %{ctx: ctx} do
       root_id = "exec_root_#{:rand.uniform(100_000)}"
       parent_id = "exec_child_#{:rand.uniform(100_000)}"
-      policy = Sanctum.Policy.default(:formula)
+      limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, parent_id,
           root_execution_id: root_id,
-          policy: policy
+          limits: limits
         )
 
       # Subscribe to both root and parent

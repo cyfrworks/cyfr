@@ -4,8 +4,12 @@
 defmodule Sanctum.Policy.CeilingTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Policy
+  alias Sanctum.Limits
   alias Sanctum.Policy.Ceiling
+
+  # A partial Limits for clamp tests — clamp only reads the fields the
+  # ceiling names, so unset fields may stay nil.
+  defp limits(fields), do: struct(Limits, fields)
 
   setup do
     # Save original config for cleanup
@@ -64,12 +68,13 @@ defmodule Sanctum.Policy.CeilingTest do
 
   describe "clamp/2" do
     test "clamps numeric fields to ceiling" do
-      policy = %Policy{
-        max_memory_bytes: 512 * 1024 * 1024,
-        max_request_size: 20 * 1024 * 1024,
-        max_response_size: 100 * 1024 * 1024,
-        max_concurrent_tasks: 100
-      }
+      limits =
+        limits(
+          max_memory_bytes: 512 * 1024 * 1024,
+          max_request_size: 20 * 1024 * 1024,
+          max_response_size: 100 * 1024 * 1024,
+          max_concurrent_tasks: 100
+        )
 
       ceiling = %{
         max_memory_bytes: 256 * 1024 * 1024,
@@ -78,7 +83,7 @@ defmodule Sanctum.Policy.CeilingTest do
         max_concurrent_tasks: 50
       }
 
-      clamped = Ceiling.clamp(policy, ceiling)
+      clamped = Ceiling.clamp(limits, ceiling)
       assert clamped.max_memory_bytes == 256 * 1024 * 1024
       assert clamped.max_request_size == 10 * 1024 * 1024
       assert clamped.max_response_size == 50 * 1024 * 1024
@@ -86,29 +91,30 @@ defmodule Sanctum.Policy.CeilingTest do
     end
 
     test "clamps duration fields to ceiling" do
-      policy = %Policy{timeout: "2h", batch_timeout: "1h"}
+      limits = limits(timeout: "2h", batch_timeout: "1h")
       ceiling = %{timeout: "30m", batch_timeout: "30m"}
 
-      clamped = Ceiling.clamp(policy, ceiling)
+      clamped = Ceiling.clamp(limits, ceiling)
       assert clamped.timeout == "30m"
       assert clamped.batch_timeout == "30m"
     end
 
     test "clamps rate_limit.requests" do
-      policy = %Policy{rate_limit: %{requests: 50_000, window: "1m"}}
+      limits = limits(rate_limit: %{requests: 50_000, window: "1m"})
       ceiling = %{rate_limit_requests: 10_000}
 
-      clamped = Ceiling.clamp(policy, ceiling)
+      clamped = Ceiling.clamp(limits, ceiling)
       assert clamped.rate_limit.requests == 10_000
       assert clamped.rate_limit.window == "1m"
     end
 
     test "no-op when within ceiling" do
-      policy = %Policy{
-        timeout: "5m",
-        max_memory_bytes: 64 * 1024 * 1024,
-        max_concurrent_tasks: 10
-      }
+      limits =
+        limits(
+          timeout: "5m",
+          max_memory_bytes: 64 * 1024 * 1024,
+          max_concurrent_tasks: 10
+        )
 
       ceiling = %{
         timeout: "30m",
@@ -116,41 +122,25 @@ defmodule Sanctum.Policy.CeilingTest do
         max_concurrent_tasks: 50
       }
 
-      clamped = Ceiling.clamp(policy, ceiling)
+      clamped = Ceiling.clamp(limits, ceiling)
       assert clamped.timeout == "5m"
       assert clamped.max_memory_bytes == 64 * 1024 * 1024
       assert clamped.max_concurrent_tasks == 10
     end
 
-    test "preserves allow-list fields unchanged" do
-      policy = %Policy{
-        allowed_domains: ["example.com"],
-        allowed_tools: ["component.*"],
-        allowed_paths: ["data/"],
-        timeout: "2h"
-      }
-
-      ceiling = %{timeout: "30m"}
-
-      clamped = Ceiling.clamp(policy, ceiling)
-      assert clamped.allowed_domains == ["example.com"]
-      assert clamped.allowed_tools == ["component.*"]
-      assert clamped.allowed_paths == ["data/"]
-    end
-
     test "no-op for fields not in ceiling" do
-      policy = %Policy{max_memory_bytes: 512 * 1024 * 1024}
+      limits = limits(max_memory_bytes: 512 * 1024 * 1024)
       ceiling = %{timeout: "30m"}
 
-      clamped = Ceiling.clamp(policy, ceiling)
+      clamped = Ceiling.clamp(limits, ceiling)
       assert clamped.max_memory_bytes == 512 * 1024 * 1024
     end
 
     test "handles nil rate_limit" do
-      policy = %Policy{rate_limit: nil}
+      limits = limits(rate_limit: nil)
       ceiling = %{rate_limit_requests: 10_000}
 
-      clamped = Ceiling.clamp(policy, ceiling)
+      clamped = Ceiling.clamp(limits, ceiling)
       assert clamped.rate_limit == nil
     end
   end

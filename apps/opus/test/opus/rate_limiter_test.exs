@@ -269,19 +269,22 @@ defmodule Opus.RateLimiterTest do
     end
   end
 
-  describe "Sanctum.Policy struct" do
-    test "works with Sanctum.Policy struct" do
+  describe "Sanctum.Limits struct" do
+    test "works with a Sanctum.Limits struct as the limit source" do
       project_id = project()
       component_ref = "local.test-component:1.0.0"
 
-      policy = %Sanctum.Policy{
-        allowed_domains: [],
-        rate_limit: %{requests: 5, window: "1m"},
+      limits = %Sanctum.Limits{
         timeout: "30s",
-        max_memory_bytes: 64 * 1024 * 1024
+        max_memory_bytes: 64 * 1024 * 1024,
+        max_request_size: 1_048_576,
+        max_response_size: 5_242_880,
+        rate_limit: %{requests: 5, window: "1m"},
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
       }
 
-      assert {:ok, 4} = RateLimiter.check(@org, project_id, component_ref, policy)
+      assert {:ok, 4} = RateLimiter.check(@org, project_id, component_ref, limits)
 
       # Cleanup
       RateLimiter.reset(@org, project_id, component_ref)

@@ -35,13 +35,9 @@ defmodule Sanctum.Consent.ShapeDiffTest do
         type: "reagent",
         manifest:
           Jason.encode!(%{
-            "setup" => %{
-              "policy" => %{
-                "allowed_domains" => [],
-                "allowed_paths" => [],
-                "allowed_actions" => []
-              }
-            }
+            "name" => "diffed",
+            "version" => "1.0.0",
+            "type" => "reagent"
           })
       })
 
@@ -70,12 +66,28 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     })
   end
 
-  defp store_policy!(ctx, fields) do
-    :ok = Sanctum.PolicyStore.put(ctx, @source, Map.put(fields, :component_type, "reagent"))
+  # The live side is the latest release's manifest caps: publishing a newer
+  # version with the wanted caps is how a test moves the live shape.
+  defp publish_live!(ctx, version, caps) do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "diffed",
+        version: version,
+        type: "reagent",
+        manifest:
+          Jason.encode!(%{
+            "name" => "diffed",
+            "version" => version,
+            "type" => "reagent",
+            "caps" => caps
+          })
+      })
+
+    :ok
   end
 
   test "a widened capability is named with what appeared", %{ctx: ctx} do
-    store_policy!(ctx, %{allowed_domains: ["a.example", "b.example"]})
+    publish_live!(ctx, "1.0.1", %{"egress" => %{"domains" => ["a.example", "b.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["a.example"]}})
     diff = ShapeDiff.compute(ctx, @source, granted)
@@ -85,7 +97,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
   end
 
   test "a narrowed capability is named with what went away", %{ctx: ctx} do
-    store_policy!(ctx, %{allowed_domains: ["a.example"]})
+    publish_live!(ctx, "1.0.2", %{"egress" => %{"domains" => ["a.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["a.example", "gone.example"]}})
     diff = ShapeDiff.compute(ctx, @source, granted)
@@ -95,7 +107,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
   end
 
   test "both directions at once read as changed", %{ctx: ctx} do
-    store_policy!(ctx, %{allowed_domains: ["new.example"]})
+    publish_live!(ctx, "1.0.3", %{"egress" => %{"domains" => ["new.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["old.example"]}})
     diff = ShapeDiff.compute(ctx, @source, granted)
@@ -105,7 +117,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
   end
 
   test "an unchanged capability produces no entry", %{ctx: ctx} do
-    store_policy!(ctx, %{allowed_domains: ["same.example"]})
+    publish_live!(ctx, "1.0.4", %{"egress" => %{"domains" => ["same.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["same.example"]}})
     diff = ShapeDiff.compute(ctx, @source, granted)
@@ -114,7 +126,9 @@ defmodule Sanctum.Consent.ShapeDiffTest do
   end
 
   test "storage and tools are covered too", %{ctx: ctx} do
-    store_policy!(ctx, %{allowed_paths: ["data/"], allowed_actions: ["read", "write"]})
+    publish_live!(ctx, "1.0.5", %{
+      "storage" => %{"paths" => ["data/"], "actions" => ["read", "write"]}
+    })
 
     granted = blob(%{"storage" => %{"paths" => ["data/"], "actions" => ["read"]}})
     diff = ShapeDiff.compute(ctx, @source, granted)

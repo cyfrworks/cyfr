@@ -211,10 +211,9 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-shape")
       {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.flow-shape"})
 
-      # A new release widens its grants — the live shape moves.
+      # A new release widens its ask — the live shape moves.
       publish!(ctx, "flow-shape", "1.0.1", %{
-        manifest:
-          Jason.encode!(%{"setup" => %{"policy" => %{"allowed_tools" => ["component.search"]}}})
+        manifest: Jason.encode!(%{"caps" => %{"tools" => ["component.search"]}})
       })
 
       decisions = %{ref: "reagent:local.flow-shape"}

@@ -23,7 +23,7 @@ defmodule Opus.HttpStreamHandler do
 
   ## Security
 
-  All the same policy enforcement as `cyfr:http/fetch` applies:
+  All the same edge enforcement as `cyfr:http/fetch` applies:
   - Domain allowlisting, method checking, SSRF prevention
   - Rate limiting (each stream.request counts as one request)
   - Cumulative response size tracked against `max_response_size`
@@ -33,8 +33,10 @@ defmodule Opus.HttpStreamHandler do
 
   require Logger
 
-  alias Sanctum.{Context, Policy}
-  alias Opus.{HttpHandler, PolicyEnforcer}
+  alias Sanctum.Authority.Blob.Edge
+  alias Sanctum.Context
+  alias Sanctum.Limits
+  alias Opus.{EdgeGuard, HttpHandler}
 
   @stream_timeout_ms 60_000
   @max_concurrent_streams 3
@@ -48,8 +50,9 @@ defmodule Opus.HttpStreamHandler do
 
   Returns a map with `request`, `read`, and `close` functions.
   """
-  @spec build_stream_imports(Policy.t(), Context.t(), String.t()) :: {map(), String.t()}
-  def build_stream_imports(%Policy{} = policy, %Context{} = ctx, component_ref) do
+  @spec build_stream_imports(Edge.t() | nil, Limits.t(), Context.t(), String.t()) ::
+          {map(), String.t()}
+  def build_stream_imports(edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
     # Create a unique execution ref for cache-based stream tracking
     exec_ref = create_registry()
 
@@ -58,12 +61,12 @@ defmodule Opus.HttpStreamHandler do
         "request" =>
           {:fn,
            fn json_req ->
-             stream_request(json_req, policy, ctx, component_ref, exec_ref)
+             stream_request(json_req, edge, ctx, component_ref, exec_ref)
            end},
         "read" =>
           {:fn,
            fn handle_id ->
-             stream_read(handle_id, exec_ref, policy)
+             stream_read(handle_id, exec_ref, limits)
            end},
         "close" =>
           {:fn,
@@ -99,7 +102,7 @@ defmodule Opus.HttpStreamHandler do
     Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
   end
 
-  defp stream_request(json_request, policy, ctx, component_ref, exec_ref) do
+  defp stream_request(json_request, edge, ctx, component_ref, exec_ref) do
     # Check concurrent stream limit
     stream_count =
       Arca.Cache.match({:http_stream, exec_ref, :_})
@@ -112,10 +115,10 @@ defmodule Opus.HttpStreamHandler do
       )
     else
       with {:ok, request} <- parse_stream_request(json_request),
-           :ok <- validate_stream_method(policy, request.method),
-           :ok <- validate_stream_scheme(policy, request.url),
-           :ok <- validate_stream_domain(policy, request.url),
-           {:ok, ip} <- HttpHandler.resolve_and_validate_ip(request.hostname, policy) do
+           :ok <- validate_stream_method(edge, request.method),
+           :ok <- validate_stream_scheme(edge, request.url),
+           :ok <- validate_stream_domain(edge, request.url),
+           {:ok, ip} <- HttpHandler.resolve_and_validate_ip(request.hostname, edge) do
         start_stream(request, ip, exec_ref, component_ref)
       else
         {:error, type, message} ->
@@ -125,7 +128,7 @@ defmodule Opus.HttpStreamHandler do
     end
   end
 
-  defp stream_read(handle_id, exec_ref, policy) do
+  defp stream_read(handle_id, exec_ref, limits) do
     case Arca.Cache.get({:http_stream, exec_ref, handle_id}) do
       {:ok, stream_state} ->
         # Check timeout
@@ -136,7 +139,7 @@ defmodule Opus.HttpStreamHandler do
           Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
           encode_error(:timeout, "Stream timed out after #{div(@stream_timeout_ms, 1000)}s")
         else
-          read_from_stream(handle_id, stream_state, exec_ref, policy)
+          read_from_stream(handle_id, stream_state, exec_ref, limits)
         end
 
       :miss ->
@@ -285,7 +288,7 @@ defmodule Opus.HttpStreamHandler do
     end
   end
 
-  defp read_from_stream(handle_id, stream_state, exec_ref, policy) do
+  defp read_from_stream(handle_id, stream_state, exec_ref, limits) do
     # Atomically pop the first chunk to avoid race with the streaming process
     # appending new chunks between a get and a separate update.
     case Agent.get_and_update(stream_state.buffer, fn state ->
@@ -304,13 +307,13 @@ defmodule Opus.HttpStreamHandler do
         # Track cumulative response size
         new_cumulative = stream_state.cumulative_size + byte_size(chunk)
 
-        if new_cumulative > policy.max_response_size do
+        if new_cumulative > limits.max_response_size do
           cleanup_stream(stream_state)
           Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
 
           encode_error(
             :response_too_large,
-            "Stream response (#{new_cumulative} bytes) exceeds limit (#{policy.max_response_size} bytes)"
+            "Stream response (#{new_cumulative} bytes) exceeds limit (#{limits.max_response_size} bytes)"
           )
         else
           # Update cumulative size in cache
@@ -383,27 +386,27 @@ defmodule Opus.HttpStreamHandler do
   defp parse_headers(headers) when is_list(headers), do: headers
   defp parse_headers(_), do: []
 
-  defp validate_stream_domain(policy, url) do
+  defp validate_stream_domain(edge, url) do
     uri = URI.parse(url)
     domain = uri.host || ""
 
-    case PolicyEnforcer.check_domain(policy, domain) do
+    case EdgeGuard.check_domain(edge, domain) do
       :ok -> :ok
       {:error, msg} -> {:error, :domain_blocked, msg}
     end
   end
 
-  defp validate_stream_scheme(policy, url) do
+  defp validate_stream_scheme(edge, url) do
     scheme = URI.parse(url).scheme || ""
 
-    case PolicyEnforcer.check_scheme(policy, scheme) do
+    case EdgeGuard.check_scheme(edge, scheme) do
       :ok -> :ok
       {:error, msg} -> {:error, :scheme_blocked, msg}
     end
   end
 
-  defp validate_stream_method(policy, method) do
-    case PolicyEnforcer.check_method(policy, method) do
+  defp validate_stream_method(edge, method) do
+    case EdgeGuard.check_method(edge, method) do
       :ok -> :ok
       {:error, msg} -> {:error, :method_blocked, msg}
     end

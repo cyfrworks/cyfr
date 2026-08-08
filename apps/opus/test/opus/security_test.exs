@@ -353,25 +353,14 @@ defmodule Opus.SecurityTest do
 
     test "default input limit is 1MB" do
       # Verify the default limit constant
-      policy = Sanctum.Policy.default()
-      assert policy.max_request_size == 1_048_576
+      limits = Sanctum.Limits.defaults(:reagent)
+      assert limits.max_request_size == 1_048_576
     end
 
     test "default output limit is 5MB" do
       # Verify the default limit constant
-      policy = Sanctum.Policy.default()
-      assert policy.max_response_size == 5_242_880
-    end
-
-    test "policy can override size limits" do
-      {:ok, policy} =
-        Sanctum.Policy.from_map(%{
-          "max_request_size" => "512KB",
-          "max_response_size" => "10MB"
-        })
-
-      assert policy.max_request_size == 512 * 1024
-      assert policy.max_response_size == 10 * 1024 * 1024
+      limits = Sanctum.Limits.defaults(:reagent)
+      assert limits.max_response_size == 5_242_880
     end
   end
 

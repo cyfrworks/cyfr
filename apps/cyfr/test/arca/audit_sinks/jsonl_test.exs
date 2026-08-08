@@ -71,7 +71,7 @@ defmodule Arca.AuditSinks.JSONLTest do
       )
 
       JSONL.handle_audit_event(
-        [:cyfr, :sanctum, :policy],
+        [:cyfr, :opus, :execute, :stop],
         %{count: 1},
         %{context: ctx, user_id: ctx.user_id}
       )

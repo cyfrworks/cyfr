@@ -49,6 +49,20 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     {profile, consent}
   end
 
+  # A needs manifest whose only between-version delta is the (prose) need
+  # reason: the release digest moves, the shape does not.
+  defp roll_manifest(reason) do
+    %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => reason,
+          "fields" => ["EXAMPLE_API_KEY"]
+        }
+      }
+    }
+  end
+
   defp live!(ctx, name) do
     {:ok, component} = Compendium.Registry.get_latest(ctx, name, "local", "reagent")
     {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
@@ -66,15 +80,15 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   end
 
   test "a new release with an unchanged shape allows and records (§2.6)", %{ctx: ctx} do
-    publish!(ctx, "shape-roll", "1.0.0")
+    publish!(ctx, "shape-roll", "1.0.0", %{manifest: Jason.encode!(roll_manifest("original"))})
     {:ok, _} = Bootstrap.run(ctx)
     {profile, consent} = head!(ctx, "reagent:local.shape-roll")
 
-    # A release whose security-relevant manifest changed: new release
-    # digest, new activation — but the consent shape is untouched.
-    publish!(ctx, "shape-roll", "1.0.1", %{
-      manifest: Jason.encode!(%{"wasi" => %{"http" => true}})
-    })
+    # A release whose security-relevant manifest changed: the reworded need
+    # reason moves the release digest (needs is digest-covered) and with it
+    # the activation — but reason is prose, so the consent shape is
+    # untouched.
+    publish!(ctx, "shape-roll", "1.0.1", %{manifest: Jason.encode!(roll_manifest("reworded"))})
 
     live = live!(ctx, "shape-roll")
     refute live.graph == consent.activation
@@ -93,13 +107,11 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   end
 
   test "without a live shape the same drift fails closed to consent_required", %{ctx: ctx} do
-    publish!(ctx, "shape-dark", "1.0.0")
+    publish!(ctx, "shape-dark", "1.0.0", %{manifest: Jason.encode!(roll_manifest("original"))})
     {:ok, _} = Bootstrap.run(ctx)
     {profile, _consent} = head!(ctx, "shape-dark" |> then(&"reagent:local.#{&1}"))
 
-    publish!(ctx, "shape-dark", "1.0.1", %{
-      manifest: Jason.encode!(%{"wasi" => %{"http" => true}})
-    })
+    publish!(ctx, "shape-dark", "1.0.1", %{manifest: Jason.encode!(roll_manifest("reworded"))})
 
     assert {:error, {:consent_required, payload}} =
              Loader.load_root(ctx, profile,
@@ -115,14 +127,11 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     {:ok, _} = Bootstrap.run(ctx)
     {profile, consent} = head!(ctx, "reagent:local.shape-chg")
 
-    # The new release declares more: its setup.policy widens the tool
-    # grants through the manifest auto-merge, so the live shape moves away
-    # from what revision 1 was shown.
+    # The new release declares more: its caps block asks for a tool the
+    # empty-ask revision never carried, so the live shape moves away from
+    # what revision 1 was shown.
     publish!(ctx, "shape-chg", "1.0.1", %{
-      manifest:
-        Jason.encode!(%{
-          "setup" => %{"policy" => %{"allowed_tools" => ["component.search"]}}
-        })
+      manifest: Jason.encode!(%{"caps" => %{"tools" => ["component.search"]}})
     })
 
     {:ok, live_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-chg")
@@ -177,14 +186,23 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       refute Map.has_key?(input.caps, "egress.methods")
     end
 
-    test "a manifest with neither block keeps the legacy shape", %{ctx: ctx} do
-      publish!(ctx, "shape-legacy", "1.0.0")
+    test "a manifest with neither block derives the empty ask", %{ctx: ctx} do
+      publish!(ctx, "shape-empty", "1.0.0")
 
-      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-legacy")
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-empty")
 
-      refute Map.has_key?(input, :needs)
-      refute Map.has_key?(input, :caps)
-      refute Map.has_key?(input, :slots)
+      assert input.needs == []
+      assert input.caps == %{}
+      assert input.slots == []
+      assert input.tool_actions == []
+
+      # Absent blocks and explicitly empty blocks are the same shape.
+      publish!(ctx, "shape-empty-blocks", "1.0.0", %{
+        manifest: Jason.encode!(%{"needs" => %{}, "caps" => %{}})
+      })
+
+      {:ok, explicit} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-empty-blocks")
+      assert Map.delete(input, :source_ref) == Map.delete(explicit, :source_ref)
     end
 
     test "the reason text is not shape — editing it keeps the digest", %{ctx: ctx} do

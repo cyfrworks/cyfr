@@ -5,8 +5,8 @@ defmodule Arca.McpServerStorage do
   @moduledoc """
   Storage operations for external MCP server configurations.
 
-  Follows the same tenant-scoped patterns as `Arca.PolicyStorage` and
-  `Arca.SecretStorage`. All queries are scoped via `where_tenant(ctx)`.
+  Follows the same tenant-scoped patterns as the other `Arca.*Storage`
+  modules. All queries are scoped via `where_tenant(ctx)`.
 
   ## Schema
 

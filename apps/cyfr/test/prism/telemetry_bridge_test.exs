@@ -58,14 +58,6 @@ defmodule Prism.TelemetryBridgeTest do
       assert_receive {:auth_event, %{user: "test"}, %{count: 1}}
     end
 
-    test "broadcasts policy events to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:components"))
-
-      :telemetry.execute([:cyfr, :sanctum, :policy], %{count: 1}, %{action: "update"})
-
-      assert_receive {:policy_changed, %{action: "update"}, %{count: 1}}
-    end
-
     test "broadcasts policy decisions to enforcement subscribers" do
       Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:enforcement"))
 
@@ -95,14 +87,14 @@ defmodule Prism.TelemetryBridgeTest do
              end)
     end
 
-    test "all 6 handlers are attached" do
+    test "core handlers are attached" do
       expected = [
         {[:cyfr, :opus, :execute, :start], "prism-execution_start"},
         {[:cyfr, :opus, :execute, :stop], "prism-execution_stop"},
         {[:cyfr, :opus, :execute, :exception], "prism-execution_exception"},
         {[:cyfr, :emissary, :request], "prism-request"},
         {[:cyfr, :sanctum, :auth], "prism-auth"},
-        {[:cyfr, :sanctum, :policy], "prism-policy"}
+        {[:cyfr, :sanctum, :policy, :decision], "prism-policy_decision"}
       ]
 
       for {event, handler_id} <- expected do

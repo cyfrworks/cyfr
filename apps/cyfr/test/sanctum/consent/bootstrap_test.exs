@@ -85,44 +85,6 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert {"reagent:local.boot-idem", :already_bootstrapped} in skipped
   end
 
-  test "a legacy oauth block mints no vault resource — connections bind through the walk", %{
-    ctx: ctx
-  } do
-    manifest =
-      Jason.encode!(%{
-        "name" => "boot-oauth",
-        "version" => "1.0.0",
-        "type" => "catalyst",
-        "oauth" => %{
-          "google" => %{
-            "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-            "token_url" => "https://oauth2.googleapis.com/token",
-            "client_id_secret" => "GOOGLE_CLIENT",
-            "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"]
-          }
-        }
-      })
-
-    {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
-        name: "boot-oauth",
-        version: "1.0.0",
-        type: "catalyst",
-        manifest: manifest
-      })
-
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert "catalyst:local.boot-oauth" in minted
-
-    {:ok, [profile]} = Source.DB.profiles(ctx, "catalyst:local.boot-oauth")
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
-    {:ok, blob} = Blob.parse(consent.resolved_policy)
-    {:ok, edge} = Blob.ingress(blob, "catalyst:local.boot-oauth")
-
-    assert edge.vault == nil
-    assert consent.vault_refs == []
-  end
-
   test "consents are insert-only by export list" do
     exports = Arca.ConsentStorage.__info__(:functions) |> Keyword.keys()
 

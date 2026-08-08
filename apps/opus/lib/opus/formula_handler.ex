@@ -13,7 +13,8 @@ defmodule Opus.FormulaHandler do
 
   All formula capabilities go through `Emissary.MCP.ToolRegistry`. Component
   execution, registry search, build, guides — everything is an MCP tool call.
-  Policy enforcement uses `allowed_tools` from the formula's policy.
+  Tool access is decided by the authority's transition relation over the
+  consent edge's granted tools.
 
   ## Concurrency Model — Unbundled Promise Pattern
 
@@ -62,7 +63,7 @@ defmodule Opus.FormulaHandler do
   ## Usage
 
       {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id,
-        root_execution_id: root_execution_id, policy: policy)
+        root_execution_id: root_execution_id, limits: limits)
       # Merge imports and pass to Wasmex.Components.start_link
       # Call Opus.FormulaHandler.cleanup_registry(tracker_pid) after execution
   """
@@ -70,7 +71,7 @@ defmodule Opus.FormulaHandler do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Policy
+  alias Sanctum.Limits
 
   # ============================================================================
   # Public API
@@ -90,7 +91,7 @@ defmodule Opus.FormulaHandler do
   ## Options
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
-  - `:policy` - The `Sanctum.Policy` struct for the formula (for limits and allowed_tools)
+  - `:limits` - The node's `Sanctum.Limits` (batch timeout, max concurrent tasks)
   - `:authority` - The `Sanctum.Authority` the chain runs under. When present,
     execution dispatch goes through `Opus.Chain` and every other tool through
     `ToolRegistry.call_in_chain/5`; when absent the legacy path runs unchanged.
@@ -100,20 +101,15 @@ defmodule Opus.FormulaHandler do
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
     root_execution_id = opts[:root_execution_id] || parent_execution_id
-    policy = opts[:policy]
+    limits = opts[:limits]
 
-    # Parse batch_timeout from policy
     batch_timeout_ms =
-      if policy do
-        case Policy.parse_duration(policy.batch_timeout) do
-          {:ok, ms} -> ms
-          {:error, _} -> 300_000
-        end
-      else
-        300_000
+      case limits && Limits.batch_timeout_ms(limits) do
+        {:ok, ms} -> ms
+        _ -> 300_000
       end
 
-    max_tasks = if policy, do: policy.max_concurrent_tasks, else: 10
+    max_tasks = if limits, do: limits.max_concurrent_tasks, else: 10
 
     {:ok, tracker} =
       Opus.AsyncTracker.start_link(
@@ -135,15 +131,13 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
-        policy: policy,
         emit_counter: emit_counter
       ] ++ authority_opts
 
     spawn_opts =
       [
         parent_execution_id: parent_execution_id,
-        root_execution_id: root_execution_id,
-        policy: policy
+        root_execution_id: root_execution_id
       ] ++ authority_opts
 
     imports = %{
@@ -215,18 +209,17 @@ defmodule Opus.FormulaHandler do
   @doc """
   Execute an MCP tool call from a formula (synchronous).
 
-  Parses the JSON request, validates against policy, dispatches to
-  `Emissary.MCP.ToolRegistry`, and returns a JSON response string.
+  Parses the JSON request, dispatches through the in-chain chokepoint (or
+  `Opus.Chain` for execution verbs), and returns a JSON response string.
 
-  When a sub-component call fails due to a setup issue (missing policy,
-  missing secret grant), the error is enriched with a `remediation` field
+  When a sub-component call fails due to a setup issue (missing consent,
+  missing connection), the error is enriched with a `remediation` field
   and a `setup_required` event is emitted to the ExecutionEventBuffer.
 
   ## Options
 
   - `:parent_execution_id` (required) - The formula's own execution ID for lineage tracking
   - `:root_execution_id` - The top-level execution ID for routing emit events (falls back to `parent_execution_id`)
-  - `:policy` - The `Sanctum.Policy` struct for the formula
   - `:emit_counter` - Atomics ref for emit sequence numbers
   """
   @spec execute(String.t(), Context.t(), keyword()) :: String.t()

@@ -12,7 +12,7 @@ defmodule Arca.Cache do
   For persistent data, services call the appropriate `Arca.*Storage` module directly.
 
   Keys are `{entity_type, id}` tuples, e.g.:
-  - `{:policy, "stripe-catalyst"}`
+  - `{:component_meta, "org", "project", "catalyst:local.demo:0.1.0"}`
   - `{:permission, "user@example.com"}`
   - `{:session, "user_1", "sess_abc"}`
   """

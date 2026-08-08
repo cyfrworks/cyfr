@@ -4,7 +4,6 @@ defmodule Sanctum.LimitsTest do
   use ExUnit.Case, async: true
 
   alias Sanctum.Limits
-  alias Sanctum.Policy
   alias Sanctum.Policy.Ceiling
 
   doctest Sanctum.Limits
@@ -31,11 +30,6 @@ defmodule Sanctum.LimitsTest do
     test "struct keys equal Ceiling.clamped_fields/0" do
       struct_keys = Map.keys(%Limits{}) -- [:__struct__]
       assert Enum.sort(struct_keys) == Enum.sort(Ceiling.clamped_fields())
-    end
-
-    test "every clamped field also exists on Policy" do
-      policy_keys = Map.keys(%Policy{})
-      assert Enum.all?(Ceiling.clamped_fields(), &(&1 in policy_keys))
     end
   end
 
@@ -138,7 +132,7 @@ defmodule Sanctum.LimitsTest do
   end
 
   # ============================================================================
-  # Clamp — one implementation shared with Policy
+  # Clamp — delegated to the one Ceiling implementation
   # ============================================================================
 
   describe "clamp/2" do
@@ -172,43 +166,27 @@ defmodule Sanctum.LimitsTest do
       roomy = Map.put(@ceiling, :max_concurrent_tasks, 10)
       assert Limits.clamp(limits, roomy).max_concurrent_tasks == 1
     end
-
-    test "agrees with Policy clamping on all seven fields" do
-      {:ok, limits} = Limits.new(@valid)
-      policy = struct(Policy, Map.from_struct(limits))
-
-      clamped_limits = Ceiling.clamp(limits, @ceiling)
-      clamped_policy = Ceiling.clamp(policy, @ceiling)
-
-      for field <- Ceiling.clamped_fields() do
-        assert Map.get(clamped_limits, field) == Map.get(clamped_policy, field),
-               "clamp diverged on #{field}"
-      end
-
-      assert %Limits{} = clamped_limits
-      assert %Policy{} = clamped_policy
-    end
   end
 
   # ============================================================================
-  # Characterization: Policy.parse_duration/1 trailing-suffix quirk
+  # Characterization: parse_duration/1 trailing-suffix quirk
   # ============================================================================
 
   describe "parse_duration characterization" do
     # parse_int_unit uses String.trim_trailing, which strips *every* trailing
     # occurrence of the suffix — so "5mm" parses as 5 minutes and "30ss" as
-    # 30 seconds. Pinned here because Limits leans on parse_duration; if this
-    # ever tightens, the canonical duration grammar in the freeze doc must be
-    # revisited alongside it.
+    # 30 seconds. Pinned because Limits validation leans on parse_duration;
+    # if this ever tightens, the canonical duration grammar in the freeze doc
+    # must be revisited alongside it.
     test "repeated trailing suffixes are tolerated" do
-      assert Policy.parse_duration("5mm") == {:ok, 300_000}
-      assert Policy.parse_duration("30ss") == {:ok, 30_000}
+      assert Limits.parse_duration("5mm") == {:ok, 300_000}
+      assert Limits.parse_duration("30ss") == {:ok, 30_000}
     end
 
     test "inner garbage is still rejected" do
-      assert {:error, _} = Policy.parse_duration("5m30s")
-      assert {:error, _} = Policy.parse_duration("1.5m")
-      assert {:error, _} = Policy.parse_duration("30 s")
+      assert {:error, _} = Limits.parse_duration("5m30s")
+      assert {:error, _} = Limits.parse_duration("1.5m")
+      assert {:error, _} = Limits.parse_duration("30 s")
     end
   end
 
@@ -217,26 +195,24 @@ defmodule Sanctum.LimitsTest do
   # ============================================================================
 
   describe "defaults/1" do
-    # The literals must match the numeric half of the legacy type defaults
-    # while both exist — this arm is what lets the legacy plane be deleted
-    # without anything silently loosening. It dies with Sanctum.Policy;
-    # the literals stay.
-    test "each type's literals lock to Sanctum.Policy.default/1's numeric half" do
+    # These literals are the only source of type defaults; the pins are what
+    # keep a refactor from silently loosening what an empty ask grants.
+    test "the per-type literals are pinned" do
       for type <- Sanctum.ComponentRef.valid_type_atoms() do
         limits = Limits.defaults(type)
-        policy = Policy.default(type)
 
-        # The tincture default leaves defstruct values in place for
-        # everything but rate_limit; nil rate limits are unrepresentable
-        # here (frozen decision 4), and the policy defaults all carry one.
-        for field <- Limits.fields() do
-          legacy = Map.get(policy, field)
-
-          assert Map.get(limits, field) == legacy,
-                 "#{type}.#{field}: limits #{inspect(Map.get(limits, field))} " <>
-                   "vs policy #{inspect(legacy)}"
-        end
+        assert limits.max_memory_bytes == 64 * 1024 * 1024
+        assert limits.max_request_size == 1_048_576
+        assert limits.max_response_size == 5_242_880
+        assert limits.rate_limit == %{requests: 100, window: "1m"}
+        assert limits.max_concurrent_tasks == 10
+        assert limits.batch_timeout == "5m"
       end
+
+      assert Limits.defaults(:catalyst).timeout == "3m"
+      assert Limits.defaults(:formula).timeout == "5m"
+      assert Limits.defaults(:reagent).timeout == "1m"
+      assert Limits.defaults(:tincture).timeout == "1m"
     end
 
     test "every default is a complete, valid Limits" do

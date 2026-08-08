@@ -69,8 +69,8 @@ defmodule Compendium.ReleaseImmutabilityTest do
     end
 
     test "refuses a republish with a different manifest at identical bytes", %{ctx: ctx} do
-      manifest = Jason.encode!(%{"setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}}})
-      widened = Jason.encode!(%{"setup" => %{"policy" => %{"allowed_domains" => ["*"]}}})
+      manifest = Jason.encode!(%{"caps" => %{"egress" => %{"domains" => ["a.example"]}}})
+      widened = Jason.encode!(%{"caps" => %{"egress" => %{"domains" => ["*"]}}})
 
       {:ok, _} = publish(ctx, name: "immutable-manifest", manifest: manifest)
 
@@ -79,7 +79,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
     end
 
     test "an identical republish proceeds and refreshes metadata", %{ctx: ctx} do
-      manifest = Jason.encode!(%{"wasi" => %{"http" => true}})
+      manifest = Jason.encode!(%{"caps" => %{"tools" => ["execution.run"]}})
 
       {:ok, first} = publish(ctx, name: "idempotent", manifest: manifest)
 

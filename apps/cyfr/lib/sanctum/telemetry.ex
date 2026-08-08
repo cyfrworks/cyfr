@@ -11,14 +11,6 @@ defmodule Sanctum.Telemetry do
     - Measurements: `%{count: 1}`
     - Metadata: `%{provider: atom(), outcome: :success | :failure}`
 
-  - `[:cyfr, :sanctum, :policy]` - Policy change events
-    - Measurements: `%{count: 1}`
-    - Metadata: `%{action: atom(), component_ref: String.t()}`
-
-  - `[:cyfr, :sanctum, :policy, :resolve_error]` - Policy resolution failures
-    - Measurements: `%{count: 1}`
-    - Metadata: `%{class: atom(), component_ref: String.t()}`
-
   - `[:cyfr, :sanctum, :platform_context]` - Platform-scope context built
     - Measurements: `%{count: 1}`
     - Metadata: `%{user_id, auth_method, namespace, sanctioned: boolean(), caller}`
@@ -49,8 +41,6 @@ defmodule Sanctum.Telemetry do
   """
 
   @auth_event [:cyfr, :sanctum, :auth]
-  @policy_event [:cyfr, :sanctum, :policy]
-  @policy_resolve_error_event [:cyfr, :sanctum, :policy, :resolve_error]
   @platform_context_event [:cyfr, :sanctum, :platform_context]
 
   @doc """
@@ -77,45 +67,6 @@ defmodule Sanctum.Telemetry do
       @auth_event,
       %{count: 1},
       Map.merge(%{provider: provider, outcome: outcome}, metadata)
-    )
-  end
-
-  @doc """
-  Emit a policy change event.
-
-  ## Parameters
-
-  - `action` - What changed (`:put`, `:update_field`, `:delete`)
-  - `component_ref` - The component reference
-  - `metadata` - Additional metadata map (optional)
-  """
-  @spec policy_event(atom(), String.t(), map()) :: :ok
-  def policy_event(action, component_ref, metadata \\ %{}) do
-    :telemetry.execute(
-      @policy_event,
-      %{count: 1},
-      Map.merge(%{action: action, component_ref: component_ref}, metadata)
-    )
-  end
-
-  @doc """
-  Emit a policy-resolution-error event.
-
-  - `class` - the failure class. `:invalid_ref` means an un-normalizable
-    `component_ref` (missing type prefix / version) — a caller bug that now
-    fails closed instead of silently substituting a type-default policy.
-  - `component_ref` - the offending reference
-  - `metadata` - additional metadata map (optional)
-
-  Emits `[:cyfr, :sanctum, :policy, :resolve_error]` so a previously-masked
-  caller bug is observable.
-  """
-  @spec policy_resolve_error(atom(), String.t(), map()) :: :ok
-  def policy_resolve_error(class, component_ref, metadata \\ %{}) do
-    :telemetry.execute(
-      @policy_resolve_error_event,
-      %{count: 1},
-      Map.merge(%{class: class, component_ref: component_ref}, metadata)
     )
   end
 

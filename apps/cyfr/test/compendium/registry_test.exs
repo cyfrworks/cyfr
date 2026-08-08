@@ -102,14 +102,16 @@ defmodule Compendium.RegistryTest do
                })
     end
 
-    test "rejects a non-object oauth block", %{ctx: ctx} do
-      assert {:error, {:invalid_manifest_oauth, _}} =
+    test "rejects a manifest carrying an oauth block", %{ctx: ctx} do
+      assert {:error, {:legacy_manifest_blocks, msg}} =
                Registry.publish_bytes(ctx, @valid_wasm, %{
                  name: "bad-oauth",
                  version: "1.0.0",
                  type: "reagent",
                  manifest: ~s({"oauth": "not-a-map"})
                })
+
+      assert msg =~ "retired block(s) oauth"
     end
 
     test "allows overwriting local publisher versions", %{ctx: ctx} do
@@ -1252,89 +1254,6 @@ defmodule Compendium.RegistryTest do
 
       {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
       assert component.name == "empty-src"
-    end
-  end
-
-  describe "capability escalation warnings on publish" do
-    test "returns empty warnings for first version", %{ctx: ctx} do
-      manifest = %{
-        "type" => "catalyst",
-        "setup" => %{"policy" => %{"allowed_domains" => []}}
-      }
-
-      {:ok, component} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "escalation-first",
-          version: "1.0.0",
-          type: "catalyst",
-          manifest: Jason.encode!(manifest)
-        })
-
-      assert component.capability_warnings == []
-    end
-
-    test "returns warnings when new version adds capabilities", %{ctx: ctx} do
-      v1_manifest = %{
-        "type" => "catalyst",
-        "setup" => %{"policy" => %{"allowed_domains" => []}}
-      }
-
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "escalation-test",
-          version: "1.0.0",
-          type: "catalyst",
-          manifest: Jason.encode!(v1_manifest)
-        })
-
-      v2_manifest = %{
-        "type" => "catalyst",
-        "setup" => %{
-          "policy" => %{
-            "allowed_domains" => [],
-            "allowed_paths" => [],
-            "allowed_methods" => []
-          }
-        }
-      }
-
-      {:ok, component} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "escalation-test",
-          version: "2.0.0",
-          type: "catalyst",
-          manifest: Jason.encode!(v2_manifest)
-        })
-
-      assert "allowed_methods" in component.capability_warnings
-      assert "allowed_paths" in component.capability_warnings
-    end
-
-    test "returns empty warnings when capabilities are unchanged", %{ctx: ctx} do
-      manifest = %{
-        "type" => "catalyst",
-        "setup" => %{
-          "policy" => %{"allowed_domains" => [], "allowed_paths" => []}
-        }
-      }
-
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "no-escalation-test",
-          version: "1.0.0",
-          type: "catalyst",
-          manifest: Jason.encode!(manifest)
-        })
-
-      {:ok, component} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "no-escalation-test",
-          version: "2.0.0",
-          type: "catalyst",
-          manifest: Jason.encode!(manifest)
-        })
-
-      assert component.capability_warnings == []
     end
   end
 

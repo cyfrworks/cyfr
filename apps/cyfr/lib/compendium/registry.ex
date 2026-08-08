@@ -157,7 +157,6 @@ defmodule Compendium.Registry do
          :ok <- validate_publish_namespace(publisher, ctx),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
-         :ok <- validate_manifest_oauth(manifest_map),
          :ok <- validate_manifest_capability_blocks(manifest_map),
          # Before store_wasm: a refused republish must leave no bytes behind
          # for the scanner to pick up.
@@ -180,8 +179,7 @@ defmodule Compendium.Registry do
          {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
          :ok <- index_dependencies(ctx, component, manifest_bytes) do
       invalidate_executor_caches(ctx)
-      warnings = check_capability_escalation(ctx, name, version, component_type, manifest_bytes)
-      {:ok, Map.put(component, :capability_warnings, warnings)}
+      {:ok, component}
     end
   end
 
@@ -214,11 +212,10 @@ defmodule Compendium.Registry do
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
          manifest_bytes = Map.get(metadata, :manifest),
-         # Validate the OAuth manifest block on the OCI pull path too — the WASM
+         # Validate the manifest blocks on the OCI pull path too — the WASM
          # path (publish_bytes/4) already does, and a manifest sourced from a
          # remote registry is no more trustworthy than a directly-published one.
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
-         :ok <- validate_manifest_oauth(manifest_map),
          :ok <- validate_manifest_capability_blocks(manifest_map),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
@@ -289,7 +286,6 @@ defmodule Compendium.Registry do
          version = manifest["version"] || dir_version,
          :ok <- validate_name(name),
          :ok <- validate_version(version),
-         :ok <- validate_manifest_oauth(manifest),
          :ok <- validate_manifest_capability_blocks(manifest),
          {:ok, validation} <- validate_artifact(directory_path, component_type) do
       do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
@@ -320,7 +316,6 @@ defmodule Compendium.Registry do
          version = manifest["version"] || dir_version,
          :ok <- validate_name(name),
          :ok <- validate_version(version),
-         :ok <- validate_manifest_oauth(manifest),
          :ok <- validate_manifest_capability_blocks(manifest),
          {:ok, validation} <- validate_artifact_arca(ctx, segments, component_type) do
       do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
@@ -356,8 +351,6 @@ defmodule Compendium.Registry do
              :ok <- index_dependencies(ctx, component, manifest) do
           invalidate_executor_caches(ctx)
 
-          warnings = check_capability_escalation(ctx, name, version, component_type, manifest)
-
           :telemetry.execute(
             [:cyfr, :compendium, :component, :install],
             %{system_time: System.system_time()},
@@ -373,7 +366,7 @@ defmodule Compendium.Registry do
             }
           )
 
-          {:ok, Map.put(component, :capability_warnings, warnings)}
+          {:ok, component}
         end
       end
     end
@@ -1125,28 +1118,33 @@ defmodule Compendium.Registry do
   end
 
   # The needs/caps blocks are digest-covered manifest vocabulary; a manifest
-  # carrying a malformed block is refused at every register/publish ingress,
-  # exactly like a malformed oauth block.
+  # carrying a malformed block is refused at every register/publish ingress.
+  # The retired setup/oauth/wasi blocks are refused outright — the frozen
+  # model has no arm that could honor them, so accepting one would register
+  # a component whose declared ask silently never applies.
   defp validate_manifest_capability_blocks(manifest) do
-    with :ok <- Compendium.Manifest.Needs.validate(manifest) do
+    with :ok <- reject_legacy_manifest_blocks(manifest),
+         :ok <- Compendium.Manifest.Needs.validate(manifest) do
       Compendium.Manifest.Caps.validate(manifest)
     end
   end
 
-  defp validate_manifest_oauth(nil), do: :ok
+  @legacy_manifest_blocks ~w(setup oauth wasi)
 
-  defp validate_manifest_oauth(%{"oauth" => oauth}) when is_map(oauth) do
-    case Sanctum.OAuth.ManifestValidator.validate(oauth) do
-      :ok -> :ok
-      {:error, errors} -> {:error, {:invalid_manifest_oauth, Enum.join(errors, "; ")}}
+  defp reject_legacy_manifest_blocks(manifest) when is_map(manifest) do
+    case Enum.filter(@legacy_manifest_blocks, &Map.has_key?(manifest, &1)) do
+      [] ->
+        :ok
+
+      keys ->
+        {:error,
+         {:legacy_manifest_blocks,
+          "Manifest declares retired block(s) #{Enum.join(keys, "/")} — declare needs/caps " <>
+            "instead (see component-guide.md, \"Migrating from setup/oauth\")"}}
     end
   end
 
-  defp validate_manifest_oauth(%{"oauth" => _not_a_map}) do
-    {:error, {:invalid_manifest_oauth, "oauth block must be a JSON object"}}
-  end
-
-  defp validate_manifest_oauth(manifest) when is_map(manifest), do: :ok
+  defp reject_legacy_manifest_blocks(_manifest), do: :ok
 
   # ============================================================================
   # Registration Helpers
@@ -1572,60 +1570,5 @@ defmodule Compendium.Registry do
       _ ->
         :ok
     end
-  end
-
-  # Check if a newly registered version declares capabilities not present
-  # in the previous latest version. Returns a list of new capability keys.
-  defp check_capability_escalation(ctx, name, new_version, component_type, manifest_data) do
-    new_setup_policy = extract_setup_policy_from_manifest(manifest_data)
-
-    # Find the previous latest version (any version other than the one just registered)
-    case Arca.ComponentStorage.list_components(ctx, name: name, component_type: component_type) do
-      {:ok, components} ->
-        previous =
-          components
-          |> Enum.reject(&(&1.version == new_version))
-          |> Enum.sort(fn a, b ->
-            case Version.compare(a.version, b.version) do
-              :gt -> true
-              :lt -> false
-              :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt
-            end
-          end)
-          |> List.first()
-
-        if previous do
-          old_setup_policy =
-            previous
-            |> decode_row_json_fields()
-            |> extract_setup_policy_from_component()
-
-          Sanctum.Policy.CapabilityDiff.diff(old_setup_policy, new_setup_policy)
-        else
-          []
-        end
-
-      _ ->
-        []
-    end
-  end
-
-  defp extract_setup_policy_from_manifest(nil), do: nil
-
-  defp extract_setup_policy_from_manifest(manifest) when is_binary(manifest) do
-    case Jason.decode(manifest) do
-      {:ok, decoded} -> extract_setup_policy_from_manifest(decoded)
-      _ -> nil
-    end
-  end
-
-  defp extract_setup_policy_from_manifest(manifest) when is_map(manifest) do
-    setup = manifest["setup"] || %{}
-    setup["policy"]
-  end
-
-  defp extract_setup_policy_from_component(component) do
-    manifest_raw = component[:manifest] || component["manifest"]
-    extract_setup_policy_from_manifest(manifest_raw)
   end
 end

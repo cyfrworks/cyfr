@@ -73,9 +73,9 @@ defmodule Opus.Runtime do
     wasi_opts = Opus.ComponentType.wasi_options(component_type, wasi_env)
 
     preloaded_secrets = Keyword.get(opts, :preloaded_secrets, %{})
-    oauth_config = Keyword.get(opts, :oauth_config, %{})
     component_ref = Keyword.get(opts, :component_ref)
-    policy = Keyword.get(opts, :policy)
+    edge = Keyword.get(opts, :edge)
+    limits = Keyword.get(opts, :limits)
     ctx = Keyword.get(opts, :ctx)
     execution_id = Keyword.get(opts, :execution_id)
     root_execution_id = Keyword.get(opts, :root_execution_id)
@@ -124,11 +124,11 @@ defmodule Opus.Runtime do
         component_type,
         preloaded_secrets,
         component_ref,
-        policy,
+        edge,
+        limits,
         ctx,
         execution_id,
         root_execution_id,
-        oauth_config,
         authority_info
       )
 
@@ -217,16 +217,21 @@ defmodule Opus.Runtime do
     end
   end
 
-  # Build all host function imports and collect cleanup refs
+  # Build all host function imports and collect cleanup refs. The node's
+  # limits are the presence signal for capability-scoped imports: they are
+  # always carried under an authority, while the edge itself may be nil
+  # (resources :none) — a nil edge builds the same imports with deny-all
+  # resource lists, so a guest's host call fails with a denial instead of
+  # a missing import.
   defp build_imports_and_cleanup(
          component_type,
          preloaded_secrets,
          component_ref,
-         policy,
+         edge,
+         limits,
          ctx,
          execution_id,
          root_execution_id,
-         oauth_config,
          authority_info
        ) do
     secrets_imports =
@@ -237,23 +242,23 @@ defmodule Opus.Runtime do
       end
 
     http_imports =
-      if component_type == :catalyst && policy && ctx do
-        Opus.HttpHandler.build_http_imports(policy, ctx, component_ref)
+      if component_type == :catalyst && limits && ctx do
+        Opus.HttpHandler.build_http_imports(edge, limits, ctx, component_ref)
       else
         %{}
       end
 
     {stream_imports, stream_exec_ref} =
-      if component_type == :catalyst && policy && ctx do
-        Opus.HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
+      if component_type == :catalyst && limits && ctx do
+        Opus.HttpStreamHandler.build_stream_imports(edge, limits, ctx, component_ref)
       else
         {%{}, nil}
       end
 
     storage_imports =
-      if component_type == :catalyst && policy && ctx do
+      if component_type == :catalyst && limits && ctx do
         Opus.StorageHandler.build_storage_imports(
-          policy,
+          edge,
           ctx,
           component_ref,
           public_storage_opts(authority_info.authority)
@@ -263,12 +268,11 @@ defmodule Opus.Runtime do
       end
 
     oauth_imports =
-      if component_type == :catalyst && ctx && oauth_config != %{} do
+      if component_type == :catalyst && ctx do
         Opus.OAuthHandler.build_oauth_imports(
           ctx,
           component_ref,
           execution_id,
-          oauth_config,
           oauth_resolver_opts(authority_info.authority, ctx)
         )
       else
@@ -283,7 +287,7 @@ defmodule Opus.Runtime do
       if component_type == :formula && ctx && execution_id do
         Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
           root_execution_id: root_execution_id,
-          policy: policy,
+          limits: limits,
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,
           activation_digest: authority_info.activation_digest
@@ -312,8 +316,8 @@ defmodule Opus.Runtime do
   # Under an authority, tokens come from the consent edge's vault resource
   # through the vault reader — the callee-keyed lookup is unreachable. An
   # authority execution without a vault edge resolves nothing, fail closed.
-  # Public-profile storage rides explicit opts, never `policy.is_public`
-  # (an execution semantic the redesign deletes).
+  # Public-profile storage rides explicit opts derived from the authority's
+  # profile kind — never a flag a guest could influence.
   defp public_storage_opts(%Sanctum.Authority{profile_kind: :public}), do: [public?: true]
   defp public_storage_opts(_authority), do: []
 

@@ -11,10 +11,11 @@ defmodule Opus.OAuthHandler do
 
   ## Security Model
 
-  - Client credentials stored encrypted in oauth_credentials table — never exposed to WASM
-  - Refresh tokens stored encrypted — never exposed to WASM
+  - Client credentials and refresh tokens live sealed in vault entries —
+    never exposed to WASM
   - Access tokens are the ONLY thing exposed to WASM, and they're masked in output
-  - Provider parameter validated against manifest's declared providers
+  - Provider matching happens at dispense: the bound vault entry refuses
+    any provider it wasn't authorized for
 
   ## Architecture
 
@@ -43,22 +44,20 @@ defmodule Opus.OAuthHandler do
   Build the WASI host function imports for OAuth token access.
 
   Returns a map suitable for merging into the Wasmex imports.
-  Only call for catalysts that have an oauth block in their manifest.
 
   ## Options
 
-  - `:resolver` - `(provider -> {:ok, token} | {:error, term})`. The
-    default is the legacy callee-keyed lookup; an authority execution
-    passes a vault-reader-backed resolver so the token comes from the
-    consent edge. Everything else — the manifest validation, the
-    dispensed-token tracking that feeds masking and timeout draining, the
-    telemetry — is identical on both paths.
+  - `:resolver` (required) - `(provider -> {:ok, token} | {:error, term})`,
+    vault-reader-backed from the consent edge. A component whose edge
+    carries no vault binding gets a resolver that denies every request.
   """
-  @spec build_oauth_imports(Context.t(), String.t(), String.t(), map(), keyword()) :: map()
-  def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, oauth_config, opts \\ [])
-      when is_map(oauth_config) do
+  @spec build_oauth_imports(Context.t(), String.t(), String.t(), keyword()) :: map()
+  def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, opts \\ []) do
     # The resolver is edge-supplied (vault-reader-backed) — the
-    # callee-keyed default died with the legacy execution path.
+    # callee-keyed default died with the legacy execution path. Provider
+    # matching and endpoint integrity live behind it: the vault entry is
+    # provider-checked at dispense and its endpoints are covered by the
+    # consent's binding digest.
     resolver = Keyword.fetch!(opts, :resolver)
     _ = ctx
 
@@ -67,7 +66,7 @@ defmodule Opus.OAuthHandler do
         "get-access-token" =>
           {:fn,
            fn provider ->
-             get_access_token(provider, resolver, component_ref, execution_id, oauth_config)
+             get_access_token(provider, resolver, component_ref, execution_id)
            end}
       }
     }
@@ -93,56 +92,43 @@ defmodule Opus.OAuthHandler do
   # Internal
   # ============================================================================
 
-  defp get_access_token(provider, resolver, component_ref, execution_id, oauth_config) do
+  defp get_access_token(provider, resolver, component_ref, execution_id) do
     start_time = System.monotonic_time(:millisecond)
 
-    case Map.get(oauth_config, provider) do
-      nil ->
-        {:error, "provider '#{provider}' not declared in manifest oauth block"}
-
-      provider_config ->
-        # Belt + suspenders: validate token_url is https at runtime
-        token_url = provider_config["token_url"] || ""
-
-        if not String.starts_with?(token_url, "https://") do
-          {:error, "provider '#{provider}' has invalid token_url — must use https://"}
-        else
-          case resolver.(provider) do
-            {:ok, token} ->
-              try do
-                :ets.insert(@table, {execution_id, token})
-              rescue
-                ArgumentError ->
-                  Logger.warning("[Opus.OAuthHandler] ETS table unavailable for token tracking")
-              end
-
-              duration = System.monotonic_time(:millisecond) - start_time
-
-              :telemetry.execute(
-                [:cyfr, :opus, :oauth, :token_request],
-                %{duration_ms: duration},
-                %{component_ref: component_ref, provider: provider, status: :ok}
-              )
-
-              {:ok, token}
-
-            {:error, reason} ->
-              duration = System.monotonic_time(:millisecond) - start_time
-
-              :telemetry.execute(
-                [:cyfr, :opus, :oauth, :token_request],
-                %{duration_ms: duration},
-                %{
-                  component_ref: component_ref,
-                  provider: provider,
-                  status: :error,
-                  reason: String.slice(to_string(reason), 0, 100)
-                }
-              )
-
-              {:error, reason}
-          end
+    case resolver.(provider) do
+      {:ok, token} ->
+        try do
+          :ets.insert(@table, {execution_id, token})
+        rescue
+          ArgumentError ->
+            Logger.warning("[Opus.OAuthHandler] ETS table unavailable for token tracking")
         end
+
+        duration = System.monotonic_time(:millisecond) - start_time
+
+        :telemetry.execute(
+          [:cyfr, :opus, :oauth, :token_request],
+          %{duration_ms: duration},
+          %{component_ref: component_ref, provider: provider, status: :ok}
+        )
+
+        {:ok, token}
+
+      {:error, reason} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+
+        :telemetry.execute(
+          [:cyfr, :opus, :oauth, :token_request],
+          %{duration_ms: duration},
+          %{
+            component_ref: component_ref,
+            provider: provider,
+            status: :error,
+            reason: String.slice(to_string(reason), 0, 100)
+          }
+        )
+
+        {:error, reason}
     end
   end
 end

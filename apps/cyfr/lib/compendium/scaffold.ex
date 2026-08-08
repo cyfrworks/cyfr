@@ -153,17 +153,12 @@ defmodule Compendium.Scaffold do
       version: version,
       publisher: "local",
       description: "TODO: Describe your catalyst",
-      setup: %{
-        policy: %{
-          allowed_domains: [],
-          allowed_methods: ["GET", "POST"],
-          timeout: "30s"
+      caps: %{
+        egress: %{
+          domains: [],
+          methods: ["GET", "POST"]
         },
-        secrets: []
-      },
-      wasi: %{
-        http: true,
-        secrets: true
+        limits: %{timeout: "30s"}
       },
       dependencies: %{
         static: []
@@ -178,11 +173,9 @@ defmodule Compendium.Scaffold do
       version: version,
       publisher: "local",
       description: "TODO: Describe your formula",
-      setup: %{
-        policy: %{
-          allowed_tools: [],
-          timeout: "5m"
-        }
+      caps: %{
+        tools: [],
+        limits: %{timeout: "5m"}
       },
       dependencies: %{
         static: []

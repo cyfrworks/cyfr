@@ -153,7 +153,6 @@ defmodule Opus.Executor do
            {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),
            {:ok, p} <- stage_record_start(p),
            {:ok, p} <- stage_resolve_secrets(p),
-           {:ok, p} <- stage_resolve_oauth(p),
            {:ok, p, output, exec_metadata} <- stage_execute(p, wasm_bytes, input) do
         finalize_execution(p, output, exec_metadata)
       else
@@ -235,12 +234,12 @@ defmodule Opus.Executor do
 
   # Under an authority, capability was computed once at consent time and
   # frozen into the blob: limits come from the current node, resources from
-  # the current edge, and the callee-keyed policy resolver is never
-  # consulted. Static-dependency satisfaction was already proven by the
-  # loader's all-or-nothing activation resolution.
+  # the current edge — nothing is re-resolved at execution time.
+  # Static-dependency satisfaction was already proven by the loader's
+  # all-or-nothing activation resolution.
   defp enforce_authority(%ExecutionPipeline{} = p, authority, input) do
     limits = Sanctum.Authority.limits(authority)
-    shim_policy = edge_policy(authority, limits)
+    edge = edge_resources(authority)
 
     timeout_ms =
       case Sanctum.Limits.timeout_ms(limits) do
@@ -252,12 +251,13 @@ defmodule Opus.Executor do
       component_type: p.component_type,
       timeout_ms: timeout_ms,
       max_memory_bytes: limits.max_memory_bytes,
-      policy: shim_policy
+      edge: edge,
+      limits: limits
     ]
 
     with {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
-         :ok <- check_authority_rate_limit(p.ctx, p.component_ref, shim_policy),
-         :ok <- check_public_rate_buckets(p, authority, shim_policy) do
+         :ok <- check_authority_rate_limit(p.ctx, p.component_ref, limits),
+         :ok <- check_public_rate_buckets(p, authority, limits) do
       Enforcement.record(
         Map.merge(
           %{
@@ -273,7 +273,7 @@ defmodule Opus.Executor do
         )
       )
 
-      {:ok, %{p | exec_opts: exec_opts, policy: shim_policy}}
+      {:ok, %{p | exec_opts: exec_opts, edge: edge}}
     end
   end
 
@@ -292,47 +292,10 @@ defmodule Opus.Executor do
     }
   end
 
-  # The current edge + node limits as the legacy policy container the
-  # handlers still consume. Resource semantics are the edge's, verbatim —
-  # empty lists deny, schemes are always explicit. Dies with the
-  # %Sanctum.Policy{} struct, when the handlers read Blob.Edge directly.
-  defp edge_policy(%Sanctum.Authority{} = authority, %Sanctum.Limits{} = limits) do
-    edge = edge_resources(authority)
-
-    %Sanctum.Policy{
-      allowed_domains: edge_egress(edge, :domains),
-      allowed_methods: edge_egress(edge, :methods),
-      allowed_private_ips: edge_egress(edge, :private_ips),
-      allowed_schemes: edge_egress(edge, :schemes),
-      allowed_paths: edge_storage(edge, :paths),
-      allowed_actions: edge_storage(edge, :actions),
-      allowed_tools: edge_tools(edge),
-      timeout: limits.timeout,
-      max_memory_bytes: limits.max_memory_bytes,
-      max_request_size: limits.max_request_size,
-      max_response_size: limits.max_response_size,
-      rate_limit: limits.rate_limit,
-      max_concurrent_tasks: limits.max_concurrent_tasks,
-      batch_timeout: limits.batch_timeout,
-      is_public: false
-    }
-  end
-
   defp edge_resources(%Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{} = edge}),
     do: edge
 
   defp edge_resources(%Sanctum.Authority{resources: :none}), do: nil
-
-  defp edge_egress(nil, _key), do: []
-  defp edge_egress(%{egress: nil}, _key), do: []
-  defp edge_egress(%{egress: egress}, key), do: Map.get(egress, key, [])
-
-  defp edge_storage(nil, _key), do: []
-  defp edge_storage(%{storage: nil}, _key), do: []
-  defp edge_storage(%{storage: storage}, key), do: Map.get(storage, key, [])
-
-  defp edge_tools(nil), do: []
-  defp edge_tools(%{tools: tools}), do: tools
 
   defp cursor_state({:bound, node}), do: "bound:" <> node
   defp cursor_state(:unbound), do: "unbound"
@@ -382,15 +345,6 @@ defmodule Opus.Executor do
     end
   end
 
-  # Stage 5: Resolve OAuth config from manifest (lightweight — no DB/network).
-  # The legacy oauth block is validation data (declared providers, token
-  # URLs), never credentials; the runtime's resolver is vault-reader-backed.
-  # Dies with the manifest block's deletion.
-  defp stage_resolve_oauth(%ExecutionPipeline{} = p) do
-    manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
-    {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
-  end
-
   # Stage 6: Execute WASM with all accumulated state
   defp stage_execute(%ExecutionPipeline{} = p, wasm_bytes, input) do
     digest = p.component[:digest] || p.component["digest"]
@@ -398,9 +352,7 @@ defmodule Opus.Executor do
     exec_opts_final =
       Keyword.merge(p.exec_opts,
         preloaded_secrets: p.preloaded_secrets,
-        oauth_config: p.oauth_config,
         component_ref: p.component_ref,
-        policy: p.policy,
         ctx: p.ctx,
         execution_id: p.record.id,
         root_execution_id: p.opts[:root_execution_id],
@@ -506,7 +458,11 @@ defmodule Opus.Executor do
   end
 
   defp check_response_size(p, masked_output) do
-    max_response = if p.policy, do: p.policy.max_response_size, else: 5_242_880
+    max_response =
+      case Keyword.get(p.exec_opts, :limits) do
+        %Sanctum.Limits{max_response_size: max} -> max
+        _ -> 5_242_880
+      end
 
     case Jason.encode(masked_output) do
       {:ok, output_json} ->
@@ -620,11 +576,14 @@ defmodule Opus.Executor do
     end
   end
 
-  # Validate input size against policy limits.
+  # Validate input size against the node's limits.
   # Returns {:ok, encoded_json} on success so callers can reuse the encoded form.
   defp validate_input_size(input, exec_opts, ctx, component_ref) do
-    policy = Keyword.get(exec_opts, :policy)
-    max_size = if policy, do: policy.max_request_size, else: 1_048_576
+    max_size =
+      case Keyword.get(exec_opts, :limits) do
+        %Sanctum.Limits{max_request_size: max} -> max
+        _ -> 1_048_576
+      end
 
     case Jason.encode(input) do
       {:ok, input_json} ->
@@ -653,15 +612,15 @@ defmodule Opus.Executor do
   # per (profile, node) so an address-hopping crowd cannot multiply the
   # credential and spend exposure. The transport per-IP plug stays beneath
   # both. Owner profiles use the ordinary node bucket alone.
-  defp check_public_rate_buckets(%ExecutionPipeline{} = p, authority, shim_policy) do
+  defp check_public_rate_buckets(%ExecutionPipeline{} = p, authority, limits) do
     if authority.profile_kind == :public do
       node = p.component_ref
       ip = p.opts[:client_ip] || "unknown"
       profile_bucket = "pub:#{authority.profile_id}:#{node}"
       ip_bucket = "pub:#{authority.profile_id}:#{node}:#{ip}"
 
-      with :ok <- check_authority_rate_limit(p.ctx, profile_bucket, shim_policy) do
-        check_authority_rate_limit(p.ctx, ip_bucket, shim_policy)
+      with :ok <- check_authority_rate_limit(p.ctx, profile_bucket, limits) do
+        check_authority_rate_limit(p.ctx, ip_bucket, limits)
       end
     else
       :ok
@@ -671,8 +630,8 @@ defmodule Opus.Executor do
   # The authority variant never re-resolves: the blob's node limits are the
   # policy. The limiter keys on {org, project, ref} either way, so buckets
   # are continuous across the cutover.
-  defp check_authority_rate_limit(ctx, component_ref, shim_policy) do
-    case Sanctum.Policy.check_rate_limit(shim_policy, ctx, component_ref) do
+  defp check_authority_rate_limit(ctx, component_ref, %Sanctum.Limits{} = limits) do
+    case check_rate_limit(ctx, component_ref, limits) do
       {:ok, _remaining} ->
         :ok
 
@@ -682,6 +641,62 @@ defmodule Opus.Executor do
       {:error, reason} ->
         {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}."}
     end
+  end
+
+  # The rate-limit chokepoint every authority execution goes through
+  # (node bucket and both public-profile buckets). Buckets key on the
+  # tenant-normalized {org, project, ref} triple so a not-yet-resolved
+  # org/project never reaches the limiter as "" (rejected as
+  # :missing_tenant) and members of a project share the budget. A dead or
+  # unreachable limiter fails CLOSED — a configured limit must be
+  # enforceable, so unavailability denies rather than silently allowing
+  # unbounded requests. Every denial is audited here, after the try/catch,
+  # keeping the audit write's own failures out of the fail-closed handling.
+  defp check_rate_limit(ctx, component_ref, %Sanctum.Limits{} = limits) do
+    org_id = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
+    project_id = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
+
+    result =
+      try do
+        Opus.RateLimiter.check(org_id, project_id, component_ref, %{
+          rate_limit: limits.rate_limit
+        })
+      catch
+        :exit, reason ->
+          Logger.error(
+            "[Opus.Executor] Opus.RateLimiter unavailable (#{inspect(reason)}) — " <>
+              "failing CLOSED (denying) for #{component_ref}."
+          )
+
+          {:error, :rate_limited}
+      end
+
+    case result do
+      {:error, :rate_limited, retry_ms} ->
+        record_rate_limit_denial(
+          ctx,
+          component_ref,
+          "rate limit exceeded (retry in #{retry_ms}ms)"
+        )
+
+      {:error, :rate_limited} ->
+        record_rate_limit_denial(ctx, component_ref, "rate limiter unavailable (fail closed)")
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
+
+  defp record_rate_limit_denial(ctx, component_ref, reason) do
+    Enforcement.record(%{
+      ctx: ctx,
+      component_ref: component_ref,
+      event_type: :rate_limit,
+      decision: :denied,
+      decision_reason: reason
+    })
   end
 
   defp parse_component_type(nil) do
@@ -757,9 +772,9 @@ defmodule Opus.Executor do
               :component_type,
               :max_memory_bytes,
               :preloaded_secrets,
-              :oauth_config,
               :component_ref,
-              :policy,
+              :edge,
+              :limits,
               :ctx,
               :execution_id,
               :root_execution_id,
@@ -1109,20 +1124,24 @@ defmodule Opus.Executor do
     )
   end
 
+  # Serialize the enforced edge + limits for forensic replay. The key names
+  # are stable serialization labels — audit consumers and tests pin them.
   defp build_host_policy_snapshot(exec_opts) do
-    case Keyword.get(exec_opts, :policy) do
+    case Keyword.get(exec_opts, :limits) do
       nil ->
         nil
 
-      policy ->
+      %Sanctum.Limits{} = limits ->
+        edge = Keyword.get(exec_opts, :edge)
+
         %{
-          allowed_domains: policy.allowed_domains,
-          rate_limit: policy.rate_limit,
-          max_memory_bytes: policy.max_memory_bytes,
-          timeout: policy.timeout,
-          allowed_tools: policy.allowed_tools,
-          allowed_paths: policy.allowed_paths,
-          allowed_actions: policy.allowed_actions
+          allowed_domains: Opus.EdgeGuard.domains(edge),
+          rate_limit: limits.rate_limit,
+          max_memory_bytes: limits.max_memory_bytes,
+          timeout: limits.timeout,
+          allowed_tools: Opus.EdgeGuard.tools(edge),
+          allowed_paths: Opus.EdgeGuard.paths(edge),
+          allowed_actions: Opus.EdgeGuard.actions(edge)
         }
     end
   end

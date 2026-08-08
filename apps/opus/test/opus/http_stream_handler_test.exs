@@ -5,19 +5,24 @@ defmodule Opus.HttpStreamHandlerTest do
   use ExUnit.Case, async: true
 
   alias Opus.HttpStreamHandler
-  alias Sanctum.{Context, Policy}
+  alias Opus.Test.EdgeFixtures
 
   # ============================================================================
-  # build_stream_imports/3
+  # build_stream_imports/4
   # ============================================================================
 
-  describe "build_stream_imports/3" do
+  describe "build_stream_imports/4" do
     test "returns {imports, exec_ref} tuple with correct Wasmex import shape" do
-      policy = Policy.default()
+      edge = EdgeFixtures.edge()
       ctx = Sanctum.TestContext.local()
 
       {imports, exec_ref} =
-        HttpStreamHandler.build_stream_imports(policy, ctx, "local.test-component:1.0.0")
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          ctx,
+          "local.test-component:1.0.0"
+        )
 
       assert is_map(imports)
       assert is_binary(exec_ref)
@@ -36,30 +41,24 @@ defmodule Opus.HttpStreamHandlerTest do
   end
 
   # ============================================================================
-  # Policy enforcement
+  # Edge enforcement
   # ============================================================================
 
-  describe "stream policy enforcement" do
+  describe "stream edge enforcement" do
     setup do
       case GenServer.whereis(Opus.RateLimiter) do
         nil -> {:ok, _} = Opus.RateLimiter.start_link([])
         _pid -> :ok
       end
 
-      policy = %Policy{
-        allowed_domains: ["api.openai.com"],
-        allowed_methods: ["POST"],
-        rate_limit: %{requests: 100, window: "1m"},
-        timeout: "30s",
-        max_memory_bytes: 64 * 1024 * 1024,
-        max_request_size: 1_048_576,
-        max_response_size: 5_242_880
-      }
+      edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       ctx = Sanctum.TestContext.local()
       component_ref = "test-stream"
 
-      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, component_ref)
+
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
       {:ok, stream_ns: stream_ns}
@@ -111,18 +110,13 @@ defmodule Opus.HttpStreamHandlerTest do
 
     test "blocks private IP (localhost)", %{stream_ns: _ns} do
       # Need to allow localhost domain first
-      policy = %Policy{
-        allowed_domains: ["localhost"],
-        allowed_methods: ["POST"],
-        rate_limit: nil,
-        timeout: "30s",
-        max_memory_bytes: 64 * 1024 * 1024,
-        max_request_size: 1_048_576,
-        max_response_size: 5_242_880
-      }
+      edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["POST"])
 
       ctx = Sanctum.TestContext.local()
-      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, func} = stream_ns["request"]
 
@@ -147,18 +141,13 @@ defmodule Opus.HttpStreamHandlerTest do
 
   describe "stream read/close with invalid handles" do
     setup do
-      policy = %Policy{
-        allowed_domains: ["api.openai.com"],
-        allowed_methods: ["POST"],
-        rate_limit: nil,
-        timeout: "30s",
-        max_memory_bytes: 64 * 1024 * 1024,
-        max_request_size: 1_048_576,
-        max_response_size: 5_242_880
-      }
+      edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       ctx = Sanctum.TestContext.local()
-      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
       {:ok, stream_ns: stream_ns}
@@ -190,18 +179,13 @@ defmodule Opus.HttpStreamHandlerTest do
 
   describe "concurrent stream limit" do
     test "enforces max concurrent streams" do
-      policy = %Policy{
-        allowed_domains: ["api.openai.com"],
-        allowed_methods: ["POST"],
-        rate_limit: nil,
-        timeout: "30s",
-        max_memory_bytes: 64 * 1024 * 1024,
-        max_request_size: 1_048_576,
-        max_response_size: 5_242_880
-      }
+      edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       ctx = Sanctum.TestContext.local()
-      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test")
+
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
 
@@ -248,14 +232,16 @@ defmodule Opus.HttpStreamHandlerTest do
     end
 
     test "cleanup works on exec_ref from build_stream_imports" do
-      policy = Policy.default()
+      edge = EdgeFixtures.edge()
       ctx = Sanctum.TestContext.local()
 
       # build_stream_imports creates the exec_ref internally;
       # cleanup_registry is called by the executor after completion.
       # We can't access exec_ref directly, but we can verify
       # that build_stream_imports + cleanup_registry round-trips safely.
-      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test-cleanup")
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test-cleanup")
+
       _stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
       # cleanup_registry with an arbitrary ref should be safe

@@ -11,16 +11,15 @@ defmodule Opus.StorageHandler do
 
   ## Security Model
 
-  All storage operations are deny-by-default. A Catalyst's policy must have
-  `allowed_paths` configured — an empty list means **deny all**
-  (consistent with `allowed_tools`). Use `["data/*"]` or `["components/*"]`
-  to allow all paths within a scope.
+  All storage operations are deny-by-default. A Catalyst's consent edge must
+  carry `storage.paths` — an empty list (or a nil edge) means **deny all**.
+  Use `["data/*"]` or `["components/*"]` to allow all paths within a scope.
 
   Path safety is enforced at the host boundary:
   - Paths must start with `data/` or `components/` (valid scopes)
   - Absolute paths are rejected
   - Path traversal (`..`) segments are rejected
-  - Only paths matching `allowed_paths` prefixes are permitted
+  - Only paths matching the edge's `storage.paths` prefixes are permitted
 
   ## Architecture
 
@@ -28,7 +27,7 @@ defmodule Opus.StorageHandler do
 
   1. Parse JSON request from WASM
   2. Validate path safety (no traversal, no absolute paths)
-  3. Validate `allowed_paths` policy (Sanctum)
+  3. Validate the edge's `storage.actions` / `storage.paths` (EdgeGuard)
   4. Dispatch to Arca storage functions
   5. Return JSON response to WASM
 
@@ -60,11 +59,13 @@ defmodule Opus.StorageHandler do
 
   ## Usage
 
-      imports = Opus.StorageHandler.build_storage_imports(policy, ctx, "my-catalyst")
+      imports = Opus.StorageHandler.build_storage_imports(edge, ctx, "my-catalyst")
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
-  alias Sanctum.{Context, Policy}
+  alias Sanctum.Authority.Blob.Edge
+  alias Sanctum.Context
+  alias Opus.EdgeGuard
 
   # ============================================================================
   # Public API
@@ -75,12 +76,13 @@ defmodule Opus.StorageHandler do
 
   Returns a map suitable for merging into `Wasmex.Components.start_link` opts.
   When the component calls `cyfr:storage/files.call(json)`, the host function
-  parses the request, validates against the policy, dispatches to Arca, and
-  returns the JSON result.
+  parses the request, validates against the consent edge, dispatches to Arca,
+  and returns the JSON result.
 
   ## Parameters
 
-  - `policy` - The `Sanctum.Policy` with `allowed_paths` configured
+  - `edge` - The `Sanctum.Authority.Blob.Edge` carrying `storage` grants
+    (nil = deny all storage)
   - `ctx` - The execution `Sanctum.Context`
   - `component_ref` - Component reference string for telemetry/audit
 
@@ -88,14 +90,14 @@ defmodule Opus.StorageHandler do
 
   A map with the `"cyfr:storage/files@0.1.0"` namespace containing a `"call"` function.
   """
-  @spec build_storage_imports(Policy.t(), Context.t(), String.t(), keyword()) :: map()
-  def build_storage_imports(%Policy{} = policy, %Context{} = ctx, component_ref, opts \\ []) do
+  @spec build_storage_imports(Edge.t() | nil, Context.t(), String.t(), keyword()) :: map()
+  def build_storage_imports(edge, %Context{} = ctx, component_ref, opts \\ []) do
     %{
       "cyfr:storage/files@0.1.0" => %{
         "call" =>
           {:fn,
            fn json_request ->
-             execute(json_request, policy, ctx, component_ref, opts)
+             execute(json_request, edge, ctx, component_ref, opts)
            end}
       }
     }
@@ -104,18 +106,18 @@ defmodule Opus.StorageHandler do
   @doc """
   Execute a storage operation from a catalyst.
 
-  Parses the JSON request, validates path safety and policy, dispatches to
-  the appropriate Arca function, and returns a JSON response string. All
-  errors are caught and returned as JSON (never raised into WASM).
+  Parses the JSON request, validates path safety and the consent edge,
+  dispatches to the appropriate Arca function, and returns a JSON response
+  string. All errors are caught and returned as JSON (never raised into WASM).
   """
-  @spec execute(String.t(), Policy.t(), Context.t(), String.t(), keyword()) :: String.t()
-  def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref, opts \\ []) do
+  @spec execute(String.t(), Edge.t() | nil, Context.t(), String.t(), keyword()) :: String.t()
+  def execute(json_request, edge, %Context{} = ctx, component_ref, opts \\ []) do
     start_time = System.monotonic_time(:millisecond)
 
     result =
       case parse_request(json_request) do
         {:ok, %{action: action} = request} ->
-          case validate_and_dispatch(request, policy, ctx, opts) do
+          case validate_and_dispatch(request, edge, ctx, opts) do
             {:ok, response} ->
               emit_telemetry(component_ref, action, :ok, start_time)
               encode_success(response)
@@ -162,11 +164,11 @@ defmodule Opus.StorageHandler do
   # Private: Validation & Dispatch
   # ============================================================================
 
-  defp validate_and_dispatch(%{action: action, path: path} = request, policy, ctx, opts) do
-    with :ok <- validate_action_allowed(policy, action),
+  defp validate_and_dispatch(%{action: action, path: path} = request, edge, ctx, opts) do
+    with :ok <- validate_action_allowed(edge, action),
          :ok <- validate_path_scope(path),
          :ok <- validate_path_safe(path),
-         :ok <- validate_allowed_paths(policy, path),
+         :ok <- validate_allowed_paths(edge, path),
          :ok <- validate_public_quota(action, request, ctx, opts) do
       dispatch(action, request, ctx)
     end
@@ -238,13 +240,13 @@ defmodule Opus.StorageHandler do
 
   @known_actions ~w(read write append list delete exists)
 
-  defp validate_action_allowed(_policy, action) when action not in @known_actions do
+  defp validate_action_allowed(_edge, action) when action not in @known_actions do
     # Unknown actions pass through to dispatch/3 which returns a proper "unknown_action" error
     :ok
   end
 
-  defp validate_action_allowed(policy, action) do
-    if Policy.allows_action?(policy, action) do
+  defp validate_action_allowed(edge, action) do
+    if EdgeGuard.allows_action?(edge, action) do
       :ok
     else
       {:error, :action_denied, "Storage action '#{action}' is not allowed by policy."}
@@ -290,13 +292,13 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp validate_allowed_paths(policy, path) do
+  defp validate_allowed_paths(edge, path) do
     # Normalize: check both "data" and "data/" since directory listings
-    # use the bare name but policies use trailing slash prefixes
+    # use the bare name but grants use trailing slash prefixes
     path_with_slash = if String.ends_with?(path, "/"), do: path, else: path <> "/"
 
-    if Policy.allows_path?(policy, path) or
-         Policy.allows_path?(policy, path_with_slash) do
+    if EdgeGuard.allows_path?(edge, path) or
+         EdgeGuard.allows_path?(edge, path_with_slash) do
       :ok
     else
       {:error, :storage_path_denied, "Storage path '#{path}' is not allowed by policy."}

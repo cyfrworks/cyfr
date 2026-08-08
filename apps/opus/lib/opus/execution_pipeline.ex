@@ -24,9 +24,8 @@ defmodule Opus.ExecutionPipeline do
           record: ExecutionRecord.t() | nil,
           exec_opts: keyword(),
           host_policy: map() | nil,
-          policy: struct() | nil,
+          edge: Sanctum.Authority.Blob.Edge.t() | nil,
           preloaded_secrets: map(),
-          oauth_config: map(),
           started_written: reference() | nil,
           opts: keyword()
         }
@@ -40,10 +39,9 @@ defmodule Opus.ExecutionPipeline do
     :component_digest,
     :record,
     :host_policy,
-    :policy,
+    :edge,
     exec_opts: [],
     preloaded_secrets: %{},
-    oauth_config: %{},
     started_written: nil,
     opts: []
   ]

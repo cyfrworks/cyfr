@@ -146,8 +146,8 @@ defmodule Sanctum.Consent.ShapeDigestTest do
     end
 
     test "rejects loose durations in caps" do
-      # Sanctum.Policy tolerates "5mm"; a digest input must not — one
-      # duration, one spelling.
+      # Sanctum.Limits.parse_duration/1 tolerates "5mm"; a digest input
+      # must not — one duration, one spelling.
       assert {:error, {:invalid_shape, :caps, message}} =
                ShapeDigest.compute(Map.put(@base, :caps, %{"timeout" => "5mm"}))
 

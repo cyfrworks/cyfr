@@ -12,8 +12,6 @@ defmodule Sanctum.Policy.Ceiling do
   resolved policy is clamped to, regardless of tenant.
   """
 
-  alias Sanctum.Policy
-
   # --- Clamped field categories ---
 
   @numeric_fields [
@@ -68,19 +66,12 @@ defmodule Sanctum.Policy.Ceiling do
   def clamped_fields, do: @numeric_fields ++ @duration_fields ++ [:rate_limit]
 
   @doc """
-  Clamp a %Policy{} or %Sanctum.Limits{} struct to respect ceiling limits.
+  Clamp a %Sanctum.Limits{} struct to respect ceiling limits.
 
-  Returns a new struct of the same type with clamped values. Allow-list
-  fields (allowed_domains, allowed_tools, etc.) are never clamped.
+  Returns a new struct with clamped values. Resource allowlists are never
+  clamped — they live on consent edges, not here.
   """
-  @spec clamp(Policy.t() | Sanctum.Limits.t(), map()) :: Policy.t() | Sanctum.Limits.t()
-  def clamp(%Policy{} = policy, ceiling) when is_map(ceiling) do
-    policy
-    |> clamp_numeric_fields(ceiling)
-    |> clamp_duration_fields(ceiling)
-    |> clamp_rate_limit(ceiling)
-  end
-
+  @spec clamp(Sanctum.Limits.t(), map()) :: Sanctum.Limits.t()
   def clamp(%Sanctum.Limits{} = limits, ceiling) when is_map(ceiling) do
     limits
     |> clamp_numeric_fields(ceiling)
@@ -111,8 +102,8 @@ defmodule Sanctum.Policy.Ceiling do
   # Private: Clamping
   # ============================================================================
 
-  defp clamp_numeric_fields(policy, ceiling) do
-    Enum.reduce(@numeric_fields, policy, fn field, acc ->
+  defp clamp_numeric_fields(limits, ceiling) do
+    Enum.reduce(@numeric_fields, limits, fn field, acc ->
       case Map.get(ceiling, field) do
         nil ->
           acc
@@ -129,8 +120,8 @@ defmodule Sanctum.Policy.Ceiling do
     end)
   end
 
-  defp clamp_duration_fields(policy, ceiling) do
-    Enum.reduce(@duration_fields, policy, fn field, acc ->
+  defp clamp_duration_fields(limits, ceiling) do
+    Enum.reduce(@duration_fields, limits, fn field, acc ->
       case Map.get(ceiling, field) do
         nil ->
           acc
@@ -138,8 +129,8 @@ defmodule Sanctum.Policy.Ceiling do
         max_dur ->
           current = Map.get(acc, field)
 
-          with {:ok, current_ms} <- Policy.parse_duration(current),
-               {:ok, max_ms} <- Policy.parse_duration(max_dur) do
+          with {:ok, current_ms} <- Sanctum.Limits.parse_duration(current),
+               {:ok, max_ms} <- Sanctum.Limits.parse_duration(max_dur) do
             if current_ms > max_ms do
               Map.put(acc, field, max_dur)
             else
@@ -152,13 +143,13 @@ defmodule Sanctum.Policy.Ceiling do
     end)
   end
 
-  defp clamp_rate_limit(policy, ceiling) do
-    case {policy.rate_limit, Map.get(ceiling, :rate_limit_requests)} do
+  defp clamp_rate_limit(limits, ceiling) do
+    case {limits.rate_limit, Map.get(ceiling, :rate_limit_requests)} do
       {%{requests: req} = rl, max_req} when is_number(max_req) and req > max_req ->
-        %{policy | rate_limit: %{rl | requests: max_req}}
+        %{limits | rate_limit: %{rl | requests: max_req}}
 
       _ ->
-        policy
+        limits
     end
   end
 
@@ -188,8 +179,8 @@ defmodule Sanctum.Policy.Ceiling do
 
       case {val, max} do
         {v, m} when is_binary(v) and is_binary(m) ->
-          with {:ok, val_ms} <- Policy.parse_duration(v),
-               {:ok, max_ms} <- Policy.parse_duration(m) do
+          with {:ok, val_ms} <- Sanctum.Limits.parse_duration(v),
+               {:ok, max_ms} <- Sanctum.Limits.parse_duration(m) do
             if val_ms > max_ms do
               ["Policy value for #{field} (#{v}) exceeds maximum (#{m})"]
             else

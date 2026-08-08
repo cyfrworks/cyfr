@@ -14,7 +14,7 @@ defmodule Sanctum.Consent.Normalize do
 
   alias Sanctum.ComponentRef
 
-  # Durations must be exact here. Sanctum.Policy.parse_duration/1 tolerates
+  # Durations must be exact here. Sanctum.Limits.parse_duration/1 tolerates
   # repeated trailing suffixes ("5mm" parses as 5 minutes) — harmless for a
   # timeout, unacceptable for a digest input, where it would give one
   # duration two spellings.

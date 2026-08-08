@@ -4,15 +4,14 @@ defmodule Sanctum.Limits do
   @moduledoc """
   The resolved numeric limits for one node of a consented execution graph.
 
-  Carries exactly the seven fields `Sanctum.Policy.Ceiling` clamps — the
-  numeric half of `Sanctum.Policy` — and nothing else. Instances live inside
-  a resolved policy blob (one per node) and are clamped against the platform
-  ceiling once, when an Authority is built, never at use time. The field set
-  is locked to `Sanctum.Policy.Ceiling.clamped_fields/0` by test so the two
-  cannot drift.
+  Carries exactly the seven fields `Sanctum.Policy.Ceiling` clamps — and
+  nothing else. Instances live inside a resolved policy blob (one per node)
+  and are clamped against the platform ceiling once, when an Authority is
+  built, never at use time. The field set is locked to
+  `Sanctum.Policy.Ceiling.clamped_fields/0` by test so the two cannot drift.
 
-  Durations are strings (`"30s"`, `"5m"`) exactly as `Sanctum.Policy` spells
-  them; parse on demand with `timeout_ms/1` / `batch_timeout_ms/1`.
+  Durations are strings (`"30s"`, `"5m"`); parse on demand with
+  `timeout_ms/1` / `batch_timeout_ms/1` or `parse_duration/1`.
 
   ## Examples
 
@@ -34,8 +33,6 @@ defmodule Sanctum.Limits do
       {:error, {:invalid_limit, :batch_timeout, "is required"}}
 
   """
-
-  alias Sanctum.Policy
 
   @type rate_limit :: %{requests: non_neg_integer(), window: String.t()}
 
@@ -120,10 +117,9 @@ defmodule Sanctum.Limits do
   `caps.limits` merges over before the operator adjusts and the ceiling
   clamps.
 
-  Deliberately literal (the ZeroAuthority doctrine): while the legacy
-  policy plane exists, a test locks each entry to the numeric half of
-  `Sanctum.Policy.default/1`; when that plane is deleted, these literals
-  are the only source and nothing silently loosens.
+  Deliberately literal (the ZeroAuthority doctrine): these literals are the
+  only source, so nothing can silently loosen them — the per-type values
+  are pinned by test.
   """
   @spec defaults(atom()) :: t()
   def defaults(component_type) when is_map_key(@type_defaults, component_type) do
@@ -136,10 +132,9 @@ defmodule Sanctum.Limits do
   Fail-closed allowlist parsing: every one of the seven fields is required,
   unknown keys are rejected, numerics must be non-negative integers (no
   floats — the canonical digest domain has none), durations must parse via
-  `Sanctum.Policy.parse_duration/1`, and `rate_limit` must be a map of
-  `requests` (non-negative integer) and `window` (duration). A blob that
-  omits a limit gets an error, not a default — a fallback here would be a
-  silent widening.
+  `parse_duration/1`, and `rate_limit` must be a map of `requests`
+  (non-negative integer) and `window` (duration). A blob that omits a limit
+  gets an error, not a default — a fallback here would be a silent widening.
   """
   @spec new(map()) :: {:ok, t()} | {:error, {:invalid_limit, atom(), String.t()}}
   def new(map) when is_map(map) do
@@ -158,13 +153,72 @@ defmodule Sanctum.Limits do
   Parsed `timeout` in milliseconds.
   """
   @spec timeout_ms(t()) :: {:ok, non_neg_integer()} | {:error, String.t()}
-  def timeout_ms(%__MODULE__{timeout: timeout}), do: Policy.parse_duration(timeout)
+  def timeout_ms(%__MODULE__{timeout: timeout}), do: parse_duration(timeout)
 
   @doc """
   Parsed `batch_timeout` in milliseconds.
   """
   @spec batch_timeout_ms(t()) :: {:ok, non_neg_integer()} | {:error, String.t()}
-  def batch_timeout_ms(%__MODULE__{batch_timeout: bt}), do: Policy.parse_duration(bt)
+  def batch_timeout_ms(%__MODULE__{batch_timeout: bt}), do: parse_duration(bt)
+
+  @doc """
+  Parse a duration string to milliseconds.
+
+  Supports: "500ms", "30s", "5m", "1h", or integer seconds.
+
+  ## Examples
+
+      iex> Sanctum.Limits.parse_duration("30s")
+      {:ok, 30_000}
+
+      iex> Sanctum.Limits.parse_duration("5m")
+      {:ok, 300_000}
+
+  """
+  @spec parse_duration(String.t()) :: {:ok, non_neg_integer()} | {:error, String.t()}
+  def parse_duration(duration) when is_binary(duration) do
+    cond do
+      String.ends_with?(duration, "ms") ->
+        parse_int_unit(duration, "ms", 1)
+
+      String.ends_with?(duration, "s") ->
+        parse_int_unit(duration, "s", 1000)
+
+      String.ends_with?(duration, "m") ->
+        parse_int_unit(duration, "m", 60 * 1000)
+
+      String.ends_with?(duration, "h") ->
+        parse_int_unit(duration, "h", 60 * 60 * 1000)
+
+      true ->
+        case Integer.parse(duration) do
+          {n, ""} ->
+            {:ok, n * 1000}
+
+          _ ->
+            {:error,
+             "Invalid duration '#{duration}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
+        end
+    end
+  end
+
+  def parse_duration(other) do
+    {:error,
+     "Invalid duration #{inspect(other)}. Expected a string like '30s', '5m', '1h', or '500ms'"}
+  end
+
+  defp parse_int_unit(str, suffix, multiplier) do
+    raw = String.trim_trailing(str, suffix)
+
+    case Integer.parse(raw) do
+      {n, ""} ->
+        {:ok, n * multiplier}
+
+      _ ->
+        {:error,
+         "Invalid duration '#{str}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
+    end
+  end
 
   @doc """
   Clamp against a ceiling map. Delegates to `Sanctum.Policy.Ceiling.clamp/2`
@@ -228,7 +282,7 @@ defmodule Sanctum.Limits do
 
   defp validate_field(field, value) when field in @duration_fields do
     with true <- is_binary(value),
-         {:ok, _ms} <- Policy.parse_duration(value) do
+         {:ok, _ms} <- parse_duration(value) do
       {:ok, value}
     else
       _ -> {:error, "must be a duration string like \"30s\", got: #{inspect(value)}"}
@@ -246,7 +300,7 @@ defmodule Sanctum.Limits do
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}
 
-      not (is_binary(window) and match?({:ok, _}, Policy.parse_duration(window))) ->
+      not (is_binary(window) and match?({:ok, _}, parse_duration(window))) ->
         {:error, "window must be a duration string, got: #{inspect(window)}"}
 
       true ->

@@ -48,8 +48,6 @@ defmodule EmissaryWeb.TinctureController do
   # framer cannot obtain, so a hostile embed cannot read state or act as the user.
   @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors *"
 
-  # Rate limiting now delegated to Sanctum.Policy + Opus.RateLimiter
-
   # -------------------------------------------------------------------
   # Access-token mint — a cross-origin client (Porta) exchanges its
   # session/Bearer credential (sent as a header, never a URL) for a

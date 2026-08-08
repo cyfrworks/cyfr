@@ -12,7 +12,7 @@ defmodule Compendium.ManifestTest do
     end
 
     test "passes through maps unchanged" do
-      map = %{"setup" => %{"secrets" => []}}
+      map = %{"caps" => %{"tools" => []}}
       assert Manifest.decode(map) == map
     end
 
@@ -41,7 +41,7 @@ defmodule Compendium.ManifestTest do
     end
 
     test "passes through maps unchanged" do
-      map = %{"setup" => %{"secrets" => []}}
+      map = %{"caps" => %{"tools" => []}}
       assert Manifest.decode_strict(map) == {:ok, map}
     end
 

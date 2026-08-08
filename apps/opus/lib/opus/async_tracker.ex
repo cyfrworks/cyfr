@@ -48,8 +48,8 @@ defmodule Opus.AsyncTracker do
   ## Options
 
   - `:parent_execution_id` - The formula's execution ID
-  - `:max_tasks` - Maximum concurrent spawned tasks (from policy)
-  - `:batch_timeout_ms` - Default timeout for await-all/await-any (from policy)
+  - `:max_tasks` - Maximum concurrent spawned tasks (from the node's limits)
+  - `:batch_timeout_ms` - Default timeout for await-all/await-any (from the node's limits)
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do

@@ -62,7 +62,7 @@ defmodule Opus.ChainTest do
             "name" => "chain-target",
             "version" => "0.1.0",
             "type" => "reagent",
-            "setup" => %{"policy" => %{"allowed_tools" => ["component.search"]}}
+            "caps" => %{"tools" => ["component.search"]}
           })
       })
 
@@ -170,7 +170,7 @@ defmodule Opus.ChainTest do
   end
 
   # Build the real formula import closures the way the runtime does for an
-  # authority execution: guest-planed ctx, shim policy, host-threaded
+  # authority execution: guest-planed ctx, node limits, host-threaded
   # transition inputs.
   defp fork_imports(ctx, auth, parent_id, overrides \\ []) do
     Opus.FormulaHandler.build_formula_imports(
@@ -179,7 +179,7 @@ defmodule Opus.ChainTest do
       Keyword.merge(
         [
           root_execution_id: parent_id,
-          policy: Opus.Test.EdgePolicy.policy_from_edge(auth),
+          limits: Sanctum.Authority.limits(auth),
           authority: auth,
           declared_needs: [],
           activation_digest: "sha256:root-act"

@@ -5,7 +5,6 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
 
   alias Sanctum.Authority
   alias Sanctum.Limits
-  alias Sanctum.Policy
 
   # §6 "ZeroAuthority" gate: no resources, no control plane, and the exact
   # model §3.5 constants — asserted as literals on BOTH sides, never derived.
@@ -43,12 +42,12 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
     assert Authority.limits(Authority.zero()) == expected
   end
 
-  test "zero limits are strictly tighter than Policy defaults on three fields" do
+  test "zero limits are strictly tighter than type defaults on three fields" do
     # Guards against anyone "simplifying" the literals into a derivation:
-    # Policy.default/0 is looser on exactly these, so a derivation would
+    # Limits.defaults/1 is looser on exactly these, so a derivation would
     # silently widen what unconsented code gets.
     zero = Authority.zero_limits()
-    default = Policy.default()
+    default = Sanctum.Limits.defaults(:reagent)
 
     assert zero.timeout == "30s" and default.timeout == "1m"
     assert zero.batch_timeout == "30s" and default.batch_timeout == "5m"

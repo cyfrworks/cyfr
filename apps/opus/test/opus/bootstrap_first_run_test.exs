@@ -39,7 +39,6 @@ defmodule Opus.BootstrapFirstRunTest do
 
     on_exit(fn ->
       File.rm_rf!(test_path)
-      Arca.Cache.delete_match({:policy, :_, :_, :_})
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),

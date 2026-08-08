@@ -13,7 +13,7 @@ defmodule MultiTenantIsolationTest do
   dedicated test even though the helpers are well-covered in unit tests.
 
   This test exercises the *real* `Sanctum.Webhook` / `Arca.ApiKeyStorage`
-  / `Sanctum.PolicyStore` API with two tenant contexts and confirms that
+  / `Sanctum.Vault` API with two tenant contexts and confirms that
   reads from one context never return rows created by the other. Runs
   under both SQLite (single-user) and Postgres (multi-tenant) — same code path either way.
   """
@@ -197,22 +197,6 @@ defmodule MultiTenantIsolationTest do
     end
   end
 
-  describe "Sanctum.PolicyStore tenant isolation" do
-    # put_type_default/3 has no component-registration dependency, so it
-    # isolates the tenant-keying of the policies table cleanly.
-    test "tenant_a cannot read tenant_b's stored type-default policy",
-         %{a: ctx_a, b: ctx_b} do
-      :ok =
-        Sanctum.PolicyStore.put_type_default(ctx_b, :catalyst, %{
-          allowed_domains: ["b-only.example"]
-        })
-
-      assert {:error, :not_found} = Sanctum.PolicyStore.get_type_default(ctx_a, :catalyst)
-      assert {:ok, pol} = Sanctum.PolicyStore.get_type_default(ctx_b, :catalyst)
-      assert pol.allowed_domains == ["b-only.example"]
-    end
-  end
-
   # The multi-tenant org-less collapse: an org_id-less context must never
   # reach the shared org_id="" bucket on a WRITE (insert_all has no R6
   # backstop — only the Sanctum-layer require_tenant!/require_org chokepoint
@@ -259,12 +243,6 @@ defmodule MultiTenantIsolationTest do
 
       assert entry.org_id == Arca.Tenant.local_org()
       refute entry.org_id == ""
-    end
-
-    test "Sanctum.PolicyStore writes raise (A5 chokepoint)", %{orgless: ctx} do
-      assert_raise Sanctum.UnauthorizedError, fn ->
-        Sanctum.PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["x.example"]})
-      end
     end
 
     test "Sanctum.Webhook.create raises (S5 chokepoint)", %{orgless: ctx} do

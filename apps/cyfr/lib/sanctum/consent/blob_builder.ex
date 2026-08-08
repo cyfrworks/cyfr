@@ -4,27 +4,22 @@
 defmodule Sanctum.Consent.BlobBuilder do
   @moduledoc """
   Builds the resolved-policy blob for a consent revision from an
-  activation graph — shared by bootstrap (machine-minted revisions from
-  legacy effective policy) and the commit verb (operator-decided
-  revisions). One builder is what keeps the two indistinguishable to the
-  loader: a blob is a blob, whoever minted it.
+  activation graph — shared by bootstrap (machine-minted revisions) and
+  the commit verb (operator-decided revisions). One builder is what keeps
+  the two indistinguishable to the loader: a blob is a blob, whoever
+  minted it.
 
-  Every edge A → B carries B's own resources. Source priority per node: a
-  manifest declaring `needs` or `caps` is manifest-sourced — resources
-  come from the declared caps (the ask, granted whole at this grain) and
-  limits from `Sanctum.Limits.defaults/1` under `caps.limits`. A manifest
-  with neither falls back to the node's legacy effective policy — exactly
-  what the callee-keyed model grants it today, which is what makes those
-  revisions legacy-equivalent; that branch dies with
-  `Sanctum.Policy.get_effective/2`.
+  Every edge A → B carries B's own resources, and every node's grant is
+  manifest-sourced: resources come from the declared caps (the ask,
+  granted whole at this grain) and limits from `Sanctum.Limits.defaults/1`
+  under `caps.limits`. A manifest with no `needs`/`caps` blocks grants the
+  empty ask — deny-all resources under type-default limits.
 
   The caller supplies a `vault_fn` deciding which vault resource (if any)
-  rides each node; bootstrap mints legacy pointers, commit binds the
-  operator's chosen entries.
+  rides each node; commit binds the operator's chosen entries.
   """
 
   alias Compendium.Manifest.Caps
-  alias Compendium.Manifest.Needs
   alias Sanctum.JCS
 
   @type vault_fn ::
@@ -80,38 +75,6 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  @doc "A node's blob resources from its legacy effective policy."
-  @spec resource_map(Sanctum.Policy.t()) :: map()
-  def resource_map(policy) do
-    %{
-      "egress" => %{
-        "domains" => policy.allowed_domains,
-        "methods" => policy.allowed_methods,
-        "schemes" => ["https", "http"],
-        "private_ips" => policy.allowed_private_ips
-      },
-      "storage" => %{
-        "paths" => policy.allowed_paths,
-        "actions" => policy.allowed_actions
-      },
-      "tools" => Sanctum.Consent.ShapeDerivation.expand_tools(policy.allowed_tools)
-    }
-  end
-
-  @doc "A node's blob limits from its legacy effective policy."
-  @spec limits_map(Sanctum.Policy.t()) :: map()
-  def limits_map(policy) do
-    %{
-      "timeout" => policy.timeout,
-      "max_memory_bytes" => policy.max_memory_bytes,
-      "max_request_size" => policy.max_request_size,
-      "max_response_size" => policy.max_response_size,
-      "rate_limit" => rate_limit_map(policy.rate_limit),
-      "max_concurrent_tasks" => policy.max_concurrent_tasks,
-      "batch_timeout" => policy.batch_timeout
-    }
-  end
-
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
@@ -150,22 +113,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   @doc false
-  # Source priority: manifest needs/caps when declared, legacy effective
-  # policy otherwise. Public for the plan verb, which must show the same
-  # grant this builder would freeze.
-  def node_grant(ctx, node_key, manifest) do
-    needs = Needs.from_manifest(manifest)
-    caps = Caps.from_manifest(manifest)
-
-    if needs != nil or caps != nil do
-      caps = caps || Caps.from_manifest(%{"caps" => %{}})
-      {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
-    else
-      case Sanctum.Policy.get_effective(ctx, node_key) do
-        {:ok, policy, _meta} -> {:ok, resource_map(policy), limits_map(policy)}
-        {:error, reason} -> {:error, reason}
-      end
-    end
+  # The manifest's declared caps are the grant; an absent block is the
+  # empty ask. Public for the plan verb, which must show the same grant
+  # this builder would freeze.
+  def node_grant(_ctx, node_key, manifest) do
+    caps = Caps.from_manifest(manifest) || Caps.from_manifest(%{"caps" => %{}})
+    {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
   end
 
   # The declared ask becomes the granted resources at this grain (the
@@ -246,11 +199,4 @@ defmodule Sanctum.Consent.BlobBuilder do
       vault -> Map.put(rest, "vault", vault)
     end
   end
-
-  # A nil legacy rate limit means unchecked; the blob grammar requires a
-  # map, so the ceiling's maximum is the closest expressible equivalent.
-  defp rate_limit_map(nil), do: %{"requests" => 10_000, "window" => "1m"}
-
-  defp rate_limit_map(%{requests: requests, window: window}),
-    do: %{"requests" => requests, "window" => window}
 end

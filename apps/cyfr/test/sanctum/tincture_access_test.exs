@@ -126,12 +126,9 @@ defmodule Sanctum.TinctureAccessTest do
         updated_at: now
       })
 
-    # Store tincture policies (visibility is now a policy field)
+    # Public-ness is a published profile: the public tincture gets one,
+    # the private one stays profile-less.
     pub_ref = "tincture:local.public-dash"
-    priv_ref = "tincture:local.private-dash"
-
-    # Public-ness is a published profile now, not a policy bit.
-    _ = priv_ref
 
     {:ok, _} =
       Arca.ProfileStorage.put(%{
@@ -150,10 +147,6 @@ defmodule Sanctum.TinctureAccessTest do
       else
         Application.delete_env(:cyfr, :components_path)
       end
-
-      # Clean up policy cache entries
-      Arca.Cache.invalidate({:policy, pub_ref, "", "default"})
-      Arca.Cache.invalidate({:policy, priv_ref, "", "default"})
 
       File.rm_rf!(base)
     end)

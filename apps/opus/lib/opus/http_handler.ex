@@ -18,27 +18,29 @@ defmodule Opus.HttpHandler do
     there is no DNS-rebinding TOCTOU gap and no second resolution to rebind
   - **Full Request Visibility**: Unlike a CONNECT tunnel, the host sees method,
     URL, headers, and body for both HTTP and HTTPS
-  - **Size Enforcement**: Request and response bodies validated against policy limits
+  - **Size Enforcement**: Request and response bodies validated against node limits
   - **Redirect Prevention**: `redirect: false` prevents redirect-based SSRF
 
   ## Architecture
 
   Follows the same pattern as `cyfr:secrets/read` (see `runtime.ex:267-291`).
   The host function is registered as a Wasmex import that the WASM component
-  calls synchronously. All policy checks happen before any network I/O.
+  calls synchronously. All edge checks happen before any network I/O.
 
   ## Usage
 
-      imports = Opus.HttpHandler.build_http_imports(policy, ctx, "my-catalyst")
+      imports = Opus.HttpHandler.build_http_imports(edge, limits, ctx, "my-catalyst")
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
   require Logger
   import Bitwise
 
-  alias Sanctum.{Context, Policy}
+  alias Sanctum.Authority.Blob.Edge
+  alias Sanctum.Context
+  alias Sanctum.Limits
   alias Sanctum.Policy.Enforcement
-  alias Opus.PolicyEnforcer
+  alias Opus.EdgeGuard
 
   # Private IP ranges (CIDR notation as {base, mask} tuples)
   @private_ranges [
@@ -67,11 +69,12 @@ defmodule Opus.HttpHandler do
 
   Returns a map suitable for merging into `Wasmex.Components.start_link` opts.
   When the component calls `cyfr:http/fetch.request(json)`, the host function
-  validates the request against policy and executes it.
+  validates the request against the consent edge and executes it.
 
   ## Parameters
 
-  - `policy` - The `Sanctum.Policy` struct to enforce
+  - `edge` - The `Sanctum.Authority.Blob.Edge` to enforce (nil = deny all egress)
+  - `limits` - The node's `Sanctum.Limits` (sizes, timeout)
   - `ctx` - The execution `Sanctum.Context`
   - `component_ref` - Component reference string for telemetry/audit
 
@@ -79,24 +82,25 @@ defmodule Opus.HttpHandler do
 
   A map with the `"cyfr:http/fetch"` namespace containing a `"request"` function.
   """
-  @spec build_http_imports(Policy.t(), Context.t(), String.t()) :: map()
-  def build_http_imports(%Policy{} = policy, %Context{} = ctx, component_ref) do
+  @spec build_http_imports(Edge.t() | nil, Limits.t(), Context.t(), String.t()) :: map()
+  def build_http_imports(edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
     %{
       "cyfr:http/fetch@0.1.0" => %{
         "request" =>
           {:fn,
            fn json_req ->
-             execute(json_req, policy, ctx, component_ref)
+             execute(json_req, edge, limits, ctx, component_ref)
            end}
       }
     }
   end
 
   @doc """
-  Execute an HTTP request with full policy enforcement.
+  Execute an HTTP request with full edge enforcement.
 
-  Parses the JSON request, validates against policy, resolves DNS with
-  private IP blocking, and executes via Req with IP pinning.
+  Parses the JSON request, validates against the consent edge and node
+  limits, resolves DNS with private IP blocking, and executes via Req with
+  IP pinning.
 
   ## Request Format (JSON)
 
@@ -151,16 +155,16 @@ defmodule Opus.HttpHandler do
 
   All errors are returned as JSON strings (never raised).
   """
-  @spec execute(String.t(), Policy.t(), Context.t(), String.t()) :: String.t()
-  def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref) do
+  @spec execute(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t()) :: String.t()
+  def execute(json_request, edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
     with {:ok, request} <- parse_request(json_request),
-         :ok <- validate_method(policy, request.method),
-         :ok <- validate_scheme(policy, request.url),
-         :ok <- validate_domain(policy, request.url),
+         :ok <- validate_method(edge, request.method),
+         :ok <- validate_scheme(edge, request.url),
+         :ok <- validate_domain(edge, request.url),
          {:ok, request} <- decode_request_body(request),
-         :ok <- validate_request_size(policy, request),
-         {:ok, ip} <- resolve_and_validate_ip(request.hostname, policy) do
-      perform_request(request, ip, policy, component_ref, ctx)
+         :ok <- EdgeGuard.check_request_size(limits, request),
+         {:ok, ip} <- resolve_and_validate_ip(request.hostname, edge) do
+      perform_request(request, ip, limits, component_ref, ctx)
     else
       {:error, type, message} ->
         record_egress_denial(ctx, component_ref, type, message)
@@ -204,24 +208,24 @@ defmodule Opus.HttpHandler do
   DNS resolves once, then the IP is checked against private ranges.
   Returns `{:ok, ip_string}` for public IPs or `{:error, type, message}`.
 
-  When a `Sanctum.Policy` is provided as the second argument, private IPs
-  listed in `allowed_private_ips` are permitted (except `169.254.0.0/16`
-  which is always blocked).
+  When an edge is provided as the second argument, private IPs listed in
+  its `egress.private_ips` are permitted (except `169.254.0.0/16` which is
+  always blocked). A nil edge denies every private IP.
   """
-  @spec resolve_and_validate_ip(String.t(), Policy.t() | nil) ::
+  @spec resolve_and_validate_ip(String.t(), Edge.t() | nil) ::
           {:ok, String.t()} | {:error, atom(), String.t()}
-  def resolve_and_validate_ip(hostname, policy \\ nil) do
+  def resolve_and_validate_ip(hostname, edge \\ nil) do
     hostname_charlist = String.to_charlist(hostname)
 
     # Try IPv4 first, then fall back to IPv6
     case :inet.getaddr(hostname_charlist, :inet) do
       {:ok, ip_tuple} ->
-        validate_resolved_ip(ip_tuple, hostname, policy)
+        validate_resolved_ip(ip_tuple, hostname, edge)
 
       {:error, _ipv4_reason} ->
         case :inet.getaddr(hostname_charlist, :inet6) do
           {:ok, ip_tuple} ->
-            validate_resolved_ip(ip_tuple, hostname, policy)
+            validate_resolved_ip(ip_tuple, hostname, edge)
 
           {:error, reason} ->
             {:error, :dns_error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
@@ -229,10 +233,10 @@ defmodule Opus.HttpHandler do
     end
   end
 
-  defp validate_resolved_ip(ip_tuple, hostname, policy) do
+  defp validate_resolved_ip(ip_tuple, hostname, edge) do
     if private_ip?(ip_tuple) do
-      # Check if the policy allows this specific private IP
-      if policy != nil and Policy.allows_private_ip?(policy, ip_tuple) do
+      # Check if the edge allows this specific private IP
+      if EdgeGuard.allows_private_ip?(edge, ip_tuple) do
         {:ok, :inet.ntoa(ip_tuple) |> to_string()}
       else
         {:error, :private_ip_blocked,
@@ -408,72 +412,32 @@ defmodule Opus.HttpHandler do
   end
 
   # ============================================================================
-  # Private: Policy Validation
+  # Private: Edge Validation
   # ============================================================================
 
-  defp validate_domain(policy, url) do
+  defp validate_domain(edge, url) do
     uri = URI.parse(url)
     domain = uri.host || ""
 
-    case PolicyEnforcer.check_domain(policy, domain) do
+    case EdgeGuard.check_domain(edge, domain) do
       :ok -> :ok
       {:error, msg} -> {:error, :domain_blocked, msg}
     end
   end
 
-  defp validate_scheme(policy, url) do
+  defp validate_scheme(edge, url) do
     scheme = URI.parse(url).scheme || ""
 
-    case PolicyEnforcer.check_scheme(policy, scheme) do
+    case EdgeGuard.check_scheme(edge, scheme) do
       :ok -> :ok
       {:error, msg} -> {:error, :scheme_blocked, msg}
     end
   end
 
-  defp validate_method(policy, method) do
-    case PolicyEnforcer.check_method(policy, method) do
+  defp validate_method(edge, method) do
+    case EdgeGuard.check_method(edge, method) do
       :ok -> :ok
       {:error, msg} -> {:error, :method_blocked, msg}
-    end
-  end
-
-  defp validate_request_size(policy, %{multipart: parts}) when is_list(parts) do
-    size =
-      Enum.reduce(parts, 0, fn part, acc ->
-        acc + multipart_part_size(part)
-      end)
-
-    if size > policy.max_request_size do
-      {:error, :request_too_large,
-       "Multipart body (#{size} bytes) exceeds limit (#{policy.max_request_size} bytes)"}
-    else
-      :ok
-    end
-  end
-
-  defp validate_request_size(policy, %{body: body}) do
-    size = byte_size(body || "")
-
-    if size > policy.max_request_size do
-      {:error, :request_too_large,
-       "Request body (#{size} bytes) exceeds limit (#{policy.max_request_size} bytes)"}
-    else
-      :ok
-    end
-  end
-
-  defp multipart_part_size(%{data: data}) when is_binary(data), do: byte_size(data)
-  defp multipart_part_size(%{value: value}) when is_binary(value), do: byte_size(value)
-  defp multipart_part_size(_), do: 0
-
-  defp validate_response_size(policy, body) do
-    size = byte_size(body || "")
-
-    if size > policy.max_response_size do
-      {:error, :response_too_large,
-       "Response body (#{size} bytes) exceeds limit (#{policy.max_response_size} bytes)"}
-    else
-      :ok
     end
   end
 
@@ -481,7 +445,7 @@ defmodule Opus.HttpHandler do
   # Private: HTTP Execution
   # ============================================================================
 
-  defp perform_request(request, ip_string, policy, component_ref, ctx) do
+  defp perform_request(request, ip_string, limits, component_ref, ctx) do
     case parse_method_atom(request.method) do
       {:error, message} ->
         record_egress_denial(ctx, component_ref, :method_blocked, message)
@@ -490,14 +454,14 @@ defmodule Opus.HttpHandler do
       {:ok, method_atom} ->
         start_time = System.monotonic_time(:millisecond)
 
-        req_opts = build_req_opts(request, method_atom, ip_string, policy)
+        req_opts = build_req_opts(request, method_atom, ip_string, limits)
 
         case Req.request(req_opts) do
           {:ok, response} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
             response_body = normalize_response_body(response.body)
 
-            case validate_response_size(policy, response_body) do
+            case EdgeGuard.check_response_size(limits, response_body) do
               :ok ->
                 emit_telemetry(component_ref, request, response.status, duration_ms)
 
@@ -515,23 +479,8 @@ defmodule Opus.HttpHandler do
 
           {:error, %Req.TransportError{reason: :timeout}} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
-
-            timeout =
-              case Policy.timeout_ms(policy) do
-                {:ok, ms} ->
-                  ms
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
-                      "Reporting #{@request_timeout}ms in error. Fix with: cyfr policy set <component> timeout <duration>"
-                  )
-
-                  @request_timeout
-              end
-
             emit_telemetry(component_ref, request, :timeout, duration_ms)
-            encode_error(:timeout, "HTTP request timed out after #{timeout}ms")
+            encode_error(:timeout, "HTTP request timed out after #{request_timeout(limits)}ms")
 
           {:error, exception} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
@@ -541,20 +490,25 @@ defmodule Opus.HttpHandler do
     end
   end
 
-  defp build_req_opts(request, method_atom, ip_string, policy) do
-    timeout =
-      case Policy.timeout_ms(policy) do
-        {:ok, ms} ->
-          ms
+  # Node limits are validated when the blob parses, so the fallback only
+  # fires for a hand-built Limits in a test.
+  defp request_timeout(limits) do
+    case Limits.timeout_ms(limits) do
+      {:ok, ms} ->
+        ms
 
-        {:error, reason} ->
-          Logger.warning(
-            "[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
-              "Falling back to #{@request_timeout}ms. Fix with: cyfr policy set <component> timeout <duration>"
-          )
+      {:error, reason} ->
+        Logger.warning(
+          "[Opus.HttpHandler] Invalid timeout in node limits: #{reason}. " <>
+            "Falling back to #{@request_timeout}ms."
+        )
 
-          @request_timeout
-      end
+        @request_timeout
+    end
+  end
+
+  defp build_req_opts(request, method_atom, ip_string, limits) do
+    timeout = request_timeout(limits)
 
     # Pin the connection to the IP validated in execute/4 by substituting it for
     # the hostname in the URL, while preserving the original hostname for TLS

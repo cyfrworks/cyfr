@@ -21,7 +21,6 @@ defmodule Arca.AuditHandler do
   ## Monitored Events
 
   - `[:cyfr, :sanctum, :auth]` — login success/failure
-  - `[:cyfr, :sanctum, :policy]` — policy changes
   - `[:cyfr, :opus, :execute, :start]` — execution begins
   - `[:cyfr, :opus, :execute, :stop]` — execution completes
   - `[:cyfr, :opus, :execute, :exception]` — execution fails
@@ -32,7 +31,6 @@ defmodule Arca.AuditHandler do
 
   @audit_events [
     [:cyfr, :sanctum, :auth],
-    [:cyfr, :sanctum, :policy],
     [:cyfr, :opus, :execute, :start],
     [:cyfr, :opus, :execute, :stop],
     [:cyfr, :opus, :execute, :exception]

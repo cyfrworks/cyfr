@@ -7,11 +7,11 @@ defmodule Sanctum.Cidr do
   detection.
 
   Consolidates three previously-divergent hand-rolled implementations
-  (`Sanctum.ApiKey`, `Sanctum.Policy`, `Cyfr.Network`) into one IPv4 + IPv6,
-  prefix-family-bounded, fail-closed primitive. The previous divergence was
-  security-relevant: `Sanctum.Policy` was IPv4-only (an IPv6 CIDR allowlist
-  entry silently never matched) and its link-local check omitted IPv6
-  `fe80::/10`.
+  (`Sanctum.ApiKey`, the legacy policy matcher, `Cyfr.Network`) into one
+  IPv4 + IPv6, prefix-family-bounded, fail-closed primitive. The previous
+  divergence was security-relevant: the policy matcher was IPv4-only (an
+  IPv6 CIDR allowlist entry silently never matched) and its link-local
+  check omitted IPv6 `fe80::/10`.
 
   `Cyfr.Network` keeps its own private/reserved-range SSRF *policy*
   (`@private_ranges`) — a different question — and only delegates the
@@ -64,7 +64,7 @@ defmodule Sanctum.Cidr do
   True when `ip` (an `:inet` tuple or a string) falls within `cidr_string`.
 
   An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is matched against an IPv4
-  CIDR by its embedded IPv4 form (preserves the prior `Sanctum.Policy`
+  CIDR by its embedded IPv4 form (preserves the prior policy-matcher
   behaviour and makes `Sanctum.ApiKey` consistent with it).
   """
   @spec ip_in_cidr?(:inet.ip_address() | String.t(), String.t()) :: boolean()

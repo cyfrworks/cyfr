@@ -12,12 +12,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   record" checkable at all — two implementations would drift and either
   re-consent every release (worst case) or falsely allow (unacceptable).
 
-  Source priority: a manifest that declares `needs` or `caps` is
-  manifest-sourced — the shape carries the declared needs, the flattened
-  caps, the caps tools expanded against the live catalog, and the slot
-  vocabulary (sorted need names). A manifest with neither falls back to
-  the legacy effective-policy read; that branch dies with
-  `Sanctum.Policy.get_effective/2` when the `policies` table drops.
+  The shape is manifest-sourced, always: it carries the declared needs,
+  the flattened caps, the caps tools expanded against the live catalog,
+  and the slot vocabulary (sorted need names). A manifest with no `needs`
+  or `caps` blocks derives the empty ask — deny-all resources, no needs —
+  exactly as if it declared empty blocks.
 
   The canonical caps encoding is dotted flat keys (`"egress.domains"`,
   `"limits.rate_limit.requests"`, …) over the digest's existing flat caps
@@ -46,23 +45,19 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc "The `ShapeDigest.compute/1` input derived from live state."
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref) do
-    case manifest_blocks(ctx, source_ref) do
-      {:ok, needs, caps} when needs != nil or caps != nil ->
-        needs = needs || []
-        caps = caps || Caps.from_manifest(%{"caps" => %{}})
+    with {:ok, needs, caps} <- manifest_blocks(ctx, source_ref) do
+      needs = needs || []
+      caps = caps || Caps.from_manifest(%{"caps" => %{}})
 
-        {:ok,
-         %{
-           scope: :versionless,
-           source_ref: source_ref,
-           needs: digest_needs(needs),
-           caps: digest_caps(caps),
-           tool_actions: expand_tools(caps.tools),
-           slots: Enum.sort(Enum.map(needs, & &1.name))
-         }}
-
-      _ ->
-        legacy_shape_input(ctx, source_ref)
+      {:ok,
+       %{
+         scope: :versionless,
+         source_ref: source_ref,
+         needs: digest_needs(needs),
+         caps: digest_caps(caps),
+         tool_actions: expand_tools(caps.tools),
+         slots: Enum.sort(Enum.map(needs, & &1.name))
+       }}
     end
   end
 
@@ -79,15 +74,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
       {:ok, Needs.from_manifest(manifest), Caps.from_manifest(manifest)}
-    end
-  end
-
-  @doc "The legacy effective tool grants, expanded against the live catalog."
-  @spec tool_actions(Sanctum.Context.t(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
-  def tool_actions(ctx, source_ref) do
-    case Sanctum.Policy.get_effective(ctx, source_ref) do
-      {:ok, policy, _meta} -> {:ok, expand_tools(policy.allowed_tools)}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -112,12 +98,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
-
-  defp legacy_shape_input(ctx, source_ref) do
-    with {:ok, tools} <- tool_actions(ctx, source_ref) do
-      {:ok, %{scope: :versionless, source_ref: source_ref, tool_actions: tools}}
-    end
-  end
 
   # The digest's need rows: name/type/fields/scopes — the reason is prose
   # and required-ness surfaces on the sheet, neither is shape.

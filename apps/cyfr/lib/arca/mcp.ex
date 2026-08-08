@@ -526,7 +526,7 @@ defmodule Arca.MCP do
   # Policy Log Tool
   # ============================================================================
 
-  # Policy log writing is kernel-only (internal to Opus.PolicyEnforcer)
+  # Policy log writing is kernel-only (internal to Sanctum.Policy.Enforcement)
   # External clients may only read logs via list, get, correlate actions
   def handle("policy_log", _ctx, %{"action" => "log"}) do
     {:error,

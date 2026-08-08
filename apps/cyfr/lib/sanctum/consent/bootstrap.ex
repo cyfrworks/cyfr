@@ -2,19 +2,13 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.Bootstrap do
   @moduledoc """
-  Convert a legacy install's effective policy into consents.
+  Mint first consents for components that have none.
 
   For every executable local component without a profile, mints an owner
-  profile and a revision-1 consent whose blob mirrors what the legacy
-  resolver grants today: each closure node runs under its own effective
-  policy's limits, the ingress edge carries the source's own resources,
-  and every edge into a node carries **that node's** resources — the
-  behavior-equivalence of the callee-keyed model, frozen into
-  source-keyed form.
-
-  Deliberately included: the manifest auto-merge widening inside
-  `Sanctum.Policy.get_effective/2` — equivalence first, de-widening is a
-  later, deliberate step measured by the equivalence oracle.
+  profile and a revision-1 consent whose blob grants each closure node its
+  manifest-declared caps (the empty ask when a manifest declares none):
+  the ingress edge carries the source's own resources, and every edge into
+  a node carries **that node's** resources.
 
   Idempotent: a source ref that already has an owner profile is skipped.
   Machine-minted revisions record `granted_via: "bootstrap"`.

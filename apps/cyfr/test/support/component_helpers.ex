@@ -6,9 +6,9 @@ defmodule Sanctum.Test.ComponentHelpers do
 
   @doc """
   Registers a test component in the component_store with the given manifest.
-  Used by tests that need a registered component for manifest-driven policy
-  validation or target-ref existence checks. Pass a ctx to register under a
-  specific tenant (defaults to the local test tenant).
+  Used by tests that need a registered component for target-ref existence
+  checks. Pass a ctx to register under a specific tenant (defaults to the
+  local test tenant).
   """
   def register_test_component(name, version, type, manifest, ctx \\ nil) do
     ctx = ctx || Sanctum.TestContext.local()
@@ -35,35 +35,5 @@ defmodule Sanctum.Test.ComponentHelpers do
     }
 
     Arca.ComponentStorage.put_component(ctx, attrs)
-  end
-
-  @doc """
-  Standard manifest with all capability fields declared in setup.policy.
-  Useful for tests that don't care about field validation restrictions.
-  """
-  def full_capability_manifest(type \\ "catalyst") do
-    policy =
-      case type do
-        "formula" ->
-          %{
-            "allowed_tools" => [],
-            "batch_timeout" => "5m",
-            "max_concurrent_tasks" => 10
-          }
-
-        _ ->
-          %{
-            "allowed_domains" => [],
-            "allowed_methods" => [],
-            "allowed_paths" => [],
-            "allowed_actions" => [],
-            "allowed_private_ips" => [],
-            "allowed_tools" => [],
-            "batch_timeout" => "5m",
-            "max_concurrent_tasks" => 10
-          }
-      end
-
-    %{"setup" => %{"policy" => policy}}
   end
 end

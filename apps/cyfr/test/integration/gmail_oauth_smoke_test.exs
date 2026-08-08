@@ -8,9 +8,9 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   binding it, dispense through the vault, refresh when it expires, and
   watch revocation bite.
 
-  gmail@0.1.2 is the only bundled component carrying a full oauth block,
-  so this is the shape the redesign has to serve. The component itself
-  arrives by registry pull in production; here the same manifest is
+  gmail is the OAuth exemplar: a needs manifest declaring an
+  `oauth:google` role plus the egress it is allowed. The component itself
+  arrives by registry pull in production; here the same manifest shape is
   published directly, since what is under test is the credential path,
   not ingestion.
   """
@@ -54,29 +54,30 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
     ctx = Sanctum.TestContext.local()
 
-    # The gmail manifest's security-relevant shape: an oauth block plus
-    # the egress it is allowed.
+    # The gmail manifest's security-relevant shape: an oauth need plus
+    # the egress it is allowed — the re-released bundle's vocabulary.
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, @wasm, %{
         name: "gmail",
-        version: "0.1.2",
+        version: "0.2.0",
         type: "catalyst",
         manifest:
           Jason.encode!(%{
-            "oauth" => %{
+            "name" => "gmail",
+            "version" => "0.2.0",
+            "type" => "catalyst",
+            "needs" => %{
               @provider => %{
-                "auth_style" => "params",
-                "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-                "token_url" => "https://oauth2.googleapis.com/token",
-                "client_id_secret" => "GMAIL_CLIENT_ID",
-                "client_secret_secret" => "GMAIL_CLIENT_SECRET",
+                "type" => "oauth:google",
+                "reason" => "to read your Gmail inbox",
+                "required" => true,
                 "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"]
               }
             },
-            "setup" => %{
-              "policy" => %{
-                "allowed_domains" => ["gmail.googleapis.com"],
-                "allowed_methods" => ["GET"]
+            "caps" => %{
+              "egress" => %{
+                "domains" => ["gmail.googleapis.com"],
+                "methods" => ["GET"]
               }
             }
           })
@@ -105,7 +106,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
 
     binding =
-      %{need: "@ingress", entry_id: entry_id}
+      %{need: @provider, entry_id: entry_id}
       |> then(fn b -> if scopes == [], do: b, else: Map.put(b, :scopes, scopes) end)
 
     decisions = %{ref: ref, bindings: [binding]}

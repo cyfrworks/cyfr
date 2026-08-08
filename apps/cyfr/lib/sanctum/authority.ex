@@ -25,7 +25,7 @@ defmodule Sanctum.Authority do
   `zero/0` is the authority of code with no applicable profile: no
   resources, no control-plane access, only inert invocation, under the
   `zero_limits/0` constants. Those constants are deliberately literals —
-  `Sanctum.Policy.default/0,1` is looser on three of the seven fields
+  `Sanctum.Limits.defaults/1` is looser on three of the seven fields
   (timeout, batch_timeout, max_concurrent_tasks), so deriving them would
   silently widen what unconsented code gets.
 

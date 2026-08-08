@@ -143,7 +143,9 @@ defmodule Compendium.ScaffoldTest do
       assert manifest["type"] == "catalyst"
       assert manifest["version"] == "0.1.0"
       assert manifest["publisher"] == "local"
-      assert is_map(manifest["setup"]["policy"])
+      assert is_map(manifest["caps"]["egress"])
+      refute Map.has_key?(manifest, "setup")
+      refute Map.has_key?(manifest, "wasi")
 
       # Verify lib.rs contains catalyst pattern
       {:ok, lib_rs} = File.read(Path.join([base, "src", "src", "lib.rs"]))
@@ -180,7 +182,7 @@ defmodule Compendium.ScaffoldTest do
       {:ok, manifest_json} = File.read(Path.join(base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["type"] == "formula"
-      assert is_list(manifest["setup"]["policy"]["allowed_tools"])
+      assert is_list(manifest["caps"]["tools"])
       assert is_map(manifest["dependencies"])
 
       # Verify lib.rs contains formula pattern
