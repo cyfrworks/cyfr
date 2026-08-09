@@ -849,11 +849,45 @@ defmodule PrismWeb.AquaLive do
     {:noreply, socket}
   end
 
-  # Spawn a Task that calls the proposal's MCP tool with the user's normal
-  # context. On reply, send {:approval_result, id, :approved | :error, payload}
-  # back to this LiveView. `scope` (:once | :conversation | :always) governs
-  # whether the same `tool.action` is remembered (for this chat, or persisted
-  # to the agent's allowlist as "auto").
+  # The human decision unblocks the call; it never supplies authority.
+  #
+  # An approved `execution.run`/`run_stream` is a deliberate app launch: the
+  # target roots its OWN consented authority (`run_root` re-resolves the ref
+  # and profile), and the operator identity supplies only ingress. It runs on
+  # the external plane — routing it in-chain under the agent's authority would
+  # leave every app the agent has no edge to inert. Guest-supplied lineage keys
+  # are dropped, exactly as the in-chain path would.
+  defp run_approved_call(%{tool: "execution", action: action}, ctx, args)
+       when action in ["run", "run_stream"] do
+    launch_args = Map.drop(args, ["parent_execution_id", "root_execution_id"])
+    Emissary.MCP.ToolRegistry.call_external("execution", ctx, launch_args)
+  end
+
+  # Every other approved tool runs under the agent formula's consented
+  # authority through the in-chain chokepoint, guest-planed so it cannot reach
+  # the operator's external-plane powers. If that authority is unavailable (no
+  # profile, revoked, or re-consent required) we FAIL CLOSED — never fall back
+  # to the operator's context.
+  defp run_approved_call(proposal, ctx, args) do
+    case Opus.Chain.authority_for(ctx, nil, @agent_ref) do
+      {:ok, authority} ->
+        Emissary.MCP.ToolRegistry.call_in_chain(
+          proposal.tool,
+          Sanctum.Context.enter_guest(ctx),
+          args,
+          authority
+        )
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Spawn a Task that calls the proposal's MCP tool. On reply, send
+  # {:approval_result, id, :approved | :error, payload} back to this LiveView.
+  # `scope` (:once | :conversation | :always) governs whether the same
+  # `tool.action` is remembered (for this chat, or persisted to the agent's
+  # allowlist as "auto").
   defp run_approval(socket, id, %{proposal: nil} = intent, _scope) do
     # Pure-confirmation card — nothing to execute; record the acknowledgement.
     complete_approval(
@@ -875,25 +909,7 @@ defmodule PrismWeb.AquaLive do
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       args = Map.put(proposal.args || %{}, "action", proposal.action)
 
-      # The human decision unblocks the call; it never supplies authority.
-      # When the agent formula has a profile, the approved tool runs under
-      # that consented authority through the in-chain chokepoint — with the
-      # guest plane on the context, so it cannot escalate to the operator's
-      # own external-plane powers. Without a profile, the legacy behavior
-      # (the operator's context) remains until the profile exists.
-      result =
-        with {:ok, authority} <- Opus.Chain.authority_for(ctx, nil, @agent_ref) do
-          Emissary.MCP.ToolRegistry.call_in_chain(
-            proposal.tool,
-            Sanctum.Context.enter_guest(ctx),
-            args,
-            authority
-          )
-        else
-          _ -> Emissary.MCP.ToolRegistry.call_external(proposal.tool, ctx, args)
-        end
-
-      case result do
+      case run_approved_call(proposal, ctx, args) do
         {:ok, result} ->
           send(lv, {:approval_result, id, :approved, %{result: result}})
 

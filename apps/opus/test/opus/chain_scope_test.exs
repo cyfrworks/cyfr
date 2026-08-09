@@ -227,4 +227,34 @@ defmodule Opus.ChainScopeTest do
 
     auth
   end
+
+  describe "guest plane cannot re-root execution" do
+    setup %{ctx: ctx} do
+      {:ok, guest: Sanctum.Context.enter_guest(ctx)}
+    end
+
+    for action <- ["run", "run_stream"] do
+      test "execution.#{action} is refused for a guest-planed context", %{guest: guest} do
+        assert {:error, message} =
+                 Opus.MCP.handle(
+                   "execution",
+                   guest,
+                   %{"action" => unquote(action), "reference" => "reagent:local.x:1.0.0"}
+                 )
+
+        assert message =~ "cannot be invoked in-chain"
+      end
+    end
+
+    test "guest-plane read actions are unaffected", %{guest: guest} do
+      # The guard is scoped to the two authority-rooting actions; a chain-scoped
+      # read still resolves normally (here: no such execution).
+      assert {:error, _} =
+               Opus.MCP.handle(
+                 "execution",
+                 guest,
+                 %{"action" => "logs", "execution_id" => "exec_missing"}
+               )
+    end
+  end
 end

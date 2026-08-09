@@ -326,6 +326,17 @@ defmodule Opus.MCP do
 
   def handle("execution", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
 
+  # A guest-planed context reaching run/run_stream would re-root a fresh
+  # Authority from an in-chain call — the confused-deputy shape run_child
+  # exists to prevent. Components invoke children through the formula host,
+  # which intercepts these actions before dispatch; nothing legitimate arrives
+  # here guest-planed. Fail closed regardless of the identity's permissions.
+  def handle("execution", %Context{plane: :guest}, %{"action" => action})
+      when action in ["run", "run_stream"] do
+    {:error,
+     "execution.#{action} cannot be invoked in-chain; a component runs children through the formula host, not by re-rooting"}
+  end
+
   # Run stream action - start execution in background and return execution_id + stream URL
   # The caller can connect to the SSE endpoint to receive intermediate events.
   def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
