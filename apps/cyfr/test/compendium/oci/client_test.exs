@@ -216,26 +216,4 @@ defmodule Compendium.OCI.ClientTest do
       assert {:error, _} = Arca.get(ctx, path)
     end
   end
-
-  describe "startup validation" do
-    test "validate_registry_config! accepts any registry URL (custom hosts are allowed)" do
-      original_url = Application.get_env(:cyfr, :registry_url)
-      original_oci = Application.get_env(:cyfr, :oci_registry_url)
-
-      Application.put_env(:cyfr, :registry_url, "api.acme.internal")
-      Application.put_env(:cyfr, :oci_registry_url, "registry.acme.internal")
-
-      try do
-        assert :ok == Compendium.Application.validate_registry_config!()
-      after
-        if original_url,
-          do: Application.put_env(:cyfr, :registry_url, original_url),
-          else: Application.delete_env(:cyfr, :registry_url)
-
-        if original_oci,
-          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
-          else: Application.delete_env(:cyfr, :oci_registry_url)
-      end
-    end
-  end
 end

@@ -50,9 +50,6 @@ defmodule Cyfr.Application do
       Cyfr.OtelTenantHandler.attach()
     end
 
-    # Compendium: Validate registry configuration
-    Compendium.Application.validate_registry_config!()
-
     # Webhook verify-failed → log at :warning. Operators can disable by
     # detaching `"webhook-verify-failed-log"` if they prefer an alternative
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).

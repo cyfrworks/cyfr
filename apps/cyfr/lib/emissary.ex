@@ -3,10 +3,11 @@
 
 defmodule Emissary do
   @moduledoc """
-  Emissary keeps the contexts that define your domain
-  and business logic.
+  MCP protocol layer: JSON-RPC routing, sessions, SSE buffering, the tool and
+  resource registries, and external MCP server supervision.
 
-  Contexts are also responsible for managing your data, regardless
-  if it comes from the database, an external API or others.
+  Emissary owns the transport and dispatch; each namespace registers its own
+  tools/resources (see `Emissary.MCP.ToolProvider`). Also home to
+  `Emissary.UUID7`, the repo-wide RFC 9562 v7 id generator.
   """
 end

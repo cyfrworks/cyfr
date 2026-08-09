@@ -188,10 +188,9 @@ defmodule Compendium.Registry.Identity do
   end
 
   # REST API host (e.g. "cyfr.run"). Distinct from the OCI gateway host
-  # (e.g. "registry.cyfr.run") in the default cyfr.run topology;
-  # `Compendium.Application.validate_*!/0` pins both at boot. Delegates to
-  # `Compendium.Registry.canonical_rest_host/0` so Identity + Client share
-  # one source of truth.
+  # (e.g. "registry.cyfr.run") in the default cyfr.run topology; both default in
+  # config/runtime.exs. Delegates to `Compendium.Registry.canonical_rest_host/0`
+  # so Identity + Client share one source of truth.
   defp rest_host do
     Compendium.Registry.canonical_rest_host()
   end
