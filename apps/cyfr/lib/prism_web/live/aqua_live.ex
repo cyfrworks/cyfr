@@ -586,7 +586,14 @@ defmodule PrismWeb.AquaLive do
 
   def handle_info({:execution_event, %{type: "complete"}}, socket) do
     raw = String.trim(socket.assigns.streaming_text)
-    tool_policy = (socket.assigns.orchestrator || %{})["tool_policy"] || %{}
+    orch = socket.assigns.orchestrator || %{}
+
+    tool_policy =
+      Prism.AgentConfig.effective_tool_policy(
+        socket.assigns.context,
+        orch["name"] || "aqua",
+        orch["tool_policy"] || %{}
+      )
 
     %{stripped: stripped, intents: intents, drops: drops} =
       Prism.AquaActions.parse(raw, tool_policy)
@@ -961,15 +968,12 @@ defmodule PrismWeb.AquaLive do
     ctx = socket.assigns.context
     key = "#{tool}.#{action}"
 
+    # A personal preference, not an agent-definition change: the grant is
+    # written to the caller's tenant-scoped overlay, never into the shared
+    # agent.json every other user's agent runs under.
     if name && ctx do
-      new_policy = Map.put(orch["tool_policy"] || %{}, key, "auto")
-
-      case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
-             "action" => "update",
-             "name" => name,
-             "tool_policy" => new_policy
-           }) do
-        {:ok, _} ->
+      case Prism.AgentConfig.put_user_tool_grant(ctx, name, key, "auto") do
+        :ok ->
           send(self(), :editor_refresh)
           put_flash(socket, :info, "#{key} won't ask again — manage in Agents.")
 
@@ -991,17 +995,14 @@ defmodule PrismWeb.AquaLive do
     ctx = socket.assigns.context
     key = "#{tool}.#{action}"
 
-    if name && ctx && Map.has_key?(orch["tool_policy"] || %{}, key) do
-      new_policy = Map.delete(orch["tool_policy"] || %{}, key)
-
-      case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
-             "action" => "update",
-             "name" => name,
-             "tool_policy" => new_policy
-           }) do
-        {:ok, _} ->
+    # Same shape as "always": a per-user deny overlay filtered out of the
+    # effective policy at run time, so one user's "never" cannot strip a
+    # capability from every other user's agent.
+    if name && ctx do
+      case Prism.AgentConfig.put_user_tool_grant(ctx, name, key, "deny") do
+        :ok ->
           send(self(), :editor_refresh)
-          put_flash(socket, :info, "Removed #{key} from #{name}'s capabilities.")
+          put_flash(socket, :info, "Removed #{key} from #{name}'s capabilities for you.")
 
         {:error, reason} ->
           put_flash(socket, :error, "Couldn't remove #{key}: #{inspect(reason)}")
@@ -1241,7 +1242,15 @@ defmodule PrismWeb.AquaLive do
 
     orchestrator = socket.assigns.orchestrator
     orchestrator_name = orchestrator["name"]
-    tool_policy = orchestrator["tool_policy"] || %{}
+
+    # Shared manifest policy overlaid with the caller's personal always/never
+    # grants — the merge happens here, per run, never in the stored manifest.
+    tool_policy =
+      Prism.AgentConfig.effective_tool_policy(
+        ctx,
+        orchestrator_name,
+        orchestrator["tool_policy"] || %{}
+      )
 
     user_msg = %{
       role: "user",

@@ -12,6 +12,64 @@ defmodule Prism.AgentConfig do
 
   alias Sanctum.Context
 
+  # Per-user approval grants live under the TENANT-scoped `aqua-grants/`
+  # prefix, never in the shared agent.json: the manifest is instance-global
+  # (Arca routes `aqua/` outside tenant segmentation), so one user's
+  # "always approve" click must not change what the agent may do for
+  # everyone else. The overlay is merged into the effective policy at
+  # run/parse time only — manifest reads and the Agents editor stay pure.
+  @grants_prefix "aqua-grants"
+
+  @doc """
+  The caller's personal approval overlay for `agent_name`:
+  `%{"tool.action" => "auto" | "deny"}`. `"auto"` is a persisted
+  "always approve"; `"deny"` a persisted "never".
+  """
+  def user_tool_grants(%Context{} = ctx, agent_name) do
+    case Arca.get_json(ctx, grants_path(ctx)) do
+      {:ok, %{} = grants} -> Map.get(grants, agent_name, %{})
+      _ -> %{}
+    end
+  end
+
+  @doc "Persist one per-user grant (`\"auto\"` or `\"deny\"`) for `agent_name`."
+  def put_user_tool_grant(%Context{} = ctx, agent_name, key, mode)
+      when is_binary(agent_name) and is_binary(key) and mode in ["auto", "deny"] do
+    grants =
+      case Arca.get_json(ctx, grants_path(ctx)) do
+        {:ok, %{} = existing} -> existing
+        _ -> %{}
+      end
+
+    updated = Map.update(grants, agent_name, %{key => mode}, &Map.put(&1, key, mode))
+    Arca.put_json(ctx, grants_path(ctx), updated)
+  end
+
+  @doc """
+  The manifest policy overlaid with the caller's personal grants:
+  `"auto"` entries are added, `"deny"` entries removed (absence from the
+  allowlist is what makes an action uncallable).
+  """
+  def effective_tool_policy(%Context{} = ctx, agent_name, manifest_policy)
+      when is_map(manifest_policy) do
+    {denies, autos} =
+      ctx
+      |> user_tool_grants(agent_name)
+      |> Enum.split_with(fn {_k, mode} -> mode == "deny" end)
+
+    manifest_policy
+    |> Map.merge(Map.new(autos))
+    |> Map.drop(Enum.map(denies, &elem(&1, 0)))
+  end
+
+  # One file per user; ids are `<provider>|<iss>|<sub>` so they are hashed
+  # into a fixed-width filename instead of sanitized.
+  defp grants_path(%Context{} = ctx) do
+    user = ctx.user_id || "local"
+    digest = Base.encode16(:crypto.hash(:sha256, user), case: :lower)
+    [@grants_prefix, digest <> ".json"]
+  end
+
   @doc "List available top-level orchestrators."
   def list_orchestrators(%Context{} = ctx) do
     case call_guide(ctx, %{"action" => "list", "type" => "orchestrator"}) do

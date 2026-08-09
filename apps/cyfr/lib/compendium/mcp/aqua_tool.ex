@@ -128,7 +128,8 @@ defmodule Compendium.MCP.AquaTool do
   # orchestrator. Pass `type: "doc"` to create a markdown guide entry.
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Shared.require_permission(ctx, :component_manage),
+         :ok <- require_definition_authority(ctx) do
       type = inferred_aqua_create_type(args)
 
       case type do
@@ -147,6 +148,7 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
     with :ok <- Shared.require_permission(ctx, :component_manage),
+         :ok <- require_definition_authority(ctx),
          {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       # Update manifest fields if provided
@@ -195,6 +197,7 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
     with :ok <- Shared.require_permission(ctx, :component_manage),
+         :ok <- require_definition_authority(ctx),
          {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       {updated, prompt_file} =
@@ -225,6 +228,21 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(_ctx, _args) do
     {:error, "Invalid aqua action. Use: list, get, create, update, or delete"}
+  end
+
+  # Agent definitions are instance-global (`aqua/` bypasses tenant
+  # segmentation), so on a deployment exposed to non-operator users a
+  # tenant-scoped caller must not be able to rewrite every user's agents.
+  # Single-user deployments (no :auth_provider) keep the permission check
+  # as the only gate.
+  defp require_definition_authority(%Context{} = ctx) do
+    if Sanctum.auth_configured?() and ctx.scope != :platform do
+      {:error,
+       "Agent definitions are shared by every user of this deployment; " <>
+         "changing them requires platform scope"}
+    else
+      :ok
+    end
   end
 
   # --- aqua create helpers ---
