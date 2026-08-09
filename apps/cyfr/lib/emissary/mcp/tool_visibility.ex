@@ -5,8 +5,14 @@ defmodule Emissary.MCP.ToolVisibility do
   @moduledoc """
   Filters `tools/list` results based on the caller's API key permissions.
 
-  Actions listed in `@action_permissions` require the mapped permission atom.
-  Actions NOT in the map are public — visible to all callers (including unauthenticated).
+  An action in `@action_permissions` requires the mapped permission atom; any
+  other action is visible to all callers. Because an *unlisted* action would
+  therefore be public, the completeness audit
+  (`test/emissary/mcp/tool_visibility_test.exs`) asserts every registered action
+  is deliberately placed in `@action_permissions` or `@public_actions` — so a
+  new sensitive tool cannot leak its schema by being forgotten, which is how
+  `vault.*`, `profile.*`, `webhook.*` and `oauth.*` had drifted into public
+  discovery.
 
   External tools (namespaced with `:`, no action enum) pass through unchanged.
   """
@@ -106,8 +112,84 @@ defmodule Emissary.MCP.ToolVisibility do
     "tincture_visibility.set" => :execute,
 
     # :storage_read — tincture visibility read
-    "tincture_visibility.get" => :storage_read
+    "tincture_visibility.get" => :storage_read,
+
+    # Credential / consent operator surfaces. These authorize through the
+    # consent Authz plane (oidc / interactive), not a permission atom, so they
+    # were absent from this map and fell through to public discovery. Gate their
+    # DISCOVERY to :admin so anonymous callers never see the schemas; actual
+    # invocation is still governed by the consent path.
+    "vault.authorize" => :admin,
+    "vault.create" => :admin,
+    "vault.delete" => :admin,
+    "vault.list" => :admin,
+    "vault.rebind" => :admin,
+    "vault.rename" => :admin,
+    "vault.revoke" => :admin,
+    "vault.rotate" => :admin,
+    "profile.plan" => :admin,
+    "profile.preview" => :admin,
+    "profile.commit" => :admin,
+    "profile.publish" => :admin,
+    "profile.list" => :admin,
+    "profile.revoke" => :admin,
+    "webhook.create" => :admin,
+    "webhook.get" => :admin,
+    "webhook.list" => :admin,
+    "webhook.revoke" => :admin,
+    "webhook.rotate" => :admin,
+    "webhook.update" => :admin,
+    "oauth.set_client" => :admin,
+
+    # Audit correlate/fan_outs/stats join their list/get siblings.
+    "mcp_log.correlate" => :storage_read,
+    "mcp_log.fan_outs" => :storage_read,
+    "mcp_log.stats" => :storage_read,
+    "policy_log.correlate" => :storage_read
   }
+
+  # Actions intentionally visible to every caller (including unauthenticated):
+  # pre-session bootstrap, cyfr.run spec reads, and discovery/guide reads an LLM
+  # calls before any session exists. Split out from @action_permissions so the
+  # completeness audit (test/emissary/mcp/tool_visibility_test.exs) can assert
+  # every registered action is deliberately classified as gated OR public — a
+  # new action fails that test until it is placed here or in the gate map.
+  @public_actions MapSet.new([
+                    "aqua.create",
+                    "aqua.delete",
+                    "aqua.get",
+                    "aqua.list",
+                    "aqua.update",
+                    "build.toolchains",
+                    "build.validate",
+                    "component.categories",
+                    "component.inspect",
+                    "component.list",
+                    "component.search",
+                    "component.setup_plan",
+                    "mcp_servers.get",
+                    "mcp_servers.list",
+                    "registry.appeal",
+                    "registry.claim_personal",
+                    "registry.get_namespace",
+                    "registry.legal_accept",
+                    "registry.legal_page",
+                    "registry.legal_version",
+                    "registry.list_my_reports",
+                    "registry.members_list",
+                    "registry.probe",
+                    "registry.report",
+                    "registry.tokens_list",
+                    "registry.whoami",
+                    "session.whoami",
+                    "system.status",
+                    "tools.list"
+                  ])
+
+  @doc false
+  def action_permissions, do: @action_permissions
+  @doc false
+  def public_actions, do: @public_actions
 
   @doc """
   Filter tool definitions to only include tools/actions the caller can see.

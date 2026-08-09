@@ -223,20 +223,14 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       refute "push" in actions
     end
 
-    test "mcp_log only has public actions", %{filtered: filtered} do
-      log = Enum.find(filtered, &(&1["name"] == "mcp_log"))
-      assert log
-      actions = action_enum(log)
-      assert "correlate" in actions
-      assert "stats" in actions
-      refute "list" in actions
-      refute "get" in actions
+    test "mcp_log is dropped — every action requires :storage_read", %{filtered: filtered} do
+      # correlate/fan_outs/stats join list/get behind :storage_read, so an
+      # unauthenticated caller sees no audit-log actions and the tool is dropped.
+      refute Enum.find(filtered, &(&1["name"] == "mcp_log"))
     end
 
-    test "policy_log only has correlate", %{filtered: filtered} do
-      log = Enum.find(filtered, &(&1["name"] == "policy_log"))
-      assert log
-      assert action_enum(log) == ["correlate"]
+    test "policy_log is dropped — every action requires :storage_read", %{filtered: filtered} do
+      refute Enum.find(filtered, &(&1["name"] == "policy_log"))
     end
 
     test "build only has public actions", %{filtered: filtered} do
@@ -338,6 +332,48 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       actions = action_enum(ret)
 
       assert "cleanup" in actions
+    end
+  end
+
+  describe "classification completeness" do
+    test "every registered tool.action is classified as gated or public" do
+      registered =
+        Application.get_env(:cyfr, :tool_providers, [])
+        |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :tools, 0)))
+        |> Enum.flat_map(& &1.tools())
+        |> Enum.flat_map(fn tool ->
+          name = tool[:name] || tool["name"]
+
+          actions =
+            get_in(tool, [:input_schema, "properties", "action", "enum"]) ||
+              get_in(tool, ["inputSchema", "properties", "action", "enum"]) || []
+
+          Enum.map(actions, &"#{name}.#{&1}")
+        end)
+        |> MapSet.new()
+
+      classified =
+        MapSet.union(
+          MapSet.new(Map.keys(ToolVisibility.action_permissions())),
+          ToolVisibility.public_actions()
+        )
+
+      unclassified = MapSet.difference(registered, classified)
+      stale = MapSet.difference(classified, registered)
+
+      assert MapSet.size(unclassified) == 0, """
+      New tool actions are unclassified — they would be HIDDEN from discovery:
+
+        #{unclassified |> MapSet.to_list() |> Enum.sort() |> Enum.join("\n  ")}
+
+      Add each to @action_permissions (with its permission) or @public_actions.
+      """
+
+      assert MapSet.size(stale) == 0, """
+      These classified actions are no longer registered — remove them:
+
+        #{stale |> MapSet.to_list() |> Enum.sort() |> Enum.join("\n  ")}
+      """
     end
   end
 end
