@@ -730,7 +730,7 @@ defmodule Sanctum.Context do
     admin/`:*` wildcard).
   - `{:tenant, record}` — permission + per-record `verify_tenant` (no owner).
   - `nil` / a shape with no tenant identity — permission + tenant *presence*
-    only. The storage primitive (`Arca.QueryHelpers.where_org_id/3`,
+    only. The storage primitive (`Arca.QueryHelpers.where_tenant/3`,
     `Arca.Storage.tenant_segments/1`) is a fail-closed **backstop** for these,
     not the primary control — so a tenant-bearing record must use a tuple
     above rather than rely on storage scoping.
@@ -814,7 +814,7 @@ defmodule Sanctum.Context do
   # that DOES carry a tenant must be passed as `{:execution|:owned|:tenant,
   # record}` so it is tenant-checked authoritatively above (a malformed such
   # tuple now fails closed in the clause directly above, not here). The storage
-  # primitive (`Arca.QueryHelpers.where_org_id/3` / `Arca.Storage.tenant_segments/1`)
+  # primitive (`Arca.QueryHelpers.where_tenant/3` / `Arca.Storage.tenant_segments/1`)
   # remains a fail-closed *backstop* — it scopes every query by org/project
   # and rejects an org-less tenant context — but it is no longer the control
   # for any caller that passes a tenant-bearing record.

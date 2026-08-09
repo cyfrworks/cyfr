@@ -734,4 +734,79 @@ defmodule Arca.MCPTest do
                })
     end
   end
+
+  describe "mcp_log.stats authorization" do
+    setup do
+      no_read_ctx = %Context{
+        user_id: "regular_user",
+        org_id: "local",
+        project_id: "default",
+        permissions: MapSet.new([:execute]),
+        scope: :project,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, no_read_ctx: no_read_ctx}
+    end
+
+    test "stats requires :read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error, msg} = MCP.handle("mcp_log", ctx, %{"action" => "stats"})
+      assert msg =~ "Unauthorized"
+    end
+
+    test "stats succeeds for a :storage_read context", %{ctx: ctx} do
+      assert {:ok, result} = MCP.handle("mcp_log", ctx, %{"action" => "stats"})
+      assert is_integer(result.total)
+      assert is_integer(result.errors)
+    end
+  end
+
+  # Walks every action each tool declares in its input schema and asserts the
+  # handler denies an unprivileged context. Pins authorization on all current
+  # actions and fails when a future action ships without an authorize call
+  # (an unauthorized probe must never fall through to a data-bearing path).
+  describe "declared tool actions all authorize" do
+    test "every declared action denies a context without permissions" do
+      no_perm_ctx = %Context{
+        user_id: "no_perm_user",
+        org_id: "local",
+        project_id: "default",
+        permissions: MapSet.new(),
+        scope: :project,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      # Minimal args per action so the call reaches the authorize path
+      # instead of the missing-required-argument clause. A new action with
+      # required args must be added here — the "Unauthorized" assert below
+      # fails on the missing-arg error otherwise, forcing the pin.
+      extra_args = fn
+        "get" -> %{"id" => "guard_probe"}
+        "correlate" -> %{"request_id" => "guard_probe"}
+        "fan_outs" -> %{"request_ids" => ["guard_probe"]}
+        "set" -> %{"settings" => %{"executions" => 5}}
+        _ -> %{}
+      end
+
+      for tool <- MCP.tools(),
+          action <- tool.input_schema["properties"]["action"]["enum"] do
+        args = Map.put(extra_args.(action), "action", action)
+
+        case MCP.handle(tool.name, no_perm_ctx, args) do
+          {:error, msg} ->
+            assert msg =~ "Unauthorized",
+                   "#{tool.name}.#{action} error is not a permission denial: #{inspect(msg)}"
+
+          other ->
+            flunk(
+              "#{tool.name}.#{action} succeeded for an unprivileged context: #{inspect(other)}"
+            )
+        end
+      end
+    end
+  end
 end

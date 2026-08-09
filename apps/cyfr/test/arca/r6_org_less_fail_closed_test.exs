@@ -6,9 +6,11 @@ defmodule Arca.R6OrgLessFailClosedTest do
   Defense-in-depth: an org-less *tenant* context must never alias another
   org's rows.
 
-  1. Read path — `Arca.QueryHelpers.where_org_id` fails closed (`where: false`)
-     for a non-platform org-less query, so a store that forgets the Sanctum
-     chokepoint still cannot leak.
+  1. Read path — `Arca.QueryHelpers.where_tenant/3` raises for an
+     authenticated non-platform context with a nil/"" org, so a store that
+     forgets the Sanctum chokepoint still cannot read the seeded local org's
+     rows. The bare-key `where_org_id/2` filter canonicalizes nil/"" to the
+     local sentinel (org strings carry no authentication state to judge).
   2. Write path / chokepoint — `Sanctum.Permission` calls
      `Context.require_tenant!`, and `Arca.Storage.tenant_segments/1` fails
      closed for a nil/"" org. The seeded `"local"` org substitutes the
@@ -40,12 +42,20 @@ defmodule Arca.R6OrgLessFailClosedTest do
       refute last_where_expr(q) == false
     end
 
-    test "where_tenant/3 scopes an org-less context to org + project" do
+    test "where_tenant/3 scopes an org-less UNauthenticated context to org + project" do
       ctx = Context.build(user_id: "u1", org_id: nil, project_id: "p1")
       q = QueryHelpers.where_tenant(base_query(), ctx)
       # Two filters (org_id + project_id), neither a fail-closed `false`.
       assert length(q.wheres) == 2
       refute Enum.any?(q.wheres, &(&1.expr == false))
+    end
+
+    test "where_tenant/3 raises for an org-less AUTHENTICATED tenant context" do
+      ctx = Context.build(user_id: "u1", org_id: nil, project_id: "p1", authenticated: true)
+
+      assert_raise ArgumentError, ~r/a resolved org_id is required/, fn ->
+        QueryHelpers.where_tenant(base_query(), ctx)
+      end
     end
   end
 

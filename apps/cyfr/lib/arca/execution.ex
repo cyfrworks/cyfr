@@ -203,8 +203,9 @@ defmodule Arca.Execution do
   Gets an execution by ID, scoped to the given tenant context.
 
   Platform scope bypasses tenant filtering. A non-platform context is scoped
-  via `where_tenant/2`, which normalizes a nil/empty org_id to the seeded
-  `"local"` sentinel — matching what `normalize_tenant_fields/1` writes.
+  via `where_tenant/2`: an unauthenticated/system org-less context normalizes
+  to the seeded `"local"` sentinel — matching what `normalize_tenant_fields/1`
+  writes — while an authenticated org-less one raises (fail closed).
   """
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{scope: :platform}, id) do

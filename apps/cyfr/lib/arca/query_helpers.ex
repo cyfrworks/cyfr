@@ -22,9 +22,15 @@ defmodule Arca.QueryHelpers do
   These helpers are a fail-closed **backstop**, not the authoritative tenant
   control. The authoritative per-record tenant + permission decision is
   `Sanctum.Context.authorize/3` (via `Sanctum.TenantPolicy`).
-  `where_org_id/3` additionally scopes every query and
-  rejects an org-less *tenant* context so a missed Sanctum-layer check still
-  cannot leak — but callers must not rely on it as the primary control.
+  `where_tenant/3` — the context-taking entry every tenant-scoped store
+  queries through — scopes the query to the context's org/project and raises
+  for an authenticated non-platform context whose org_id is still nil/`""`:
+  such a context bypassed the Sanctum chokepoint
+  (`Sanctum.Context.require_tenant!/1`), and silently normalizing it to the
+  seeded `"local"` org would read that org's rows. `where_org_id/2` /
+  `where_project_id/2` are plain normalizing filters for bare-key call sites
+  (org/project strings, no context to judge). Callers must not rely on any of
+  these as the primary control.
   """
 
   import Ecto.Query
@@ -52,22 +58,14 @@ defmodule Arca.QueryHelpers do
   @doc """
   Add an org_id filter to a query, scoping to the canonical org sentinel.
 
-  nil/"" canonicalize to the seeded `"local"` org. The org-less rejection for
-  authenticated contexts is enforced upstream by the Sanctum chokepoint
-  (`Sanctum.Context.require_tenant!/1`); this filter just scopes rows. The
-  `scope` arg is accepted for call-site symmetry but does not change the
-  filter (platform/system callers pass an explicit org or query their own).
+  nil/"" canonicalize to the seeded `"local"` org. This is the plain
+  normalizing filter for bare-key call sites (API-key / permission / webhook
+  lookups that carry an org string, not a context — there is no scope or
+  authentication state to judge here). Context-driven queries go through
+  `where_tenant/3`, which owns the org-less fail-closed rejection.
   """
   @spec where_org_id(Ecto.Queryable.t(), String.t() | nil) :: Ecto.Query.t()
-  def where_org_id(query, org_id), do: where_org_id(query, org_id, nil)
-
-  @spec where_org_id(Ecto.Queryable.t(), String.t() | nil, String.t() | atom() | nil) ::
-          Ecto.Query.t()
-  def where_org_id(query, org_id, _scope) do
-    # nil/"" canonicalize to the seeded "local" org — org-less data is local
-    # data. The authoritative org-less rejection lives in the Sanctum chokepoint
-    # (`Sanctum.Context.require_tenant!`), which keeps an unresolved
-    # authenticated context from ever reaching here.
+  def where_org_id(query, org_id) do
     from(q in query, where: q.org_id == ^normalize_org_id(org_id))
   end
 
@@ -76,14 +74,29 @@ defmodule Arca.QueryHelpers do
 
   Applies both `org_id` and `project_id` filters by default.
   Pass `skip_project: true` to filter by org_id only.
+
+  Fail-closed backstop: raises `ArgumentError` for an authenticated
+  non-platform context whose org_id is nil/`""` — such a context bypassed
+  `Sanctum.Context.require_tenant!/1`, and normalizing it to the seeded
+  `"local"` org would silently read that org's rows. `:platform` is exempt
+  (system/scheduled contexts legitimately cross tenants), as are
+  unauthenticated contexts (the public context has no tenant to protect and
+  is rejected from tenant-scoped routes upstream).
   """
   @spec where_tenant(Ecto.Queryable.t(), Sanctum.Context.t(), keyword()) :: Ecto.Query.t()
   def where_tenant(query, %Sanctum.Context{} = ctx, opts \\ []) do
-    # The org-less fail-closed guard lives in `where_org_id/3`, which exempts
-    # `:platform` (system/scheduled contexts legitimately have no org) —
-    # symmetric with `Sanctum.Context.require_tenant!/1`. Every store inherits
-    # it uniformly; there is no separate guard to keep in sync here.
-    query = where_org_id(query, ctx.org_id, to_string(ctx.scope))
+    # An authenticated tenant context must carry a resolved org before it may
+    # scope a query — every store inherits this guard uniformly through the
+    # single context-taking entry. Exempting :platform is symmetric with
+    # `Sanctum.Context.require_tenant!/1` and `Arca.Storage.tenant_segments/1`.
+    if ctx.authenticated and ctx.scope != :platform and ctx.org_id in [nil, ""] do
+      raise ArgumentError,
+            "Arca.QueryHelpers.where_tenant/3: a resolved org_id is required " <>
+              "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
+              "auth_method=#{inspect(ctx.auth_method)})"
+    end
+
+    query = where_org_id(query, ctx.org_id)
 
     if Keyword.get(opts, :skip_project, false) do
       query

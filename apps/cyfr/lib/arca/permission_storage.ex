@@ -24,7 +24,7 @@ defmodule Arca.PermissionStorage do
     only: [
       normalize_org_id: 1,
       normalize_project_id: 1,
-      where_org_id: 3,
+      where_org_id: 2,
       where_project_id: 2
     ]
 
@@ -55,7 +55,7 @@ defmodule Arca.PermissionStorage do
         limit: 1,
         select: p.permissions
       )
-      |> where_org_id(org_id, scope_type)
+      |> where_org_id(org_id)
       |> where_project_id(project_id)
 
     case Arca.Repo.one(query) do
@@ -137,7 +137,7 @@ defmodule Arca.PermissionStorage do
         select: %{subject: p.subject, permissions: p.permissions},
         order_by: p.subject
       )
-      |> where_org_id(org_id, scope_type)
+      |> where_org_id(org_id)
       |> where_project_id(project_id)
 
     {:ok, Arca.Repo.all(query)}
@@ -163,7 +163,7 @@ defmodule Arca.PermissionStorage do
       from(p in Permission,
         where: p.subject == ^subject and p.scope_type == ^scope_type
       )
-      |> where_org_id(org_id, scope_type)
+      |> where_org_id(org_id)
       |> where_project_id(project_id)
 
     Arca.Repo.delete_all(query)

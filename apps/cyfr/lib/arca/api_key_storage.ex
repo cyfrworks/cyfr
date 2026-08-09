@@ -28,7 +28,7 @@ defmodule Arca.ApiKeyStorage do
     only: [
       normalize_org_id: 1,
       normalize_project_id: 1,
-      where_org_id: 3,
+      where_org_id: 2,
       where_project_id: 2
     ]
 
@@ -116,7 +116,7 @@ defmodule Arca.ApiKeyStorage do
         select: ^@returned_fields
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -193,7 +193,7 @@ defmodule Arca.ApiKeyStorage do
         select: ^@returned_fields
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     {:ok, Arca.Repo.all(query)}
   rescue
@@ -216,7 +216,7 @@ defmodule Arca.ApiKeyStorage do
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.update_all(query, set: [revoked: true, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -251,7 +251,7 @@ defmodule Arca.ApiKeyStorage do
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.update_all(query,
            set: [

@@ -26,7 +26,7 @@ defmodule Arca.WebhookStorage do
   import Ecto.Query
 
   import Arca.QueryHelpers,
-    only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 3, where_project_id: 2]
+    only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 2, where_project_id: 2]
 
   alias Arca.Schemas.Webhook
 
@@ -115,7 +115,7 @@ defmodule Arca.WebhookStorage do
         limit: 1
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -161,7 +161,7 @@ defmodule Arca.WebhookStorage do
         ]
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     {:ok, Arca.Repo.all(query)}
   rescue
@@ -202,7 +202,7 @@ defmodule Arca.WebhookStorage do
           where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
         )
 
-      query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+      query = query |> where_org_id(org_id) |> where_project_id(project)
 
       case Arca.Repo.update_all(query, set: allowed ++ [updated_at: now]) do
         {0, _} -> {:error, :not_found}
@@ -229,7 +229,7 @@ defmodule Arca.WebhookStorage do
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.update_all(query, set: [enabled: false, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -272,7 +272,7 @@ defmodule Arca.WebhookStorage do
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
       )
 
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     # Capture the outgoing secret so it stays valid through the grace window.
     case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do

@@ -502,22 +502,24 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
-    since_hours = args["since_hours"] || 1
+    with :ok <- authorize(ctx, :read) do
+      since_hours = args["since_hours"] || 1
 
-    since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
+      since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
-    opts = [since: since, org_id: ctx.org_id, project_id: ctx.project_id]
-    stats = Arca.McpLog.stats(opts)
+      opts = [since: since, org_id: ctx.org_id, project_id: ctx.project_id]
+      stats = Arca.McpLog.stats(opts)
 
-    {:ok,
-     %{
-       since: DateTime.to_iso8601(since),
-       total: stats.total,
-       errors: stats.errors,
-       avg_duration_ms: stats.avg_duration_ms,
-       error_rate:
-         if(stats.total > 0, do: Float.round(stats.errors / stats.total * 100, 1), else: 0.0)
-     }}
+      {:ok,
+       %{
+         since: DateTime.to_iso8601(since),
+         total: stats.total,
+         errors: stats.errors,
+         avg_duration_ms: stats.avg_duration_ms,
+         error_rate:
+           if(stats.total > 0, do: Float.round(stats.errors / stats.total * 100, 1), else: 0.0)
+       }}
+    end
   end
 
   def handle("mcp_log", _ctx, _args) do
