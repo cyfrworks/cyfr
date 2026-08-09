@@ -209,8 +209,16 @@ defmodule Arca.ComponentStorage do
   def list_components(%Context{} = ctx, opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
 
+    # Stable baseline ordering so row order (and thus limit truncation) is
+    # identical on every adapter. Semver-aware "latest" cannot be expressed
+    # portably in SQL — callers that need it sort in Elixir
+    # (Compendium.Registry.latest_row/4); this order_by only removes
+    # adapter-defined nondeterminism.
     query =
-      from(c in Component, limit: ^limit)
+      from(c in Component,
+        order_by: [desc: c.inserted_at, asc: c.name, asc: c.version, asc: c.id],
+        limit: ^limit
+      )
       |> where_tenant(ctx)
 
     query =

@@ -217,15 +217,10 @@ defmodule Compendium.DependencyResolver do
 
     result =
       if version == nil do
-        case Arca.ComponentStorage.list_components(ctx,
-               name: name,
-               publisher: namespace,
-               component_type: component_type
-             ) do
-          {:ok, [latest | _]} -> {:ok, latest}
-          {:ok, []} -> {:error, :not_found}
-          error -> error
-        end
+        # Versionless deps resolve through the registry's semver-aware
+        # "latest" — the same pick the activation graph records — rather
+        # than whatever row the adapter happens to return first.
+        Compendium.Registry.latest_row(ctx, name, namespace, component_type)
       else
         Arca.ComponentStorage.get_component(ctx, name, version, namespace, component_type)
       end

@@ -162,15 +162,10 @@ defmodule Compendium.Activation do
         dep.dep_type
       )
     else
-      case Arca.ComponentStorage.list_components(ctx,
-             name: dep.dep_name,
-             publisher: dep.dep_namespace,
-             component_type: dep.dep_type
-           ) do
-        {:ok, [latest | _]} -> {:ok, latest}
-        {:ok, []} -> {:error, :not_found}
-        error -> error
-      end
+      # A versionless dep must resolve to the same release everywhere — the
+      # activation digest is computed from this row, so "latest" is the
+      # registry's semver-aware pick, never adapter row order.
+      Compendium.Registry.latest_row(ctx, dep.dep_name, dep.dep_namespace, dep.dep_type)
     end
   end
 

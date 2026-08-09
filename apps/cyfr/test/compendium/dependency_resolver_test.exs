@@ -276,4 +276,37 @@ defmodule Compendium.DependencyResolverTest do
       description: "Test #{name}"
     })
   end
+
+  # ============================================================================
+  # Versionless "latest" determinism
+  # ============================================================================
+
+  describe "versionless dependency resolution" do
+    test "resolves to the semver-latest release, not adapter row order", %{ctx: ctx} do
+      {:ok, _} = register_test_component(ctx, "marker-dep", "1.0.0", "reagent")
+      {:ok, _} = register_test_component(ctx, "multi-ver", "1.0.0", "reagent")
+      {:ok, _} = register_test_component(ctx, "multi-ver", "1.2.0", "reagent")
+
+      # "1.10.0" sorts before "1.2.0" lexically but after it semantically.
+      # Only this release declares a child, so a subtree under the node
+      # proves which release's manifest was resolved.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "multi-ver",
+          version: "1.10.0",
+          type: "reagent",
+          manifest:
+            Jason.encode!(%{
+              "dependencies" => %{"static" => [%{"ref" => "reagent:local.marker-dep:1.0.0"}]}
+            })
+        })
+
+      manifest = %{"dependencies" => %{"static" => [%{"ref" => "reagent:local.multi-ver"}]}}
+
+      assert {:ok, [node]} = DependencyResolver.resolve_tree(ctx, "comp_root", manifest)
+      assert node.dep_name == "multi-ver"
+      assert [child] = node.children
+      assert child.dep_name == "marker-dep"
+    end
+  end
 end

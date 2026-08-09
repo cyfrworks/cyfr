@@ -1,11 +1,34 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Compendium.RegistryTest.FailingPutAdapter do
+  @moduledoc false
+  # Delegates to the Local adapter but refuses to write `boom.txt` —
+  # simulates an object-store write failing partway through a multi-file
+  # tincture store.
+  defdelegate get(ctx, path), to: Arca.Adapters.Local
+  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate delete(ctx, path), to: Arca.Adapters.Local
+  defdelegate list(ctx, path), to: Arca.Adapters.Local
+  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
+  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+
+  def put(ctx, path, content) do
+    if List.last(path) == "boom.txt" do
+      {:error, :injected_write_failure}
+    else
+      Arca.Adapters.Local.put(ctx, path, content)
+    end
+  end
+end
+
 defmodule Compendium.RegistryTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Registry
-  alias Sanctum.Context
 
   # Valid minimal WASM with export section
   # magic + version
@@ -1266,15 +1289,141 @@ defmodule Compendium.RegistryTest do
       # rejected at decompression, before any tar extraction or filesystem write.
       archive = :zlib.gzip(String.duplicate("A", 50_000))
 
+      # Non-local publisher: this ingress refuses `local` outright, and the
+      # point here is the decompression bound, not the namespace gate.
       assert {:error, msg} =
                Registry.publish_tincture_archive(ctx, archive, %{
                  name: "bomb-test",
                  version: "1.0.0",
                  type: "tincture",
-                 publisher: "local"
+                 publisher: "acme"
                })
 
       assert msg =~ "decompresses beyond"
     end
+  end
+
+  describe "remote-origin publishes — local namespace refusal" do
+    test "publish_bytes refuses remote content into the local namespace", %{ctx: ctx} do
+      assert {:error, {:namespace_rejected, msg}} =
+               Registry.publish_bytes(
+                 ctx,
+                 @valid_wasm,
+                 %{name: "sneaky", version: "1.0.0", type: "reagent", publisher: "local"},
+                 allow_overwrite: true,
+                 origin: :remote
+               )
+
+      assert msg =~ "local"
+      assert {:error, :not_found} = Registry.get(ctx, "sneaky", "1.0.0")
+    end
+
+    test "an absent publisher normalizes to local and is refused for remote content", %{ctx: ctx} do
+      assert {:error, {:namespace_rejected, _}} =
+               Registry.publish_bytes(
+                 ctx,
+                 @valid_wasm,
+                 %{name: "sneaky-default", version: "1.0.0", type: "reagent"},
+                 origin: :remote
+               )
+    end
+
+    test "a non-local publisher passes the origin gate", %{ctx: ctx} do
+      assert {:ok, component} =
+               Registry.publish_bytes(
+                 ctx,
+                 @valid_wasm,
+                 %{name: "remote-fine", version: "1.0.0", type: "reagent", publisher: "acme"},
+                 origin: :remote
+               )
+
+      assert component.publisher == "acme"
+    end
+
+    test "local publishes without a remote origin keep working", %{ctx: ctx} do
+      assert {:ok, component} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "local-still-ok",
+                 version: "1.0.0",
+                 type: "reagent"
+               })
+
+      assert component.publisher == "local"
+    end
+
+    test "publish_tincture_archive refuses the local namespace unconditionally", %{ctx: ctx} do
+      # The refusal fires before the archive is even decompressed, so any
+      # bytes will do.
+      archive = :zlib.gzip("irrelevant")
+
+      assert {:error, {:namespace_rejected, _}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "sneaky-tincture",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "local"
+               })
+
+      # An absent publisher normalizes to local — refused all the same.
+      assert {:error, {:namespace_rejected, _}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "sneaky-tincture",
+                 version: "1.0.0",
+                 type: "tincture"
+               })
+    end
+  end
+
+  describe "publish_tincture_archive/4 — partial storage failure" do
+    test "a failed file write aborts registration and cleans up partial files", %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :storage_adapter)
+      Application.put_env(:cyfr, :storage_adapter, Compendium.RegistryTest.FailingPutAdapter)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :storage_adapter, original),
+          else: Application.delete_env(:cyfr, :storage_adapter)
+      end)
+
+      archive =
+        tincture_archive([
+          {"cyfr-manifest.json",
+           Jason.encode!(%{"name" => "partial", "version" => "1.0.0", "type" => "tincture"})},
+          {"index.html", "<html></html>"},
+          {"boom.txt", "this write fails"}
+        ])
+
+      assert {:error, {:tincture_store_failed, :injected_write_failure}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "partial",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "acme"
+               })
+
+      # Nothing registered — a component whose stored files do not match its
+      # digest must never appear healthy.
+      assert {:error, :not_found} = Registry.get(ctx, "partial", "1.0.0")
+
+      # And any files that landed before the failure were cleaned up.
+      version_dir =
+        Compendium.ComponentPath.version_dir("tincture", "acme", "partial", "1.0.0", ctx)
+
+      case Arca.list(ctx, version_dir) do
+        {:ok, entries} -> assert entries == []
+        {:error, _not_found} -> :ok
+      end
+    end
+  end
+
+  # Gzipped tar archive from {path, content} entries (OTP 28-compatible:
+  # :erl_tar's :memory create is unreliable, so round-trip a tmp file).
+  defp tincture_archive(files) do
+    tmp = Path.join(System.tmp_dir!(), "cyfr_tincture_fixture_#{:rand.uniform(1_000_000)}.tar")
+    entries = Enum.map(files, fn {path, content} -> {String.to_charlist(path), content} end)
+    :ok = :erl_tar.create(String.to_charlist(tmp), entries)
+    {:ok, tar} = File.read(tmp)
+    File.rm!(tmp)
+    :zlib.gzip(tar)
   end
 end

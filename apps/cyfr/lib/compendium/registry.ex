@@ -136,6 +136,10 @@ defmodule Compendium.Registry do
 
   - `:allow_overwrite` - When true, overwrites existing components instead of
     rejecting duplicates. Used by OCI pull to update cached components.
+  - `:origin` - `:remote` marks the bytes as sourced from a remote registry
+    (the OCI pull path). Remote content may never mint into the `local`
+    publisher namespace — that namespace is reserved for components
+    registered from the filesystem.
 
   ## Returns
 
@@ -155,6 +159,7 @@ defmodule Compendium.Registry do
          {:ok, validation} <- Validator.validate(wasm_bytes),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
+         :ok <- validate_publish_origin(publisher, Keyword.get(opts, :origin)),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_capability_blocks(manifest_map),
@@ -211,6 +216,10 @@ defmodule Compendium.Registry do
          :ok <- validate_version(version),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
+         # This ingress only ever carries registry-sourced archives (local
+         # tinctures register from the filesystem), so the local-namespace
+         # refusal is unconditional here — no origin marker to forget.
+         :ok <- validate_publish_origin(publisher, :remote),
          manifest_bytes = Map.get(metadata, :manifest),
          # Validate the manifest blocks on the OCI pull path too — the WASM
          # path (publish_bytes/4) already does, and a manifest sourced from a
@@ -486,7 +495,32 @@ defmodule Compendium.Registry do
   """
   def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
-    opts = [name: name]
+    case latest_row(ctx, name, publisher, component_type) do
+      {:ok, row} -> {:ok, decode_row_json_fields(row)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Get the latest version's raw storage row for a component by name.
+
+  The single "latest" ordering every resolver shares: semver-aware sort in
+  Elixir over the complete version set (adapter row order is never the
+  authority — `"1.10.0"` sorts before `"1.2.0"` lexically but after it
+  semantically), with `inserted_at` as the tiebreak. Activation digests are
+  computed from this pick, so it must be deterministic and identical on
+  every adapter.
+
+  Returns the undecoded row (as `Arca.ComponentStorage` produced it);
+  `get_latest/4` wraps it in the decoded document shape.
+  """
+  @spec latest_row(Context.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, :not_found | term()}
+  def latest_row(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
+      when is_binary(name) do
+    # A single name rarely has more than a handful of versions; the raised
+    # limit just guarantees the sort sees all of them.
+    opts = [name: name, limit: 10_000]
     opts = if publisher, do: Keyword.put(opts, :publisher, publisher), else: opts
     opts = if component_type, do: Keyword.put(opts, :component_type, component_type), else: opts
 
@@ -505,7 +539,6 @@ defmodule Compendium.Registry do
             end
           end)
           |> List.first()
-          |> decode_row_json_fields()
 
         {:ok, latest}
 
@@ -682,8 +715,17 @@ defmodule Compendium.Registry do
                     ctx
                   )
 
-                store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
-                {:ok, validation}
+                case store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir) do
+                  :ok ->
+                    {:ok, validation}
+
+                  {:error, reason} ->
+                    # A partial write must never register: the stored files
+                    # would not match the component's digest. Best-effort
+                    # cleanup so a retry starts from an empty version dir.
+                    Arca.delete_tree(ctx, version_dir)
+                    {:error, {:tincture_store_failed, reason}}
+                end
               end
 
             {:error, reason} ->
@@ -762,20 +804,35 @@ defmodule Compendium.Registry do
   # arca:bypass-ok=D — recursively walks the tar-extract tmp dir set up by
   # `extract_and_store_tincture/5` and writes each file back through
   # `Arca.put/3`. Once this returns, no Arca content lives on local FS.
+  #
+  # Halts on the first failed write and returns the error: a partially
+  # stored tincture must abort registration, or the registry would record a
+  # healthy component whose stored files do not match its digest.
   defp store_tincture_files(ctx, base_dir, current_dir, arca_base) do
-    for entry <- File.ls!(current_dir),
-        entry not in @tincture_excluded_on_pull do
+    current_dir
+    |> File.ls!()
+    |> Enum.reject(&(&1 in @tincture_excluded_on_pull))
+    |> Enum.reduce_while(:ok, fn entry, :ok ->
       path = Path.join(current_dir, entry)
 
-      if File.dir?(path) do
-        store_tincture_files(ctx, base_dir, path, arca_base)
-      else
-        rel = Path.relative_to(path, base_dir)
-        segments = arca_base ++ String.split(rel, "/")
-        {:ok, content} = File.read(path)
-        Arca.put(ctx, segments, content)
+      result =
+        if File.dir?(path) do
+          store_tincture_files(ctx, base_dir, path, arca_base)
+        else
+          rel = Path.relative_to(path, base_dir)
+          segments = arca_base ++ String.split(rel, "/")
+
+          case File.read(path) do
+            {:ok, content} -> Arca.put(ctx, segments, content)
+            {:error, reason} -> {:error, {:tincture_read_failed, rel, reason}}
+          end
+        end
+
+      case result do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
       end
-    end
+    end)
   end
 
   # ============================================================================
@@ -1062,6 +1119,24 @@ defmodule Compendium.Registry do
   end
 
   defp validate_publish_namespace(_publisher, _ctx), do: :ok
+
+  # The `local` namespace is the highest-trust one: the scanner indexes it and
+  # the seeder copies it into every new project. Remote (registry-sourced)
+  # content must never mint a component there, however the ref was spelled on
+  # the way in. Direct local publishes (no `:remote` origin) are unaffected —
+  # they are same-machine callers, equivalent in trust to the register path.
+  defp validate_publish_origin(publisher, :remote) do
+    if ComponentPath.local_publisher?(publisher) do
+      {:error,
+       {:namespace_rejected,
+        "remote content cannot be published into the 'local' namespace — " <>
+          "local components are registered from the filesystem, never pulled"}}
+    else
+      :ok
+    end
+  end
+
+  defp validate_publish_origin(_publisher, _origin), do: :ok
 
   defp validate_name(name) do
     case Sanctum.ComponentRef.validate_name(name) do

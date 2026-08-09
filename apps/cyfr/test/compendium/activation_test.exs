@@ -174,6 +174,36 @@ defmodule Compendium.ActivationTest do
       refute graph["reagent:local.pinned"] == v2.release_digest
     end
 
+    test "a versionless dependency resolves to the semver-latest release, not row order", %{
+      ctx: ctx
+    } do
+      publish!(ctx, "marker")
+      publish!(ctx, "multi-ver", version: "1.0.0")
+      publish!(ctx, "multi-ver", version: "1.2.0")
+
+      # "1.10.0" sorts before "1.2.0" lexically but after it semantically —
+      # only a semver-aware pick lands here. This release alone declares the
+      # marker dep, so the graph also proves which manifest was walked.
+      publish!(ctx, "multi-ver",
+        version: "1.10.0",
+        manifest: %{
+          "dependencies" => %{"static" => [%{"ref" => "reagent:local.marker:1.0.0"}]}
+        }
+      )
+
+      root =
+        publish!(ctx, "latest-root",
+          type: "formula",
+          manifest: %{"dependencies" => %{"static" => [%{"ref" => "reagent:local.multi-ver"}]}}
+        )
+
+      assert {:ok, %{graph: graph}} = Activation.resolve(ctx, root)
+
+      assert graph["reagent:local.multi-ver"] == row!(ctx, "multi-ver", "1.10.0").release_digest
+      refute graph["reagent:local.multi-ver"] == row!(ctx, "multi-ver", "1.2.0").release_digest
+      assert Map.has_key?(graph, "reagent:local.marker")
+    end
+
     test "cycles and diamonds terminate", %{ctx: ctx} do
       # a -> b -> a
       publish!(ctx, "cyc-b",
