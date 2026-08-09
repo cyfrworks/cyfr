@@ -37,7 +37,9 @@ defmodule Opus.ExecutionEventBuffer do
   @buffer_ttl_ms :timer.minutes(10)
   @idle_timeout :timer.minutes(2)
 
-  defp pubsub, do: Application.get_env(:cyfr, :pubsub, Emissary.PubSub)
+  # The application's single supervised PubSub. The old `:cyfr, :pubsub` knob was
+  # never set anywhere; the name is a compile-time constant.
+  defp pubsub, do: Emissary.PubSub
 
   defp put_provenance(event, opts) do
     case Keyword.get(opts, :origin) do

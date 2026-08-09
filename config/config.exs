@@ -57,8 +57,14 @@ config :phoenix, :json_library, Jason
 # Redact sensitive values from inbound request logs.
 # Note: this only masks inbound request params. Outbound response bodies must be
 # redacted separately — see Compendium.Registry.Client token-redacting wrapper.
-config :phoenix, :filter_parameters,
-  ["password", "secret", "token", "push_token", "access_token", "client_secret"]
+config :phoenix, :filter_parameters, [
+  "password",
+  "secret",
+  "token",
+  "push_token",
+  "access_token",
+  "client_secret"
+]
 
 # Arca Repo adapter is selected at build time — Ecto can't swap adapters at
 # runtime. Default is SQLite; set CYFR_DATABASE=postgres to build for
@@ -94,13 +100,9 @@ config :cyfr,
   components_path: Path.expand("./components"),
   aqua_path: Path.expand("./aqua")
 
-# WIT path for component scaffolding and WASM builds
+# WIT path + build timeout for component scaffolding and WASM builds. Locus
+# reads these under the `:cyfr` app key (Locus.Builder), not `:locus`.
 config :cyfr, :wit_path, Path.expand("../wit", __DIR__)
-
-# Locus Build Service Configuration
-config :locus,
-  wit_path: Path.expand("../wit", __DIR__),
-  compile_timeout_ms: 300_000
 
 # CORS Configuration — wildcard default for fresh installs. The boot guard in
 # Cyfr.Application requires an explicit allowlist once authentication is
@@ -135,7 +137,8 @@ config :cyfr, PrismWeb.Endpoint,
 config :esbuild,
   version: "0.25.0",
   prism: [
-    args: ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
+    args:
+      ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
     cd: Path.expand("../apps/cyfr/assets", __DIR__),
     env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
   ]
@@ -153,8 +156,7 @@ config :tailwind,
 
 # Ueberauth base configuration
 # Provider strategies are configured at runtime based on environment.
-config :ueberauth, Ueberauth,
-  providers: []
+config :ueberauth, Ueberauth, providers: []
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

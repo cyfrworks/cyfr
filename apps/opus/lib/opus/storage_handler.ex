@@ -192,7 +192,7 @@ defmodule Opus.StorageHandler do
   defp validate_public_quota(_action, _request, _ctx, _opts), do: :ok
 
   defp default_public_quota do
-    Application.get_env(:opus, :public_storage_quota, %{
+    Application.get_env(:cyfr, :public_storage_quota, %{
       max_bytes: 26_214_400,
       max_files: 200
     })
