@@ -39,29 +39,53 @@ defmodule Arca.Cache.Sweeper do
   end
 
   @doc """
-  Run a sweep immediately. Removes all expired entries from the cache table.
+  Run a sweep immediately: remove expired entries, then enforce the size cap
+  as a backstop. Returns the number of expired entries removed.
+
+  Both run here, off the `Arca.Cache.put/3` hot path — a request never pays for
+  an O(n) eviction scan. With attacker-cardinality counters moved to
+  `Cyfr.RateLimiter`, the cap is a defense-in-depth bound, not a load-bearing
+  eviction path.
   """
   @spec sweep() :: non_neg_integer()
   def sweep do
     table = Arca.Cache.table_name()
     now = System.monotonic_time(:millisecond)
 
-    :ets.foldl(
-      fn {_key, _value, expires_at} = entry, count ->
-        if now >= expires_at do
-          :ets.delete_object(table, entry)
-          count + 1
-        else
-          count
-        end
-      end,
-      0,
-      table
-    )
+    expired =
+      :ets.foldl(
+        fn {_key, _value, expires_at} = entry, count ->
+          if now >= expires_at do
+            :ets.delete_object(table, entry)
+            count + 1
+          else
+            count
+          end
+        end,
+        0,
+        table
+      )
+
+    enforce_cap(table, Arca.Cache.max_entries())
+    expired
   rescue
     e in ArgumentError ->
       Logger.warning("[Arca.Cache.Sweeper] Sweep failed: #{Exception.message(e)}")
       0
+  end
+
+  # After expired rows are gone, if the table is still over the cap, drop the
+  # nearest-to-expiry rows down to it. Runs at most once per interval.
+  defp enforce_cap(table, max) do
+    size = :ets.info(table, :size)
+
+    if is_integer(size) and size > max do
+      table
+      |> :ets.tab2list()
+      |> Enum.sort_by(fn {_key, _value, expires_at} -> expires_at end)
+      |> Enum.take(size - max)
+      |> Enum.each(fn {key, _value, _expires_at} -> :ets.delete(table, key) end)
+    end
   end
 
   defp schedule_sweep do

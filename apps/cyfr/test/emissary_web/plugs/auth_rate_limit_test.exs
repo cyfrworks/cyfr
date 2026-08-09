@@ -7,14 +7,13 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
   alias EmissaryWeb.Plugs.AuthRateLimit
 
   setup do
-    Arca.Cache.init()
+    # Counters live in Cyfr.RateLimiter's own table; start each test clean.
+    Cyfr.RateLimiter.reset()
 
     original_trust = Application.get_env(:cyfr, :trust_x_forwarded_for)
 
-    # Prevent cross-test pollution: wipe every :rate_limit entry this plug
-    # might have written. Match the 3-tuple key shape used by AuthRateLimit.
     on_exit(fn ->
-      Arca.Cache.delete_match({:rate_limit, :_, :_})
+      Cyfr.RateLimiter.reset()
 
       case original_trust do
         nil -> Application.delete_env(:cyfr, :trust_x_forwarded_for)
@@ -95,12 +94,11 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
 
       assert AuthRateLimit.call(conn_from(ip), opts).halted
 
-      # Rewrite the Arca.Cache entry with a timestamp far in the past so
-      # the plug treats it as a new window on the next call. Mirrors the
-      # TTL-expiry technique used in personal_namespace_cache_test.exs.
+      # Backdate the stored counter past the window so the plug opens a fresh
+      # window on the next call. The Cyfr.RateLimiter row is {key, count, start}.
       key = {:rate_limit, :test_bucket, :inet.ntoa(ip) |> to_string()}
       past = System.monotonic_time(:millisecond) - 90_000
-      Arca.Cache.put(key, {0, past}, 60_000)
+      :ets.insert(Cyfr.RateLimiter.table_name(), {key, 3, past})
 
       result = AuthRateLimit.call(conn_from(ip), opts)
       refute result.halted

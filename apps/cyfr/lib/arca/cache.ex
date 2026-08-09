@@ -6,8 +6,13 @@ defmodule Arca.Cache do
   ETS-backed read-through cache with TTL support.
 
   A valid public API for ephemeral in-memory data. Services may use
-  `Arca.Cache` directly for short-lived, non-persistent state such as
-  rate-limit counters, MCP sessions, and SSE buffers.
+  `Arca.Cache` directly for short-lived, non-persistent state such as MCP
+  sessions and SSE buffers.
+
+  Attacker-cardinality state does **not** belong here: request rate-limit
+  counters live in `Cyfr.RateLimiter`'s own table, so a flood cannot evict
+  sessions or OAuth state from this shared one. Eviction and expiry run on
+  `Arca.Cache.Sweeper`'s timer, never on the `put/3` hot path.
 
   For persistent data, services call the appropriate `Arca.*Storage` module directly.
 
@@ -75,7 +80,6 @@ defmodule Arca.Cache do
   """
   @spec put(term(), term(), non_neg_integer()) :: :ok | {:error, :cache_unavailable}
   def put(key, value, ttl_ms) do
-    maybe_evict()
     expires_at = System.monotonic_time(:millisecond) + ttl_ms
     :ets.insert(@table_name, {key, value, expires_at})
     :ok
@@ -167,41 +171,6 @@ defmodule Arca.Cache do
   @doc false
   def table_name, do: @table_name
 
-  # Evict entries when at the size limit.
-  # First bulk-delete expired entries (common case, avoids full scan).
-  # Only fall back to nearest-to-expiry eviction if no expired entries were swept.
-  defp maybe_evict do
-    size = :ets.info(@table_name, :size)
-
-    if size >= @max_entries do
-      now = System.monotonic_time(:millisecond)
-
-      # Bulk-delete all expired entries using a match spec
-      expired_count =
-        :ets.select_delete(@table_name, [
-          {{:_, :_, :"$1"}, [{:"=<", :"$1", now}], [true]}
-        ])
-
-      if expired_count == 0 do
-        # No expired entries found — evict the nearest-to-expiry entry
-        case :ets.foldl(
-               fn
-                 {key, _val, exp}, nil -> {key, exp}
-                 {key, _val, exp}, {_ak, ae} when exp < ae -> {key, exp}
-                 _entry, acc -> acc
-               end,
-               nil,
-               @table_name
-             ) do
-          {evict_key, _expires_at} ->
-            :ets.delete(@table_name, evict_key)
-
-          nil ->
-            :ok
-        end
-      end
-    end
-  rescue
-    ArgumentError -> :ok
-  end
+  @doc false
+  def max_entries, do: @max_entries
 end

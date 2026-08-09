@@ -64,6 +64,9 @@ defmodule Cyfr.Application do
       Arca.Cache.Sweeper,
       Arca.RetentionScheduler,
       Arca.AuditHandler,
+      # Request rate-limit counters — own table, isolated from Arca.Cache so an
+      # attacker-cardinality flood cannot evict sessions or OAuth state.
+      Cyfr.RateLimiter,
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:cyfr, :dns_cluster_query) || :ignore},

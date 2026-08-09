@@ -17,7 +17,7 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
         max_requests: 10,
         window_ms: 60_000
 
-  Counters live in `Arca.Cache` (ETS) so the plug is single-node only; the
+  Counters live in `Cyfr.RateLimiter` (ETS) so the plug is single-node only; the
   off-by-one on concurrent boundary requests is acceptable for rate limits
   (not a security boundary). For multi-node deployments the counter needs
   a shared store, out of scope here.
@@ -40,26 +40,16 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
   def call(conn, %{bucket: bucket, max_requests: max_requests, window_ms: window_ms}) do
     ip = Sanctum.ClientIp.resolve(conn)
     key = {:rate_limit, bucket, ip}
-    now = System.monotonic_time(:millisecond)
 
-    case Arca.Cache.get(key) do
-      {:ok, {count, window_start}} when now - window_start < window_ms ->
-        if count >= max_requests do
-          remaining_ms = window_ms - (now - window_start)
-          retry_after = max(div(remaining_ms, 1000), 1)
-
-          conn
-          |> put_resp_header("retry-after", to_string(retry_after))
-          |> send_resp(429, "Rate limit exceeded. Try again in #{retry_after} seconds.")
-          |> halt()
-        else
-          Arca.Cache.put(key, {count + 1, window_start}, window_ms)
-          conn
-        end
-
-      _ ->
-        Arca.Cache.put(key, {1, now}, window_ms)
+    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+      :ok ->
         conn
+
+      {:deny, retry_after} ->
+        conn
+        |> put_resp_header("retry-after", to_string(retry_after))
+        |> send_resp(429, "Rate limit exceeded. Try again in #{retry_after} seconds.")
+        |> halt()
     end
   end
 end

@@ -7,7 +7,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimitTest do
   alias EmissaryWeb.Plugs.MCPRateLimit
 
   setup do
-    Arca.Cache.init()
+    Cyfr.RateLimiter.reset()
 
     original_max = Application.get_env(:cyfr, :mcp_rate_limit_max)
     original_window = Application.get_env(:cyfr, :mcp_rate_limit_window_ms)
@@ -28,7 +28,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimitTest do
       restore.(:mcp_rate_limit_max, original_max)
       restore.(:mcp_rate_limit_window_ms, original_window)
       restore.(:trust_x_forwarded_for, original_trust)
-      Arca.Cache.delete_match({:rate_limit, :_, :_})
+      Cyfr.RateLimiter.reset()
     end)
 
     :ok

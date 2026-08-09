@@ -24,7 +24,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   tenant+component via `Opus.RateLimiter`, while this plug always bounds
   per-IP request volume — including for tinctures with no policy limit.
 
-  Counters live in `Arca.Cache` (ETS) so the plug is single-node only; the
+  Counters live in `Cyfr.RateLimiter` (ETS) so the plug is single-node only; the
   off-by-one on concurrent boundary requests is acceptable for rate limits
   (not a security boundary).
 
@@ -60,29 +60,16 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
       end
 
     key = {:rate_limit, bucket, ip, publisher, tincture_name}
-    now = System.monotonic_time(:millisecond)
 
-    # Non-atomic read-check-write — two concurrent requests at the limit
-    # boundary could both pass. Acceptable for rate limiting (off-by-one,
-    # not a security boundary).
-    case Arca.Cache.get(key) do
-      {:ok, {count, window_start}} when now - window_start < window_ms ->
-        if count >= max_requests do
-          remaining_ms = window_ms - (now - window_start)
-          retry_after = max(div(remaining_ms, 1000), 1)
-
-          conn
-          |> put_resp_header("retry-after", to_string(retry_after))
-          |> send_resp(429, "Rate limit exceeded. Try again in #{retry_after} seconds.")
-          |> halt()
-        else
-          Arca.Cache.put(key, {count + 1, window_start}, window_ms)
-          conn
-        end
-
-      _ ->
-        Arca.Cache.put(key, {1, now}, window_ms)
+    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+      :ok ->
         conn
+
+      {:deny, retry_after} ->
+        conn
+        |> put_resp_header("retry-after", to_string(retry_after))
+        |> send_resp(429, "Rate limit exceeded. Try again in #{retry_after} seconds.")
+        |> halt()
     end
   end
 end

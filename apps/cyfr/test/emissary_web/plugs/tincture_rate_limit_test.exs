@@ -7,7 +7,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
   alias EmissaryWeb.Plugs.TinctureRateLimit
 
   setup do
-    Arca.Cache.init()
+    Cyfr.RateLimiter.reset()
 
     # config/test.exs disables the limit globally (1_000_000); exercise the
     # real per-pipeline limits here by removing the override.
@@ -16,7 +16,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
     Application.delete_env(:cyfr, :tincture_rate_limit_max)
 
     on_exit(fn ->
-      Arca.Cache.delete_match({:rate_limit, :_, :_, :_, :_})
+      Cyfr.RateLimiter.reset()
 
       restore = fn
         _key, nil -> :ok

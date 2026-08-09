@@ -23,7 +23,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
 
   or `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS`.
 
-  Counters live in `Arca.Cache` (ETS) — single-node only, same caveat as
+  Counters live in `Cyfr.RateLimiter` (ETS) — single-node only, same caveat as
   `EmissaryWeb.Plugs.AuthRateLimit`.
   """
 
@@ -42,21 +42,10 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
 
     ip = Sanctum.ClientIp.resolve(conn)
     key = {:rate_limit, :mcp, ip}
-    now = System.monotonic_time(:millisecond)
 
-    case Arca.Cache.get(key) do
-      {:ok, {count, window_start}} when now - window_start < window_ms ->
-        if count >= max_requests do
-          remaining_ms = window_ms - (now - window_start)
-          reject(conn, max(div(remaining_ms, 1000), 1))
-        else
-          Arca.Cache.put(key, {count + 1, window_start}, window_ms)
-          conn
-        end
-
-      _ ->
-        Arca.Cache.put(key, {1, now}, window_ms)
-        conn
+    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+      :ok -> conn
+      {:deny, retry_after} -> reject(conn, retry_after)
     end
   end
 

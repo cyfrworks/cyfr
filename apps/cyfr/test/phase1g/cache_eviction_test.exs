@@ -2,29 +2,26 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Phase1g.CacheEvictionTest do
+  # Eviction runs on Arca.Cache.Sweeper's timer, not the put/3 hot path.
   use ExUnit.Case, async: false
 
-  setup do
-    # Save original max_entries and set a small limit for testing
-    :ok
-  end
+  test "the sweeper removes expired entries; fresh entries survive" do
+    table = Arca.Cache.table_name()
 
-  test "cache eviction removes expired entries first" do
-    # Fill cache with entries that have very short TTLs
-    for i <- 1..5 do
-      Arca.Cache.put({:eviction_test, i}, "value_#{i}", 1)
-    end
-
-    # Wait for them to expire
+    for i <- 1..5, do: Arca.Cache.put({:eviction_test, i}, "value_#{i}", 1)
+    Arca.Cache.put({:eviction_test, :fresh}, "keep", 60_000)
     Process.sleep(10)
 
-    # The next put should trigger eviction and clean up expired entries
-    Arca.Cache.put({:eviction_test, :new}, "new_value", 60_000)
+    # Expired rows stay physically present until a sweep — get/1 would
+    # lazy-delete them, so probe ETS directly to prove the sweeper did the work.
+    assert :ets.lookup(table, {:eviction_test, 1}) != []
 
-    # The new entry should exist
-    assert {:ok, "new_value"} = Arca.Cache.get({:eviction_test, :new})
+    removed = Arca.Cache.Sweeper.sweep()
+    assert removed >= 5
 
-    # Clean up
-    Arca.Cache.invalidate({:eviction_test, :new})
+    assert :ets.lookup(table, {:eviction_test, 1}) == []
+    assert {:ok, "keep"} = Arca.Cache.get({:eviction_test, :fresh})
+
+    Arca.Cache.invalidate({:eviction_test, :fresh})
   end
 end

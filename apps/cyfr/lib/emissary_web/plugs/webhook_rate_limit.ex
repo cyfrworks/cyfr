@@ -19,7 +19,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   unverified requests indefinitely. The lookup is a single indexed query
   against `webhooks.slug` (UNIQUE).
 
-  Counters live in `Arca.Cache` (ETS) — single-node only; same caveats as
+  Counters live in `Cyfr.RateLimiter` (ETS) — single-node only; same caveats as
   `EmissaryWeb.Plugs.AuthRateLimit`.
   """
 
@@ -36,27 +36,17 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   def call(conn, _opts) do
     {conn, bucket_id, max_requests, window_ms} = bucket_for(conn)
     key = {:rate_limit, :webhook, bucket_id}
-    now = System.monotonic_time(:millisecond)
 
-    case Arca.Cache.get(key) do
-      {:ok, {count, window_start}} when now - window_start < window_ms ->
-        if count >= max_requests do
-          remaining_ms = window_ms - (now - window_start)
-          retry_after = max(div(remaining_ms, 1000), 1)
-
-          conn
-          |> put_resp_header("retry-after", to_string(retry_after))
-          |> put_resp_content_type("application/json")
-          |> send_resp(429, ~s({"error":"rate_limit_exceeded"}))
-          |> halt()
-        else
-          Arca.Cache.put(key, {count + 1, window_start}, window_ms)
-          conn
-        end
-
-      _ ->
-        Arca.Cache.put(key, {1, now}, window_ms)
+    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+      :ok ->
         conn
+
+      {:deny, retry_after} ->
+        conn
+        |> put_resp_header("retry-after", to_string(retry_after))
+        |> put_resp_content_type("application/json")
+        |> send_resp(429, ~s({"error":"rate_limit_exceeded"}))
+        |> halt()
     end
   end
 
