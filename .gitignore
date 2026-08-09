@@ -68,6 +68,7 @@ apps/*/priv/static/cache_manifest.json
 
 # Go (Codex CLI)
 apps/codex/cyfr
+apps/codex/codex
 
 # goreleaser output
 dist/
