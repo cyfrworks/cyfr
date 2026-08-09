@@ -195,10 +195,20 @@ defmodule EmissaryWeb.WebhookController do
     # not inherit it. Same idiom as `EmissaryWeb.Plugs.MCPSession`.
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
-           run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time)
-         end) do
+    # The release starts :cyfr (binding this endpoint) before :opus brings
+    # up the execution machinery — refuse the request cleanly in that
+    # window instead of accepting work that noproc-crashes in the task.
+    spawn_result =
+      if is_pid(Process.whereis(Opus.ExecutionSemaphore)) do
+        Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+          Cyfr.LoggerContext.restore(logger_metadata)
+          run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time)
+        end)
+      else
+        {:error, :engine_starting}
+      end
+
+    case spawn_result do
       {:ok, _pid} ->
         json(conn, %{status: "accepted", request_id: request_id})
 

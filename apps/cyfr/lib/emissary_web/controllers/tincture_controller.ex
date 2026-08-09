@@ -387,10 +387,14 @@ defmodule EmissaryWeb.TinctureController do
     # a public URL selects the public profile whatever cookies the caller
     # holds, and a tincture without the route's profile does not run.
     run_result =
-      Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
-        route: opts[:route],
-        client_ip: Sanctum.ClientIp.resolve(conn)
-      )
+      if engine_ready?() do
+        Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
+          route: opts[:route],
+          client_ip: Sanctum.ClientIp.resolve(conn)
+        )
+      else
+        {:error, :engine_starting}
+      end
 
     case run_result do
       {:ok, result} ->
@@ -437,6 +441,23 @@ defmodule EmissaryWeb.TinctureController do
           detail: "this tincture has no #{route_name(opts[:route])} profile — grant it first"
         })
 
+      {:error, :engine_starting} ->
+        duration_ms = duration_ms(start_time)
+
+        RequestLog.safe_log_failed(ctx, request_id, %{
+          error: "engine_starting",
+          duration_ms: duration_ms,
+          routed_to: "opus"
+        })
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :tincture, :invoke, :stop],
+          %{duration_ms: duration_ms},
+          telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "engine_starting")
+        )
+
+        conn |> put_status(503) |> json(%{error: "service_unavailable", retry: true})
+
       {:error, reason} ->
         duration_ms = duration_ms(start_time)
         Logger.warning("[TinctureInvoke] error: #{inspect(reason)}")
@@ -456,6 +477,12 @@ defmodule EmissaryWeb.TinctureController do
         conn |> put_status(500) |> json(%{error: "Execution failed"})
     end
   end
+
+  # The release starts :cyfr (binding this endpoint) before :opus brings up
+  # the execution machinery; a request in that window would noproc-crash
+  # mid-flight. Process liveness — not module presence — is the readiness
+  # signal.
+  defp engine_ready?, do: is_pid(Process.whereis(Opus.ExecutionSemaphore))
 
   defp duration_ms(start_time) do
     System.monotonic_time()

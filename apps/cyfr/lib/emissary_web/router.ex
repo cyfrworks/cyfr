@@ -176,9 +176,19 @@ defmodule EmissaryWeb.Router do
     get "/:org/:project/:publisher/:tincture_name/*path", TinctureController, :asset
   end
 
+  # Anonymous and internet-reachable behind the tls proxy, and /ready does
+  # real DB/storage work per uncached hit — metered per IP so it cannot be
+  # used to drive storage round-trips (billable PUTs on S3) at will.
+  pipeline :health_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :health,
+      max_requests: 60,
+      window_ms: 60_000
+  end
+
   # Health check endpoint
   scope "/api", EmissaryWeb do
-    pipe_through :api
+    pipe_through [:api, :health_throttle]
 
     get "/health", HealthController, :check
     get "/health/ready", HealthController, :ready

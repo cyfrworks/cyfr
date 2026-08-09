@@ -11,28 +11,28 @@ defmodule EmissaryWeb.HealthController do
 
   use EmissaryWeb, :controller
 
+  require Logger
+
   def check(conn, _params) do
     json(conn, %{status: "ok", service: "emissary"})
   end
 
-  def ready(conn, _params) do
-    checks = %{
-      database: check_database(),
-      cache: check_cache()
-    }
+  # Probes from several monitors collapse onto one real check per window;
+  # the DB query, PubSub round-trip and storage write are not free (on the
+  # S3 adapter the write probe is a billable PUT per uncached hit).
+  @ready_cache_ms 5_000
+  @ready_cache_key {__MODULE__, :ready_cache}
 
-    checks =
-      Map.merge(checks, %{
-        pubsub: check_pubsub(),
-        storage: check_storage(),
-        tool_registry: check_process(Emissary.MCP.ToolRegistry),
-        resource_registry: check_process(Emissary.MCP.ResourceRegistry),
-        sse_buffer: check_process(Emissary.MCP.SSEBuffer)
-      })
+  def ready(conn, _params) do
+    checks = cached_checks()
 
     all_ok = Enum.all?(checks, fn {_k, v} -> v == :ok end)
 
     status_code = if all_ok, do: 200, else: 503
+
+    unless all_ok do
+      Logger.warning("[HealthController] not_ready: #{inspect(checks)}")
+    end
 
     conn
     |> put_status(status_code)
@@ -40,9 +40,37 @@ defmodule EmissaryWeb.HealthController do
       status: if(all_ok, do: "ready", else: "not_ready"),
       checks:
         Map.new(checks, fn {k, v} ->
-          {k, if(v == :ok, do: "ok", else: inspect(v))}
+          # Anonymous callers get pass/fail only; raw DB/storage error
+          # internals go to the log line above.
+          {k, if(v == :ok, do: "ok", else: "failed")}
         end)
     })
+  end
+
+  defp cached_checks do
+    now = System.monotonic_time(:millisecond)
+
+    case :persistent_term.get(@ready_cache_key, nil) do
+      {checks, expires_at} when expires_at > now ->
+        checks
+
+      _ ->
+        checks = run_checks()
+        :persistent_term.put(@ready_cache_key, {checks, now + @ready_cache_ms})
+        checks
+    end
+  end
+
+  defp run_checks do
+    %{
+      database: check_database(),
+      cache: check_cache(),
+      pubsub: check_pubsub(),
+      storage: check_storage(),
+      tool_registry: check_process(Emissary.MCP.ToolRegistry),
+      resource_registry: check_process(Emissary.MCP.ResourceRegistry),
+      sse_buffer: check_process(Emissary.MCP.SSEBuffer)
+    }
   end
 
   defp check_database do
