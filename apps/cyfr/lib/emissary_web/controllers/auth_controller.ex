@@ -349,7 +349,13 @@ defmodule EmissaryWeb.AuthController do
           {true, nil}
 
         %{"slug" => slug, "token" => _} ->
-          case put_cred(user_id, registry, slug, personal["token"], "personal") do
+          case Compendium.Registry.CredentialStore.put_push_token(
+                 user_id,
+                 registry,
+                 slug,
+                 personal["token"],
+                 "personal"
+               ) do
             :ok -> {true, nil}
             :skipped -> {true, nil}
             {:error, _} -> {false, slug}
@@ -361,7 +367,13 @@ defmodule EmissaryWeb.AuthController do
 
     membership_warnings =
       Enum.flat_map(memberships, fn m ->
-        case put_cred(user_id, registry, m["slug"], m["token"], m["role"] || "member") do
+        case Compendium.Registry.CredentialStore.put_push_token(
+               user_id,
+               registry,
+               m["slug"],
+               m["token"],
+               m["role"] || "member"
+             ) do
           :ok -> []
           :skipped -> []
           {:error, _} -> [m["slug"]]
@@ -379,44 +391,6 @@ defmodule EmissaryWeb.AuthController do
 
     {personal_stored?, warnings}
   end
-
-  defp put_cred(user_id, registry, slug, token, role)
-       when is_binary(slug) and is_binary(token) do
-    cred = %{
-      type: :push_token,
-      token: token,
-      namespace: slug,
-      role: role,
-      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      label: Compendium.Registry.Client.device_label()
-    }
-
-    case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
-      :ok ->
-        :ok
-
-      {:error, reason} = err ->
-        Logger.warning(
-          "[EmissaryWeb.AuthController] CredentialStore.put failed for #{slug}: " <>
-            "#{inspect(reason)} — leaving orphan cyfr.run token (server-side reaper backstop)"
-        )
-
-        err
-    end
-  rescue
-    # Storing probe credentials is best-effort: a raised failure (e.g. an
-    # encryption/keyring misconfiguration) must degrade to a failed write so the
-    # caller bounces the user to re-auth, not crash the OAuth callback.
-    e ->
-      Logger.warning(
-        "[EmissaryWeb.AuthController] CredentialStore.put raised for #{slug}: " <>
-          "#{Exception.message(e)} — treating as a failed credential write"
-      )
-
-      {:error, :exception}
-  end
-
-  defp put_cred(_user_id, _registry, _slug, _token, _role), do: :skipped
 
   # Email local-part normalized to the server-side personal-slug shape
   # (see `Sanctum.Context.suggest_slug/1`). Returns nil when the local-part

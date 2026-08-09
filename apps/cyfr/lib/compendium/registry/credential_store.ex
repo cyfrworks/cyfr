@@ -67,6 +67,52 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   @doc """
+  Build a push-token credential and store it, best-effort.
+
+  Shared by the OAuth callback and the CLI device flow — both cache the same
+  push-token shape after the identity probe. Failures, including a raised
+  encryption/keyring misconfiguration, degrade to `{:error, reason}` rather than
+  crashing the caller, which then decides whether to re-auth. A non-binary slug
+  or token yields `:skipped`.
+  """
+  @spec put_push_token(String.t(), String.t(), term(), term(), String.t()) ::
+          :ok | {:error, term()} | :skipped
+  def put_push_token(user_id, registry, slug, token, role)
+      when is_binary(slug) and is_binary(token) do
+    cred = %{
+      type: :push_token,
+      token: token,
+      namespace: slug,
+      role: role,
+      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      label: Compendium.Registry.Client.device_label()
+    }
+
+    case put(user_id, registry, slug, cred) do
+      :ok ->
+        :ok
+
+      {:error, reason} = err ->
+        Logger.warning(
+          "[CredentialStore] push-token write failed for #{slug}: #{inspect(reason)} — " <>
+            "leaving orphan cyfr.run token (server-side reaper backstop)"
+        )
+
+        err
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[CredentialStore] push-token write raised for #{slug}: #{Exception.message(e)} — " <>
+          "treating as a failed credential write"
+      )
+
+      {:error, :exception}
+  end
+
+  def put_push_token(_user_id, _registry, _slug, _token, _role), do: :skipped
+
+  @doc """
   Get a credential for a specific user, registry, and namespace.
 
   Returns `{:ok, credential_map}` or `:not_found`.

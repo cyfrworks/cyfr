@@ -706,7 +706,13 @@ defmodule Sanctum.Auth.DeviceFlow do
         token = personal["token"] || personal[:token]
 
         if is_binary(slug) and is_binary(token) do
-          put_credential(user_id, registry, slug, token, "personal")
+          Compendium.Registry.CredentialStore.put_push_token(
+            user_id,
+            registry,
+            slug,
+            token,
+            "personal"
+          )
         else
           :skipped
         end
@@ -723,7 +729,13 @@ defmodule Sanctum.Auth.DeviceFlow do
 
         result =
           if is_binary(slug) and is_binary(token) do
-            put_credential(user_id, registry, slug, token, role)
+            Compendium.Registry.CredentialStore.put_push_token(
+              user_id,
+              registry,
+              slug,
+              token,
+              role
+            )
           else
             :skipped
           end
@@ -733,30 +745,6 @@ defmodule Sanctum.Auth.DeviceFlow do
       |> Enum.reject(fn {_slug, result} -> result == :ok or result == :skipped end)
 
     %{personal_stored?: personal_result == :ok, membership_failures: membership_failures}
-  end
-
-  defp put_credential(user_id, registry, slug, token, role) do
-    cred = %{
-      type: :push_token,
-      token: token,
-      namespace: slug,
-      role: role,
-      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      label: Compendium.Registry.Client.device_label()
-    }
-
-    case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
-      :ok ->
-        :ok
-
-      {:error, reason} = err ->
-        Logger.warning(
-          "[Sanctum.Auth.DeviceFlow] CredentialStore.put failed for #{slug}: " <>
-            "#{inspect(reason)} — leaving orphan cyfr.run token (server-side reaper backstop)"
-        )
-
-        err
-    end
   end
 
   defp suggest_username(provider, session) do
