@@ -125,6 +125,10 @@ database_path: ./data/cyfr.db
 			if err != nil {
 				output.Errorf("Failed to generate secret key: %v", err)
 			}
+			bridgeToken, err := generateSecretKey()
+			if err != nil {
+				output.Errorf("Failed to generate mcp-bridge token: %v", err)
+			}
 
 			host := "localhost"
 			adminEmail := ""
@@ -147,7 +151,7 @@ database_path: ./data/cyfr.db
 			}
 			adminEmailConfigured = adminEmail != ""
 
-			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
+			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, bridgeToken, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
 				output.Errorf("Failed to write .env: %v", err)
 			}
 			envCreated = true
@@ -234,7 +238,10 @@ components/formulas/*/
 			fmt.Println("  cyfr.yaml already exists (skipped).")
 		}
 		if envCreated {
-			fmt.Println("  .env created from .env.example (contains a generated secret key — do not commit)")
+			fmt.Println("  .env created from .env.example (contains a generated secret key + mcp-bridge token — do not commit)")
+			fmt.Println("     To require the bridge token, register mcp-bridge in the PWA with header")
+			fmt.Println("     `Authorization: vault:mcp_bridge_token` and store MCP_BRIDGE_TOKEN's value in a")
+			fmt.Println("     Vault entry named `mcp_bridge_token`.")
 		} else if fileExists(".env") {
 			fmt.Println("  .env already exists (skipped).")
 		}
@@ -320,11 +327,11 @@ func ask(r *bufio.Reader, question, def string) string {
 }
 
 // renderEnvFile fills in a .env.example template: substitutes the generated
-// secret key, sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips
-// CYFR_BEHIND_PROXY + CYFR_PORTA_BIND based on the TLS choice, and (if
-// adminEmail is non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS.
-// Everything else is left as-is.
-func renderEnvFile(template, secretKey, host, adminEmail, acmeEmail string, tls bool) string {
+// secret key, un-comments and sets MCP_BRIDGE_TOKEN so the bridge boots closed,
+// sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips CYFR_BEHIND_PROXY +
+// CYFR_PORTA_BIND based on the TLS choice, and (if adminEmail is non-empty)
+// un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS. Everything else is left as-is.
+func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail string, tls bool) string {
 	portaBind := "0.0.0.0:8080"
 	behindProxy := "false"
 	if tls {
@@ -336,6 +343,8 @@ func renderEnvFile(template, secretKey, host, adminEmail, acmeEmail string, tls 
 		switch {
 		case strings.HasPrefix(line, "CYFR_SECRET_KEY_BASE="):
 			lines[i] = "CYFR_SECRET_KEY_BASE=" + secretKey
+		case strings.HasPrefix(line, "# MCP_BRIDGE_TOKEN="):
+			lines[i] = "MCP_BRIDGE_TOKEN=" + bridgeToken
 		case strings.HasPrefix(line, "CYFR_HOST="):
 			lines[i] = "CYFR_HOST=" + host
 		case strings.HasPrefix(line, "CYFR_BEHIND_PROXY="):

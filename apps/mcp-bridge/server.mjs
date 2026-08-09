@@ -36,8 +36,9 @@ const VERSION = JSON.parse(
 // Defense-in-depth against a compromised sibling container: when
 // MCP_BRIDGE_TOKEN is set, /mcp requires a matching `Authorization: Bearer`
 // header. cyfr supplies it via the registered server's headers (e.g.
-// `Authorization: secret:mcp_bridge_token`). When unset, the bridge runs open
-// and logs a warning at boot.
+// `Authorization: vault:mcp_bridge_token`). `cyfr init` generates the token so
+// the bridge boots closed; when unset, the bridge runs open and logs a warning
+// at boot.
 
 const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
 const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
