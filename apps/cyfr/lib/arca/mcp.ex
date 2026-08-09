@@ -400,56 +400,58 @@ defmodule Arca.MCP do
     {:error, "Audit log deletion is not permitted. MCP logs are append-only."}
   end
 
-  def handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    mcp_logs =
-      case Arca.McpLog.get_tenant(ctx, request_id) do
-        nil ->
-          []
+  def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
+    with :ok <- authorize(ctx, :read) do
+      mcp_logs =
+        case Arca.McpLog.get_tenant(ctx, request_id) do
+          nil ->
+            []
 
-        log ->
-          [mcp_log_to_map(log)]
-      end
+          log ->
+            [mcp_log_to_map(log)]
+        end
 
-    import Ecto.Query
-    import Arca.QueryHelpers, only: [where_tenant: 2, maybe_put: 3]
+      import Ecto.Query
+      import Arca.QueryHelpers, only: [where_tenant: 2, maybe_put: 3]
 
-    exec_query =
-      from(e in Arca.Execution,
-        where: e.request_id == ^request_id,
-        order_by: [desc: e.started_at],
-        limit: 100
-      )
+      exec_query =
+        from(e in Arca.Execution,
+          where: e.request_id == ^request_id,
+          order_by: [desc: e.started_at],
+          limit: 100
+        )
 
-    # Platform admins correlate across tenants; everyone else is scoped to their
-    # org/project — no per-user narrowing (members are interchangeable).
-    exec_query =
-      if admin?(ctx) and ctx.scope == :platform do
-        exec_query
-      else
-        where_tenant(exec_query, ctx)
-      end
+      # Platform admins correlate across tenants; everyone else is scoped to their
+      # org/project — no per-user narrowing (members are interchangeable).
+      exec_query =
+        if admin?(ctx) and ctx.scope == :platform do
+          exec_query
+        else
+          where_tenant(exec_query, ctx)
+        end
 
-    executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
+      executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
 
-    policy_log_opts =
-      [
-        request_id: request_id,
-        limit: 100,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id
-      ]
+      policy_log_opts =
+        [
+          request_id: request_id,
+          limit: 100,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id
+        ]
 
-    policy_logs =
-      Arca.PolicyLog.list(policy_log_opts)
-      |> Enum.map(&policy_log_to_map/1)
+      policy_logs =
+        Arca.PolicyLog.list(policy_log_opts)
+        |> Enum.map(&policy_log_to_map/1)
 
-    {:ok,
-     %{
-       request_id: request_id,
-       mcp_logs: mcp_logs,
-       executions: executions,
-       policy_logs: policy_logs
-     }}
+      {:ok,
+       %{
+         request_id: request_id,
+         mcp_logs: mcp_logs,
+         executions: executions,
+         policy_logs: policy_logs
+       }}
+    end
   end
 
   def handle("mcp_log", _ctx, %{"action" => "correlate"}) do
@@ -575,20 +577,25 @@ defmodule Arca.MCP do
     {:error, "Audit log deletion is not permitted. Policy logs are append-only."}
   end
 
-  def handle("policy_log", ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    opts =
-      [
-        request_id: request_id,
-        limit: 100,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id
-      ]
+  def handle("policy_log", %Context{} = ctx, %{
+        "action" => "correlate",
+        "request_id" => request_id
+      }) do
+    with :ok <- authorize(ctx, :read) do
+      opts =
+        [
+          request_id: request_id,
+          limit: 100,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id
+        ]
 
-    policy_logs =
-      Arca.PolicyLog.list(opts)
-      |> Enum.map(&policy_log_to_map/1)
+      policy_logs =
+        Arca.PolicyLog.list(opts)
+        |> Enum.map(&policy_log_to_map/1)
 
-    {:ok, %{request_id: request_id, policy_logs: policy_logs}}
+      {:ok, %{request_id: request_id, policy_logs: policy_logs}}
+    end
   end
 
   def handle("policy_log", _ctx, %{"action" => "correlate"}) do

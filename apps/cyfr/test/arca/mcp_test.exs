@@ -692,4 +692,46 @@ defmodule Arca.MCPTest do
       assert Base.decode64!(result.content) == "nested content"
     end
   end
+
+  describe "correlate authorization" do
+    setup do
+      no_read_ctx = %Context{
+        user_id: "regular_user",
+        org_id: "local",
+        project_id: "default",
+        permissions: MapSet.new([:execute]),
+        scope: :project,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, no_read_ctx: no_read_ctx}
+    end
+
+    test "mcp_log.correlate requires :read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error, msg} =
+               MCP.handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => "req_x"})
+
+      assert msg =~ "Unauthorized"
+    end
+
+    test "policy_log.correlate requires :read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error, msg} =
+               MCP.handle("policy_log", ctx, %{"action" => "correlate", "request_id" => "req_x"})
+
+      assert msg =~ "Unauthorized"
+    end
+
+    test "correlate succeeds for a :storage_read context", %{ctx: ctx} do
+      assert {:ok, %{request_id: "req_none"}} =
+               MCP.handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => "req_none"})
+
+      assert {:ok, %{request_id: "req_none"}} =
+               MCP.handle("policy_log", ctx, %{
+                 "action" => "correlate",
+                 "request_id" => "req_none"
+               })
+    end
+  end
 end
