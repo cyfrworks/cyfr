@@ -82,3 +82,35 @@ jobs:
         run: mix format --check-formatted
       - name: Run tests
         run: mix test
+
+  arca-seam:
+    name: Arca single-seam (no untagged filesystem I/O)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # Arca.Storage's single-seam policy: all file/blob I/O flows through the
+      # storage adapter. A direct File.* / Path.wildcard call outside the adapter
+      # must be acknowledged with an `# arca:bypass-ok=<A|B|C|D>` tag (see the
+      # bypass-group table in Arca.Storage). This asserts every file that makes
+      # such a call carries a tag, so a new module cannot silently bypass the
+      # object-store seam.
+      - name: Assert direct filesystem calls are tagged
+        run: |
+          set -uo pipefail
+          fail=0
+          while IFS= read -r f; do
+            case "$f" in
+              */arca/adapters/*) continue ;;
+              apps/cyfr/lib/arca/storage.ex) continue ;;
+            esac
+            calls="$(grep -nE '(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard' "$f" | grep -v '^[0-9]*: *#' || true)"
+            if [ -n "$calls" ] && ! grep -q 'arca:bypass-ok' "$f"; then
+              echo "::error file=$f::direct filesystem I/O without an arca:bypass-ok tag (see Arca.Storage single-seam policy)"
+              echo "$calls"
+              fail=1
+            fi
+          done < <(git ls-files 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/**/*.ex')
+          if [ "$fail" -ne 0 ]; then
+            echo "Untagged filesystem I/O found. Route it through Arca, or tag it # arca:bypass-ok=<A|B|C|D>."
+            exit 1
+          fi

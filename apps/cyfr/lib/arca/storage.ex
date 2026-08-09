@@ -23,9 +23,10 @@ defmodule Arca.Storage do
   append caller today is the audit log, which never reads back through
   `get/2` — a future append-then-get caller must go through `list/2`.
 
-  CI greps for direct filesystem calls and fails on any not tagged with one of
-  the four acceptable bypass groups below. To intentionally bypass, mark the
-  call with a comment like `# arca:bypass-ok=B` (matching the group letter).
+  The `arca-seam` CI job (`.github/workflows/test.yml`) greps for direct
+  filesystem calls and fails when a file makes one without carrying an
+  `# arca:bypass-ok=<group>` tag. To intentionally bypass, mark the call with a
+  comment like `# arca:bypass-ok=B` (matching the group letter).
 
   | Group | When | Why bypass is OK | Examples |
   |-------|------|------------------|----------|
