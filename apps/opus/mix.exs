@@ -41,7 +41,6 @@ defmodule Opus.MixProject do
       {:req, "~> 0.5"},
       {:finch, "~> 0.19"},
       {:cyfr, in_umbrella: true},
-      {:locus, in_umbrella: true},
       {:dotenvy, "~> 0.9"},
       {:stream_data, "~> 1.1", only: [:test, :dev]}
     ]

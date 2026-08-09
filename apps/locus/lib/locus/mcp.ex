@@ -160,9 +160,16 @@ defmodule Locus.MCP do
 
           case store_result do
             :ok ->
-              # Fire-and-forget registration — Locus compiles, CYFR registers
-              Task.start(fn ->
-                case Compendium.MCP.handle("component", ctx, %{"action" => "register"}) do
+              # Fire-and-forget registration — Locus compiles, CYFR registers.
+              # Routed through the dispatch chokepoint (not a direct provider
+              # handle/3 call) so this state-changing mutation gets the same
+              # auth gate, timeout containment, and request-log audit row as
+              # every other dispatch — and supervised, unlike a bare
+              # Task.start.
+              Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+                case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+                       "action" => "register"
+                     }) do
                   {:ok, _} ->
                     :ok
 
