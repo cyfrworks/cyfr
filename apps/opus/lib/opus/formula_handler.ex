@@ -322,13 +322,16 @@ defmodule Opus.FormulaHandler do
         "issue" => "The consent names a dependency the installed world cannot satisfy",
         "node_ref" => payload.node_ref,
         "need" => payload.need,
-        "reason" => to_string(payload.reason)
+        "reason" => reason_string(payload.reason)
       }
     )
   end
 
   defp encode_child_error(reason),
     do: encode_error(:dispatch_error, stringify_reason(reason))
+
+  defp reason_string(reason) when is_atom(reason) or is_binary(reason), do: to_string(reason)
+  defp reason_string(reason), do: inspect(reason)
 
   defp dispatch_via_registry(json_request, %Context{} = ctx, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
@@ -353,7 +356,9 @@ defmodule Opus.FormulaHandler do
             emit_telemetry(parent_execution_id, tool_action, :error, start_time)
             reason_str = stringify_reason(reason)
 
-            case Opus.Remediation.analyze(ctx, reason_str) do
+            # Analyze the raw term: the typed setup/consent tuples carry the
+            # structural cause, and stringifying first would hide it.
+            case Opus.Remediation.analyze(ctx, reason) do
               {:setup_required, remediation} ->
                 maybe_emit_setup_event(
                   root_execution_id,

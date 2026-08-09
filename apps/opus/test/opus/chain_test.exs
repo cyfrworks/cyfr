@@ -400,6 +400,29 @@ defmodule Opus.ChainTest do
       )
     end
 
+    defp revoked_vault_entry(ctx) do
+      id = Emissary.UUID7.generate_id("vlt")
+      aad = Sanctum.CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "")
+      {:ok, json} = Sanctum.Vault.Payload.encode_material(%{"api_key" => "sk-gone"}, nil)
+      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+
+      {:ok, entry} =
+        Arca.VaultStorage.put(%{
+          id: id,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id,
+          name: "chain-revoked-entry",
+          provider_hint: "",
+          kind: "api_key",
+          field_names: Jason.encode!(["api_key"]),
+          sealed_payload: sealed
+        })
+
+      {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
+      :ok = Arca.VaultStorage.set_status(ctx.org_id, entry.id, "revoked")
+      {entry, digest}
+    end
+
     test "a bound child executes under the edge's authority with host lineage", %{
       ctx: ctx,
       target: target
@@ -478,6 +501,32 @@ defmodule Opus.ChainTest do
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "reagent:local.gone:1.0.0"
       assert payload.reason == :unresolvable_target
+    end
+
+    test "a bound edge naming a revoked vault entry is typed setup_required", %{ctx: ctx} do
+      # The consented edge is intact but its credential is gone — the
+      # "declared need unmet at run" case. The executor must surface the
+      # typed term (so the error envelope and the parent-stream event carry
+      # the structural cause), never a flattened prose string.
+      {entry, digest} = revoked_vault_entry(ctx)
+
+      auth =
+        authority_with_edges(%{
+          @target_node => %{
+            "vault" => %{
+              "entry_id" => entry.id,
+              "binding_digest" => digest,
+              "projection" => %{"fields" => ["api_key"]}
+            }
+          }
+        })
+
+      assert {:error, {:setup_required, payload}} =
+               Opus.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
+
+      assert payload.profile_id == "prof-chain"
+      assert payload.node_ref == "#{@target_node}:0.1.0"
+      assert payload.reason == "vault_entry_revoked"
     end
 
     test "a need containing the edge separator is rejected before edge lookup", %{ctx: ctx} do

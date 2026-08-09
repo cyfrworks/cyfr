@@ -160,6 +160,15 @@ defmodule Opus.Executor do
           maybe_emit_setup_event(ctx, reason, opts)
           handle_failure(p.record, reason, p.started_written)
 
+        {:error, {tag, payload} = typed}
+        when tag in [:setup_required, :consent_required] and is_map(payload) ->
+          # Record and stream the readable message, but return the typed
+          # term — the error envelope needs the structural payload, and
+          # callers already receive these tuples from consent loading.
+          maybe_emit_setup_event(ctx, typed, opts)
+          _ = handle_failure(p.record, failure_message(typed), p.started_written)
+          {:error, typed}
+
         {:error, reason} ->
           handle_failure(p.record, "Execution failed: #{inspect(reason)}", p.started_written)
       end
@@ -334,10 +343,24 @@ defmodule Opus.Executor do
   # secrets — an ungranted read denies exactly as an empty resolution.
   defp stage_resolve_secrets(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
-      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} ->
+      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
         case Sanctum.VaultReader.fetch(p.ctx, vault) do
-          {:ok, secrets} -> {:ok, %{p | preloaded_secrets: secrets}}
-          {:error, reason} -> {:error, "Vault resolution failed: #{inspect(reason)}"}
+          {:ok, secrets} ->
+            {:ok, %{p | preloaded_secrets: secrets}}
+
+          {:error, reason} ->
+            # A consented vault edge that cannot produce material is a
+            # declared need unmet at run: a typed setup_required, so the
+            # error envelope and the parent-stream setup event carry the
+            # structural cause instead of flattened prose.
+            {:error,
+             {:setup_required,
+              %{
+                profile_id: authority.profile_id,
+                node_ref: p.component_ref,
+                need: p.opts[:need] || "",
+                reason: vault_setup_reason(reason)
+              }}}
         end
 
       _ ->
@@ -965,7 +988,7 @@ defmodule Opus.Executor do
               "component_ref" => remediation["component_ref"],
               "issues" => remediation["issues"],
               "setup_command" => remediation["setup_command"],
-              "message" => reason
+              "message" => failure_message(reason)
             },
             System.unique_integer([:positive]),
             ctx
@@ -976,6 +999,17 @@ defmodule Opus.Executor do
       end
     end
   end
+
+  defp failure_message({:setup_required, %{node_ref: node_ref, reason: reason}}),
+    do: "Setup required for #{node_ref}: #{inspect(reason)}"
+
+  defp failure_message(reason), do: "Execution failed: #{inspect(reason)}"
+
+  # The typed payload crosses the JSON error envelope, so its reason must
+  # be JSON-encodable — vault loader tuples are flattened here.
+  defp vault_setup_reason({:entry_unavailable, status}), do: "vault_entry_#{status}"
+  defp vault_setup_reason(reason) when is_atom(reason), do: reason
+  defp vault_setup_reason(reason), do: inspect(reason)
 
   defp handle_failure(record, error_msg, started_written) do
     Opus.OAuthHandler.collect_dispensed(record.id)
