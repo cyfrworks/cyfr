@@ -22,7 +22,15 @@ defmodule Opus.ExecutionSweeper do
   @stale_threshold_seconds 600
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    # Timer-driven DB queries from a permanent process poison the test
+    # sandbox (the lent connection outlives its owning test) — same gate
+    # as CronScheduler/RetentionScheduler; test config turns it off and
+    # the sweep logic is exercised directly.
+    if Application.get_env(:cyfr, :execution_sweeper_enabled, true) do
+      GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    else
+      :ignore
+    end
   end
 
   @impl true

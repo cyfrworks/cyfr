@@ -75,7 +75,12 @@ config :cyfr, external_server_reconciler_enabled: false
 # Same reason, sharper teeth: the cron scheduler is lent a test's sandbox
 # connection and then outlives it, so the connection dies mid-query and
 # the NEXT test fails. cron_scheduler_test.exs starts it itself.
-config :opus, cron_scheduler_enabled: false
+config :cyfr, cron_scheduler_enabled: false
+
+# The stale-execution sweeper has the same shape (permanent named GenServer
+# querying on a 60s timer) and the same sandbox hazard; its own suite
+# exercises sweep logic directly.
+config :cyfr, execution_sweeper_enabled: false
 
 # Set a default base_path for tests (individual tests may override)
 config :cyfr, base_path: Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")

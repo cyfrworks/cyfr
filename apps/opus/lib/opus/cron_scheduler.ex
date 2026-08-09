@@ -29,7 +29,7 @@ defmodule Opus.CronScheduler do
     # the pooled connection and fails whichever test runs next — a flake
     # that lands nowhere near its cause. Its own suite starts it
     # explicitly; nothing else needs it running.
-    if Application.get_env(:opus, :cron_scheduler_enabled, true) do
+    if Application.get_env(:cyfr, :cron_scheduler_enabled, true) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
       :ignore

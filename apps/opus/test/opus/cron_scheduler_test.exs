@@ -14,13 +14,13 @@ defmodule Opus.CronSchedulerTest do
     # connection it is lent and poisons the next test); this suite is the
     # one that actually exercises it, so it starts its own — supervised,
     # so it dies with the test rather than with someone else's.
-    original = Application.get_env(:opus, :cron_scheduler_enabled)
-    Application.put_env(:opus, :cron_scheduler_enabled, true)
+    original = Application.get_env(:cyfr, :cron_scheduler_enabled)
+    Application.put_env(:cyfr, :cron_scheduler_enabled, true)
 
     on_exit(fn ->
       if original == nil,
-        do: Application.delete_env(:opus, :cron_scheduler_enabled),
-        else: Application.put_env(:opus, :cron_scheduler_enabled, original)
+        do: Application.delete_env(:cyfr, :cron_scheduler_enabled),
+        else: Application.put_env(:cyfr, :cron_scheduler_enabled, original)
     end)
 
     start_supervised!(Opus.CronScheduler)
