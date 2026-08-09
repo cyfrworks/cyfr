@@ -787,12 +787,7 @@ defmodule Opus.FormulaHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data) do
-    case Jason.encode(data) do
-      {:ok, json} -> json
-      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
-    end
-  end
+  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
 
   defp encode_success(output) do
     safe_encode(%{
@@ -802,14 +797,8 @@ defmodule Opus.FormulaHandler do
   end
 
   @doc false
-  def encode_error(type, message) do
-    safe_encode(%{
-      "error" => %{
-        "type" => to_string(type),
-        "message" => stringify_reason(message)
-      }
-    })
-  end
+  def encode_error(type, message),
+    do: Opus.WitResponse.encode_error(type, stringify_reason(message))
 
   defp encode_error_with_remediation(type, message, remediation) do
     safe_encode(%{

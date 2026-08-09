@@ -592,12 +592,7 @@ defmodule Opus.HttpHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data) do
-    case Jason.encode(data) do
-      {:ok, json} -> json
-      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
-    end
-  end
+  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
 
   @doc false
   def encode_response(status, headers, body) do
@@ -634,14 +629,7 @@ defmodule Opus.HttpHandler do
   end
 
   @doc false
-  def encode_error(type, message) do
-    safe_encode(%{
-      "error" => %{
-        "type" => to_string(type),
-        "message" => message
-      }
-    })
-  end
+  def encode_error(type, message), do: Opus.WitResponse.encode_error(type, message)
 
   # Replace invalid UTF-8 bytes with the Unicode replacement character (U+FFFD).
   # Some servers (e.g. japan-guide.com) return Windows-1252 or other legacy

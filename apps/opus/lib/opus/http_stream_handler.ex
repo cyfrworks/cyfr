@@ -433,19 +433,7 @@ defmodule Opus.HttpStreamHandler do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
-  defp safe_encode(data) do
-    case Jason.encode(data) do
-      {:ok, json} -> json
-      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
-    end
-  end
+  defp safe_encode(data), do: Opus.WitResponse.safe_encode(data)
 
-  defp encode_error(type, message) do
-    safe_encode(%{
-      "error" => %{
-        "type" => to_string(type),
-        "message" => message
-      }
-    })
-  end
+  defp encode_error(type, message), do: Opus.WitResponse.encode_error(type, message)
 end

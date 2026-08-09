@@ -6,7 +6,8 @@ package cyfr:http@0.1.0;
 interface fetch {
     /// Execute an HTTP request. JSON format:
     /// Request: {"method": "GET", "url": "...", "headers": {...}, "body": "..."}
-    /// Response: {"status": 200, "headers": {...}, "body": "..."} or {"error": "..."}
+    /// Response: {"status": 200, "headers": {...}, "body": "..."} or
+    /// {"error": {"type": "...", "message": "..."}}
     request: func(json-request: string) -> string;
 }
 
