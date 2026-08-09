@@ -469,12 +469,12 @@ defmodule EmissaryWeb.TinctureControllerTest do
     setup do
       # Earlier tests in this file already counted requests under the disabled
       # (1M) limit — start these from a clean slate, then lower the limit.
-      Arca.Cache.delete_match({:rate_limit, :_, :_, :_, :_})
+      Cyfr.RateLimiter.reset()
       Application.put_env(:cyfr, :tincture_rate_limit_max, 2)
 
       on_exit(fn ->
         Application.put_env(:cyfr, :tincture_rate_limit_max, 1_000_000)
-        Arca.Cache.delete_match({:rate_limit, :_, :_, :_, :_})
+        Cyfr.RateLimiter.reset()
       end)
 
       :ok

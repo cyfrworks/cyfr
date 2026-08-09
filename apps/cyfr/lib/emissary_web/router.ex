@@ -16,6 +16,17 @@ defmodule EmissaryWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Client-driven auth-API endpoints (logout, whoami) self-gate in the
+  # controller (401/400 without a token) but were otherwise unmetered — a
+  # session-token brute-force / Session.get amplification surface. The
+  # IdP-driven callbacks stay unthrottled (shared-NAT corporate IPs).
+  pipeline :auth_api_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :auth_api,
+      max_requests: 30,
+      window_ms: 60_000
+  end
+
   pipeline :mcp do
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.CORS
@@ -28,7 +39,7 @@ defmodule EmissaryWeb.Router do
 
   # Auth API routes (logout, whoami) - must be defined before wildcard /:provider
   scope "/auth", EmissaryWeb do
-    pipe_through :api
+    pipe_through [:api, :auth_api_throttle]
 
     delete "/logout", AuthController, :logout
     post "/logout", AuthController, :logout
