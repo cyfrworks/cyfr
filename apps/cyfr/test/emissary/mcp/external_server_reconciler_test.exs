@@ -4,6 +4,8 @@
 defmodule Emissary.MCP.ExternalServerReconcilerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Emissary.MCP.ExternalServerReconciler
   alias Sanctum.Vault
 
@@ -110,5 +112,39 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       # Creation may fail on the unreachable probe, but never on validation.
       {:error, message} -> refute message =~ "looks like a credential"
     end
+  end
+
+  test "a revoked referenced entry can no longer resolve its header", %{ctx: ctx} do
+    {:ok, entry} =
+      Vault.create(ctx, %{
+        name: "revoke-me",
+        kind: "api_key",
+        fields: %{"token" => "ghp_live"}
+      })
+
+    # While active, the header resolves through the host-side unseal path.
+    assert {:ok, %{"token" => "ghp_live"}} =
+             Sanctum.VaultReader.unseal_by_name(ctx.org_id, ctx.project_id, "revoke-me")
+
+    {:ok, _} = Vault.revoke(ctx, entry.id)
+
+    # After revocation the same reference fails closed.
+    assert {:error, _} =
+             Sanctum.VaultReader.unseal_by_name(ctx.org_id, ctx.project_id, "revoke-me")
+  end
+
+  test "the catch-all handle_info survives and logs an unexpected message" do
+    pid = Process.whereis(ExternalServerReconciler)
+    assert is_pid(pid)
+
+    log =
+      capture_log(fn ->
+        send(pid, :unexpected_test_message)
+        # Force a synchronous round-trip so the message is processed.
+        :sys.get_state(ExternalServerReconciler)
+      end)
+
+    assert Process.alive?(pid)
+    assert log =~ "unexpected message"
   end
 end

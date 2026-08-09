@@ -475,26 +475,22 @@ defmodule Emissary.MCP.ExternalServer do
   # and picking silently from a bundle would smuggle the wrong credential
   # into the wrong header. Errors stay opaque outward, like secrets.
   defp resolve_value("vault:" <> entry_name, org_id, project_id) do
-    with {:ok, entry} <- Arca.VaultStorage.get_by_name(org_id, project_id, entry_name),
-         "active" <- entry.status,
-         aad =
-           Sanctum.CipherAAD.vault_entry(org_id, entry.project_id, entry.id, entry.provider_hint),
-         {:ok, plaintext} <- Sanctum.Cipher.decrypt(entry.sealed_payload, aad),
-         {:ok, %{"v" => 2, "fields" => fields}} <- Sanctum.Vault.Payload.decode(plaintext) do
-      case Map.values(fields) do
-        [value] ->
-          {:ok, value}
+    case Sanctum.VaultReader.unseal_by_name(org_id, project_id, entry_name) do
+      {:ok, fields} ->
+        case Map.values(fields) do
+          [value] ->
+            {:ok, value}
 
-        _ ->
-          Logger.debug(
-            "[ExternalServer] vault header ref must name a single-field entry, " <>
-              "got #{map_size(fields)} fields"
-          )
+          _ ->
+            Logger.debug(
+              "[ExternalServer] vault header ref must name a single-field entry, " <>
+                "got #{map_size(fields)} fields"
+            )
 
-          {:error, :vault_ref_ambiguous}
-      end
-    else
-      _ ->
+            {:error, :vault_ref_ambiguous}
+        end
+
+      {:error, _} ->
         Logger.debug("[ExternalServer] vault header reference unresolved for org=#{org_id}")
         {:error, :vault_ref_unavailable}
     end
