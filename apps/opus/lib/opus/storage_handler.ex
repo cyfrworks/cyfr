@@ -176,11 +176,10 @@ defmodule Opus.StorageHandler do
 
   @writing_actions ~w(write append)
 
-  # Public profiles write under a byte and file ceiling. The flag rides
-  # explicit opts rather than `policy.is_public`: that execution semantic
-  # is on the deletion list, and resurrecting it through the shim would
-  # re-create exactly what Phase 5 has to remove. Read-only publishes
-  # never reach this.
+  # Public profiles write under a byte and file ceiling. The flag rides explicit
+  # opts rather than a callee-derived `is_public` semantic, which no longer
+  # exists — public-ness is a property of the profile, threaded in as an opt.
+  # Read-only publishes never reach this.
   defp validate_public_quota(action, request, ctx, opts) when action in @writing_actions do
     if Keyword.get(opts, :public?, false) do
       quota = Keyword.get(opts, :public_quota, default_public_quota())

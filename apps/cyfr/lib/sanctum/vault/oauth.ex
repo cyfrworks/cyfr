@@ -16,9 +16,8 @@ defmodule Sanctum.Vault.OAuth do
   Refresh is single-flighted per **vault entry** on
   `{:vault_oauth_refresh, org, entry_id}` — the entry is the only route
   to a material bundle, so entry grain is exactly one lock per stored
-  refresh token. Legacy pointer entries never reach this module; they
-  delegate to `Sanctum.OAuth` and serialize on its component-ref key
-  with every legacy caller of the same bundle.
+  refresh token. Legacy v1 pointer entries are retired and never reach this
+  module.
 
   INVARIANT: no database transaction is held across the provider HTTP
   call — the POST and the CAS write-back are sequential; serialization

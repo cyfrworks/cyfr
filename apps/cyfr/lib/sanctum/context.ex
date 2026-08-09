@@ -73,16 +73,16 @@ defmodule Sanctum.Context do
     authenticated: false,
     # True when the ORIGINATING caller presented no credentials (public
     # tincture invocation). Ingress adapters may still mint an authenticated
-    # execution context for such a caller, but the credential planes
-    # (Sanctum.Secrets, Sanctum.OAuth) deny anonymous contexts — an
-    # anonymous internet caller must never reach operator credentials.
+    # execution context for such a caller, but the credential plane
+    # (Sanctum.VaultReader) denies anonymous contexts — an anonymous internet
+    # caller must never reach operator credentials.
     anonymous: false,
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
-    # enters a WASM closure, and require_permission/2 fails closed on it —
-    # a context that has entered a guest closure can never authorize an
-    # external-plane call. No production caller stamps :guest yet; the
-    # runtime split lands with the Authority cutover.
+    # enters a WASM closure (Opus.Executor before a guest run, AquaLive before an
+    # approved in-chain call), and require_permission/2 fails closed on it — a
+    # context that has entered a guest closure can never authorize an
+    # external-plane call.
     plane: :external
   ]
 

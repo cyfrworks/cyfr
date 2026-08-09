@@ -124,9 +124,9 @@ defmodule Sanctum do
     #
     # An authenticated caller's invocation runs with the caller's OWN
     # permissions — no stronger, no weaker. A public caller gets exactly
-    # [:execute] and is marked `anonymous`, which the credential planes
-    # (Sanctum.Secrets, Sanctum.OAuth) deny: an anonymous internet request
-    # must never be silently upgraded into a credential-bearing executor.
+    # [:execute] and is marked `anonymous`, which the credential plane
+    # (Sanctum.VaultReader) denies: an anonymous internet request must never be
+    # silently upgraded into a credential-bearing executor.
     {user_id, namespace, permissions, anonymous} =
       if caller_ctx.authenticated and is_binary(caller_ctx.user_id) do
         {caller_ctx.user_id, caller_ctx.namespace, caller_ctx.permissions, false}

@@ -40,7 +40,7 @@ defmodule Sanctum.Cipher.Rotation do
 
   The cipher binds the row's canonical tenant tuple as AAD. This module
   rebuilds that tuple from each row's stored columns; the shapes here MUST
-  stay identical to `Sanctum.Secrets`, `Sanctum.OAuth`, and `Sanctum.Webhook`
+  stay identical to how `Sanctum.Vault` and `Sanctum.Webhook` persist them
   (the org/project values the storage layer persists are already normalized,
   so re-normalizing is idempotent).
   """

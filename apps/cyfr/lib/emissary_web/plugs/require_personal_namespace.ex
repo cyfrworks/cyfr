@@ -91,8 +91,8 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   defp has_personal_namespace?(user_id, registry) do
     CredentialStore.has_personal?(user_id, registry)
   rescue
-    # CredentialStore backed by Sanctum.Secrets can raise if the secret store
-    # isn't ready (e.g., during app boot). Treat as no-claim — the redirect to
+    # CredentialStore can raise if its store isn't ready (e.g., during app
+    # boot). Treat as no-claim — the redirect to
     # /claim-namespace will render the static claim page without hitting
     # CredentialStore again on that bypass path. Log so silent decryption /
     # DB errors don't disappear into the void.

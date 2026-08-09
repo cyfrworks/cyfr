@@ -10,10 +10,11 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   ## Configuration
 
-      config :cyfr, :resource_providers, [
-        Arca.MCP,
-        Opus.MCP
-      ]
+  Optional. When `:resource_providers` is unset (the default), the built-in list
+  `[Arca.MCP, Opus.MCP, Compendium.MCP, Sanctum.MCP]` is used, filtered to the
+  modules that are loaded. Set the key only to override that list:
+
+      config :cyfr, :resource_providers, [Arca.MCP, Opus.MCP]
 
   Providers must implement the `Emissary.MCP.ResourceProvider` behaviour.
   """

@@ -54,8 +54,9 @@ defmodule Opus.Runtime do
   - `:reference` - Component reference string (for cache keying)
   - `:digest` - Content digest (for cache validation)
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
-  - `:authority` - The `Sanctum.Authority` this execution runs under (nil = legacy path)
-  - `:authority_required` - When true, a nil `:authority` raises instead of executing
+  - `:authority` - The `Sanctum.Authority` this execution runs under
+  - `:authority_required` - When true, a nil `:authority` raises instead of
+    executing (a WASM run always carries one; this is the final invariant guard)
 
   ## Examples
 

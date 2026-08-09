@@ -6,10 +6,10 @@ defmodule Sanctum.TenantScope do
   Single source of truth for deriving the `{scope, org_id, project_id}` tuple
   (and applying the tenant chokepoint) from a `Sanctum.Context`.
 
-  Previously duplicated verbatim in `Sanctum.Secrets` and `Sanctum.OAuth`.
-  Both are tenant-scoped credential stores whose write/read entry points must
-  go through `Sanctum.Context.require_tenant!/1`; having one implementation
-  guarantees the chokepoint cannot silently drift between them.
+  Tenant-scoped stores derive their `{scope, org, project}` tuple here and pass
+  their write/read entry points through `Sanctum.Context.require_tenant!/1`;
+  one implementation guarantees the chokepoint cannot silently drift between
+  callers.
   """
 
   alias Sanctum.Context

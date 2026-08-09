@@ -29,21 +29,12 @@ defmodule Sanctum.VaultReader do
   requested scopes must be a subset of what the entry was authorized
   for, because an issued token cannot be attenuated after the fact.
 
-  ## The legacy pointer
+  ## The retired v1 pointer
 
-  Until credential re-entry, a sealed payload may be a v1 **pointer**
-  into the legacy stores rather than material:
-
-      {"v":1,"legacy":{"secrets":[{"name":"KEY","scope":"project"}],
-                       "oauth":[{"component_ref":"catalyst:local.gmail",
-                                 "provider":"google"}]}}
-
-  Legacy v1 pointers fail closed as retired —
-  deliberately not through `Sanctum.Secrets`' permission-gated grant
-  plane, which serves a different authorization model. OAuth pointers
-  resolve through `Sanctum.OAuth.get_access_token/3` by the pointer's own
-  name-level ref, so the refresh single-flight lock serializes with any
-  legacy caller of the same bundle.
+  A pre-capability-model sealed payload could be a v1 **pointer** into the
+  now-deleted secret/OAuth stores rather than material. Those stores are gone,
+  so a v1 pointer resolves to `{:error, :legacy_pointer_retired}` — it can
+  dispense nothing. `vault.rotate` with fresh material is the converter.
   """
 
   require Logger

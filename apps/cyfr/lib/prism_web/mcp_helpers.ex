@@ -5,7 +5,7 @@ defmodule PrismWeb.MCPHelpers do
   @moduledoc """
   Convenience wrapper for MCP tool calls from LiveViews.
 
-  All tool invocations go through `Emissary.MCP.ToolRegistry.call/3`
+  All tool invocations go through `Emissary.MCP.ToolRegistry.call_external/3`
   using the `Sanctum.Context` stored in socket assigns.
   """
 

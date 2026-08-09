@@ -108,11 +108,11 @@ defmodule Sanctum.Consent do
   @doc """
   The ways a consent can have been granted, as recorded on the revision.
 
-  `:bootstrap` marks machine-minted revisions — the migration task that
-  converts a legacy install's effective policy into consents. Recording
-  them as `:interactive` would render a false audit line ("you,
-  interactive") into every enforcement display forever; the vocabulary
-  says what actually happened instead.
+  `:bootstrap` marks machine-minted revisions — connections bind through the
+  walk, so these carry no vault resource and no human granted them. Recording
+  them as `:interactive` would render a false audit line ("you, interactive")
+  into every enforcement display forever; the vocabulary says what actually
+  happened instead.
   """
   @spec granted_via_values() :: [granted_via()]
   def granted_via_values, do: [:interactive, :scoped_key, :bootstrap]

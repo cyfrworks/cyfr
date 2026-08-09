@@ -92,9 +92,10 @@ defmodule Opus.FormulaHandler do
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
   - `:limits` - The node's `Sanctum.Limits` (batch timeout, max concurrent tasks)
-  - `:authority` - The `Sanctum.Authority` the chain runs under. When present,
-    execution dispatch goes through `Opus.Chain` and every other tool through
-    `ToolRegistry.call_in_chain/5`; when absent the legacy path runs unchanged.
+  - `:authority` - The `Sanctum.Authority` the chain runs under. Execution
+    dispatch goes through `Opus.Chain` and every other tool through
+    `ToolRegistry.call_in_chain/5`. A formula run always carries one; a nil
+    authority raises upstream (`Opus.Executor.stage_enforce_policy`).
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
     for this node's onward invocations
   """
@@ -747,17 +748,6 @@ defmodule Opus.FormulaHandler do
       _ -> {:error, :invalid_event}
     end
   end
-
-  # ============================================================================
-  # Private: Tools List Filtering
-  # ============================================================================
-
-  # When a formula calls tools.list, filter the result to only show
-  # tools and actions that the formula can actually use.
-
-  # ============================================================================
-  # Private: Tool Access Check
-  # ============================================================================
 
   # ============================================================================
   # Private: Request Parsing (MCP format)

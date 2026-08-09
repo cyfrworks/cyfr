@@ -18,8 +18,8 @@ defmodule Opus.ComponentType do
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
   | `cyfr:secrets/read`           | ✅*       | ❌       | ❌       |
 
-  *`cyfr:secrets/read` requires explicit grants via `Sanctum.Secrets.grant/3`
-  †`cyfr:oauth/token` requires manifest `oauth` block + provider setup + component authorization
+  *`cyfr:secrets/read` resolves fields from the Vault entry a consent edge binds
+  †`cyfr:oauth/token` resolves a token from the Vault OAuth entry a consent edge binds
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects
@@ -31,33 +31,26 @@ defmodule Opus.ComponentType do
 
   ## Secrets Access
 
-  Only Catalysts can read secrets via the `cyfr:secrets/read` WASI import.
-  Access requires an explicit grant:
+  Only Catalysts can read secrets via the `cyfr:secrets/read` WASI import. The
+  value comes from a Vault entry that a consent edge binds to the running node —
+  the operator maps the catalyst's named need to one of their Connections at
+  consent time; there is no per-secret grant API and no project-wide secret
+  namespace.
 
-      # Grant a catalyst access to a secret
-      Sanctum.Secrets.grant(ctx, "API_KEY", "local.my-catalyst:1.0.0")
-
-      # Catalysts call cyfr:secrets/read.get("API_KEY") to retrieve the value
-      # Access without a grant returns "access-denied" error
-      # Reagents and Formulas never receive secrets imports
+      # Catalysts call cyfr:secrets/read.get("url") to read a projected field of
+      # the bound Vault entry. A node with no bound entry gets "access-denied".
+      # Reagents and Formulas never receive the secrets import.
 
   ## OAuth Token Access
 
   Only Catalysts with an `oauth` block in their manifest can request OAuth tokens.
   The host manages the full lifecycle — client credentials, refresh tokens, and
-  token exchange are never exposed to WASM.
+  token exchange are never exposed to WASM. Tokens come from an OAuth Vault entry
+  bound by a consent edge (`Sanctum.Vault.OAuthGrant` mints the authorize URL and
+  the callback seals the tokens).
 
-      # 1. Store provider client credentials as secrets (one-time per
-      #    provider; secret names come from the manifest's setup.oauth block)
-      Sanctum.Secrets.set(ctx, "google_client_id", client_id)
-      Sanctum.Secrets.set(ctx, "google_client_secret", client_secret)
-
-      # 2. Authorize component (one-time per component+provider)
-      {:ok, %{url: url}} = Sanctum.Vault.OAuthGrant.authorize_url(ctx, %{entry_id: id})
-      # User visits url, grants consent, callback stores tokens
-
-      # 3. Catalysts call cyfr:oauth/token.get-access-token("google") at runtime
-      # Host refreshes automatically. Access tokens masked in output.
+      # Catalysts call cyfr:oauth/token.get-access-token("google") at runtime.
+      # Host refreshes automatically. Access tokens are masked in output.
 
   ## Wasmex 0.14.0 Behavior
 
