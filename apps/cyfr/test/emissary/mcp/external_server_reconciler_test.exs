@@ -127,6 +127,9 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
              Sanctum.VaultReader.unseal_by_name(ctx.org_id, ctx.project_id, "revoke-me")
 
     {:ok, _} = Vault.revoke(ctx, entry.id)
+    # Drain the reconcile the revoke broadcast triggers, so its DB reads aren't
+    # in flight when the sandbox connection is checked in at test teardown.
+    sync_reconciler()
 
     # After revocation the same reference fails closed.
     assert {:error, _} =

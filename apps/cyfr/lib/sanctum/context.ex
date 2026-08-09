@@ -631,6 +631,22 @@ defmodule Sanctum.Context do
   end
 
   @doc """
+  Plane-aware permission gate — the one sanctioned shim for an MCP tool provider.
+
+  Guest-planed callers get the identity conjunct (`require_identity_permission/2`),
+  because the authority conjunct was already applied at the dispatch chokepoint;
+  external-plane callers keep the fail-closed `require_permission/2`. Providers
+  call this instead of hand-rolling the two-clause shim, so the rule lives in one
+  place and cannot drift between them.
+  """
+  @spec require_permission_for_plane(t(), atom()) :: :ok | {:error, String.t()}
+  def require_permission_for_plane(%__MODULE__{plane: :guest} = ctx, permission),
+    do: require_identity_permission(ctx, permission)
+
+  def require_permission_for_plane(%__MODULE__{} = ctx, permission),
+    do: require_permission(ctx, permission)
+
+  @doc """
   Require permission, raises `Sanctum.UnauthorizedError` if missing.
 
   Fails closed on guest-plane contexts, like `require_permission/2`.

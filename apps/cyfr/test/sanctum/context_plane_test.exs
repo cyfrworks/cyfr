@@ -82,4 +82,23 @@ defmodule Sanctum.ContextPlaneTest do
       end
     end
   end
+
+  describe "require_permission_for_plane/2 (the shared provider shim)" do
+    test "external plane fails closed, exactly like require_permission/2" do
+      external = Context.build(%{user_id: "u", permissions: [:execute]})
+      assert :ok = Context.require_permission_for_plane(external, :execute)
+      assert {:error, msg} = Context.require_permission_for_plane(external, :admin)
+      assert msg =~ "missing required permission"
+    end
+
+    test "guest plane uses the identity conjunct, not the plane refusal" do
+      guest = Context.enter_guest(Context.build(%{user_id: "u", permissions: [:execute]}))
+      # Allowed when identity carries the permission (authority conjunct is
+      # applied upstream at the dispatch chokepoint)...
+      assert :ok = Context.require_permission_for_plane(guest, :execute)
+      # ...and refused when it does not — but never with the guest-plane error.
+      assert {:error, msg} = Context.require_permission_for_plane(guest, :admin)
+      refute msg =~ "guest-plane"
+    end
+  end
 end

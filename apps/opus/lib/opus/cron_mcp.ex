@@ -498,13 +498,11 @@ defmodule Opus.CronMCP do
     end
   end
 
-  # In-chain callers arrive guest-planed with the authority conjunct already
-  # applied at the dispatch chokepoint; the provider supplies the identity
-  # conjunct. External callers keep the fail-closed plane gate.
-  defp require_permission(%Context{plane: :guest} = ctx, permission),
-    do: Context.require_identity_permission(ctx, permission)
+  # The plane-aware gate lives in Sanctum.Context (guest → identity conjunct,
+  # external → fail-closed), so every provider shares one rule.
+  defp require_permission(ctx, permission),
+    do: Context.require_permission_for_plane(ctx, permission)
 
-  defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
   # Binding a schedule to a profile mints a standing, attacker-timed
   # invocation conduit for that profile's authority — the consent
   # authorization class gates it, not a permission a wildcard key holds.
