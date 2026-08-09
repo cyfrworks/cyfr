@@ -47,13 +47,11 @@ defmodule Opus.Application do
       # Cron scheduler for recurring component executions
       Opus.CronScheduler,
       # Periodic sweep to mark stale "running" executions as failed (replaces one-shot startup sweep)
-      Opus.ExecutionSweeper
+      Opus.ExecutionSweeper,
+      # Owns the :protected ETS table of OAuth tokens dispensed to guests (for
+      # SecretMasker); sweeps tokens from runs that never drained.
+      Opus.OAuthTokenTracker
     ]
-
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    # ETS table for tracking OAuth tokens dispensed during execution (for SecretMasker)
-    Opus.OAuthHandler.init_table()
 
     opts = [strategy: :one_for_one, name: Opus.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)

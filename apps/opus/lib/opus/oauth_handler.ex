@@ -20,25 +20,13 @@ defmodule Opus.OAuthHandler do
   ## Architecture
 
   Follows the same pattern as `Opus.HttpHandler` and `Opus.StorageHandler`.
-  Uses ETS for tracking dispensed tokens (cross-process safe — host function
-  closures run in the Wasmex GenServer process, but finalize_execution runs
-  in the executor process).
+  Dispensed tokens are tracked by `Opus.OAuthTokenTracker`, a supervised
+  process owning a `:protected` ETS table — the host-function closure (running
+  in the Wasmex process) records a token via a synchronous call, and
+  `finalize_execution` (in the executor process) drains it for masking.
   """
-
-  require Logger
 
   alias Sanctum.Context
-
-  @table :opus_oauth_dispensed_tokens
-
-  @doc """
-  Initialize the ETS table for tracking dispensed OAuth tokens.
-  Called from `Opus.Application.start/2`.
-  """
-  @spec init_table() :: :ets.table()
-  def init_table do
-    :ets.new(@table, [:named_table, :public, :bag])
-  end
 
   @doc """
   Build the WASI host function imports for OAuth token access.
@@ -78,15 +66,7 @@ defmodule Opus.OAuthHandler do
   Safe to call multiple times (second call returns empty list).
   """
   @spec collect_dispensed(String.t() | nil) :: [String.t()]
-  def collect_dispensed(nil), do: []
-
-  def collect_dispensed(execution_id) do
-    tokens = :ets.lookup(@table, execution_id) |> Enum.map(&elem(&1, 1))
-    :ets.delete(@table, execution_id)
-    tokens
-  rescue
-    ArgumentError -> []
-  end
+  def collect_dispensed(execution_id), do: Opus.OAuthTokenTracker.collect(execution_id)
 
   # ============================================================================
   # Internal
@@ -97,12 +77,7 @@ defmodule Opus.OAuthHandler do
 
     case resolver.(provider) do
       {:ok, token} ->
-        try do
-          :ets.insert(@table, {execution_id, token})
-        rescue
-          ArgumentError ->
-            Logger.warning("[Opus.OAuthHandler] ETS table unavailable for token tracking")
-        end
+        Opus.OAuthTokenTracker.put(execution_id, token)
 
         duration = System.monotonic_time(:millisecond) - start_time
 
