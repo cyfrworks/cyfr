@@ -33,12 +33,12 @@ const VERSION = JSON.parse(
 // cross-container reachability; do NOT change it to loopback and do NOT publish
 // the port to the host.
 //
-// Defense-in-depth against a compromised sibling container: when
-// MCP_BRIDGE_TOKEN is set, /mcp requires a matching `Authorization: Bearer`
-// header. cyfr supplies it via the registered server's headers (e.g.
-// `Authorization: vault:mcp_bridge_token`). `cyfr init` generates the token so
-// the bridge boots closed; when unset, the bridge runs open and logs a warning
-// at boot.
+// Defense-in-depth against a compromised sibling container: /mcp requires a
+// matching `Authorization: Bearer` header. cyfr supplies it via the registered
+// server's headers (e.g. `Authorization: vault:mcp_bridge_token`). `cyfr init`
+// generates the token so the bridge boots closed; without a token the bridge
+// refuses to start unless MCP_BRIDGE_ALLOW_INSECURE=1 explicitly accepts an
+// unauthenticated, shell-spawning endpoint on an isolated network.
 
 const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
 const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
@@ -545,10 +545,26 @@ process.on("SIGINT", () => shutdown("SIGINT"));
     initializeBackend(entry.name).catch(() => {});
   }
   if (!AUTH_TOKEN) {
-    console.warn(
-      "[mcp-bridge] WARNING: MCP_BRIDGE_TOKEN is unset — /mcp is unauthenticated " +
-        "and relies solely on network isolation. Set MCP_BRIDGE_TOKEN to require a bearer."
-    );
+    // add_backend spawns arbitrary `sh -c`, so an unauthenticated /mcp is
+    // remote code execution for anyone who can reach the port. Refuse to
+    // boot open unless the operator explicitly opts in — `cyfr init`
+    // always provisions MCP_BRIDGE_TOKEN, so the happy path never hits this.
+    if (process.env.MCP_BRIDGE_ALLOW_INSECURE === "1") {
+      console.warn(
+        "[mcp-bridge] WARNING: MCP_BRIDGE_TOKEN is unset and " +
+          "MCP_BRIDGE_ALLOW_INSECURE=1 — /mcp is unauthenticated and relies " +
+          "solely on network isolation."
+      );
+    } else {
+      console.error(
+        "[mcp-bridge] FATAL: MCP_BRIDGE_TOKEN is unset. /mcp dispatches " +
+          "shell-spawning admin tools, so running without a bearer token is " +
+          "remote code execution for anything that can reach this port. Set " +
+          "MCP_BRIDGE_TOKEN (cyfr init generates one), or set " +
+          "MCP_BRIDGE_ALLOW_INSECURE=1 to accept that risk on an isolated network."
+      );
+      process.exit(1);
+    }
   }
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[mcp-bridge] /mcp on :${PORT} (data: ${PERSIST}, auth: ${AUTH_TOKEN ? "on" : "off"})`);
