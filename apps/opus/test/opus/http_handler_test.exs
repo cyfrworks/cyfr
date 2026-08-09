@@ -137,6 +137,36 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
+  # private_ip?/1 delegation — the range policy lives in Cyfr.Network
+  # ============================================================================
+
+  describe "private_ip?/1 delegates to Cyfr.Network.private_ip?/1" do
+    test "RFC1918 denial passes through Cyfr.Network" do
+      assert Cyfr.Network.private_ip?({10, 0, 0, 1})
+      assert HttpHandler.private_ip?({10, 0, 0, 1}) == Cyfr.Network.private_ip?({10, 0, 0, 1})
+    end
+
+    test "loopback denial passes through Cyfr.Network" do
+      assert Cyfr.Network.private_ip?({127, 0, 0, 1})
+      assert HttpHandler.private_ip?({127, 0, 0, 1}) == Cyfr.Network.private_ip?({127, 0, 0, 1})
+    end
+
+    test "link-local / metadata denial passes through Cyfr.Network" do
+      assert Cyfr.Network.private_ip?({169, 254, 169, 254})
+
+      assert HttpHandler.private_ip?({169, 254, 169, 254}) ==
+               Cyfr.Network.private_ip?({169, 254, 169, 254})
+    end
+
+    test "IPv4-mapped IPv6 denial passes through Cyfr.Network" do
+      # ::ffff:10.0.0.1
+      mapped = {0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001}
+      assert Cyfr.Network.private_ip?(mapped)
+      assert HttpHandler.private_ip?(mapped) == Cyfr.Network.private_ip?(mapped)
+    end
+  end
+
+  # ============================================================================
   # resolve_and_validate_ip/1
   # ============================================================================
 
@@ -356,12 +386,11 @@ defmodule Opus.HttpHandlerTest do
     end
 
     test "blocks request to private IP (localhost)", %{
-      edge: edge,
       limits: limits,
       ctx: ctx,
       component_ref: ref
     } do
-      # Add localhost to allowed domains so we get past domain check
+      # Use localhost in allowed domains so we get past the domain check
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET", "POST"])
 
       request =

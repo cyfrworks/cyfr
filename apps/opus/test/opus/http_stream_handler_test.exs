@@ -222,6 +222,182 @@ defmodule Opus.HttpStreamHandlerTest do
   end
 
   # ============================================================================
+  # Request size enforcement (parity with cyfr:http/fetch)
+  # ============================================================================
+
+  describe "stream request size enforcement" do
+    test "rejects a body exceeding the node's max_request_size" do
+      edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
+      limits = EdgeFixtures.limits(max_request_size: 16)
+      ctx = Sanctum.TestContext.local()
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-req-size")
+
+      {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
+
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/chat/completions",
+          "headers" => %{},
+          "body" => String.duplicate("x", 100)
+        })
+
+      decoded = request_fn.(request) |> Jason.decode!()
+
+      assert decoded["error"]["type"] == "request_too_large"
+      assert decoded["error"]["message"] =~ "exceeds limit (16 bytes)"
+    end
+
+    test "rejects multipart on the streaming interface" do
+      edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
+      ctx = Sanctum.TestContext.local()
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, EdgeFixtures.limits(), ctx, "test-mp")
+
+      {:fn, request_fn} = imports["cyfr:http/streaming@0.1.0"]["request"]
+
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/transcriptions",
+          "headers" => %{},
+          "body" => "",
+          "multipart" => [%{"name" => "model", "value" => "whisper-1"}]
+        })
+
+      decoded = request_fn.(request) |> Jason.decode!()
+
+      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["message"] =~ "do not support 'multipart'"
+    end
+  end
+
+  # ============================================================================
+  # Stream timeout derived from consented limits
+  # ============================================================================
+
+  describe "stream timeout from node limits" do
+    test "times out per the node's consented timeout, not the 60s fallback" do
+      # A "0s" consented timeout makes the derived deadline elapse immediately;
+      # the 60s fallback would never fire within test time.
+      edge =
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+
+      limits = EdgeFixtures.limits(timeout: "0s")
+      ctx = Sanctum.TestContext.local()
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-timeout")
+
+      stream_ns = imports["cyfr:http/streaming@0.1.0"]
+      {:fn, request_fn} = stream_ns["request"]
+      {:fn, read_fn} = stream_ns["read"]
+
+      # Port 1 refuses the connection, but the handle is created before the
+      # collector's result is known.
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:1/stream",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      Process.sleep(15)
+      decoded = read_fn.(handle) |> Jason.decode!()
+
+      assert decoded["error"]["type"] == "timeout"
+      assert decoded["error"]["message"] == "Stream timed out after 0s"
+    end
+  end
+
+  # ============================================================================
+  # Collector buffer cap
+  # ============================================================================
+
+  describe "stream collector cap" do
+    test "buffered response bytes are capped at max_response_size before the guest reads" do
+      # Local server sends a body larger than the consented max_response_size;
+      # the collector must stop buffering and park the oversize error even
+      # though the guest never reads a byte.
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      body = String.duplicate("x", 100)
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          response =
+            "HTTP/1.1 200 OK\r\ncontent-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n" <>
+              body
+
+          :ok = :gen_tcp.send(sock, response)
+          Process.sleep(500)
+          :gen_tcp.close(sock)
+        end)
+
+      edge =
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+
+      limits = EdgeFixtures.limits(max_response_size: 8)
+      ctx = Sanctum.TestContext.local()
+
+      {imports, _exec_ref} =
+        HttpStreamHandler.build_stream_imports(edge, limits, ctx, "test-collector-cap")
+
+      stream_ns = imports["cyfr:http/streaming@0.1.0"]
+      {:fn, request_fn} = stream_ns["request"]
+      {:fn, read_fn} = stream_ns["read"]
+
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost:#{port}/big",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      decoded = poll_for_error(read_fn, handle, 150)
+
+      assert decoded["error"]["type"] == "response_too_large"
+      assert decoded["error"]["message"] =~ "exceeds limit (8 bytes)"
+
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+  end
+
+  # Drain data frames until the stream surfaces an error; fail loudly if the
+  # stream completes or the attempts run out first.
+  defp poll_for_error(_read_fn, _handle, 0), do: flunk("stream never surfaced an error")
+
+  defp poll_for_error(read_fn, handle, attempts) do
+    decoded = read_fn.(handle) |> Jason.decode!()
+
+    cond do
+      decoded["error"] ->
+        decoded
+
+      decoded["done"] == true ->
+        flunk("stream completed without surfacing the oversize error")
+
+      true ->
+        Process.sleep(20)
+        poll_for_error(read_fn, handle, attempts - 1)
+    end
+  end
+
+  # ============================================================================
   # cleanup_registry/1
   # ============================================================================
 
