@@ -73,8 +73,9 @@ defmodule Compendium.OCI.Client do
          :ok <- maybe_store_manifest(ctx, component_ref, config_bytes),
          :ok <- maybe_store_readme(ctx, component_ref, readme_bytes),
          :ok <- maybe_store_source(ctx, component_ref, source_bytes) do
-      # Cache manifest for future use
-      tag = ref.tag || "latest"
+      # Cache manifest for future use, under the same key fetch_manifest
+      # reads (a digest-pinned pull must never overwrite a tag entry).
+      tag = ref.tag || ref.digest || "latest"
       Cache.put_manifest(ref.registry, ref.repository, tag, manifest_json, manifest_digest)
 
       result = %{
@@ -373,26 +374,45 @@ defmodule Compendium.OCI.Client do
     # Check cache first (for tag refs)
     case Cache.get_manifest(ref.registry, ref.repository, tag) do
       {:ok, cached_manifest, cached_digest} ->
-        # For tag refs, verify digest hasn't changed via HEAD
-        if ref.tag do
-          case head_manifest(ctx, ref, tag) do
-            {:ok, remote_digest} when remote_digest == cached_digest ->
-              {:ok, cached_manifest, cached_digest, []}
+        cond do
+          # For tag refs, verify digest hasn't changed via HEAD
+          ref.tag ->
+            case head_manifest(ctx, ref, tag) do
+              {:ok, remote_digest} when remote_digest == cached_digest ->
+                {:ok, cached_manifest, cached_digest, []}
 
-            {:ok, _remote_digest} ->
-              # Digest changed, re-fetch
-              fetch_manifest_remote(ctx, ref, tag)
+              {:ok, _remote_digest} ->
+                # Digest changed, re-fetch
+                fetch_manifest_remote(ctx, ref, tag)
 
-            {:error, _} ->
+              {:error, _} ->
+                Logger.warning(
+                  "[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
+                    "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}"
+                )
+
+                {:ok, cached_manifest, cached_digest, [stale: true]}
+            end
+
+          # A digest-pinned ref must serve exactly the pinned bytes even from
+          # cache — recompute from the cached body rather than trust the
+          # recorded digest. A mismatch means the entry is corrupt or was
+          # written outside the verified path; refetch and let the remote
+          # verification decide (a genuine pull then overwrites the entry).
+          ref.digest ->
+            if Blob.compute_digest(cached_manifest) == ref.digest do
+              {:ok, cached_manifest, ref.digest, []}
+            else
               Logger.warning(
-                "[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
-                  "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}"
+                "[Compendium.OCI.Client] Cached manifest for #{ref.registry}/#{ref.repository}" <>
+                  "@#{ref.digest} does not hash to its pin — discarding and refetching"
               )
 
-              {:ok, cached_manifest, cached_digest, [stale: true]}
-          end
-        else
-          {:ok, cached_manifest, cached_digest, []}
+              fetch_manifest_remote(ctx, ref, tag)
+            end
+
+          true ->
+            {:ok, cached_manifest, cached_digest, []}
         end
 
       :miss ->
@@ -410,8 +430,25 @@ defmodule Compendium.OCI.Client do
 
     case Transport.request(ctx, :get, path, ref, accept_headers) do
       {:ok, 200, headers, body} ->
-        digest = get_header(headers, "docker-content-digest") || Blob.compute_digest(body)
-        {:ok, body, digest, []}
+        # The manifest digest is the hash of the bytes received — the
+        # docker-content-digest header is advisory only; a registry cannot
+        # vouch for its own honesty. For a digest-pinned ref the computed
+        # hash must equal the pin, or the pull is refused.
+        computed = Blob.compute_digest(body)
+        claimed = get_header(headers, "docker-content-digest")
+
+        if claimed && claimed != computed do
+          Logger.warning(
+            "[Compendium.OCI.Client] #{ref.registry} sent docker-content-digest #{claimed} " <>
+              "but the body hashes to #{computed} — using the computed digest"
+          )
+        end
+
+        if ref.digest && computed != ref.digest do
+          {:error, Errors.digest_mismatch(ref.digest, computed)}
+        else
+          {:ok, body, computed, []}
+        end
 
       {:ok, status, _headers, body} ->
         {:error, Errors.from_response(status, body, ref.registry)}
@@ -543,12 +580,21 @@ defmodule Compendium.OCI.Client do
       signer_issuer: sig_meta[:issuer]
     }
 
+    # origin: :remote marks these publishes as carrying registry-sourced
+    # content, so Registry refuses the local namespace even if a future ref
+    # shape slips past refuse_local_namespace/1.
     case component_ref.type do
       "tincture" ->
-        Registry.publish_tincture_archive(ctx, content_bytes, metadata, allow_overwrite: true)
+        Registry.publish_tincture_archive(ctx, content_bytes, metadata,
+          allow_overwrite: true,
+          origin: :remote
+        )
 
       _wasm_type ->
-        Registry.publish_bytes(ctx, content_bytes, metadata, allow_overwrite: true)
+        Registry.publish_bytes(ctx, content_bytes, metadata,
+          allow_overwrite: true,
+          origin: :remote
+        )
     end
   end
 
