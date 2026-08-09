@@ -198,7 +198,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       assert conn.assigns[:mcp_session] != nil
 
       # Verify the session was refreshed (expires_at extended)
-      {:ok, refreshed} = Sanctum.Session.load(token)
+      {:ok, refreshed} = Sanctum.Session.load(token, surface: :console)
       assert refreshed.user_id == "hydrate_user"
 
       # Clean up

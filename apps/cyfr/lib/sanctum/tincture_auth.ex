@@ -156,10 +156,12 @@ defmodule Sanctum.TinctureAuth do
   end
 
   defp try_sanctum_session(token) do
-    case Sanctum.Session.load(token) do
+    case Sanctum.Session.load(token, surface: :tincture) do
       {:ok, ctx} ->
-        # Session.load defaults auth_method to :oidc; tincture access wants
-        # :session, scope :project, authenticated.
+        # The :tincture surface stamps auth_method :session in the loader.
+        # Tincture access always runs project-scoped and authenticated,
+        # regardless of the operator's restored console workspace (and for
+        # a not-yet-claimed user, whose load yields authenticated: false).
         {:ok, %{ctx | auth_method: :session, scope: :project, authenticated: true}}
 
       _ ->

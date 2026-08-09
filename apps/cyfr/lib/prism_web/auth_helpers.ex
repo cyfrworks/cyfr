@@ -23,7 +23,7 @@ defmodule PrismWeb.AuthHelpers do
   def authenticate_session(nil), do: {:error, :unauthenticated}
 
   def authenticate_session(token) when is_binary(token) do
-    case Session.load(token) do
+    case Session.load(token, surface: :console) do
       {:ok, ctx} ->
         ctx =
           ctx

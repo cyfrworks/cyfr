@@ -188,7 +188,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       # Has session ID but it's invalid/expired (in memory)
       session_id ->
         # Try to hydrate from persistent storage before returning error
-        case Sanctum.Session.load(session_id) do
+        case Sanctum.Session.load(session_id, surface: :console) do
           {:ok, ctx} ->
             case context_from_session(ctx) do
               {:error, :missing_tenant} ->

@@ -71,7 +71,7 @@ defmodule Sanctum.Auth.OAuth do
   end
 
   def authenticate(%{token: token}) when is_binary(token) do
-    case Session.load(token) do
+    case Session.load(token, surface: :console) do
       {:ok, ctx} ->
         Telemetry.auth_event(:session, :success, %{user_id: ctx.user_id})
         {:ok, ctx}
@@ -94,7 +94,7 @@ defmodule Sanctum.Auth.OAuth do
         nil
 
       token ->
-        case Session.load(token) do
+        case Session.load(token, surface: :console) do
           {:ok, ctx} -> ctx
           {:error, _} -> nil
         end

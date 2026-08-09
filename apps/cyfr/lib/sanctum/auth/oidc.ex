@@ -107,7 +107,7 @@ defmodule Sanctum.Auth.OIDC do
 
   # Authenticate with session token
   def authenticate(%{token: token}) when is_binary(token) do
-    case Session.load(token) do
+    case Session.load(token, surface: :console) do
       {:ok, _ctx} = result ->
         Sanctum.Telemetry.auth_event(:session, :success)
         result
@@ -170,14 +170,14 @@ defmodule Sanctum.Auth.OIDC do
     cond do
       # Check session token in assigns
       token = conn.assigns[:session_token] ->
-        case Session.load(token) do
+        case Session.load(token, surface: :console) do
           {:ok, ctx} -> ctx
           _ -> nil
         end
 
       # Check Authorization header
       token = get_bearer_token(conn) ->
-        case Session.load(token) do
+        case Session.load(token, surface: :console) do
           {:ok, ctx} -> ctx
           _ -> nil
         end

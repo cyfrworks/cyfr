@@ -21,7 +21,7 @@ defmodule PrismWeb.AuthController do
   """
   def session(conn, %{"code" => code}) do
     with {:ok, token} <- Prism.AuthExchange.redeem(code),
-         {:ok, _ctx} <- Session.load(token) do
+         {:ok, _ctx} <- Session.load(token, surface: :console) do
       conn
       |> configure_session(renew: true)
       |> put_session(:session_token, token)

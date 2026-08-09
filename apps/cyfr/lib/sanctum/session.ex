@@ -15,7 +15,7 @@ defmodule Sanctum.Session do
       {:ok, session} = Sanctum.Session.create(ctx)
 
       # Load context from session token
-      {:ok, ctx} = Sanctum.Session.load(session.token)
+      {:ok, ctx} = Sanctum.Session.load(session.token, surface: :console)
 
       # Refresh session (extend expiration)
       {:ok, session} = Sanctum.Session.refresh(session.token)
@@ -178,20 +178,34 @@ defmodule Sanctum.Session do
   ephemeral fields (request_id, etc.) nil. Returns `{:error, :invalid_session}`
   if the token is unknown or expired.
 
+  The `:surface` option is required and decides the context's auth class:
+  `:console` stamps `auth_method: :oidc` — the interactive class that can
+  reach vault CRUD, consent commits and overrides — while `:tincture`
+  stamps `:session`, which cannot. The most-privileged class must never be
+  a default a caller can inherit by omission, so every ingress declares
+  which surface it serves.
+
   ## Examples
 
-      {:ok, ctx} = Sanctum.Session.load("abc123...")
+      {:ok, ctx} = Sanctum.Session.load("abc123...", surface: :console)
       ctx.user_id
       #=> "123"
 
   """
-  @spec load(String.t()) ::
+  @spec load(String.t(), surface: :console | :tincture) ::
           {:ok, Context.t()}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
-  def load(token) when is_binary(token) do
+  def load(token, opts) when is_binary(token) do
+    surface = Keyword.fetch!(opts, :surface)
+
+    unless surface in [:console, :tincture] do
+      raise ArgumentError,
+            "Session.load surface must be :console or :tincture, got: #{inspect(surface)}"
+    end
+
     case get_session_direct(token) do
       {:ok, row} ->
-        case row_to_context(row) do
+        case row_to_context(row, surface) do
           {:error, :namespace_unavailable} = err -> err
           %Context{} = ctx -> {:ok, ctx}
         end
@@ -369,7 +383,7 @@ defmodule Sanctum.Session do
           | {:error, :forbidden | :invalid_session | :database_error | :namespace_unavailable}
   def set_workspace(token, org_id, project_id)
       when is_binary(token) and is_binary(org_id) and is_binary(project_id) do
-    with {:ok, ctx} <- load(token) do
+    with {:ok, ctx} <- load(token, surface: :console) do
       if workspace_allowed?(ctx, org_id, project_id) do
         Arca.SessionStorage.update_workspace(hash_token(token), org_id, project_id)
       else
@@ -400,7 +414,7 @@ defmodule Sanctum.Session do
 
   defp hash_token(token), do: :crypto.hash(:sha256, token)
 
-  defp row_to_context(row) do
+  defp row_to_context(row, surface) do
     permissions =
       case Jason.decode(row.permissions || "[]") do
         {:ok, list} when is_list(list) ->
@@ -438,7 +452,7 @@ defmodule Sanctum.Session do
           org_id: org_id,
           project_id: row.project_id,
           scope: scope,
-          auth_method: :oidc,
+          auth_method: surface_auth_method(surface),
           authenticated: true
         )
         # Re-validate the persisted (scope, workspace) against CURRENT
@@ -455,6 +469,9 @@ defmodule Sanctum.Session do
         {:error, :namespace_unavailable}
     end
   end
+
+  defp surface_auth_method(:console), do: :oidc
+  defp surface_auth_method(:tincture), do: :session
 
   # Restore the persisted working scope + org as a STARTING POINT. The persisted
   # values are never trusted on their own: `Sanctum.Tenancy.revalidate/1` (called

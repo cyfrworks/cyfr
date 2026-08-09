@@ -172,7 +172,7 @@ defmodule EmissaryWeb.LegalAcceptController do
   end
 
   defp current_provider(conn) do
-    case Sanctum.Session.load(get_session(conn, :sanctum_session_token) || "") do
+    case Sanctum.Session.load(get_session(conn, :sanctum_session_token) || "", surface: :console) do
       {:ok, %{provider: p}} when p in ["github", "google"] -> p
       _ -> "github"
     end

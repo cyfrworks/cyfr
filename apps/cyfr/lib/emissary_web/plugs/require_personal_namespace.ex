@@ -59,7 +59,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
 
     case get_session(conn, :sanctum_session_token) do
       token when is_binary(token) and token != "" ->
-        case Sanctum.Session.load(token) do
+        case Sanctum.Session.load(token, surface: :console) do
           {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
           _ -> :anonymous
         end

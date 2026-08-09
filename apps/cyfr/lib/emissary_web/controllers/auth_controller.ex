@@ -199,7 +199,7 @@ defmodule EmissaryWeb.AuthController do
         conn |> redirect(to: "/auth/github")
 
       true ->
-        case Sanctum.Session.load(session_token) do
+        case Sanctum.Session.load(session_token, surface: :console) do
           {:ok, ctx} ->
             provider = ctx.provider || "github"
 
