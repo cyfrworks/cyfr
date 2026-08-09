@@ -31,6 +31,9 @@ defmodule Arca.AuditHandler do
 
   @audit_events [
     [:cyfr, :sanctum, :auth],
+    # A release digest that no longer re-derives from its row is a tamper
+    # signal — it belongs in the audit sinks, not only in the server log.
+    [:cyfr, :sanctum, :consent, :integrity_alarm],
     [:cyfr, :opus, :execute, :start],
     [:cyfr, :opus, :execute, :stop],
     [:cyfr, :opus, :execute, :exception]

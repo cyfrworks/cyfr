@@ -131,15 +131,14 @@ defmodule PrismWeb.AuthLive do
     |> Enum.filter(&provider_configured?/1)
   end
 
-  defp provider_configured?(:github) do
-    !!(Application.get_env(:cyfr, :github_client_id) ||
-         System.get_env("CYFR_GITHUB_CLIENT_ID"))
-  end
+  # App-env only: runtime.exs resolves CYFR_* through Dotenvy's merged .env
+  # sources, which are not exported to the OS environment — a System.get_env
+  # fallback would consult a second, divergent config universe.
+  defp provider_configured?(:github),
+    do: !!Application.get_env(:cyfr, :github_client_id)
 
-  defp provider_configured?(:google) do
-    !!(Application.get_env(:cyfr, :google_client_id) ||
-         System.get_env("CYFR_GOOGLE_CLIENT_ID"))
-  end
+  defp provider_configured?(:google),
+    do: !!Application.get_env(:cyfr, :google_client_id)
 
   defp format_error({:client_id_not_configured, provider}),
     do: "#{provider} client ID not configured."

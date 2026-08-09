@@ -240,7 +240,11 @@ defmodule Sanctum.Vault.OAuth do
   def http_post(url, headers, body) do
     req = Finch.build(:post, url, headers, body)
 
-    case Finch.request(req, Compendium.Finch, receive_timeout: 15_000, request_timeout: 20_000) do
+    # Credential-bearing provider HTTP rides the sanctum-owned pool, never
+    # Compendium's — registry pull/publish bursts must not contend with
+    # token refresh, and the pool split is the supervision-level statement
+    # of that boundary (see the Finch children in Cyfr.Application).
+    case Finch.request(req, Sanctum.Auth.Finch, receive_timeout: 15_000, request_timeout: 20_000) do
       {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
         case Jason.decode(resp_body) do
           {:ok, data} -> {:ok, data}

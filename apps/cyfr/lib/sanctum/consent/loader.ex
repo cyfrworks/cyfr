@@ -183,7 +183,7 @@ defmodule Sanctum.Consent.Loader do
           )
 
           :telemetry.execute(
-            [:sanctum, :consent, :integrity_alarm],
+            [:cyfr, :sanctum, :consent, :integrity_alarm],
             %{count: length(nodes)},
             %{profile_id: profile.id, nodes: nodes}
           )

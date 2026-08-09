@@ -499,25 +499,20 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Configuration
   # ============================================================================
 
-  defp get_client_id(:github) do
-    Application.get_env(:cyfr, :github_client_id) ||
-      System.get_env("CYFR_GITHUB_CLIENT_ID")
-  end
+  # App-env only, no System.get_env fallback: runtime.exs resolves the
+  # CYFR_* vars through Dotenvy's merged .env sources, which are NOT
+  # exported to the OS environment — a direct read here would consult a
+  # second, divergent config universe.
+  defp get_client_id(:github), do: Application.get_env(:cyfr, :github_client_id)
 
-  defp get_client_id(:google) do
-    Application.get_env(:cyfr, :google_client_id) ||
-      System.get_env("CYFR_GOOGLE_CLIENT_ID")
-  end
+  defp get_client_id(:google), do: Application.get_env(:cyfr, :google_client_id)
 
   # Google's device-flow token endpoint requires client_secret in the POST
   # body; GitHub's does not (GitHub device-flow OAuth apps are issued
   # without a secret by design). Returns nil on GitHub.
   defp get_client_secret(:github), do: nil
 
-  defp get_client_secret(:google) do
-    Application.get_env(:cyfr, :google_client_secret) ||
-      System.get_env("CYFR_GOOGLE_CLIENT_SECRET")
-  end
+  defp get_client_secret(:google), do: Application.get_env(:cyfr, :google_client_secret)
 
   defp normalize_provider("github"), do: :github
   defp normalize_provider(:github), do: :github
