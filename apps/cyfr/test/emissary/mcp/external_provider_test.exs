@@ -86,6 +86,15 @@ defmodule Emissary.MCP.ExternalProviderTest do
       original = Application.get_env(:cyfr, :max_external_servers)
       Application.put_env(:cyfr, :max_external_servers, 2)
 
+      # on_exit, not a trailing statement: a failing assertion below would skip
+      # an inline restore and leave the limit at 2 for every later test in the
+      # BEAM — which is how one failure here cascades into unrelated files.
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :max_external_servers, original),
+          else: Application.delete_env(:cyfr, :max_external_servers)
+      end)
+
       # Add two servers (they'll fail to connect but get saved)
       ExternalProvider.handle("mcp_servers", ctx, %{
         "action" => "create",
@@ -106,10 +115,6 @@ defmodule Emissary.MCP.ExternalProviderTest do
                  "name" => "limit-s3",
                  "config" => %{"url" => "https://localhost:99999/mcp"}
                })
-
-      if original,
-        do: Application.put_env(:cyfr, :max_external_servers, original),
-        else: Application.delete_env(:cyfr, :max_external_servers)
     end
 
     test "saves server config to storage", %{ctx: ctx} do

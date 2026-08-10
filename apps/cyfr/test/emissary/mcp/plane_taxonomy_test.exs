@@ -209,6 +209,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       ToolRegistry.audit_action_kinds()
     after
       Application.put_env(:cyfr, :tool_providers, original)
+      Application.delete_env(:cyfr, :plane_taxonomy_probe)
     end
   end
 
