@@ -6,6 +6,7 @@ import { useConnectionStore } from "../state/connection-store";
 import { PageLayout } from "../components/common/PageLayout";
 import { label } from "../config/labels";
 import type { TinctureEntry } from "../api/types";
+import { tinctureAccessToken } from "../api/tincture-token";
 
 /**
  * Origin to load tincture iframes / "open in browser" links from.
@@ -148,8 +149,22 @@ export default function TincturesPage() {
     navigator.clipboard.writeText(url).catch(() => {});
   };
 
-  // MCP session ID for iframe auth
+  // The relay POST sends the real credential in a header. The iframe URL can
+  // only carry a query param, so it gets a short-lived, execute-only token
+  // minted from that credential instead.
   const sessionId = client?.sessionId ?? "";
+  const [accessToken, setAccessToken] = useState("");
+
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    void tinctureAccessToken(client).then((token) => {
+      if (!cancelled) setAccessToken(token);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   const focused = tinctures[focusedIndex];
   const previewCount = focused?.previews.length ?? 0;
@@ -290,6 +305,7 @@ export default function TincturesPage() {
                 project={t.project}
                 isActive={viewing === name}
                 sessionId={sessionId}
+                accessToken={accessToken}
               />
             );
           })}
@@ -635,6 +651,7 @@ function TinctureIframe({
   project,
   isActive,
   sessionId,
+  accessToken,
 }: {
   name: string;
   publisher: string;
@@ -642,6 +659,7 @@ function TinctureIframe({
   project: string;
   isActive: boolean;
   sessionId: string;
+  accessToken: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -700,7 +718,7 @@ function TinctureIframe({
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
-        if (sessionId) headers["MCP-Session-Id"] = sessionId;
+        if (sessionId) headers["Authorization"] = `Bearer ${sessionId}`;
 
         fetch(url, {
           method: "POST",
@@ -746,7 +764,9 @@ function TinctureIframe({
   }, [handleMessage]);
 
   // Tinctures are served by Cyfr at `/t/<org>/<project>/<publisher>/<name>`.
-  // Auth rides the `?_session=` query param so it works cross-origin.
+  // An iframe cannot carry headers, so the URL carries a short-lived,
+  // execute-only access token — never the account credential, which would end
+  // up in browser history and `Referer`.
   //
   // Sandbox: a tincture's CSP uses `'self'` for its own base/scripts/styles,
   // which only resolves correctly if the iframe has its real origin — i.e. it
@@ -758,8 +778,8 @@ function TinctureIframe({
   const crossOrigin =
     TINCTURE_ORIGIN.length > 0 && TINCTURE_ORIGIN !== window.location.origin;
   const sandbox = crossOrigin ? "allow-scripts allow-same-origin" : "allow-scripts";
-  const src = sessionId
-    ? `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}?_session=${encodeURIComponent(sessionId)}`
+  const src = accessToken
+    ? `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}?_t=${encodeURIComponent(accessToken)}`
     : `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}`;
 
   return (

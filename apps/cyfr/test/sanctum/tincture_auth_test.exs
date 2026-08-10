@@ -18,41 +18,58 @@ defmodule Sanctum.TinctureAuthTest do
     %Plug.Conn{query_string: query_string, remote_ip: remote_ip}
   end
 
+  defp bearer_conn(token, remote_ip \\ {127, 0, 0, 1}) do
+    %Plug.Conn{
+      query_string: "",
+      remote_ip: remote_ip,
+      req_headers: [{"authorization", "Bearer " <> token}]
+    }
+  end
+
   describe "authenticate/1 — no / invalid credentials" do
     test "blank query string → :unauthenticated" do
       assert TinctureAuth.authenticate(conn("")) == :unauthenticated
     end
 
-    test "non-cyfr-prefixed ?_key= is skipped → :unauthenticated" do
-      assert TinctureAuth.authenticate(conn("_key=not-a-cyfr-key")) == :unauthenticated
+    test "a non-cyfr bearer token that is no session → :unauthenticated" do
+      assert TinctureAuth.authenticate(bearer_conn("not-a-cyfr-key")) == :unauthenticated
     end
 
-    test "unknown ?_session= falls through (MCP session miss → Sanctum session miss)" do
-      assert TinctureAuth.authenticate(conn("_session=sess_does_not_exist")) == :unauthenticated
+    test "an unknown session bearer falls through → :unauthenticated" do
+      assert TinctureAuth.authenticate(bearer_conn("sess_does_not_exist")) == :unauthenticated
     end
 
     test "malformed remote_ip does not crash (client_ip rescue → nil)" do
       # cyfr-prefixed but invalid key; the point is client_ip/1's rescue path
       # is exercised without raising.
-      assert TinctureAuth.authenticate(conn("_key=cyfr_pk_bogus", nil)) == :unauthenticated
+      assert TinctureAuth.authenticate(bearer_conn("cyfr_pk_bogus", nil)) == :unauthenticated
+    end
+  end
+
+  describe "authenticate/1 — credentials are never accepted from a query string" do
+    test "a valid API key in ?_key= does not authenticate", %{ctx: ctx} do
+      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "query-key"})
+
+      # Valid credential, wrong channel. A URL reaches browser history, Referer
+      # and proxy logs, so only the scoped ?_t= token may travel there.
+      assert TinctureAuth.authenticate(conn("_key=#{key}")) == :unauthenticated
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(bearer_conn(key))
+    end
+
+    test "a session id in ?_session= does not authenticate", %{ctx: ctx} do
+      {:ok, session} = Sanctum.Session.create(ctx)
+
+      assert TinctureAuth.authenticate(conn("_session=#{session.token}")) == :unauthenticated
     end
   end
 
   describe "authenticate/1 — API key path" do
-    test "valid ?_key= yields an :api_key context", %{ctx: ctx} do
+    test "a bearer API key yields an :api_key context", %{ctx: ctx} do
       {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "tincture-key"})
 
-      assert {:ok, %Context{} = out} = TinctureAuth.authenticate(conn("_key=#{key}"))
+      assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(key))
       assert out.auth_method == :api_key
       assert out.authenticated == true
-    end
-
-    test "session is attempted before key (invalid session + valid key still authenticates)",
-         %{ctx: ctx} do
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "order-key"})
-
-      qs = "_session=sess_bogus&_key=#{key}"
-      assert {:ok, %Context{auth_method: :api_key}} = TinctureAuth.authenticate(conn(qs))
     end
   end
 
@@ -63,7 +80,7 @@ defmodule Sanctum.TinctureAuthTest do
       # :unauthenticated (the tincture HTTP isolation guarantee).
       {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "orgless-key"})
 
-      fn -> assert TinctureAuth.authenticate(conn("_key=#{key}")) == :unauthenticated end
+      fn -> assert TinctureAuth.authenticate(bearer_conn(key)) == :unauthenticated end
     end
   end
 end

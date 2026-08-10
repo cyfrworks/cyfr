@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { host } from "../host";
 import { useConnectionStore } from "./connection-store";
 import * as cyfrMcp from "../api/cyfr-mcp";
+import { resetTinctureAccessToken } from "../api/tincture-token";
 
 /**
  * Claim-gate state — whenever the user has logged in locally but hasn't yet
@@ -643,8 +644,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // Already logged out
     }
     // Discard the cached MCP client so the next caller rebuilds without
-    // the invalid sessionId.
+    // the invalid sessionId, and the tincture token minted from it.
     useConnectionStore.getState().resetMcpClient();
+    resetTinctureAccessToken();
     set({
       authenticated: false,
       userName: null,

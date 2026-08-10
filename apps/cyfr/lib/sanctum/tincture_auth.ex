@@ -11,17 +11,17 @@ defmodule Sanctum.TinctureAuth do
   Auth priority (header- and token-preferred so live credentials do not travel
   in URL query strings / access logs):
 
-  1. `Authorization: Bearer cyfr_…` header — programmatic callers
+  1. `Authorization: Bearer …` header — an API key or a session token, told
+     apart by the `cyfr_` prefix. The only way to present an account credential.
   2. `Mcp-Session-Id` header — MCP / Sanctum session id
-  3. `?_t=` — short-lived, single-purpose tincture access token (the only
-     query-string credential the browser iframe/`<img>` path should use)
-  4. `?_session=` — legacy session query param (slated for removal)
-  5. `?_key=cyfr_…` — legacy API-key query param (slated for removal)
+  3. `?_t=` — short-lived, single-purpose tincture access token
 
-  `issue_access_token/1` mints the `?_t=` token from an already-authenticated
-  context (server-side, e.g. in the Prism shell LiveView or the token-mint
-  endpoint) so the browser never needs to put a raw session id / API key in a
-  URL.
+  **An account credential is never accepted from a query string.** An iframe or
+  `<img>` cannot send headers, so those URLs carry a `?_t=` token instead:
+  minted by `issue_access_token/1` (or `GET /t/access-token`) from an
+  already-authenticated caller, it lasts an hour and grants only tincture
+  `:execute` for one tenant. A URL ends up in browser history, `Referer` and
+  every intermediary's logs, so what goes there has to be worth leaking.
 
   ## Returns
 
@@ -68,9 +68,7 @@ defmodule Sanctum.TinctureAuth do
   def authenticate(conn) do
     with :skip <- try_bearer_header(conn),
          :skip <- try_session_id_header(conn),
-         :skip <- try_access_token(conn),
-         :skip <- try_session(conn),
-         :skip <- try_api_key(conn) do
+         :skip <- try_access_token(conn) do
       :unauthenticated
     else
       # Single tenant chokepoint. Every path builds a `scope: :project`
@@ -89,15 +87,30 @@ defmodule Sanctum.TinctureAuth do
     Sanctum.Context.tenant_ok(ctx) == :ok
   end
 
-  # --- Authorization: Bearer cyfr_… header (preferred for programmatic) ---
+  # --- Authorization: Bearer header (preferred) ---
+  #
+  # Carries either kind of credential, told apart by the `cyfr_` prefix, so a
+  # caller has one place to put it. This is what lets a client mint a scoped
+  # `?_t=` token from `GET /t/access-token` without falling back to a query
+  # parameter or the retired `Mcp-Session-Id` header.
 
   defp try_bearer_header(conn) do
-    with ["Bearer " <> token | _] <- get_req_header(conn, "authorization"),
-         true <- Sanctum.ApiKey.looks_like_key?(token),
-         {:ok, metadata} <-
-           Sanctum.ApiKey.validate(token, client_ip: Sanctum.ClientIp.resolve(conn)) do
-      {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
-    else
+    case get_req_header(conn, "authorization") do
+      ["Bearer " <> token | _] when token != "" ->
+        if Sanctum.ApiKey.looks_like_key?(token) do
+          validate_api_key(token, conn)
+        else
+          try_sanctum_session(token)
+        end
+
+      _ ->
+        :skip
+    end
+  end
+
+  defp validate_api_key(token, conn) do
+    case Sanctum.ApiKey.validate(token, client_ip: Sanctum.ClientIp.resolve(conn)) do
+      {:ok, metadata} -> {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
       _ -> :skip
     end
   end
@@ -137,17 +150,7 @@ defmodule Sanctum.TinctureAuth do
     end
   end
 
-  # --- Legacy ?_session= (slated for removal once shell_live/Porta migrate) ---
-
-  defp try_session(conn) do
-    case query_param(conn, "_session") do
-      id when is_binary(id) and id != "" -> resolve_session(id)
-      _ -> :skip
-    end
-  end
-
-  # MCP session id first, then Sanctum session token. Shared by the header
-  # and the legacy query path.
+  # MCP session id first, then Sanctum session token.
   defp resolve_session(id) do
     case Emissary.MCP.Session.get(id) do
       {:ok, session} -> {:ok, session.context}
@@ -166,21 +169,6 @@ defmodule Sanctum.TinctureAuth do
 
       _ ->
         :skip
-    end
-  end
-
-  # --- Legacy ?_key=cyfr_… (slated for removal once shell_live/Porta migrate) ---
-
-  defp try_api_key(conn) do
-    with key when is_binary(key) <- query_param(conn, "_key"),
-         true <- Sanctum.ApiKey.looks_like_key?(key),
-         {:ok, metadata} <-
-           Sanctum.ApiKey.validate(key, client_ip: Sanctum.ClientIp.resolve(conn)) do
-      # org/project come from the key row, never the request; the
-      # tenant gate is applied by `tenant_resolved?/1`.
-      {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
-    else
-      _ -> :skip
     end
   end
 

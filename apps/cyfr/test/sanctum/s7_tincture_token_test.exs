@@ -81,7 +81,7 @@ defmodule Sanctum.S7TinctureTokenTest do
                :unauthenticated
     end
 
-    test "header wins over a bogus legacy query param", %{ctx: ctx} do
+    test "the header is what authenticates, whatever the query string says", %{ctx: ctx} do
       {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "order-key"})
 
       cn = conn("_key=cyfr_pk_bogus", [{"authorization", "Bearer #{key}"}])
@@ -89,10 +89,18 @@ defmodule Sanctum.S7TinctureTokenTest do
     end
   end
 
-  describe "legacy query params still work (additive — removed later)" do
-    test "raw ?_key=cyfr_… still authenticates", %{ctx: ctx} do
+  describe "account credentials are not accepted from a query string" do
+    test "a valid ?_key=cyfr_… no longer authenticates", %{ctx: ctx} do
       {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "legacy-key"})
-      assert {:ok, %Context{}} = TinctureAuth.authenticate(conn("_key=#{key}"))
+
+      # This path was kept while Porta still built iframe URLs with a raw
+      # credential. Porta now mints the scoped ?_t= token instead, so the
+      # query channel is closed: a URL is visible in browser history, Referer
+      # and every intermediary log.
+      assert TinctureAuth.authenticate(conn("_key=#{key}")) == :unauthenticated
+
+      cn = conn("", [{"authorization", "Bearer #{key}"}])
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(cn)
     end
 
     test "no credentials → :unauthenticated" do

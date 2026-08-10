@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { McpClient } from "../api/mcp-client";
 import type { TinctureEntry } from "../api/types";
 import * as cyfrMcp from "../api/cyfr-mcp";
+import { tinctureAccessToken } from "../api/tincture-token";
 
 /** Image extensions accepted by the CYFR tincture asset route. Mirrors the
  *  server-side `@allowed_extensions` whitelist in `tincture_helpers.ex`. */
@@ -42,7 +43,7 @@ function buildAssetUrl(
   publisher: string,
   name: string,
   relPath: string,
-  sessionId: string,
+  accessToken: string,
 ): string | null {
   if (
     typeof relPath !== "string" ||
@@ -64,11 +65,10 @@ function buildAssetUrl(
     .split("/")
     .map((seg) => encodeURIComponent(seg))
     .join("/");
-  const sessionQuery = sessionId
-    ? `?_session=${encodeURIComponent(sessionId)}`
-    : "";
+  // A scoped, one-hour token — never the account credential. See tincture-token.ts.
+  const tokenQuery = accessToken ? `?_t=${encodeURIComponent(accessToken)}` : "";
 
-  return `${tincturePath(org, project, publisher, name)}/${encodedPath}${sessionQuery}`;
+  return `${tincturePath(org, project, publisher, name)}/${encodedPath}${tokenQuery}`;
 }
 
 interface TinctureState {
@@ -105,7 +105,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
   loadTinctures: async (client) => {
     set({ loading: true });
     try {
-      const sessionId = client.sessionId ?? "";
+      const accessToken = await tinctureAccessToken(client);
 
       const listResult = await client.callTool("component", {
         action: "list",
@@ -176,7 +176,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
             if (media) {
               const mediaIcon = media.icon;
               if (typeof mediaIcon === "string") {
-                iconUrl = buildAssetUrl(org, project, publisher, name, mediaIcon, sessionId);
+                iconUrl = buildAssetUrl(org, project, publisher, name, mediaIcon, accessToken);
               }
 
               const mediaPreviews = media.previews;
@@ -185,7 +185,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
                   .slice(0, MAX_PREVIEWS)
                   .map((p) =>
                     typeof p === "string"
-                      ? buildAssetUrl(org, project, publisher, name, p, sessionId)
+                      ? buildAssetUrl(org, project, publisher, name, p, accessToken)
                       : null,
                   )
                   .filter((u): u is string => u !== null);

@@ -158,7 +158,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
   end
 
-  describe "private tincture — authenticated via MCP session" do
+  describe "private tincture — authenticated via MCP session header" do
     setup do
       # Create an MCP session for auth
       ctx = Sanctum.TestContext.local()
@@ -167,7 +167,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     test "serves index.html with CSP headers", %{conn: conn, session_id: sid} do
-      conn = %{conn | query_string: "_session=#{sid}"}
+      conn = put_req_header(conn, "mcp-session-id", sid)
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
@@ -186,7 +186,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     test "injects base tag with signed token for private tincture", %{conn: conn, session_id: sid} do
-      conn = %{conn | query_string: "_session=#{sid}"}
+      conn = put_req_header(conn, "mcp-session-id", sid)
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
@@ -242,13 +242,28 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     test "serves private tincture with valid API key", %{conn: conn, api_key: key} do
-      conn = get(conn, "/t/local/default/local/auth-dash?_key=#{key}")
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{key}")
+        |> get("/t/local/default/local/auth-dash")
+
       assert conn.status == 200
       assert conn.resp_body =~ "Auth"
     end
 
+    test "an API key in the query string does not authenticate", %{conn: conn, api_key: key} do
+      # A credential in a URL lands in history, Referer and every proxy log, so
+      # the query path is no longer accepted at all — even for a valid key.
+      conn = get(conn, "/t/local/default/local/auth-dash?_key=#{key}")
+      assert conn.status == 404
+    end
+
     test "returns 404 with invalid API key", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/auth-dash?_key=cyfr_sk_invalidgarbage")
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer cyfr_sk_invalidgarbage")
+        |> get("/t/local/default/local/auth-dash")
+
       assert conn.status == 404
     end
   end
