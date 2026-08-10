@@ -395,7 +395,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
             {:error, reason} ->
               Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
-                error: inspect(reason),
+                error: inspect(Sanctum.Sanitizer.sanitize(reason)),
                 code: -32_603,
                 duration_ms: duration_ms,
                 routed_to: inspect(module)
@@ -468,7 +468,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
                 {:error, reason} ->
                   Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
-                    error: inspect(reason),
+                    error: inspect(Sanctum.Sanitizer.sanitize(reason)),
                     code: -32_603,
                     duration_ms: duration_ms,
                     routed_to: "external:#{name}"

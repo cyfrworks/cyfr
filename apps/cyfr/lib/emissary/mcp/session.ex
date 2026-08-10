@@ -42,6 +42,10 @@ defmodule Emissary.MCP.Session do
           expires_at: DateTime.t()
         }
 
+  # `sanctum_token` is a live bearer credential and this struct is stored in a
+  # `:public` ETS table, so it travels through plugs, crash reports and error
+  # terms that end up stringified into logs. Keep it out of every `inspect/1`.
+  @derive {Inspect, except: [:sanctum_token]}
   defstruct [:id, :sanctum_token, :context, :capabilities, :created_at, :expires_at]
 
   @default_ttl_hours 24

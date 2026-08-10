@@ -33,6 +33,54 @@ defmodule Sanctum.SanitizerTest do
       assert 42 == Sanitizer.sanitize(42)
       assert nil == Sanitizer.sanitize(nil)
     end
+
+    test "redacts sensitive fields inside a struct instead of passing it through" do
+      session = %Emissary.MCP.Session{
+        id: "sess_abc",
+        sanctum_token: "cyfr_live_token_value",
+        context: nil,
+        capabilities: %{}
+      }
+
+      result = Sanitizer.sanitize(session)
+
+      assert %Emissary.MCP.Session{} = result
+      assert result.sanctum_token == "[REDACTED]"
+      assert result.id == "sess_abc"
+      refute inspect(result) =~ "cyfr_live_token_value"
+    end
+
+    test "round-trips calendar value structs unchanged" do
+      dt = ~U[2026-08-10 12:00:00Z]
+      assert dt == Sanitizer.sanitize(dt)
+
+      nested = %{"when" => dt, "token" => "abc"}
+      result = Sanitizer.sanitize(nested)
+      assert result["when"] == dt
+      assert result["token"] == "[REDACTED]"
+    end
+  end
+
+  describe "inspect redaction" do
+    test "a session never renders its bearer token" do
+      session = %Emissary.MCP.Session{
+        id: "sess_abc",
+        sanctum_token: "cyfr_live_token_value",
+        context: nil,
+        capabilities: %{}
+      }
+
+      rendered = inspect(session)
+
+      refute rendered =~ "cyfr_live_token_value"
+      assert rendered =~ "sess_abc"
+    end
+
+    test "the token stays hidden when the session is nested in an error term" do
+      session = %Emissary.MCP.Session{id: "sess_abc", sanctum_token: "cyfr_live_token_value"}
+
+      refute inspect({:error, %{session: session}}) =~ "cyfr_live_token_value"
+    end
   end
 
   describe "sensitive_key?/1 — original keys" do

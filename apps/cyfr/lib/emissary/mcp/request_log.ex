@@ -95,7 +95,7 @@ defmodule Emissary.MCP.RequestLog do
            status: "error",
            error_code: data[:code] || data["code"],
            duration_ms: data[:duration_ms] || data["duration_ms"],
-           error: data[:error] || data["error"],
+           error: sanitize_input(data[:error] || data["error"]),
            routed_to: data[:routed_to] || data["routed_to"]
          }) do
       {:ok, _} -> :ok

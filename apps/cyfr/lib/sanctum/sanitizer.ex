@@ -36,7 +36,16 @@ defmodule Sanctum.Sanitizer do
 
   """
   @spec sanitize(term()) :: term()
-  def sanitize(%{__struct__: _} = data), do: data
+  # Structs are traversed field-by-field and rebuilt, so one carrying a
+  # sensitive field (a session token, a credential) is redacted like any other
+  # map rather than passing through whole. Calendar and URI value structs
+  # declare no sensitive field names, so they round-trip unchanged.
+  def sanitize(%mod{} = data) do
+    data
+    |> Map.from_struct()
+    |> sanitize()
+    |> then(&struct(mod, &1))
+  end
 
   def sanitize(data) when is_map(data) do
     data
