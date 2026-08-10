@@ -43,7 +43,11 @@ export function connectSSE(
   };
 
   const headers: Record<string, string> = { accept: "text/event-stream" };
-  if (client.apiKey) headers["authorization"] = `Bearer ${client.apiKey}`;
+  // Same credential rule as the MCP client: an explicit API key wins, otherwise
+  // the Device Flow session token. Previously only the API-key mode sent one, so
+  // a session-mode stream carried no credential and leaned on cookies.
+  const credential = client.apiKey || client.sessionId;
+  if (credential) headers["authorization"] = `Bearer ${credential}`;
   if (opts.lastEventId) headers["last-event-id"] = opts.lastEventId;
 
   const url = `${client.baseUrl}/api/executions/${encodeURIComponent(

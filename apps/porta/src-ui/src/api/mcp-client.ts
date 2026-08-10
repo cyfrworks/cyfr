@@ -37,15 +37,15 @@ export class AuthRequiredError extends Error {
 interface TransportResponse {
   status: number;
   body: string;
-  sessionId: string | null;
 }
 
 /**
  * MCP client speaking Streamable HTTP directly to the Cyfr `/mcp` endpoint.
  *
- * Auth modes (the server prefers the API key when both are present):
- * - Session ID (`MCP-Session-Id` header) — after Device Flow login
- * - API key (`Authorization: Bearer` header) — remote/API-key mode
+ * Auth: the caller's credential travels in `Authorization: Bearer` on every
+ * request — either an API key, or the session token obtained by Device Flow
+ * login. The server resolves it per request, so there is no protocol session to
+ * establish and a revoked credential stops working immediately.
  *
  * Cyfr's Emissary handles CORS/OPTIONS on `/mcp` (EmissaryWeb.Plugs.CORS), and
  * when the PWA is served from the same origin as Cyfr there is no CORS at all.
@@ -163,14 +163,11 @@ export class McpClient {
     return result.tools ?? [];
   }
 
+  /**
+   * Releases client-side state. There is no server-side session to terminate —
+   * the credential is revoked by logging out, not by closing a client.
+   */
   async close(): Promise<void> {
-    if (!this.sessionId) return;
-
-    try {
-      await this.transport("DELETE", null);
-    } catch {
-      // Best-effort
-    }
     this.sessionId = "";
   }
 
@@ -183,8 +180,10 @@ export class McpClient {
     if (body != null) headers["content-type"] = "application/json";
     // The server can return either JSON or an SSE stream; ask for both.
     headers["accept"] = "application/json, text/event-stream";
-    if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
-    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
+    // An explicit API key wins; otherwise the Device Flow session token is the
+    // bearer credential. Both are resolved server-side on every request.
+    const credential = this.apiKey || this.sessionId;
+    if (credential) headers["authorization"] = `Bearer ${credential}`;
 
     const resp = await fetch(`${this.baseUrl}/mcp`, {
       method,
@@ -194,11 +193,7 @@ export class McpClient {
     });
 
     const text = await resp.text();
-    return {
-      status: resp.status,
-      body: text,
-      sessionId: resp.headers.get("mcp-session-id"),
-    };
+    return { status: resp.status, body: text };
   }
 
   private async sendNotification(
@@ -212,10 +207,6 @@ export class McpClient {
     });
 
     const resp = await this.transport("POST", body);
-
-    if (resp.sessionId) {
-      this.sessionId = resp.sessionId;
-    }
 
     if (resp.status !== 200 && resp.status !== 202) {
       throw new Error(`Notification HTTP ${resp.status}: ${resp.body}`);
@@ -248,10 +239,6 @@ export class McpClient {
 
   private async doRequestOnce(req: JSONRPCRequest): Promise<JSONRPCResponse> {
     const resp = await this.transport("POST", JSON.stringify(req));
-
-    if (resp.sessionId) {
-      this.sessionId = resp.sessionId;
-    }
 
     if (resp.status !== 200) {
       if (resp.status === 404 && this.sessionId) {
