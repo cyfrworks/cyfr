@@ -42,7 +42,7 @@ defmodule Emissary.MCP.Router do
 
   """
 
-  alias Emissary.MCP.{Message, Session, ToolRegistry, ResourceRegistry, InputValidator}
+  alias Emissary.MCP.{Message, Protocol, Session, ToolRegistry, ResourceRegistry, InputValidator}
   alias Sanctum.Context
 
   @protocol_version Emissary.MCP.Protocol.version()
@@ -124,6 +124,19 @@ defmodule Emissary.MCP.Router do
     # If we reach here, the session is already initialized (handled by MCPController).
     {:error, :invalid_request,
      "Session already initialized. Send a new initialize without a session ID to start a new session."}
+  end
+
+  # Version and capability discovery, without establishing anything. A client
+  # may call it before any other request to pick a mutually supported revision,
+  # or skip it and handle `UnsupportedProtocolVersion` on the request it wanted
+  # to make anyway. It replaces `initialize`, whose only remaining job this is.
+  defp dispatch_method(_session, "server/discover", _params, _id) do
+    {:ok,
+     %{
+       "protocolVersions" => Protocol.supported(),
+       "capabilities" => @server_capabilities,
+       "serverInfo" => @server_info
+     }}
   end
 
   defp dispatch_method(_session, "ping", _params, _id) do

@@ -78,6 +78,11 @@ defmodule EmissaryWeb.MCPController do
       when auth in [:api_key, :session_token] ->
         handle_initialize_stateless(conn, params, request_id, start_time)
 
+      # Discovery answers before authentication — a client has to be able to
+      # learn which revisions the server speaks before it can speak one.
+      {_session, _auth, %{"method" => "server/discover"} = params} ->
+        handle_discover(conn, params, request_id, start_time)
+
       # No session, initialize request (any auth method)
       {nil, _auth, %{"method" => "initialize"} = params} ->
         handle_initialize(conn, params, request_id, start_time)
@@ -101,6 +106,31 @@ defmodule EmissaryWeb.MCPController do
       {session, _auth, params} ->
         handle_message(conn, session, params, request_id, start_time)
     end
+  end
+
+  defp handle_discover(conn, params, request_id, start_time) do
+    context = conn.assigns[:mcp_context]
+    id = params["id"]
+
+    {:ok, result} =
+      Emissary.MCP.Router.dispatch(
+        %Emissary.MCP.Session{context: context},
+        %Message{type: :request, id: id, method: "server/discover", params: %{}}
+      )
+
+    emit_telemetry(start_time, context, %{
+      method: "server/discover",
+      tool: nil,
+      status: :success,
+      action: nil,
+      request_id: request_id,
+      session_id: context.session_id
+    })
+
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header("x-request-id", request_id)
+    |> json(MCP.encode_result(id, result))
   end
 
   # Initialize for a caller that authenticated with its own credential: same
