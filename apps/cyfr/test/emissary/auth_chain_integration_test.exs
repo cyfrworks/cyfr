@@ -11,8 +11,6 @@ defmodule Emissary.AuthChainIntegrationTest do
   """
   use EmissaryWeb.ConnCase, async: false
 
-  alias Emissary.MCP.Session
-
   setup do
     test_dir =
       Path.join(System.tmp_dir!(), "cyfr_auth_chain_test_#{System.unique_integer([:positive])}")
@@ -180,7 +178,7 @@ defmodule Emissary.AuthChainIntegrationTest do
   end
 
   describe "session cleanup" do
-    test "sessions created during auth chain are valid", %{conn: conn, reader_key: key} do
+    test "a bearer credential authenticates each call on its own", %{conn: conn, reader_key: key} do
       # Initialize a session with the reader key
       init_conn =
         conn
@@ -196,15 +194,16 @@ defmodule Emissary.AuthChainIntegrationTest do
       response = json_response(init_conn, 200)
       assert response["result"]["protocolVersion"] == "2025-11-25"
 
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-      assert String.starts_with?(session_id, "sess_")
+      # A bearer-authenticated caller establishes nothing: no session id comes
+      # back, and subsequent calls re-present the same credential.
+      assert get_resp_header(init_conn, "mcp-session-id") == []
 
-      # Use session for a tool call
+      # The same credential authenticates the next call — nothing carried over.
       tool_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("authorization", "Bearer #{key}")
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 2,
@@ -217,8 +216,6 @@ defmodule Emissary.AuthChainIntegrationTest do
 
       tool_resp = json_response(tool_conn, 200)
       assert tool_resp["result"]["isError"] == false
-
-      Session.terminate(session_id)
     end
   end
 end

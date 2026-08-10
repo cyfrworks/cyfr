@@ -7,7 +7,6 @@ defmodule EmissaryWeb.MCPController do
 
   Endpoints:
   - POST /mcp - Handle MCP requests/notifications
-  - DELETE /mcp - Terminate session
 
   ## Request Format
 
@@ -18,14 +17,15 @@ defmodule EmissaryWeb.MCPController do
 
   - `Content-Type: application/json` (required)
   - `Accept: application/json, text/event-stream` (recommended)
-  - `MCP-Session-Id: <id>` (required after initialization)
+  - `Authorization: Bearer <credential>` (an API key or a session token)
   - `MCP-Protocol-Version: 2025-11-25` (returned in responses)
   - `X-Request-Id: req_<uuid7>` (returned in responses for correlation)
 
   ## Response
 
-  For initialization: Returns result with `MCP-Session-Id` and `MCP-Protocol-Version` headers.
-  For other requests: Returns JSON-RPC response with `X-Request-Id` header.
+  A bearer-authenticated caller needs no handshake; `initialize` answers as a
+  version probe and mints nothing. Returns a JSON-RPC response with
+  `MCP-Protocol-Version` and `X-Request-Id` headers.
 
   ## Telemetry
 
@@ -72,15 +72,21 @@ defmodule EmissaryWeb.MCPController do
     start_time = System.monotonic_time()
 
     case {conn.assigns[:mcp_session], conn.assigns[:auth_method], params} do
+      # A bearer-authenticated caller is already authenticated on every request,
+      # so the handshake mints nothing — it answers as a version probe only.
+      # Must precede the session clauses: the plug gives these callers a
+      # credential-keyed session, which would otherwise read as "already
+      # initialized" and be rejected.
+      {_session, auth, %{"method" => "initialize"} = params}
+      when auth in [:api_key, :session_token] ->
+        handle_initialize_stateless(conn, params, request_id, start_time)
+
       # No session, initialize request (any auth method)
       {nil, _auth, %{"method" => "initialize"} = params} ->
         handle_initialize(conn, params, request_id, start_time)
 
-      # No session, but the request carried its own bearer credential (an API
-      # key or a session token) — it needs no handshake, so give it an
-      # ephemeral, uncached session for the duration of this request.
-      {nil, auth, params} when auth in [:api_key, :session_token] ->
-        session = Session.ephemeral(conn.assigns[:mcp_context])
+      # Bearer-authenticated: the plug supplied the credential-keyed session.
+      {%Session{} = session, auth, params} when auth in [:api_key, :session_token] ->
         handle_message(conn, session, params, request_id, start_time)
 
       # No session, no API key - require initialization
@@ -102,6 +108,39 @@ defmodule EmissaryWeb.MCPController do
       {session, _auth, params} ->
         handle_message(conn, session, params, request_id, start_time)
     end
+  end
+
+  # Initialize for a caller that authenticated with its own credential: same
+  # result body, but no session is created and no `mcp-session-id` is returned.
+  defp handle_initialize_stateless(conn, params, request_id, start_time) do
+    context = conn.assigns[:mcp_context]
+    id = params["id"]
+
+    log_request_started(context, request_id, %{
+      method: "initialize",
+      tool: nil,
+      action: nil,
+      input: params["params"] || %{}
+    })
+
+    {:ok, result} = Emissary.MCP.Router.initialize_stateless(params["params"] || %{})
+    duration_ms = duration_ms(start_time)
+
+    emit_telemetry(start_time, context, %{
+      method: "initialize",
+      tool: nil,
+      status: :success,
+      action: nil,
+      request_id: request_id,
+      session_id: context.session_id
+    })
+
+    log_request_completed(context, request_id, result, duration_ms, "emissary")
+
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header("x-request-id", request_id)
+    |> json(MCP.encode_result(id, result))
   end
 
   defp handle_initialize(conn, params, request_id, start_time) do
@@ -271,22 +310,6 @@ defmodule EmissaryWeb.MCPController do
         |> put_resp_header("x-request-id", request_id)
         |> put_status(400)
         |> json(MCP.encode_error(nil, code, message))
-    end
-  end
-
-  @doc """
-  Terminate an MCP session.
-
-  DELETE /mcp with Mcp-Session-Id header.
-  """
-  def terminate_session(conn, _params) do
-    case conn.assigns[:mcp_session] do
-      nil ->
-        send_resp(conn, 404, "")
-
-      session ->
-        Session.terminate(session.id)
-        send_resp(conn, 202, "")
     end
   end
 

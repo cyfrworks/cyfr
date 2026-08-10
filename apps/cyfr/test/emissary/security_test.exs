@@ -136,44 +136,6 @@ defmodule Emissary.SecurityTest do
         assert conn.status == 404, "Special ID should return 404: #{special_id}"
       end
     end
-
-    test "terminated session cannot be reused", %{conn: conn} do
-      # Create a valid session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
-        })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-
-      # Terminate the session
-      conn
-      |> recycle()
-      |> put_req_header("mcp-session-id", session_id)
-      |> delete("/mcp")
-
-      # Try to use the terminated session
-      reuse_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/list"
-        })
-
-      # Should return 404 with session expired error
-      assert json_response(reuse_conn, 404)
-      response = json_response(reuse_conn, 404)
-      assert response["error"]["code"] == -33302
-    end
   end
 
   describe "header security" do

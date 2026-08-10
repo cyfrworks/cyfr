@@ -440,8 +440,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
         |> MCPSession.call([])
 
       refute conn.halted
-      # No MCP session row is created — the credential travelled on the request.
-      assert conn.assigns[:mcp_session] == nil
+      # Nothing is stored; the session is derived from the credential purely as
+      # a correlation key, so it carries a "cred_" id rather than a "sess_" one.
+      assert %Session{id: "cred_" <> _} = conn.assigns[:mcp_session]
+      assert conn.assigns[:auth_method] == :session_token
       assert conn.assigns[:mcp_context].user_id == ctx.user_id
       # `authenticated` additionally depends on the user having claimed a
       # personal namespace, which is a separate gate from bearer auth.
@@ -471,7 +473,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
         |> MCPSession.call([])
 
       refute conn.halted
-      assert conn.assigns[:mcp_session] == nil
+      # No stored session — the plug supplies an uncached, credential-keyed one
+      # purely so a caller's POST and its progress stream share a key.
+      assert %Emissary.MCP.Session{id: "cred_" <> _} = conn.assigns[:mcp_session]
+      assert conn.assigns[:auth_method] == :api_key
       assert conn.assigns[:mcp_context].auth_method == :api_key
     end
 
@@ -486,10 +491,12 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
         |> put_req_header("mcp-session-id", session.id)
         |> MCPSession.call([])
 
-      # API key should take priority
+      # The bearer credential wins: the stored session is never consulted, so
+      # the assigned session is the credential-derived one, not `session`.
       refute conn.halted
       assert conn.assigns[:auth_method] == :api_key
-      assert conn.assigns[:mcp_session] == nil
+      assert %Session{id: "cred_" <> _} = conn.assigns[:mcp_session]
+      refute conn.assigns[:mcp_session].id == session.id
 
       Session.terminate(session.id)
     end

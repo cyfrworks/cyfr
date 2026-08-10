@@ -45,11 +45,15 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     # own, so no server-side session is involved either way.
     result_conn =
       case resolve_bearer_credential(conn) do
-        {:ok, context, kind} ->
+        {:ok, context, kind, credential} ->
           Cyfr.LoggerContext.set_from_context(context)
 
+          # No stored session — but a credential-derived key so a caller's
+          # `POST /mcp` and its `GET /mcp` progress stream still correlate.
+          session = Session.for_credential(context, credential)
+
           conn
-          |> assign(:mcp_session, nil)
+          |> assign(:mcp_session, session)
           |> assign(:mcp_context, context)
           |> assign(:auth_method, kind)
 
@@ -410,15 +414,15 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # on the request itself, consulting the database every time — no server-side
   # session state, and no cached copy that can outlive a logout.
   #
-  # Returns {:ok, context, :api_key | :session_token}, :no_key when no bearer
-  # credential is present, or {:error, reason}.
+  # Returns {:ok, context, :api_key | :session_token, credential}, :no_key when
+  # no bearer credential is present, or {:error, reason}.
   defp resolve_bearer_credential(conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token | _] when token != "" ->
         if Sanctum.ApiKey.looks_like_key?(token) do
-          with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key}
+          with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key, token}
         else
-          validate_session_token(token)
+          with {:ok, ctx, kind} <- validate_session_token(token), do: {:ok, ctx, kind, token}
         end
 
       _ ->

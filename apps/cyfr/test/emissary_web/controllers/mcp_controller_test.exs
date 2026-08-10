@@ -245,46 +245,6 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
   end
 
-  describe "DELETE /mcp - session termination" do
-    test "terminates an existing session", %{conn: conn} do
-      # Initialize first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
-        })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-
-      # Terminate
-      del_conn =
-        conn
-        |> recycle()
-        |> put_req_header("mcp-session-id", session_id)
-        |> delete("/mcp")
-
-      assert response(del_conn, 202)
-
-      # Subsequent requests should fail
-      post_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/list"
-        })
-
-      assert json_response(post_conn, 404)
-    end
-  end
-
   describe "POST /mcp - API key authentication" do
     setup %{conn: _conn} do
       # Use a temp directory for API key tests
@@ -382,7 +342,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["result"] == %{}
     end
 
-    test "initialize with API key still creates a real persisted session", %{
+    test "initialize with a bearer credential mints no session", %{
       conn: conn,
       api_key: api_key
     } do
@@ -405,9 +365,9 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       assert response["result"]["protocolVersion"] == "2025-11-25"
 
-      # Initialize should return a real session ID
-      assert [session_id] = get_resp_header(conn, "mcp-session-id")
-      assert String.starts_with?(session_id, "sess_")
+      # The caller is already authenticated on every request, so the handshake
+      # establishes nothing and hands back no session id to carry.
+      assert get_resp_header(conn, "mcp-session-id") == []
     end
 
     test "response does NOT include mcp-session-id header for non-initialize requests", %{
@@ -426,18 +386,6 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       assert json_response(conn, 200)
       assert get_resp_header(conn, "mcp-session-id") == []
-    end
-
-    test "DELETE /mcp with API key returns 404 (no session to terminate)", %{
-      conn: conn,
-      api_key: api_key
-    } do
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer #{api_key}")
-        |> delete("/mcp")
-
-      assert response(conn, 404)
     end
   end
 

@@ -20,19 +20,6 @@ defmodule EmissaryWeb.RouterTest do
       assert mcp_post.plug_opts == :handle
     end
 
-    test "defines DELETE /mcp route to MCPController.terminate_session" do
-      routes = Phoenix.Router.routes(Router)
-
-      mcp_delete =
-        Enum.find(routes, fn route ->
-          route.path == "/mcp" and route.verb == :delete
-        end)
-
-      assert mcp_delete
-      assert mcp_delete.plug == EmissaryWeb.MCPController
-      assert mcp_delete.plug_opts == :terminate_session
-    end
-
     test "defines GET /mcp route to SSEController.stream" do
       routes = Phoenix.Router.routes(Router)
 

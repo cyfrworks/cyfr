@@ -453,6 +453,33 @@ defmodule Emissary.MCP.Router do
   Creates a session and returns the result with session ID.
   """
   def handle_initialize(%Context{} = context, params) do
+    warn_on_version_mismatch(params)
+    {:ok, session} = Session.create(context, @server_capabilities)
+    {:ok, initialize_result(), session}
+  end
+
+  @doc """
+  The initialize result for a caller that authenticated with its own credential.
+
+  Such a caller needs no session — it is already authenticated on every request —
+  so the handshake mints nothing and returns no session id. It survives only as a
+  protocol-version and capability probe, which `server/discover` replaces.
+  """
+  def initialize_stateless(params) do
+    warn_on_version_mismatch(params)
+    {:ok, initialize_result()}
+  end
+
+  defp initialize_result do
+    %{
+      "protocolVersion" => @protocol_version,
+      "capabilities" => @server_capabilities,
+      "serverInfo" => @server_info,
+      "instructions" => "CYFR MCP server. Use tools/list to discover available tools."
+    }
+  end
+
+  defp warn_on_version_mismatch(params) do
     client_version = params["protocolVersion"]
 
     if client_version != @protocol_version do
@@ -463,15 +490,6 @@ defmodule Emissary.MCP.Router do
       )
     end
 
-    {:ok, session} = Session.create(context, @server_capabilities)
-
-    result = %{
-      "protocolVersion" => @protocol_version,
-      "capabilities" => @server_capabilities,
-      "serverInfo" => @server_info,
-      "instructions" => "CYFR MCP server. Use tools/list to discover available tools."
-    }
-
-    {:ok, result, session}
+    :ok
   end
 end

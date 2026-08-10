@@ -72,29 +72,6 @@ defmodule Emissary.IntegrationTest do
       [content] = response["result"]["content"]
       result = Jason.decode!(content["text"])
       assert result["status"] == "ok"
-
-      # Step 4: Terminate session
-      del_conn =
-        conn
-        |> recycle()
-        |> put_req_header("mcp-session-id", session_id)
-        |> delete("/mcp")
-
-      assert response(del_conn, 202)
-
-      # Step 5: Verify session is terminated
-      post_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 3,
-          "method" => "tools/list"
-        })
-
-      assert json_response(post_conn, 404)
     end
 
     test "session persists across multiple tool calls", %{conn: conn} do

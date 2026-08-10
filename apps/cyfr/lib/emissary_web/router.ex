@@ -128,7 +128,6 @@ defmodule EmissaryWeb.Router do
 
     post "/", MCPController, :handle
     get "/", SSEController, :stream
-    delete "/", MCPController, :terminate_session
   end
 
   # Tincture serving — auth via query params (token, MCP session, API key)

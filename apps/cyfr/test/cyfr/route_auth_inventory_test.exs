@@ -23,7 +23,6 @@ defmodule Cyfr.RouteAuthInventoryTest do
     # EmissaryWeb — chokepoint-authenticated
     {:post, "/mcp"} => :mcp_session,
     {:get, "/mcp"} => :mcp_session,
-    {:delete, "/mcp"} => :mcp_session,
     {:get, "/api/executions/:id/events"} => :mcp_session,
     {:post, "/hooks/:slug"} => :webhook_hmac,
 

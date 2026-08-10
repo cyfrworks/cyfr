@@ -134,6 +134,39 @@ defmodule Emissary.MCP.Session do
   end
 
   @doc """
+  Build an uncached session whose id is derived from the caller's credential.
+
+  A bearer-authenticated request establishes no session, but two requests from
+  the same caller still need a shared key: `POST /mcp` starts a build while
+  `GET /mcp` streams its progress, and the progress buffer is keyed by
+  `context.session_id`. A per-request id would break that correlation.
+
+  The id is a SHA-256 of the credential, so it is stable for a caller, opaque,
+  and not reversible into the credential. That also fixes an older leak: the
+  hydration path this replaces used the caller's **raw** session token as the
+  session id, which `mcp_logs.session_id` then persisted verbatim.
+
+  This exists to keep the standalone progress stream working while it is on its
+  way out; request-scoped progress on the originating response stream removes
+  the need for a shared key entirely.
+  """
+  @spec for_credential(Context.t(), String.t()) :: t()
+  def for_credential(%Context{} = context, credential) when is_binary(credential) do
+    digest =
+      :crypto.hash(:sha256, credential)
+      |> Base.url_encode64(padding: false)
+      |> binary_part(0, 32)
+
+    %__MODULE__{
+      id: "cred_" <> digest,
+      context: context,
+      capabilities: %{},
+      created_at: DateTime.utc_now(),
+      expires_at: DateTime.utc_now()
+    }
+  end
+
+  @doc """
   Get a session by ID.
 
   Returns `{:ok, session}` if found and not expired, `{:error, :not_found}` otherwise.
