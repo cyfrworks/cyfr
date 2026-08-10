@@ -101,7 +101,41 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         conn
 
       true ->
-        check_declared_version(conn, body)
+        with %Plug.Conn{halted: false} = conn <- check_declared_version(conn, body),
+             %Plug.Conn{halted: false} = conn <- check_mirrored_headers(conn, body) do
+          conn
+        end
+    end
+  end
+
+  # `Mcp-Method` and `Mcp-Name` mirror body fields into headers so an
+  # intermediary can route and authorize without parsing the body. They are only
+  # safe to route on if they cannot disagree with the body, so a mismatch is
+  # refused here the same way a version mismatch is.
+  defp check_mirrored_headers(conn, body) do
+    with :ok <- match_header(conn, "mcp-method", body["method"], "Mcp-Method"),
+         :ok <- match_header(conn, "mcp-name", Protocol.named_subject(body), "Mcp-Name") do
+      conn
+    else
+      {:error, message} -> reject_version(conn, :header_mismatch, message)
+    end
+  end
+
+  # A method that names no subject sends no `Mcp-Name`, and must not be
+  # required to.
+  defp match_header(_conn, _header, nil, _label), do: :ok
+
+  defp match_header(conn, header, expected, label) do
+    case get_req_header(conn, header) do
+      [] ->
+        {:error, "Missing required #{label} header."}
+
+      [raw | _] ->
+        case Protocol.decode_header_value(raw) do
+          {:ok, ^expected} -> :ok
+          {:ok, other} -> {:error, "#{label} header (#{other}) does not match the request body."}
+          :error -> {:error, "#{label} header is not valid Base64 sentinel encoding."}
+        end
     end
   end
 

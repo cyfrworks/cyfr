@@ -369,6 +369,47 @@ func TestCallTool_NilArgsSerialized(t *testing.T) {
 	}
 }
 
+func TestRoutingHeaders_MirrorTheBody(t *testing.T) {
+	var gotMethod, gotName string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Header.Get("Mcp-Method")
+		gotName = r.Header.Get("Mcp-Name")
+		json.NewEncoder(w).Encode(JSONRPCResponse{JSONRPC: "2.0", ID: 1, Result: map[string]any{}})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	_, _ = c.CallTool("system", map[string]any{"action": "status"})
+
+	if gotMethod != "tools/call" {
+		t.Errorf("expected Mcp-Method tools/call, got %q", gotMethod)
+	}
+	// The server refuses a header that disagrees with the body, so the tool name
+	// must be mirrored exactly.
+	if gotName != "system" {
+		t.Errorf("expected Mcp-Name system, got %q", gotName)
+	}
+}
+
+func TestEncodeHeaderValue_Sentinel(t *testing.T) {
+	if got := encodeHeaderValue("plain-name"); got != "plain-name" {
+		t.Errorf("expected plain passthrough, got %q", got)
+	}
+
+	// Non-ASCII cannot travel as a plain header value.
+	got := encodeHeaderValue("naïve")
+	if !strings.HasPrefix(got, "=?base64?") || !strings.HasSuffix(got, "?=") {
+		t.Errorf("expected sentinel encoding, got %q", got)
+	}
+
+	// A value that merely looks like the sentinel must be encoded too, or it
+	// would be decoded into something else at the far end.
+	if got := encodeHeaderValue("=?base64?nope?="); got == "=?base64?nope?=" {
+		t.Error("expected sentinel-looking value to be re-encoded")
+	}
+}
+
 func TestRequestHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify headers

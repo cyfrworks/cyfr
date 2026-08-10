@@ -49,7 +49,21 @@ defmodule EmissaryWeb.ConnCase do
   def mcp_post(conn, body) when is_map(body) do
     conn
     |> Plug.Conn.put_req_header("mcp-protocol-version", Emissary.MCP.Protocol.version())
+    |> put_mcp_routing_headers(body)
     |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", conform_mcp_body(body))
+  end
+
+  defp put_mcp_routing_headers(conn, body) do
+    conn =
+      case body["method"] do
+        method when is_binary(method) -> Plug.Conn.put_req_header(conn, "mcp-method", method)
+        _ -> conn
+      end
+
+    case Emissary.MCP.Protocol.named_subject(body) do
+      name when is_binary(name) -> Plug.Conn.put_req_header(conn, "mcp-name", name)
+      _ -> conn
+    end
   end
 
   defp conform_mcp_body(%{"method" => _} = body) do

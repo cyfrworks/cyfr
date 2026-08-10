@@ -602,7 +602,10 @@ defmodule EmissaryWeb.MCPControllerTest do
         })
 
       response = json_response(conn, 400)
-      assert response["error"]["message"] =~ "Method must be a string"
+      # A non-string method cannot be mirrored into `Mcp-Method`, so the
+      # transport rejects it before the JSON-RPC layer sees it. That the message
+      # layer also rejects it is asserted directly in message_test.
+      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:header_mismatch)
     end
 
     test "rejects array as method (invalid per spec)", %{conn: conn} do
@@ -617,7 +620,10 @@ defmodule EmissaryWeb.MCPControllerTest do
         })
 
       response = json_response(conn, 400)
-      assert response["error"]["message"] =~ "Method must be a string"
+      # A non-string method cannot be mirrored into `Mcp-Method`, so the
+      # transport rejects it before the JSON-RPC layer sees it. That the message
+      # layer also rejects it is asserted directly in message_test.
+      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:header_mismatch)
     end
 
     test "handles negative integer id", %{conn: conn} do

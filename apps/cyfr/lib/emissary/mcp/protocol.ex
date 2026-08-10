@@ -52,6 +52,45 @@ defmodule Emissary.MCP.Protocol do
   def declared_version(_), do: nil
 
   @doc """
+  Decode a header value that may carry the specification's Base64 sentinel.
+
+  Tool names and resource URIs are only *recommended* to be header-safe, so a
+  value outside visible ASCII travels as `=?base64?<encoded>?=`. Comparing a
+  header to a body value without decoding first would reject every legitimate
+  request that needed the encoding.
+
+  Returns the value unchanged when it carries no sentinel, and `:error` when the
+  sentinel is present but its payload is not valid Base64.
+  """
+  @spec decode_header_value(String.t()) :: {:ok, String.t()} | :error
+  def decode_header_value("=?base64?" <> rest) do
+    case String.split(rest, "?=", parts: 2) do
+      [encoded, ""] -> Base.decode64(encoded)
+      _ -> :error
+    end
+  end
+
+  def decode_header_value(value) when is_binary(value), do: {:ok, value}
+
+  @doc """
+  The value a request's `Mcp-Name` header must carry, or `nil` when the method
+  does not name a subject.
+
+  `tools/call` and `prompts/get` name it in `params.name`; `resources/read`
+  names it in `params.uri`.
+  """
+  @spec named_subject(term()) :: String.t() | nil
+  def named_subject(%{"method" => method, "params" => %{"name" => name}})
+      when method in ["tools/call", "prompts/get"] and is_binary(name),
+      do: name
+
+  def named_subject(%{"method" => "resources/read", "params" => %{"uri" => uri}})
+      when is_binary(uri),
+      do: uri
+
+  def named_subject(_), do: nil
+
+  @doc """
   The revision this server implements and announces.
   """
   @spec version() :: String.t()

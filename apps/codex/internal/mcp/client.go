@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -107,6 +109,62 @@ func (c *Client) Discover() error {
 
 	return fmt.Errorf("%w: server speaks %v, client supports %q",
 		ErrUnsupportedProtocol, discovered.ProtocolVersions, protocolVersion)
+}
+
+// routingHeaders mirrors body fields into the headers the protocol requires, so
+// an intermediary can route and authorize without parsing the body. The server
+// refuses a header that disagrees with the body, so they are derived from it
+// rather than tracked separately.
+func routingHeaders(req *http.Request, method string, params any) {
+	req.Header.Set("Mcp-Method", method)
+
+	if name := namedSubject(method, params); name != "" {
+		req.Header.Set("Mcp-Name", encodeHeaderValue(name))
+	}
+}
+
+// namedSubject is the value Mcp-Name must carry, or "" when the method names
+// no subject.
+func namedSubject(method string, params any) string {
+	m, ok := params.(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	switch method {
+	case "tools/call", "prompts/get":
+		if name, ok := m["name"].(string); ok {
+			return name
+		}
+	case "resources/read":
+		if uri, ok := m["uri"].(string); ok {
+			return uri
+		}
+	}
+	return ""
+}
+
+// encodeHeaderValue applies the specification's Base64 sentinel when a value
+// cannot travel as a plain header: outside visible ASCII, padded with
+// whitespace, or already looking like the sentinel.
+func encodeHeaderValue(v string) string {
+	safe := v != "" &&
+		v == strings.TrimSpace(v) &&
+		!strings.HasPrefix(v, "=?base64?")
+
+	if safe {
+		for _, r := range v {
+			if r < 0x20 || r > 0x7E {
+				safe = false
+				break
+			}
+		}
+	}
+
+	if safe {
+		return v
+	}
+	return "=?base64?" + base64.StdEncoding.EncodeToString([]byte(v)) + "?="
 }
 
 // withMeta attaches the per-request metadata the protocol requires.
@@ -289,6 +347,7 @@ func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
+	routingHeaders(httpReq, req.Method, req.Params)
 	c.setCredential(httpReq)
 
 	httpResp, err := c.httpClient.Do(httpReq)

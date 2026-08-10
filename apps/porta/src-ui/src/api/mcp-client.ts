@@ -188,12 +188,62 @@ export class McpClient {
     };
   }
 
+  /**
+   * The value `Mcp-Name` must carry, or null when the method names no subject.
+   */
+  private namedSubject(
+    method: string,
+    params: Record<string, unknown> | undefined,
+  ): string | null {
+    if (!params) return null;
+    if (method === "tools/call" || method === "prompts/get") {
+      return typeof params.name === "string" ? params.name : null;
+    }
+    if (method === "resources/read") {
+      return typeof params.uri === "string" ? params.uri : null;
+    }
+    return null;
+  }
+
+  /**
+   * The specification's Base64 sentinel, applied when a value cannot travel as
+   * a plain header: outside visible ASCII, whitespace-padded, or already
+   * looking like the sentinel.
+   */
+  private encodeHeaderValue(v: string): string {
+    const plain =
+      v.length > 0 &&
+      v === v.trim() &&
+      !v.startsWith("=?base64?") &&
+      // eslint-disable-next-line no-control-regex
+      /^[\x20-\x7E]*$/.test(v);
+
+    if (plain) return v;
+
+    const bytes = new TextEncoder().encode(v);
+    let binary = "";
+    bytes.forEach((b) => (binary += String.fromCharCode(b)));
+    return `=?base64?${btoa(binary)}?=`;
+  }
+
   /** Single HTTP round-trip to the `/mcp` endpoint. */
   private async transport(
     method: "POST" | "DELETE",
     body: string | null,
+    routing?: { method: string; params?: Record<string, unknown> },
   ): Promise<TransportResponse> {
     const headers: Record<string, string> = {};
+
+    // Mirror body fields into headers so an intermediary can route without
+    // parsing the body. The server refuses a header that disagrees with the
+    // body, so both are derived from the same value.
+    if (routing) {
+      headers["mcp-method"] = routing.method;
+      const name = this.namedSubject(routing.method, routing.params);
+      if (name !== null) headers["mcp-name"] = this.encodeHeaderValue(name);
+    }
+    // Required on every request, and must equal the version declared in _meta.
+    headers["mcp-protocol-version"] = PROTOCOL_VERSION;
     if (body != null) headers["content-type"] = "application/json";
     // The server can return either JSON or an SSE stream; ask for both.
     headers["accept"] = "application/json, text/event-stream";
@@ -223,11 +273,14 @@ export class McpClient {
   }
 
   private async doRequestOnce(req: JSONRPCRequest): Promise<JSONRPCResponse> {
-    const withMeta = {
-      ...req,
-      params: { ...((req.params as Record<string, unknown>) ?? {}), _meta: this.meta() },
+    const params = {
+      ...((req.params as Record<string, unknown>) ?? {}),
+      _meta: this.meta(),
     };
-    const resp = await this.transport("POST", JSON.stringify(withMeta));
+    const resp = await this.transport("POST", JSON.stringify({ ...req, params }), {
+      method: req.method,
+      params,
+    });
 
     if (resp.status !== 200) {
       if (resp.status === 404 && this.sessionId) {
