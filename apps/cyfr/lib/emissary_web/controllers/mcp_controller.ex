@@ -53,17 +53,14 @@ defmodule EmissaryWeb.MCPController do
   # is the shape a batch actually arrives in — a bare `is_list(params)` clause
   # would never match a request that went through the endpoint.
   def handle(conn, %{"_json" => batch}) when is_list(batch) do
+    # A batch has no single id, so `nil` here is correct rather than lossy.
     conn
     |> put_resp_header("mcp-protocol-version", @protocol_version)
-    |> put_status(400)
-    |> json(%{
-      "jsonrpc" => "2.0",
-      "error" => %{
-        "code" => Message.error_code(:invalid_request),
-        "message" => "Batch requests not supported. Send one message per request."
-      },
-      "id" => nil
-    })
+    |> EmissaryWeb.MCPError.send(
+      400,
+      :invalid_request,
+      "Batch requests not supported. Send one message per request."
+    )
   end
 
   def handle(conn, params) do
@@ -94,15 +91,11 @@ defmodule EmissaryWeb.MCPController do
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
-        |> put_status(400)
-        |> json(%{
-          "jsonrpc" => "2.0",
-          "error" => %{
-            "code" => Message.cyfr_code(:session_required),
-            "message" => "Session required. Send initialize request first."
-          },
-          "id" => params["id"]
-        })
+        |> EmissaryWeb.MCPError.send(
+          400,
+          :session_required,
+          "Session required. Send initialize request first."
+        )
 
       # Has session, handle normally
       {session, _auth, params} ->

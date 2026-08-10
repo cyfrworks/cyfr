@@ -19,8 +19,6 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
   import Plug.Conn
   require Logger
 
-  alias Emissary.MCP.Message
-
   @protocol_version "2025-11-25"
 
   @default_allowed_origins [
@@ -44,16 +42,11 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
 
           conn
           |> put_resp_header("mcp-protocol-version", @protocol_version)
-          |> put_status(403)
-          |> Phoenix.Controller.json(%{
-            "jsonrpc" => "2.0",
-            "error" => %{
-              "code" => Message.cyfr_code(:insufficient_permissions),
-              "message" => "Origin not allowed: #{origin}"
-            },
-            "id" => nil
-          })
-          |> halt()
+          |> EmissaryWeb.MCPError.halt(
+            403,
+            :insufficient_permissions,
+            "Origin not allowed: #{origin}"
+          )
         end
 
       [] ->

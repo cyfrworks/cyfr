@@ -29,8 +29,6 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
 
   import Plug.Conn
 
-  alias Emissary.MCP.Message
-
   @default_max 120
   @default_window_ms 60_000
 
@@ -52,15 +50,10 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
   defp reject(conn, retry_after) do
     conn
     |> put_resp_header("retry-after", to_string(retry_after))
-    |> put_status(429)
-    |> Phoenix.Controller.json(%{
-      "jsonrpc" => "2.0",
-      "error" => %{
-        "code" => Message.cyfr_code(:rate_limited),
-        "message" => "Rate limit exceeded. Try again in #{retry_after} seconds."
-      },
-      "id" => nil
-    })
-    |> halt()
+    |> EmissaryWeb.MCPError.halt(
+      429,
+      :rate_limited,
+      "Rate limit exceeded. Try again in #{retry_after} seconds."
+    )
   end
 end

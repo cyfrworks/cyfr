@@ -39,7 +39,7 @@ defmodule EmissaryWeb.SSEController do
 
   use EmissaryWeb, :controller
 
-  alias Emissary.MCP.{Message, Session, SSEBuffer}
+  alias Emissary.MCP.{Session, SSEBuffer}
 
   @protocol_version "2025-11-25"
   @keep_alive_interval_ms 15_000
@@ -52,17 +52,14 @@ defmodule EmissaryWeb.SSEController do
   def stream(conn, _params) do
     case conn.assigns[:mcp_session] do
       nil ->
+        # GET has no body, so there is genuinely no id to echo.
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_status(400)
-        |> json(%{
-          "jsonrpc" => "2.0",
-          "error" => %{
-            "code" => Message.cyfr_code(:session_required),
-            "message" => "Session required. Initialize via POST /mcp first."
-          },
-          "id" => nil
-        })
+        |> EmissaryWeb.MCPError.send(
+          400,
+          :session_required,
+          "Session required. Initialize via POST /mcp first."
+        )
 
       session ->
         # Check for Last-Event-ID for resumption
