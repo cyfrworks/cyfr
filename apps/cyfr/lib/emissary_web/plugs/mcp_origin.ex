@@ -19,7 +19,7 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
   import Plug.Conn
   require Logger
 
-  @protocol_version "2025-11-25"
+  @protocol_version Emissary.MCP.Protocol.version()
 
   @default_allowed_origins [
     "http://localhost",

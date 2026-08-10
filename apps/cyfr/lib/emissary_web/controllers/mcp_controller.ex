@@ -40,7 +40,7 @@ defmodule EmissaryWeb.MCPController do
   alias Emissary.MCP.{Message, RequestLog, Session}
   alias Emissary.UUID7
 
-  @protocol_version "2025-11-25"
+  @protocol_version Emissary.MCP.Protocol.version()
 
   @doc """
   Handle MCP POST requests.

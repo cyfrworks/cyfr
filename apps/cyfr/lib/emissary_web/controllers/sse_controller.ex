@@ -41,7 +41,7 @@ defmodule EmissaryWeb.SSEController do
 
   alias Emissary.MCP.{Session, SSEBuffer}
 
-  @protocol_version "2025-11-25"
+  @protocol_version Emissary.MCP.Protocol.version()
   @keep_alive_interval_ms 15_000
 
   @doc """

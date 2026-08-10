@@ -45,7 +45,7 @@ defmodule Emissary.MCP.Router do
   alias Emissary.MCP.{Message, Session, ToolRegistry, ResourceRegistry, InputValidator}
   alias Sanctum.Context
 
-  @protocol_version "2025-11-25"
+  @protocol_version Emissary.MCP.Protocol.version()
 
   # Tools/actions accessible without authentication.
   # :all means every action on that tool is public.

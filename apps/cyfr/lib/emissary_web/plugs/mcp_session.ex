@@ -38,7 +38,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   def init(opts), do: opts
 
-  @protocol_version "2025-11-25"
+  @protocol_version Emissary.MCP.Protocol.version()
 
   def call(conn, _opts) do
     # A bearer credential is resolved first: it authenticates the request on its
