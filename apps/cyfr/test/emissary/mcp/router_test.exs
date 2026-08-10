@@ -124,6 +124,23 @@ defmodule Emissary.MCP.RouterTest do
       assert message =~ "Missing required field: name"
     end
 
+    test "returns invalid_params for non-object arguments", %{session: session} do
+      # Regression: the dispatcher reads `arguments["action"]`, and Access raises
+      # on a list — this used to escape as an uncaught ArgumentError (HTTP 500)
+      # rather than a JSON-RPC -32602.
+      for bad_arguments <- [[1, 2, 3], "a string", 42] do
+        msg = %Message{
+          type: :request,
+          id: 5,
+          method: "tools/call",
+          params: %{"name" => "system", "arguments" => bad_arguments}
+        }
+
+        assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+        assert message =~ "must be an object"
+      end
+    end
+
     test "handles missing arguments as empty map", %{session: session} do
       msg = %Message{
         type: :request,

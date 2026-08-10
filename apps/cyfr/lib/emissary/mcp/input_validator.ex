@@ -21,7 +21,7 @@ defmodule Emissary.MCP.InputValidator do
   Returns `:ok` if valid, or `{:error, message}` with a human-readable
   description of the first validation failure.
   """
-  @spec validate(map(), map()) :: :ok | {:error, String.t()}
+  @spec validate(term(), term()) :: :ok | {:error, String.t()}
   def validate(arguments, input_schema) when is_map(arguments) and is_map(input_schema) do
     with :ok <- validate_required(arguments, input_schema),
          :ok <- validate_properties(arguments, input_schema) do
@@ -29,7 +29,24 @@ defmodule Emissary.MCP.InputValidator do
     end
   end
 
+  # `arguments` must be a JSON object. Letting a list or scalar through here is
+  # not harmless: the dispatcher immediately reads `arguments["action"]`, and
+  # Access raises on a list, killing the request with a 500 instead of returning
+  # a JSON-RPC error.
+  def validate(arguments, _input_schema) when not is_map(arguments) do
+    {:error, "Invalid params: arguments must be an object, got #{type_name(arguments)}"}
+  end
+
+  # A tool with no usable schema still gets its arguments shape-checked above.
   def validate(_arguments, _input_schema), do: :ok
+
+  defp type_name(value) when is_list(value), do: "array"
+  defp type_name(value) when is_binary(value), do: "string"
+  defp type_name(value) when is_boolean(value), do: "boolean"
+  defp type_name(value) when is_integer(value), do: "integer"
+  defp type_name(value) when is_float(value), do: "number"
+  defp type_name(nil), do: "null"
+  defp type_name(_), do: "value"
 
   # Check that all required fields are present
   defp validate_required(arguments, schema) do

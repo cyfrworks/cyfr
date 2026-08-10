@@ -101,8 +101,24 @@ defmodule Emissary.MCP.InputValidatorTest do
       assert :ok = InputValidator.validate(%{"anything" => "goes"}, %{})
     end
 
-    test "accepts non-map arguments gracefully" do
-      assert :ok = InputValidator.validate("not a map", @schema)
+    test "rejects non-map arguments" do
+      # The dispatcher reads `arguments["action"]` immediately after this call,
+      # and Access raises on a list — so letting a non-object through here turns
+      # a client mistake into a 500 rather than a JSON-RPC error.
+      assert {:error, msg} = InputValidator.validate("not a map", @schema)
+      assert msg =~ "must be an object"
+      assert msg =~ "string"
+
+      assert {:error, list_msg} = InputValidator.validate([1, 2, 3], @schema)
+      assert list_msg =~ "array"
+
+      assert {:error, _} = InputValidator.validate(42, @schema)
+      assert {:error, _} = InputValidator.validate(true, @schema)
+    end
+
+    test "rejects non-map arguments even when the schema is unusable" do
+      assert {:error, msg} = InputValidator.validate([1, 2, 3], "not a schema")
+      assert msg =~ "must be an object"
     end
   end
 end
