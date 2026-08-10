@@ -14,7 +14,7 @@ defmodule Emissary.MCP.ServerDiscoverTest do
   defp discover(conn, id \\ 1) do
     conn
     |> put_req_header("content-type", "application/json")
-    |> post("/mcp", %{"jsonrpc" => "2.0", "id" => id, "method" => "server/discover"})
+    |> mcp_post(%{"jsonrpc" => "2.0", "id" => id, "method" => "server/discover"})
   end
 
   test "answers without any credential", %{conn: conn} do
@@ -42,14 +42,25 @@ defmodule Emissary.MCP.ServerDiscoverTest do
     assert get_resp_header(conn, "mcp-session-id") == []
   end
 
-  test "does not require the initialize handshake first", %{conn: conn} do
-    # A bare tools/call without a credential is rejected; discovery is not.
-    rejected =
+  test "a client that guesses wrong is told what is supported", %{conn: conn} do
+    # This is the bootstrap path: the header is required on every request, so a
+    # client that does not yet know the revision declares its own and learns the
+    # answer from the rejection rather than from a special unauthenticated probe.
+    conn =
       conn
       |> put_req_header("content-type", "application/json")
-      |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 9, "method" => "tools/list"})
+      |> put_req_header("mcp-protocol-version", "1999-01-01")
+      |> post("/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => 9,
+        "method" => "server/discover",
+        "params" => %{
+          "_meta" => %{"io.modelcontextprotocol/protocolVersion" => "1999-01-01"}
+        }
+      })
 
-    assert rejected.status == 400
-    assert json_response(discover(conn, 10), 200)["result"]
+    body = json_response(conn, 400)
+    assert body["error"]["code"] == -32022
+    assert body["error"]["message"] =~ Protocol.version()
   end
 end

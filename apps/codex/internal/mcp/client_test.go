@@ -20,76 +20,22 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-func TestInitialize_DoesNotCaptureSessionID(t *testing.T) {
+func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 	var requestCount int
-	var notificationBody []byte
+	var reqBody []byte
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		body, _ := io.ReadAll(r.Body)
-
-		if requestCount == 1 {
-			// First request: initialize
-			w.Header().Set("Mcp-Session-Id", "sess-abc123")
-			resp := JSONRPCResponse{
-				JSONRPC: "2.0",
-				ID:      1,
-				Result: map[string]any{
-					"protocolVersion": "2025-11-25",
-					"capabilities":    map[string]any{},
-					"serverInfo":      map[string]any{"name": "cyfr", "version": "0.1.0"},
-				},
-			}
-			json.NewEncoder(w).Encode(resp)
-		} else {
-			// Second request: notifications/initialized
-			notificationBody = body
-			w.WriteHeader(http.StatusAccepted)
-		}
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL)
-	if err := c.Initialize(); err != nil {
-		t.Fatalf("Initialize failed: %v", err)
-	}
-	// A server-minted session id is ignored: the client authenticates each
-	// request with its own credential and holds no protocol session.
-	if c.SessionID != "" {
-		t.Errorf("expected no captured SessionID, got %q", c.SessionID)
-	}
-
-	// Verify 2 requests were sent (initialize + notification)
-	if requestCount != 2 {
-		t.Fatalf("expected 2 requests (initialize + notification), got %d", requestCount)
-	}
-
-	// Verify notification has no "id" field
-	var notif map[string]any
-	if err := json.Unmarshal(notificationBody, &notif); err != nil {
-		t.Fatalf("failed to parse notification body: %v", err)
-	}
-	if _, hasID := notif["id"]; hasID {
-		t.Error("notification must not have 'id' field")
-	}
-	if notif["method"] != "notifications/initialized" {
-		t.Errorf("expected method 'notifications/initialized', got %v", notif["method"])
-	}
-	if notif["jsonrpc"] != "2.0" {
-		t.Errorf("expected jsonrpc '2.0', got %v", notif["jsonrpc"])
-	}
-}
-
-func TestInitialize_RejectsUnsupportedProtocol(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Mcp-Session-Id", "sess-xyz")
+		reqBody, _ = io.ReadAll(r.Body)
+		// A server-minted session id must be ignored if one ever appears.
+		w.Header().Set("Mcp-Session-Id", "sess-abc123")
 		resp := JSONRPCResponse{
 			JSONRPC: "2.0",
 			ID:      1,
 			Result: map[string]any{
-				"protocolVersion": "2099-01-01",
-				"capabilities":    map[string]any{},
-				"serverInfo":      map[string]any{"name": "future-server", "version": "9.9.9"},
+				"protocolVersions": []string{protocolVersion},
+				"capabilities":     map[string]any{},
+				"serverInfo":       map[string]any{"name": "cyfr", "version": "0.1.0"},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -97,7 +43,52 @@ func TestInitialize_RejectsUnsupportedProtocol(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	err := c.Initialize()
+	if err := c.Discover(); err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+
+	// One request, no handshake follow-up notification.
+	if requestCount != 1 {
+		t.Fatalf("expected 1 request, got %d", requestCount)
+	}
+	if c.SessionID != "" {
+		t.Errorf("expected no captured SessionID, got %q", c.SessionID)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(reqBody, &sent); err != nil {
+		t.Fatalf("failed to parse request body: %v", err)
+	}
+	if sent["method"] != "server/discover" {
+		t.Errorf("expected server/discover, got %v", sent["method"])
+	}
+
+	// Every request declares its own protocol version — there is no handshake
+	// that could have established it.
+	params, _ := sent["params"].(map[string]any)
+	meta, _ := params["_meta"].(map[string]any)
+	if meta["io.modelcontextprotocol/protocolVersion"] != protocolVersion {
+		t.Errorf("expected _meta protocolVersion %q, got %v", protocolVersion, meta)
+	}
+}
+
+func TestDiscover_RejectsUnsupportedProtocol(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result: map[string]any{
+				"protocolVersions": []string{"2099-01-01"},
+				"capabilities":     map[string]any{},
+				"serverInfo":       map[string]any{"name": "future-server", "version": "9.9.9"},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	err := c.Discover()
 	if err == nil {
 		t.Fatal("expected error for unsupported protocol version")
 	}
@@ -387,8 +378,8 @@ func TestRequestHeaders(t *testing.T) {
 		if accept := r.Header.Get("Accept"); accept != "application/json, text/event-stream" {
 			t.Errorf("expected Accept 'application/json, text/event-stream', got %q", accept)
 		}
-		if pv := r.Header.Get("MCP-Protocol-Version"); pv != "2025-11-25" {
-			t.Errorf("expected MCP-Protocol-Version '2025-11-25', got %q", pv)
+		if pv := r.Header.Get("MCP-Protocol-Version"); pv != protocolVersion {
+			t.Errorf("expected MCP-Protocol-Version %q, got %q", protocolVersion, pv)
 		}
 		// The credential travels in Authorization on every request; no
 		// protocol session header is sent.

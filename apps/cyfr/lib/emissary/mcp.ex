@@ -22,12 +22,10 @@ defmodule Emissary.MCP do
       {:ok, response} = Emissary.MCP.handle_message(session, json_message)
 
       # Initialize a new session
-      {:ok, result, session} = Emissary.MCP.initialize(context, params)
 
   """
 
   alias Emissary.MCP.{Message, Session, Router}
-  alias Sanctum.Context
 
   @doc """
   Handle an incoming MCP JSON-RPC message.
@@ -80,18 +78,6 @@ defmodule Emissary.MCP do
 
   defp handle_decoded(session, %Message{type: :error} = message) do
     Router.dispatch(session, message)
-  end
-
-  @doc """
-  Initialize a new MCP session.
-
-  Called when a client sends an initialize request without an existing session.
-  Creates a new session and returns the initialization result.
-
-  Returns `{:ok, result, session}` or `{:error, code, message}`.
-  """
-  def initialize(%Context{} = context, params) do
-    Router.handle_initialize(context, params)
   end
 
   @doc """

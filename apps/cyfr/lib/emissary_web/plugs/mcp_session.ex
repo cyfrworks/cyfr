@@ -33,7 +33,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   import Plug.Conn
   require Logger
 
-  alias Emissary.MCP.Session
+  alias Emissary.MCP.{Protocol, Session}
   alias Sanctum.Context
 
   def init(opts), do: opts
@@ -79,43 +79,76 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     end
   end
 
-  # Validate MCP-Protocol-Version header.
-  # Skip for initialize requests (which establish the version).
-  # Reject missing or mismatched header for all other requests.
+  # Every POST declares its protocol version twice: in `params._meta` and in the
+  # `MCP-Protocol-Version` header. Both are required, and they must agree.
+  #
+  # The duplication is deliberate — a gateway can route and rate-limit on the
+  # header without parsing the body, but only if the header cannot disagree with
+  # what the server will actually execute. So a mismatch is refused outright
+  # rather than resolved in favour of either side.
+  #
+  # Notifications are exempt: this revision defines no header requirement for
+  # them, and a notification carries no id to answer an error on.
   defp validate_protocol_version(conn) do
-    is_initialize =
-      is_map(conn.body_params) and not is_struct(conn.body_params) and
-        conn.body_params["method"] == "initialize"
+    body = conn.body_params
 
-    if is_initialize do
-      conn
-    else
-      case get_req_header(conn, "mcp-protocol-version") do
-        [@protocol_version] ->
-          conn
+    cond do
+      not (is_map(body) and not is_struct(body)) ->
+        conn
 
-        [invalid_version] ->
-          conn
-          |> put_resp_header("mcp-protocol-version", @protocol_version)
-          |> EmissaryWeb.MCPError.halt(
-            400,
-            :invalid_protocol,
-            "Unsupported MCP-Protocol-Version: #{invalid_version}. Server supports: #{@protocol_version}"
-          )
+      is_nil(body["id"]) ->
+        # A notification, not a request.
+        conn
 
-        [] ->
-          # MCP spec: for backwards compatibility, if no header is sent,
-          # assume 2025-11-25. Also allow if session already negotiated the version.
-          if conn.assigns[:mcp_session] != nil do
-            # Session exists — version was already negotiated during initialize
-            conn
-          else
-            # No session and no header — assume backwards-compat version per spec
-            # (This allows pre-2025-11-25 clients to function)
-            conn
-          end
-      end
+      true ->
+        check_declared_version(conn, body)
     end
+  end
+
+  defp check_declared_version(conn, body) do
+    header = get_req_header(conn, "mcp-protocol-version") |> List.first()
+    meta = Protocol.declared_version(body)
+
+    cond do
+      is_nil(header) ->
+        reject_version(
+          conn,
+          :header_mismatch,
+          "Missing required MCP-Protocol-Version header."
+        )
+
+      is_nil(meta) ->
+        reject_version(
+          conn,
+          :header_mismatch,
+          "Missing required #{Protocol.meta_protocol_version_key()} in params._meta."
+        )
+
+      header != meta ->
+        reject_version(
+          conn,
+          :header_mismatch,
+          "MCP-Protocol-Version header (#{header}) does not match " <>
+            "#{Protocol.meta_protocol_version_key()} (#{meta})."
+        )
+
+      not Protocol.supported?(header) ->
+        reject_version(
+          conn,
+          :unsupported_protocol_version,
+          "Unsupported protocol version #{header}. Supported: " <>
+            Enum.join(Protocol.supported(), ", ") <> "."
+        )
+
+      true ->
+        conn
+    end
+  end
+
+  defp reject_version(conn, code, message) do
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> EmissaryWeb.MCPError.halt(400, code, message)
   end
 
   # Session-based authentication flow

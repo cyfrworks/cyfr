@@ -34,6 +34,38 @@ defmodule EmissaryWeb.ConnCase do
     end
   end
 
+  @doc """
+  POST a JSON-RPC message to `/mcp` as a conforming client.
+
+  Every request must declare its protocol version twice — in the
+  `MCP-Protocol-Version` header and in `params._meta` — and the two must agree.
+  Encoding that in one helper keeps the rule in a single place: a test asserts
+  what it is about, and the next protocol revision is one edit here rather than
+  eighty across the suite.
+
+  Tests that deliberately send a malformed or non-conforming request should call
+  `post/3` directly instead.
+  """
+  def mcp_post(conn, body) when is_map(body) do
+    conn
+    |> Plug.Conn.put_req_header("mcp-protocol-version", Emissary.MCP.Protocol.version())
+    |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", conform_mcp_body(body))
+  end
+
+  defp conform_mcp_body(%{"method" => _} = body) do
+    params = Map.get(body, "params") || %{}
+
+    meta = %{
+      Emissary.MCP.Protocol.meta_protocol_version_key() => Emissary.MCP.Protocol.version(),
+      Emissary.MCP.Protocol.meta_client_info_key() => %{"name" => "test", "version" => "0.0.0"},
+      Emissary.MCP.Protocol.meta_client_capabilities_key() => %{}
+    }
+
+    Map.put(body, "params", Map.put(params, "_meta", meta))
+  end
+
+  defp conform_mcp_body(body), do: body
+
   setup tags do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
 

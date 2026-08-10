@@ -18,9 +18,38 @@ defmodule Emissary.MCP.Protocol do
   there is still one source.
   """
 
-  @version "2025-11-25"
+  @version "2026-07-28"
 
   @supported [@version]
+
+  # Reverse-DNS `_meta` keys defined by the specification. Every request carries
+  # its own version, identity and capabilities here instead of establishing them
+  # once in a handshake — that is what makes the protocol stateless.
+  @meta_protocol_version "io.modelcontextprotocol/protocolVersion"
+  @meta_client_info "io.modelcontextprotocol/clientInfo"
+  @meta_client_capabilities "io.modelcontextprotocol/clientCapabilities"
+
+  @doc "The `_meta` key carrying the protocol version of a request."
+  @spec meta_protocol_version_key() :: String.t()
+  def meta_protocol_version_key, do: @meta_protocol_version
+
+  @doc "The `_meta` key carrying the calling client's identity."
+  @spec meta_client_info_key() :: String.t()
+  def meta_client_info_key, do: @meta_client_info
+
+  @doc "The `_meta` key carrying the calling client's capabilities."
+  @spec meta_client_capabilities_key() :: String.t()
+  def meta_client_capabilities_key, do: @meta_client_capabilities
+
+  @doc """
+  The protocol version declared in a request's `params._meta`, or `nil`.
+  """
+  @spec declared_version(term()) :: String.t() | nil
+  def declared_version(%{"params" => %{"_meta" => %{@meta_protocol_version => v}}})
+      when is_binary(v),
+      do: v
+
+  def declared_version(_), do: nil
 
   @doc """
   The revision this server implements and announces.

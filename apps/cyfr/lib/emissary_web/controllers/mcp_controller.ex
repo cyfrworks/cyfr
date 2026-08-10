@@ -23,9 +23,9 @@ defmodule EmissaryWeb.MCPController do
 
   ## Response
 
-  A bearer-authenticated caller needs no handshake; `initialize` answers as a
-  version probe and mints nothing. Returns a JSON-RPC response with
-  `MCP-Protocol-Version` and `X-Request-Id` headers.
+  Every request authenticates and declares its own protocol version, so there
+  is no handshake. Returns a JSON-RPC response with `MCP-Protocol-Version` and
+  `X-Request-Id` headers.
 
   ## Telemetry
 
@@ -45,8 +45,7 @@ defmodule EmissaryWeb.MCPController do
   @doc """
   Handle MCP POST requests.
 
-  Routes to initialize flow or regular message handling based on
-  whether a session exists.
+  Discovery answers before authentication; everything else needs a credential.
   """
   # MCP 2025-11-25: POST body MUST be a single message, not a batch.
   # Plug.Parsers wraps a top-level JSON array as %{"_json" => [...]}, so this
@@ -69,41 +68,18 @@ defmodule EmissaryWeb.MCPController do
     start_time = System.monotonic_time()
 
     case {conn.assigns[:mcp_session], conn.assigns[:auth_method], params} do
-      # A bearer-authenticated caller is already authenticated on every request,
-      # so the handshake mints nothing — it answers as a version probe only.
-      # Must precede the session clauses: the plug gives these callers a
-      # credential-keyed session, which would otherwise read as "already
-      # initialized" and be rejected.
-      {_session, auth, %{"method" => "initialize"} = params}
-      when auth in [:api_key, :session_token] ->
-        handle_initialize_stateless(conn, params, request_id, start_time)
-
       # Discovery answers before authentication — a client has to be able to
       # learn which revisions the server speaks before it can speak one.
       {_session, _auth, %{"method" => "server/discover"} = params} ->
         handle_discover(conn, params, request_id, start_time)
 
-      # No session, initialize request (any auth method)
-      {nil, _auth, %{"method" => "initialize"} = params} ->
-        handle_initialize(conn, params, request_id, start_time)
-
-      # Bearer-authenticated: the plug supplied the credential-keyed session.
-      {%Session{} = session, auth, params} when auth in [:api_key, :session_token] ->
-        handle_message(conn, session, params, request_id, start_time)
-
-      # No session, no API key - require initialization
-      {nil, _auth, _params} ->
-        conn
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> EmissaryWeb.MCPError.send(
-          400,
-          :session_required,
-          "Session required. Send initialize request first."
-        )
-
-      # Has session, handle normally
+      # Everything else. There is no session to require: a bearer caller gets the
+      # plug's credential-keyed session, an auth-provider caller gets an
+      # ephemeral one, and an anonymous caller gets an unauthenticated context
+      # that the router gates per action. "Not authenticated" is the tools'
+      # answer to give, not the transport's.
       {session, _auth, params} ->
+        session = session || Session.ephemeral(conn.assigns[:mcp_context])
         handle_message(conn, session, params, request_id, start_time)
     end
   end
@@ -131,94 +107,6 @@ defmodule EmissaryWeb.MCPController do
     |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> put_resp_header("x-request-id", request_id)
     |> json(MCP.encode_result(id, result))
-  end
-
-  # Initialize for a caller that authenticated with its own credential: same
-  # result body, but no session is created and no `mcp-session-id` is returned.
-  defp handle_initialize_stateless(conn, params, request_id, start_time) do
-    context = conn.assigns[:mcp_context]
-    id = params["id"]
-
-    log_request_started(context, request_id, %{
-      method: "initialize",
-      tool: nil,
-      action: nil,
-      input: params["params"] || %{}
-    })
-
-    {:ok, result} = Emissary.MCP.Router.initialize_stateless(params["params"] || %{})
-    duration_ms = duration_ms(start_time)
-
-    emit_telemetry(start_time, context, %{
-      method: "initialize",
-      tool: nil,
-      status: :success,
-      action: nil,
-      request_id: request_id,
-      session_id: context.session_id
-    })
-
-    log_request_completed(context, request_id, result, duration_ms, "emissary")
-
-    conn
-    |> put_resp_header("mcp-protocol-version", @protocol_version)
-    |> put_resp_header("x-request-id", request_id)
-    |> json(MCP.encode_result(id, result))
-  end
-
-  defp handle_initialize(conn, params, request_id, start_time) do
-    context = conn.assigns[:mcp_context]
-    id = params["id"]
-
-    # Log request start asynchronously
-    log_request_started(context, request_id, %{
-      method: "initialize",
-      tool: nil,
-      action: nil,
-      input: params["params"] || %{}
-    })
-
-    case MCP.initialize(context, params["params"] || %{}) do
-      {:ok, result, session} ->
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: "initialize",
-          tool: nil,
-          status: :success,
-          action: nil,
-          request_id: request_id,
-          session_id: session.id
-        })
-
-        log_request_completed(context, request_id, result, duration_ms, "emissary")
-
-        conn
-        |> put_resp_header("mcp-session-id", session.id)
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> json(MCP.encode_result(id, result))
-
-      {:error, code, message} ->
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: "initialize",
-          tool: nil,
-          status: :error,
-          action: nil,
-          request_id: request_id,
-          session_id: nil
-        })
-
-        log_request_failed(context, request_id, message, Message.error_code(code), duration_ms)
-
-        conn
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> put_status(400)
-        |> json(MCP.encode_error(id, code, message))
-    end
   end
 
   defp handle_message(conn, session, params, request_id, start_time) do
@@ -416,7 +304,7 @@ defmodule EmissaryWeb.MCPController do
     end
   end
 
-  defp log_request_failed(ctx, request_id, error, code, duration_ms, routed_to \\ nil) do
+  defp log_request_failed(ctx, request_id, error, code, duration_ms, routed_to) do
     try do
       RequestLog.log_failed(ctx, request_id, %{
         error: error,

@@ -60,8 +60,9 @@ namespace on cyfr.run — required before you can push components.`,
 
 		client := newClient()
 
-		// Initialize MCP session
-		if err := client.Initialize(); err != nil {
+		// Confirm the server speaks a revision we understand before starting a
+		// device flow that would otherwise fail confusingly later.
+		if err := client.Discover(); err != nil {
 			output.Errorf("Failed to connect: %v", err)
 		}
 

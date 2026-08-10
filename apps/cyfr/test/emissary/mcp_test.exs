@@ -21,58 +21,10 @@ defmodule Emissary.MCPTest do
     :ok
   end
 
-  describe "initialize/2 - internal session creation" do
-    test "creates session without HTTP context" do
-      ctx = Sanctum.TestContext.local()
-      params = %{"protocolVersion" => "2025-11-25"}
-
-      {:ok, result, session} = MCP.initialize(ctx, params)
-
-      assert result["protocolVersion"] == "2025-11-25"
-      assert result["serverInfo"]["name"] == "CYFR"
-      assert result["capabilities"]["tools"]
-      assert String.starts_with?(session.id, "sess_")
-      assert session.context == ctx
-
-      Session.terminate(session.id)
-    end
-
-    test "returns server version for incompatible client version" do
-      ctx = Sanctum.TestContext.local()
-      params = %{"protocolVersion" => "1999-01-01"}
-
-      {:ok, result, session} = MCP.initialize(ctx, params)
-
-      # Per MCP spec: server returns its own version; client decides compatibility
-      assert result["protocolVersion"] == "2025-11-25"
-
-      Session.terminate(session.id)
-    end
-
-    test "session inherits context permissions" do
-      ctx = %Context{
-        user_id: "test_user",
-        org_id: "test_org",
-        permissions: MapSet.new(["read:files", "write:files"]),
-        scope: :organization
-      }
-
-      params = %{"protocolVersion" => "2025-11-25"}
-      {:ok, _result, session} = MCP.initialize(ctx, params)
-
-      assert session.context.user_id == "test_user"
-      assert session.context.org_id == "test_org"
-      assert MapSet.member?(session.context.permissions, "read:files")
-      assert session.context.scope == :organization
-
-      Session.terminate(session.id)
-    end
-  end
-
   describe "handle_message/2 - request processing" do
     setup do
       ctx = Sanctum.TestContext.local()
-      {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
+      session = Emissary.MCP.Session.ephemeral(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
 
@@ -163,21 +115,11 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - notification processing" do
     setup do
       ctx = Sanctum.TestContext.local()
-      {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
+      session = Emissary.MCP.Session.ephemeral(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
 
       {:ok, session: session}
-    end
-
-    test "handles notifications/initialized", %{session: session} do
-      params = %{
-        "jsonrpc" => "2.0",
-        "method" => "notifications/initialized"
-      }
-
-      result = MCP.handle_message(session, params)
-      assert result == :ok
     end
 
     test "handles notifications/cancelled", %{session: session} do
@@ -205,7 +147,7 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - batch requests" do
     setup do
       ctx = Sanctum.TestContext.local()
-      {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
+      session = Emissary.MCP.Session.ephemeral(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
 
@@ -246,7 +188,7 @@ defmodule Emissary.MCPTest do
         },
         %{
           "jsonrpc" => "2.0",
-          "method" => "notifications/initialized"
+          "method" => "notifications/cancelled"
         }
       ]
 
@@ -310,7 +252,7 @@ defmodule Emissary.MCPTest do
 
   describe "protocol_version/0" do
     test "returns the supported protocol version" do
-      assert MCP.protocol_version() == "2025-11-25"
+      assert MCP.protocol_version() == Emissary.MCP.Protocol.version()
     end
   end
 end

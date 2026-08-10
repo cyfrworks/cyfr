@@ -23,30 +23,18 @@ defmodule Emissary.MCP.RouterTest do
 
   describe "protocol_version/0" do
     test "returns the supported protocol version" do
-      assert Router.protocol_version() == "2025-11-25"
+      assert Router.protocol_version() == Emissary.MCP.Protocol.version()
     end
   end
 
-  describe "dispatch/2 with initialize" do
-    test "returns success for compatible version", %{context: ctx} do
-      params = %{"protocolVersion" => "2025-11-25"}
+  describe "dispatch/2 with server/discover" do
+    test "advertises the supported revisions, capabilities and identity", %{session: session} do
+      msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
 
-      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
-      assert result["protocolVersion"] == "2025-11-25"
+      assert {:ok, result} = Router.dispatch(session, msg)
+      assert result["protocolVersions"] == Emissary.MCP.Protocol.supported()
       assert result["serverInfo"]["name"] == "CYFR"
       assert is_map(result["capabilities"])
-      assert is_binary(result["instructions"])
-
-      Session.terminate(session.id)
-    end
-
-    test "returns server version even for incompatible client version", %{context: ctx} do
-      params = %{"protocolVersion" => "1999-01-01"}
-
-      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
-      assert result["protocolVersion"] == "2025-11-25"
-
-      Session.terminate(session.id)
     end
   end
 
@@ -284,31 +272,6 @@ defmodule Emissary.MCP.RouterTest do
       }
 
       assert :ok = Router.dispatch(session, msg)
-    end
-  end
-
-  describe "handle_initialize/2" do
-    test "creates session and returns result for compatible version", %{context: ctx} do
-      params = %{"protocolVersion" => "2025-11-25"}
-
-      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
-      assert result["protocolVersion"] == "2025-11-25"
-      assert result["serverInfo"]["name"] == "CYFR"
-      assert is_binary(session.id)
-      assert String.starts_with?(session.id, "sess_")
-
-      # Cleanup
-      Session.terminate(session.id)
-    end
-
-    test "returns server version for incompatible client version", %{context: ctx} do
-      params = %{"protocolVersion" => "1999-01-01"}
-
-      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
-      assert result["protocolVersion"] == "2025-11-25"
-
-      # Cleanup
-      Session.terminate(session.id)
     end
   end
 end

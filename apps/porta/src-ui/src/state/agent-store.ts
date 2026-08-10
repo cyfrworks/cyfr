@@ -243,7 +243,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   initClient: async () => {
     const client = await useConnectionStore.getState().getMcpClient();
     if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
-      await client.initialize();
+      await client.discover();
     }
     set({ client });
 
@@ -296,7 +296,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // Use the shared MCP client from connection-store
     const client = await useConnectionStore.getState().getMcpClient();
     if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
-      await client.initialize();
+      await client.discover();
     }
     set({ client });
 
@@ -678,7 +678,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!client) {
       client = await useConnectionStore.getState().getMcpClient();
       if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
-        await client.initialize();
+        await client.discover();
       }
       set({ client });
     }

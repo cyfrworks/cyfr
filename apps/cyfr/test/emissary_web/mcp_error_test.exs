@@ -26,7 +26,7 @@ defmodule EmissaryWeb.MCPErrorTest do
       body = json_response(conn, 400)
       assert body["id"] == 4242
       assert body["jsonrpc"] == "2.0"
-      assert body["error"]["code"] == Message.cyfr_code(:invalid_protocol)
+      assert body["error"]["code"] == Message.error_code(:header_mismatch)
     end
 
     test "a string request id round-trips unchanged", %{conn: conn} do

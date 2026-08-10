@@ -88,30 +88,11 @@ func newClient() *mcp.Client {
 	client := mcp.NewClient(url)
 	activeClient = client
 
-	// Wire up auto-recovery: when a session is recovered after expiry,
-	// persist the new session ID to config.
-	client.OnSessionRecovered = func(sessionID string) {
-		saveSessionID(client)
-	}
-
-	// Use cached session ID
+	// The stored credential authenticates every request; there is nothing to
+	// establish up front. Without one, commands that need auth will say so.
 	ctx := cfg.Current()
 	if ctx != nil && ctx.SessionID != "" {
 		client.SessionID = ctx.SessionID
-	}
-
-	// No cached session — initialize with the server.
-	// Without a cached token this returns an unauthenticated session;
-	// the user must run `cyfr login` to authenticate.
-	if client.SessionID == "" {
-		if err := client.Initialize(); err == nil {
-			saveSessionID(client)
-		} else {
-			// Not fatal — local-only commands still work — but surface it under
-			// CYFR_DEBUG so an offline/unreachable server isn't a silent mystery
-			// when a later call reports "not logged in".
-			output.Debugf("MCP initialize failed (continuing unauthenticated): %v", err)
-		}
 	}
 
 	return client

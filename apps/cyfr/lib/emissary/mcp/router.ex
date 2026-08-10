@@ -6,7 +6,7 @@ defmodule Emissary.MCP.Router do
   Routes MCP method calls to appropriate handlers.
 
   Handles:
-  - Lifecycle methods (initialize, notifications/initialized)
+  - Discovery (server/discover)
   - Tool methods (tools/list, tools/call)
   - Resource methods (resources/list, resources/read)
   - Prompt methods (prompts/list, prompts/get) [future]
@@ -42,8 +42,7 @@ defmodule Emissary.MCP.Router do
 
   """
 
-  alias Emissary.MCP.{Message, Protocol, Session, ToolRegistry, ResourceRegistry, InputValidator}
-  alias Sanctum.Context
+  alias Emissary.MCP.{Message, Protocol, ToolRegistry, ResourceRegistry, InputValidator}
 
   @protocol_version Emissary.MCP.Protocol.version()
 
@@ -118,13 +117,6 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
   # Lifecycle Methods
   # ============================================================================
-
-  defp dispatch_method(_session, "initialize", _params, _id) do
-    # Per MCP spec, initialize MUST be the first message in a session.
-    # If we reach here, the session is already initialized (handled by MCPController).
-    {:error, :invalid_request,
-     "Session already initialized. Send a new initialize without a session ID to start a new session."}
-  end
 
   # Version and capability discovery, without establishing anything. A client
   # may call it before any other request to pick a mutually supported revision,
@@ -326,11 +318,6 @@ defmodule Emissary.MCP.Router do
   # Notifications
   # ============================================================================
 
-  defp dispatch_notification(_session, "notifications/initialized", _params) do
-    # Client has completed initialization
-    :ok
-  end
-
   defp dispatch_notification(session, "notifications/cancelled", params) do
     request_id = params["requestId"]
     reason = params["reason"]
@@ -458,51 +445,4 @@ defmodule Emissary.MCP.Router do
   Get the protocol version this server supports.
   """
   def protocol_version, do: @protocol_version
-
-  @doc """
-  Handle initialization for a new session.
-
-  Called when receiving an initialize request without an existing session.
-  Creates a session and returns the result with session ID.
-  """
-  def handle_initialize(%Context{} = context, params) do
-    warn_on_version_mismatch(params)
-    {:ok, session} = Session.create(context, @server_capabilities)
-    {:ok, initialize_result(), session}
-  end
-
-  @doc """
-  The initialize result for a caller that authenticated with its own credential.
-
-  Such a caller needs no session — it is already authenticated on every request —
-  so the handshake mints nothing and returns no session id. It survives only as a
-  protocol-version and capability probe, which `server/discover` replaces.
-  """
-  def initialize_stateless(params) do
-    warn_on_version_mismatch(params)
-    {:ok, initialize_result()}
-  end
-
-  defp initialize_result do
-    %{
-      "protocolVersion" => @protocol_version,
-      "capabilities" => @server_capabilities,
-      "serverInfo" => @server_info,
-      "instructions" => "CYFR MCP server. Use tools/list to discover available tools."
-    }
-  end
-
-  defp warn_on_version_mismatch(params) do
-    client_version = params["protocolVersion"]
-
-    if client_version != @protocol_version do
-      require Logger
-
-      Logger.warning(
-        "[MCP] Client requested protocol version #{inspect(client_version)}, server supports #{@protocol_version}"
-      )
-    end
-
-    :ok
-  end
 end

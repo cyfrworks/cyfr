@@ -31,11 +31,12 @@ type JSONRPCError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// InitializeResult is the result of the initialize method.
-type InitializeResult struct {
-	ProtocolVersion string      `json:"protocolVersion"`
-	Capabilities    any         `json:"capabilities"`
-	ServerInfo      *ServerInfo `json:"serverInfo,omitempty"`
+// DiscoverResult is the result of server/discover: which protocol revisions the
+// server speaks, plus its capabilities and identity.
+type DiscoverResult struct {
+	ProtocolVersions []string       `json:"protocolVersions"`
+	Capabilities     map[string]any `json:"capabilities"`
+	ServerInfo       map[string]any `json:"serverInfo"`
 }
 
 // ServerInfo describes the MCP server.

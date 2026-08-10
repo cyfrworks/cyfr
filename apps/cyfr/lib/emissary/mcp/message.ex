@@ -35,14 +35,19 @@ defmodule Emissary.MCP.Message do
 
   @jsonrpc_version "2.0"
 
-  # Standard JSON-RPC 2.0 error codes
+  # Standard JSON-RPC 2.0 error codes, plus the codes the MCP specification
+  # reserves for itself in -32020..-32099. Those are protocol-defined, not
+  # CYFR-defined, so they live here rather than with the -33xxx block.
   @error_codes %{
     parse_error: -32700,
     invalid_request: -32600,
     method_not_found: -32601,
     invalid_params: -32602,
     internal_error: -32603,
-    resource_not_found: -32002
+    resource_not_found: -32602,
+    header_mismatch: -32020,
+    missing_required_client_capability: -32021,
+    unsupported_protocol_version: -32022
   }
 
   # CYFR-specific error codes.

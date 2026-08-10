@@ -23,7 +23,7 @@ defmodule Emissary.SecurityTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", forged_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "tools/list"
@@ -49,7 +49,7 @@ defmodule Emissary.SecurityTest do
           |> recycle()
           |> put_req_header("content-type", "application/json")
           |> put_req_header("mcp-session-id", pattern)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => 1,
             "method" => "tools/list"
@@ -68,7 +68,7 @@ defmodule Emissary.SecurityTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", oversized_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "tools/list"
@@ -83,7 +83,7 @@ defmodule Emissary.SecurityTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", "")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "tools/list"
@@ -101,7 +101,7 @@ defmodule Emissary.SecurityTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", null_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "tools/list"
@@ -126,7 +126,7 @@ defmodule Emissary.SecurityTest do
           |> recycle()
           |> put_req_header("content-type", "application/json")
           |> put_req_header("mcp-session-id", special_id)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => 1,
             "method" => "tools/list"
@@ -144,21 +144,17 @@ defmodule Emissary.SecurityTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Try with wrong content-type
       wrong_ct_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "text/plain")
-        |> put_req_header("mcp-session-id", session_id)
         |> post(
           "/mcp",
           Jason.encode!(%{
@@ -170,9 +166,6 @@ defmodule Emissary.SecurityTest do
 
       # Should handle gracefully (either reject or parse)
       assert wrong_ct_conn.status in [200, 400, 415]
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
     test "multiple session ID headers uses first", %{conn: conn} do
@@ -180,14 +173,11 @@ defmodule Emissary.SecurityTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Send request with multiple session headers via raw connection
       # Phoenix will use the first header value
@@ -195,8 +185,7 @@ defmodule Emissary.SecurityTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "ping"
@@ -204,67 +193,9 @@ defmodule Emissary.SecurityTest do
 
       # Should work with the valid session
       assert json_response(conn, 200)
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
-    test "case-insensitive session header handling", %{conn: conn} do
-      # Create a valid session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
-        })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-
-      # HTTP headers are case-insensitive, Phoenix normalizes them
-      # Test with the normalized lowercase header
-      conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "ping"
-        })
-
-      assert json_response(conn, 200)
-
-      # Cleanup
-      Session.terminate(session_id)
-    end
-  end
-
-  describe "input sanitization" do
-    setup %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
-        })
-
-      [session_id] = get_resp_header(conn, "mcp-session-id")
-
-      on_exit(fn ->
-        Session.terminate(session_id)
-      end)
-
-      {:ok, session_id: session_id}
-    end
-
-    test "XSS payloads in params are not executed", %{conn: conn, session_id: session_id} do
+    test "XSS payloads in params are not executed", %{conn: conn} do
       xss_payloads = [
         "<script>alert('xss')</script>",
         "javascript:alert('xss')",
@@ -278,8 +209,7 @@ defmodule Emissary.SecurityTest do
           conn
           |> recycle()
           |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", session_id)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => 2,
             "method" => "tools/call",
@@ -298,7 +228,7 @@ defmodule Emissary.SecurityTest do
       end
     end
 
-    test "path traversal in tool params is contained", %{conn: conn, session_id: session_id} do
+    test "path traversal in tool params is contained", %{conn: conn} do
       traversal_payloads = [
         "../../../etc/passwd",
         "..\\..\\..\\windows\\system32",
@@ -312,8 +242,7 @@ defmodule Emissary.SecurityTest do
           conn
           |> recycle()
           |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", session_id)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => 2,
             "method" => "tools/call",
@@ -328,7 +257,7 @@ defmodule Emissary.SecurityTest do
       end
     end
 
-    test "command injection in params is contained", %{conn: conn, session_id: session_id} do
+    test "command injection in params is contained", %{conn: conn} do
       injection_payloads = [
         "; rm -rf /",
         "| cat /etc/passwd",
@@ -342,8 +271,7 @@ defmodule Emissary.SecurityTest do
           conn
           |> recycle()
           |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", session_id)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => 2,
             "method" => "tools/call",
@@ -365,14 +293,11 @@ defmodule Emissary.SecurityTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Send many rapid requests
       results =
@@ -380,8 +305,7 @@ defmodule Emissary.SecurityTest do
           conn
           |> recycle()
           |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", session_id)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => i,
             "method" => "ping"
@@ -391,41 +315,6 @@ defmodule Emissary.SecurityTest do
       # All should complete (even if some are rate limited)
       for result <- results do
         assert result.status in [200, 429, 503]
-      end
-
-      # Cleanup
-      Session.terminate(session_id)
-    end
-
-    test "many concurrent sessions are handled", %{conn: conn} do
-      # Create many sessions
-      sessions =
-        for _ <- 1..20 do
-          init_conn =
-            conn
-            |> recycle()
-            |> put_req_header("content-type", "application/json")
-            |> post("/mcp", %{
-              "jsonrpc" => "2.0",
-              "id" => 1,
-              "method" => "initialize",
-              "params" => %{"protocolVersion" => "2025-11-25"}
-            })
-
-          case get_resp_header(init_conn, "mcp-session-id") do
-            [session_id] -> session_id
-            [] -> nil
-          end
-        end
-
-      valid_sessions = Enum.filter(sessions, & &1)
-
-      # Should have created sessions
-      assert valid_sessions != []
-
-      # Cleanup
-      for session_id <- valid_sessions do
-        Session.terminate(session_id)
       end
     end
   end

@@ -61,11 +61,6 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       if (sid) client.sessionId = sid;
     }
 
-    // Persist any session ID the server hands back.
-    client.onSessionRecovered = (newSessionId) => {
-      host.setSessionId(newSessionId);
-    };
-
     // Gate dangerous tool calls invoked directly from the UI through the
     // approval flow. AQUA-initiated calls run server-side and aren't
     // intercepted here.

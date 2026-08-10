@@ -19,32 +19,6 @@ defmodule EmissaryWeb.SSEControllerTest do
       assert response["error"]["message"] =~ "Session required"
     end
 
-    test "accepts valid session and returns event-stream headers", %{conn: conn} do
-      # Initialize a session first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
-        })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-
-      # Open SSE connection
-      _sse_conn =
-        conn
-        |> recycle()
-        |> put_req_header("accept", "text/event-stream")
-        |> put_req_header("mcp-session-id", session_id)
-
-      # Since SSE is a streaming connection, we need to test it differently
-      # For now, just verify the session lookup works
-      assert Session.exists?(session_id)
-    end
-
     test "returns 400 for non-existent session", %{conn: conn} do
       conn =
         conn

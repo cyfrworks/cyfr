@@ -2,7 +2,6 @@ import type {
   JSONRPCRequest,
   JSONRPCResponse,
   JSONRPCError,
-  InitializeResult,
   ToolCallResult,
   Tool,
   ToolsListResult,
@@ -34,6 +33,15 @@ export class AuthRequiredError extends Error {
   }
 }
 
+/** The protocol revision this client speaks. Declared on every request. */
+const PROTOCOL_VERSION = "2026-07-28";
+
+interface DiscoverResult {
+  protocolVersions?: string[];
+  capabilities?: Record<string, unknown>;
+  serverInfo?: Record<string, unknown>;
+}
+
 interface TransportResponse {
   status: number;
   body: string;
@@ -54,10 +62,8 @@ export class McpClient {
   baseUrl: string;
   sessionId: string;
   apiKey: string;
-  onSessionRecovered?: (sessionId: string) => void;
 
   private nextId = 0;
-  private recovering = false;
 
   constructor(baseUrl: string, options: { apiKey?: string } = {}) {
     // Strip a trailing slash so `${baseUrl}/mcp` is well-formed; "" => same-origin.
@@ -66,35 +72,34 @@ export class McpClient {
     this.apiKey = options.apiKey ?? "";
   }
 
-  async initialize(): Promise<void> {
-    this.sessionId = "";
+  /**
+   * Confirm the server speaks a revision we understand.
+   *
+   * Not a handshake and not a precondition — every request declares its own
+   * version, so this establishes nothing and may be skipped entirely. It exists
+   * so a mismatch surfaces once, clearly, instead of on every later call.
+   */
+  async discover(): Promise<void> {
     const req: JSONRPCRequest = {
       jsonrpc: "2.0",
       id: ++this.nextId,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-11-25",
-        capabilities: {},
-        clientInfo: { name: "aqua", version: "1.0.3" },
-      },
+      method: "server/discover",
+      params: {},
     };
 
     const resp = await this.doRequest(req);
 
     if (resp.error) {
-      throw new Error(`Initialize error: ${resp.error.message}`);
+      throw new Error(`server/discover error: ${resp.error.message}`);
     }
 
-    if (resp.result) {
-      const result = resp.result as InitializeResult;
-      if (result.protocolVersion && result.protocolVersion !== "2025-11-25") {
-        throw new Error(
-          `Unsupported protocol: server ${result.protocolVersion}, client 2025-11-25`,
-        );
-      }
+    const result = resp.result as DiscoverResult | undefined;
+    const versions = result?.protocolVersions ?? [];
+    if (versions.length > 0 && !versions.includes(PROTOCOL_VERSION)) {
+      throw new Error(
+        `Unsupported protocol: server speaks ${versions.join(", ")}, client ${PROTOCOL_VERSION}`,
+      );
     }
-
-    await this.sendNotification("notifications/initialized", null);
   }
 
   async callTool(
@@ -171,6 +176,18 @@ export class McpClient {
     this.sessionId = "";
   }
 
+  /**
+   * The per-request metadata the protocol requires. There is no handshake, so
+   * every request carries its own version, identity and capabilities.
+   */
+  private meta(): Record<string, unknown> {
+    return {
+      "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+      "io.modelcontextprotocol/clientInfo": { name: "aqua", version: "1.0.3" },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+  }
+
   /** Single HTTP round-trip to the `/mcp` endpoint. */
   private async transport(
     method: "POST" | "DELETE",
@@ -196,49 +213,21 @@ export class McpClient {
     return { status: resp.status, body: text };
   }
 
-  private async sendNotification(
-    method: string,
-    params: unknown,
-  ): Promise<void> {
-    const body = JSON.stringify({
-      jsonrpc: "2.0",
-      method,
-      ...(params != null ? { params } : {}),
-    });
-
-    const resp = await this.transport("POST", body);
-
-    if (resp.status !== 200 && resp.status !== 202) {
-      throw new Error(`Notification HTTP ${resp.status}: ${resp.body}`);
-    }
-  }
-
+  /**
+   * No retry-on-expiry: the credential authenticates each request on its own,
+   * so a rejected one will be rejected again. A revoked credential needs a
+   * fresh login, not a re-handshake.
+   */
   private async doRequest(req: JSONRPCRequest): Promise<JSONRPCResponse> {
-    try {
-      return await this.doRequestOnce(req);
-    } catch (err) {
-      if (this.recovering) throw err;
-
-      if (
-        err instanceof SessionExpiredError ||
-        err instanceof SessionRequiredError
-      ) {
-        this.recovering = true;
-        try {
-          await this.initialize();
-          this.onSessionRecovered?.(this.sessionId);
-          return await this.doRequestOnce(req);
-        } finally {
-          this.recovering = false;
-        }
-      }
-
-      throw err;
-    }
+    return this.doRequestOnce(req);
   }
 
   private async doRequestOnce(req: JSONRPCRequest): Promise<JSONRPCResponse> {
-    const resp = await this.transport("POST", JSON.stringify(req));
+    const withMeta = {
+      ...req,
+      params: { ...((req.params as Record<string, unknown>) ?? {}), _meta: this.meta() },
+    };
+    const resp = await this.transport("POST", JSON.stringify(withMeta));
 
     if (resp.status !== 200) {
       if (resp.status === 404 && this.sessionId) {

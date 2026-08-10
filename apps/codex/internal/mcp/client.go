@@ -3,14 +3,13 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sync/atomic"
 )
 
-const protocolVersion = "2025-11-25"
+const protocolVersion = "2026-07-28"
 
 // ErrSessionExpired is returned when the server reports that the session has expired.
 var ErrSessionExpired = fmt.Errorf("session expired")
@@ -29,13 +28,8 @@ type Client struct {
 	BaseURL   string
 	SessionID string
 
-	// OnSessionRecovered is called when auto-recovery obtains a new session ID.
-	// Use this to persist the new session ID to config.
-	OnSessionRecovered func(sessionID string)
-
 	httpClient *http.Client
 	nextID     atomic.Int64
-	recovering bool
 }
 
 // NewClient creates a new MCP client for the given base URL.
@@ -79,50 +73,63 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// Initialize sends the MCP initialize request and captures the session ID.
-func (c *Client) Initialize() error {
-	c.SessionID = "" // Clear stale session ID; initialize creates a new one
+// Discover asks the server which protocol revisions it speaks, and fails if
+// none of them is ours. There is no handshake to perform — every request carries
+// its own version — so this is purely a compatibility check a caller may run
+// once, and never a precondition for anything else.
+func (c *Client) Discover() error {
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      int(c.nextID.Add(1)),
-		Method:  "initialize",
-		Params: map[string]any{
-			"protocolVersion": protocolVersion,
-			"capabilities":    map[string]any{},
-			"clientInfo": map[string]any{
-				"name":    "cyfr",
-				"version": "0.1.0",
-			},
-		},
+		Method:  "server/discover",
+		Params:  map[string]any{},
 	}
 
 	resp, err := c.doRequest(req)
 	if err != nil {
-		return fmt.Errorf("initialize: %w", err)
+		return fmt.Errorf("server/discover: %w", err)
 	}
-
 	if resp.Error != nil {
-		return fmt.Errorf("initialize error: %s", resp.Error.Message)
+		return fmt.Errorf("server/discover error: %s", resp.Error.Message)
 	}
 
-	// MCP spec: client SHOULD verify protocolVersion in response
-	if resp.Result != nil {
-		resultBytes, _ := json.Marshal(resp.Result)
-		var initResult InitializeResult
-		if json.Unmarshal(resultBytes, &initResult) == nil {
-			if initResult.ProtocolVersion != "" && initResult.ProtocolVersion != protocolVersion {
-				return fmt.Errorf("%w: server speaks %q, client supports %q",
-					ErrUnsupportedProtocol, initResult.ProtocolVersion, protocolVersion)
-			}
+	resultBytes, _ := json.Marshal(resp.Result)
+	var discovered DiscoverResult
+	if json.Unmarshal(resultBytes, &discovered) != nil {
+		return nil // Unreadable result is not fatal; the next real call decides.
+	}
+
+	for _, v := range discovered.ProtocolVersions {
+		if v == protocolVersion {
+			return nil
 		}
 	}
 
-	// MCP spec: client MUST send notifications/initialized after successful init
-	if err := c.sendNotification("notifications/initialized", nil); err != nil {
-		return fmt.Errorf("send initialized notification: %w", err)
-	}
+	return fmt.Errorf("%w: server speaks %v, client supports %q",
+		ErrUnsupportedProtocol, discovered.ProtocolVersions, protocolVersion)
+}
 
-	return nil
+// withMeta attaches the per-request metadata the protocol requires.
+//
+// There is no handshake, so every request declares its own protocol version,
+// client identity and capabilities. Params may be a struct or a map, so it is
+// round-tripped through JSON to get a map to add `_meta` to.
+func withMeta(params any) map[string]any {
+	m := map[string]any{}
+	if params != nil {
+		if b, err := json.Marshal(params); err == nil {
+			_ = json.Unmarshal(b, &m)
+		}
+	}
+	m["_meta"] = map[string]any{
+		"io.modelcontextprotocol/protocolVersion": protocolVersion,
+		"io.modelcontextprotocol/clientInfo": map[string]any{
+			"name":    "cyfr",
+			"version": "0.1.0",
+		},
+		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+	}
+	return m
 }
 
 // CallTool invokes an MCP tool and returns the raw result.
@@ -260,32 +267,15 @@ func (c *Client) sendNotification(method string, params any) error {
 }
 
 func (c *Client) doRequest(req JSONRPCRequest) (*JSONRPCResponse, error) {
-	resp, err := c.doRequestOnce(req)
-	if err == nil || c.recovering {
-		return resp, err
-	}
-
-	// Auto-recover on session expired or session required
-	if errors.Is(err, ErrSessionExpired) || errors.Is(err, ErrSessionRequired) {
-		c.recovering = true
-		defer func() { c.recovering = false }()
-
-		if initErr := c.Initialize(); initErr != nil {
-			return nil, err // Return the original error
-		}
-
-		if c.OnSessionRecovered != nil {
-			c.OnSessionRecovered(c.SessionID)
-		}
-
-		// Retry the original request with the new session
-		return c.doRequestOnce(req)
-	}
-
-	return resp, err
+	// No retry-on-expiry: the credential authenticates each request on its own,
+	// so a rejected one will be rejected again. A revoked or expired token needs
+	// `cyfr login`, not a re-handshake.
+	return c.doRequestOnce(req)
 }
 
 func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
+	req.Params = withMeta(req.Params)
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)

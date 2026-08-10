@@ -236,7 +236,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       let initErr: unknown;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          await client.initialize();
+          await client.discover();
           initErr = null;
           break;
         } catch (err) {

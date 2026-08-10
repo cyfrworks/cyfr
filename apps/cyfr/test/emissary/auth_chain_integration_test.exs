@@ -71,7 +71,7 @@ defmodule Emissary.AuthChainIntegrationTest do
     conn
     |> put_req_header("content-type", "application/json")
     |> put_req_header("authorization", "Bearer #{api_key}")
-    |> post("/mcp", %{
+    |> mcp_post(%{
       "jsonrpc" => "2.0",
       "id" => System.unique_integer([:positive]),
       "method" => "tools/call",
@@ -162,7 +162,7 @@ defmodule Emissary.AuthChainIntegrationTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("authorization", "Bearer cyfr_pk_invalid000000000000000000")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "tools/call",
@@ -184,15 +184,13 @@ defmodule Emissary.AuthChainIntegrationTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("authorization", "Bearer #{key}")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
       response = json_response(init_conn, 200)
-      assert response["result"]["protocolVersion"] == "2025-11-25"
 
       # A bearer-authenticated caller establishes nothing: no session id comes
       # back, and subsequent calls re-present the same credential.
@@ -204,7 +202,7 @@ defmodule Emissary.AuthChainIntegrationTest do
         |> recycle()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("authorization", "Bearer #{key}")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",

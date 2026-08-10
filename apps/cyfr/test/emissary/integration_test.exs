@@ -24,27 +24,16 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{
-            "protocolVersion" => "2025-11-25",
-            "clientInfo" => %{"name" => "integration-test", "version" => "1.0"}
-          }
-        })
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"})
 
       assert json_response(init_conn, 200)
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-      assert String.starts_with?(session_id, "sess_")
 
       # Step 2: Send initialized notification
       notif_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "method" => "notifications/initialized"
         })
@@ -56,8 +45,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -79,14 +67,11 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Multiple tool calls
       for i <- 2..5 do
@@ -94,8 +79,7 @@ defmodule Emissary.IntegrationTest do
           conn
           |> recycle()
           |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", session_id)
-          |> post("/mcp", %{
+          |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => i,
             "method" => "tools/call",
@@ -108,11 +92,7 @@ defmodule Emissary.IntegrationTest do
         assert json_response(call_conn, 200)
       end
 
-      # Session should still be valid
-      assert Session.exists?(session_id)
-
-      # Cleanup
-      Session.terminate(session_id)
+      # Each call stood on its own credential; there is no session to outlive them.
     end
   end
 
@@ -121,11 +101,10 @@ defmodule Emissary.IntegrationTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
       [request_id] = get_resp_header(conn, "x-request-id")
@@ -136,7 +115,7 @@ defmodule Emissary.IntegrationTest do
 
       # Verify all required fields
       assert log.id == request_id
-      assert log.method == "initialize"
+      assert log.method == "ping"
       assert log.status == "success"
       assert log.timestamp
       assert is_integer(log.duration_ms)
@@ -151,14 +130,12 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
 
       # Make tool call
@@ -166,8 +143,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -191,7 +167,6 @@ defmodule Emissary.IntegrationTest do
       # Cleanup
       Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
       Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
-      Session.terminate(session_id)
     end
 
     test "failed request log includes error details", %{conn: conn} do
@@ -199,14 +174,12 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
 
       # Make request that will fail (invalid URI)
@@ -214,8 +187,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "resources/read",
@@ -236,7 +208,6 @@ defmodule Emissary.IntegrationTest do
       # Cleanup
       Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
       Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
-      Session.terminate(session_id)
     end
   end
 
@@ -268,14 +239,11 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Drain initialize telemetry
       receive do
@@ -289,8 +257,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -307,9 +274,6 @@ defmodule Emissary.IntegrationTest do
       assert metadata.method == "tools/call"
       assert metadata.tool == "system"
       assert metadata.status == :success
-
-      # Cleanup
-      Session.terminate(session_id)
     end
   end
 
@@ -319,22 +283,18 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Call 1: status all
       conn1 =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -349,8 +309,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 3,
           "method" => "tools/call",
@@ -368,8 +327,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 4,
           "method" => "tools/list"
@@ -378,9 +336,6 @@ defmodule Emissary.IntegrationTest do
       result3 = json_response(conn3, 200)
       assert result3["id"] == 4
       assert is_list(result3["result"]["tools"])
-
-      # Cleanup
-      Session.terminate(session_id)
     end
   end
 
@@ -390,22 +345,18 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Call with invalid action
       error_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -420,9 +371,6 @@ defmodule Emissary.IntegrationTest do
       response = json_response(error_conn, 400)
       assert response["error"]["code"] == -32602
       assert response["error"]["message"] =~ "must be one of"
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
     test "unknown tool returns protocol error", %{conn: conn} do
@@ -430,23 +378,19 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Call unknown tool
       error_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
         |> put_req_header("mcp-protocol-version", "2025-11-25")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -460,9 +404,6 @@ defmodule Emissary.IntegrationTest do
       response = json_response(error_conn, 400)
       assert response["error"]["code"] == -32602
       assert response["error"]["message"] =~ "Unknown tool: nonexistent/tool"
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
     test "invalid JSON-RPC returns error with session", %{conn: conn} do
@@ -470,23 +411,19 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Send invalid JSON-RPC version with session
       conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
         |> put_req_header("mcp-protocol-version", "2025-11-25")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "1.0",
           "id" => 1,
           "method" => "ping"
@@ -494,47 +431,25 @@ defmodule Emissary.IntegrationTest do
 
       response = json_response(conn, 400)
       assert response["error"]["message"] =~ "Unsupported jsonrpc version"
-
-      Session.terminate(session_id)
     end
 
-    test "request without session returns error", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "tools/list"
-        })
-
-      response = json_response(conn, 400)
-      assert response["error"]["message"] =~ "Session required"
-    end
-  end
-
-  describe "webhook notification" do
     test "system notify action sends webhook with correct payload", %{conn: conn} do
       # Initialize session
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Call notify with a non-existent endpoint (will fail delivery but test the structure)
       notify_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -562,9 +477,6 @@ defmodule Emissary.IntegrationTest do
       # Delivery fails because endpoint doesn't exist
       assert result["delivered"] == false
       assert is_binary(result["error"])
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
     test "system notify fails gracefully with missing target", %{conn: conn} do
@@ -572,22 +484,18 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Call notify without target
       notify_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -604,9 +512,6 @@ defmodule Emissary.IntegrationTest do
       assert response["result"]["isError"] == true
       [content] = response["result"]["content"]
       assert content["text"] =~ "target"
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
     test "system notify fails gracefully with missing event", %{conn: conn} do
@@ -614,22 +519,18 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Call notify without event
       notify_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -646,30 +547,13 @@ defmodule Emissary.IntegrationTest do
       assert response["result"]["isError"] == true
       [content] = response["result"]["content"]
       assert content["text"] =~ "event"
-
-      # Cleanup
-      Session.terminate(session_id)
     end
   end
 
   describe "internal MCP module integration" do
-    test "MCP.initialize creates session with correct state" do
-      ctx = Sanctum.TestContext.local()
-
-      {:ok, result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
-
-      assert result["protocolVersion"] == "2025-11-25"
-      assert result["serverInfo"]["name"] == "CYFR"
-      assert String.starts_with?(session.id, "sess_")
-      assert session.context.user_id == "local|local|testns"
-
-      # Cleanup
-      Session.terminate(session.id)
-    end
-
     test "MCP.handle_message delegates to ToolRegistry" do
       ctx = Sanctum.TestContext.local()
-      {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
+      session = Emissary.MCP.Session.ephemeral(ctx)
 
       message = %{
         "jsonrpc" => "2.0",
@@ -697,11 +581,10 @@ defmodule Emissary.IntegrationTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
       # Request ID should be in response header
@@ -716,11 +599,10 @@ defmodule Emissary.IntegrationTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
       [request_id] = get_resp_header(conn, "x-request-id")
@@ -743,18 +625,15 @@ defmodule Emissary.IntegrationTest do
             conn
             |> recycle()
             |> put_req_header("content-type", "application/json")
-            |> post("/mcp", %{
+            |> mcp_post(%{
               "jsonrpc" => "2.0",
               "id" => 1,
-              "method" => "initialize",
-              "params" => %{"protocolVersion" => "2025-11-25"}
+              "method" => "ping"
             })
 
           [request_id] = get_resp_header(response_conn, "x-request-id")
-          [session_id] = get_resp_header(response_conn, "mcp-session-id")
 
           # Cleanup session
-          Session.terminate(session_id)
 
           request_id
         end
@@ -769,14 +648,12 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
 
       # Make tool call
@@ -784,8 +661,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -806,14 +682,12 @@ defmodule Emissary.IntegrationTest do
       tool_log = Arca.Repo.get(Arca.McpLog, tool_request_id)
       assert tool_log.id == tool_request_id
 
-      # Tool log should have session_id context
-      assert tool_log.session_id == session_id or
-               tool_log.user_id != nil
+      # The log still attributes the call to a caller, now by credential.
+      assert tool_log.user_id != nil
 
       # Cleanup
       Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
       Arca.Repo.get(Arca.McpLog, tool_request_id) |> Arca.Repo.delete()
-      Session.terminate(session_id)
     end
 
     test "request_id propagates to downstream tool handlers", %{conn: conn} do
@@ -821,22 +695,18 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
-
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
 
       # Make a tool call that uses the context
       tool_conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "tools/call",
@@ -858,22 +728,19 @@ defmodule Emissary.IntegrationTest do
 
       # Cleanup
       Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
-      Session.terminate(session_id)
     end
 
     test "request_id format is valid UUID7", %{conn: conn} do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
       [request_id] = get_resp_header(conn, "x-request-id")
-      [session_id] = get_resp_header(conn, "mcp-session-id")
 
       # Extract the UUID part
       "req_" <> uuid_part = request_id
@@ -885,37 +752,6 @@ defmodule Emissary.IntegrationTest do
                uuid_part,
                ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
              )
-
-      # Cleanup
-      Session.terminate(session_id)
-    end
-
-    test "session_id format is valid UUID7", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
-        })
-
-      [session_id] = get_resp_header(conn, "mcp-session-id")
-
-      # Extract the UUID part
-      "sess_" <> uuid_part = session_id
-
-      # UUID format: 8-4-4-4-12 (36 chars with dashes)
-      assert String.length(uuid_part) == 36
-
-      assert String.match?(
-               uuid_part,
-               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-             )
-
-      # Cleanup
-      Session.terminate(session_id)
     end
 
     test "failed requests still have request_id in log", %{conn: conn} do
@@ -923,14 +759,12 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "initialize",
-          "params" => %{"protocolVersion" => "2025-11-25"}
+          "method" => "ping"
         })
 
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
 
       # Make a request that will fail
@@ -938,8 +772,7 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", %{
+        |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
           "method" => "resources/read",
@@ -958,7 +791,6 @@ defmodule Emissary.IntegrationTest do
       # Cleanup
       Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
       Arca.Repo.get(Arca.McpLog, error_request_id) |> Arca.Repo.delete()
-      Session.terminate(session_id)
     end
   end
 end
