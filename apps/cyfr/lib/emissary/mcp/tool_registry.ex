@@ -661,46 +661,50 @@ defmodule Emissary.MCP.ToolRegistry do
   # Internal
   # ============================================================================
 
+  # The handler runs under `async_nolink`, never `Task.async`. `Task.async` links,
+  # and the caller here is the request process, which does not trap exits — so a
+  # handler raising would propagate a link exit signal and kill the request
+  # outright, returning a bare 500 instead of a JSON-RPC error. A signal is not
+  # catchable by try/rescue, so the crash clauses below could never have fired for
+  # that case. Without a link, a crash arrives as `{:exit, reason}` from `yield/2`.
   defp execute_tool_call(name, ctx, opts, execute_fn) do
     mcp_request_id = Keyword.get(opts, :mcp_request_id)
+    task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, execute_fn)
 
-    try do
-      task = Task.async(execute_fn)
+    if mcp_request_id,
+      do:
+        Emissary.MCP.RunningTasks.register(
+          mcp_request_id,
+          task,
+          ctx.user_id,
+          ctx.org_id,
+          ctx.project_id
+        )
 
-      if mcp_request_id,
-        do:
-          Emissary.MCP.RunningTasks.register(
-            mcp_request_id,
-            task,
-            ctx.user_id,
-            ctx.org_id,
-            ctx.project_id
-          )
+    result =
+      case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} ->
+          result
 
-      result =
-        case Task.yield(task, @tool_timeout_ms) do
-          {:ok, result} ->
-            result
+        {:exit, {exception, stacktrace}} when is_exception(exception) ->
+          Logger.error("Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}")
 
-          nil ->
-            Task.shutdown(task, :brutal_kill)
-            Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
-            {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
-        end
+          {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(exception)}"}}
 
-      if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
-      result
-    rescue
-      e ->
-        if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
-        Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
-        {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(e)}"}}
-    catch
-      :exit, reason ->
-        if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
-        Logger.error("Tool #{name} exited: #{inspect(reason)}")
-        {:error, {:exit, "Tool #{name} exited unexpectedly"}}
-    end
+        {:exit, :cancelled} ->
+          {:error, {:exit, "Tool #{name} was cancelled"}}
+
+        {:exit, reason} ->
+          Logger.error("Tool #{name} exited: #{inspect(reason)}")
+          {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+
+        nil ->
+          Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
+          {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+      end
+
+    if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
+    result
   end
 
   defp schedule_refresh do

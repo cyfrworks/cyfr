@@ -72,15 +72,25 @@ defmodule Emissary.MCP.ResourceRegistry do
       {:ok, scheme} ->
         case find_provider_for_scheme(scheme) do
           {:ok, provider} ->
-            task = Task.async(fn -> provider.read(ctx, uri) end)
+            # `async_nolink`, not `Task.async`: the caller is the request process
+            # and does not trap exits, so a linked provider crash would kill the
+            # request instead of returning an error. Unlinked, it arrives here as
+            # `{:exit, reason}`.
+            task =
+              Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+                provider.read(ctx, uri)
+              end)
 
-            case Task.yield(task, @resource_timeout_ms) do
+            case Task.yield(task, @resource_timeout_ms) ||
+                   Task.shutdown(task, :brutal_kill) do
               {:ok, result} ->
                 result
 
-              nil ->
-                Task.shutdown(task, :brutal_kill)
+              {:exit, reason} ->
+                Logger.error("ResourceRegistry: read crashed for #{uri}: #{inspect(reason)}")
+                {:error, "Resource read failed for #{uri}"}
 
+              nil ->
                 Logger.error(
                   "ResourceRegistry: read timed out after #{@resource_timeout_ms}ms for #{uri}"
                 )

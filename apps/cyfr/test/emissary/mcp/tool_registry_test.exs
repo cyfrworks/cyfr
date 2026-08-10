@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Emissary.MCP.ToolRegistryTest.CrashingProvider do
+  @moduledoc false
+  # A provider that fails the way a real one would: by raising or exiting
+  # rather than returning an error tuple.
+  def handle(_tool, _ctx, %{"action" => "raise"}), do: raise("boom from provider")
+  def handle(_tool, _ctx, %{"action" => "exit"}), do: exit(:provider_exit)
+  def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
+end
+
 defmodule Emissary.MCP.ToolRegistryTest do
   @moduledoc """
   Tests for the MCP tool registry.
@@ -216,6 +225,45 @@ defmodule Emissary.MCP.ToolRegistryTest do
       assert {:error, message} = result
       assert message =~ "Unknown tool"
       assert message =~ "completely/unknown/tool"
+    end
+
+    @crash_tool "crash_barrier_test_tool"
+
+    defp register_crashing_tool do
+      Arca.Cache.put(
+        {:mcp_tool, @crash_tool},
+        {Emissary.MCP.ToolRegistryTest.CrashingProvider, %{requires_auth: false}},
+        :timer.minutes(1)
+      )
+
+      on_exit(fn -> Arca.Cache.invalidate({:mcp_tool, @crash_tool}) end)
+    end
+
+    test "a raising handler yields a typed error and the caller survives" do
+      register_crashing_tool()
+      ctx = Sanctum.TestContext.local()
+      caller = self()
+
+      assert {:error, {:crashed, message}} =
+               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "raise"})
+
+      assert message =~ "boom from provider"
+
+      # The whole point: Task.async would have propagated a link exit and killed
+      # this process, so reaching the next line at all is the assertion.
+      assert Process.alive?(caller)
+      assert {:ok, %{"ok" => true}} = ToolRegistry.call_external(@crash_tool, ctx, %{})
+    end
+
+    test "an exiting handler yields a typed error and the caller survives" do
+      register_crashing_tool()
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, {:exit, message}} =
+               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "exit"})
+
+      assert message =~ "exited unexpectedly"
+      assert Process.alive?(self())
     end
 
     test "handles nil arguments gracefully" do
