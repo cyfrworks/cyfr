@@ -403,32 +403,47 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # ============================================================================
 
   @doc false
-  # Extract and validate API key from Authorization header
-  # Returns {:ok, context} on success, :no_key if no API key present,
-  # or {:error, reason} if key is invalid
+  # Resolve a credential presented in the `Authorization: Bearer` header.
+  #
+  # Two credential kinds share the header and are told apart by the `cyfr_`
+  # prefix: an API key, or a Sanctum session token. Both resolve to a Context
+  # on the request itself, consulting the database every time — no server-side
+  # session state, and no cached copy that can outlive a logout.
+  #
+  # Returns {:ok, context}, :no_key when no bearer credential is present, or
+  # {:error, reason}.
   defp extract_and_validate_api_key(conn) do
-    case extract_api_key(conn) do
-      nil ->
-        :no_key
-
-      key ->
-        validate_api_key(conn, key)
-    end
-  end
-
-  # Extract Bearer token from Authorization header if it's a CYFR API key
-  defp extract_api_key(conn) do
     case get_req_header(conn, "authorization") do
-      ["Bearer " <> token | _] ->
-        # Only treat as API key if it carries a recognized cyfr_ prefix.
+      ["Bearer " <> token | _] when token != "" ->
         if Sanctum.ApiKey.looks_like_key?(token) do
-          token
+          validate_api_key(conn, token)
         else
-          nil
+          validate_session_token(token)
         end
 
       _ ->
-        nil
+        :no_key
+    end
+  end
+
+  # A Sanctum session token presented as a bearer credential. `Session.load/2`
+  # reads the row, so a revoked or expired session is rejected on the very next
+  # request rather than surviving in a cache.
+  defp validate_session_token(token) do
+    case Sanctum.Session.load(token, surface: :console) do
+      {:ok, ctx} ->
+        case context_from_session(ctx) do
+          {:error, :missing_tenant} -> {:error, :missing_tenant}
+          %Context{} = resolved -> {:ok, resolved}
+        end
+
+      {:error, :namespace_unavailable} ->
+        # Transient store failure during session→context resolution, distinct
+        # from an unknown session. Retryable, so it must not read as "expired".
+        {:error, :auth_provider_error}
+
+      {:error, _reason} ->
+        :no_key
     end
   end
 

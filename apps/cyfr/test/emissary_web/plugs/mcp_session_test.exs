@@ -428,6 +428,41 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       assert ctx.user_id == "test_user_123"
     end
 
+    test "a Sanctum session token authenticates as a bearer credential", %{conn: conn} do
+      # Stateless auth: the credential travels on the request itself, so no
+      # server-side MCP session is created and nothing is cached.
+      ctx = Sanctum.TestContext.local()
+      {:ok, session} = Sanctum.Session.create(ctx)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> MCPSession.call([])
+
+      refute conn.halted
+      # No MCP session row is created — the credential travelled on the request.
+      assert conn.assigns[:mcp_session] == nil
+      assert conn.assigns[:mcp_context].user_id == ctx.user_id
+      # `authenticated` additionally depends on the user having claimed a
+      # personal namespace, which is a separate gate from bearer auth.
+    end
+
+    test "a destroyed session token stops authenticating immediately", %{conn: conn} do
+      # The bearer path reads the row on every request, so revocation takes
+      # effect on the next call rather than when a cache entry expires.
+      ctx = Sanctum.TestContext.local()
+      {:ok, session} = Sanctum.Session.create(ctx)
+      :ok = Sanctum.Session.destroy(session.token)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> MCPSession.call([])
+
+      resolved = conn.assigns[:mcp_context]
+      refute resolved && resolved.user_id == ctx.user_id && resolved.authenticated
+    end
+
     test "API key auth bypasses session requirement", %{conn: conn, api_key: api_key} do
       # API keys should work without any session
       conn =
