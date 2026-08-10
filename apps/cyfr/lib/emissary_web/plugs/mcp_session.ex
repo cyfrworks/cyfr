@@ -41,17 +41,17 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   @protocol_version "2025-11-25"
 
   def call(conn, _opts) do
-    # Check API key first - this is stateless auth that bypasses sessions
+    # A bearer credential is resolved first: it authenticates the request on its
+    # own, so no server-side session is involved either way.
     result_conn =
-      case extract_and_validate_api_key(conn) do
-        {:ok, context} ->
-          # API key auth successful - no session needed
+      case resolve_bearer_credential(conn) do
+        {:ok, context, kind} ->
           Cyfr.LoggerContext.set_from_context(context)
 
           conn
           |> assign(:mcp_session, nil)
           |> assign(:mcp_context, context)
-          |> assign(:auth_method, :api_key)
+          |> assign(:auth_method, kind)
 
         :no_key ->
           # No API key - fall back to session-based auth
@@ -410,13 +410,13 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # on the request itself, consulting the database every time — no server-side
   # session state, and no cached copy that can outlive a logout.
   #
-  # Returns {:ok, context}, :no_key when no bearer credential is present, or
-  # {:error, reason}.
-  defp extract_and_validate_api_key(conn) do
+  # Returns {:ok, context, :api_key | :session_token}, :no_key when no bearer
+  # credential is present, or {:error, reason}.
+  defp resolve_bearer_credential(conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token | _] when token != "" ->
         if Sanctum.ApiKey.looks_like_key?(token) do
-          validate_api_key(conn, token)
+          with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key}
         else
           validate_session_token(token)
         end
@@ -434,7 +434,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       {:ok, ctx} ->
         case context_from_session(ctx) do
           {:error, :missing_tenant} -> {:error, :missing_tenant}
-          %Context{} = resolved -> {:ok, resolved}
+          %Context{} = resolved -> {:ok, resolved, :session_token}
         end
 
       {:error, :namespace_unavailable} ->

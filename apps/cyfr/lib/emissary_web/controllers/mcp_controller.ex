@@ -76,8 +76,10 @@ defmodule EmissaryWeb.MCPController do
       {nil, _auth, %{"method" => "initialize"} = params} ->
         handle_initialize(conn, params, request_id, start_time)
 
-      # No session, API key auth - create ephemeral session
-      {nil, :api_key, params} ->
+      # No session, but the request carried its own bearer credential (an API
+      # key or a session token) — it needs no handshake, so give it an
+      # ephemeral, uncached session for the duration of this request.
+      {nil, auth, params} when auth in [:api_key, :session_token] ->
         session = Session.ephemeral(conn.assigns[:mcp_context])
         handle_message(conn, session, params, request_id, start_time)
 
