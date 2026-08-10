@@ -135,12 +135,16 @@ defmodule EmissaryWeb.Router do
   # No session cookie auth (EmissaryWeb and PrismWeb have separate session stores).
   pipeline :tincture do
     plug :accepts, ["html", "json"]
+    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
     plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :page, max_requests: 60, window_ms: 60_000
   end
 
   pipeline :tincture_invoke do
     plug :accepts, ["json"]
     plug EmissaryWeb.Plugs.CORS
+    # Before the rate limiter so a 429 is scrubbed too — it is logged like any
+    # other response, and it never reaches the action that reads the credential.
+    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
     # After CORS on purpose: OPTIONS preflights are halted with 204 above and
     # must never be counted or answered 429 without CORS headers.
     plug EmissaryWeb.Plugs.TinctureRateLimit,
@@ -151,6 +155,7 @@ defmodule EmissaryWeb.Router do
 
   pipeline :tincture_asset do
     # No :accepts — assets serve arbitrary content types.
+    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
     plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :asset, max_requests: 300, window_ms: 60_000
   end
 

@@ -57,10 +57,10 @@ defmodule EmissaryWeb.TinctureController do
   # -------------------------------------------------------------------
 
   def access_token(conn, _params) do
+    # Credential query params are scrubbed for every response on these routes by
+    # `EmissaryWeb.Plugs.ScrubTinctureCredentials` (a `before_send` callback), so
+    # `authenticate/1` still sees the raw value here and nothing downstream does.
     result = Sanctum.TinctureAuth.authenticate(conn)
-    # Scrub credential query params AFTER auth so no log sink / error report
-    # observes a raw credential for the remainder of the pipeline.
-    conn = Sanctum.TinctureAuth.scrub_conn(conn)
 
     case result do
       {:ok, ctx} ->
