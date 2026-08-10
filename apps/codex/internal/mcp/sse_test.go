@@ -17,8 +17,8 @@ func TestOpenStream_ReceivesEvents(t *testing.T) {
 		if r.Header.Get("Accept") != "text/event-stream" {
 			t.Errorf("expected Accept: text/event-stream, got %q", r.Header.Get("Accept"))
 		}
-		if r.Header.Get("MCP-Session-Id") != "sess-123" {
-			t.Errorf("expected MCP-Session-Id: sess-123, got %q", r.Header.Get("MCP-Session-Id"))
+		if r.Header.Get("Authorization") != "Bearer sess-123" {
+			t.Errorf("expected Authorization: Bearer sess-123, got %q", r.Header.Get("Authorization"))
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")

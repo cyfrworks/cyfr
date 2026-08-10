@@ -59,23 +59,22 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-// Close terminates the MCP session by sending DELETE to the server.
-// Per MCP spec, clients SHOULD send DELETE when they no longer need a session.
+// setCredential attaches the caller's credential to a request.
+//
+// The credential travels in Authorization on every request rather than in a
+// protocol session header: the server resolves it per request, so a revoked
+// token stops working immediately and there is no server-side session state to
+// establish, carry or expire.
+func (c *Client) setCredential(req *http.Request) {
+	if c.SessionID != "" {
+		req.Header.Set("Authorization", "Bearer "+c.SessionID)
+	}
+}
+
+// Close releases client-side state. The credential authenticates each request
+// on its own, so there is no server-side session to terminate — the token
+// outlives the process and is revoked by logging out, not by closing a client.
 func (c *Client) Close() error {
-	if c.SessionID == "" {
-		return nil
-	}
-	req, err := http.NewRequest("DELETE", c.BaseURL+"/mcp", nil)
-	if err != nil {
-		return fmt.Errorf("create delete request: %w", err)
-	}
-	req.Header.Set("MCP-Session-Id", c.SessionID)
-	req.Header.Set("MCP-Protocol-Version", protocolVersion)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("delete session: %w", err)
-	}
-	resp.Body.Close()
 	c.SessionID = ""
 	return nil
 }
@@ -243,9 +242,7 @@ func (c *Client) sendNotification(method string, params any) error {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
-	if c.SessionID != "" {
-		httpReq.Header.Set("MCP-Session-Id", c.SessionID)
-	}
+	c.setCredential(httpReq)
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -302,20 +299,13 @@ func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
-	if c.SessionID != "" {
-		httpReq.Header.Set("MCP-Session-Id", c.SessionID)
-	}
+	c.setCredential(httpReq)
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer httpResp.Body.Close()
-
-	// Capture session ID from response headers
-	if sid := httpResp.Header.Get("Mcp-Session-Id"); sid != "" {
-		c.SessionID = sid
-	}
 
 	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {

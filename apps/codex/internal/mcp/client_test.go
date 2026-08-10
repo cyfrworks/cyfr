@@ -20,7 +20,7 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-func TestInitialize_CapturesSessionID(t *testing.T) {
+func TestInitialize_DoesNotCaptureSessionID(t *testing.T) {
 	var requestCount int
 	var notificationBody []byte
 
@@ -53,8 +53,10 @@ func TestInitialize_CapturesSessionID(t *testing.T) {
 	if err := c.Initialize(); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	if c.SessionID != "sess-abc123" {
-		t.Errorf("expected SessionID 'sess-abc123', got %q", c.SessionID)
+	// A server-minted session id is ignored: the client authenticates each
+	// request with its own credential and holds no protocol session.
+	if c.SessionID != "" {
+		t.Errorf("expected no captured SessionID, got %q", c.SessionID)
 	}
 
 	// Verify 2 requests were sent (initialize + notification)
@@ -248,17 +250,11 @@ func TestCallTool_SessionExpired_Bare404(t *testing.T) {
 	}
 }
 
-func TestClose_SendsDelete(t *testing.T) {
-	var deleteReceived bool
-	var deleteSessionID string
+func TestClose_SendsNothing(t *testing.T) {
+	var anyRequest bool
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "DELETE" {
-			deleteReceived = true
-			deleteSessionID = r.Header.Get("MCP-Session-Id")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+		anyRequest = true
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -269,11 +265,10 @@ func TestClose_SendsDelete(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
-	if !deleteReceived {
-		t.Error("expected DELETE request to be sent")
-	}
-	if deleteSessionID != "sess-to-close" {
-		t.Errorf("expected session ID 'sess-to-close', got %q", deleteSessionID)
+	// There is no server-side session to terminate, so Close talks to nobody —
+	// the credential is revoked by logging out, not by closing a client.
+	if anyRequest {
+		t.Error("expected Close to send no request")
 	}
 	if c.SessionID != "" {
 		t.Errorf("expected SessionID to be cleared, got %q", c.SessionID)
@@ -395,8 +390,13 @@ func TestRequestHeaders(t *testing.T) {
 		if pv := r.Header.Get("MCP-Protocol-Version"); pv != "2025-11-25" {
 			t.Errorf("expected MCP-Protocol-Version '2025-11-25', got %q", pv)
 		}
-		if sid := r.Header.Get("MCP-Session-Id"); sid != "my-session" {
-			t.Errorf("expected MCP-Session-Id 'my-session', got %q", sid)
+		// The credential travels in Authorization on every request; no
+		// protocol session header is sent.
+		if auth := r.Header.Get("Authorization"); auth != "Bearer my-session" {
+			t.Errorf("expected Authorization 'Bearer my-session', got %q", auth)
+		}
+		if sid := r.Header.Get("MCP-Session-Id"); sid != "" {
+			t.Errorf("expected no MCP-Session-Id header, got %q", sid)
 		}
 
 		// Verify request body is valid JSON-RPC

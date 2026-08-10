@@ -70,7 +70,7 @@ func (c *Client) OpenStream(lastEventID string) (*EventStream, error) {
 
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", protocolVersion)
-	req.Header.Set("MCP-Session-Id", c.SessionID)
+	c.setCredential(req)
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
 	}
