@@ -134,6 +134,61 @@ defmodule Sanctum.TenancyTest do
 
       assert [_one] = Memberships.list_by_user(uid)
     end
+
+    test "minting platform scope emits an audit event exactly once" do
+      # The widest grant in the system, keyed only on an email address that a
+      # generic OIDC issuer may assert without verifying — it must not be silent,
+      # and it must not re-fire on every subsequent sign-in.
+      Application.put_env(:cyfr, :platform_admin_emails, ["admin3@example.com"])
+      uid = "u-admin3-#{System.unique_integer([:positive])}"
+      ctx = %Context{user_id: uid, org_id: nil, email: "admin3@example.com"}
+
+      handler_id = "test-platform-bootstrap-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
+        fn _event, measurements, metadata, _cfg ->
+          send(test_pid, {:bootstrap_audited, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      Tenancy.resolve_into(ctx, force: true)
+      assert_receive {:bootstrap_audited, %{count: 1}, metadata}
+      assert metadata.user_id == uid
+      assert metadata.email == "admin3@example.com"
+
+      # Second sign-in finds the membership already present.
+      Tenancy.resolve_into(ctx, force: true)
+      refute_receive {:bootstrap_audited, _, _}, 100
+    end
+
+    test "no audit event when the email is not an admin" do
+      Application.put_env(:cyfr, :platform_admin_emails, ["someone-else@example.com"])
+      uid = "u-plain-#{System.unique_integer([:positive])}"
+
+      handler_id = "test-no-bootstrap-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
+        fn _e, m, md, _c -> send(test_pid, {:bootstrap_audited, m, md}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      Tenancy.resolve_into(%Context{user_id: uid, org_id: nil, email: "plain@example.com"},
+        force: true
+      )
+
+      refute_receive {:bootstrap_audited, _, _}, 100
+    end
   end
 
   describe "revalidate/1" do

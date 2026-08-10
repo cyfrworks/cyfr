@@ -334,16 +334,49 @@ defmodule Sanctum.Tenancy do
 
   # Uniform admin bootstrap. An email listed in CYFR_PLATFORM_ADMIN_EMAILS gets
   # a platform-scope membership minted on sign-in. Idempotent.
+  #
+  # This is the widest grant in the system and its only input is an email
+  # address, so it is audited rather than silent: under a generic OIDC issuer
+  # `email_verified` may legitimately be absent (see
+  # `Sanctum.Auth.EmailVerification`), which means the address is asserted by
+  # the issuer rather than proven. An operator needs to be able to see when the
+  # grant was minted and for whom.
   defp maybe_bootstrap_platform_admin(user_id, email)
        when is_binary(user_id) and is_binary(email) do
     if email_match?(email, Application.get_env(:cyfr, :platform_admin_emails, [])) do
-      Memberships.ensure(user_id, scope: "platform")
+      already_admin? =
+        Enum.any?(Memberships.list_by_user(user_id), &(&1.scope == "platform"))
+
+      case Memberships.ensure(user_id, scope: "platform") do
+        {:ok, _membership} ->
+          if already_admin?, do: :ok, else: emit_platform_bootstrap(user_id, email)
+
+        {:error, reason} ->
+          Logger.error(
+            "[Sanctum.Tenancy] platform admin bootstrap failed for #{user_id}: #{inspect(reason)}"
+          )
+      end
     end
 
     :ok
   end
 
   defp maybe_bootstrap_platform_admin(_user_id, _email), do: :ok
+
+  defp emit_platform_bootstrap(user_id, email) do
+    Logger.warning(
+      "[Sanctum.Tenancy] minted platform-scope membership for #{user_id} " <>
+        "(matched CYFR_PLATFORM_ADMIN_EMAILS)"
+    )
+
+    :telemetry.execute(
+      [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
+      %{count: 1},
+      %{user_id: user_id, email: email}
+    )
+
+    :ok
+  end
 
   defp email_match?(email, list) when is_list(list), do: String.downcase(email) in list
   defp email_match?(_email, _list), do: false

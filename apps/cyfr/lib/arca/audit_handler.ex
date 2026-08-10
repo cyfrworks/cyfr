@@ -34,6 +34,11 @@ defmodule Arca.AuditHandler do
     # A release digest that no longer re-derives from its row is a tamper
     # signal — it belongs in the audit sinks, not only in the server log.
     [:cyfr, :sanctum, :consent, :integrity_alarm],
+    # The widest grant in the system, and its only input is an email address —
+    # under a generic OIDC issuer `email_verified` may legitimately be absent,
+    # so the address is asserted rather than proven. Minting it must not be
+    # silent.
+    [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
     [:cyfr, :opus, :execute, :start],
     [:cyfr, :opus, :execute, :stop],
     [:cyfr, :opus, :execute, :exception]
