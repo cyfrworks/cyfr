@@ -925,8 +925,13 @@ defmodule Emissary.MCP.ExternalProvider do
   defp format_server_info(%{server_info: info}), do: info
   defp format_server_info(_), do: nil
 
+  # Topic name is `mcp_servers`, not `prism:mcp_servers`: the console was the
+  # only listener when this was written, but adding or removing a server changes
+  # which `server:tool` names exist, so an MCP client holding a
+  # `subscriptions/listen` stream is a listener too. The event was never
+  # console-specific.
   defp broadcast_mcp_servers_changed(ctx) do
-    topic = Sanctum.PubSub.topic("prism:mcp_servers", ctx)
+    topic = Sanctum.PubSub.topic("mcp_servers", ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :mcp_servers_changed)
   end
 end

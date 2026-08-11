@@ -9,6 +9,7 @@ defmodule EmissaryWeb.MCPTransportTest do
   use EmissaryWeb.ConnCase, async: false
 
   alias Emissary.MCP.Progress
+  alias Emissary.MCP.Subscriptions
 
   describe "verbs the previous transport defined" do
     # A 404 would read as "wrong URL" and send an older client looking for the
@@ -107,6 +108,87 @@ defmodule EmissaryWeb.MCPTransportTest do
       # Order is preserved and the response is last.
       assert response["id"] == 9
       assert response["result"]["resultType"] == "complete"
+    end
+  end
+
+  describe "subscriptions/listen" do
+    # The acknowledgment must come first and must carry the subscription id: on
+    # stdio one channel multiplexes every subscription, so without it a client
+    # cannot tell which stream a later notification belongs to.
+    test "acknowledges first, with the subscription id", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 42,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+
+      assert get_resp_header(conn, "content-type") |> List.first() =~ "text/event-stream"
+
+      first =
+        conn.resp_body
+        |> String.split("\n\n", trim: true)
+        |> List.first()
+        |> String.replace_prefix("data: ", "")
+        |> Jason.decode!()
+
+      assert first["method"] == "notifications/subscriptions/acknowledged"
+      assert first["params"]["_meta"][Subscriptions.subscription_id_key()] == 42
+      assert first["params"]["notifications"] == %{"toolsListChanged" => true}
+    end
+
+    test "the acknowledgment reports only what will actually be sent", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"resourcesListChanged" => true}}
+        })
+
+      first =
+        conn.resp_body
+        |> String.split("\n\n", trim: true)
+        |> List.first()
+        |> String.replace_prefix("data: ", "")
+        |> Jason.decode!()
+
+      # Requested, not honourable, so not acknowledged — the client learns
+      # immediately rather than waiting on an event that cannot arrive.
+      assert first["params"]["notifications"] == %{}
+    end
+
+    # A stream that simply stops is indistinguishable from a dropped connection.
+    # Answering the original request says "this ended cleanly", which is what
+    # tells a client to reconnect rather than to report a fault.
+    test "ends by answering the original request, not by going silent",
+         %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 7,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+
+      last =
+        conn.resp_body
+        |> String.split("\n\n", trim: true)
+        |> Enum.reject(&(&1 == ":"))
+        |> List.last()
+        |> String.replace_prefix("data: ", "")
+        |> Jason.decode!()
+
+      assert last["id"] == 7
+      assert last["result"]["resultType"] == "complete"
+      assert last["result"]["_meta"][Subscriptions.subscription_id_key()] == 7
     end
   end
 

@@ -83,7 +83,8 @@ config :cyfr, cron_scheduler_enabled: false
 config :cyfr, execution_sweeper_enabled: false
 
 # Set a default base_path for tests (individual tests may override)
-config :cyfr, base_path: Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
+config :cyfr,
+  base_path: Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
 
 # Sanctum test configuration
 config :cyfr,
@@ -97,3 +98,8 @@ config :cyfr,
 
 # Print only warnings and errors during test
 config :logger, level: :warning
+
+# A subscription stream is long-lived by design, so a test that opens one would
+# otherwise block until the production bound. Short enough that the graceful
+# close is what the assertions actually observe.
+config :cyfr, :mcp_subscription_max_ms, 50

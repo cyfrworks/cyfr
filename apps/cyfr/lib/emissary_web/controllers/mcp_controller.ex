@@ -39,7 +39,7 @@ defmodule EmissaryWeb.MCPController do
   use EmissaryWeb, :controller
 
   alias Emissary.MCP
-  alias Emissary.MCP.{Message, Progress, RequestLog, Session}
+  alias Emissary.MCP.{Message, Progress, RequestLog, Session, Subscriptions}
   require Logger
   alias Emissary.UUID7
 
@@ -83,7 +83,16 @@ defmodule EmissaryWeb.MCPController do
     # anonymous caller an unauthenticated context. "Not authenticated" is the
     # tools' answer to give, not the transport's.
     session = conn.assigns[:mcp_session] || Session.ephemeral(conn.assigns[:mcp_context])
-    handle_message(conn, session, params, request_id, start_time)
+
+    # `subscriptions/listen` is answered here rather than through the dispatcher
+    # for a reason the discovery branch above did not have: its response *is* an
+    # open stream that outlives the call, so it cannot return a result for
+    # someone else to encode. Everything else about it — auth, header validation
+    # — has already happened in the pipeline, same as any other request.
+    case params["method"] do
+      "subscriptions/listen" -> listen(conn, session, params, request_id)
+      _ -> handle_message(conn, session, params, request_id, start_time)
+    end
   end
 
   @doc """
@@ -226,6 +235,115 @@ defmodule EmissaryWeb.MCPController do
         |> put_resp_header("x-request-id", request_id)
         |> put_status(http_status_for(code))
         |> json(MCP.encode_error(nil, code, message))
+    end
+  end
+
+  # ============================================================================
+  # subscriptions/listen
+  # ============================================================================
+
+  # How long to wait before writing a keep-alive comment. Intermediaries and
+  # client idle timeouts close a connection that says nothing; a quiet
+  # subscription is the normal state, not a broken one.
+  @keep_alive_ms :timer.seconds(15)
+
+  # A subscription does not live forever. Nothing in the protocol requires a
+  # bound, but an unbounded one means a client that vanishes without closing
+  # cleanly holds a process and a socket until the VM restarts — and the
+  # specification already defines how a server ends one on its own initiative,
+  # so there is a correct way to do it. The client reconnects; that is what the
+  # graceful-close response is for.
+  defp max_stream_ms do
+    Application.get_env(:cyfr, :mcp_subscription_max_ms, :timer.minutes(30))
+  end
+
+  defp listen(conn, session, params, request_id) do
+    id = params["id"]
+    filter = get_in(params, ["params", "notifications"]) || %{}
+
+    {:ok, acknowledged} = Subscriptions.listen(session.context, filter)
+    deadline = System.monotonic_time(:millisecond) + max_stream_ms()
+
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header("x-request-id", request_id)
+    |> put_resp_header("content-type", "text/event-stream")
+    |> put_resp_header("cache-control", "no-cache")
+    |> put_resp_header("x-accel-buffering", "no")
+    |> send_chunked(200)
+    |> acknowledge(id, acknowledged)
+    |> listen_loop(id, deadline)
+  end
+
+  # The acknowledgment must be the first message on the stream, and must carry
+  # the subscription id — on stdio one channel multiplexes every subscription,
+  # so without it a client cannot tell which stream a notification belongs to.
+  defp acknowledge(conn, id, acknowledged) do
+    sse_event(
+      conn,
+      Message.encode_notification("notifications/subscriptions/acknowledged", %{
+        "_meta" => %{Subscriptions.subscription_id_key() => id},
+        "notifications" => acknowledged
+      })
+    )
+  end
+
+  # A write failure ends the stream. `sse_event/2` swallows one because a dead
+  # client must not crash a one-shot response, but here that would spin against
+  # a closed socket forever — so the loop uses the reporting form.
+  defp listen_loop(conn, id, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      close_gracefully(conn, id)
+    else
+      receive do
+        message ->
+          case Subscriptions.notification_for(message) do
+            {:ok, method, params} ->
+              params = Map.put(params, "_meta", %{Subscriptions.subscription_id_key() => id})
+
+              write(conn, Message.encode_notification(method, params), id, deadline)
+
+            :ignore ->
+              listen_loop(conn, id, deadline)
+          end
+      after
+        min(@keep_alive_ms, remaining) ->
+          # An SSE comment: the client must ignore it, and it costs one line to
+          # keep the connection from being reaped during a quiet period.
+          case chunk(conn, ":\n\n") do
+            {:ok, conn} -> listen_loop(conn, id, deadline)
+            {:error, _closed} -> conn
+          end
+      end
+    end
+  end
+
+  # Ending on the server's own initiative means answering the original request.
+  # A stream that just stops is indistinguishable from a dropped connection; the
+  # response says "this ended cleanly", which is what tells a client to
+  # reconnect rather than to report a fault.
+  defp close_gracefully(conn, id) do
+    sse_event(
+      conn,
+      MCP.encode_result(id, %{"_meta" => %{Subscriptions.subscription_id_key() => id}})
+    )
+  end
+
+  defp write(conn, payload, id, deadline) do
+    case Jason.encode(payload) do
+      {:ok, encoded} ->
+        case chunk(conn, "data: #{encoded}\n\n") do
+          {:ok, conn} -> listen_loop(conn, id, deadline)
+          # Closing the stream is this transport's cancellation signal, so a
+          # disconnect is an ordinary end rather than a failure to report.
+          {:error, _closed} -> conn
+        end
+
+      {:error, reason} ->
+        Logger.error("[MCPController] subscription payload not encodable: #{inspect(reason)}")
+        listen_loop(conn, id, deadline)
     end
   end
 

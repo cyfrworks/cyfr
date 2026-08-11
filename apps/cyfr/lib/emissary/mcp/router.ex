@@ -75,8 +75,16 @@ defmodule Emissary.MCP.Router do
   }
 
   @server_capabilities %{
+    # `listChanged: true` is a promise to actually push. It is true for tools
+    # because the catalogue genuinely changes — registering, removing, enabling
+    # or disabling an external MCP server changes which `server:tool` names
+    # exist — and `subscriptions/listen` delivers that event. It stays false for
+    # resources, whose list is a fixed set of providers with no change feed;
+    # claiming otherwise would leave a client waiting for a notification that
+    # cannot arrive, which reads as "nothing changed" rather than "nobody is
+    # watching".
     "tools" => %{
-      "listChanged" => false
+      "listChanged" => true
     },
     "resources" => %{
       "listChanged" => false
