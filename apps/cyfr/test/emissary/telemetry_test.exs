@@ -35,78 +35,13 @@ defmodule Emissary.TelemetryTest do
     end
   end
 
-  describe "session telemetry events" do
-    test "session creation emits [:cyfr, :emissary, :session] event" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
-
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx, %{}, transport: :http)
-
-      # Receive events until we find the one for our session (other tests may run concurrently)
-      metadata = receive_session_event(ref, session.id, :created)
-
-      # Verify metadata
-      assert metadata.lifecycle == :created
-      assert metadata.transport == :http
-      assert metadata.session_id == session.id
-
-      Session.terminate(session.id)
-    end
-
-    test "session creation with SSE transport includes transport metadata" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
-
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx, %{}, transport: :sse)
-
-      metadata = receive_session_event(ref, session.id, :created)
-      assert metadata.transport == :sse
-
-      Session.terminate(session.id)
-    end
-
-    test "session termination emits [:cyfr, :emissary, :session] event" do
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx)
-
-      # Now attach the handler and terminate
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
-
-      Session.terminate(session.id)
-
-      metadata = receive_session_event(ref, session.id, :terminated)
-
-      assert metadata.lifecycle == :terminated
-      assert metadata.session_id == session.id
-    end
-
-    test "session_id in telemetry matches created session" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
-
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx)
-
-      metadata = receive_session_event(ref, session.id, :created)
-
-      # Session ID should start with sess_ prefix and match
-      assert String.starts_with?(metadata.session_id, "sess_")
-      assert metadata.session_id == session.id
-
-      Session.terminate(session.id)
-    end
-  end
-
   describe "telemetry metrics definition" do
-    test "EmissaryWeb.Telemetry.metrics/0 includes session counter" do
-      metrics = EmissaryWeb.Telemetry.metrics()
+    # The session counter is deliberately absent: it measured a protocol
+    # session's lifecycle, and there is no longer one to measure.
+    test "no metric is declared without an emitter behind it" do
+      names = Enum.map(EmissaryWeb.Telemetry.metrics(), & &1.name)
 
-      session_metric =
-        Enum.find(metrics, fn m ->
-          m.name == [:cyfr, :emissary, :session, :count]
-        end)
-
-      assert session_metric
-      assert session_metric.tags == [:transport, :lifecycle]
+      refute [:cyfr, :emissary, :session, :count] in names
     end
 
     test "EmissaryWeb.Telemetry.metrics/0 includes request duration" do

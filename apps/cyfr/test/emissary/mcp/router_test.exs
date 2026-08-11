@@ -12,13 +12,8 @@ defmodule Emissary.MCP.RouterTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    {:ok, session} = Session.create(ctx)
 
-    on_exit(fn ->
-      Session.terminate(session.id)
-    end)
-
-    {:ok, session: session, context: ctx}
+    {:ok, session: Session.ephemeral(ctx), context: ctx}
   end
 
   describe "protocol_version/0" do

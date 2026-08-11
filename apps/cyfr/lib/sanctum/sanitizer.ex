@@ -63,6 +63,22 @@ defmodule Sanctum.Sanitizer do
     Enum.map(data, &sanitize/1)
   end
 
+  # Tuples are traversed for the same reason maps and lists are: `{:error, %{...}}`
+  # is the canonical Elixir error shape, so a credential that reaches a log
+  # almost always arrives inside one. Without this clause the term fell through
+  # to the catch-all untouched — which went unnoticed because the one struct that
+  # carried a credential also derived `Inspect` redaction, so the *struct* hid
+  # the value and the sanitizer never had to. That struct no longer holds a
+  # credential, and the next one that does would not be protected.
+  #
+  # Structs match the clause above and never reach here.
+  def sanitize(data) when is_tuple(data) do
+    data
+    |> Tuple.to_list()
+    |> Enum.map(&sanitize/1)
+    |> List.to_tuple()
+  end
+
   def sanitize(data), do: data
 
   @doc """

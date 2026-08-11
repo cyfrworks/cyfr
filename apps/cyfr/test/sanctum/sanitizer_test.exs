@@ -1,10 +1,20 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# A struct defined here rather than borrowed from the app: the property under
+# test is the sanitizer's, and pinning it to whichever production struct happens
+# to carry a credential field today made these tests fail when that struct
+# legitimately lost the field.
+defmodule Sanctum.SanitizerTest.Credentialed do
+  @moduledoc false
+  defstruct [:id, :sanctum_token]
+end
+
 defmodule Sanctum.SanitizerTest do
   use ExUnit.Case, async: true
 
   alias Sanctum.Sanitizer
+  alias Sanctum.SanitizerTest.Credentialed
 
   describe "sanitize/1" do
     test "redacts password keys" do
@@ -35,16 +45,10 @@ defmodule Sanctum.SanitizerTest do
     end
 
     test "redacts sensitive fields inside a struct instead of passing it through" do
-      session = %Emissary.MCP.Session{
-        id: "sess_abc",
-        sanctum_token: "cyfr_live_token_value",
-        context: nil,
-        capabilities: %{}
-      }
+      result =
+        Sanitizer.sanitize(%Credentialed{id: "sess_abc", sanctum_token: "cyfr_live_token_value"})
 
-      result = Sanitizer.sanitize(session)
-
-      assert %Emissary.MCP.Session{} = result
+      assert %Credentialed{} = result
       assert result.sanctum_token == "[REDACTED]"
       assert result.id == "sess_abc"
       refute inspect(result) =~ "cyfr_live_token_value"
@@ -61,25 +65,29 @@ defmodule Sanctum.SanitizerTest do
     end
   end
 
-  describe "inspect redaction" do
-    test "a session never renders its bearer token" do
-      session = %Emissary.MCP.Session{
-        id: "sess_abc",
-        sanctum_token: "cyfr_live_token_value",
-        context: nil,
-        capabilities: %{}
-      }
+  # These asserted `@derive {Inspect, except: [:sanctum_token]}` on
+  # `Emissary.MCP.Session`, which held a live bearer credential in a `:public`
+  # ETS table and so could reach a log through any crash report that stringified
+  # it. That struct no longer stores a credential at all — the protocol session
+  # it belonged to is gone — so the derive went with the field.
+  #
+  # The general risk did not go anywhere, so the guarantee is restated against
+  # what actually defends it now: a credential-bearing struct buried in an error
+  # term must not survive sanitizing, however deeply it is nested.
+  describe "credentials nested in error terms" do
+    test "a struct's credential is redacted inside an error tuple" do
+      term = {:error, %{session: %Credentialed{id: "sess_abc", sanctum_token: "cyfr_live_token"}}}
 
-      rendered = inspect(session)
+      result = Sanitizer.sanitize(term)
 
-      refute rendered =~ "cyfr_live_token_value"
-      assert rendered =~ "sess_abc"
+      refute inspect(result) =~ "cyfr_live_token"
+      assert inspect(result) =~ "sess_abc"
     end
 
-    test "the token stays hidden when the session is nested in an error term" do
-      session = %Emissary.MCP.Session{id: "sess_abc", sanctum_token: "cyfr_live_token_value"}
+    test "redaction reaches through lists and nested maps" do
+      term = %{"attempts" => [%{"detail" => %Credentialed{sanctum_token: "cyfr_live_token"}}]}
 
-      refute inspect({:error, %{session: session}}) =~ "cyfr_live_token_value"
+      refute inspect(Sanitizer.sanitize(term)) =~ "cyfr_live_token"
     end
   end
 

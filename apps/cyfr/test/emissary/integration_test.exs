@@ -212,26 +212,6 @@ defmodule Emissary.IntegrationTest do
   end
 
   describe "telemetry event verification" do
-    test "session telemetry emitted on create and terminate" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
-
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx, %{}, transport: :http)
-
-      # Receive create event
-      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, metadata}
-      assert metadata.lifecycle == :created
-      assert metadata.transport == :http
-      assert metadata.session_id == session.id
-
-      Session.terminate(session.id)
-
-      # Receive terminate event
-      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, metadata}
-      assert metadata.lifecycle == :terminated
-      assert metadata.session_id == session.id
-    end
-
     test "request telemetry emitted on tool call", %{conn: conn} do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
 
@@ -553,7 +533,7 @@ defmodule Emissary.IntegrationTest do
   describe "internal MCP module integration" do
     test "MCP.handle_message delegates to ToolRegistry" do
       ctx = Sanctum.TestContext.local()
-      session = Emissary.MCP.Session.ephemeral(ctx)
+      session = Session.ephemeral(ctx)
 
       message = %{
         "jsonrpc" => "2.0",
@@ -570,9 +550,6 @@ defmodule Emissary.IntegrationTest do
       assert is_list(result["content"])
       [content] = result["content"]
       assert content["type"] == "text"
-
-      # Cleanup
-      Session.terminate(session.id)
     end
   end
 

@@ -190,7 +190,7 @@ defmodule Emissary.AuthChainIntegrationTest do
           "method" => "server/discover"
         })
 
-      response = json_response(init_conn, 200)
+      assert json_response(init_conn, 200)["result"]
 
       # A bearer-authenticated caller establishes nothing: no session id comes
       # back, and subsequent calls re-present the same credential.

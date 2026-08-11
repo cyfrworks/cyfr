@@ -5,16 +5,15 @@ defmodule Sanctum.TinctureAuth do
   @moduledoc """
   Unified tincture authentication.
 
-  Resolves credentials and delegates to existing Sanctum infrastructure (MCP
-  sessions, API keys, Sanctum session tokens).
+  Resolves credentials and delegates to existing Sanctum infrastructure (API
+  keys, Sanctum session tokens).
 
   Auth priority (header- and token-preferred so live credentials do not travel
   in URL query strings / access logs):
 
   1. `Authorization: Bearer …` header — an API key or a session token, told
      apart by the `cyfr_` prefix. The only way to present an account credential.
-  2. `Mcp-Session-Id` header — MCP / Sanctum session id
-  3. `?_t=` — short-lived, single-purpose tincture access token
+  2. `?_t=` — short-lived, single-purpose tincture access token
 
   **An account credential is never accepted from a query string.** An iframe or
   `<img>` cannot send headers, so those URLs carry a `?_t=` token instead:
@@ -28,8 +27,6 @@ defmodule Sanctum.TinctureAuth do
   - `{:ok, %Sanctum.Context{}}` — Authenticated context
   - `:unauthenticated` — No valid credentials found
   """
-
-  @compile {:no_warn_undefined, [Emissary.MCP.Session]}
 
   import Plug.Conn, only: [get_req_header: 2]
 
@@ -67,7 +64,6 @@ defmodule Sanctum.TinctureAuth do
   @spec authenticate(Plug.Conn.t()) :: {:ok, Context.t()} | :unauthenticated
   def authenticate(conn) do
     with :skip <- try_bearer_header(conn),
-         :skip <- try_session_id_header(conn),
          :skip <- try_access_token(conn) do
       :unauthenticated
     else
@@ -92,7 +88,12 @@ defmodule Sanctum.TinctureAuth do
   # Carries either kind of credential, told apart by the `cyfr_` prefix, so a
   # caller has one place to put it. This is what lets a client mint a scoped
   # `?_t=` token from `GET /t/access-token` without falling back to a query
-  # parameter or the retired `Mcp-Session-Id` header.
+  # parameter.
+  #
+  # An `Mcp-Session-Id` header used to be accepted here as a third credential
+  # form. It went out with the protocol session it was named for: it carried the
+  # same Sanctum session token this branch already resolves, so it was a second
+  # spelling of one credential rather than a second credential.
 
   defp try_bearer_header(conn) do
     case get_req_header(conn, "authorization") do
@@ -111,15 +112,6 @@ defmodule Sanctum.TinctureAuth do
   defp validate_api_key(token, conn) do
     case Sanctum.ApiKey.validate(token, client_ip: Sanctum.ClientIp.resolve(conn)) do
       {:ok, metadata} -> {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
-      _ -> :skip
-    end
-  end
-
-  # --- Mcp-Session-Id header ---
-
-  defp try_session_id_header(conn) do
-    case get_req_header(conn, "mcp-session-id") do
-      [id | _] when is_binary(id) and id != "" -> resolve_session(id)
       _ -> :skip
     end
   end
@@ -147,14 +139,6 @@ defmodule Sanctum.TinctureAuth do
        )}
     else
       _ -> :skip
-    end
-  end
-
-  # MCP session id first, then Sanctum session token.
-  defp resolve_session(id) do
-    case Emissary.MCP.Session.get(id) do
-      {:ok, session} -> {:ok, session.context}
-      {:error, :not_found} -> try_sanctum_session(id)
     end
   end
 

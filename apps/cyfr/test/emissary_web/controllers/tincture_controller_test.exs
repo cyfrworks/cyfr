@@ -158,16 +158,32 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
   end
 
-  describe "private tincture — authenticated via MCP session header" do
+  # Was "authenticated via MCP session header". That header carried the same
+  # Sanctum session token the bearer branch already resolves, so it was a second
+  # spelling of one credential, and it went out with the protocol session it was
+  # named for.
+  #
+  # These tests are about what a private tincture *renders* — CSP headers, the
+  # injected base tag — not about which credential got in, so they use the
+  # simplest working one. That the bearer session token authenticates at all is
+  # asserted directly in `Sanctum.TinctureAuthTest`, which is where the auth
+  # chain lives.
+  describe "private tincture — rendering under an authenticated caller" do
     setup do
-      # Create an MCP session for auth
       ctx = Sanctum.TestContext.local()
-      {:ok, session} = Emissary.MCP.Session.create(ctx)
-      %{session_id: session.id}
+
+      {:ok, %{key: key}} =
+        Sanctum.ApiKey.create(ctx, %{
+          name: "tincture-render-key-#{:rand.uniform(1_000_000)}",
+          type: :service,
+          scope: ["execute", "component_read", "storage_read"]
+        })
+
+      %{session_token: key}
     end
 
-    test "serves index.html with CSP headers", %{conn: conn, session_id: sid} do
-      conn = put_req_header(conn, "mcp-session-id", sid)
+    test "serves index.html with CSP headers", %{conn: conn, session_token: token} do
+      conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
@@ -185,8 +201,11 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert csp =~ "frame-ancestors"
     end
 
-    test "injects base tag with signed token for private tincture", %{conn: conn, session_id: sid} do
-      conn = put_req_header(conn, "mcp-session-id", sid)
+    test "injects base tag with signed token for private tincture", %{
+      conn: conn,
+      session_token: token
+    } do
+      conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
@@ -200,8 +219,11 @@ defmodule EmissaryWeb.TinctureControllerTest do
                ~r/<base href="\/t\/local\/default\/local\/auth-dash\/_s\/[^"]+\/">/
     end
 
-    test "returns 404 for nonexistent tincture", %{conn: conn, session_id: sid} do
-      conn = %{conn | query_string: "_session=#{sid}"}
+    test "returns 404 for nonexistent tincture", %{conn: conn, session_token: token} do
+      # Was `?_session=` in the query string. Account credentials stopped being
+      # accepted from tincture URLs; this only kept passing because a missing
+      # tincture 404s whether or not the caller authenticated.
+      conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{

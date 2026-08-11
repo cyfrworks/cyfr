@@ -24,9 +24,7 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - request processing" do
     setup do
       ctx = Sanctum.TestContext.local()
-      session = Emissary.MCP.Session.ephemeral(ctx)
-
-      on_exit(fn -> Session.terminate(session.id) end)
+      session = Session.ephemeral(ctx)
 
       {:ok, session: session}
     end
@@ -118,9 +116,7 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - notification processing" do
     setup do
       ctx = Sanctum.TestContext.local()
-      session = Emissary.MCP.Session.ephemeral(ctx)
-
-      on_exit(fn -> Session.terminate(session.id) end)
+      session = Session.ephemeral(ctx)
 
       {:ok, session: session}
     end
@@ -150,9 +146,7 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - batch requests" do
     setup do
       ctx = Sanctum.TestContext.local()
-      session = Emissary.MCP.Session.ephemeral(ctx)
-
-      on_exit(fn -> Session.terminate(session.id) end)
+      session = Session.ephemeral(ctx)
 
       {:ok, session: session}
     end

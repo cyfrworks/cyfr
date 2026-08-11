@@ -63,6 +63,47 @@ defmodule Sanctum.TinctureAuthTest do
     end
   end
 
+  # The `Mcp-Session-Id` header used to be a third way to present exactly this
+  # credential. It went out with the protocol session it was named for, so the
+  # bearer branch is now the only route a session token takes — which makes it
+  # worth asserting directly rather than only through a controller.
+  describe "authenticate/1 — session-token path" do
+    test "a bearer session token authenticates once the namespace is claimed",
+         %{ctx: ctx} do
+      # `Session.load` resolves through the user's claimed namespace, and a user
+      # with none loads as unauthenticated by design — the claim gate runs before
+      # anything tenant-scoped.
+      Compendium.Registry.CredentialStore.put(
+        ctx.user_id,
+        Compendium.Registry.canonical_host(),
+        ctx.namespace,
+        %{type: :push_token, token: "test-token", role: "owner"}
+      )
+
+      {:ok, session} = Sanctum.Session.create(ctx)
+
+      assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
+
+      # Tincture access always runs project-scoped, whatever workspace the
+      # operator's console happened to be in.
+      assert out.auth_method == :session
+      assert out.scope == :project
+      assert out.authenticated
+    end
+
+    # Deliberate, and documented in `try_sanctum_session/1`: a user who has not
+    # yet claimed a namespace loads as unauthenticated for the console, because
+    # the claim gate must run first — but tincture access is not tenant
+    # administration and is granted anyway, project-scoped. What the resulting
+    # context can then *do* is decided by its permissions, not by this branch.
+    test "an unclaimed user still authenticates, project-scoped", %{ctx: ctx} do
+      {:ok, session} = Sanctum.Session.create(ctx)
+
+      assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
+      assert out.scope == :project
+    end
+  end
+
   describe "authenticate/1 — API key path" do
     test "a bearer API key yields an :api_key context", %{ctx: ctx} do
       {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "tincture-key"})

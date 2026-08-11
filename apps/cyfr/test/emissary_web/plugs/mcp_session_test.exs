@@ -99,77 +99,53 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     end
   end
 
-  describe "call/2 - session validation" do
-    test "assigns nil session when no Mcp-Session-Id header", %{conn: conn} do
+  # These used to assert a session lifecycle: a valid `Mcp-Session-Id` loaded a
+  # stored session, an unknown one returned 404, a stale one was let through for
+  # `initialize`, and hydration from SQLite refreshed the row's expiry.
+  #
+  # None of that exists. The protocol has no session, so the header authenticates
+  # nothing and the server must ignore it. What replaces those tests is the
+  # property that now has to hold: whatever the header says, it changes nothing —
+  # which is strictly stronger, because the old behaviour still fed the value
+  # into a lookup before rejecting it.
+  describe "call/2 — the retired session header" do
+    test "a request with no credential still gets a context", %{conn: conn} do
       conn = MCPSession.call(conn, [])
 
-      assert conn.assigns[:mcp_session] == nil
+      refute conn.halted
       assert conn.assigns[:mcp_context]
+      assert conn.assigns[:mcp_session] == nil
     end
 
-    test "assigns session when valid Mcp-Session-Id provided", %{conn: conn} do
-      # Create a session first
+    test "a session id in the header neither authenticates nor rejects", %{conn: conn} do
       ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
         conn
-        |> put_req_header("mcp-session-id", session.id)
+        |> put_req_header("mcp-session-id", session.token)
+        |> Map.put(:body_params, %{"method" => "tools/call"})
         |> MCPSession.call([])
 
-      assert conn.assigns[:mcp_session].id == session.id
-      assert conn.assigns[:mcp_context] == session.context
-
-      Session.terminate(session.id)
+      refute conn.halted
+      assert conn.assigns[:mcp_session] == nil
     end
 
-    test "returns 404 for invalid/expired session ID", %{conn: conn} do
+    test "an unknown session id is not an error", %{conn: conn} do
       conn =
         conn
         |> put_req_header("mcp-session-id", "sess_nonexistent")
         |> Map.put(:body_params, %{"method" => "tools/call"})
         |> MCPSession.call([])
 
-      assert conn.halted
-      assert conn.status == 404
-      body = Jason.decode!(conn.resp_body)
-      assert body["error"]["message"] =~ "Session not found or expired"
-    end
-
-    test "allows initialize through with stale session ID", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("mcp-session-id", "sess_stale_gone")
-        |> Map.put(:body_params, %{"method" => "initialize"})
-        |> MCPSession.call([])
-
       refute conn.halted
       assert conn.assigns[:mcp_session] == nil
-      assert conn.assigns[:mcp_context]
-    end
-
-    test "returns 404 for expired session", %{conn: conn} do
-      # Create a session
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx)
-
-      # Terminate it to simulate expiration
-      Session.terminate(session.id)
-
-      conn =
-        conn
-        |> put_req_header("mcp-session-id", session.id)
-        |> Map.put(:body_params, %{"method" => "tools/call"})
-        |> MCPSession.call([])
-
-      assert conn.halted
-      assert conn.status == 404
     end
   end
 
-  describe "call/2 - session hydration with refresh" do
-    test "hydration from SQLite refreshes session expiration", %{conn: conn} do
-      # Create a persistent session via Sanctum (stored in SQLite)
+  # The same credential the header used to carry, in the place it belongs.
+  describe "call/2 — a session token as a bearer credential" do
+    test "authenticates and resolves the stored context", %{conn: conn} do
       ctx =
         Sanctum.Context.build(
           user_id: "hydrate_user",
@@ -182,27 +158,59 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
           authenticated: true
         )
 
-      {:ok, session} = Sanctum.Session.create(ctx)
-      token = session.token
+      Compendium.Registry.CredentialStore.put(
+        "hydrate_user",
+        Compendium.Registry.canonical_host(),
+        "testns",
+        %{type: :push_token, token: "test-token", role: "owner"}
+      )
 
-      # The ETS (in-memory) session does NOT exist for this token,
-      # so the plug will hit the hydration path via Sanctum.Session.load
+      {:ok, session} = Sanctum.Session.create(ctx)
+
       conn =
         conn
-        |> put_req_header("mcp-session-id", token)
+        |> put_req_header("authorization", "Bearer " <> session.token)
         |> MCPSession.call([])
 
-      # Hydration should succeed
       refute conn.halted
       assert conn.assigns[:mcp_context].user_id == "hydrate_user"
-      assert conn.assigns[:mcp_session] != nil
+      assert conn.assigns[:auth_method] == :session_token
 
-      # Verify the session was refreshed (expires_at extended)
-      {:ok, refreshed} = Sanctum.Session.load(token, surface: :console)
-      assert refreshed.user_id == "hydrate_user"
+      Sanctum.Session.destroy(session.token)
+    end
 
-      # Clean up
-      Sanctum.Session.destroy(token)
+    # A presented-but-dead credential used to fall through to the anonymous
+    # surface, which reads to the caller as "your request worked" rather than
+    # "your token is gone".
+    #
+    # The refusal is deliberately last: an auth provider may accept bearer
+    # tokens of its own, so an unrecognised one is only invalid once nothing
+    # else has claimed it. With no provider configured, nothing can.
+    test "an unclaimed bearer is refused once nothing else can claim it", %{conn: conn} do
+      original = Application.get_env(:cyfr, :auth_provider)
+      Application.delete_env(:cyfr, :auth_provider)
+      on_exit(fn -> Application.put_env(:cyfr, :auth_provider, original) end)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer not-a-real-session-token")
+        |> Map.put(:body_params, %{"method" => "tools/call"})
+        |> MCPSession.call([])
+
+      assert conn.halted
+      assert conn.status == 401
+    end
+
+    test "an unclaimed bearer is left to a configured auth provider", %{conn: conn} do
+      # The provider in this file's setup accepts any caller, so the request
+      # proceeds — the plug does not pre-empt it.
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer a-token-only-the-provider-knows")
+        |> MCPSession.call([])
+
+      refute conn.halted
+      assert conn.assigns[:mcp_context].authenticated
     end
   end
 
@@ -316,16 +324,20 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       assert MapSet.member?(ctx.permissions, :admin)
     end
 
-    test "invalid Bearer token returns unauthenticated context", %{conn: conn} do
+    # This used to assert the opposite — that a bad token yielded an
+    # unauthenticated context and the request continued onto the public surface.
+    # That is a fail-open: a caller whose token was revoked got a 200 for
+    # whatever happens to be public instead of being told the credential is dead,
+    # and the difference between "not signed in" and "no longer signed in" was
+    # invisible to them.
+    test "an invalid Bearer token is refused rather than downgraded", %{conn: conn} do
       conn =
         conn
         |> put_req_header("authorization", "Bearer invalid_token")
         |> MCPSession.call([])
 
-      ctx = conn.assigns[:mcp_context]
-      # Auth failure returns unauthenticated context
-      assert ctx.user_id == nil
-      assert ctx.permissions == MapSet.new()
+      assert conn.halted
+      assert conn.status == 401
     end
 
     test "missing Authorization header returns unauthenticated context", %{conn: conn} do
@@ -442,7 +454,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       refute conn.halted
       # Nothing is stored; the session is derived from the credential purely as
       # a correlation key, so it carries a "cred_" id rather than a "sess_" one.
-      assert %Session{id: "cred_" <> _} = conn.assigns[:mcp_session]
+      assert %Session{id: "req_" <> _} = conn.assigns[:mcp_session]
       assert conn.assigns[:auth_method] == :session_token
       assert conn.assigns[:mcp_context].user_id == ctx.user_id
       # `authenticated` additionally depends on the user having claimed a
@@ -475,30 +487,22 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       refute conn.halted
       # No stored session — the plug supplies an uncached, credential-keyed one
       # purely so a caller's POST and its progress stream share a key.
-      assert %Emissary.MCP.Session{id: "cred_" <> _} = conn.assigns[:mcp_session]
+      assert %Emissary.MCP.Session{id: "req_" <> _} = conn.assigns[:mcp_session]
       assert conn.assigns[:auth_method] == :api_key
       assert conn.assigns[:mcp_context].auth_method == :api_key
     end
 
-    test "API key auth takes priority over session", %{conn: conn, api_key: api_key} do
-      # Create a session
-      ctx = Sanctum.TestContext.local()
-      {:ok, session} = Session.create(ctx)
-
+    test "the bearer credential decides, whatever the retired header says",
+         %{conn: conn, api_key: api_key} do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> put_req_header("mcp-session-id", session.id)
+        |> put_req_header("mcp-session-id", "sess_something_else_entirely")
         |> MCPSession.call([])
 
-      # The bearer credential wins: the stored session is never consulted, so
-      # the assigned session is the credential-derived one, not `session`.
       refute conn.halted
       assert conn.assigns[:auth_method] == :api_key
-      assert %Session{id: "cred_" <> _} = conn.assigns[:mcp_session]
-      refute conn.assigns[:mcp_session].id == session.id
-
-      Session.terminate(session.id)
+      assert conn.assigns[:mcp_context].auth_method == :api_key
     end
 
     test "context has authenticated: true for valid API key", %{conn: conn, api_key: api_key} do

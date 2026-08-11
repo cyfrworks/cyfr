@@ -3,31 +3,30 @@
 
 defmodule EmissaryWeb.Plugs.MCPSession do
   @moduledoc """
-  Plug for MCP session validation and context injection.
+  Authenticates an MCP request and enforces the conformance rules that must hold
+  before any handler runs.
 
-  Handles:
-  - Extracting Mcp-Session-Id header
-  - Validating existing sessions
-  - Creating context for new sessions (initialization)
-  - Authentication via configured auth provider
-  - API key authentication via Bearer token
+  ## Authentication
 
-  ## Authentication Priority
+  There is no session. Every request carries its own credential and is resolved
+  against the database on its own, so a revoked one stops working on the next
+  call rather than whenever a cached session would have expired.
 
-  1. API Key (Bearer token with cyfr_ prefix) - stateless, no session required
-  2. Session ID (Mcp-Session-Id header) - stateful, requires prior initialization
-  3. Auth Provider (OAuth, OIDC, etc.) - for session initialization
+  1. `Authorization: Bearer …` — an API key or a Sanctum session token, told
+     apart by the `cyfr_` prefix.
+  2. A configured auth provider, for browser-borne callers.
+  3. Neither — an unauthenticated context. This is not an error: the router
+     gates per action and some are deliberately public.
 
-  ## Session Flow
+  An auth-provider *error* is distinguished from absent credentials and fails
+  closed with 503; it never degrades to unauthenticated.
 
-  1. First request (initialize): No session ID, creates new session
-  2. Subsequent requests: Validates session ID, loads session
-  3. Invalid session ID: Returns 404 Not Found
+  ## Conformance
 
-  ## API Key Flow
-
-  API keys bypass session management entirely. Each request is authenticated
-  independently via the Bearer token.
+  Every request declares its protocol version and client capabilities in
+  `params._meta` and mirrors the routed fields into `Mcp-Method` / `Mcp-Name`.
+  Header and body must agree — a header a gateway can route on is only safe if
+  it cannot disagree with what the server will execute.
   """
 
   import Plug.Conn
@@ -45,21 +44,41 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     # own, so no server-side session is involved either way.
     result_conn =
       case resolve_bearer_credential(conn) do
-        {:ok, context, kind, credential} ->
+        {:ok, context, kind} ->
           Cyfr.LoggerContext.set_from_context(context)
 
-          # No stored session — but a credential-derived key so a caller's
-          # `POST /mcp` and its `GET /mcp` progress stream still correlate.
-          session = Session.for_credential(context, credential)
-
           conn
-          |> assign(:mcp_session, session)
+          |> assign(:mcp_session, Session.ephemeral(context))
           |> assign(:mcp_context, context)
           |> assign(:auth_method, kind)
 
-        :no_key ->
-          # No API key - fall back to session-based auth
-          handle_session_auth(conn)
+        # No credential this plug recognises. Either none was presented — the
+        # public surface is reachable that way and the router gates per action —
+        # or a bearer token was presented that only the auth provider could
+        # claim. `presented?` distinguishes them, because the two deserve
+        # different answers when nobody ends up authenticating.
+        result when result in [:no_key, :unclaimed_bearer] ->
+          case get_context(conn) do
+            {:error, :auth_provider_error} ->
+              auth_provider_error_response(conn)
+
+            {:error, :missing_tenant} ->
+              missing_tenant_error_response(conn)
+
+            %Context{authenticated: false} when result == :unclaimed_bearer ->
+              # A credential was presented, nothing claimed it, and nothing else
+              # will. Serving the public surface here is a fail-open: the caller
+              # gets a 200 for whatever happens to be public and never learns
+              # their token is dead, which is indistinguishable from success.
+              error_response(conn, :invalid_bearer)
+
+            context ->
+              Cyfr.LoggerContext.set_from_context(context)
+
+              conn
+              |> assign(:mcp_session, nil)
+              |> assign(:mcp_context, context)
+          end
 
         {:error, :missing_tenant} ->
           # API key valid but the owner has no resolved tenant/membership —
@@ -216,136 +235,6 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     |> EmissaryWeb.MCPError.halt(400, code, message)
   end
 
-  # Session-based authentication flow
-  defp handle_session_auth(conn) do
-    session_id = get_session_id(conn)
-
-    case get_context(conn) do
-      {:error, :auth_provider_error} ->
-        auth_provider_error_response(conn)
-
-      {:error, :missing_tenant} ->
-        missing_tenant_error_response(conn)
-
-      context ->
-        do_handle_session_auth(conn, session_id, context)
-    end
-  end
-
-  defp do_handle_session_auth(conn, session_id, context) do
-    cond do
-      # Has valid session ID
-      session_id && Session.exists?(session_id) ->
-        {:ok, session} = Session.get(session_id)
-
-        case get_context(conn) do
-          {:error, :auth_provider_error} ->
-            auth_provider_error_response(conn)
-
-          {:error, :missing_tenant} ->
-            missing_tenant_error_response(conn)
-
-          fresh_context ->
-            if tenant_changed?(session.context, fresh_context) do
-              Session.invalidate_on_context_change(session_id, "tenant_changed")
-              {:ok, new_session} = Session.create(fresh_context, session.capabilities)
-              Cyfr.LoggerContext.set_from_context(fresh_context)
-
-              conn
-              |> put_resp_header("mcp-session-id", new_session.id)
-              |> assign(:mcp_session, new_session)
-              |> assign(:mcp_context, fresh_context)
-            else
-              # Async refresh SQLite expiration (activity-based TTL).
-              refresh_token = session.sanctum_token || session_id
-              logger_metadata = Cyfr.LoggerContext.capture()
-
-              case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-                     Cyfr.LoggerContext.restore(logger_metadata)
-                     Sanctum.Session.refresh(refresh_token)
-                   end) do
-                {:ok, _pid} ->
-                  :ok
-
-                {:error, reason} ->
-                  Logger.debug(
-                    "[MCPSession] Failed to start session refresh task: #{inspect(reason)}"
-                  )
-              end
-
-              Cyfr.LoggerContext.set_from_context(session.context)
-
-              conn
-              |> assign(:mcp_session, session)
-              |> assign(:mcp_context, session.context)
-            end
-        end
-
-      # Has session ID but it's invalid/expired (in memory)
-      session_id ->
-        # Try to hydrate from persistent storage before returning error
-        case Sanctum.Session.load(session_id, surface: :console) do
-          {:ok, ctx} ->
-            case context_from_session(ctx) do
-              {:error, :missing_tenant} ->
-                missing_tenant_error_response(conn)
-
-              context ->
-                {:ok, session} = Session.hydrate(session_id, context)
-                # Extend session expiration on successful hydration (activity-based TTL)
-                _ = Sanctum.Session.refresh(session_id)
-                Cyfr.LoggerContext.set_from_context(session.context)
-
-                conn
-                |> assign(:mcp_session, session)
-                |> assign(:mcp_context, session.context)
-            end
-
-          {:error, :namespace_unavailable} ->
-            # Transient CredentialStore/DB failure during session→context
-            # resolution (distinct from an expired/unknown session). Retryable
-            # — return 503 rather than a misleading 404 "session expired" that
-            # would silently wedge a valid user. Mirrors the auth-provider 503.
-            auth_provider_error_response(conn)
-
-          _ ->
-            # Allow initialize requests through — the client may be re-initializing
-            # with a stale session ID cached from a previous server lifecycle.
-            # Guard: body_params may be %Plug.Conn.Unfetched{} in tests or if
-            # Plug.Parsers hasn't run yet, so check it's a map first.
-            if is_map(conn.body_params) and not is_struct(conn.body_params) and
-                 conn.body_params["method"] == "initialize" do
-              case get_context(conn) do
-                {:error, :auth_provider_error} ->
-                  auth_provider_error_response(conn)
-
-                {:error, :missing_tenant} ->
-                  missing_tenant_error_response(conn)
-
-                init_context ->
-                  Cyfr.LoggerContext.set_from_context(init_context)
-
-                  conn
-                  |> assign(:mcp_session, nil)
-                  |> assign(:mcp_context, init_context)
-              end
-            else
-              conn
-              |> put_resp_header("mcp-protocol-version", @protocol_version)
-              |> EmissaryWeb.MCPError.halt(404, :session_expired, "Session not found or expired")
-            end
-        end
-
-      # No session ID - unauthenticated
-      true ->
-        Cyfr.LoggerContext.set_from_context(context)
-
-        conn
-        |> assign(:mcp_session, nil)
-        |> assign(:mcp_context, context)
-    end
-  end
-
   defp missing_tenant_error_response(conn) do
     conn
     |> put_resp_header("mcp-protocol-version", @protocol_version)
@@ -360,13 +249,6 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     conn
     |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> EmissaryWeb.MCPError.halt(503, :auth_invalid, "Authentication service unavailable")
-  end
-
-  defp get_session_id(conn) do
-    case get_req_header(conn, "mcp-session-id") do
-      [id | _] -> id
-      [] -> nil
-    end
   end
 
   defp get_context(conn) do
@@ -426,18 +308,6 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     )
   end
 
-  # Returns true if the tenant (org_id/project_id) has changed between stored and fresh context.
-  # Returns false for unauthenticated fresh contexts (no-op without auth).
-  defp tenant_changed?(_stored, %Context{authenticated: false}), do: false
-  defp tenant_changed?(nil, _fresh), do: false
-
-  defp tenant_changed?(stored, fresh) do
-    Arca.QueryHelpers.normalize_org_id(stored.org_id) !=
-      Arca.QueryHelpers.normalize_org_id(fresh.org_id) or
-      Arca.QueryHelpers.normalize_project_id(stored.project_id) !=
-        Arca.QueryHelpers.normalize_project_id(fresh.project_id)
-  end
-
   # A pre-claim / unauthenticated context (valid session, namespace not yet
   # claimed) legitimately carries no resolved org — it is forwarded to the
   # namespace-claim flow downstream, not tenant-gated here.
@@ -483,15 +353,15 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # on the request itself, consulting the database every time — no server-side
   # session state, and no cached copy that can outlive a logout.
   #
-  # Returns {:ok, context, :api_key | :session_token, credential}, :no_key when
-  # no bearer credential is present, or {:error, reason}.
+  # Returns {:ok, context, :api_key | :session_token}, :no_key when no bearer
+  # credential is present, or {:error, reason}.
   defp resolve_bearer_credential(conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token | _] when token != "" ->
         if Sanctum.ApiKey.looks_like_key?(token) do
-          with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key, token}
+          with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key}
         else
-          with {:ok, ctx, kind} <- validate_session_token(token), do: {:ok, ctx, kind, token}
+          with {:ok, ctx, kind} <- validate_session_token(token), do: {:ok, ctx, kind}
         end
 
       _ ->
@@ -516,7 +386,12 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         {:error, :auth_provider_error}
 
       {:error, _reason} ->
-        :no_key
+        # Not a session token this server issued — but not necessarily invalid.
+        # A configured auth provider may accept bearer tokens of its own (an
+        # OIDC access token, say), and it reads the header itself. So this falls
+        # through rather than deciding, and the caller in `call/2` refuses only
+        # once the provider has also declined.
+        :unclaimed_bearer
     end
   end
 
@@ -557,6 +432,16 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   end
 
   # Error response for API key validation failures
+  defp error_response(conn, :invalid_bearer) do
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> EmissaryWeb.MCPError.halt(
+      401,
+      :auth_invalid,
+      "The presented credential is not valid. If it expired, sign in again."
+    )
+  end
+
   defp error_response(conn, :invalid_api_key) do
     conn
     |> put_resp_header("mcp-protocol-version", @protocol_version)

@@ -14,127 +14,53 @@ defmodule Emissary.SecurityTest do
 
   alias Emissary.MCP.Session
 
-  describe "session security" do
-    test "forged session ID returns 404", %{conn: conn} do
-      # Try to use a session ID that looks valid but doesn't exist
-      forged_id = "sess_00000000-0000-0000-0000-000000000000"
+  # The `Mcp-Session-Id` header used to authenticate, so it had an attack surface
+  # worth probing: forged ids, SQL injection, oversized values. The specification
+  # removed protocol sessions and requires a server to ignore the header
+  # entirely, so what has to hold now is narrower and stronger — whatever is in
+  # it, it changes nothing.
+  #
+  # That is a better property than the ones it replaces: those asserted the
+  # server rejected a bad value, which still meant the value reached a lookup.
+  describe "the retired session header is inert" do
+    @hostile [
+      "sess_00000000-0000-0000-0000-000000000000",
+      "sess_' OR '1'='1",
+      "sess_\"; DROP TABLE sessions; --",
+      "sess_" <> String.duplicate("a", 10_000),
+      "",
+      "sess_\0null"
+    ]
 
-      conn =
+    test "no value in it authenticates, and none of them changes the answer",
+         %{conn: conn} do
+      baseline =
         conn
+        |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", forged_id)
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "tools/list"
-        })
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
 
-      assert json_response(conn, 404)
-      response = json_response(conn, 404)
-      assert response["error"]["code"] == -33302
-    end
-
-    test "SQL injection in session ID is rejected", %{conn: conn} do
-      # Try various SQL injection patterns
-      injection_patterns = [
-        "sess_' OR '1'='1",
-        "sess_\"; DROP TABLE sessions; --",
-        "sess_1'; DELETE FROM sessions WHERE '1'='1",
-        "sess_UNION SELECT * FROM users --"
-      ]
-
-      for pattern <- injection_patterns do
-        conn =
+      for value <- @hostile do
+        with_header =
           conn
           |> recycle()
           |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", pattern)
-          |> mcp_post(%{
-            "jsonrpc" => "2.0",
-            "id" => 1,
-            "method" => "tools/list"
-          })
+          |> put_req_header("mcp-session-id", value)
+          |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
 
-        # Should return 404 (not found) not crash or return data
-        assert conn.status == 404, "SQL injection pattern should return 404: #{pattern}"
+        assert with_header.status == baseline.status,
+               "mcp-session-id changed the outcome for #{inspect(value)}"
       end
     end
 
-    test "oversized session ID is handled gracefully", %{conn: conn} do
-      # Try an absurdly long session ID
-      oversized_id = "sess_" <> String.duplicate("a", 10_000)
-
+    test "the server never mints or echoes a session id", %{conn: conn} do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", oversized_id)
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "tools/list"
-        })
+        |> put_req_header("mcp-session-id", "sess_whatever")
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
 
-      # Should return 404 not crash
-      assert conn.status == 404
-    end
-
-    test "empty session ID is treated as no session", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", "")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "tools/list"
-        })
-
-      # Empty session should be treated as no session - requires initialize
-      assert conn.status in [400, 404]
-    end
-
-    test "session ID with null bytes is handled", %{conn: conn} do
-      # Try session ID with null bytes
-      null_id = "sess_valid\x00injected"
-
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", null_id)
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "tools/list"
-        })
-
-      # Should not crash, should return 404
-      assert conn.status == 404
-    end
-
-    test "session ID with special characters is handled", %{conn: conn} do
-      special_ids = [
-        "sess_<script>alert('xss')</script>",
-        "sess_../../../etc/passwd",
-        "sess_${env:SECRET}",
-        "sess_{{template_injection}}",
-        "sess_%00%0a%0d"
-      ]
-
-      for special_id <- special_ids do
-        conn =
-          conn
-          |> recycle()
-          |> put_req_header("content-type", "application/json")
-          |> put_req_header("mcp-session-id", special_id)
-          |> mcp_post(%{
-            "jsonrpc" => "2.0",
-            "id" => 1,
-            "method" => "tools/list"
-          })
-
-        # Should return 404, not crash or expose information
-        assert conn.status == 404, "Special ID should return 404: #{special_id}"
-      end
+      assert get_resp_header(conn, "mcp-session-id") == []
     end
   end
 

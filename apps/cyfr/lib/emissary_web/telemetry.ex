@@ -7,7 +7,6 @@ defmodule EmissaryWeb.Telemetry do
 
   ## MCP Metrics
 
-  - `cyfr.emissary.session.count` - Session lifecycle events
     - Tags: `:transport`, `:lifecycle` (created/terminated)
 
   - `cyfr.emissary.request.duration` - Request processing time
@@ -54,10 +53,11 @@ defmodule EmissaryWeb.Telemetry do
   def metrics do
     [
       # MCP Metrics
-      counter("cyfr.emissary.session.count",
-        tags: [:transport, :lifecycle],
-        description: "MCP session lifecycle events (created/terminated)"
-      ),
+      #
+      # There is no session counter. It measured a protocol session's
+      # create/terminate lifecycle, and this revision has neither — a metric with
+      # no emitter reads as "zero sessions", which is indistinguishable from a
+      # broken emitter and worse than an absent series.
       distribution("cyfr.emissary.request.duration",
         tags: [:method, :tool, :status],
         unit: {:native, :millisecond},
