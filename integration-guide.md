@@ -241,11 +241,16 @@ All requests go to a single endpoint:
 POST /mcp HTTP/1.1
 Host: localhost:4000
 Content-Type: application/json
-MCP-Protocol-Version: 2025-11-25
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: execution
 Authorization: Bearer cyfr_sk_...
 ```
 
-The body is a JSON-RPC 2.0 message:
+The body is a JSON-RPC 2.0 message. Every request declares its own protocol
+version and the capabilities of the client sending it — there is no handshake,
+so there is nowhere else to say it:
 
 ```json
 {
@@ -259,10 +264,22 @@ The body is a JSON-RPC 2.0 message:
       "reference": "catalyst:local.claude:1.0.0",
       "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514", "messages": [{"role": "user", "content": "Hello"}]}},
       "type": "catalyst"
+    },
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {"name": "my-app", "version": "1.0.0"}
     }
   }
 }
 ```
+
+`Mcp-Method` and `Mcp-Name` mirror `method` and `params.name` into headers so a
+gateway can route and rate-limit without parsing the body. The server checks
+that they agree with the body and refuses the request with `-32020` if they do
+not — a header that can disagree with what the server executes is worse than no
+header at all. `Mcp-Name` carries `params.uri` for `resources/read`, and is
+omitted entirely for methods that name no subject.
 
 ### Response Format
 
@@ -271,45 +288,76 @@ The body is a JSON-RPC 2.0 message:
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
+    "resultType": "complete",
     "content": [
       {
         "type": "text",
         "text": "{\"status\":\"completed\",\"execution_id\":\"exec_01234567-...\",\"result\":{...}}"
       }
-    ]
+    ],
+    "isError": false,
+    "_meta": {
+      "io.modelcontextprotocol/serverInfo": {"name": "CYFR", "version": "0.5.8"}
+    }
   }
 }
 ```
+
+Every result carries `resultType`. Today it is always `"complete"`; treat any
+value you do not recognise as an error rather than assuming the result is
+finished.
 
 ### Required Headers
 
 | Header | Value | When |
 |--------|-------|------|
 | `Content-Type` | `application/json` | Always |
-| `MCP-Protocol-Version` | `2025-11-25` | Always |
-| `Authorization` | `Bearer cyfr_pk_...` or `Bearer cyfr_sk_...` | API key auth |
-| `MCP-Session-Id` | `<token>` | Session-based auth (after initialization) |
+| `Accept` | `application/json, text/event-stream` | Always |
+| `MCP-Protocol-Version` | `2026-07-28` | Always — must equal the `_meta` version |
+| `Mcp-Method` | the request's `method` | Always |
+| `Mcp-Name` | `params.name`, or `params.uri` for `resources/read` | Methods that name a subject |
+| `Authorization` | `Bearer cyfr_pk_...`, `Bearer cyfr_sk_...`, or a session token | Always, unless calling a public action |
 
-### Session-Based Requests (Stateful)
+A value that is not plain visible ASCII travels Base64-encoded in the
+specification's sentinel form, `=?base64?<encoded>?=`, and the server decodes it
+before comparing against the body.
 
-Most integrations use API keys and can skip this section.
+### There Is No Session To Establish
 
-If using session tokens instead of API keys, you need to initialize a session first:
+Earlier revisions of MCP opened with an `initialize` handshake and carried an
+`Mcp-Session-Id` afterwards. **Neither exists in `2026-07-28`.** Every request
+authenticates itself and declares its own version, so:
 
-1. **Initialize** — first request without `MCP-Session-Id`:
+- There is no `initialize` call to make. Sending one returns `404` with
+  `-32601`.
+- The server never mints or echoes a session id. Do not look for one.
+- `Authorization: Bearer ...` goes on **every** request. Both an API key and a
+  Sanctum session token are accepted in that header, and both are re-checked
+  against the database each time — so revoking either takes effect on the very
+  next call rather than whenever a cached session happens to expire.
+
+### Discovering What A Server Speaks
+
+Optional. A client may call any method directly and handle
+`-32022 UnsupportedProtocolVersion`, which carries the supported list. If you
+would rather ask up front:
 
 ```json
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "id": 1, "method": "server/discover",
+ "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                      "io.modelcontextprotocol/clientCapabilities": {}}}}
 ```
 
-2. **Capture** the `MCP-Session-Id` header from the response
-3. **Include** it in all subsequent requests:
+The result carries `supportedVersions`, `capabilities`, `instructions`, and the
+caching hints below.
 
-```
-MCP-Session-Id: <token-from-step-2>
-```
+### Caching
 
-API key auth is stateless — no session initialization needed.
+`server/discover`, `tools/list`, `resources/list`, `resources/templates/list`
+and `resources/read` return `ttlMs` and `cacheScope`. `ttlMs` is how long you
+may treat the answer as fresh; `cacheScope` is `"private"` when the answer
+depends on who asked — CYFR filters the tool list by the caller's permissions,
+so a shared cache must not serve one caller's list to another.
 
 ### Error Responses
 
@@ -375,13 +423,18 @@ A public key is safe to embed in client-side code. It can execute and search com
 ```javascript
 const CYFR_URL = "https://your-cyfr-server.example.com/mcp";
 const CYFR_KEY = "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345";
+const PROTOCOL_VERSION = "2026-07-28";
 
 async function runComponent(reference, input, type = "catalyst") {
   const response = await fetch(CYFR_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "MCP-Protocol-Version": "2025-11-25",
+      "Accept": "application/json, text/event-stream",
+      "MCP-Protocol-Version": PROTOCOL_VERSION,
+      // Mirror the routed fields; the server refuses a header that disagrees.
+      "Mcp-Method": "tools/call",
+      "Mcp-Name": "execution",
       "Authorization": `Bearer ${CYFR_KEY}`,
     },
     body: JSON.stringify({
@@ -391,6 +444,10 @@ async function runComponent(reference, input, type = "catalyst") {
       params: {
         name: "execution",
         arguments: { action: "run", reference, input, type },
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
       },
     }),
   });
@@ -411,20 +468,31 @@ Secret keys should live in environment variables, never in source code.
 ```javascript
 const CYFR_URL = process.env.CYFR_URL || "http://localhost:4000/mcp";
 const CYFR_KEY = process.env.CYFR_SECRET_KEY; // cyfr_sk_...
+const PROTOCOL_VERSION = "2026-07-28";
 
 async function cyfr(toolName, args) {
   const res = await fetch(CYFR_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "MCP-Protocol-Version": "2025-11-25",
+      "Accept": "application/json, text/event-stream",
+      "MCP-Protocol-Version": PROTOCOL_VERSION,
+      "Mcp-Method": "tools/call",
+      "Mcp-Name": toolName,
       "Authorization": `Bearer ${CYFR_KEY}`,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
       method: "tools/call",
-      params: { name: toolName, arguments: args },
+      params: {
+        name: toolName,
+        arguments: args,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
     }),
   });
 
@@ -486,7 +554,10 @@ jobs:
         run: |
           curl -X POST "$CYFR_URL/mcp" \
             -H "Content-Type: application/json" \
-            -H "MCP-Protocol-Version: 2025-11-25" \
+            -H "Accept: application/json, text/event-stream" \
+            -H "MCP-Protocol-Version: 2026-07-28" \
+            -H "Mcp-Method: tools/call" \
+            -H "Mcp-Name: build" \
             -H "Authorization: Bearer $CYFR_ADMIN_KEY" \
             -d '{
               "jsonrpc": "2.0",
@@ -497,6 +568,10 @@ jobs:
                 "arguments": {
                   "action": "compile",
                   "reference": "reagent:local.my-tool:0.1.0"
+                },
+                "_meta": {
+                  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                  "io.modelcontextprotocol/clientCapabilities": {}
                 }
               }
             }'
@@ -512,20 +587,31 @@ import os
 
 CYFR_URL = os.environ.get("CYFR_URL", "http://localhost:4000/mcp")
 CYFR_KEY = os.environ["CYFR_SECRET_KEY"]  # cyfr_sk_...
+PROTOCOL_VERSION = "2026-07-28"
 
 def cyfr_call(tool_name, arguments):
     response = requests.post(
         CYFR_URL,
         headers={
             "Content-Type": "application/json",
-            "MCP-Protocol-Version": "2025-11-25",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": tool_name,
             "Authorization": f"Bearer {CYFR_KEY}",
         },
         json={
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
+            "params": {
+                "name": tool_name,
+                "arguments": arguments,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
         },
     )
     data = response.json()
