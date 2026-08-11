@@ -28,6 +28,18 @@ defmodule Emissary.MCP.Protocol do
   @meta_protocol_version "io.modelcontextprotocol/protocolVersion"
   @meta_client_info "io.modelcontextprotocol/clientInfo"
   @meta_client_capabilities "io.modelcontextprotocol/clientCapabilities"
+  @meta_server_info "io.modelcontextprotocol/serverInfo"
+
+  # Every result declares its type so a client can tell a finished answer from
+  # one that is asking for more input. `:input_required` is the multi-round-trip
+  # half and has no producer yet; it is named here so the vocabulary is complete
+  # and the encoder does not have to grow a second shape later.
+  @result_types %{complete: "complete", input_required: "input_required"}
+
+  # The server's own identity, reported in every result's `_meta`. The version is
+  # read from the application rather than written down: a hardcoded one was
+  # announcing 0.1.0 from a 0.5.8 build, which is worse than announcing nothing.
+  @server_name "CYFR"
 
   @doc "The `_meta` key carrying the protocol version of a request."
   @spec meta_protocol_version_key() :: String.t()
@@ -77,6 +89,33 @@ defmodule Emissary.MCP.Protocol do
   @doc "Prefix for headers mirrored from tool arguments by `x-mcp-header`."
   @spec param_header_prefix() :: String.t()
   def param_header_prefix, do: @param_header_prefix
+
+  @doc "The `_meta` key carrying this server's identity."
+  @spec meta_server_info_key() :: String.t()
+  def meta_server_info_key, do: @meta_server_info
+
+  @doc """
+  The `resultType` string for a result kind.
+
+  A client that does not recognise the value must treat the result as invalid,
+  so this is deliberately a closed set rather than a free string.
+  """
+  @spec result_type(:complete | :input_required) :: String.t()
+  def result_type(kind) when is_map_key(@result_types, kind), do: @result_types[kind]
+
+  @doc "This server's name and version, for a result's `_meta`."
+  @spec server_info() :: %{String.t() => String.t()}
+  def server_info do
+    %{"name" => @server_name, "version" => version_string()}
+  end
+
+  defp version_string do
+    case :application.get_key(:cyfr, :vsn) do
+      {:ok, vsn} -> List.to_string(vsn)
+      # Only reachable before the application is loaded — in practice, tooling.
+      :undefined -> "unknown"
+    end
+  end
 
   @doc """
   The protocol version declared in a request's `params._meta`, or `nil`.

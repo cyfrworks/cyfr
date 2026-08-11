@@ -32,14 +32,32 @@ defmodule Emissary.MCP.RouterTest do
       msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
 
       assert {:ok, result} = Router.dispatch(session, msg)
-      assert result["protocolVersions"] == Emissary.MCP.Protocol.supported()
-      assert result["serverInfo"]["name"] == "CYFR"
+      assert result["supportedVersions"] == Emissary.MCP.Protocol.supported()
       assert is_map(result["capabilities"])
+
+      # Identity is stamped onto every result by the encoder, so the router's
+      # own return value carries only what is specific to discovery.
+      refute Map.has_key?(result, "serverInfo")
+    end
+
+    test "does not advertise a resource-subscribe capability it cannot honour",
+         %{session: session} do
+      msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
+
+      assert {:ok, result} = Router.dispatch(session, msg)
+
+      # `resources/subscribe` was replaced by `subscriptions/listen`; advertising
+      # the retired capability would have clients waiting for updates that this
+      # server has no way to send.
+      refute Map.has_key?(result["capabilities"]["resources"], "subscribe")
+      assert is_map(result["capabilities"]["extensions"])
     end
   end
 
   describe "dispatch/2 with ping" do
-    test "returns empty object", %{session: session} do
+    # Removed in 2026-07-28. Answering it would misreport which revision this
+    # server speaks, so the rejection is the conformant behaviour.
+    test "is not a method this revision has", %{session: session} do
       msg = %Message{
         type: :request,
         id: 2,
@@ -47,8 +65,8 @@ defmodule Emissary.MCP.RouterTest do
         params: nil
       }
 
-      assert {:ok, result} = Router.dispatch(session, msg)
-      assert result == %{}
+      assert {:error, :method_not_found, message} = Router.dispatch(session, msg)
+      assert message =~ "ping"
     end
   end
 

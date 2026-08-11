@@ -187,7 +187,7 @@ defmodule Emissary.AuthChainIntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       response = json_response(init_conn, 200)

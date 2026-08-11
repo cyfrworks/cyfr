@@ -33,9 +33,9 @@ func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 			JSONRPC: "2.0",
 			ID:      1,
 			Result: map[string]any{
-				"protocolVersions": []string{protocolVersion},
-				"capabilities":     map[string]any{},
-				"serverInfo":       map[string]any{"name": "cyfr", "version": "0.1.0"},
+				"supportedVersions": []string{protocolVersion},
+				"capabilities":      map[string]any{},
+				"_meta":             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "cyfr", "version": "0.1.0"}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -78,9 +78,9 @@ func TestDiscover_RejectsUnsupportedProtocol(t *testing.T) {
 			JSONRPC: "2.0",
 			ID:      1,
 			Result: map[string]any{
-				"protocolVersions": []string{"2099-01-01"},
-				"capabilities":     map[string]any{},
-				"serverInfo":       map[string]any{"name": "future-server", "version": "9.9.9"},
+				"supportedVersions": []string{"2099-01-01"},
+				"capabilities":      map[string]any{},
+				"_meta":             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "future-server", "version": "9.9.9"}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)

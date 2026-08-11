@@ -136,14 +136,41 @@ defmodule Emissary.MCP.MessageTest do
     end
   end
 
-  describe "encode_result/2" do
+  describe "encode_result/3" do
     test "encodes a successful response" do
       result = Message.encode_result(1, %{"tools" => []})
 
       assert result["jsonrpc"] == "2.0"
       assert result["id"] == 1
-      assert result["result"] == %{"tools" => []}
+      assert result["result"]["tools"] == []
       refute Map.has_key?(result, "error")
+    end
+
+    # Two things every result must carry. They are stamped here rather than in
+    # each handler because a result that reaches the wire without a `resultType`
+    # is invalid to a conforming client, and no handler should have to remember.
+    test "stamps resultType and the server identity" do
+      result = Message.encode_result(1, %{"tools" => []})["result"]
+
+      assert result["resultType"] == "complete"
+
+      assert result["_meta"][Emissary.MCP.Protocol.meta_server_info_key()]["name"] == "CYFR"
+    end
+
+    test "merges into a handler's own _meta rather than replacing it" do
+      result =
+        Message.encode_result(1, %{"tools" => [], "_meta" => %{"run.cyfr/filtered" => true}})[
+          "result"
+        ]
+
+      assert result["_meta"]["run.cyfr/filtered"] == true
+      assert result["_meta"][Emissary.MCP.Protocol.meta_server_info_key()]["name"] == "CYFR"
+    end
+
+    test "input_required is expressible — the multi-round-trip half of the vocabulary" do
+      result = Message.encode_result(1, %{}, :input_required)["result"]
+
+      assert result["resultType"] == "input_required"
     end
   end
 

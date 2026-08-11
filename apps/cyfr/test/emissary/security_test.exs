@@ -147,7 +147,7 @@ defmodule Emissary.SecurityTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Try with wrong content-type
@@ -176,7 +176,7 @@ defmodule Emissary.SecurityTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Send request with multiple session headers via raw connection
@@ -188,7 +188,7 @@ defmodule Emissary.SecurityTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Should work with the valid session
@@ -296,7 +296,7 @@ defmodule Emissary.SecurityTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Send many rapid requests
@@ -308,7 +308,7 @@ defmodule Emissary.SecurityTest do
           |> mcp_post(%{
             "jsonrpc" => "2.0",
             "id" => i,
-            "method" => "ping"
+            "method" => "server/discover"
           })
         end
 

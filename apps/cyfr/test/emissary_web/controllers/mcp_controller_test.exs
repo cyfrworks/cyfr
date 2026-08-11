@@ -248,7 +248,10 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert content["type"] == "text"
     end
 
-    test "ping works with API key", %{conn: conn, api_key: api_key} do
+    test "an unauthenticated-surface method works with an API key", %{
+      conn: conn,
+      api_key: api_key
+    } do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
@@ -256,12 +259,12 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 3,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       assert json_response(conn, 200)
       response = json_response(conn, 200)
-      assert response["result"] == %{}
+      assert response["result"]["resultType"] == "complete"
     end
 
     test "response does NOT include mcp-session-id header for non-initialize requests", %{
@@ -288,7 +291,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"})
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
 
       [request_id] = get_resp_header(conn, "x-request-id")
 
@@ -298,7 +301,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       log = Arca.Repo.get(Arca.McpLog, request_id)
 
       assert log.id == request_id
-      assert log.method == "ping"
+      assert log.method == "server/discover"
       assert log.status == "success"
       assert is_integer(log.duration_ms)
 
@@ -464,7 +467,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["error"]["message"] =~ "jsonrpc"
     end
 
-    test "handles ping method", %{conn: conn} do
+    test "handles server/discover", %{conn: conn} do
       conn =
         conn
         |> recycle()
@@ -472,12 +475,12 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       assert json_response(conn, 200)
       response = json_response(conn, 200)
-      assert response["result"] == %{}
+      assert response["result"]["supportedVersions"] == Emissary.MCP.Protocol.supported()
     end
   end
 
@@ -491,7 +494,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => nil,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # MCP spec: unlike base JSON-RPC, the ID MUST NOT be null
@@ -507,13 +510,13 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => "string-request-id",
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       assert json_response(conn, 200)
       response = json_response(conn, 200)
       assert response["id"] == "string-request-id"
-      assert response["result"] == %{}
+      assert response["result"]["resultType"] == "complete"
     end
 
     test "handles missing params field (optional per spec)", %{conn: conn} do
@@ -586,8 +589,23 @@ defmodule EmissaryWeb.MCPControllerTest do
           "method" => long_method
         })
 
-      # Should return method not found, not crash
-      assert conn.status in [200, 400]
+      # An unimplemented method is 404 with -32601, not 400. A dual-era client
+      # reads the status and the body together to tell "modern server, no such
+      # method" from "legacy server, no such endpoint"; answering 400 for both
+      # makes that undecidable.
+      assert json_response(conn, 404)["error"]["code"] == -32601
+    end
+
+    test "an unknown method is 404, not 400", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 7, "method" => "no/such/method"})
+
+      body = json_response(conn, 404)
+      assert body["error"]["code"] == -32601
+      assert body["id"] == 7
     end
 
     test "rejects numeric method (invalid per spec)", %{conn: conn} do
@@ -634,7 +652,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => -999,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Negative IDs are valid per JSON-RPC
@@ -651,7 +669,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 3.14,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Float IDs are technically valid but unusual
@@ -668,7 +686,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => special_id,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Should handle special characters
@@ -740,7 +758,7 @@ defmodule EmissaryWeb.MCPControllerTest do
             |> mcp_post(%{
               "jsonrpc" => "2.0",
               "id" => i,
-              "method" => "session",
+              "method" => "tools/call",
               "params" => %{
                 "name" => "session",
                 "arguments" => %{"action" => "whoami"}
@@ -753,7 +771,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       # Each should succeed
       for conn <- results do
-        assert conn.status in [200, 400]
+        assert conn.status == 200
       end
 
       # One caller finishing cannot affect another: nothing is shared between
@@ -765,7 +783,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 99,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       assert json_response(result_conn, 200)
@@ -925,7 +943,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping",
+          "method" => "server/discover",
           "params" => %{
             "_meta" => %{"io.modelcontextprotocol/protocolVersion" => "1999-01-01"}
           }
@@ -948,7 +966,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping",
+          "method" => "server/discover",
           "params" => %{
             "_meta" => %{"io.modelcontextprotocol/protocolVersion" => "1999-01-01"}
           }
@@ -965,7 +983,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"})
+        |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
 
       response = json_response(conn, 400)
 
@@ -1091,8 +1109,8 @@ defmodule EmissaryWeb.MCPControllerTest do
       # Must encode manually since Phoenix ConnTest.post/3 expects a map
       batch_body =
         Jason.encode!([
-          %{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"},
-          %{"jsonrpc" => "2.0", "id" => 2, "method" => "ping"}
+          %{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"},
+          %{"jsonrpc" => "2.0", "id" => 2, "method" => "server/discover"}
         ])
 
       conn =

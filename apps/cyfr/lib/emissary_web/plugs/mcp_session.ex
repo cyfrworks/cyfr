@@ -102,9 +102,40 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
       true ->
         with %Plug.Conn{halted: false} = conn <- check_declared_version(conn, body),
+             %Plug.Conn{halted: false} = conn <- check_client_capabilities(conn, body),
              %Plug.Conn{halted: false} = conn <- check_mirrored_headers(conn, body) do
           conn
         end
+    end
+  end
+
+  # `clientCapabilities` is a required `_meta` field, and a missing required
+  # field is `-32602`.
+  #
+  # It is not decoration. A stateless protocol has no handshake in which to learn
+  # what the caller can do, so the server may never assume a capability the
+  # request did not declare — which is what makes it safe to *offer* a client
+  # something like an elicitation. Accepting requests that omit it would leave
+  # the server guessing, and guessing wrong means asking a client for input it
+  # has no way to supply.
+  defp check_client_capabilities(conn, body) do
+    case get_in(body, ["params", "_meta", Protocol.meta_client_capabilities_key()]) do
+      caps when is_map(caps) ->
+        assign(conn, :mcp_client_capabilities, caps)
+
+      nil ->
+        reject_version(
+          conn,
+          :invalid_params,
+          "Missing required #{Protocol.meta_client_capabilities_key()} in params._meta."
+        )
+
+      _other ->
+        reject_version(
+          conn,
+          :invalid_params,
+          "#{Protocol.meta_client_capabilities_key()} must be an object."
+        )
     end
   end
 

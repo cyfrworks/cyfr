@@ -74,21 +74,39 @@ defmodule Emissary.MCP.Router do
     "system" => ~w(status)
   }
 
-  @server_info %{
-    "name" => "CYFR",
-    "version" => "0.1.0"
-  }
-
   @server_capabilities %{
     "tools" => %{
       "listChanged" => false
     },
     "resources" => %{
-      "subscribe" => false,
       "listChanged" => false
-    }
-    # Future: prompts, logging, completions
+    },
+    # Optional protocol extensions this server speaks. Empty until one is
+    # implemented — the field is declared so a client can read it uniformly
+    # rather than distinguishing "no extensions" from "old server".
+    "extensions" => %{}
   }
+
+  # How long a client may treat a cacheable result as fresh, and who may hold it.
+  #
+  # The tool and resource catalogues change only when a component is registered
+  # or removed, so a few minutes of staleness costs a client one out-of-date
+  # listing and saves the server a poll per turn. They are `private` rather than
+  # `public` because `ToolVisibility` filters the list by the caller's
+  # permissions — two callers legitimately see different tools, so a shared
+  # cache would serve one caller's view to another.
+  @catalogue_ttl_ms :timer.minutes(5)
+  @catalogue_scope "private"
+
+  # Discovery carries no per-caller data: same versions, same capabilities, same
+  # identity for everyone, so an intermediary may share it.
+  @discover_ttl_ms :timer.hours(1)
+  @discover_scope "public"
+
+  # Resource contents are read under the caller's context and can differ per
+  # caller. Never shared, and short — a resource is a live read, not a catalogue.
+  @resource_ttl_ms :timer.seconds(30)
+  @resource_scope "private"
 
   @doc """
   Dispatch an MCP message to the appropriate handler.
@@ -124,15 +142,18 @@ defmodule Emissary.MCP.Router do
   # to make anyway. It replaces `initialize`, whose only remaining job this is.
   defp dispatch_method(_session, "server/discover", _params, _id) do
     {:ok,
-     %{
-       "protocolVersions" => Protocol.supported(),
-       "capabilities" => @server_capabilities,
-       "serverInfo" => @server_info
-     }}
-  end
-
-  defp dispatch_method(_session, "ping", _params, _id) do
-    {:ok, %{}}
+     cacheable(
+       %{
+         "supportedVersions" => Protocol.supported(),
+         "capabilities" => @server_capabilities,
+         "instructions" =>
+           "CYFR runs sandboxed WebAssembly components under explicit, per-app consent. " <>
+             "Call tools/list for the catalogue; `execution.run` executes a component, " <>
+             "`component.search` and `component.inspect` describe what is installed."
+       },
+       @discover_ttl_ms,
+       @discover_scope
+     )}
   end
 
   # ============================================================================
@@ -267,7 +288,7 @@ defmodule Emissary.MCP.Router do
             %{"uri" => uri, "mimeType" => mime_type, "text" => encoded}
           end
 
-        {:ok, %{"contents" => [content_entry]}}
+        {:ok, cacheable(%{"contents" => [content_entry]}, @resource_ttl_ms, @resource_scope)}
 
       {:error, reason} ->
         {:error, :resource_not_found, "Failed to read resource: #{inspect(reason)}"}
@@ -353,6 +374,20 @@ defmodule Emissary.MCP.Router do
   # Helpers
   # ============================================================================
 
+  # Freshness hints. The specification requires both fields on every cacheable
+  # result; `ttlMs` is how long a client may skip re-fetching, `cacheScope`
+  # decides whether an intermediary may hold the answer for someone else.
+  #
+  # `cacheScope` is a disclosure decision, not a performance one: `public` means
+  # "this answer is the same for every caller and may be served to any of them".
+  # Getting it wrong hands one tenant's view to another, which is why nothing
+  # filtered by caller permissions is ever marked public.
+  defp cacheable(result, ttl_ms, scope) when is_map(result) do
+    result
+    |> Map.put("ttlMs", ttl_ms)
+    |> Map.put("cacheScope", scope)
+  end
+
   @default_page_size 50
   # Defense-in-depth ceiling on a client-supplied cursor offset. Not a real
   # overflow risk (Elixir ints are arbitrary-precision and a too-large offset
@@ -375,7 +410,10 @@ defmodule Emissary.MCP.Router do
         result
       end
 
-    {:ok, result}
+    # Every page carries its own hints; the specification treats each page as an
+    # independently cacheable response with its own freshness clock, and requires
+    # one scope across all pages of a list.
+    {:ok, cacheable(result, @catalogue_ttl_ms, @catalogue_scope)}
   end
 
   defp decode_cursor(nil), do: 0
@@ -398,31 +436,40 @@ defmodule Emissary.MCP.Router do
     Base.url_encode64(Integer.to_string(offset), padding: false)
   end
 
+  # `_meta` keys are a namespaced grammar: dot-separated labels, then a slash,
+  # then the name. The `cyfr:` form these used is not a valid prefix at all, and
+  # any second label of `mcp` or `modelcontextprotocol` is reserved — so CYFR's
+  # own reverse-DNS namespace is the correct home.
+  @meta_prefix "run.cyfr/"
+
   defp filter_tools_for_component(tools, component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
         filtered = ToolRegistry.in_chain_view(tools)
 
         {:ok,
-         %{
-           "tools" => filtered,
-           "_meta" => %{"cyfr:component_ref" => component_ref, "cyfr:filtered" => true}
-         }}
+         component_view(filtered, %{
+           (@meta_prefix <> "component_ref") => component_ref,
+           (@meta_prefix <> "filtered") => true
+         })}
 
       {:ok, %{type: type}} ->
         {:ok,
-         %{
-           "tools" => tools,
-           "_meta" => %{
-             "cyfr:component_ref" => component_ref,
-             "cyfr:component_type" => type,
-             "cyfr:filtered" => false
-           }
-         }}
+         component_view(tools, %{
+           (@meta_prefix <> "component_ref") => component_ref,
+           (@meta_prefix <> "component_type") => type,
+           (@meta_prefix <> "filtered") => false
+         })}
 
       {:error, reason} ->
         {:error, :invalid_params, "Invalid component_ref: #{reason}"}
     end
+  end
+
+  # This view is keyed by the caller's `component_ref` argument, so it is part of
+  # the cache key and carries the same hints as any other `tools/list` page.
+  defp component_view(tools, meta) do
+    cacheable(%{"tools" => tools, "_meta" => meta}, @catalogue_ttl_ms, @catalogue_scope)
   end
 
   defp public_tool_action?(name, action) do

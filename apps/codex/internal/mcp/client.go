@@ -101,14 +101,14 @@ func (c *Client) Discover() error {
 		return nil // Unreadable result is not fatal; the next real call decides.
 	}
 
-	for _, v := range discovered.ProtocolVersions {
+	for _, v := range discovered.SupportedVersions {
 		if v == protocolVersion {
 			return nil
 		}
 	}
 
 	return fmt.Errorf("%w: server speaks %v, client supports %q",
-		ErrUnsupportedProtocol, discovered.ProtocolVersions, protocolVersion)
+		ErrUnsupportedProtocol, discovered.SupportedVersions, protocolVersion)
 }
 
 // routingHeaders mirrors body fields into the headers the protocol requires, so

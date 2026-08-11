@@ -67,15 +67,18 @@ defmodule Emissary.MCPTest do
       assert decoded["status"] in ["ok", "degraded"]
     end
 
-    test "handles ping request", %{session: session} do
+    # `ping` was removed in 2026-07-28. It is not merely unimplemented — a server
+    # that still answers it tells a client the wrong thing about which revision
+    # it speaks, so the rejection is the correct behaviour and worth pinning.
+    test "ping is gone", %{session: session} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 3,
         "method" => "ping"
       }
 
-      {:ok, result, 3} = MCP.handle_message(session, params)
-      assert result == %{}
+      assert {:error, :method_not_found, message, 3} = MCP.handle_message(session, params)
+      assert message =~ "ping"
     end
 
     test "handles resources/list request", %{session: session} do
@@ -159,7 +162,7 @@ defmodule Emissary.MCPTest do
         %{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "resources/list"
         },
         %{
           "jsonrpc" => "2.0",
@@ -172,8 +175,8 @@ defmodule Emissary.MCPTest do
 
       assert length(responses) == 2
 
-      ping_response = Enum.find(responses, &(&1["id"] == 1))
-      assert ping_response["result"] == %{}
+      resources_response = Enum.find(responses, &(&1["id"] == 1))
+      assert is_list(resources_response["result"]["resources"])
 
       list_response = Enum.find(responses, &(&1["id"] == 2))
       assert is_list(list_response["result"]["tools"])
@@ -184,7 +187,7 @@ defmodule Emissary.MCPTest do
         %{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "resources/list"
         },
         %{
           "jsonrpc" => "2.0",
@@ -204,7 +207,7 @@ defmodule Emissary.MCPTest do
         %{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "resources/list"
         },
         %{
           "jsonrpc" => "2.0",
@@ -217,8 +220,8 @@ defmodule Emissary.MCPTest do
 
       assert length(responses) == 2
 
-      ping_response = Enum.find(responses, &(&1["id"] == 1))
-      assert ping_response["result"] == %{}
+      ok_response = Enum.find(responses, &(&1["id"] == 1))
+      assert is_list(ok_response["result"]["resources"])
 
       error_response = Enum.find(responses, &(&1["id"] == 2))
       assert error_response["error"]["message"] =~ "Unknown method"
@@ -231,7 +234,8 @@ defmodule Emissary.MCPTest do
 
       assert result["jsonrpc"] == "2.0"
       assert result["id"] == 42
-      assert result["result"] == %{"tools" => []}
+      assert result["result"]["tools"] == []
+      assert result["result"]["resultType"] == "complete"
     end
 
     test "encode_error creates valid JSON-RPC error" do

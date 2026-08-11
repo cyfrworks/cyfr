@@ -37,9 +37,12 @@ export class AuthRequiredError extends Error {
 const PROTOCOL_VERSION = "2026-07-28";
 
 interface DiscoverResult {
-  protocolVersions?: string[];
+  supportedVersions?: string[];
   capabilities?: Record<string, unknown>;
-  serverInfo?: Record<string, unknown>;
+  instructions?: string;
+  // Identity lives here, under io.modelcontextprotocol/serverInfo. The server
+  // stamps it on every result, so discovery carries no separate copy.
+  _meta?: Record<string, unknown>;
 }
 
 interface TransportResponse {
@@ -94,7 +97,7 @@ export class McpClient {
     }
 
     const result = resp.result as DiscoverResult | undefined;
-    const versions = result?.protocolVersions ?? [];
+    const versions = result?.supportedVersions ?? [];
     if (versions.length > 0 && !versions.includes(PROTOCOL_VERSION)) {
       throw new Error(
         `Unsupported protocol: server speaks ${versions.join(", ")}, client ${PROTOCOL_VERSION}`,

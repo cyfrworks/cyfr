@@ -67,46 +67,20 @@ defmodule EmissaryWeb.MCPController do
     Cyfr.LoggerContext.set_request_id(request_id)
     start_time = System.monotonic_time()
 
-    case {conn.assigns[:mcp_session], conn.assigns[:auth_method], params} do
-      # Discovery answers before authentication — a client has to be able to
-      # learn which revisions the server speaks before it can speak one.
-      {_session, _auth, %{"method" => "server/discover"} = params} ->
-        handle_discover(conn, params, request_id, start_time)
-
-      # Everything else. There is no session to require: a bearer caller gets the
-      # plug's credential-keyed session, an auth-provider caller gets an
-      # ephemeral one, and an anonymous caller gets an unauthenticated context
-      # that the router gates per action. "Not authenticated" is the tools'
-      # answer to give, not the transport's.
-      {session, _auth, params} ->
-        session = session || Session.ephemeral(conn.assigns[:mcp_context])
-        handle_message(conn, session, params, request_id, start_time)
-    end
-  end
-
-  defp handle_discover(conn, params, request_id, start_time) do
-    context = conn.assigns[:mcp_context]
-    id = params["id"]
-
-    {:ok, result} =
-      Emissary.MCP.Router.dispatch(
-        %Emissary.MCP.Session{context: context},
-        %Message{type: :request, id: id, method: "server/discover", params: %{}}
-      )
-
-    emit_telemetry(start_time, context, %{
-      method: "server/discover",
-      tool: nil,
-      status: :success,
-      action: nil,
-      request_id: request_id,
-      session_id: context.session_id
-    })
-
-    conn
-    |> put_resp_header("mcp-protocol-version", @protocol_version)
-    |> put_resp_header("x-request-id", request_id)
-    |> json(MCP.encode_result(id, result))
+    # One path for every method. `server/discover` used to be answered by a
+    # branch of its own so that it could reply before authentication — but the
+    # ordinary path already does that: an anonymous caller gets an ephemeral
+    # session and the router gates per action, and the discovery clause consults
+    # neither. The branch bought nothing and skipped `Message.decode/1`, so a
+    # discovery request with a null id — which the specification forbids — was
+    # answered 200 instead of rejected.
+    #
+    # There is no session to require here: a bearer caller gets the plug's
+    # credential-keyed session, an auth-provider caller an ephemeral one, and an
+    # anonymous caller an unauthenticated context. "Not authenticated" is the
+    # tools' answer to give, not the transport's.
+    session = conn.assigns[:mcp_session] || Session.ephemeral(conn.assigns[:mcp_context])
+    handle_message(conn, session, params, request_id, start_time)
   end
 
   defp handle_message(conn, session, params, request_id, start_time) do
@@ -192,7 +166,7 @@ defmodule EmissaryWeb.MCPController do
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
-        |> put_status(400)
+        |> put_status(http_status_for(code))
         |> json(MCP.encode_error(id, code, message))
 
       {:error, code, message} ->
@@ -219,7 +193,7 @@ defmodule EmissaryWeb.MCPController do
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
-        |> put_status(400)
+        |> put_status(http_status_for(code))
         |> json(MCP.encode_error(nil, code, message))
     end
   end
@@ -227,6 +201,14 @@ defmodule EmissaryWeb.MCPController do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  # An unimplemented method is `404`, not `400`. The specification makes the
+  # distinction load-bearing for backward compatibility: a dual-era client reads
+  # the status *and* the body to decide whether it is talking to a modern server
+  # that lacks this method, or a legacy server that lacks the whole endpoint.
+  # Answering `400` for both makes that undecidable.
+  defp http_status_for(:method_not_found), do: 404
+  defp http_status_for(_code), do: 400
 
   defp extract_tool(%{"method" => "tools/call", "params" => %{"name" => name}}), do: name
   defp extract_tool(%{"method" => "resources/read"}), do: "resources"

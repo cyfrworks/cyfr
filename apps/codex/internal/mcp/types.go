@@ -32,11 +32,16 @@ type JSONRPCError struct {
 }
 
 // DiscoverResult is the result of server/discover: which protocol revisions the
-// server speaks, plus its capabilities and identity.
+// server speaks, plus its capabilities and guidance.
+//
+// Identity is not here. The server reports itself in every result's _meta under
+// io.modelcontextprotocol/serverInfo, so discovery has no reason to carry a
+// second copy — see Meta.
 type DiscoverResult struct {
-	ProtocolVersions []string       `json:"protocolVersions"`
-	Capabilities     map[string]any `json:"capabilities"`
-	ServerInfo       map[string]any `json:"serverInfo"`
+	SupportedVersions []string       `json:"supportedVersions"`
+	Capabilities      map[string]any `json:"capabilities"`
+	Instructions      string         `json:"instructions,omitempty"`
+	Meta              map[string]any `json:"_meta,omitempty"`
 }
 
 // ServerInfo describes the MCP server.

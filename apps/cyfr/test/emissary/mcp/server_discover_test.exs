@@ -21,9 +21,21 @@ defmodule Emissary.MCP.ServerDiscoverTest do
     body = json_response(discover(conn), 200)
 
     assert body["id"] == 1
-    assert body["result"]["protocolVersions"] == Protocol.supported()
-    assert body["result"]["serverInfo"]["name"] == "CYFR"
+    assert body["result"]["supportedVersions"] == Protocol.supported()
     assert is_map(body["result"]["capabilities"])
+  end
+
+  test "reports its identity in _meta, not at the top level", %{conn: conn} do
+    result = json_response(discover(conn), 200)["result"]
+
+    info = result["_meta"][Protocol.meta_server_info_key()]
+    assert info["name"] == "CYFR"
+
+    # The version is read from the running application. It was hardcoded "0.1.0"
+    # in a 0.5.8 build — a wrong answer is worse than none, because a client has
+    # no way to tell it is wrong.
+    assert info["version"] == to_string(Application.spec(:cyfr, :vsn))
+    refute Map.has_key?(result, "serverInfo")
   end
 
   test "advertises the version the server actually announces", %{conn: conn} do
@@ -31,8 +43,17 @@ defmodule Emissary.MCP.ServerDiscoverTest do
 
     # The advertised list and the response header must agree — a server that
     # says one revision and validates another is the failure this replaces.
-    assert Protocol.version() in body["result"]["protocolVersions"]
+    assert Protocol.version() in body["result"]["supportedVersions"]
     assert [Protocol.version()] == get_resp_header(discover(conn), "mcp-protocol-version")
+  end
+
+  test "is cacheable, and shareable because it carries no per-caller data",
+       %{conn: conn} do
+    result = json_response(discover(conn), 200)["result"]
+
+    assert result["ttlMs"] > 0
+    assert result["cacheScope"] == "public"
+    assert result["resultType"] == "complete"
   end
 
   test "establishes nothing — no session id comes back", %{conn: conn} do

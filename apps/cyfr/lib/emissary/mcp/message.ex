@@ -16,10 +16,13 @@ defmodule Emissary.MCP.Message do
       iex> Emissary.MCP.Message.decode(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
       {:ok, %Emissary.MCP.Message{type: :request, id: 1, method: "tools/list", params: nil}}
 
-      iex> Emissary.MCP.Message.encode_result(1, %{tools: []})
-      %{"jsonrpc" => "2.0", "id" => 1, "result" => %{tools: []}}
+      iex> encoded = Emissary.MCP.Message.encode_result(1, %{"tools" => []})
+      iex> encoded["result"]["resultType"]
+      "complete"
 
   """
+
+  alias Emissary.MCP.Protocol
 
   @type message_type :: :request | :notification | :response | :error
   @type t :: %__MODULE__{
@@ -190,14 +193,43 @@ defmodule Emissary.MCP.Message do
 
   @doc """
   Encode a successful result response.
+
+  Stamps the two things the specification requires of every result and that no
+  individual handler should have to remember: `resultType`, which tells a client
+  whether this is a finished answer or a request for more input, and the server's
+  identity under `_meta`.
+
+  Both are applied here rather than in `Emissary.MCP.Router` because the router
+  is not the only producer — the discovery path in `EmissaryWeb.MCPController`
+  encodes its own result — and a result that reaches the wire without a
+  `resultType` is invalid to a conforming client.
+
+  Any `_meta` a handler already built is preserved; the server identity is merged
+  into it, never over it.
   """
-  def encode_result(id, result) do
+  def encode_result(id, result, kind \\ :complete) do
     %{
       "jsonrpc" => @jsonrpc_version,
       "id" => id,
-      "result" => result
+      "result" => stamp_result(result, kind)
     }
   end
+
+  defp stamp_result(result, kind) when is_map(result) do
+    meta =
+      result
+      |> Map.get("_meta", %{})
+      |> Map.put(Protocol.meta_server_info_key(), Protocol.server_info())
+
+    result
+    |> Map.put("resultType", Protocol.result_type(kind))
+    |> Map.put("_meta", meta)
+  end
+
+  # A non-map result cannot carry the required fields. No handler produces one;
+  # passing it through unchanged beats corrupting it into a map that the caller
+  # did not ask for.
+  defp stamp_result(result, _kind), do: result
 
   @doc """
   Encode an error response.

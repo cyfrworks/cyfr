@@ -24,7 +24,7 @@ defmodule Emissary.IntegrationTest do
       init_conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"})
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
 
       assert json_response(init_conn, 200)
 
@@ -70,7 +70,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Multiple tool calls
@@ -104,7 +104,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [request_id] = get_resp_header(conn, "x-request-id")
@@ -115,7 +115,7 @@ defmodule Emissary.IntegrationTest do
 
       # Verify all required fields
       assert log.id == request_id
-      assert log.method == "ping"
+      assert log.method == "server/discover"
       assert log.status == "success"
       assert log.timestamp
       assert is_integer(log.duration_ms)
@@ -133,7 +133,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
@@ -177,7 +177,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
@@ -242,7 +242,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Drain initialize telemetry
@@ -286,7 +286,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Call 1: status all
@@ -348,7 +348,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Call with invalid action
@@ -381,7 +381,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Call unknown tool
@@ -414,7 +414,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Send invalid JSON-RPC version with session
@@ -426,7 +426,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "1.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       response = json_response(conn, 400)
@@ -441,7 +441,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Call notify with a non-existent endpoint (will fail delivery but test the structure)
@@ -487,7 +487,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Call notify without target
@@ -522,7 +522,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Call notify without event
@@ -584,7 +584,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Request ID should be in response header
@@ -602,7 +602,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [request_id] = get_resp_header(conn, "x-request-id")
@@ -628,7 +628,7 @@ defmodule Emissary.IntegrationTest do
             |> mcp_post(%{
               "jsonrpc" => "2.0",
               "id" => 1,
-              "method" => "ping"
+              "method" => "server/discover"
             })
 
           [request_id] = get_resp_header(response_conn, "x-request-id")
@@ -651,7 +651,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
@@ -698,7 +698,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       # Make a tool call that uses the context
@@ -737,7 +737,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [request_id] = get_resp_header(conn, "x-request-id")
@@ -762,7 +762,7 @@ defmodule Emissary.IntegrationTest do
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 1,
-          "method" => "ping"
+          "method" => "server/discover"
         })
 
       [init_request_id] = get_resp_header(init_conn, "x-request-id")
