@@ -18,10 +18,18 @@ defmodule Emissary.MCP.ExternalServer do
   use GenServer
   require Logger
 
+  alias Emissary.MCP.Protocol
+
   @default_timeout_ms 30_000
   @initialize_timeout_ms 15_000
   @registry Emissary.MCP.ExternalServerRegistry
   @version Mix.Project.config()[:version] || "0.1.0"
+
+  # The revision to offer a peer that turns out not to speak the current one.
+  # `2025-03-26` rather than the newest legacy revision because it is the widest
+  # common denominator among servers still on the handshake — including
+  # `apps/mcp-bridge`, which answers `2024-11-05` but accepts any version string.
+  @legacy_protocol_version "2025-03-26"
   @reinit_cooldown_ms 5_000
   # 10 MB
   @max_response_body_bytes 10_485_760
@@ -116,7 +124,11 @@ defmodule Emissary.MCP.ExternalServer do
       server_info: nil,
       request_id: 0,
       error: nil,
-      last_init_attempt: nil
+      last_init_attempt: nil,
+      # Which era this peer speaks. Determined once per connection and cached:
+      # it is a property of the server, not of a request, and re-probing on
+      # every call would double the traffic to a legacy peer forever.
+      era: nil
     }
 
     {:ok, state}
@@ -185,12 +197,36 @@ defmodule Emissary.MCP.ExternalServer do
       }
 
       case http_post(state, body) do
+        # An upstream server asking for more input is refused, deliberately.
+        #
+        # `input_required` is how a server requests sampling, elicitation or
+        # roots. Fulfilling one would mean an external server driving a model or
+        # a user prompt from inside a running chain — under whatever authority
+        # that chain holds. An upstream peer can already rewrite its tool
+        # descriptions at will; letting it also originate requests would hand it
+        # a channel into the caller rather than just influence over the text.
+        #
+        # Parsing it as a completed result would be worse than refusing: the
+        # guest would receive an interim answer as though it were final.
+        {:ok, %{"result" => %{"resultType" => "input_required"}}} ->
+          Logger.warning(
+            "[ExternalServer] #{state.name} returned input_required for #{tool_name}; refused"
+          )
+
+          {:reply,
+           {:error,
+            "#{state.name} asked for additional input, which external servers may not do."},
+           state}
+
         {:ok, %{"result" => result}} ->
           {:reply, {:ok, mask_credentials(result, state)}, state}
 
         {:ok, %{"error" => error}} ->
           message = mask_credentials(error["message"] || inspect(error), state)
           {:reply, {:error, message}, state}
+
+        {:legacy, state} ->
+          {:reply, {:error, "#{state.name} changed protocol era mid-connection"}, state}
 
         {:error, reason} ->
           {:reply, {:error, reason}, state}
@@ -246,18 +282,14 @@ defmodule Emissary.MCP.ExternalServer do
   # ============================================================================
 
   defp do_initialize(state) do
-    Logger.info("[ExternalServer] Initializing connection to #{state.name} at #{state.url}")
+    Logger.info("[ExternalServer] Connecting to #{state.name} at #{state.url}")
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond)}
 
     with {:ok, resolved_headers} <-
            resolve_headers(state.raw_headers, state.org_id, state.project_id),
          state <- %{state | headers: resolved_headers},
          :ok <- validate_server_url(state.url),
-         {:ok, init_result, state} <- send_initialize(state),
-         :ok <- send_initialized_notification(state),
-         {:ok, tools, state} <- send_tools_list(state) do
-      server_info = init_result["serverInfo"]
-
+         {:ok, tools, server_info, state} <- connect(state) do
       state = %{
         state
         | status: :ready,
@@ -267,7 +299,8 @@ defmodule Emissary.MCP.ExternalServer do
       }
 
       Logger.info(
-        "[ExternalServer] Connected to #{state.name}: #{length(tools)} tools discovered"
+        "[ExternalServer] Connected to #{state.name} (#{state.era}): " <>
+          "#{length(tools)} tools discovered"
       )
 
       {:ok, state}
@@ -281,6 +314,39 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
+  # Try the current protocol first; fall back to the handshake only when the
+  # answer says the peer cannot speak it.
+  #
+  # The fallback is not politeness — it is required. `apps/mcp-bridge` speaks
+  # `2024-11-05` and is registered as an ordinary external server by the bundled
+  # deployment, so a modern-only client would drop every stdio backend behind it.
+  defp connect(state) do
+    case send_tools_list(%{state | era: :modern}) do
+      {:ok, tools, state} ->
+        {:ok, tools, nil, state}
+
+      {:legacy, state} ->
+        Logger.info("[ExternalServer] #{state.name} speaks a pre-2026-07-28 revision")
+        legacy_connect(%{state | era: :legacy})
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp legacy_connect(state) do
+    with {:ok, init_result, state} <- send_initialize(state),
+         :ok <- send_initialized_notification(state),
+         {:ok, tools, state} <- send_tools_list(state) do
+      {:ok, tools, init_result["serverInfo"], state}
+    else
+      # A legacy peer has no fall-forward; a second `:legacy` here would mean the
+      # handshake itself was refused, which is a failure rather than an era.
+      {:legacy, state} -> {:error, "#{state.name} refused both protocol eras"}
+      other -> other
+    end
+  end
+
   defp send_initialize(state) do
     {request_id, state} = next_request_id(state)
 
@@ -289,7 +355,7 @@ defmodule Emissary.MCP.ExternalServer do
       "id" => request_id,
       "method" => "initialize",
       "params" => %{
-        "protocolVersion" => "2025-03-26",
+        "protocolVersion" => @legacy_protocol_version,
         "capabilities" => %{},
         "clientInfo" => %{
           "name" => "cyfr",
@@ -341,6 +407,9 @@ defmodule Emissary.MCP.ExternalServer do
       {:ok, %{"error" => error}} ->
         {:error, error["message"] || inspect(error)}
 
+      {:legacy, state} ->
+        {:legacy, state}
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -351,8 +420,11 @@ defmodule Emissary.MCP.ExternalServer do
   # ============================================================================
 
   defp http_post(state, body) do
+    body = maybe_add_meta(body, state.era)
+
     headers =
       [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"}]
+      |> Enum.concat(protocol_headers(body, state.era, state.tools))
       |> merge_headers(state.headers)
 
     case Jason.encode(body) do
@@ -375,10 +447,20 @@ defmodule Emissary.MCP.ExternalServer do
               parse_response(resp_body)
             end
 
-          {:ok, status, _headers, _resp_body} ->
-            # Never reflect the external server's response body — it may carry
-            # internal diagnostics or reflected credentials.
-            {:error, "HTTP #{status}"}
+          {:ok, status, _headers, resp_body} ->
+            # A 4xx while speaking the current revision is how a peer says it
+            # cannot. The specification is explicit that the body has to be read
+            # before falling back: a modern server also answers 4xx for an
+            # unsupported version or a bad header, and those mean "retry
+            # differently", not "you are talking to an older server".
+            #
+            # The body is inspected, never reflected — it may carry internal
+            # diagnostics or credentials echoed back at us.
+            if state.era == :modern and status in 400..499 and not modern_error?(resp_body) do
+              {:legacy, state}
+            else
+              {:error, "HTTP #{status}"}
+            end
 
           # SSRF/DNS validation failures are safe, descriptive strings.
           {:error, reason} when is_binary(reason) ->
@@ -393,6 +475,94 @@ defmodule Emissary.MCP.ExternalServer do
 
       {:error, _reason} ->
         {:error, "Request encoding failed"}
+    end
+  end
+
+  # Per-request metadata. There is no handshake in this revision, so a request
+  # that omits it is malformed rather than merely terse.
+  defp maybe_add_meta(body, :modern) do
+    params = Map.get(body, "params") || %{}
+
+    meta = %{
+      Protocol.meta_protocol_version_key() => Protocol.version(),
+      Protocol.meta_client_info_key() => %{"name" => "cyfr", "version" => @version},
+      Protocol.meta_client_capabilities_key() => %{}
+    }
+
+    Map.put(body, "params", Map.put(params, "_meta", meta))
+  end
+
+  defp maybe_add_meta(body, _era), do: body
+
+  # The routed fields, mirrored into headers so an intermediary can route without
+  # parsing the body. A conforming peer refuses a header that disagrees with the
+  # body, so both are derived from the same value.
+  defp protocol_headers(_body, era, _tools) when era != :modern, do: []
+
+  defp protocol_headers(body, :modern, tools) do
+    method = body["method"]
+
+    base = [
+      {"mcp-protocol-version", Protocol.version()},
+      {"mcp-method", method}
+    ]
+
+    case Protocol.named_subject(body) do
+      nil -> base
+      name -> [{"mcp-name", encode_header_value(name)} | base]
+    end ++ param_headers(body, tools)
+  end
+
+  # `x-mcp-header` lets a server ask for specific tool arguments to be mirrored
+  # into `Mcp-Param-*`. Supporting it is required of clients, and the value is
+  # taken from the arguments actually being sent so it cannot disagree with them.
+  defp param_headers(%{"method" => "tools/call", "params" => %{"name" => name} = params}, tools) do
+    case Enum.find(tools, &(&1["name"] == name)) do
+      %{"inputSchema" => %{} = schema} -> mirrored_params(schema, params["arguments"] || %{})
+      _ -> []
+    end
+  end
+
+  defp param_headers(_body, _tools), do: []
+
+  defp mirrored_params(schema, arguments) do
+    schema
+    |> Map.get("properties", %{})
+    |> Enum.flat_map(fn {property, spec} ->
+      with header when is_binary(header) <- is_map(spec) && spec["x-mcp-header"],
+           true <- Map.has_key?(arguments, property),
+           value when not is_nil(value) <- arguments[property] do
+        [{"mcp-param-" <> String.downcase(header), encode_header_value(to_header_value(value))}]
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  defp to_header_value(value) when is_binary(value), do: value
+  defp to_header_value(true), do: "true"
+  defp to_header_value(false), do: "false"
+  defp to_header_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp to_header_value(value), do: to_string(value)
+
+  # A value that cannot travel as a plain header goes in the specification's
+  # Base64 sentinel, which the receiving server decodes before comparing.
+  defp encode_header_value(value) do
+    safe? =
+      value != "" and value == String.trim(value) and
+        not String.starts_with?(value, "=?base64?") and
+        String.to_charlist(value) |> Enum.all?(&(&1 >= 0x20 and &1 <= 0x7E))
+
+    if safe?, do: value, else: "=?base64?" <> Base.encode64(value) <> "?="
+  end
+
+  # A modern server answers 4xx with a JSON-RPC error for an unsupported version,
+  # a missing capability or a header mismatch. Seeing one means the peer is
+  # current and the request was wrong — retry differently rather than fall back.
+  defp modern_error?(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{"code" => code}}} when is_integer(code) -> code <= -32020
+      _ -> false
     end
   end
 
