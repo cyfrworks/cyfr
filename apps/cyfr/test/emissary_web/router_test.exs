@@ -20,17 +20,20 @@ defmodule EmissaryWeb.RouterTest do
       assert mcp_post.plug_opts == :handle
     end
 
-    test "defines GET /mcp route to SSEController.stream" do
+    # GET opened the standalone notification stream and DELETE terminated a
+    # session; both were removed from the transport. They stay routed so the
+    # server can answer 405 — a route-miss 404 reads as "wrong URL" and sends an
+    # older client looking for an endpoint that does not exist elsewhere.
+    test "answers GET and DELETE /mcp with 405 rather than dropping the routes" do
       routes = Phoenix.Router.routes(Router)
 
-      sse_get =
-        Enum.find(routes, fn route ->
-          route.path == "/mcp" and route.verb == :get
-        end)
+      for verb <- [:get, :delete] do
+        route = Enum.find(routes, &(&1.path == "/mcp" and &1.verb == verb))
 
-      assert sse_get
-      assert sse_get.plug == EmissaryWeb.SSEController
-      assert sse_get.plug_opts == :stream
+        assert route, "GET/DELETE /mcp must stay routed so the server can say 405"
+        assert route.plug == EmissaryWeb.MCPController
+        assert route.plug_opts == :method_not_allowed
+      end
     end
 
     test "defines GET /api/health route to HealthController.check" do
@@ -88,7 +91,7 @@ defmodule EmissaryWeb.RouterTest do
 
       # Route exists and is properly configured
       assert sse_route
-      assert sse_route.plug == EmissaryWeb.SSEController
+      assert sse_route.plug == EmissaryWeb.MCPController
     end
   end
 end

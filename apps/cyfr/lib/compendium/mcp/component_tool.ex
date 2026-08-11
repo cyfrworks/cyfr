@@ -115,7 +115,6 @@ defmodule Compendium.MCP.ComponentTool do
   def handle(%Context{} = ctx, %{"action" => "pull"} = args) do
     with :ok <- Shared.require_permission(ctx, :component_manage) do
       progress_id = args["progress_id"]
-      session_id = ctx.session_id
 
       case args["reference"] do
         nil ->
@@ -132,7 +131,7 @@ defmodule Compendium.MCP.ComponentTool do
 
             case oci_reference do
               {:ok, ref} ->
-                broadcast_progress(ctx, progress_id, session_id, :pulling, "Pulling #{ref}...")
+                broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
                 result = do_oci_pull(ctx, ref)
 
                 case result do
@@ -140,7 +139,6 @@ defmodule Compendium.MCP.ComponentTool do
                     broadcast_progress(
                       ctx,
                       progress_id,
-                      session_id,
                       :complete,
                       "Pulled #{res[:component_ref] || ref}"
                     )
@@ -149,7 +147,7 @@ defmodule Compendium.MCP.ComponentTool do
 
                   {:error, reason} ->
                     Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
-                    broadcast_progress(ctx, progress_id, session_id, :error, "Pull failed")
+                    broadcast_progress(ctx, progress_id, :error, "Pull failed")
                 end
 
                 result
@@ -168,7 +166,6 @@ defmodule Compendium.MCP.ComponentTool do
       reference = args["reference"]
       registry = args["registry"] || default_registry()
       progress_id = args["progress_id"]
-      session_id = ctx.session_id
 
       cond do
         is_nil(reference) ->
@@ -198,7 +195,6 @@ defmodule Compendium.MCP.ComponentTool do
                   broadcast_progress(
                     ctx,
                     progress_id,
-                    session_id,
                     :pushing,
                     "Pushing #{reference} to #{registry}..."
                   )
@@ -208,7 +204,6 @@ defmodule Compendium.MCP.ComponentTool do
                       broadcast_progress(
                         ctx,
                         progress_id,
-                        session_id,
                         :complete,
                         "Pushed #{result[:oci_reference] || reference}"
                       )
@@ -217,7 +212,7 @@ defmodule Compendium.MCP.ComponentTool do
 
                     {:error, reason} ->
                       Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
-                      broadcast_progress(ctx, progress_id, session_id, :error, "Push failed")
+                      broadcast_progress(ctx, progress_id, :error, "Push failed")
                       {:error, reason}
                   end
               end
@@ -252,12 +247,10 @@ defmodule Compendium.MCP.ComponentTool do
   def handle(%Context{} = ctx, %{"action" => "register"} = args) do
     with :ok <- Shared.require_permission(ctx, :component_manage) do
       register_id = args["register_id"]
-      session_id = ctx.session_id
 
       broadcast_register_progress(
         ctx,
         register_id,
-        session_id,
         :scanning,
         "Scanning component directories..."
       )
@@ -275,7 +268,6 @@ defmodule Compendium.MCP.ComponentTool do
             broadcast_register_progress(
               ctx,
               register_id,
-              session_id,
               :registered,
               "Registered #{name}:#{version}"
             )
@@ -284,7 +276,6 @@ defmodule Compendium.MCP.ComponentTool do
             broadcast_register_progress(
               ctx,
               register_id,
-              session_id,
               :unchanged,
               "Unchanged #{name}:#{version}"
             )
@@ -298,7 +289,6 @@ defmodule Compendium.MCP.ComponentTool do
         broadcast_register_progress(
           ctx,
           register_id,
-          session_id,
           :pruning,
           "Pruned #{result.pruned} stale component(s)"
         )
@@ -307,17 +297,15 @@ defmodule Compendium.MCP.ComponentTool do
       broadcast_register_progress(
         ctx,
         register_id,
-        session_id,
         :checking_deps,
         "Checking dependencies..."
       )
 
-      dep_info = check_register_deps(ctx, result.components, register_id, session_id)
+      dep_info = check_register_deps(ctx, result.components, register_id)
 
       broadcast_register_progress(
         ctx,
         register_id,
-        session_id,
         :complete,
         "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
       )
@@ -631,7 +619,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # After registration, check newly registered formulas for missing dependencies.
   # Local deps (local/agent namespaces) produce warnings; published deps are auto-pulled.
-  defp check_register_deps(ctx, components, register_id, session_id) do
+  defp check_register_deps(ctx, components, register_id) do
     empty = %{
       pulled_dependencies: [],
       failed_pulls: [],
@@ -674,7 +662,7 @@ defmodule Compendium.MCP.ComponentTool do
         local_refs = Enum.map(local_missing, & &1[:dependency_ref])
 
         {pulled_refs, failed_refs} =
-          auto_pull_published_deps(ctx, published_missing, register_id, session_id)
+          auto_pull_published_deps(ctx, published_missing, register_id)
 
         %{
           pulled_dependencies: pulled_refs,
@@ -724,19 +712,19 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # Auto-pull published (non-local) missing dependencies via OCI.
-  defp auto_pull_published_deps(ctx, published_missing, register_id, session_id) do
+  defp auto_pull_published_deps(ctx, published_missing, register_id) do
     {pulled, failed, _visited} =
       Enum.reduce(published_missing, {[], [], MapSet.new()}, fn dep, {acc, failed_acc, visited} ->
         ref = dep[:dependency_ref]
         Logger.info("[Compendium.MCP] Auto-pulling dependency after register: #{ref}")
-        broadcast_register_progress(ctx, register_id, session_id, :pulling, "Pulling #{ref}...")
+        broadcast_register_progress(ctx, register_id, :pulling, "Pulling #{ref}...")
 
         case do_auto_pull(ctx, ref, visited) do
           {:ok, :cycle_skipped} ->
             {acc, failed_acc, visited}
 
           {:ok, _} ->
-            broadcast_register_progress(ctx, register_id, session_id, :pulled, "Pulled #{ref}")
+            broadcast_register_progress(ctx, register_id, :pulled, "Pulled #{ref}")
             {[ref | acc], failed_acc, MapSet.put(visited, ref)}
 
           {:error, reason} ->
@@ -745,7 +733,6 @@ defmodule Compendium.MCP.ComponentTool do
             broadcast_register_progress(
               ctx,
               register_id,
-              session_id,
               :pull_failed,
               "Failed to pull #{ref}"
             )
@@ -757,10 +744,11 @@ defmodule Compendium.MCP.ComponentTool do
     {Enum.reverse(pulled), Enum.reverse(failed)}
   end
 
-  # Broadcast register progress to both PubSub (Prism) and SSEBuffer (CLI).
-  defp broadcast_register_progress(_ctx, nil, _session_id, _phase, _message), do: :ok
+  # Broadcast register progress to both PubSub (the console) and the MCP
+  # response stream (the CLI).
+  defp broadcast_register_progress(_ctx, nil, _phase, _message), do: :ok
 
-  defp broadcast_register_progress(ctx, register_id, session_id, phase, message) do
+  defp broadcast_register_progress(ctx, register_id, phase, message) do
     payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
 
     case Phoenix.PubSub.broadcast(
@@ -775,16 +763,11 @@ defmodule Compendium.MCP.ComponentTool do
         Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
     end
 
-    if session_id do
-      notification =
-        Emissary.MCP.Message.encode_notification("notifications/progress", %{
-          register_id: register_id,
-          phase: phase,
-          message: message
-        })
-
-      Emissary.MCP.SSEBuffer.push(session_id, notification)
-    end
+    Emissary.MCP.Progress.emit(ctx, %{
+      "register_id" => register_id,
+      "phase" => phase,
+      "message" => message
+    })
 
     :ok
   end
@@ -796,11 +779,11 @@ defmodule Compendium.MCP.ComponentTool do
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
   end
 
-  # Broadcast generic progress to both PubSub (Prism) and SSEBuffer (CLI).
-  # Used by pull and publish handlers.
-  defp broadcast_progress(_ctx, nil, _session_id, _phase, _message), do: :ok
+  # Broadcast generic progress to both PubSub (the console) and the MCP response
+  # stream (the CLI). Used by pull and publish handlers.
+  defp broadcast_progress(_ctx, nil, _phase, _message), do: :ok
 
-  defp broadcast_progress(ctx, progress_id, session_id, phase, message) do
+  defp broadcast_progress(ctx, progress_id, phase, message) do
     payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
 
     case Phoenix.PubSub.broadcast(
@@ -815,16 +798,11 @@ defmodule Compendium.MCP.ComponentTool do
         Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
     end
 
-    if session_id do
-      notification =
-        Emissary.MCP.Message.encode_notification("notifications/progress", %{
-          progress_id: progress_id,
-          phase: phase,
-          message: message
-        })
-
-      Emissary.MCP.SSEBuffer.push(session_id, notification)
-    end
+    Emissary.MCP.Progress.emit(ctx, %{
+      "progress_id" => progress_id,
+      "phase" => phase,
+      "message" => message
+    })
 
     :ok
   end

@@ -28,13 +28,10 @@ configure secrets and policies for WASM components.`,
 		client := newClient()
 		registerID := randomHex(8)
 
-		cleanup := streamProgress(client, "register_id", registerID)
-		defer cleanup()
-
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallToolWithProgress("component", map[string]any{
 			"action":      "register",
 			"register_id": registerID,
-		})
+		}, progressPrinter())
 		if err != nil {
 			handleToolError(err, "Register failed")
 		}

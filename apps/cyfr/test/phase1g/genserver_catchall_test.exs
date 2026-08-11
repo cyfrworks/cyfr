@@ -13,7 +13,6 @@ defmodule Phase1g.GenServerCatchallTest do
   @unexpected_msg :unexpected_test_message
 
   @genservers [
-    {Emissary.MCP.SSEBuffer, "SSEBuffer"},
     {Emissary.MCP.ToolRegistry, "ToolRegistry"},
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},

@@ -72,7 +72,7 @@ defmodule Cyfr.Application do
       {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
       Emissary.MCP.ToolRegistry,
       Emissary.MCP.ResourceRegistry,
-      Emissary.MCP.SSEBuffer,
+      Emissary.MCP.Progress,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       Emissary.MCP.RunningTasks,
       EmissaryWeb.Plugs.PersonalNamespaceCache,

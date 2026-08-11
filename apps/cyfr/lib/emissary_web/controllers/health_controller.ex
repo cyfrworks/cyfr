@@ -69,7 +69,7 @@ defmodule EmissaryWeb.HealthController do
       storage: check_storage(),
       tool_registry: check_process(Emissary.MCP.ToolRegistry),
       resource_registry: check_process(Emissary.MCP.ResourceRegistry),
-      sse_buffer: check_process(Emissary.MCP.SSEBuffer)
+      progress: check_process(Emissary.MCP.Progress.Registry)
     }
   end
 

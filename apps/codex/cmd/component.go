@@ -267,14 +267,11 @@ var pullCmd = &cobra.Command{
 		normalized := resolveComponentRef(client, args[0])
 		progressID := randomHex(8)
 
-		cleanup := streamProgress(client, "progress_id", progressID)
-		defer cleanup()
-
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallToolWithProgress("component", map[string]any{
 			"action":      "pull",
 			"reference":   normalized,
 			"progress_id": progressID,
-		})
+		}, progressPrinter())
 		if err != nil {
 			handleToolError(err, "Pull failed")
 		}
@@ -308,9 +305,6 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 
 		progressID := randomHex(8)
 
-		cleanup := streamProgress(client, "progress_id", progressID)
-		defer cleanup()
-
 		toolArgs := map[string]any{
 			"action":      "push",
 			"reference":   normalized,
@@ -319,7 +313,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
 			toolArgs["registry"] = registry
 		}
-		result, err := client.CallTool("component", toolArgs)
+		result, err := client.CallToolWithProgress("component", toolArgs, progressPrinter())
 		if err != nil {
 			handleToolError(err, "Push failed")
 		}

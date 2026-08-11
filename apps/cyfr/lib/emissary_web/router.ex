@@ -125,13 +125,15 @@ defmodule EmissaryWeb.Router do
     post "/submit", LegalAcceptController, :submit
   end
 
-  # MCP endpoint - Model Context Protocol
-  # Single endpoint path for POST (requests) and GET (SSE) per MCP 2025-11-25 spec
+  # MCP endpoint. POST is the only verb this revision defines: a request's own
+  # response stream carries its progress, so there is no standalone stream to
+  # open, and there is no session to terminate.
   scope "/mcp", EmissaryWeb do
     pipe_through :mcp
 
     post "/", MCPController, :handle
-    get "/", SSEController, :stream
+    get "/", MCPController, :method_not_allowed
+    delete "/", MCPController, :method_not_allowed
   end
 
   # Tincture serving — auth via query params (token, MCP session, API key)

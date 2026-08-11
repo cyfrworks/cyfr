@@ -22,7 +22,11 @@ defmodule Cyfr.RouteAuthInventoryTest do
   @classified %{
     # EmissaryWeb — chokepoint-authenticated
     {:post, "/mcp"} => :mcp_session,
+    # GET and DELETE reach only `method_not_allowed`, which answers 405 without
+    # consulting the caller. They still run the pipeline, so they authenticate
+    # like any other MCP route — but nothing behind them can act on that.
     {:get, "/mcp"} => :mcp_session,
+    {:delete, "/mcp"} => :mcp_session,
     {:get, "/api/executions/:id/events"} => :mcp_session,
     {:post, "/hooks/:slug"} => :webhook_hmac,
 

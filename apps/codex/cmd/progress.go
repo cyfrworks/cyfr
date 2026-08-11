@@ -3,7 +3,6 @@ package cmd
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -17,50 +16,23 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// streamProgress opens an SSE stream and prints progress notifications
-// matching the given idField/idValue to stderr. Returns a cleanup function.
-func streamProgress(client *mcp.Client, idField, idValue string) func() {
-	stream, err := client.OpenStream("")
-	if err != nil {
-		// Non-fatal: progress just won't be shown
-		return func() {}
-	}
+// progressPrinter returns a handler that prints progress phases to stderr.
+//
+// Progress arrives on the response stream of the call that produced it, so
+// there is nothing to open, nothing to close, and no id to match against: every
+// notification the handler sees belongs to this request. The idField/idValue
+// filtering the previous implementation needed existed only because a single
+// shared stream carried every caller's progress at once.
+//
+// stderr rather than stdout: the command's actual result goes to stdout and is
+// routinely piped into jq.
+func progressPrinter() mcp.ProgressFunc {
+	return func(params map[string]any) {
+		phase, _ := params["phase"].(string)
+		message, _ := params["message"].(string)
 
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		for event := range stream.Events {
-			var msg struct {
-				Method string          `json:"method"`
-				Params json.RawMessage `json:"params"`
-			}
-			if err := json.Unmarshal(event.Data, &msg); err != nil {
-				continue
-			}
-			if msg.Method != "notifications/progress" {
-				continue
-			}
-
-			var params map[string]any
-			if err := json.Unmarshal(msg.Params, &params); err != nil {
-				continue
-			}
-
-			if id, ok := params[idField].(string); !ok || id != idValue {
-				continue
-			}
-
-			phase, _ := params["phase"].(string)
-			message, _ := params["message"].(string)
-			if phase != "" && message != "" {
-				fmt.Fprintf(os.Stderr, "[%s] %s\n", phase, message)
-			}
+		if phase != "" && message != "" {
+			fmt.Fprintf(os.Stderr, "[%s] %s\n", phase, message)
 		}
-	}()
-
-	return func() {
-		stream.Close()
-		<-done
 	}
 }

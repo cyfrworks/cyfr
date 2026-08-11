@@ -122,7 +122,6 @@ defmodule Locus.MCP do
       when is_binary(reference) do
     with :ok <- require_permission(ctx, :execute) do
       build_id = args["build_id"]
-      session_id = ctx.session_id
 
       build_meta = %{
         build_id: build_id,
@@ -132,7 +131,7 @@ defmodule Locus.MCP do
         user_id: ctx.user_id
       }
 
-      on_progress = build_progress_callback(build_id, session_id, ctx, build_meta)
+      on_progress = build_progress_callback(build_id, ctx, build_meta)
 
       :telemetry.execute(
         [:cyfr, :locus, :build, :start],
@@ -412,7 +411,7 @@ defmodule Locus.MCP do
     end)
   end
 
-  defp build_progress_callback(build_id, session_id, ctx, build_meta) do
+  defp build_progress_callback(build_id, ctx, build_meta) do
     fn phase, message ->
       :telemetry.execute(
         [:cyfr, :locus, :build, :progress],
@@ -428,16 +427,11 @@ defmodule Locus.MCP do
            %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
         )
 
-        if session_id do
-          notification =
-            Emissary.MCP.Message.encode_notification("notifications/progress", %{
-              build_id: build_id,
-              phase: phase,
-              message: message
-            })
-
-          Emissary.MCP.SSEBuffer.push(session_id, notification)
-        end
+        Emissary.MCP.Progress.emit(ctx, %{
+          "build_id" => build_id,
+          "phase" => phase,
+          "message" => message
+        })
       end
 
       :ok

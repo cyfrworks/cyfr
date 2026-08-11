@@ -3,29 +3,31 @@
 
 defmodule EmissaryWeb.MCPController do
   @moduledoc """
-  MCP HTTP controller implementing Streamable HTTP transport.
+  MCP HTTP controller implementing the Streamable HTTP transport.
 
-  Endpoints:
-  - POST /mcp - Handle MCP requests/notifications
+  `POST /mcp` is the whole endpoint. `GET` and `DELETE` are routed only so they
+  can answer `405` to clients written against the previous transport.
 
-  ## Request Format
+  ## Request
 
-  POST body must be valid JSON-RPC 2.0:
-  - Single request or notification (batching not supported per 2025-11-25 spec)
-
-  ## Headers
-
-  - `Content-Type: application/json` (required)
-  - `Accept: application/json, text/event-stream` (recommended)
-  - `Authorization: Bearer <credential>` (an API key or a session token)
-  - `MCP-Protocol-Version: 2025-11-25` (returned in responses)
-  - `X-Request-Id: req_<uuid7>` (returned in responses for correlation)
+  One JSON-RPC 2.0 request or notification per POST — never a batch. Every
+  request authenticates and declares its own protocol version and client
+  capabilities in `params._meta`, so there is no handshake and nothing to
+  establish. `EmissaryWeb.Plugs.MCPSession` enforces that before this controller
+  runs.
 
   ## Response
 
-  Every request authenticates and declares its own protocol version, so there
-  is no handshake. Returns a JSON-RPC response with `MCP-Protocol-Version` and
-  `X-Request-Id` headers.
+  Two shapes, chosen by the client:
+
+    * **`application/json`** — one object. The default.
+    * **`text/event-stream`** — when the request carries `_meta.progressToken`:
+      any `notifications/progress` the work produced, then the response, then
+      close. This is what replaced the standalone `GET /mcp` stream; progress now
+      belongs to the request that caused it rather than to a connection the
+      client had to open separately and correlate by hand.
+
+  Both carry `MCP-Protocol-Version` and `X-Request-Id`.
 
   ## Telemetry
 
@@ -37,7 +39,8 @@ defmodule EmissaryWeb.MCPController do
   use EmissaryWeb, :controller
 
   alias Emissary.MCP
-  alias Emissary.MCP.{Message, RequestLog, Session}
+  alias Emissary.MCP.{Message, Progress, RequestLog, Session}
+  require Logger
   alias Emissary.UUID7
 
   @protocol_version Emissary.MCP.Protocol.version()
@@ -83,6 +86,28 @@ defmodule EmissaryWeb.MCPController do
     handle_message(conn, session, params, request_id, start_time)
   end
 
+  @doc """
+  Answer `GET` and `DELETE` on the MCP endpoint with `405`.
+
+  Both were part of the previous transport — `GET` opened a standalone
+  notification stream, `DELETE` terminated a session — and a client written
+  against that revision will still try them. `405` tells it plainly that the verb
+  is gone, which a route-miss `404` does not: `404` reads as "wrong URL", and
+  sends the client looking for an endpoint elsewhere.
+  """
+  def method_not_allowed(conn, _params) do
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header("allow", "POST, OPTIONS")
+    |> EmissaryWeb.MCPError.send(
+      405,
+      :invalid_request,
+      "#{conn.method} is not supported on the MCP endpoint. " <>
+        "This revision uses POST only: a request's progress travels on its own " <>
+        "response stream, and there is no session to terminate."
+    )
+  end
+
   defp handle_message(conn, session, params, request_id, start_time) do
     method = params["method"]
     tool = extract_tool(params)
@@ -102,6 +127,12 @@ defmodule EmissaryWeb.MCPController do
 
     routed_to = determine_routed_to(tool, action)
 
+    # A client opts into progress by sending `_meta.progressToken`. Registering
+    # before dispatch, not after, is what makes it race-free: the work runs in a
+    # task and can report before this process would otherwise get around to it.
+    progress_token = progress_token(params)
+    if progress_token, do: Progress.listen(request_id, progress_token)
+
     case MCP.handle_message(session, params) do
       {:ok, result, id} ->
         duration_ms = duration_ms(start_time)
@@ -120,7 +151,7 @@ defmodule EmissaryWeb.MCPController do
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
-        |> json(MCP.encode_result(id, result))
+        |> respond(MCP.encode_result(id, result), progress_token)
 
       :ok ->
         # Notification - no response needed
@@ -195,6 +226,64 @@ defmodule EmissaryWeb.MCPController do
         |> put_resp_header("x-request-id", request_id)
         |> put_status(http_status_for(code))
         |> json(MCP.encode_error(nil, code, message))
+    end
+  end
+
+  # ============================================================================
+  # Response modes
+  # ============================================================================
+
+  # `progressToken` is the client's opt-in. It is the only signal: a server that
+  # streamed whenever it felt like it would break clients that asked for one JSON
+  # object, and the specification makes the choice the client's to make.
+  defp progress_token(%{"params" => %{"_meta" => %{"progressToken" => token}}})
+       when not is_nil(token),
+       do: token
+
+  defp progress_token(_params), do: nil
+
+  # Without a token, one JSON object — the ordinary case, and the cheap one.
+  defp respond(conn, payload, nil), do: json(conn, payload)
+
+  # With a token, an SSE stream carrying whatever progress arrived while the work
+  # ran, then the response, then close. Everything queued in this process's
+  # mailbox is drained first: the work has already finished by the time we get
+  # here, so anything still in flight is progress that was reported before the
+  # result and must be delivered before it.
+  defp respond(conn, payload, _token) do
+    conn
+    |> put_resp_header("content-type", "text/event-stream")
+    |> put_resp_header("cache-control", "no-cache")
+    # Reverse proxies buffer by default, which turns a progress stream into one
+    # delivery at the end — the exact thing the client asked to avoid.
+    |> put_resp_header("x-accel-buffering", "no")
+    |> send_chunked(200)
+    |> drain_progress()
+    |> sse_event(payload)
+  end
+
+  defp drain_progress(conn) do
+    receive do
+      {:mcp_progress, notification} ->
+        conn |> sse_event(notification) |> drain_progress()
+    after
+      0 -> conn
+    end
+  end
+
+  defp sse_event(conn, payload) do
+    case Jason.encode(payload) do
+      {:ok, encoded} ->
+        case chunk(conn, "data: #{encoded}\n\n") do
+          {:ok, conn} -> conn
+          # The client hung up mid-stream. Closing is the cancellation signal in
+          # this transport, so there is nothing to report and nobody to report to.
+          {:error, _reason} -> conn
+        end
+
+      {:error, reason} ->
+        Logger.error("[MCPController] progress payload not encodable: #{inspect(reason)}")
+        conn
     end
   end
 

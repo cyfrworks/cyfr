@@ -172,14 +172,14 @@ func encodeHeaderValue(v string) string {
 // There is no handshake, so every request declares its own protocol version,
 // client identity and capabilities. Params may be a struct or a map, so it is
 // round-tripped through JSON to get a map to add `_meta` to.
-func withMeta(params any) map[string]any {
+func withMeta(params any, progressToken string) map[string]any {
 	m := map[string]any{}
 	if params != nil {
 		if b, err := json.Marshal(params); err == nil {
 			_ = json.Unmarshal(b, &m)
 		}
 	}
-	m["_meta"] = map[string]any{
+	meta := map[string]any{
 		"io.modelcontextprotocol/protocolVersion": protocolVersion,
 		"io.modelcontextprotocol/clientInfo": map[string]any{
 			"name":    "cyfr",
@@ -187,11 +187,26 @@ func withMeta(params any) map[string]any {
 		},
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 	}
+	// Opting in is what makes the server answer with a stream instead of a
+	// single object, so it is only sent when the caller can consume one.
+	if progressToken != "" {
+		meta["progressToken"] = progressToken
+	}
+	m["_meta"] = meta
 	return m
 }
 
 // CallTool invokes an MCP tool and returns the raw result.
 func (c *Client) CallTool(name string, args map[string]any) (map[string]any, error) {
+	return c.CallToolWithProgress(name, args, nil)
+}
+
+// CallToolWithProgress invokes a tool and reports progress as it arrives.
+//
+// Progress travels on this request's own response stream. There is no separate
+// stream to open and no id to correlate by hand: passing a handler is what opts
+// in, and every notification on the stream belongs to this call.
+func (c *Client) CallToolWithProgress(name string, args map[string]any, onProgress ProgressFunc) (map[string]any, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
@@ -205,7 +220,12 @@ func (c *Client) CallTool(name string, args map[string]any) (map[string]any, err
 		},
 	}
 
-	resp, err := c.doRequest(req)
+	progressToken := ""
+	if onProgress != nil {
+		progressToken = fmt.Sprintf("prog-%d", req.ID)
+	}
+
+	resp, err := c.doRequestOnce(req, progressToken, onProgress)
 	if err != nil {
 		return nil, err
 	}
@@ -328,11 +348,15 @@ func (c *Client) doRequest(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	// No retry-on-expiry: the credential authenticates each request on its own,
 	// so a rejected one will be rejected again. A revoked or expired token needs
 	// `cyfr login`, not a re-handshake.
-	return c.doRequestOnce(req)
+	return c.doRequestOnce(req, "", nil)
 }
 
-func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
-	req.Params = withMeta(req.Params)
+// ProgressFunc receives the params of a notifications/progress sent while a
+// request was being served.
+type ProgressFunc func(params map[string]any)
+
+func (c *Client) doRequestOnce(req JSONRPCRequest, progressToken string, onProgress ProgressFunc) (*JSONRPCResponse, error) {
+	req.Params = withMeta(req.Params, progressToken)
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -385,10 +409,66 @@ func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 		return nil, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, string(respBody))
 	}
 
+	// The server answers a progress-opted request with an SSE stream: the
+	// notifications it produced while working, then the response. Both shapes are
+	// valid for the same request, so the content type decides how to read it.
+	if strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream") {
+		return parseStreamedResponse(respBody, onProgress)
+	}
+
 	var resp JSONRPCResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
 
 	return &resp, nil
+}
+
+// parseStreamedResponse walks the SSE frames of a response stream, handing each
+// notification to onProgress and returning the response that terminates it.
+func parseStreamedResponse(body []byte, onProgress ProgressFunc) (*JSONRPCResponse, error) {
+	var last *JSONRPCResponse
+
+	for _, frame := range strings.Split(string(body), "\n\n") {
+		var payload []byte
+		for _, line := range strings.Split(frame, "\n") {
+			if data, ok := strings.CutPrefix(line, "data: "); ok {
+				payload = append(payload, data...)
+			}
+		}
+		if len(payload) == 0 {
+			continue
+		}
+
+		// A notification has a method and no id; the response has an id.
+		var probe struct {
+			Method string `json:"method"`
+			ID     any    `json:"id"`
+		}
+		if json.Unmarshal(payload, &probe) != nil {
+			continue
+		}
+
+		if probe.ID == nil && probe.Method != "" {
+			if onProgress != nil && probe.Method == "notifications/progress" {
+				var notif struct {
+					Params map[string]any `json:"params"`
+				}
+				if json.Unmarshal(payload, &notif) == nil {
+					onProgress(notif.Params)
+				}
+			}
+			continue
+		}
+
+		var resp JSONRPCResponse
+		if json.Unmarshal(payload, &resp) == nil {
+			last = &resp
+		}
+	}
+
+	if last == nil {
+		return nil, fmt.Errorf("response stream ended without a response")
+	}
+	return last, nil
 }

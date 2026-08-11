@@ -42,16 +42,13 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
 		normalized := resolveComponentRef(client, args[0])
 		buildID := randomHex(8)
 
-		cleanup := streamProgress(client, "build_id", buildID)
-		defer cleanup()
-
 		fmt.Fprintf(os.Stderr, "Compiling %s...\n", normalized)
 
-		result, err := client.CallTool("build", map[string]any{
+		result, err := client.CallToolWithProgress("build", map[string]any{
 			"action":    "compile",
 			"reference": normalized,
 			"build_id":  buildID,
-		})
+		}, progressPrinter())
 		if err != nil {
 			handleToolError(err, "Compile failed")
 		}
