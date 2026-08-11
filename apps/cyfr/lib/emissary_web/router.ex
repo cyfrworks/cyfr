@@ -29,7 +29,11 @@ defmodule EmissaryWeb.Router do
 
   pipeline :mcp do
     plug :accepts, ["json", "event-stream"]
-    plug EmissaryWeb.Plugs.CORS
+    # POST is the only verb this protocol revision defines for the MCP endpoint.
+    # The GET below is the retired standalone SSE stream and is on its way out;
+    # `/api/executions/:id/events` also pipes through here and is a GET, so the
+    # verb list stays until both are settled.
+    plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
     plug EmissaryWeb.Plugs.MCPOrigin
     # Before MCPSession so unauthenticated floods never touch session/DB
     # state. Also covers /api/executions/:id/events (pipes through :mcp).
@@ -140,7 +144,8 @@ defmodule EmissaryWeb.Router do
 
   pipeline :tincture_invoke do
     plug :accepts, ["json"]
-    plug EmissaryWeb.Plugs.CORS
+    # POST for invoke, GET for the cross-origin `/t/access-token` mint.
+    plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
     # Before the rate limiter so a 429 is scrubbed too — it is logged like any
     # other response, and it never reaches the action that reads the credential.
     plug EmissaryWeb.Plugs.ScrubTinctureCredentials

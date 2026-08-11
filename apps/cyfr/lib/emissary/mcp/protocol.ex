@@ -41,6 +41,43 @@ defmodule Emissary.MCP.Protocol do
   @spec meta_client_capabilities_key() :: String.t()
   def meta_client_capabilities_key, do: @meta_client_capabilities
 
+  # Headers a conforming client sends on every request, lower-cased because
+  # `Plug.Conn` down-cases and RFC 9110 makes field names case-insensitive.
+  #
+  # This list is the reason the constant lives here rather than in the plug that
+  # validates it: the CORS preflight has to advertise exactly what the plug
+  # demands, and when the two were written apart the preflight fell behind and
+  # locked every cross-origin client out.
+  @request_headers ~w(mcp-protocol-version mcp-method mcp-name)
+
+  # Headers a client must be able to read off the response. `x-request-id` is
+  # CYFR's, not the specification's, but a client that cannot read it cannot
+  # correlate a failure with a server log.
+  @exposed_headers ~w(mcp-protocol-version x-request-id)
+
+  # `x-mcp-header` mirrors a tool argument into `Mcp-Param-{Name}`. A preflight
+  # cannot advertise a prefix, so each one would have to be named explicitly —
+  # see `Emissary.MCP.ToolProvider` and the CORS drift test.
+  @param_header_prefix "mcp-param-"
+
+  @doc """
+  Request headers required on every MCP request, lower-cased.
+
+  `mcp-name` is required only for methods that name a subject (`named_subject/1`),
+  but it appears here unconditionally: a preflight advertises what a request
+  *may* carry, not what this particular request does.
+  """
+  @spec request_headers() :: [String.t()]
+  def request_headers, do: @request_headers
+
+  @doc "Response headers a client must be able to read."
+  @spec exposed_headers() :: [String.t()]
+  def exposed_headers, do: @exposed_headers
+
+  @doc "Prefix for headers mirrored from tool arguments by `x-mcp-header`."
+  @spec param_header_prefix() :: String.t()
+  def param_header_prefix, do: @param_header_prefix
+
   @doc """
   The protocol version declared in a request's `params._meta`, or `nil`.
   """

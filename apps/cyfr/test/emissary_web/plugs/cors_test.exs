@@ -6,7 +6,23 @@ defmodule EmissaryWeb.Plugs.CORSTest do
   import Plug.Test
   import Plug.Conn
 
+  alias Emissary.MCP.Protocol
   alias EmissaryWeb.Plugs.CORS
+
+  # An OPTIONS preflight against the real plug, wildcard origin.
+  defp preflight_headers(header) do
+    Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
+
+    conn(:options, "/mcp")
+    |> put_req_header("origin", "https://example.com")
+    |> CORS.call(CORS.init([]))
+    |> get_resp_header(header)
+    |> List.first()
+    |> to_string()
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&String.downcase/1)
+  end
 
   setup do
     original = Application.get_env(:cyfr, :cors_allowed_origins)
@@ -30,7 +46,9 @@ defmodule EmissaryWeb.Plugs.CORSTest do
       assert get_resp_header(conn, "access-control-allow-headers") |> List.first() =~
                "content-type"
 
-      assert get_resp_header(conn, "access-control-expose-headers") == ["mcp-session-id"]
+      assert get_resp_header(conn, "access-control-expose-headers") ==
+               [Enum.join(Protocol.exposed_headers(), ", ")]
+
       assert conn.halted
     end
 
@@ -59,6 +77,75 @@ defmodule EmissaryWeb.Plugs.CORSTest do
     end
   end
 
+  # The regression this guards: `Mcp-Method` / `Mcp-Name` / `MCP-Protocol-Version`
+  # became mandatory, `MCPSession` began rejecting requests that omit them, and
+  # the preflight was not updated — so every cross-origin client failed in the
+  # browser before reaching any code that could report why. The bundled compose
+  # deployment proxies the PWA same-origin, so nothing preflights there and
+  # nothing caught it.
+  describe "preflight advertises every header the server requires" do
+    test "allow-headers is a superset of Protocol.request_headers/0" do
+      advertised = preflight_headers("access-control-allow-headers")
+      missing = Protocol.request_headers() -- advertised
+
+      assert missing == [],
+             """
+             These headers are required by EmissaryWeb.Plugs.MCPSession but are not
+             advertised in the CORS preflight, so a cross-origin client cannot send
+             them and the browser refuses the request:
+
+               #{Enum.join(missing, "\n  ")}
+
+             Both sides read Emissary.MCP.Protocol.request_headers/0 — add it there.
+             """
+    end
+
+    test "allow-headers carries the credential and content headers a client needs" do
+      advertised = preflight_headers("access-control-allow-headers")
+
+      for header <- ~w(content-type authorization accept) do
+        assert header in advertised
+      end
+    end
+
+    test "expose-headers matches Protocol.exposed_headers/0" do
+      assert preflight_headers("access-control-expose-headers") == Protocol.exposed_headers()
+    end
+
+    test "DELETE is not advertised — no mount routes it" do
+      refute "delete" in preflight_headers("access-control-allow-methods")
+    end
+
+    test "each mount advertises only the verbs it routes" do
+      Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
+
+      methods = fn opts ->
+        conn(:options, "/mcp")
+        |> put_req_header("origin", "https://example.com")
+        |> CORS.call(CORS.init(opts))
+        |> get_resp_header("access-control-allow-methods")
+        |> List.first()
+        |> String.split(", ")
+        |> Enum.sort()
+      end
+
+      assert methods.(methods: ~w(POST)) == ["OPTIONS", "POST"]
+      assert methods.(methods: ~w(GET POST)) == ["GET", "OPTIONS", "POST"]
+      # OPTIONS is appended, never duplicated.
+      assert methods.(methods: ~w(POST OPTIONS)) == ["OPTIONS", "POST"]
+    end
+
+    # `mcp-session-id` and `last-event-id` are still advertised on purpose:
+    # `Sanctum.TinctureAuth` still reads the former and `SSEController` the
+    # latter. They come off this list in the change that deletes those readers.
+    test "credential headers still in use are still advertised" do
+      advertised = preflight_headers("access-control-allow-headers")
+
+      assert "mcp-session-id" in advertised
+      assert "last-event-id" in advertised
+    end
+  end
+
   describe "non-OPTIONS requests" do
     test "adds CORS headers without halting" do
       Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
@@ -70,7 +157,10 @@ defmodule EmissaryWeb.Plugs.CORSTest do
 
       refute conn.halted
       assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
-      assert get_resp_header(conn, "access-control-expose-headers") == ["mcp-session-id"]
+
+      assert get_resp_header(conn, "access-control-expose-headers") ==
+               [Enum.join(Protocol.exposed_headers(), ", ")]
+
       assert get_resp_header(conn, "vary") == ["Origin"]
     end
 
