@@ -10,6 +10,17 @@ defmodule Emissary.MCP.ToolRegistryTest.CrashingProvider do
   def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
 end
 
+defmodule Emissary.MCP.ToolRegistryTest.BlockingProvider do
+  @moduledoc false
+  # A provider that stays in flight. It announces its own pid to the test
+  # process first, so a test can assert on the dispatcher's bookkeeping while
+  # the call is provably still running instead of guessing at a delay.
+  def handle(_tool, _ctx, args) do
+    send(Map.fetch!(args, :reply_to), {:handler_running, self()})
+    Process.sleep(:infinity)
+  end
+end
+
 defmodule Emissary.MCP.ToolRegistryTest do
   @moduledoc """
   Tests for the MCP tool registry.
@@ -294,8 +305,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
         scope: :project,
         auth_method: nil,
         api_key_type: nil,
-        request_id: nil,
-        session_id: nil
+        request_id: nil
       }
 
       # The tool should handle nil user_id gracefully
@@ -363,6 +373,61 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
   end
 
+  describe "cancellation tracking" do
+    @blocking_tool "cancellation_test_tool"
+
+    defp register_blocking_tool do
+      Arca.Cache.put(
+        {:mcp_tool, @blocking_tool},
+        {Emissary.MCP.ToolRegistryTest.BlockingProvider, %{requires_auth: false}},
+        :timer.minutes(1)
+      )
+
+      on_exit(fn -> Arca.Cache.invalidate({:mcp_tool, @blocking_tool}) end)
+    end
+
+    # The transport cancels a request by request id when its caller closes the
+    # response stream, so in-flight work has to be findable under that same id.
+    # It used to be registered under the *client-supplied* JSON-RPC id, which
+    # two callers can trivially pick the same value for.
+    test "in-flight work is registered under the context's request id, and cancellable" do
+      register_blocking_tool()
+      ctx = %{Sanctum.TestContext.local() | request_id: "req_tracked"}
+      caller = self()
+
+      spawn(fn ->
+        args = %{reply_to: caller}
+        send(caller, {:result, ToolRegistry.call_external(@blocking_tool, ctx, args)})
+      end)
+
+      # The handler reports its pid and then blocks, so the call is provably
+      # still in flight for the assertions below — no sleeping, no racing.
+      assert_receive {:handler_running, handler_pid}, 5_000
+
+      assert [{"req_tracked", ^handler_pid}] =
+               :ets.lookup(Emissary.MCP.RunningTasks, "req_tracked")
+
+      assert :ok = Emissary.MCP.RunningTasks.cancel("req_tracked")
+
+      # Killing the handler surfaces to the caller as a typed error rather than
+      # taking the dispatcher down with it.
+      assert_receive {:result, {:error, {:exit, message}}}, 5_000
+      assert message =~ "cancelled"
+
+      :sys.get_state(Emissary.MCP.RunningTasks)
+      assert {:error, :not_found} = Emissary.MCP.RunningTasks.cancel("req_tracked")
+    end
+
+    test "the entry is cleaned up when the work finishes on its own" do
+      ctx = %{Sanctum.TestContext.local() | request_id: "req_finished"}
+
+      {:ok, _} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
+
+      :sys.get_state(Emissary.MCP.RunningTasks)
+      assert {:error, :not_found} = Emissary.MCP.RunningTasks.cancel("req_finished")
+    end
+  end
+
   describe "provider resilience" do
     test "provider exception is caught and returns error" do
       ctx = Sanctum.TestContext.local()
@@ -420,8 +485,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
         scope: nil,
         auth_method: nil,
         api_key_type: nil,
-        request_id: nil,
-        session_id: nil
+        request_id: nil
       }
 
       # Should not crash the registry

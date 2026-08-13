@@ -43,7 +43,10 @@ defmodule EmissaryWeb.MCPTransportTest do
       assert json_response(conn, 200)["result"]["resultType"] == "complete"
     end
 
-    test "a progressToken opts into a stream", %{conn: conn} do
+    # A `progressToken` is an opt-in to *receiving* progress, not a demand for a
+    # stream. Opening one commits `200`, and the choice of body shape is the
+    # server's — so a call that reports nothing is answered the cheap way.
+    test "a progressToken alone does not open a stream", %{conn: conn} do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
@@ -53,38 +56,39 @@ defmodule EmissaryWeb.MCPTransportTest do
         )
 
       assert conn.status == 200
-      assert get_resp_header(conn, "content-type") |> List.first() =~ "text/event-stream"
-
-      # Reverse proxies buffer by default, which would collapse a progress stream
-      # into a single delivery at the end — the one thing the client asked to avoid.
-      assert get_resp_header(conn, "x-accel-buffering") == ["no"]
+      assert get_resp_header(conn, "content-type") |> List.first() =~ "application/json"
+      assert json_response(conn, 200)["result"]["resultType"] == "complete"
     end
 
-    test "the stream carries the response as an SSE event", %{conn: conn} do
+    # This is the reason the stream is opened on first progress rather than up
+    # front. Committing `200` before dispatch would make every status-bearing
+    # rejection unreachable, and this revision leans on those: an unimplemented
+    # method MUST answer 404, and a dual-era client reads the status to tell a
+    # modern server from a legacy one.
+    test "an unimplemented method still answers 404 when progress was requested",
+         %{conn: conn} do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> mcp_post_with_meta(
-          %{"jsonrpc" => "2.0", "id" => 7, "method" => "server/discover"},
-          %{"progressToken" => "tok-2"}
+          %{"jsonrpc" => "2.0", "id" => 3, "method" => "no/such/method"},
+          %{"progressToken" => "tok-404"}
         )
 
-      assert ["data: " <> payload] = String.split(conn.resp_body, "\n\n", trim: true)
-      decoded = Jason.decode!(payload)
-
-      assert decoded["id"] == 7
-      assert decoded["result"]["resultType"] == "complete"
+      assert conn.status == 404
+      assert json_response(conn, 404)["error"]["code"] == -32_601
     end
 
-    # Progress reported while the work ran must arrive before the result, not
-    # after it — a client reading in order would otherwise see the stream close
-    # and drop whatever was still queued behind the response.
+    # Progress must reach the client *while* the work runs. It used to be
+    # delivered by draining the mailbox after the handler had already returned,
+    # which turned a progress stream into one burst at the end — and left
+    # nothing open for a client to close, so cancellation had no signal.
     #
-    # `Phoenix.ConnTest` dispatches inline, so the test process *is* the
-    # connection process. Seeding its mailbox before dispatch is exactly the
-    # state the controller finds itself in when a handler reported progress from
-    # its task while the request was still running.
-    test "progress queued during the call is flushed ahead of the response", %{conn: conn} do
+    # `Phoenix.ConnTest` dispatches inline, so the test process is the
+    # connection process; the handler runs in a task and reports back to it.
+    # Seeding the mailbox before dispatch is exactly the state the pump finds
+    # when a handler reports progress before the result is ready.
+    test "progress reported during the call is written before the response", %{conn: conn} do
       send(self(), {:mcp_progress, %{"method" => "notifications/progress", "seq" => 1}})
       send(self(), {:mcp_progress, %{"method" => "notifications/progress", "seq" => 2}})
 
@@ -96,6 +100,12 @@ defmodule EmissaryWeb.MCPTransportTest do
           %{"progressToken" => "tok-3"}
         )
 
+      assert get_resp_header(conn, "content-type") |> List.first() =~ "text/event-stream"
+
+      # Reverse proxies buffer by default, which would collapse a progress stream
+      # into a single delivery at the end — the one thing the client asked to avoid.
+      assert get_resp_header(conn, "x-accel-buffering") == ["no"]
+
       events =
         conn.resp_body
         |> String.split("\n\n", trim: true)
@@ -105,7 +115,7 @@ defmodule EmissaryWeb.MCPTransportTest do
       assert first["seq"] == 1
       assert second["seq"] == 2
 
-      # Order is preserved and the response is last.
+      # Order is preserved and the response is the stream's last frame.
       assert response["id"] == 9
       assert response["result"]["resultType"] == "complete"
     end

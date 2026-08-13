@@ -152,12 +152,15 @@ defmodule Emissary.MCP.Protocol do
   The value a request's `Mcp-Name` header must carry, or `nil` when the method
   does not name a subject.
 
-  `tools/call` and `prompts/get` name it in `params.name`; `resources/read`
-  names it in `params.uri`.
+  `tools/call` names it in `params.name`; `resources/read` names it in
+  `params.uri`. The specification also names `prompts/get`, which this server
+  does not implement and does not advertise a `prompts` capability for — a rule
+  for a method that answers `404` is a rule for nobody, so it is added with the
+  handler or not at all.
   """
   @spec named_subject(term()) :: String.t() | nil
-  def named_subject(%{"method" => method, "params" => %{"name" => name}})
-      when method in ["tools/call", "prompts/get"] and is_binary(name),
+  def named_subject(%{"method" => "tools/call", "params" => %{"name" => name}})
+      when is_binary(name),
       do: name
 
   def named_subject(%{"method" => "resources/read", "params" => %{"uri" => uri}})

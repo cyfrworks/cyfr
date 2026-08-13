@@ -5,7 +5,6 @@ defmodule Emissary.MCP.RunningTasksTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.RunningTasks
-  alias Sanctum.Context
 
   setup do
     # Ensure RunningTasks GenServer is running and healthy.
@@ -28,113 +27,77 @@ defmodule Emissary.MCP.RunningTasksTest do
     :ok
   end
 
-  describe "register/4 and cancel/2 with ownership" do
-    test "owner can cancel their own task" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          permissions: [:execute],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
+  # Cancellation kills the tracked process outright, so a *linked* task would
+  # propagate the `:cancelled` exit straight into the test process. Production
+  # tasks come from `Task.Supervisor.async_nolink/2` for the same reason — the
+  # dispatcher must survive a handler dying — so the tests use it too.
+  defp forever, do: Task.Supervisor.async_nolink(Emissary.TaskSupervisor, &sleep_forever/0)
 
-      task = Task.async(fn -> Process.sleep(:infinity) end)
+  defp sleep_forever, do: Process.sleep(:infinity)
 
-      :ok = RunningTasks.register("req_1", task, "user_1")
-      assert :ok == RunningTasks.cancel("req_1", ctx)
+  describe "register/2 and cancel/1" do
+    test "cancel kills the registered process" do
+      %Task{ref: ref} = task = forever()
+
+      :ok = RunningTasks.register("req_01HQ", task)
+      assert :ok == RunningTasks.cancel("req_01HQ")
+
+      assert_receive {:DOWN, ^ref, :process, _pid, :cancelled}, 1_000
     end
 
-    test "any member with :execute can cancel a task (members are interchangeable)" do
-      ctx =
-        Context.build(
-          user_id: "user_2",
-          permissions: [:execute],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-
-      # Registered for user_1 with no tenant coords (single-user style); user_2
-      # is a fellow member with :execute, so the cancel is authorized.
-      :ok = RunningTasks.register("req_2", task, "user_1")
-      assert :ok == RunningTasks.cancel("req_2", ctx)
+    test "cancel returns :not_found for an unknown request id" do
+      assert {:error, :not_found} = RunningTasks.cancel("nonexistent")
     end
 
-    test "cannot cancel a task in a different project (project isolation)" do
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-      :ok = RunningTasks.register("req_proj", task, "user_1", "org_a", "proj_a")
-
-      other_project_ctx =
-        Context.build(
-          user_id: "user_2",
-          permissions: [:execute],
-          org_id: "org_a",
-          project_id: "proj_b",
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      assert {:error, :unauthorized} = RunningTasks.cancel("req_proj", other_project_ctx)
-
-      Task.shutdown(task, :brutal_kill)
-    end
-
-    test "admin with wildcard can cancel any task" do
-      admin_ctx = Sanctum.TestContext.local()
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-
-      :ok = RunningTasks.register("req_3", task, "other_user")
-      assert :ok == RunningTasks.cancel("req_3", admin_ctx)
-    end
-
-    test "admin with :admin permission can cancel any task" do
-      admin_ctx =
-        Context.build(
-          user_id: "admin_user",
-          permissions: [:execute, :admin],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-
-      :ok = RunningTasks.register("req_4", task, "other_user")
-      assert :ok == RunningTasks.cancel("req_4", admin_ctx)
-    end
-
-    test "cancel returns :not_found for unknown request_id" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          permissions: [:execute],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      assert {:error, :not_found} = RunningTasks.cancel("nonexistent", ctx)
-    end
-
-    test "ETS entry is auto-cleaned when task process dies" do
-      task = Task.async(fn -> :ok end)
-      :ok = RunningTasks.register("req_cleanup", task, "user_1")
-
-      # Wait for the task to complete
+    test "cancel returns :not_found once the work has already finished" do
+      task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+      :ok = RunningTasks.register("req_done", task)
       Task.await(task)
 
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          permissions: [:execute],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
+      RunningTasks.unregister("req_done")
+      :sys.get_state(RunningTasks)
+
+      assert {:error, :not_found} = RunningTasks.cancel("req_done")
+    end
+
+    test "concurrent requests are independent — no shared key" do
+      # The whole reason the key is the server-minted request id: two callers
+      # sending `{"id": 1}` used to collide on one ETS row, so the second
+      # registration evicted the first and a cancellation reached the wrong
+      # task. Distinct ids must never interfere.
+      %Task{ref: ref_a} = a = forever()
+      b = forever()
+
+      :ok = RunningTasks.register("req_a", a)
+      :ok = RunningTasks.register("req_b", b)
+
+      assert :ok == RunningTasks.cancel("req_a")
+      assert_receive {:DOWN, ^ref_a, :process, _pid, :cancelled}, 1_000
+
+      assert Process.alive?(b.pid), "cancelling one request must not touch another"
+      Task.shutdown(b, :brutal_kill)
+    end
+
+    test "re-registering the same id replaces the previous entry" do
+      first = forever()
+      %Task{ref: ref_second} = second = forever()
+
+      :ok = RunningTasks.register("req_replace", first)
+      :ok = RunningTasks.register("req_replace", second)
+      :sys.get_state(RunningTasks)
+
+      assert :ok == RunningTasks.cancel("req_replace")
+      assert_receive {:DOWN, ^ref_second, :process, _pid, :cancelled}, 1_000
+
+      assert Process.alive?(first.pid), "the evicted entry must not be killed"
+      Task.shutdown(first, :brutal_kill)
+    end
+
+    test "ETS entry is auto-cleaned when the task process dies" do
+      task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+      :ok = RunningTasks.register("req_cleanup", task)
+
+      Task.await(task)
 
       # Poll until the GenServer has processed the :DOWN message.
       # :sys.get_state/1 drains the GenServer's mailbox, but the :DOWN message
@@ -142,7 +105,7 @@ defmodule Emissary.MCP.RunningTasksTest do
       Enum.reduce_while(1..20, nil, fn _, _ ->
         :sys.get_state(RunningTasks)
 
-        case RunningTasks.cancel("req_cleanup", ctx) do
+        case RunningTasks.cancel("req_cleanup") do
           {:error, :not_found} ->
             {:halt, :ok}
 
@@ -152,7 +115,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         end
       end)
 
-      assert {:error, :not_found} = RunningTasks.cancel("req_cleanup", ctx)
+      assert {:error, :not_found} = RunningTasks.cancel("req_cleanup")
     end
   end
 
@@ -173,8 +136,8 @@ defmodule Emissary.MCP.RunningTasksTest do
       task1 = %{pid: pid1, ref: make_ref(), owner: self(), mfa: {Function, :identity, 1}}
       task2 = %{pid: pid2, ref: make_ref(), owner: self(), mfa: {Function, :identity, 1}}
 
-      :ok = RunningTasks.register("term_req_1", struct!(Task, task1), "user_1")
-      :ok = RunningTasks.register("term_req_2", struct!(Task, task2), "user_1")
+      :ok = RunningTasks.register("term_req_1", struct!(Task, task1))
+      :ok = RunningTasks.register("term_req_2", struct!(Task, task2))
 
       # Stop the GenServer cleanly — this triggers terminate/2 internally,
       # which demonitors all processes and deletes the ETS table.
@@ -197,93 +160,6 @@ defmodule Emissary.MCP.RunningTasksTest do
       # The supervisor will restart it eventually, but we do it explicitly
       # to avoid race conditions with tests that run immediately after.
       RunningTasks.start_link([])
-    end
-  end
-
-  describe "cross-org isolation" do
-    test "cross-org cancel is rejected" do
-      ctx_a =
-        Context.build(
-          user_id: "admin_a",
-          org_id: "org_a",
-          permissions: [:execute, :admin],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      ctx_b =
-        Context.build(
-          user_id: "admin_b",
-          org_id: "org_b",
-          permissions: [:execute, :admin],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-      :ok = RunningTasks.register("req_org_1", task, "admin_a", "org_a")
-
-      # Admin in org_b cannot cancel org_a's task
-      assert {:error, :unauthorized} = RunningTasks.cancel("req_org_1", ctx_b)
-
-      # Clean up
-      RunningTasks.cancel("req_org_1", ctx_a)
-    end
-
-    test "same-org cancel succeeds" do
-      ctx =
-        Context.build(
-          user_id: "admin_user",
-          org_id: "org_a",
-          permissions: [:execute, :admin],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-      :ok = RunningTasks.register("req_org_2", task, "other_user", "org_a")
-
-      # Admin in same org can cancel
-      assert :ok == RunningTasks.cancel("req_org_2", ctx)
-    end
-
-    test "nil org_id (single-user) bypasses org check" do
-      # Single-user: neither task nor context have org_id
-      ctx =
-        Context.build(
-          user_id: "admin_user",
-          permissions: [:execute, :admin],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-      :ok = RunningTasks.register("req_org_3", task, "other_user")
-
-      # Should succeed — nil org_id means single-user, skip org check
-      assert :ok == RunningTasks.cancel("req_org_3", ctx)
-    end
-
-    test "platform-scope admin can cancel a task in any org" do
-      # Platform scope carries no org (org_id nil), so the org check is bypassed.
-      ctx =
-        Context.build(
-          user_id: "admin_user",
-          permissions: [:execute, :admin],
-          namespace: "testns",
-          scope: :platform,
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      task = Task.async(fn -> Process.sleep(:infinity) end)
-      :ok = RunningTasks.register("req_org_4", task, "other_user", "org_a")
-
-      assert :ok == RunningTasks.cancel("req_org_4", ctx)
     end
   end
 end

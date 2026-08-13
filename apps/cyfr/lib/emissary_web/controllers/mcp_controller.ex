@@ -13,33 +13,43 @@ defmodule EmissaryWeb.MCPController do
   One JSON-RPC 2.0 request or notification per POST — never a batch. Every
   request authenticates and declares its own protocol version and client
   capabilities in `params._meta`, so there is no handshake and nothing to
-  establish. `EmissaryWeb.Plugs.MCPSession` enforces that before this controller
+  establish. `EmissaryWeb.Plugs.MCPRequestMetadata` enforces that before this
+  controller
   runs.
 
   ## Response
 
-  Two shapes, chosen by the client:
+  Two shapes:
 
-    * **`application/json`** — one object. The default.
-    * **`text/event-stream`** — when the request carries `_meta.progressToken`:
-      any `notifications/progress` the work produced, then the response, then
-      close. This is what replaced the standalone `GET /mcp` stream; progress now
-      belongs to the request that caused it rather than to a connection the
-      client had to open separately and correlate by hand.
+    * **`application/json`** — one object. The default, and what a request that
+      never reports progress gets even if it asked for it.
+    * **`text/event-stream`** — opened the moment a request carrying
+      `_meta.progressToken` produces its first `notifications/progress`, then
+      carrying each notification as it happens, then the response, then close.
+      This is what replaced the standalone `GET /mcp` stream; progress belongs
+      to the request that caused it rather than to a connection the client had
+      to open separately and correlate by hand.
 
   Both carry `MCP-Protocol-Version` and `X-Request-Id`.
+
+  ## Cancellation
+
+  Closing the response stream cancels the request — the only cancellation
+  signal this transport has. It is noticed on the next write, which is either
+  the next notification or the keep-alive comment, and it kills the tool task
+  through `Emissary.MCP.RunningTasks` as well as the wrapper waiting on it.
 
   ## Telemetry
 
   Emits `[:cyfr, :emissary, :request]` on every request with:
   - Measurements: `%{duration: native_time, duration_ms: integer}`
-  - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error, action: String.t() | nil, request_id: String.t(), session_id: String.t() | nil}`
+  - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error, action: String.t() | nil, request_id: String.t()}`
   """
 
   use EmissaryWeb, :controller
 
   alias Emissary.MCP
-  alias Emissary.MCP.{Message, Progress, RequestLog, Session, Subscriptions}
+  alias Emissary.MCP.{Message, Progress, RequestLog, Subscriptions}
   require Logger
   alias Emissary.UUID7
 
@@ -50,7 +60,8 @@ defmodule EmissaryWeb.MCPController do
 
   Discovery answers before authentication; everything else needs a credential.
   """
-  # MCP 2025-11-25: POST body MUST be a single message, not a batch.
+  # "The body of the HTTP POST MUST be a single JSON-RPC request or
+  # notification."
   # Plug.Parsers wraps a top-level JSON array as %{"_json" => [...]}, so this
   # is the shape a batch actually arrives in — a bare `is_list(params)` clause
   # would never match a request that went through the endpoint.
@@ -70,19 +81,19 @@ defmodule EmissaryWeb.MCPController do
     Cyfr.LoggerContext.set_request_id(request_id)
     start_time = System.monotonic_time()
 
-    # One path for every method. `server/discover` used to be answered by a
-    # branch of its own so that it could reply before authentication — but the
-    # ordinary path already does that: an anonymous caller gets an ephemeral
-    # session and the router gates per action, and the discovery clause consults
-    # neither. The branch bought nothing and skipped `Message.decode/1`, so a
-    # discovery request with a null id — which the specification forbids — was
-    # answered 200 instead of rejected.
+    # One path for every method, including `server/discover`. It once had a
+    # branch of its own so it could answer before authentication, which it did
+    # not need: an anonymous caller reaches the public surface anyway and the
+    # router gates per action. The branch bought nothing and skipped
+    # `Message.decode/1`, so a discovery request with a null id — which the
+    # specification forbids — was answered 200 instead of rejected.
     #
-    # There is no session to require here: a bearer caller gets the plug's
-    # credential-keyed session, an auth-provider caller an ephemeral one, and an
-    # anonymous caller an unauthenticated context. "Not authenticated" is the
-    # tools' answer to give, not the transport's.
-    session = conn.assigns[:mcp_session] || Session.ephemeral(conn.assigns[:mcp_context])
+    # `Plugs.Authenticate` has already resolved a context, authenticated or
+    # not; "not authenticated" is the tools' answer to give, not the
+    # transport's. The request id is stamped on it here so everything the
+    # request goes on to do — including a component's own tool calls, which
+    # inherit this context through the guest closure — files under one key.
+    ctx = %{conn.assigns.context | request_id: request_id}
 
     # `subscriptions/listen` is answered here rather than through the dispatcher
     # for a reason the discovery branch above did not have: its response *is* an
@@ -90,8 +101,8 @@ defmodule EmissaryWeb.MCPController do
     # someone else to encode. Everything else about it — auth, header validation
     # — has already happened in the pipeline, same as any other request.
     case params["method"] do
-      "subscriptions/listen" -> listen(conn, session, params, request_id)
-      _ -> handle_message(conn, session, params, request_id, start_time)
+      "subscriptions/listen" -> listen(conn, ctx, params, request_id)
+      _ -> handle_message(conn, ctx, params, request_id, start_time)
     end
   end
 
@@ -117,16 +128,14 @@ defmodule EmissaryWeb.MCPController do
     )
   end
 
-  defp handle_message(conn, session, params, request_id, start_time) do
+  defp handle_message(conn, context, params, request_id, start_time) do
     method = params["method"]
     tool = extract_tool(params)
     action = extract_action(params)
 
-    # Inject request_id and session_id into context
-    context = %{session.context | request_id: request_id, session_id: session.id}
-    session = %{session | context: context}
-
-    # Log request start asynchronously
+    # The transport's own row. Its call id is the request id: this call *is*
+    # the request. Calls made beneath it get their own ids and point back here
+    # through `request_id`.
     log_request_started(context, request_id, %{
       method: method,
       tool: tool,
@@ -136,13 +145,36 @@ defmodule EmissaryWeb.MCPController do
 
     routed_to = determine_routed_to(tool, action)
 
-    # A client opts into progress by sending `_meta.progressToken`. Registering
-    # before dispatch, not after, is what makes it race-free: the work runs in a
-    # task and can report before this process would otherwise get around to it.
-    progress_token = progress_token(params)
-    if progress_token, do: Progress.listen(request_id, progress_token)
+    # Headers go on before anything can commit the response: once the stream
+    # below is opened they can no longer be set.
+    conn =
+      conn
+      |> put_resp_header("mcp-protocol-version", @protocol_version)
+      |> put_resp_header("x-request-id", request_id)
 
-    case MCP.handle_message(session, params) do
+    {conn, outcome} = dispatch(conn, context, params, request_id)
+
+    case outcome do
+      :cancelled ->
+        emit_telemetry(start_time, context, %{
+          method: method,
+          tool: tool,
+          status: :cancelled,
+          action: action,
+          request_id: request_id
+        })
+
+        log_request_failed(
+          context,
+          request_id,
+          "Client closed the response stream",
+          Message.error_code(:request_cancelled),
+          duration_ms(start_time),
+          routed_to
+        )
+
+        conn
+
       {:ok, result, id} ->
         duration_ms = duration_ms(start_time)
 
@@ -151,16 +183,12 @@ defmodule EmissaryWeb.MCPController do
           tool: tool,
           status: :success,
           action: action,
-          request_id: request_id,
-          session_id: session.id
+          request_id: request_id
         })
 
         log_request_completed(context, request_id, result, duration_ms, routed_to)
 
-        conn
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> respond(MCP.encode_result(id, result), progress_token)
+        respond(conn, Message.encode_result(id, result))
 
       :ok ->
         # Notification - no response needed
@@ -171,16 +199,12 @@ defmodule EmissaryWeb.MCPController do
           tool: tool,
           status: :success,
           action: action,
-          request_id: request_id,
-          session_id: session.id
+          request_id: request_id
         })
 
         log_request_completed(context, request_id, %{}, duration_ms, "emissary")
 
-        conn
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> send_resp(202, "")
+        send_resp(conn, 202, "")
 
       {:error, code, message, id} ->
         duration_ms = duration_ms(start_time)
@@ -190,8 +214,7 @@ defmodule EmissaryWeb.MCPController do
           tool: tool,
           status: :error,
           action: action,
-          request_id: request_id,
-          session_id: session.id
+          request_id: request_id
         })
 
         log_request_failed(
@@ -203,11 +226,7 @@ defmodule EmissaryWeb.MCPController do
           routed_to
         )
 
-        conn
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> put_status(http_status_for(code))
-        |> json(MCP.encode_error(id, code, message))
+        respond_error(conn, code, Message.encode_error(id, code, message))
 
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
@@ -217,8 +236,7 @@ defmodule EmissaryWeb.MCPController do
           tool: tool,
           status: :error,
           action: action,
-          request_id: request_id,
-          session_id: session.id
+          request_id: request_id
         })
 
         log_request_failed(
@@ -230,11 +248,7 @@ defmodule EmissaryWeb.MCPController do
           routed_to
         )
 
-        conn
-        |> put_resp_header("mcp-protocol-version", @protocol_version)
-        |> put_resp_header("x-request-id", request_id)
-        |> put_status(http_status_for(code))
-        |> json(MCP.encode_error(nil, code, message))
+        respond_error(conn, code, Message.encode_error(nil, code, message))
     end
   end
 
@@ -257,11 +271,11 @@ defmodule EmissaryWeb.MCPController do
     Application.get_env(:cyfr, :mcp_subscription_max_ms, :timer.minutes(30))
   end
 
-  defp listen(conn, session, params, request_id) do
+  defp listen(conn, context, params, request_id) do
     id = params["id"]
     filter = get_in(params, ["params", "notifications"]) || %{}
 
-    {:ok, acknowledged} = Subscriptions.listen(session.context, filter)
+    {:ok, acknowledged} = Subscriptions.listen(context, filter)
     deadline = System.monotonic_time(:millisecond) + max_stream_ms()
 
     conn
@@ -327,7 +341,7 @@ defmodule EmissaryWeb.MCPController do
   defp close_gracefully(conn, id) do
     sse_event(
       conn,
-      MCP.encode_result(id, %{"_meta" => %{Subscriptions.subscription_id_key() => id}})
+      Message.encode_result(id, %{"_meta" => %{Subscriptions.subscription_id_key() => id}})
     )
   end
 
@@ -348,27 +362,95 @@ defmodule EmissaryWeb.MCPController do
   end
 
   # ============================================================================
-  # Response modes
+  # Dispatch and response modes
   # ============================================================================
 
-  # `progressToken` is the client's opt-in. It is the only signal: a server that
-  # streamed whenever it felt like it would break clients that asked for one JSON
-  # object, and the specification makes the choice the client's to make.
-  defp progress_token(%{"params" => %{"_meta" => %{"progressToken" => token}}})
-       when not is_nil(token),
+  # `progressToken` is the client's opt-in to receiving progress. It is the only
+  # signal: a server that streamed whenever it felt like it would break clients
+  # that asked for one JSON object.
+  #
+  # Only a *request* can stream. A notification is answered `202` with no body,
+  # and a stream opened underneath it could not be taken back.
+  defp progress_token(%{"id" => id, "params" => %{"_meta" => %{"progressToken" => token}}})
+       when not is_nil(id) and not is_nil(token),
        do: token
 
   defp progress_token(_params), do: nil
 
-  # Without a token, one JSON object — the ordinary case, and the cheap one.
-  defp respond(conn, payload, nil), do: json(conn, payload)
+  # Run the request and return `{conn, outcome}` — `MCP.handle_message/2`'s
+  # result, or `:cancelled` when the caller hung up while it was still running.
+  defp dispatch(conn, context, params, request_id) do
+    case progress_token(params) do
+      nil -> {conn, MCP.handle_message(context, params)}
+      token -> streamed_dispatch(conn, context, params, request_id, token)
+    end
+  end
 
-  # With a token, an SSE stream carrying whatever progress arrived while the work
-  # ran, then the response, then close. Everything queued in this process's
-  # mailbox is drained first: the work has already finished by the time we get
-  # here, so anything still in flight is progress that was reported before the
-  # result and must be delivered before it.
-  defp respond(conn, payload, _token) do
+  # The work runs in a task so this process stays free to write progress as it
+  # arrives. It used to run inline and the stream was opened afterwards, which
+  # meant every notification sat in the mailbox until the work had finished and
+  # then arrived in one burst — progress reported after the fact is not
+  # progress. It also left nothing for a client to close, so the cancellation
+  # rule below had no way to fire.
+  #
+  # `Progress.listen/2` registers *this* process before the task starts, so a
+  # notification emitted immediately cannot be missed.
+  defp streamed_dispatch(conn, context, params, request_id, token) do
+    Progress.listen(request_id, token)
+
+    task =
+      Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+        MCP.handle_message(context, params)
+      end)
+
+    pump(conn, task, request_id)
+  end
+
+  # The stream is opened on the first notification rather than up front, because
+  # opening it commits `200` — and this revision makes the status load-bearing:
+  # an unimplemented method MUST answer `404`, a rejected one `400`, and a
+  # dual-era client reads the status to tell a modern server from a legacy one.
+  # Those outcomes are decided in the first moments of dispatch, before any work
+  # worth reporting on has happened, so waiting for something to report costs
+  # nothing and keeps the status codes honest.
+  defp pump(conn, %Task{ref: ref} = task, request_id) do
+    receive do
+      {:mcp_progress, notification} ->
+        case conn |> open_stream() |> write_event(notification) do
+          {:ok, conn} -> pump(conn, task, request_id)
+          {:error, conn} -> {conn, cancel_work(task, request_id)}
+        end
+
+      {^ref, outcome} ->
+        Process.demonitor(ref, [:flush])
+        {conn, outcome}
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        Logger.error("[MCPController] request handler exited: #{inspect(reason)}")
+        {conn, {:error, :internal_error, "Request handler exited unexpectedly"}}
+    after
+      @keep_alive_ms ->
+        case keep_alive(conn) do
+          {:ok, conn} -> pump(conn, task, request_id)
+          {:error, conn} -> {conn, cancel_work(task, request_id)}
+        end
+    end
+  end
+
+  # "Closing the SSE response stream MUST be treated by the server as
+  # cancellation of that request." The tool task is killed through
+  # `RunningTasks`, which is keyed on the same request id; the wrapper task is
+  # killed after it, since killing the wrapper alone would leave the
+  # `async_nolink`'d tool task running with nobody waiting on it.
+  defp cancel_work(%Task{} = task, request_id) do
+    Emissary.MCP.RunningTasks.cancel(request_id)
+    Task.shutdown(task, :brutal_kill)
+    :cancelled
+  end
+
+  defp open_stream(%Plug.Conn{state: :chunked} = conn), do: conn
+
+  defp open_stream(conn) do
     conn
     |> put_resp_header("content-type", "text/event-stream")
     |> put_resp_header("cache-control", "no-cache")
@@ -376,33 +458,53 @@ defmodule EmissaryWeb.MCPController do
     # delivery at the end — the exact thing the client asked to avoid.
     |> put_resp_header("x-accel-buffering", "no")
     |> send_chunked(200)
-    |> drain_progress()
-    |> sse_event(payload)
   end
 
-  defp drain_progress(conn) do
-    receive do
-      {:mcp_progress, notification} ->
-        conn |> sse_event(notification) |> drain_progress()
-    after
-      0 -> conn
+  # Nothing to keep alive until the stream exists. Once it does, the comment
+  # line doubles as the disconnect probe: a quiet subscription and a dead client
+  # look identical until something is written.
+  defp keep_alive(%Plug.Conn{state: :chunked} = conn), do: chunk(conn, ":\n\n") |> tag(conn)
+  defp keep_alive(conn), do: {:ok, conn}
+
+  defp write_event(conn, payload) do
+    case Jason.encode(payload) do
+      {:ok, encoded} ->
+        chunk(conn, "data: #{encoded}\n\n") |> tag(conn)
+
+      {:error, reason} ->
+        # Losing one notification must not fail the work it was reporting on.
+        Logger.error("[MCPController] progress payload not encodable: #{inspect(reason)}")
+        {:ok, conn}
     end
+  end
+
+  defp tag({:ok, conn}, _prev), do: {:ok, conn}
+  defp tag({:error, _reason}, prev), do: {:error, prev}
+
+  # A response on an open stream is its last frame; otherwise it is the body.
+  defp respond(%Plug.Conn{state: :chunked} = conn, payload) do
+    {_, conn} = write_event(conn, payload)
+    conn
+  end
+
+  defp respond(conn, payload), do: json(conn, payload)
+
+  # Once the stream is open the status has already been sent as `200`, and the
+  # error travels as the last frame. That is only reachable for errors raised
+  # after work had begun reporting; the status-bearing rejections all happen
+  # before the first notification (see `pump/3`).
+  defp respond_error(%Plug.Conn{state: :chunked} = conn, _code, payload),
+    do: respond(conn, payload)
+
+  defp respond_error(conn, code, payload) do
+    conn
+    |> put_status(http_status_for(code))
+    |> json(payload)
   end
 
   defp sse_event(conn, payload) do
-    case Jason.encode(payload) do
-      {:ok, encoded} ->
-        case chunk(conn, "data: #{encoded}\n\n") do
-          {:ok, conn} -> conn
-          # The client hung up mid-stream. Closing is the cancellation signal in
-          # this transport, so there is nothing to report and nobody to report to.
-          {:error, _reason} -> conn
-        end
-
-      {:error, reason} ->
-        Logger.error("[MCPController] progress payload not encodable: #{inspect(reason)}")
-        conn
-    end
+    {_, conn} = write_event(conn, payload)
+    conn
   end
 
   # ============================================================================

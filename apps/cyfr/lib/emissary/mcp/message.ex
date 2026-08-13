@@ -56,10 +56,12 @@ defmodule Emissary.MCP.Message do
   # CYFR-specific error codes.
   # Transport errors: -33300 to -33399
   @cyfr_transport_codes %{
-    session_required: -33301,
-    session_expired: -33302,
     invalid_protocol: -33303,
-    rate_limited: -33304
+    rate_limited: -33304,
+    # Never reaches a client — by the time it is recorded the caller has already
+    # closed the stream. It exists so the request log distinguishes "the caller
+    # went away" from a genuine failure.
+    request_cancelled: -33305
   }
 
   # Authentication errors: -33000 to -33099
@@ -106,21 +108,10 @@ defmodule Emissary.MCP.Message do
   @doc """
   Decode a JSON-RPC message from a map (already parsed from JSON).
 
-  Returns `{:ok, message}` for single messages or `{:ok, [messages]}` for batches.
+  One message, never a batch: "The body of the HTTP POST **MUST** be a single
+  JSON-RPC *request* or *notification*." A batch arrives as a list and is
+  refused at the transport, so nothing reaches here that this could not decode.
   """
-  def decode(messages) when is_list(messages) do
-    results = Enum.map(messages, &decode_single/1)
-
-    case Enum.split_with(results, &match?({:ok, _}, &1)) do
-      {successes, []} ->
-        {:ok, Enum.map(successes, fn {:ok, msg} -> msg end)}
-
-      {_, errors} ->
-        # Return first error for now
-        hd(errors)
-    end
-  end
-
   def decode(message) when is_map(message), do: decode_single(message)
 
   defp decode_single(%{"jsonrpc" => @jsonrpc_version} = msg) do

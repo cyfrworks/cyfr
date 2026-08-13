@@ -4,8 +4,7 @@
 defmodule Emissary.MCP.RouterTest do
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.{Message, Router, Session}
-  alias Sanctum.Context
+  alias Emissary.MCP.{Message, Router}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -13,20 +12,14 @@ defmodule Emissary.MCP.RouterTest do
 
     ctx = Sanctum.TestContext.local()
 
-    {:ok, session: Session.ephemeral(ctx), context: ctx}
-  end
-
-  describe "protocol_version/0" do
-    test "returns the supported protocol version" do
-      assert Router.protocol_version() == Emissary.MCP.Protocol.version()
-    end
+    {:ok, context: ctx}
   end
 
   describe "dispatch/2 with server/discover" do
-    test "advertises the supported revisions, capabilities and identity", %{session: session} do
+    test "advertises the supported revisions, capabilities and identity", %{context: ctx} do
       msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result} = Router.dispatch(ctx, msg)
       assert result["supportedVersions"] == Emissary.MCP.Protocol.supported()
       assert is_map(result["capabilities"])
 
@@ -36,10 +29,10 @@ defmodule Emissary.MCP.RouterTest do
     end
 
     test "does not advertise a resource-subscribe capability it cannot honour",
-         %{session: session} do
+         %{context: ctx} do
       msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result} = Router.dispatch(ctx, msg)
 
       # `resources/subscribe` was replaced by `subscriptions/listen`; advertising
       # the retired capability would have clients waiting for updates that this
@@ -52,7 +45,7 @@ defmodule Emissary.MCP.RouterTest do
   describe "dispatch/2 with ping" do
     # Removed in 2026-07-28. Answering it would misreport which revision this
     # server speaks, so the rejection is the conformant behaviour.
-    test "is not a method this revision has", %{session: session} do
+    test "is not a method this revision has", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 2,
@@ -60,13 +53,13 @@ defmodule Emissary.MCP.RouterTest do
         params: nil
       }
 
-      assert {:error, :method_not_found, message} = Router.dispatch(session, msg)
+      assert {:error, :method_not_found, message} = Router.dispatch(ctx, msg)
       assert message =~ "ping"
     end
   end
 
   describe "dispatch/2 with tools/list" do
-    test "delegates to ToolRegistry and returns tools list", %{session: session} do
+    test "delegates to ToolRegistry and returns tools list", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 3,
@@ -74,13 +67,13 @@ defmodule Emissary.MCP.RouterTest do
         params: nil
       }
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result} = Router.dispatch(ctx, msg)
       assert is_list(result["tools"])
     end
   end
 
   describe "dispatch/2 with tools/call" do
-    test "delegates to ToolRegistry for valid tool", %{session: session} do
+    test "delegates to ToolRegistry for valid tool", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 4,
@@ -91,14 +84,14 @@ defmodule Emissary.MCP.RouterTest do
         }
       }
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result} = Router.dispatch(ctx, msg)
       assert is_list(result["content"])
       [content] = result["content"]
       assert content["type"] == "text"
       assert result["isError"] == false
     end
 
-    test "returns protocol error for unknown tool", %{session: session} do
+    test "returns protocol error for unknown tool", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 5,
@@ -109,11 +102,11 @@ defmodule Emissary.MCP.RouterTest do
         }
       }
 
-      assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+      assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
       assert message =~ "Unknown tool: nonexistent/tool"
     end
 
-    test "returns protocol error when tool name is missing", %{session: session} do
+    test "returns protocol error when tool name is missing", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 5,
@@ -121,11 +114,11 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"arguments" => %{}}
       }
 
-      assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+      assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
       assert message =~ "Missing required field: name"
     end
 
-    test "returns invalid_params for non-object arguments", %{session: session} do
+    test "returns invalid_params for non-object arguments", %{context: ctx} do
       # Regression: the dispatcher reads `arguments["action"]`, and Access raises
       # on a list — this used to escape as an uncaught ArgumentError (HTTP 500)
       # rather than a JSON-RPC -32602.
@@ -137,12 +130,12 @@ defmodule Emissary.MCP.RouterTest do
           params: %{"name" => "system", "arguments" => bad_arguments}
         }
 
-        assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+        assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
         assert message =~ "must be an object"
       end
     end
 
-    test "handles missing arguments as empty map", %{session: session} do
+    test "handles missing arguments as empty map", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 6,
@@ -155,13 +148,13 @@ defmodule Emissary.MCP.RouterTest do
 
       # Should not crash — returns validation error if schema requires fields,
       # or succeeds if tool has no required fields
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       assert match?({:ok, _}, result) or match?({:error, :invalid_params, _}, result)
     end
   end
 
   describe "dispatch/2 with resources/list" do
-    test "delegates to ResourceRegistry and returns resources list", %{session: session} do
+    test "delegates to ResourceRegistry and returns resources list", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 7,
@@ -169,7 +162,7 @@ defmodule Emissary.MCP.RouterTest do
         params: nil
       }
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result} = Router.dispatch(ctx, msg)
       assert is_list(result["resources"])
 
       # Resources list must not contain URI templates
@@ -183,7 +176,7 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with resources/templates/list" do
-    test "returns resource templates with uriTemplate field", %{session: session} do
+    test "returns resource templates with uriTemplate field", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 20,
@@ -191,7 +184,7 @@ defmodule Emissary.MCP.RouterTest do
         params: nil
       }
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result} = Router.dispatch(ctx, msg)
       assert is_list(result["resourceTemplates"])
 
       # All templates should have uriTemplate field
@@ -206,7 +199,7 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with resources/read" do
-    test "returns error for unknown URI scheme", %{session: session} do
+    test "returns error for unknown URI scheme", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 8,
@@ -214,13 +207,13 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"uri" => "unknown://resource/path"}
       }
 
-      assert {:error, :resource_not_found, message} = Router.dispatch(session, msg)
+      assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
       assert message =~ "Failed to read resource"
     end
   end
 
   describe "dispatch/2 with unknown method" do
-    test "returns method_not_found error", %{session: session} do
+    test "returns method_not_found error", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 9,
@@ -228,33 +221,33 @@ defmodule Emissary.MCP.RouterTest do
         params: nil
       }
 
-      assert {:error, :method_not_found, message} = Router.dispatch(session, msg)
+      assert {:error, :method_not_found, message} = Router.dispatch(ctx, msg)
       assert message =~ "Unknown method"
     end
   end
 
   describe "dispatch/2 with notifications" do
-    test "handles notifications/initialized", %{session: session} do
+    test "handles notifications/initialized", %{context: ctx} do
       msg = %Message{
         type: :notification,
         method: "notifications/initialized",
         params: nil
       }
 
-      assert :ok = Router.dispatch(session, msg)
+      assert :ok = Router.dispatch(ctx, msg)
     end
 
-    test "handles notifications/cancelled", %{session: session} do
+    test "handles notifications/cancelled", %{context: ctx} do
       msg = %Message{
         type: :notification,
         method: "notifications/cancelled",
         params: %{"requestId" => 123}
       }
 
-      assert :ok = Router.dispatch(session, msg)
+      assert :ok = Router.dispatch(ctx, msg)
     end
 
-    test "handles unknown notification gracefully", %{session: session} do
+    test "handles unknown notification gracefully", %{context: ctx} do
       msg = %Message{
         type: :notification,
         method: "notifications/unknown",
@@ -262,29 +255,29 @@ defmodule Emissary.MCP.RouterTest do
       }
 
       # Should not crash, just logs warning
-      assert :ok = Router.dispatch(session, msg)
+      assert :ok = Router.dispatch(ctx, msg)
     end
   end
 
   describe "dispatch/2 with client response/error types" do
-    test "returns :ok for response type (per MCP spec, maps to 202)", %{session: session} do
+    test "returns :ok for response type (per MCP spec, maps to 202)", %{context: ctx} do
       msg = %Message{
         type: :response,
         id: 10,
         result: %{}
       }
 
-      assert :ok = Router.dispatch(session, msg)
+      assert :ok = Router.dispatch(ctx, msg)
     end
 
-    test "returns :ok for error type (per MCP spec, maps to 202)", %{session: session} do
+    test "returns :ok for error type (per MCP spec, maps to 202)", %{context: ctx} do
       msg = %Message{
         type: :error,
         id: 11,
         error: %{"code" => -32600, "message" => "Error"}
       }
 
-      assert :ok = Router.dispatch(session, msg)
+      assert :ok = Router.dispatch(ctx, msg)
     end
   end
 end

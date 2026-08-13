@@ -8,16 +8,19 @@ defmodule Emissary.MCP.Router do
   Handles:
   - Discovery (server/discover)
   - Tool methods (tools/list, tools/call)
-  - Resource methods (resources/list, resources/read)
-  - Prompt methods (prompts/list, prompts/get) [future]
+  - Resource methods (resources/list, resources/templates/list, resources/read)
+  - Subscriptions (subscriptions/listen, answered by the controller because its
+    response is an open stream)
 
   ## Authorization Model
 
-  The Router authenticates; handlers authorize. The Router enforces session-level
-  authentication (is the caller logged in?) via `@public_tool_actions`. Individual
-  tool handlers then enforce fine-grained authorization (does this user have
-  permission to perform this specific action?) using `Context.require_permission/2`
-  or `Context.authorize/2`.
+  The Router gates; handlers authorize. The Router answers only the coarse
+  question — may an unauthenticated caller reach this tool action at all? — via
+  `@public_tool_actions`. Individual tool handlers then enforce fine-grained
+  authorization (does this caller have permission to perform this specific
+  action?) using `Context.require_permission/2` or `Context.authorize/2`.
+
+  Authentication itself happens earlier, in `EmissaryWeb.Plugs.Authenticate`.
 
   ## Public Tool Actions
 
@@ -43,8 +46,6 @@ defmodule Emissary.MCP.Router do
   """
 
   alias Emissary.MCP.{Message, Protocol, ToolRegistry, ResourceRegistry, InputValidator}
-
-  @protocol_version Emissary.MCP.Protocol.version()
 
   # Tools/actions accessible without authentication.
   # :all means every action on that tool is public.
@@ -122,20 +123,20 @@ defmodule Emissary.MCP.Router do
   For requests, returns `{:ok, result}` or `{:error, code, message}`.
   For notifications, returns `:ok`.
   """
-  def dispatch(session, %Message{type: :request} = msg) do
-    dispatch_method(session, msg.method, msg.params, msg.id)
+  def dispatch(ctx, %Message{type: :request} = msg) do
+    dispatch_method(ctx, msg.method, msg.params, msg.id)
   end
 
-  def dispatch(session, %Message{type: :notification} = msg) do
-    dispatch_notification(session, msg.method, msg.params)
+  def dispatch(ctx, %Message{type: :notification} = msg) do
+    dispatch_notification(ctx, msg.method, msg.params)
   end
 
-  def dispatch(_session, %Message{type: :response}) do
+  def dispatch(_ctx, %Message{type: :response}) do
     # MCP spec: client responses (e.g., to server-initiated sampling) return 202
     :ok
   end
 
-  def dispatch(_session, %Message{type: :error}) do
+  def dispatch(_ctx, %Message{type: :error}) do
     # MCP spec: client error responses return 202
     :ok
   end
@@ -148,7 +149,7 @@ defmodule Emissary.MCP.Router do
   # may call it before any other request to pick a mutually supported revision,
   # or skip it and handle `UnsupportedProtocolVersion` on the request it wanted
   # to make anyway. It replaces `initialize`, whose only remaining job this is.
-  defp dispatch_method(_session, "server/discover", _params, _id) do
+  defp dispatch_method(_ctx, "server/discover", _params, _id) do
     {:ok,
      cacheable(
        %{
@@ -168,21 +169,13 @@ defmodule Emissary.MCP.Router do
   # Tool Methods
   # ============================================================================
 
-  defp dispatch_method(session, "tools/list", params, _id) do
-    tools = ToolRegistry.list_tools()
-    tools = Emissary.MCP.ToolVisibility.filter_for_context(tools, session.context)
-    component_ref = is_map(params) && params["component_ref"]
-
-    case component_ref do
-      ref when is_binary(ref) ->
-        filter_tools_for_component(tools, ref)
-
-      _ ->
-        paginate(tools, "tools", params)
-    end
+  defp dispatch_method(ctx, "tools/list", params, _id) do
+    ToolRegistry.list_tools()
+    |> Emissary.MCP.ToolVisibility.filter_for_context(ctx)
+    |> paginate("tools", params)
   end
 
-  defp dispatch_method(session, "tools/call", params, id) do
+  defp dispatch_method(ctx, "tools/call", params, _id) do
     name = params["name"]
 
     unless is_binary(name) do
@@ -206,15 +199,13 @@ defmodule Emissary.MCP.Router do
             :ok ->
               action = arguments["action"]
 
-              if not session.context.authenticated and not public_tool_action?(name, action) do
+              if not ctx.authenticated and not public_tool_action?(name, action) do
                 {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
               else
                 has_output_schema =
                   match?({:ok, %{"outputSchema" => _}}, ToolRegistry.get_tool(name))
 
-                case ToolRegistry.call_external(name, session.context, arguments,
-                       mcp_request_id: id
-                     ) do
+                case ToolRegistry.call_external(name, ctx, arguments) do
                   {:ok, result} ->
                     text =
                       case Jason.encode(result) do
@@ -236,7 +227,8 @@ defmodule Emissary.MCP.Router do
                       "isError" => false
                     }
 
-                    # MCP 2025-11-25: include structuredContent when tool defines outputSchema
+                    # A tool that declares an outputSchema also answers in structuredContent,
+                    # so a client gets the typed value without re-parsing the text block.
                     call_result =
                       if has_output_schema and is_map(result) do
                         Map.put(call_result, "structuredContent", result)
@@ -270,20 +262,20 @@ defmodule Emissary.MCP.Router do
   # non-sensitive. Individual read handlers enforce their own authorization.
   # ============================================================================
 
-  defp dispatch_method(_session, "resources/list", params, _id) do
+  defp dispatch_method(_ctx, "resources/list", params, _id) do
     resources = ResourceRegistry.list_resources()
     paginate(resources, "resources", params)
   end
 
-  defp dispatch_method(_session, "resources/templates/list", params, _id) do
+  defp dispatch_method(_ctx, "resources/templates/list", params, _id) do
     templates = ResourceRegistry.list_resource_templates()
     paginate(templates, "resourceTemplates", params)
   end
 
-  defp dispatch_method(session, "resources/read", params, _id) do
+  defp dispatch_method(ctx, "resources/read", params, _id) do
     uri = params["uri"]
 
-    case ResourceRegistry.read(session.context, uri) do
+    case ResourceRegistry.read(ctx, uri) do
       {:ok, content} ->
         mime_type = Map.get(content, :mimeType, "application/json")
         encoded = encode_content(content)
@@ -307,7 +299,7 @@ defmodule Emissary.MCP.Router do
   # Unknown Method
   # ============================================================================
 
-  defp dispatch_method(_session, method, _params, _id) do
+  defp dispatch_method(_ctx, method, _params, _id) do
     {:error, :method_not_found, "Unknown method: #{method}"}
   end
 
@@ -347,32 +339,13 @@ defmodule Emissary.MCP.Router do
   # Notifications
   # ============================================================================
 
-  defp dispatch_notification(session, "notifications/cancelled", params) do
-    request_id = params["requestId"]
-    reason = params["reason"]
-    require Logger
-
-    case Emissary.MCP.RunningTasks.cancel(request_id, session.context) do
-      :ok ->
-        Logger.info(
-          "MCP: Cancelled running request #{inspect(request_id)}, reason: #{inspect(reason)}"
-        )
-
-      {:error, :not_found} ->
-        Logger.debug(
-          "MCP: Cancel requested for #{inspect(request_id)} (reason: #{inspect(reason)}) but no running task found"
-        )
-
-      {:error, :unauthorized} ->
-        Logger.warning(
-          "MCP: Unauthorized cancel attempt for #{inspect(request_id)} by user=#{session.context.user_id}"
-        )
-    end
-
-    :ok
-  end
-
-  defp dispatch_notification(_session, method, _params) do
+  # There is deliberately no `notifications/cancelled` clause. This revision
+  # confines that notification to stdio — "on Streamable HTTP, closing the SSE
+  # response stream is itself the cancellation signal and no
+  # `notifications/cancelled` message is expected" — and this server speaks
+  # only Streamable HTTP. `EmissaryWeb.MCPController` cancels on stream close;
+  # accepting the notification as well would be a second, unspecified way in.
+  defp dispatch_notification(_ctx, method, _params) do
     require Logger
     Logger.warning("MCP: Unknown notification: #{method}")
     :ok
@@ -444,41 +417,13 @@ defmodule Emissary.MCP.Router do
     Base.url_encode64(Integer.to_string(offset), padding: false)
   end
 
-  # `_meta` keys are a namespaced grammar: dot-separated labels, then a slash,
-  # then the name. The `cyfr:` form these used is not a valid prefix at all, and
-  # any second label of `mcp` or `modelcontextprotocol` is reserved — so CYFR's
-  # own reverse-DNS namespace is the correct home.
-  @meta_prefix "run.cyfr/"
-
-  defp filter_tools_for_component(tools, component_ref) do
-    case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{type: "formula"}} ->
-        filtered = ToolRegistry.in_chain_view(tools)
-
-        {:ok,
-         component_view(filtered, %{
-           (@meta_prefix <> "component_ref") => component_ref,
-           (@meta_prefix <> "filtered") => true
-         })}
-
-      {:ok, %{type: type}} ->
-        {:ok,
-         component_view(tools, %{
-           (@meta_prefix <> "component_ref") => component_ref,
-           (@meta_prefix <> "component_type") => type,
-           (@meta_prefix <> "filtered") => false
-         })}
-
-      {:error, reason} ->
-        {:error, :invalid_params, "Invalid component_ref: #{reason}"}
-    end
-  end
-
-  # This view is keyed by the caller's `component_ref` argument, so it is part of
-  # the cache key and carries the same hints as any other `tools/list` page.
-  defp component_view(tools, meta) do
-    cacheable(%{"tools" => tools, "_meta" => meta}, @catalogue_ttl_ms, @catalogue_scope)
-  end
+  # `tools/list` took an extra `component_ref` parameter that returned the
+  # in-chain view of the catalogue. It is gone: the specification defines
+  # `cursor` as the only parameter, and nothing in this repository — no client,
+  # no guide, no test — ever sent it. The view it produced is still reachable
+  # where it is actually used, through the `tools` tool
+  # (`Emissary.MCP.Tools.SystemProvider`), which is how a running component
+  # discovers what it may call.
 
   defp public_tool_action?(name, action) do
     # With no auth configured the instance is public — anonymous browsing
@@ -495,9 +440,4 @@ defmodule Emissary.MCP.Router do
       nil -> false
     end
   end
-
-  @doc """
-  Get the protocol version this server supports.
-  """
-  def protocol_version, do: @protocol_version
 end

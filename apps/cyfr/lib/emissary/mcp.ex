@@ -6,98 +6,62 @@ defmodule Emissary.MCP do
   MCP (Model Context Protocol) implementation for CYFR.
 
   This module is the main entry point for MCP protocol handling.
-  It coordinates message parsing, session management, and request routing.
+  It coordinates message decoding and request routing.
 
   ## Protocol Support
 
-  Implements MCP 2025-11-25 specification with:
-  - JSON-RPC 2.0 message format
-  - Streamable HTTP transport
-  - Session management via Mcp-Session-Id header
+  Implements MCP #{Emissary.MCP.Protocol.version()} with:
+  - JSON-RPC 2.0 message format, one message per request — never a batch
+  - Streamable HTTP transport, POST only
+  - Per-request protocol version and client capabilities in `params._meta`;
+    there is no handshake and no session
   - Tool discovery and execution
 
   ## Usage
 
       # Handle an incoming MCP message
-      {:ok, response} = Emissary.MCP.handle_message(session, json_message)
-
-      # Initialize a new session
+      {:ok, result, id} = Emissary.MCP.handle_message(ctx, json_message)
 
   """
 
-  alias Emissary.MCP.{Message, Session, Router}
+  alias Emissary.MCP.{Message, Router}
+  alias Sanctum.Context
 
   @doc """
   Handle an incoming MCP JSON-RPC message.
 
-  Takes a session and the raw JSON params (already decoded from JSON).
-  Returns `{:ok, response}` or `{:error, code, message}`.
+  Takes the caller's `%Sanctum.Context{}` and the decoded JSON body. Returns
+  `{:ok, result, id}`, `:ok` for a notification, or `{:error, code, message}`.
+
+  There is no list-of-messages clause. The specification requires the POST body
+  to be a single request or notification, and `EmissaryWeb.MCPController`
+  rejects a batch before it reaches here.
   """
-  def handle_message(%Session{} = session, params) when is_map(params) do
+  def handle_message(%Context{} = ctx, params) when is_map(params) do
     with {:ok, message} <- Message.decode(params) do
-      handle_decoded(session, message)
+      handle_decoded(ctx, message)
     else
       {:error, code, msg} ->
         {:error, code, msg}
     end
   end
 
-  def handle_message(%Session{} = session, params) when is_list(params) do
-    with {:ok, messages} <- Message.decode(params) do
-      responses =
-        messages
-        |> Enum.map(fn message -> handle_decoded(session, message) end)
-        |> Enum.filter(fn
-          {:ok, _result, _id} -> true
-          {:error, _code, _msg, _id} -> true
-          _ -> false
-        end)
-        |> Enum.map(fn
-          {:ok, result, id} -> Message.encode_result(id, result)
-          {:error, code, msg, id} -> Message.encode_error(id, code, msg)
-        end)
-
-      {:ok, responses}
-    end
-  end
-
-  defp handle_decoded(session, %Message{type: :request, id: id} = message) do
-    case Router.dispatch(session, message) do
+  defp handle_decoded(ctx, %Message{type: :request, id: id} = message) do
+    case Router.dispatch(ctx, message) do
       {:ok, result} -> {:ok, result, id}
       {:error, code, msg} -> {:error, code, msg, id}
     end
   end
 
-  defp handle_decoded(session, %Message{type: :notification} = message) do
-    Router.dispatch(session, message)
+  defp handle_decoded(ctx, %Message{type: :notification} = message) do
+    Router.dispatch(ctx, message)
   end
 
-  defp handle_decoded(session, %Message{type: :response} = message) do
-    Router.dispatch(session, message)
+  defp handle_decoded(ctx, %Message{type: :response} = message) do
+    Router.dispatch(ctx, message)
   end
 
-  defp handle_decoded(session, %Message{type: :error} = message) do
-    Router.dispatch(session, message)
-  end
-
-  @doc """
-  Format a successful response for the given request ID.
-  """
-  def encode_result(id, result) do
-    Message.encode_result(id, result)
-  end
-
-  @doc """
-  Format an error response for the given request ID.
-  """
-  def encode_error(id, code, message) do
-    Message.encode_error(id, code, message)
-  end
-
-  @doc """
-  Get the protocol version this server supports.
-  """
-  def protocol_version do
-    Router.protocol_version()
+  defp handle_decoded(ctx, %Message{type: :error} = message) do
+    Router.dispatch(ctx, message)
   end
 end

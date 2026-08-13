@@ -356,7 +356,12 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response(conn, 202)
     end
 
-    test "handles notifications/cancelled", %{conn: conn} do
+    test "notifications/cancelled is not a cancellation channel on this transport",
+         %{conn: conn} do
+      # This revision confines `notifications/cancelled` to stdio; on Streamable
+      # HTTP the cancellation signal is the caller closing its response stream.
+      # The notification is accepted the way any unrecognized one is — 202, no
+      # body, no effect — and must never reach a running task.
       conn =
         conn
         |> recycle()
@@ -370,8 +375,8 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response(conn, 202)
     end
 
-    # Note: Batch requests (mixing requests and notifications) are not supported via HTTP
-    # per MCP 2025-11-25 spec - only available through internal API
+    # Note: Batch requests (mixing requests and notifications) are rejected —
+    # the specification requires the POST body to be a single message.
   end
 
   describe "POST /mcp - resources" do
@@ -994,10 +999,12 @@ defmodule EmissaryWeb.MCPControllerTest do
     test "CYFR error codes are in correct ranges" do
       alias Emissary.MCP.Message
 
-      # Transport errors: -33300 to -33399
-      assert Message.cyfr_code(:session_required) == -33301
-      assert Message.cyfr_code(:session_expired) == -33302
+      # Transport errors: -33300 to -33399.
+      # -33301/-33302 were session_required/session_expired and are retired
+      # with the session concept; they are not reallocated.
       assert Message.cyfr_code(:invalid_protocol) == -33303
+      assert Message.cyfr_code(:rate_limited) == -33304
+      assert Message.cyfr_code(:request_cancelled) == -33305
 
       # Auth errors: -33000 to -33099
       assert Message.cyfr_code(:auth_required) == -33001
@@ -1039,8 +1046,8 @@ defmodule EmissaryWeb.MCPControllerTest do
       alias Emissary.MCP.Message
 
       # Verify encode_error produces correct code for CYFR atoms
-      error = Message.encode_error(1, :session_required, "Test error")
-      assert error["error"]["code"] == -33301
+      error = Message.encode_error(1, :rate_limited, "Test error")
+      assert error["error"]["code"] == -33304
 
       error = Message.encode_error(2, :auth_required, "Auth needed")
       assert error["error"]["code"] == -33001

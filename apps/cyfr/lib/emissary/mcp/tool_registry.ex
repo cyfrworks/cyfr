@@ -159,8 +159,8 @@ defmodule Emissary.MCP.ToolRegistry do
   `call_in_chain/5`; there is deliberately no plane-ambiguous entry point —
   a new call site must choose, at compile time.
 
-  Options:
-  - `:mcp_request_id` - The JSON-RPC request ID, used for cancellation tracking.
+  The work runs in a task registered under `ctx.request_id`, so a transport
+  whose caller disconnects can stop it (`Emissary.MCP.RunningTasks`).
   """
   def call_external(name, ctx, args, opts \\ [])
 
@@ -206,7 +206,12 @@ defmodule Emissary.MCP.ToolRegistry do
           warn_on_description_drift(ctx, authority, resource)
 
           try do
-            do_call(name, ctx, args, Keyword.delete(opts, :guest_fn))
+            do_call(
+              name,
+              ctx,
+              args,
+              opts |> Keyword.delete(:guest_fn) |> Keyword.put(:in_chain, true)
+            )
           after
             if guest_fn == :spawn, do: Sanctum.Authority.release_invoke(authority)
           end
@@ -347,22 +352,37 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
-    # Skip logging for mcp_log tool to avoid infinite recursion,
-    # and for calls that already have a request_id (logged by MCP controller)
-    should_log? = name != "mcp_log" && is_nil(ctx.request_id)
+    in_chain? = Keyword.get(opts, :in_chain, false)
 
-    {request_id, ctx} =
-      if should_log? do
-        rid = Emissary.UUID7.request_id()
-        {rid, %{ctx | request_id: rid}}
-      else
-        {ctx.request_id, ctx}
+    # Every call belongs to an ingress request. One that arrived over a
+    # transport already carries it; an internal caller has none, so it becomes
+    # its own root.
+    own_root? = is_nil(ctx.request_id)
+    ctx = if own_root?, do: %{ctx | request_id: Emissary.UUID7.request_id()}, else: ctx
+
+    # Who logs what: a transport logs the request it received, and each
+    # in-chain call logs itself. Without the second arm nothing recorded a
+    # component's own tool calls at all — the context they run under inherits
+    # the root's request id through the guest closure, which the guard used to
+    # read as "the transport already logged this".
+    #
+    # `mcp_log` never logs, or it would record its own listing every time.
+    should_log? = name != "mcp_log" and (in_chain? or own_root?)
+
+    # A root call *is* its request, so it is filed under the request id. An
+    # in-chain call is one of several beneath that request and needs its own
+    # key; `request_id` on the row is what ties them together.
+    call_id =
+      cond do
+        not should_log? -> nil
+        in_chain? -> Emissary.UUID7.generate_id("call")
+        true -> ctx.request_id
       end
 
     if should_log? do
       action = args["action"] || args[:action]
 
-      Emissary.MCP.RequestLog.log_started(ctx, request_id, %{
+      Emissary.MCP.RequestLog.log_started(ctx, call_id, %{
         tool: name,
         action: action,
         method: "tools/call",
@@ -387,14 +407,14 @@ defmodule Emissary.MCP.ToolRegistry do
 
           case result do
             {:ok, output} ->
-              Emissary.MCP.RequestLog.log_completed(ctx, request_id, %{
+              Emissary.MCP.RequestLog.log_completed(ctx, call_id, %{
                 output: output,
                 duration_ms: duration_ms,
                 routed_to: inspect(module)
               })
 
             {:error, reason} ->
-              Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
+              Emissary.MCP.RequestLog.log_failed(ctx, call_id, %{
                 error: inspect(Sanctum.Sanitizer.sanitize(reason)),
                 code: -32_603,
                 duration_ms: duration_ms,
@@ -440,7 +460,7 @@ defmodule Emissary.MCP.ToolRegistry do
                   :millisecond
                 )
 
-              Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
+              Emissary.MCP.RequestLog.log_failed(ctx, call_id, %{
                 error: "Unknown tool: #{name}",
                 code: -32_601,
                 duration_ms: duration_ms
@@ -460,14 +480,14 @@ defmodule Emissary.MCP.ToolRegistry do
 
               case result do
                 {:ok, output} ->
-                  Emissary.MCP.RequestLog.log_completed(ctx, request_id, %{
+                  Emissary.MCP.RequestLog.log_completed(ctx, call_id, %{
                     output: output,
                     duration_ms: duration_ms,
                     routed_to: "external:#{name}"
                   })
 
                 {:error, reason} ->
-                  Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
+                  Emissary.MCP.RequestLog.log_failed(ctx, call_id, %{
                     error: inspect(Sanctum.Sanitizer.sanitize(reason)),
                     code: -32_603,
                     duration_ms: duration_ms,
@@ -667,19 +687,18 @@ defmodule Emissary.MCP.ToolRegistry do
   # outright, returning a bare 500 instead of a JSON-RPC error. A signal is not
   # catchable by try/rescue, so the crash clauses below could never have fired for
   # that case. Without a link, a crash arrives as `{:exit, reason}` from `yield/2`.
-  defp execute_tool_call(name, ctx, opts, execute_fn) do
-    mcp_request_id = Keyword.get(opts, :mcp_request_id)
+  defp execute_tool_call(name, ctx, _opts, execute_fn) do
+    # Registered under the server-minted request id, which is also the key
+    # `Emissary.MCP.Progress` uses — one identity per request across both
+    # subsystems. The transport cancels through this when its caller hangs up;
+    # a context without one (an internal call that bypassed `do_call/4`'s
+    # minting) simply is not cancellable.
+    request_id = ctx.request_id
+    trackable? = is_binary(request_id)
+
     task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, execute_fn)
 
-    if mcp_request_id,
-      do:
-        Emissary.MCP.RunningTasks.register(
-          mcp_request_id,
-          task,
-          ctx.user_id,
-          ctx.org_id,
-          ctx.project_id
-        )
+    if trackable?, do: Emissary.MCP.RunningTasks.register(request_id, task)
 
     result =
       case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
@@ -703,7 +722,7 @@ defmodule Emissary.MCP.ToolRegistry do
           {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
-    if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
+    if trackable?, do: Emissary.MCP.RunningTasks.unregister(request_id)
     result
   end
 
@@ -726,7 +745,7 @@ defmodule Emissary.MCP.ToolRegistry do
               name: tool.name,
               description: tool.description,
               input_schema: tool.input_schema,
-              # MCP 2025-11-25 optional fields
+              # Optional per-tool fields
               title: Map.get(tool, :title),
               icons: Map.get(tool, :icons),
               output_schema: Map.get(tool, :output_schema),

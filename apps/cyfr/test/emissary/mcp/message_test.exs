@@ -60,18 +60,6 @@ defmodule Emissary.MCP.MessageTest do
       assert decoded.error["code"] == -32600
     end
 
-    test "decodes a batch of messages" do
-      msgs = [
-        %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"},
-        %{"jsonrpc" => "2.0", "method" => "notifications/initialized"}
-      ]
-
-      assert {:ok, decoded} = Message.decode(msgs)
-      assert length(decoded) == 2
-      assert Enum.at(decoded, 0).type == :request
-      assert Enum.at(decoded, 1).type == :notification
-    end
-
     test "returns error for missing jsonrpc field" do
       msg = %{"id" => 1, "method" => "test"}
 

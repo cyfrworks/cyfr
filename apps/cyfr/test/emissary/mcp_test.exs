@@ -11,8 +11,6 @@ defmodule Emissary.MCPTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP
-  alias Emissary.MCP.Session
-  alias Sanctum.Context
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -24,26 +22,24 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - request processing" do
     setup do
       ctx = Sanctum.TestContext.local()
-      session = Session.ephemeral(ctx)
-
-      {:ok, session: session}
+      {:ok, ctx: ctx}
     end
 
-    test "handles tools/list request", %{session: session} do
+    test "handles tools/list request", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 1,
         "method" => "tools/list"
       }
 
-      {:ok, result, 1} = MCP.handle_message(session, params)
+      {:ok, result, 1} = MCP.handle_message(ctx, params)
 
       assert is_list(result["tools"])
       tool_names = Enum.map(result["tools"], & &1["name"])
       assert "system" in tool_names
     end
 
-    test "handles tools/call request", %{session: session} do
+    test "handles tools/call request", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 2,
@@ -54,7 +50,7 @@ defmodule Emissary.MCPTest do
         }
       }
 
-      {:ok, result, 2} = MCP.handle_message(session, params)
+      {:ok, result, 2} = MCP.handle_message(ctx, params)
 
       assert result["content"]
       [content] = result["content"]
@@ -68,47 +64,47 @@ defmodule Emissary.MCPTest do
     # `ping` was removed in 2026-07-28. It is not merely unimplemented — a server
     # that still answers it tells a client the wrong thing about which revision
     # it speaks, so the rejection is the correct behaviour and worth pinning.
-    test "ping is gone", %{session: session} do
+    test "ping is gone", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 3,
         "method" => "ping"
       }
 
-      assert {:error, :method_not_found, message, 3} = MCP.handle_message(session, params)
+      assert {:error, :method_not_found, message, 3} = MCP.handle_message(ctx, params)
       assert message =~ "ping"
     end
 
-    test "handles resources/list request", %{session: session} do
+    test "handles resources/list request", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 4,
         "method" => "resources/list"
       }
 
-      {:ok, result, 4} = MCP.handle_message(session, params)
+      {:ok, result, 4} = MCP.handle_message(ctx, params)
       assert is_list(result["resources"])
     end
 
-    test "returns error for unknown method", %{session: session} do
+    test "returns error for unknown method", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 5,
         "method" => "unknown/method"
       }
 
-      {:error, :method_not_found, message, 5} = MCP.handle_message(session, params)
+      {:error, :method_not_found, message, 5} = MCP.handle_message(ctx, params)
       assert message =~ "Unknown method"
     end
 
-    test "returns error for invalid JSON-RPC", %{session: session} do
+    test "returns error for invalid JSON-RPC", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "1.0",
         "id" => 6,
         "method" => "tools/list"
       }
 
-      {:error, :invalid_request, message} = MCP.handle_message(session, params)
+      {:error, :invalid_request, message} = MCP.handle_message(ctx, params)
       assert message =~ "jsonrpc version"
     end
   end
@@ -116,141 +112,28 @@ defmodule Emissary.MCPTest do
   describe "handle_message/2 - notification processing" do
     setup do
       ctx = Sanctum.TestContext.local()
-      session = Session.ephemeral(ctx)
-
-      {:ok, session: session}
+      {:ok, ctx: ctx}
     end
 
-    test "handles notifications/cancelled", %{session: session} do
+    test "handles notifications/cancelled", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "method" => "notifications/cancelled",
         "params" => %{"requestId" => 123}
       }
 
-      result = MCP.handle_message(session, params)
+      result = MCP.handle_message(ctx, params)
       assert result == :ok
     end
 
-    test "unknown notifications return :ok", %{session: session} do
+    test "unknown notifications return :ok", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "method" => "notifications/unknown"
       }
 
-      result = MCP.handle_message(session, params)
+      result = MCP.handle_message(ctx, params)
       assert result == :ok
-    end
-  end
-
-  describe "handle_message/2 - batch requests" do
-    setup do
-      ctx = Sanctum.TestContext.local()
-      session = Session.ephemeral(ctx)
-
-      {:ok, session: session}
-    end
-
-    test "handles batch of requests", %{session: session} do
-      params = [
-        %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "resources/list"
-        },
-        %{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/list"
-        }
-      ]
-
-      {:ok, responses} = MCP.handle_message(session, params)
-
-      assert length(responses) == 2
-
-      resources_response = Enum.find(responses, &(&1["id"] == 1))
-      assert is_list(resources_response["result"]["resources"])
-
-      list_response = Enum.find(responses, &(&1["id"] == 2))
-      assert is_list(list_response["result"]["tools"])
-    end
-
-    test "batch with mixed requests and notifications", %{session: session} do
-      params = [
-        %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "resources/list"
-        },
-        %{
-          "jsonrpc" => "2.0",
-          "method" => "notifications/cancelled"
-        }
-      ]
-
-      {:ok, responses} = MCP.handle_message(session, params)
-
-      # Only requests generate responses, not notifications
-      assert length(responses) == 1
-      assert hd(responses)["id"] == 1
-    end
-
-    test "batch with error in one request", %{session: session} do
-      params = [
-        %{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "resources/list"
-        },
-        %{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "unknown/method"
-        }
-      ]
-
-      {:ok, responses} = MCP.handle_message(session, params)
-
-      assert length(responses) == 2
-
-      ok_response = Enum.find(responses, &(&1["id"] == 1))
-      assert is_list(ok_response["result"]["resources"])
-
-      error_response = Enum.find(responses, &(&1["id"] == 2))
-      assert error_response["error"]["message"] =~ "Unknown method"
-    end
-  end
-
-  describe "encode_result/2 and encode_error/3" do
-    test "encode_result creates valid JSON-RPC response" do
-      result = MCP.encode_result(42, %{"tools" => []})
-
-      assert result["jsonrpc"] == "2.0"
-      assert result["id"] == 42
-      assert result["result"]["tools"] == []
-      assert result["result"]["resultType"] == "complete"
-    end
-
-    test "encode_error creates valid JSON-RPC error" do
-      result = MCP.encode_error(42, :method_not_found, "Method not found")
-
-      assert result["jsonrpc"] == "2.0"
-      assert result["id"] == 42
-      assert result["error"]["code"] == -32601
-      assert result["error"]["message"] == "Method not found"
-    end
-
-    test "encode_error accepts numeric codes" do
-      result = MCP.encode_error(42, -32000, "Custom error")
-
-      assert result["error"]["code"] == -32000
-    end
-  end
-
-  describe "protocol_version/0" do
-    test "returns the supported protocol version" do
-      assert MCP.protocol_version() == Emissary.MCP.Protocol.version()
     end
   end
 end
