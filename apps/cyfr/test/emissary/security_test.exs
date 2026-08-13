@@ -12,8 +12,6 @@ defmodule Emissary.SecurityTest do
   """
   use EmissaryWeb.ConnCase
 
-  alias Emissary.MCP.Session
-
   # The `Mcp-Session-Id` header used to authenticate, so it had an attack surface
   # worth probing: forged ids, SQL injection, oversized values. The specification
   # removed protocol sessions and requires a server to ignore the header
@@ -66,16 +64,6 @@ defmodule Emissary.SecurityTest do
 
   describe "header security" do
     test "request with unusual content-type is handled", %{conn: conn} do
-      # Initialize a session first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Try with wrong content-type
       wrong_ct_conn =
         conn
@@ -95,16 +83,6 @@ defmodule Emissary.SecurityTest do
     end
 
     test "multiple session ID headers uses first", %{conn: conn} do
-      # Create a valid session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Send request with multiple session headers via raw connection
       # Phoenix will use the first header value
       conn =
@@ -215,16 +193,6 @@ defmodule Emissary.SecurityTest do
 
   describe "rate limiting and resource exhaustion" do
     test "many rapid requests are handled", %{conn: conn} do
-      # Initialize session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Send many rapid requests
       results =
         for i <- 1..100 do

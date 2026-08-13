@@ -40,7 +40,6 @@ defmodule Sanctum.ContextTest do
 
     test "includes new fields" do
       ctx = Sanctum.TestContext.local()
-      assert ctx.correlation_id == nil
       assert ctx.api_key_id == nil
     end
   end
@@ -57,35 +56,6 @@ defmodule Sanctum.ContextTest do
       ctx = Context.for_scheduled("user_1", project_id: "proj_1", org_id: "org_1")
       assert ctx.project_id == "proj_1"
       assert ctx.org_id == "org_1"
-    end
-
-    test "accepts correlation_id option" do
-      ctx = Context.for_scheduled("user_1", correlation_id: "corr_123")
-      assert ctx.correlation_id == "corr_123"
-    end
-  end
-
-  describe "build/1" do
-    test "builds context from keyword list" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          org_id: "org_1",
-          project_id: "proj_1",
-          permissions: [:execute, :storage_read],
-          scope: :project,
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
-        )
-
-      assert ctx.user_id == "user_1"
-      assert ctx.org_id == "org_1"
-      assert ctx.project_id == "proj_1"
-      assert ctx.scope == :project
-      assert MapSet.member?(ctx.permissions, :execute)
-      assert MapSet.member?(ctx.permissions, :storage_read)
-      assert ctx.authenticated == true
     end
 
     test "builds context from map" do
@@ -132,25 +102,6 @@ defmodule Sanctum.ContextTest do
         )
 
       assert ctx.api_key_id == "key_123"
-    end
-
-    test "includes correlation_id" do
-      ctx =
-        Context.build(
-          user_id: "u1",
-          correlation_id: "corr_456",
-          namespace: "testns",
-          authenticated: true
-        )
-
-      assert ctx.correlation_id == "corr_456"
-    end
-  end
-
-  describe "active_scope/1" do
-    test "returns :project when project_id is set" do
-      ctx = Sanctum.TestContext.local()
-      assert Context.active_scope(ctx) == :project
     end
 
     test "returns :org when only org_id is set" do
@@ -583,18 +534,6 @@ defmodule Sanctum.ContextTest do
       end
     end
 
-    test "rejects non-string correlation_id" do
-      assert_raise ArgumentError, ~r/correlation_id must be a string or nil/, fn ->
-        Context.build(correlation_id: :atom)
-      end
-    end
-
-    test "rejects non-string session_id" do
-      assert_raise ArgumentError, ~r/session_id must be a string or nil/, fn ->
-        Context.build(session_id: 42)
-      end
-    end
-
     test "rejects non-string api_key_id" do
       assert_raise ArgumentError, ~r/api_key_id must be a string or nil/, fn ->
         Context.build(api_key_id: 42)
@@ -615,8 +554,6 @@ defmodule Sanctum.ContextTest do
           org_id: nil,
           project_id: nil,
           request_id: nil,
-          correlation_id: nil,
-          session_id: nil,
           api_key_id: nil
         )
 
@@ -694,8 +631,7 @@ defmodule Sanctum.ContextTest do
       scheduled =
         Context.for_scheduled("user_1",
           org_id: "org_1",
-          project_id: "proj_1",
-          correlation_id: "corr_1"
+          project_id: "proj_1"
         )
 
       built =
@@ -706,7 +642,6 @@ defmodule Sanctum.ContextTest do
           permissions: [:execute, :storage_read, :execution_write, :storage_write],
           scope: :project,
           auth_method: :scheduled,
-          correlation_id: "corr_1",
           namespace: "testns",
           authenticated: true
         )
@@ -717,7 +652,6 @@ defmodule Sanctum.ContextTest do
       assert scheduled.permissions == built.permissions
       assert scheduled.scope == built.scope
       assert scheduled.auth_method == built.auth_method
-      assert scheduled.correlation_id == built.correlation_id
       assert scheduled.authenticated == built.authenticated
     end
 

@@ -14,10 +14,10 @@ defmodule Emissary.MCP.Progress do
 
   ## Why this replaced a buffer keyed by session
 
-  The previous design pushed progress into `Emissary.MCP.SSEBuffer` under
-  `context.session_id` and expected the caller to be holding a `GET /mcp` stream
-  keyed the same way. Three things were wrong with it, and only the third was a
-  conformance problem:
+  The previous design pushed progress into `Emissary.MCP.SSEBuffer` under a
+  per-credential session key, and expected the caller to be holding a
+  `GET /mcp` stream keyed the same way. Three things were wrong with it, and
+  only the third was a conformance problem:
 
     * **It did not work.** A bearer-authenticated caller's session came from
       `Session.for_credential/2`, which is deliberately never stored, so the
@@ -25,7 +25,7 @@ defmodule Emissary.MCP.Progress do
       after the first keep-alive. Progress for API-key callers — which is every
       CLI user — died 15 seconds in.
 
-    * **The key was too coarse.** `session_id` is stable per credential, so two
+    * **The key was too coarse.** It was stable per credential, so two
       concurrent calls by the same caller shared one channel and each received
       the other's progress.
 

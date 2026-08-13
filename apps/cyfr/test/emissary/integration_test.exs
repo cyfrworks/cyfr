@@ -15,11 +15,9 @@ defmodule Emissary.IntegrationTest do
   use EmissaryWeb.ConnCase, async: false
 
   alias Emissary.MCP
-  alias Emissary.MCP.Session
-  alias Sanctum.Context
 
-  describe "complete MCP session lifecycle" do
-    test "initialize -> tool call -> terminate flow", %{conn: conn} do
+  describe "an ordinary request, end to end" do
+    test "a tool call needs no handshake and leaves nothing behind", %{conn: conn} do
       # Step 1: Initialize session
       init_conn =
         conn
@@ -62,17 +60,7 @@ defmodule Emissary.IntegrationTest do
       assert result["status"] == "ok"
     end
 
-    test "session persists across multiple tool calls", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
+    test "each call stands on its own credential", %{conn: conn} do
       # Multiple tool calls
       for i <- 2..5 do
         call_conn =
@@ -215,16 +203,6 @@ defmodule Emissary.IntegrationTest do
     test "request telemetry emitted on tool call", %{conn: conn} do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
 
-      # Initialize first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Drain initialize telemetry
       receive do
         {[:cyfr, :emissary, :request], ^ref, _, _} -> :ok
@@ -259,16 +237,6 @@ defmodule Emissary.IntegrationTest do
 
   describe "multiple tool calls in sequence" do
     test "sequential calls maintain correct state", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Call 1: status all
       conn1 =
         conn
@@ -321,16 +289,6 @@ defmodule Emissary.IntegrationTest do
 
   describe "error handling propagation" do
     test "tool errors propagate correctly", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Call with invalid action
       error_conn =
         conn
@@ -354,16 +312,6 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "unknown tool returns protocol error", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Call unknown tool
       error_conn =
         conn
@@ -386,17 +334,7 @@ defmodule Emissary.IntegrationTest do
       assert response["error"]["message"] =~ "Unknown tool: nonexistent/tool"
     end
 
-    test "invalid JSON-RPC returns error with session", %{conn: conn} do
-      # Initialize first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
+    test "invalid JSON-RPC returns an error", %{conn: conn} do
       # Send invalid JSON-RPC version with session
       conn =
         conn
@@ -414,16 +352,6 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "system notify action sends webhook with correct payload", %{conn: conn} do
-      # Initialize session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Call notify with a non-existent endpoint (will fail delivery but test the structure)
       notify_conn =
         conn
@@ -460,16 +388,6 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "system notify fails gracefully with missing target", %{conn: conn} do
-      # Initialize session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Call notify without target
       notify_conn =
         conn
@@ -495,16 +413,6 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "system notify fails gracefully with missing event", %{conn: conn} do
-      # Initialize session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Call notify without event
       notify_conn =
         conn
@@ -533,7 +441,6 @@ defmodule Emissary.IntegrationTest do
   describe "internal MCP module integration" do
     test "MCP.handle_message delegates to ToolRegistry" do
       ctx = Sanctum.TestContext.local()
-      session = Session.ephemeral(ctx)
 
       message = %{
         "jsonrpc" => "2.0",
@@ -545,7 +452,7 @@ defmodule Emissary.IntegrationTest do
         }
       }
 
-      {:ok, result, 2} = MCP.handle_message(session, message)
+      {:ok, result, 2} = MCP.handle_message(ctx, message)
 
       assert is_list(result["content"])
       [content] = result["content"]
@@ -668,16 +575,6 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "request_id propagates to downstream tool handlers", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
       # Make a tool call that uses the context
       tool_conn =
         conn

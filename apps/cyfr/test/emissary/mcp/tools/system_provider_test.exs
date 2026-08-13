@@ -10,7 +10,6 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.Tools.SystemProvider
-  alias Sanctum.Context
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

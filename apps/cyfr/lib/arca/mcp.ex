@@ -171,7 +171,12 @@ defmodule Arca.MCP do
               "description" => "Action to perform"
             },
             "id" => %{"type" => "string", "description" => "Request ID"},
-            "request_id" => %{"type" => "string", "description" => "Request ID for correlation"},
+            "request_id" => %{
+              "type" => "string",
+              "description" =>
+                "The ingress request. Groups a whole chain: the call an ingress " <>
+                  "received and every tool a running component reached beneath it."
+            },
             "request_ids" => %{
               "type" => "array",
               "items" => %{"type" => "string"},
@@ -183,7 +188,6 @@ defmodule Arca.MCP do
               "description" => "ISO8601 timestamp — return logs after this time"
             },
             "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
-            "session_id" => %{"type" => "string", "description" => "Filter by session ID"},
             "status" => %{"type" => "string", "description" => "Filter by status"},
             "limit" => %{"type" => "integer", "description" => "Max results (default: 20)"}
           },
@@ -375,8 +379,6 @@ defmodule Arca.MCP do
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
     with :ok <- authorize(ctx, :read) do
-      session_id = args["session_id"] || ctx.session_id
-
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -385,7 +387,7 @@ defmodule Arca.MCP do
         ]
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
-        |> maybe_put(:session_id, session_id)
+        |> maybe_put(:request_id, args["request_id"])
         |> maybe_put(:tool, args["tool"])
 
       with {:ok, opts} <- parse_since_opt(opts, args["since"]) do
@@ -403,13 +405,9 @@ defmodule Arca.MCP do
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
     with :ok <- authorize(ctx, :read) do
       mcp_logs =
-        case Arca.McpLog.get_tenant(ctx, request_id) do
-          nil ->
-            []
-
-          log ->
-            [mcp_log_to_map(log)]
-        end
+        [request_id: request_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id]
+        |> Arca.McpLog.list()
+        |> Enum.map(&mcp_log_to_map/1)
 
       import Ecto.Query
       import Arca.QueryHelpers, only: [where_tenant: 2, maybe_put: 3]
@@ -733,7 +731,7 @@ defmodule Arca.MCP do
   defp mcp_log_to_map(%Arca.McpLog{} = log) do
     %{
       id: log.id,
-      session_id: log.session_id,
+      request_id: log.request_id,
       user_id: log.user_id,
       timestamp: format_datetime(log.timestamp),
       tool: log.tool,
@@ -754,7 +752,6 @@ defmodule Arca.MCP do
       id: log.id,
       request_id: log.request_id,
       execution_id: log.execution_id,
-      session_id: log.session_id,
       user_id: log.user_id,
       timestamp: format_datetime(log.timestamp),
       event_type: log.event_type,

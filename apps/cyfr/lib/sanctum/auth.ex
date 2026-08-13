@@ -11,7 +11,7 @@ defmodule Sanctum.Auth do
 
   Both callbacks return a `Sanctum.Context` carrying the persistent identity
   fields (`user_id`, `email`, `provider`, `permissions`, `org_id`, `project_id`).
-  Per-request fields (`request_id`, `correlation_id`, etc.) are populated
+  Per-request fields (`request_id`, etc.) are populated
   later in the request pipeline.
   """
 

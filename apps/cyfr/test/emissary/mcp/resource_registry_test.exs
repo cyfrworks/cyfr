@@ -10,7 +10,6 @@ defmodule Emissary.MCP.ResourceRegistryTest do
   use ExUnit.Case, async: true
 
   alias Emissary.MCP.ResourceRegistry
-  alias Sanctum.Context
 
   describe "list_resources/0" do
     test "returns a list" do

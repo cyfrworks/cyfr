@@ -375,7 +375,6 @@ defmodule Arca.MCPTest do
         scope: :project,
         auth_method: :oidc,
         api_key_type: nil,
-        session_id: "session_123",
         authenticated: true
       }
 

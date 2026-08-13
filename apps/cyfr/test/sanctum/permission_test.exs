@@ -131,8 +131,7 @@ defmodule Sanctum.PermissionTest do
         scope: :org,
         auth_method: :oidc,
         api_key_type: nil,
-        request_id: nil,
-        session_id: nil
+        request_id: nil
       }
 
       # Set same subject in both contexts
@@ -152,8 +151,7 @@ defmodule Sanctum.PermissionTest do
         scope: :org,
         auth_method: :oidc,
         api_key_type: nil,
-        request_id: nil,
-        session_id: nil
+        request_id: nil
       }
 
       org2_ctx = %Context{
@@ -163,8 +161,7 @@ defmodule Sanctum.PermissionTest do
         scope: :org,
         auth_method: :oidc,
         api_key_type: nil,
-        request_id: nil,
-        session_id: nil
+        request_id: nil
       }
 
       assert :ok = Permission.set(org1_ctx, "user@example.com", ["admin"])

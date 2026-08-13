@@ -25,7 +25,7 @@ defmodule Arca.McpLogTest do
         tool: "execution",
         action: "run",
         method: "tools/call",
-        session_id: "sess_1"
+        request_id: "req_chain_1"
       },
       overrides
     )
@@ -143,13 +143,18 @@ defmodule Arca.McpLogTest do
       assert Enum.all?(logs, &(&1.status == "error"))
     end
 
-    test "filters by session_id" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_fss1", session_id: "sess_a"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_fss2", session_id: "sess_b"}))
+    # The chain key: an ingress request and every in-chain call beneath it
+    # share one `request_id` while each row keeps its own `id`.
+    test "filters by request_id, returning a whole chain" do
+      {:ok, _} = McpLog.record(log_attrs(%{id: "req_root_a", request_id: "req_root_a"}))
+      {:ok, _} = McpLog.record(log_attrs(%{id: "call_a1", request_id: "req_root_a"}))
+      {:ok, _} = McpLog.record(log_attrs(%{id: "req_root_b", request_id: "req_root_b"}))
 
-      logs = McpLog.list(org_id: "local", project_id: "default", session_id: "sess_a")
+      logs = McpLog.list(org_id: "local", project_id: "default", request_id: "req_root_a")
       assert logs != []
-      assert Enum.all?(logs, &(&1.session_id == "sess_a"))
+      assert length(logs) == 2
+      assert Enum.all?(logs, &(&1.request_id == "req_root_a"))
+      assert Enum.sort(Enum.map(logs, & &1.id)) == ["call_a1", "req_root_a"]
     end
 
     test "filters by tool" do

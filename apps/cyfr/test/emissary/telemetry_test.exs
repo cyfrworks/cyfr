@@ -11,28 +11,8 @@ defmodule Emissary.TelemetryTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.Session
-  alias Sanctum.Context
-
   setup do
     :ok
-  end
-
-  # Helper to receive telemetry event for a specific session
-  # This handles concurrent test execution where multiple sessions may be created
-  defp receive_session_event(ref, session_id, lifecycle, timeout \\ 1000) do
-    receive do
-      {[:cyfr, :emissary, :session], ^ref, %{count: 1}, metadata} ->
-        if metadata.session_id == session_id and metadata.lifecycle == lifecycle do
-          metadata
-        else
-          # Not our session, keep looking
-          receive_session_event(ref, session_id, lifecycle, timeout)
-        end
-    after
-      timeout ->
-        raise "Timeout waiting for telemetry event for session #{session_id}"
-    end
   end
 
   describe "telemetry metrics definition" do

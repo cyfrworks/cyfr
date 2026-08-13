@@ -8,8 +8,13 @@ defmodule Sanctum.Context do
   Context represents whoever is using the instance — a user, an API key,
   a webhook receiver, a scheduled job, or the system itself. It carries
   the persistent identity (user_id, email, provider, permissions, org_id,
-  project_id) plus per-request decoration (request_id, correlation_id,
-  session_id, api_key_id, scope, auth_method, authenticated).
+  project_id) plus per-request decoration (request_id, api_key_id, scope,
+  auth_method, authenticated).
+
+  `request_id` is the ingress request and the only correlation key. It
+  survives into a WASM closure unchanged, so every call a running component
+  makes is attributable to the request that started it — which is what lets
+  `Arca.McpLog` show a chain as one group.
 
   Tests construct permissive single-user contexts via
   `Sanctum.TestContext.local/0` (compiled only in `:test` and `:dev`).
@@ -47,8 +52,6 @@ defmodule Sanctum.Context do
           auth_method: auth_method(),
           api_key_type: api_key_type(),
           request_id: String.t() | nil,
-          correlation_id: String.t() | nil,
-          session_id: String.t() | nil,
           api_key_id: String.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
@@ -67,8 +70,6 @@ defmodule Sanctum.Context do
     :auth_method,
     :api_key_type,
     :request_id,
-    :correlation_id,
-    :session_id,
     :api_key_id,
     authenticated: false,
     # True when the ORIGINATING caller presented no credentials (public
@@ -107,8 +108,7 @@ defmodule Sanctum.Context do
       project_id: Keyword.get(opts, :project_id, Arca.Tenant.default_project()),
       scope: :project,
       auth_method: :scheduled,
-      permissions: [:execute, :storage_read, :storage_write, :execution_write],
-      correlation_id: Keyword.get(opts, :correlation_id)
+      permissions: [:execute, :storage_read, :storage_write, :execution_write]
     )
   end
 
@@ -131,8 +131,6 @@ defmodule Sanctum.Context do
   - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
   - `:request_id` - MCP request ID
-  - `:correlation_id` - Cross-request correlation ID
-  - `:session_id` - Session ID
   - `:authenticated` - Boolean (default: false)
 
   ## Examples
@@ -187,8 +185,6 @@ defmodule Sanctum.Context do
           :org_id,
           :project_id,
           :request_id,
-          :correlation_id,
-          :session_id,
           :api_key_id
         ] do
       val = Map.get(attrs, field)
@@ -263,8 +259,6 @@ defmodule Sanctum.Context do
       auth_method: Map.get(attrs, :auth_method),
       api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
-      correlation_id: Map.get(attrs, :correlation_id),
-      session_id: Map.get(attrs, :session_id),
       api_key_id: Map.get(attrs, :api_key_id),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
@@ -299,7 +293,6 @@ defmodule Sanctum.Context do
     * `:permissions`    — default `[:execute, :storage_read, :execution_write, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
-    * `:correlation_id` — default `nil`
 
   `authenticated:` is always `true`.
 
@@ -326,7 +319,6 @@ defmodule Sanctum.Context do
         ]),
       scope: Keyword.get(opts, :scope, :platform),
       auth_method: Keyword.get(opts, :auth_method, :system),
-      correlation_id: Keyword.get(opts, :correlation_id),
       authenticated: true,
       # Marks this as the single sanctioned platform-construction path so the
       # audit in build/1 records it as sanctioned (no warning).

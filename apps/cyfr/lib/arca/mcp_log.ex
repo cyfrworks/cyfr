@@ -9,8 +9,11 @@ defmodule Arca.McpLog do
 
   ## Schema
 
-  - `id` (PK) - Request ID (req_<uuid7>)
-  - `session_id` - MCP session ID
+  - `id` (PK) - This call. For the request an ingress received, it is the
+    request id; an in-chain call minted during that request has its own.
+  - `request_id` - The ingress request every call in one chain shares. Group by
+    this to see a formula's whole run: the `execution.run` that started it and
+    each tool it reached from inside the sandbox.
   - `user_id` - User who made the request
   - `timestamp` - When the request was received
   - `tool` - Tool name (e.g., "execution", "storage")
@@ -35,7 +38,7 @@ defmodule Arca.McpLog do
   @timestamps_opts []
 
   schema "mcp_logs" do
-    field :session_id, :string
+    field :request_id, :string
     field :user_id, :string
     field :org_id, :string, default: ""
     field :project_id, :string, default: "default"
@@ -54,7 +57,7 @@ defmodule Arca.McpLog do
 
   @required_fields [:id, :user_id, :timestamp, :status]
   @optional_fields [
-    :session_id,
+    :request_id,
     :org_id,
     :project_id,
     :tool,
@@ -127,7 +130,7 @@ defmodule Arca.McpLog do
   - `:limit` - Maximum records to return (default: 20)
   - `:user_id` - Filter by user ID
   - `:status` - Filter by status
-  - `:session_id` - Filter by session ID
+  - `:request_id` - Filter by ingress request (returns a whole chain)
   - `:tool` - Filter by tool name
   - `:since` - Filter logs after this DateTime
   """
@@ -135,7 +138,7 @@ defmodule Arca.McpLog do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     status = Keyword.get(opts, :status)
-    session_id = Keyword.get(opts, :session_id)
+    request_id = Keyword.get(opts, :request_id)
     tool = Keyword.get(opts, :tool)
     since = Keyword.get(opts, :since)
     org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
@@ -148,7 +151,7 @@ defmodule Arca.McpLog do
 
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
     query = if status, do: where(query, [l], l.status == ^status), else: query
-    query = if session_id, do: where(query, [l], l.session_id == ^session_id), else: query
+    query = if request_id, do: where(query, [l], l.request_id == ^request_id), else: query
     query = if tool, do: where(query, [l], l.tool == ^tool), else: query
     query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
     query = where(query, [l], l.org_id == ^org_id)

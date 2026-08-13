@@ -38,7 +38,7 @@ defmodule Cyfr.OtelTenantHandler do
       conn = metadata[:conn]
 
       if conn && is_map(conn.assigns) do
-        ctx = conn.assigns[:mcp_context] || conn.assigns[:context]
+        ctx = conn.assigns[:context]
 
         # Only a real Context carries tenant fields; guard up front so a stray
         # non-struct assign fails fast/clearly instead of KeyError-ing into the

@@ -6,16 +6,15 @@ defmodule Emissary.MCP.RequestLogTest do
 
   alias Emissary.MCP.RequestLog
   alias Emissary.UUID7
-  alias Sanctum.Context
 
   setup do
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Create a unique request_id for each test
+    # The transport's own row: its call id is the request id.
     request_id = UUID7.request_id()
-    ctx = %{Sanctum.TestContext.local() | session_id: UUID7.session_id()}
+    ctx = %{Sanctum.TestContext.local() | request_id: request_id}
 
     %{request_id: request_id, ctx: ctx}
   end
@@ -41,7 +40,7 @@ defmodule Emissary.MCP.RequestLogTest do
       log = get_log!(request_id)
 
       assert log.id == request_id
-      assert log.session_id == ctx.session_id
+      assert log.request_id == ctx.request_id
       assert log.user_id == ctx.user_id
       assert log.tool == "storage"
       assert log.action == "get"

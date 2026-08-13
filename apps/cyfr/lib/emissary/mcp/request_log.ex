@@ -3,11 +3,16 @@
 
 defmodule Emissary.MCP.RequestLog do
   @moduledoc """
-  MCP request logging for CYFR.
+  MCP call logging for CYFR.
 
-  Logs every MCP request to enable forensic replay and audit trails.
-  Each log entry captures the complete request context, allowing exact
-  reproduction of request handling.
+  One row per call, so a chain is legible: the `execution.run` an ingress
+  received, and each tool the running component reached from inside the
+  sandbox. `id` is the call, `request_id` is the ingress request they share.
+
+  In-chain calls used to be invisible here. The row's primary key was the
+  request id, so a second row could not be written under it, and the dispatcher
+  skipped logging whenever the context already carried one — which an in-chain
+  call always does, having inherited it through the guest closure.
 
   Routes all persistent storage through `Arca.McpLog`
   which owns path construction, file writes, and SQLite indexing.
@@ -23,8 +28,8 @@ defmodule Emissary.MCP.RequestLog do
   require Logger
 
   @type log_entry :: %{
-          request_id: String.t(),
-          session_id: String.t() | nil,
+          call_id: String.t(),
+          request_id: String.t() | nil,
           user_id: String.t(),
           timestamp: String.t(),
           tool: String.t() | nil,
@@ -44,17 +49,21 @@ defmodule Emissary.MCP.RequestLog do
   # ============================================================================
 
   @doc """
-  Log the start of an MCP request.
+  Log the start of one call.
 
-  Called before routing the request. This creates the initial log entry
-  with status "pending". Input is automatically sanitized.
+  `call_id` identifies this call; `ctx.request_id` identifies the ingress
+  request it belongs to, which is what groups a chain. For the request an
+  ingress received the two are the same value — it is its own root.
+
+  Called before the work runs, so the row exists with status "pending" even if
+  the process dies. Input is automatically sanitized.
   """
   @spec log_started(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_started(%Context{} = ctx, request_id, data)
-      when is_binary(request_id) and is_map(data) do
+  def log_started(%Context{} = ctx, call_id, data)
+      when is_binary(call_id) and is_map(data) do
     case Arca.McpLog.record(%{
-           id: request_id,
-           session_id: ctx.session_id,
+           id: call_id,
+           request_id: ctx.request_id,
            user_id: ctx.user_id || "system",
            timestamp: DateTime.utc_now(),
            tool: data[:tool] || data["tool"],
@@ -72,9 +81,9 @@ defmodule Emissary.MCP.RequestLog do
   Log successful completion of an MCP request.
   """
   @spec log_completed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_completed(%Context{} = ctx, request_id, data)
-      when is_binary(request_id) and is_map(data) do
-    case Arca.McpLog.record_update(ctx, request_id, %{
+  def log_completed(%Context{} = ctx, call_id, data)
+      when is_binary(call_id) and is_map(data) do
+    case Arca.McpLog.record_update(ctx, call_id, %{
            status: "success",
            duration_ms: data[:duration_ms] || data["duration_ms"],
            routed_to: data[:routed_to] || data["routed_to"],
@@ -89,9 +98,9 @@ defmodule Emissary.MCP.RequestLog do
   Log failure of an MCP request.
   """
   @spec log_failed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_failed(%Context{} = ctx, request_id, data)
-      when is_binary(request_id) and is_map(data) do
-    case Arca.McpLog.record_update(ctx, request_id, %{
+  def log_failed(%Context{} = ctx, call_id, data)
+      when is_binary(call_id) and is_map(data) do
+    case Arca.McpLog.record_update(ctx, call_id, %{
            status: "error",
            error_code: data[:code] || data["code"],
            duration_ms: data[:duration_ms] || data["duration_ms"],
@@ -117,18 +126,18 @@ defmodule Emissary.MCP.RequestLog do
   Logs unexpected errors via `Logger.error` rather than propagating.
   """
   @spec safe_log_started(Context.t(), String.t(), map()) :: :ok
-  def safe_log_started(%Context{} = ctx, request_id, data) do
-    case log_started(ctx, request_id, data) do
+  def safe_log_started(%Context{} = ctx, call_id, data) do
+    case log_started(ctx, call_id, data) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.error("[RequestLog] log_started failed for #{request_id}: #{inspect(reason)}")
+        Logger.error("[RequestLog] log_started failed for #{call_id}: #{inspect(reason)}")
         :ok
     end
   rescue
     e ->
-      Logger.error("[RequestLog] log_started raised for #{request_id}: #{inspect(e)}")
+      Logger.error("[RequestLog] log_started raised for #{call_id}: #{inspect(e)}")
       :ok
   end
 
@@ -136,18 +145,18 @@ defmodule Emissary.MCP.RequestLog do
   Best-effort wrapper around `log_completed/3`. Always returns `:ok`.
   """
   @spec safe_log_completed(Context.t(), String.t(), map()) :: :ok
-  def safe_log_completed(%Context{} = ctx, request_id, data) do
-    case log_completed(ctx, request_id, data) do
+  def safe_log_completed(%Context{} = ctx, call_id, data) do
+    case log_completed(ctx, call_id, data) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.error("[RequestLog] log_completed failed for #{request_id}: #{inspect(reason)}")
+        Logger.error("[RequestLog] log_completed failed for #{call_id}: #{inspect(reason)}")
         :ok
     end
   rescue
     e ->
-      Logger.error("[RequestLog] log_completed raised for #{request_id}: #{inspect(e)}")
+      Logger.error("[RequestLog] log_completed raised for #{call_id}: #{inspect(e)}")
       :ok
   end
 
@@ -155,18 +164,18 @@ defmodule Emissary.MCP.RequestLog do
   Best-effort wrapper around `log_failed/3`. Always returns `:ok`.
   """
   @spec safe_log_failed(Context.t(), String.t(), map()) :: :ok
-  def safe_log_failed(%Context{} = ctx, request_id, data) do
-    case log_failed(ctx, request_id, data) do
+  def safe_log_failed(%Context{} = ctx, call_id, data) do
+    case log_failed(ctx, call_id, data) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.error("[RequestLog] log_failed failed for #{request_id}: #{inspect(reason)}")
+        Logger.error("[RequestLog] log_failed failed for #{call_id}: #{inspect(reason)}")
         :ok
     end
   rescue
     e ->
-      Logger.error("[RequestLog] log_failed raised for #{request_id}: #{inspect(e)}")
+      Logger.error("[RequestLog] log_failed raised for #{call_id}: #{inspect(e)}")
       :ok
   end
 

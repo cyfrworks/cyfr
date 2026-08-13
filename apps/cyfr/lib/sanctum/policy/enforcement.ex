@@ -62,7 +62,7 @@ defmodule Sanctum.Policy.Enforcement do
   ## Required attrs
 
     * `:ctx` — `Sanctum.Context.t()`. Source of `user_id`, `org_id`, `project_id`,
-      `request_id`, `session_id`.
+      `request_id`, `execution_id`.
     * `:component_ref` — string reference of the component being evaluated.
     * `:event_type` — typed rule name (atom, see module doc).
     * `:decision` — `:allowed` or `:denied`.
@@ -111,7 +111,6 @@ defmodule Sanctum.Policy.Enforcement do
       id: generate_id(),
       request_id: ctx.request_id,
       execution_id: attrs[:execution_id],
-      session_id: ctx.session_id,
       user_id: ctx.user_id || "system",
       org_id: ctx.org_id,
       project_id: ctx.project_id,

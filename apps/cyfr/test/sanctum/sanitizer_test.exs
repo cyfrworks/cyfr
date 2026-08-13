@@ -66,7 +66,7 @@ defmodule Sanctum.SanitizerTest do
   end
 
   # These asserted `@derive {Inspect, except: [:sanctum_token]}` on
-  # `Emissary.MCP.Session`, which held a live bearer credential in a `:public`
+  # `Emissary.MCP.Request` (then `Session`), which held a live bearer credential in a `:public`
   # ETS table and so could reach a log through any crash report that stringified
   # it. That struct no longer stores a credential at all — the protocol session
   # it belonged to is gone — so the derive went with the field.

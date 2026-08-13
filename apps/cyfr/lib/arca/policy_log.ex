@@ -13,7 +13,6 @@ defmodule Arca.PolicyLog do
   - `id` (PK) - Auto-generated ID
   - `request_id` - MCP request ID for correlation
   - `execution_id` - Execution ID if triggered by an execution
-  - `session_id` - MCP session ID
   - `user_id` - User whose policy was consulted
   - `timestamp` - When the consultation occurred
   - `event_type` - policy_consultation/denied/violation
@@ -37,7 +36,6 @@ defmodule Arca.PolicyLog do
   schema "policy_logs" do
     field :request_id, :string
     field :execution_id, :string
-    field :session_id, :string
     field :user_id, :string
     field :org_id, :string, default: "local"
     field :project_id, :string, default: "default"
@@ -61,7 +59,6 @@ defmodule Arca.PolicyLog do
   @optional_fields [
     :request_id,
     :execution_id,
-    :session_id,
     :org_id,
     :project_id,
     :component_ref,

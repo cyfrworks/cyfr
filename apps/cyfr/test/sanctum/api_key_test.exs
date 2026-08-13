@@ -580,8 +580,7 @@ defmodule Sanctum.ApiKeyTest do
         scope: :project,
         auth_method: :oidc,
         api_key_type: nil,
-        request_id: nil,
-        session_id: nil
+        request_id: nil
       }
 
       ctx_b = %{ctx_a | project_id: "proj_b"}

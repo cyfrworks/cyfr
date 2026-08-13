@@ -4,8 +4,6 @@
 defmodule Cyfr.LoggerContextTest do
   use ExUnit.Case, async: true
 
-  require Logger
-
   alias Cyfr.LoggerContext
 
   describe "set_from_context/1" do

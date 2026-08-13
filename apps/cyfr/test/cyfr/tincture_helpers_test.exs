@@ -5,7 +5,6 @@ defmodule Cyfr.TinctureHelpersTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.TinctureHelpers
-  alias Sanctum.Context
 
   setup do
     base = Path.join(System.tmp_dir!(), "tincture_helpers_test_#{:rand.uniform(1_000_000)}")

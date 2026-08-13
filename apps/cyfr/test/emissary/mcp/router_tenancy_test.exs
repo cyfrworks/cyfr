@@ -13,20 +13,16 @@ defmodule Emissary.MCP.RouterTenancyTest do
     :ok
   end
 
-  # We test public_tool_action? indirectly through dispatch since it's private.
-  # We build minimal session + message structures to exercise the auth check.
+  # public_tool_action? is private, so it is exercised through dispatch.
 
-  defp make_session(authenticated) do
-    ctx =
-      Sanctum.Context.build(
-        user_id: if(authenticated, do: "test_user", else: nil),
-        permissions: if(authenticated, do: [:*], else: []),
-        scope: :project,
-        auth_method: if(authenticated, do: :oidc, else: nil),
-        authenticated: authenticated
-      )
-
-    %{context: ctx}
+  defp make_context(authenticated) do
+    Sanctum.Context.build(
+      user_id: if(authenticated, do: "test_user", else: nil),
+      permissions: if(authenticated, do: [:*], else: []),
+      scope: :project,
+      auth_method: if(authenticated, do: :oidc, else: nil),
+      authenticated: authenticated
+    )
   end
 
   defp tool_call_msg(tool_name, action) do
@@ -54,27 +50,27 @@ defmodule Emissary.MCP.RouterTenancyTest do
     end
 
     test "component.list is public in single-user" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "list")
 
       # Should not return auth_required error
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       refute match?({:error, :auth_required, _}, result)
     end
 
     test "component.search is public in single-user" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "search")
 
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       refute match?({:error, :auth_required, _}, result)
     end
 
     test "component.inspect is public in single-user" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "inspect")
 
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       refute match?({:error, :auth_required, _}, result)
     end
   end
@@ -94,47 +90,47 @@ defmodule Emissary.MCP.RouterTenancyTest do
     end
 
     test "component.list requires auth in multi-tenant" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "list")
 
-      assert {:error, :auth_required, _} = Router.dispatch(session, msg)
+      assert {:error, :auth_required, _} = Router.dispatch(ctx, msg)
     end
 
     test "component.search requires auth in multi-tenant" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "search")
 
-      assert {:error, :auth_required, _} = Router.dispatch(session, msg)
+      assert {:error, :auth_required, _} = Router.dispatch(ctx, msg)
     end
 
     test "component.inspect requires auth in multi-tenant" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "inspect")
 
-      assert {:error, :auth_required, _} = Router.dispatch(session, msg)
+      assert {:error, :auth_required, _} = Router.dispatch(ctx, msg)
     end
 
     test "component.categories remains public in multi-tenant" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("component", "categories")
 
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       refute match?({:error, :auth_required, _}, result)
     end
 
     test "session tool remains public in multi-tenant" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("session", "status")
 
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       refute match?({:error, :auth_required, _}, result)
     end
 
     test "system.status remains public in multi-tenant" do
-      session = make_session(false)
+      ctx = make_context(false)
       msg = tool_call_msg("system", "status")
 
-      result = Router.dispatch(session, msg)
+      result = Router.dispatch(ctx, msg)
       refute match?({:error, :auth_required, _}, result)
     end
   end
