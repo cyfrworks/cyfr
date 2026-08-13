@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.Plugs.MCPSessionTest do
+defmodule EmissaryWeb.Plugs.AuthenticateTest do
   @moduledoc """
-  Tests for the MCP session validation plug.
+  Tests for the credential-resolution plug.
 
-  Verifies auth provider integration and context propagation.
+  Verifies bearer handling, auth-provider integration and context propagation.
+  The MCP endpoint's own conformance rules are a separate plug and are
+  exercised end-to-end through the pipeline in
+  `EmissaryWeb.MCPControllerTest`.
   """
   use EmissaryWeb.ConnCase, async: false
 
-  alias Emissary.MCP.Session
-  alias EmissaryWeb.Plugs.MCPSession
-  alias Sanctum.Context
+  alias EmissaryWeb.Plugs.Authenticate
 
   # Test auth provider that returns an authenticated user
   defmodule TestAuthProvider do
@@ -110,36 +111,47 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
   # into a lookup before rejecting it.
   describe "call/2 — the retired session header" do
     test "a request with no credential still gets a context", %{conn: conn} do
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
       refute conn.halted
-      assert conn.assigns[:mcp_context]
-      assert conn.assigns[:mcp_session] == nil
+      assert conn.assigns[:context]
     end
 
-    test "a session id in the header neither authenticates nor rejects", %{conn: conn} do
+    # The property is not "the header is rejected" but "the header is not read":
+    # whatever it says, the resolved context is the one the request would have
+    # had without it. Asserting equality against that baseline is stronger than
+    # asserting any particular outcome, because it fails if the value is ever
+    # fed into a lookup again.
+    test "a real session id in the header changes nothing", %{conn: conn} do
       ctx = Sanctum.TestContext.local()
       {:ok, session} = Sanctum.Session.create(ctx)
 
-      conn =
-        conn
-        |> put_req_header("mcp-session-id", session.token)
-        |> Map.put(:body_params, %{"method" => "tools/call"})
-        |> MCPSession.call([])
+      assert unchanged_by_session_header(conn, session.token)
 
-      refute conn.halted
-      assert conn.assigns[:mcp_session] == nil
+      Sanctum.Session.destroy(session.token)
     end
 
-    test "an unknown session id is not an error", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("mcp-session-id", "sess_nonexistent")
-        |> Map.put(:body_params, %{"method" => "tools/call"})
-        |> MCPSession.call([])
+    test "an unknown session id changes nothing either", %{conn: conn} do
+      assert unchanged_by_session_header(conn, "sess_nonexistent")
+    end
 
-      refute conn.halted
-      assert conn.assigns[:mcp_session] == nil
+    defp unchanged_by_session_header(conn, header_value) do
+      body = %{"method" => "tools/call"}
+
+      baseline =
+        conn
+        |> Map.put(:body_params, body)
+        |> Authenticate.call([])
+
+      with_header =
+        conn
+        |> put_req_header("mcp-session-id", header_value)
+        |> Map.put(:body_params, body)
+        |> Authenticate.call([])
+
+      refute baseline.halted
+      refute with_header.halted
+      with_header.assigns[:context] == baseline.assigns[:context]
     end
   end
 
@@ -170,10 +182,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer " <> session.token)
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
-      assert conn.assigns[:mcp_context].user_id == "hydrate_user"
+      assert conn.assigns[:context].user_id == "hydrate_user"
       assert conn.assigns[:auth_method] == :session_token
 
       Sanctum.Session.destroy(session.token)
@@ -195,7 +207,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
         conn
         |> put_req_header("authorization", "Bearer not-a-real-session-token")
         |> Map.put(:body_params, %{"method" => "tools/call"})
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       assert conn.halted
       assert conn.status == 401
@@ -207,10 +219,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer a-token-only-the-provider-knows")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
-      assert conn.assigns[:mcp_context].authenticated
+      assert conn.assigns[:context].authenticated
     end
   end
 
@@ -230,9 +242,9 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     end
 
     test "returns unauthenticated context when no auth provider configured", %{conn: conn} do
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.user_id == nil
       assert ctx.permissions == MapSet.new()
       assert ctx.authenticated == false
@@ -258,9 +270,9 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     end
 
     test "creates context from authenticated user", %{conn: conn} do
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.user_id == "test_user_123"
       assert MapSet.member?(ctx.permissions, :read)
       assert MapSet.member?(ctx.permissions, :write)
@@ -287,9 +299,9 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     end
 
     test "returns unauthenticated context when auth provider returns nil", %{conn: conn} do
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.user_id == nil
       assert ctx.permissions == MapSet.new()
     end
@@ -317,9 +329,9 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer valid_token")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.user_id == "bearer_user"
       assert MapSet.member?(ctx.permissions, :admin)
     end
@@ -334,16 +346,16 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer invalid_token")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       assert conn.halted
       assert conn.status == 401
     end
 
     test "missing Authorization header returns unauthenticated context", %{conn: conn} do
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       # No auth returns unauthenticated context
       assert ctx.user_id == nil
       assert ctx.permissions == MapSet.new()
@@ -401,10 +413,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
 
       assert ctx.auth_method == :api_key
       assert ctx.api_key_type == :application
@@ -419,7 +431,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer cyfr_pk_invalid123456789012345678")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       assert conn.halted
       assert conn.status == 401
@@ -427,16 +439,38 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       assert body["error"]["message"] =~ "Invalid API key"
     end
 
+    # RFC 9110 §15.5.2: a 401 MUST carry at least one challenge. Every rejection
+    # from this endpoint used to be a bare 401, which leaves a client with
+    # nothing to act on and no way to tell "wrong credential" from "wrong shape".
+    test "every 401 carries a WWW-Authenticate challenge", %{conn: conn} do
+      for authorization <- [
+            "Bearer cyfr_pk_invalid123456789012345678",
+            "Bearer not-a-real-session-token"
+          ] do
+        original = Application.get_env(:cyfr, :auth_provider)
+        Application.delete_env(:cyfr, :auth_provider)
+        on_exit(fn -> Application.put_env(:cyfr, :auth_provider, original) end)
+
+        conn =
+          conn
+          |> put_req_header("authorization", authorization)
+          |> Authenticate.call([])
+
+        assert conn.status == 401, "expected 401 for #{authorization}"
+        assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+      end
+    end
+
     test "falls back to session auth for non-cyfr Bearer token", %{conn: conn} do
       # Non-cyfr_ prefixed tokens should fall through to session auth
       conn =
         conn
         |> put_req_header("authorization", "Bearer some_other_token")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       # Should fall back to TestAuthProvider which returns test_user_123
       refute conn.halted
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.user_id == "test_user_123"
     end
 
@@ -449,14 +483,11 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{session.token}")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
-      # Nothing is stored; the session is derived from the credential purely as
-      # a correlation key, so it carries a "cred_" id rather than a "sess_" one.
-      assert %Session{id: "req_" <> _} = conn.assigns[:mcp_session]
       assert conn.assigns[:auth_method] == :session_token
-      assert conn.assigns[:mcp_context].user_id == ctx.user_id
+      assert conn.assigns[:context].user_id == ctx.user_id
       # `authenticated` additionally depends on the user having claimed a
       # personal namespace, which is a separate gate from bearer auth.
     end
@@ -471,9 +502,9 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{session.token}")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
-      resolved = conn.assigns[:mcp_context]
+      resolved = conn.assigns[:context]
       refute resolved && resolved.user_id == ctx.user_id && resolved.authenticated
     end
 
@@ -482,14 +513,11 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
-      # No stored session — the plug supplies an uncached, credential-keyed one
-      # purely so a caller's POST and its progress stream share a key.
-      assert %Emissary.MCP.Session{id: "req_" <> _} = conn.assigns[:mcp_session]
       assert conn.assigns[:auth_method] == :api_key
-      assert conn.assigns[:mcp_context].auth_method == :api_key
+      assert conn.assigns[:context].auth_method == :api_key
     end
 
     test "the bearer credential decides, whatever the retired header says",
@@ -498,21 +526,21 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
         |> put_req_header("mcp-session-id", "sess_something_else_entirely")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
       assert conn.assigns[:auth_method] == :api_key
-      assert conn.assigns[:mcp_context].auth_method == :api_key
+      assert conn.assigns[:context].auth_method == :api_key
     end
 
     test "context has authenticated: true for valid API key", %{conn: conn, api_key: api_key} do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       refute conn.halted
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.authenticated == true
     end
   end
@@ -547,26 +575,26 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
          %{conn: conn} do
       Application.delete_env(:cyfr, :auth_provider)
 
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
       refute conn.halted
-      refute conn.assigns[:mcp_context].authenticated
+      refute conn.assigns[:context].authenticated
     end
 
     test "auth provider returns nil credentials — unauthenticated context, not rejected",
          %{conn: conn} do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.NilAuthProvider)
 
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
       refute conn.halted
-      refute conn.assigns[:mcp_context].authenticated
+      refute conn.assigns[:context].authenticated
     end
 
     test "auth provider *error* fails closed with 503", %{conn: conn} do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.ErrorAuthProvider)
 
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
       assert conn.halted
       assert conn.status == 503
@@ -577,10 +605,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     test "allows an authenticated user with a resolved org_id through", %{conn: conn} do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.StubAuthProvider)
 
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
       refute conn.halted
-      ctx = conn.assigns[:mcp_context]
+      ctx = conn.assigns[:context]
       assert ctx.user_id == "test_user_123"
       assert ctx.org_id == "org_test"
       assert ctx.authenticated == true
@@ -589,7 +617,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     test "rejects an authenticated user with no resolved org_id with 403", %{conn: conn} do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.TestAuthProvider)
 
-      conn = MCPSession.call(conn, [])
+      conn = Authenticate.call(conn, [])
 
       assert conn.halted
       assert conn.status == 403
@@ -652,7 +680,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
       log =
         capture_log(fn ->
-          conn = MCPSession.call(conn, [])
+          conn = Authenticate.call(conn, [])
 
           # User has no org_id and membership resolution failed → reject with
           # 403 (missing_tenant).
@@ -673,33 +701,33 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       conn =
         conn
         |> put_req_header("x-forwarded-for", "")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       # Should not crash, should use remote_ip fallback
       refute conn.halted
-      assert conn.assigns[:mcp_context]
+      assert conn.assigns[:context]
     end
 
     test "handles malformed X-Forwarded-For header", %{conn: conn} do
       conn =
         conn
         |> put_req_header("x-forwarded-for", "not-an-ip, also-not-an-ip")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       # Should not crash, should use remote_ip fallback
       refute conn.halted
-      assert conn.assigns[:mcp_context]
+      assert conn.assigns[:context]
     end
 
     test "handles valid X-Forwarded-For with multiple IPs", %{conn: conn} do
       conn =
         conn
         |> put_req_header("x-forwarded-for", "192.168.1.1, 10.0.0.1, 172.16.0.1")
-        |> MCPSession.call([])
+        |> Authenticate.call([])
 
       # Should take first IP
       refute conn.halted
-      assert conn.assigns[:mcp_context]
+      assert conn.assigns[:context]
     end
   end
 end

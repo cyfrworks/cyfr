@@ -135,14 +135,32 @@ defmodule EmissaryWeb.Plugs.CORSTest do
       assert methods.(methods: ~w(POST OPTIONS)) == ["OPTIONS", "POST"]
     end
 
-    # `mcp-session-id` and `last-event-id` are still advertised on purpose:
-    # `Sanctum.TinctureAuth` still reads the former and `SSEController` the
-    # latter. They come off this list in the change that deletes those readers.
-    test "credential headers still in use are still advertised" do
-      advertised = preflight_headers("access-control-allow-headers")
+    # A header nothing reads must not be advertised: a preflight is a statement
+    # about what the server accepts, and `mcp-session-id` has no reader left.
+    test "the retired session header is not advertised" do
+      refute "mcp-session-id" in preflight_headers("access-control-allow-headers")
+    end
 
-      assert "mcp-session-id" in advertised
-      assert "last-event-id" in advertised
+    # `last-event-id` belongs to the execution event stream, not to MCP.
+    # Advertising it everywhere claimed support for something no MCP handler
+    # reads; each mount now names the extra headers it actually accepts.
+    test "each mount advertises only the extra headers it accepts" do
+      Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
+
+      headers = fn opts ->
+        conn(:options, "/mcp")
+        |> put_req_header("origin", "https://example.com")
+        |> CORS.call(CORS.init(opts))
+        |> get_resp_header("access-control-allow-headers")
+        |> List.first()
+        |> String.split(", ")
+      end
+
+      refute "last-event-id" in headers.([])
+      assert "last-event-id" in headers.(headers: ~w(last-event-id))
+
+      # The common set is still there alongside the extra one.
+      assert "authorization" in headers.(headers: ~w(last-event-id))
     end
   end
 

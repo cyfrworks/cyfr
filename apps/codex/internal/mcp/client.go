@@ -13,13 +13,10 @@ import (
 
 const protocolVersion = "2026-07-28"
 
-// ErrSessionExpired is returned when the server reports that the session has expired.
-var ErrSessionExpired = fmt.Errorf("session expired")
-
-// ErrSessionRequired is returned when the server requires a session but none was provided.
-var ErrSessionRequired = fmt.Errorf("session required")
-
-// ErrAuthRequired is returned when the session exists but is not authenticated.
+// ErrAuthRequired is returned when the caller presented no usable credential.
+// The server-side session sentinels that used to sit alongside it (-33301 /
+// -33302) are retired: the protocol has no sessions, so the server never emits
+// them and nothing can produce these errors.
 var ErrAuthRequired = fmt.Errorf("authentication required")
 
 // ErrUnsupportedProtocol is returned when the server's protocol version doesn't match the client's.
@@ -386,25 +383,18 @@ func (c *Client) doRequestOnce(req JSONRPCRequest, progressToken string, onProgr
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		// MCP spec: server returns HTTP 404 when session has expired.
-		// Check this before JSON-RPC parsing to handle bare 404 responses.
-		if httpResp.StatusCode == http.StatusNotFound && c.SessionID != "" {
-			return nil, ErrSessionExpired
-		}
-
-		// Try to parse as JSON-RPC error and extract a clean message
+		// A 404 used to be read as "the session expired" — that was the previous
+		// transport, where the server forgot a session and answered 404. This
+		// revision has no sessions and gives 404 a different meaning entirely:
+		// an unimplemented method, carrying -32601. Keeping the old heuristic
+		// told a perfectly authenticated user to run `cyfr login` whenever they
+		// hit a method the server does not have.
 		var errResp JSONRPCResponse
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil {
-			switch errResp.Error.Code {
-			case -33302:
-				return nil, ErrSessionExpired
-			case -33301:
-				return nil, ErrSessionRequired
-			case -33001:
+			if errResp.Error.Code == -33001 {
 				return nil, ErrAuthRequired
-			default:
-				return nil, fmt.Errorf("%s", errResp.Error.Message)
 			}
+			return nil, fmt.Errorf("%s", errResp.Error.Message)
 		}
 		return nil, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, string(respBody))
 	}

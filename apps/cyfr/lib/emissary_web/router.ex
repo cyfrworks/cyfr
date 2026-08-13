@@ -27,18 +27,35 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
+  # The MCP endpoint. POST is the only verb this revision defines for it; the
+  # `GET`/`DELETE` routes exist solely to answer 405 to clients written against
+  # the previous transport, and a preflight must not suggest otherwise.
   pipeline :mcp do
     plug :accepts, ["json", "event-stream"]
-    # POST is the only verb this protocol revision defines for the MCP endpoint.
-    # The GET below is the retired standalone SSE stream and is on its way out;
-    # `/api/executions/:id/events` also pipes through here and is a GET, so the
-    # verb list stays until both are settled.
-    plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
+    plug EmissaryWeb.Plugs.CORS, methods: ~w(POST)
     plug EmissaryWeb.Plugs.MCPOrigin
-    # Before MCPSession so unauthenticated floods never touch session/DB
-    # state. Also covers /api/executions/:id/events (pipes through :mcp).
+    # Before Authenticate so unauthenticated floods never touch DB state.
     plug EmissaryWeb.Plugs.MCPRateLimit
-    plug EmissaryWeb.Plugs.MCPSession
+    plug EmissaryWeb.Plugs.Authenticate
+    plug EmissaryWeb.Plugs.MCPRequestMetadata
+  end
+
+  # Authenticated HTTP that is not MCP. `/api/executions/:id/events` used to
+  # ride the `:mcp` pipeline "so the session plug establishes the caller's
+  # context" — which worked, but handed an SSE endpoint the whole protocol:
+  # a rejected request answered in JSON-RPC with a null id, the per-request
+  # `_meta` rules applied to it (passing only because a GET has no body to
+  # carry an id), it spent the MCP rate-limit budget, and `GET` had to stay
+  # allowed on a POST-only protocol to accommodate it.
+  #
+  # It needs exactly one thing from that pipeline — a resolved context — and
+  # that is the one plug here that it shares.
+  pipeline :authenticated_api do
+    plug :accepts, ["json", "event-stream"]
+    plug EmissaryWeb.Plugs.CORS, methods: ~w(GET), headers: ~w(last-event-id)
+    plug EmissaryWeb.Plugs.MCPOrigin, errors: EmissaryWeb.ApiError
+    plug EmissaryWeb.Plugs.MCPRateLimit, bucket: :api, errors: EmissaryWeb.ApiError
+    plug EmissaryWeb.Plugs.Authenticate, errors: EmissaryWeb.ApiError
   end
 
   # Auth API routes (logout, whoami) - must be defined before wildcard /:provider
@@ -205,11 +222,10 @@ defmodule EmissaryWeb.Router do
     get "/health/ready", HealthController, :ready
   end
 
-  # Execution event SSE stream — runs through the MCP pipeline so MCPSession
-  # establishes the caller's Sanctum.Context (session cookie or API key).
-  # Ownership is then verified in the controller before any event flows.
+  # Execution event SSE stream. Ownership is verified in the controller, on the
+  # context `Plugs.Authenticate` resolved, before any event flows.
   scope "/api", EmissaryWeb do
-    pipe_through :mcp
+    pipe_through :authenticated_api
 
     get "/executions/:id/events", ExecutionEventsController, :stream
   end

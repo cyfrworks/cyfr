@@ -4,11 +4,14 @@
 defmodule EmissaryWeb.ExecutionEventsControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
-  # The /api/executions/:id/events route used to live in the unauthenticated
-  # :api pipeline, letting any client probe valid execution ids. Fix B1
-  # moved it under the :mcp pipeline (so MCPSession populates the auth
-  # context) and added an owner-or-admin check + uniform 404 (rather than
-  # 403/404 split) in the controller to avoid leaking which ids exist.
+  # This route used to live in the unauthenticated :api pipeline, letting any
+  # client probe valid execution ids. It was moved under a pipeline that
+  # resolves the caller's context, with an owner-or-admin check and a uniform
+  # 404 (rather than a 403/404 split) so it cannot leak which ids exist.
+  #
+  # It rode the :mcp pipeline for a while to get that context, which handed an
+  # SSE endpoint the whole protocol along with it. It now has its own
+  # :authenticated_api pipeline and shares only `Plugs.Authenticate`.
   #
   # The shared test conn auto-authenticates via Emissary.TestAuthProvider
   # ("test_user"), so this test exercises the cross-tenant case: an
@@ -39,5 +42,38 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
     # returns 404, mirroring the `{:exec, nil}` branch). End-to-end coverage
     # against a non-admin user belongs in an integration test once a
     # session-with-narrow-permissions fixture exists.
+  end
+
+  # This endpoint has never spoken JSON-RPC. While it rode the MCP pipeline its
+  # rejections were rendered as JSON-RPC anyway — an envelope with a `jsonrpc`
+  # field and a null `id`, for a caller that never sent a JSON-RPC request.
+  describe "it does not answer in a protocol it does not speak" do
+    @describetag :requires_opus
+
+    test "a bad credential is a plain HTTP error, not a JSON-RPC envelope", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer cyfr_pk_invalid123456789012345678")
+        |> get("/api/executions/exec_whatever/events")
+
+      assert conn.status == 401
+      body = json_response(conn, 401)
+
+      refute Map.has_key?(body, "jsonrpc")
+      refute Map.has_key?(body, "error") and is_map(body["error"])
+      assert body["code"] == "auth_invalid"
+      # RFC 9110 §15.5.2 still applies wherever the 401 is rendered.
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+    end
+
+    test "a 404 is a plain HTTP error too", %{conn: conn} do
+      body =
+        conn
+        |> get("/api/executions/exec_does_not_exist/events")
+        |> json_response(404)
+
+      refute Map.has_key?(body, "jsonrpc")
+      assert body["code"] == "not_found"
+    end
   end
 end

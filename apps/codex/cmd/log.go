@@ -17,7 +17,7 @@ func init() {
 	logListCmd.Flags().String("status", "", "Filter by status (pending, success, error)")
 	logListCmd.Flags().Int("limit", 20, "Maximum number of results")
 	logListCmd.Flags().String("since", "", "ISO8601 timestamp — return logs after this time")
-	logListCmd.Flags().String("session", "", "Filter by session ID")
+	logListCmd.Flags().String("request", "", "Filter by request ID — returns every call in that chain")
 }
 
 var logCmd = &cobra.Command{
@@ -33,7 +33,8 @@ var logListCmd = &cobra.Command{
 	Long:  "List recent MCP request logs with optional filters for tool, status, and time range.",
 	Example: `  cyfr log list
   cyfr log list --tool execution --status error
-  cyfr log list --since 2026-03-01T00:00:00Z --limit 50`,
+  cyfr log list --since 2026-03-01T00:00:00Z --limit 50
+  cyfr log list --request req_01H...   # every call in one request's chain`,
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()
 		toolArgs := map[string]any{
@@ -52,8 +53,8 @@ var logListCmd = &cobra.Command{
 		if v, _ := cmd.Flags().GetString("since"); v != "" {
 			toolArgs["since"] = v
 		}
-		if v, _ := cmd.Flags().GetString("session"); v != "" {
-			toolArgs["session_id"] = v
+		if v, _ := cmd.Flags().GetString("request"); v != "" {
+			toolArgs["request_id"] = v
 		}
 
 		result, err := client.CallTool("mcp_log", toolArgs)

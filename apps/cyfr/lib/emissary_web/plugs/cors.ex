@@ -12,7 +12,7 @@ defmodule EmissaryWeb.Plugs.CORS do
   ## Why the header list is derived
 
   MCP 2026-07-28 mirrors body fields into `Mcp-Method`, `Mcp-Name` and
-  `MCP-Protocol-Version`, and `EmissaryWeb.Plugs.MCPSession` rejects a request
+  `MCP-Protocol-Version`, and `EmissaryWeb.Plugs.MCPRequestMetadata` rejects a request
   that omits any of them. A preflight that does not advertise a required header
   is a failure the browser raises *before* the request is sent, so no server-side
   error can explain it — and the failure is invisible to the bundled deployment,
@@ -44,16 +44,14 @@ defmodule EmissaryWeb.Plugs.CORS do
   # omits a required header rejects the request in the browser, before any of
   # this server's own error handling can explain why.
   #
-  # `mcp-session-id` is still here because `Sanctum.TinctureAuth` still accepts
-  # it as a credential. It leaves this list in the same change that retires that
-  # path, not before — removing a header while a caller still sends it is the
-  # very failure this list exists to prevent.
-  @base_headers ~w(content-type authorization accept mcp-session-id last-event-id)
+  # `mcp-session-id` is gone: nothing reads it. It was kept while
+  # `Sanctum.TinctureAuth` still accepted it as a credential, and that path was
+  # retired without this list following.
+  @base_headers ~w(content-type authorization accept)
 
-  @allowed_headers @base_headers
+  @default_headers @base_headers
                    |> Enum.concat(Emissary.MCP.Protocol.request_headers())
                    |> Enum.uniq()
-                   |> Enum.join(", ")
 
   @expose_headers Emissary.MCP.Protocol.exposed_headers() |> Enum.join(", ")
 
@@ -68,10 +66,14 @@ defmodule EmissaryWeb.Plugs.CORS do
 
     * `:methods` — request verbs this mount routes, upper-case, without
       `OPTIONS` (always appended). Defaults to `#{inspect(@default_methods)}`.
+    * `:headers` — request headers this mount accepts *in addition* to the
+      common set. `last-event-id` is the case that motivated it: it belongs to
+      the execution event stream, not to MCP, and advertising it on the MCP
+      endpoint claimed support for something no MCP handler reads.
 
-  The MCP endpoint and the tincture endpoint share this plug but route different
-  verbs — `/mcp` is POST-only in this protocol revision, while `/t` also serves
-  `GET /t/access-token` — so the verb list cannot be a single module constant.
+  Mounts share this plug but route different verbs and accept different
+  headers — `/mcp` is POST-only in this protocol revision, while `/t` also
+  serves `GET /t/access-token` — so neither list can be a module constant.
   """
   @impl true
   def init(opts) do
@@ -83,7 +85,15 @@ defmodule EmissaryWeb.Plugs.CORS do
       |> Enum.uniq()
       |> Enum.join(", ")
 
-    Keyword.put(opts, :allowed_methods, methods)
+    headers =
+      @default_headers
+      |> Enum.concat(Keyword.get(opts, :headers, []))
+      |> Enum.uniq()
+      |> Enum.join(", ")
+
+    opts
+    |> Keyword.put(:allowed_methods, methods)
+    |> Keyword.put(:allowed_headers, headers)
   end
 
   @impl true
@@ -99,7 +109,9 @@ defmodule EmissaryWeb.Plugs.CORS do
   end
 
   defp put_cors_headers(conn, opts) do
-    allowed_methods = Keyword.get(opts, :allowed_methods) || init([])[:allowed_methods]
+    defaults = init([])
+    allowed_methods = Keyword.get(opts, :allowed_methods) || defaults[:allowed_methods]
+    allowed_headers = Keyword.get(opts, :allowed_headers) || defaults[:allowed_headers]
     origin = get_req_header(conn, "origin") |> List.first()
     allowed = allowed_origins()
 
@@ -117,7 +129,7 @@ defmodule EmissaryWeb.Plugs.CORS do
         conn
         |> put_resp_header("access-control-allow-origin", allow_origin)
         |> put_resp_header("access-control-allow-methods", allowed_methods)
-        |> put_resp_header("access-control-allow-headers", @allowed_headers)
+        |> put_resp_header("access-control-allow-headers", allowed_headers)
         |> put_resp_header("access-control-expose-headers", @expose_headers)
         |> put_resp_header("access-control-max-age", @max_age)
 

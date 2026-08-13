@@ -21,13 +21,15 @@ defmodule Cyfr.RouteAuthInventoryTest do
   # deliberate act: it records the reviewed auth posture of that route.
   @classified %{
     # EmissaryWeb — chokepoint-authenticated
-    {:post, "/mcp"} => :mcp_session,
+    {:post, "/mcp"} => :authenticate_plug,
     # GET and DELETE reach only `method_not_allowed`, which answers 405 without
     # consulting the caller. They still run the pipeline, so they authenticate
     # like any other MCP route — but nothing behind them can act on that.
-    {:get, "/mcp"} => :mcp_session,
-    {:delete, "/mcp"} => :mcp_session,
-    {:get, "/api/executions/:id/events"} => :mcp_session,
+    {:get, "/mcp"} => :authenticate_plug,
+    {:delete, "/mcp"} => :authenticate_plug,
+    # Same credential plug, its own pipeline: an SSE endpoint that does not
+    # speak JSON-RPC and must not answer in it.
+    {:get, "/api/executions/:id/events"} => :authenticate_plug,
     {:post, "/hooks/:slug"} => :webhook_hmac,
 
     # EmissaryWeb — controller self-gates (401/400 without a token), now

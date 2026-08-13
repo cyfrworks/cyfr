@@ -43,7 +43,31 @@ const VERSION = JSON.parse(
 const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
 const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
 const PERSIST = process.env.MCP_BRIDGE_DATA || "/data/backends.json";
-const PROTOCOL_VERSION = "2024-11-05";
+
+// The bridge speaks two protocols, in two directions, and they are not the
+// same revision.
+//
+// Inbound (/mcp, where cyfr is the client) is the current one: stateless, no
+// handshake, per-request metadata. The bridge ships inside cyfr's own compose
+// stack, so leaving it on a retired revision meant every default install
+// exercised cyfr's legacy-peer fallback against a first-party component.
+const PROTOCOL_VERSION = "2026-07-28";
+
+// Outbound (stdio, where the bridge is the client of an npx child) stays on the
+// handshake. Those children are third-party packages on their own release
+// cadence; `initialize` is what they answer to, and that is a genuine interop
+// concern rather than a leftover.
+const CHILD_PROTOCOL_VERSION = "2024-11-05";
+
+// Reverse-DNS `_meta` keys defined by the specification.
+const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
+const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
+const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
+
+// The tool catalogue changes only when a backend is added, removed or
+// restarted. `private` because the aggregate is per-caller in principle and a
+// shared cache must never serve one caller's view to another.
+const TOOLS_TTL_MS = 60_000;
 const RPC_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_RPC_TIMEOUT_MS || 30_000);
 const INIT_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_INIT_TIMEOUT_MS || 15_000);
 
@@ -230,7 +254,7 @@ async function initializeBackend(name) {
       backend,
       "initialize",
       {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: CHILD_PROTOCOL_VERSION,
         capabilities: {},
         clientInfo: { name: "cyfr-mcp-bridge", version: VERSION },
       },
@@ -462,25 +486,52 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, backends: backends.size });
 });
 
+// GET and DELETE were the previous transport's standalone notification stream
+// and session termination. Neither exists now. 405 says the endpoint is right
+// and the verb is not; a 404 would send an older client looking elsewhere.
+app.all("/mcp", (req, res, next) => {
+  if (req.method === "POST" || req.method === "OPTIONS") return next();
+  res.set("mcp-protocol-version", PROTOCOL_VERSION);
+  res.set("allow", "POST, OPTIONS");
+  return rpcError(res, 405, null, -32600, `${req.method} is not supported on the MCP endpoint.`);
+});
+
 app.post("/mcp", async (req, res) => {
+  res.set("mcp-protocol-version", PROTOCOL_VERSION);
+
   if (!authorized(req)) {
+    // RFC 9110 §15.5.2: a 401 MUST carry a challenge.
+    res.set("www-authenticate", "Bearer");
     return res.status(401).json({ error: "unauthorized" });
   }
 
   const msg = req.body;
-  if (!msg || typeof msg !== "object") {
-    return res.status(400).json({ error: "expected JSON-RPC body" });
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+    // "The body of the HTTP POST MUST be a single JSON-RPC request or
+    // notification" — an array is a batch and has no handler.
+    return rpcError(res, 400, null, -32600, "Expected a single JSON-RPC message");
   }
 
-  // Notifications (no id) — return 204.
+  // Notifications carry no id and get 202 with no body. This revision defines
+  // no header requirements for them, so they skip the checks below.
   if (msg.id === undefined || msg.id === null) {
-    return res.status(204).end();
+    return res.status(202).end();
+  }
+
+  const conformance = checkConformance(req, msg);
+  if (conformance) {
+    return rpcError(res, 400, msg.id, conformance.code, conformance.message, conformance.data);
   }
 
   try {
     const result = await handleRpc(msg);
-    return res.json({ jsonrpc: "2.0", id: msg.id, result });
+    return res.json({ jsonrpc: "2.0", id: msg.id, result: stampResult(result) });
   } catch (err) {
+    if (err instanceof UnknownMethod) {
+      // 404, not 400: a dual-era client reads the status to tell a modern
+      // server missing one method from a legacy server missing the endpoint.
+      return rpcError(res, 404, msg.id, -32601, err.message);
+    }
     console.error("[mcp] error:", err);
     return res.json({
       jsonrpc: "2.0",
@@ -493,18 +544,123 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
+class UnknownMethod extends Error {}
+
+function rpcError(res, status, id, code, message, data) {
+  return res.status(status).json({
+    jsonrpc: "2.0",
+    id: id ?? null,
+    error: { code, message, ...(data !== undefined ? { data } : {}) },
+  });
+}
+
+// Every result declares its type and this server's identity. A client that
+// cannot tell a finished answer from one asking for more input has to guess.
+function stampResult(result) {
+  return {
+    ...result,
+    resultType: "complete",
+    _meta: {
+      ...(result._meta || {}),
+      [META_SERVER_INFO]: { name: "cyfr-mcp-bridge", version: VERSION },
+    },
+  };
+}
+
+// The per-request checks that replace the handshake. Returns null when the
+// request is well-formed, or the JSON-RPC error to answer with.
+function checkConformance(req, msg) {
+  const meta = (msg.params && msg.params._meta) || {};
+  const header = req.get("mcp-protocol-version");
+  const declared = meta[META_PROTOCOL_VERSION];
+
+  if (!header) {
+    return { code: -32020, message: "Missing required MCP-Protocol-Version header." };
+  }
+  if (!declared) {
+    return { code: -32020, message: `Missing required ${META_PROTOCOL_VERSION} in params._meta.` };
+  }
+  if (header !== declared) {
+    // A gateway may route on the header, so it must not be able to disagree
+    // with what this server will actually execute.
+    return {
+      code: -32020,
+      message: `MCP-Protocol-Version header (${header}) does not match ${META_PROTOCOL_VERSION} (${declared}).`,
+    };
+  }
+  if (header !== PROTOCOL_VERSION) {
+    return {
+      code: -32022,
+      message: `Unsupported protocol version ${header}.`,
+      data: { supported: [PROTOCOL_VERSION], requested: header },
+    };
+  }
+  if (typeof meta[META_CLIENT_CAPABILITIES] !== "object" || meta[META_CLIENT_CAPABILITIES] === null) {
+    return { code: -32602, message: `Missing required ${META_CLIENT_CAPABILITIES} in params._meta.` };
+  }
+
+  const methodHeader = req.get("mcp-method");
+  if (methodHeader !== msg.method) {
+    return {
+      code: -32020,
+      message: `Mcp-Method header (${methodHeader ?? "absent"}) does not match the request body.`,
+    };
+  }
+
+  const subject = namedSubject(msg);
+  if (subject !== null) {
+    const nameHeader = decodeHeaderValue(req.get("mcp-name"));
+    if (nameHeader !== subject) {
+      return {
+        code: -32020,
+        message: `Mcp-Name header (${nameHeader ?? "absent"}) does not match the request body.`,
+      };
+    }
+  }
+
+  return null;
+}
+
+// `tools/call` names its subject in `params.name`. The bridge serves no
+// resources or prompts, so there is nothing else that names one.
+function namedSubject(msg) {
+  if (msg.method === "tools/call" && typeof msg.params?.name === "string") {
+    return msg.params.name;
+  }
+  return null;
+}
+
+// A value outside visible ASCII travels as `=?base64?<encoded>?=`, and the
+// comparison has to happen after decoding or every legitimate encoded name is
+// rejected.
+function decodeHeaderValue(value) {
+  if (typeof value !== "string") return value ?? null;
+  if (!value.startsWith("=?base64?") || !value.endsWith("?=")) return value;
+  try {
+    return Buffer.from(value.slice(9, -2), "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function handleRpc(msg) {
   switch (msg.method) {
-    case "initialize":
+    // Replaces `initialize`: version and capability discovery that establishes
+    // nothing. `initialize`, `notifications/initialized` and `ping` are gone
+    // from this revision and answer 404 like any other unknown method.
+    case "server/discover":
       return {
-        protocolVersion: PROTOCOL_VERSION,
-        serverInfo: { name: "cyfr-mcp-bridge", version: VERSION },
-        capabilities: { tools: {} },
+        supportedVersions: [PROTOCOL_VERSION],
+        capabilities: { tools: { listChanged: false }, extensions: {} },
+        instructions:
+          "Wraps stdio MCP servers behind one HTTP endpoint. " +
+          "add_backend/remove_backend/list_backends/restart_backend manage the " +
+          "children; every child tool appears as `<backend>__<tool>`.",
+        ttlMs: TOOLS_TTL_MS,
+        cacheScope: "private",
       };
-    case "ping":
-      return {};
     case "tools/list":
-      return { tools: aggregatedTools() };
+      return { tools: aggregatedTools(), ttlMs: TOOLS_TTL_MS, cacheScope: "private" };
     case "tools/call": {
       const { name, arguments: args } = msg.params || {};
       if (!name) throw new Error("tools/call: missing 'name'");
@@ -518,7 +674,7 @@ async function handleRpc(msg) {
       }
     }
     default:
-      throw new Error(`unsupported method: ${msg.method}`);
+      throw new UnknownMethod(`unsupported method: ${msg.method}`);
   }
 }
 

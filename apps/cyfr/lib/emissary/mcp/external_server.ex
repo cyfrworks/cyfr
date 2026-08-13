@@ -27,9 +27,14 @@ defmodule Emissary.MCP.ExternalServer do
 
   # The revision to offer a peer that turns out not to speak the current one.
   # `2025-03-26` rather than the newest legacy revision because it is the widest
-  # common denominator among servers still on the handshake — including
-  # `apps/mcp-bridge`, which answers `2024-11-05` but accepts any version string.
+  # common denominator among third-party servers still on the handshake.
   @legacy_protocol_version "2025-03-26"
+
+  # Matched in a pattern, so it has to be a compile-time literal — but it is
+  # initialized from the one place the vocabulary is defined rather than written
+  # out again here.
+  @input_required Protocol.result_type(:input_required)
+
   @reinit_cooldown_ms 5_000
   # 10 MB
   @max_response_body_bytes 10_485_760
@@ -208,7 +213,7 @@ defmodule Emissary.MCP.ExternalServer do
         #
         # Parsing it as a completed result would be worse than refusing: the
         # guest would receive an interim answer as though it were final.
-        {:ok, %{"result" => %{"resultType" => "input_required"}}} ->
+        {:ok, %{"result" => %{"resultType" => @input_required}}} ->
           Logger.warning(
             "[ExternalServer] #{state.name} returned input_required for #{tool_name}; refused"
           )
@@ -317,9 +322,13 @@ defmodule Emissary.MCP.ExternalServer do
   # Try the current protocol first; fall back to the handshake only when the
   # answer says the peer cannot speak it.
   #
-  # The fallback is not politeness — it is required. `apps/mcp-bridge` speaks
-  # `2024-11-05` and is registered as an ordinary external server by the bundled
-  # deployment, so a modern-only client would drop every stdio backend behind it.
+  # The fallback exists for third-party servers, which are on their own release
+  # cadence and mostly still expect `initialize`. It is not a compatibility
+  # shim for anything CYFR ships: `apps/mcp-bridge` speaks the current revision,
+  # so the bundled deployment never takes this path. The specification
+  # prescribes exactly this probe — attempt a modern request, and read the body
+  # of a `400` before concluding the peer is legacy, because a modern server
+  # also answers `400` for an unsupported version or a bad header.
   defp connect(state) do
     case send_tools_list(%{state | era: :modern}) do
       {:ok, tools, state} ->
@@ -532,7 +541,10 @@ defmodule Emissary.MCP.ExternalServer do
       with header when is_binary(header) <- is_map(spec) && spec["x-mcp-header"],
            true <- Map.has_key?(arguments, property),
            value when not is_nil(value) <- arguments[property] do
-        [{"mcp-param-" <> String.downcase(header), encode_header_value(to_header_value(value))}]
+        [
+          {Protocol.param_header_prefix() <> String.downcase(header),
+           encode_header_value(to_header_value(value))}
+        ]
       else
         _ -> []
       end

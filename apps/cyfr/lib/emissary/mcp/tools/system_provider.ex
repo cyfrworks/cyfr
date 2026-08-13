@@ -186,7 +186,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
        uptime_seconds: uptime(),
        services: services,
        mcp: %{
-         protocol_version: Emissary.MCP.protocol_version(),
+         protocol_version: Emissary.MCP.Protocol.version(),
          tools_count: tool_count(),
          resources_count: resource_count()
        }

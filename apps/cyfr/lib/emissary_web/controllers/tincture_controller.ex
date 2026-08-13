@@ -69,7 +69,11 @@ defmodule EmissaryWeb.TinctureController do
         |> json(%{token: Sanctum.TinctureAuth.issue_access_token(ctx), expires_in: 3600})
 
       :unauthenticated ->
-        conn |> put_status(401) |> json(%{error: "unauthenticated"})
+        # RFC 9110 §15.5.2 makes a challenge mandatory on a 401.
+        conn
+        |> put_resp_header("www-authenticate", "Bearer")
+        |> put_status(401)
+        |> json(%{error: "unauthenticated"})
     end
   end
 

@@ -116,7 +116,7 @@ defmodule Emissary.MCP.ToolProvider do
   - `description`: Human-readable description for AI agents
   - `input_schema`: JSON Schema for input validation
 
-  Optional fields (MCP 2025-11-25):
+  Optional fields:
   - `title`: Human-readable display name for the tool
   - `icons`: Array of icon definitions for UI display
   - `output_schema`: JSON Schema for output validation
@@ -171,6 +171,20 @@ defmodule Emissary.MCP.ToolProvider do
     `device_init`, `re_resolve`, `claim_personal`, `legal_accept`, …) are
     fine when the domain warrants them; ship them with an explicit `kind`
     matching the closest canonical bucket.
+
+  > #### Before adding `x-mcp-header` to an input schema {: .warning}
+  >
+  > No tool declares one today, which is why the server has nothing to check.
+  > The moment one does, the specification's rule bites: "Any server that
+  > processes the message body **MUST** validate that encoded header values,
+  > after decoding if Base64-encoded, match the corresponding values in the
+  > request body", and a client that omits the header while sending the value
+  > **MUST** be rejected. Inbound validation lives in
+  > `EmissaryWeb.Plugs.MCPRequestMetadata.check_mirrored_headers/2`, which currently
+  > covers only `Mcp-Method` and `Mcp-Name`; extend it in the same change that
+  > adds the annotation, or the mirrored header becomes a routing input nothing
+  > verifies. `Emissary.MCP.ExternalServer` already implements the *client* half
+  > for upstream servers that declare it.
   """
   @callback tools() :: [tool_definition()]
 

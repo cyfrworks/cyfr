@@ -27,7 +27,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
         |> json(%{"error" => "Execution event streaming unavailable (Opus not loaded)"})
 
       true ->
-        ctx = conn.assigns[:mcp_context]
+        ctx = conn.assigns[:context]
 
         with {:auth, %Sanctum.Context{authenticated: true} = ctx} <- {:auth, ctx},
              {:exec, %Arca.Execution{} = exec} <-
@@ -44,15 +44,15 @@ defmodule EmissaryWeb.ExecutionEventsController do
           |> stream_events(execution_id, last_seq, exec)
         else
           {:auth, _} ->
-            conn |> put_status(401) |> json(%{"error" => "authentication required"})
+            EmissaryWeb.ApiError.send(conn, 401, :auth_required, "Authentication required")
 
           # Non-existent and not-yours both return 404 to avoid leaking which
           # execution IDs exist in the system via 403/404 distinction.
           {:exec, nil} ->
-            conn |> put_status(404) |> json(%{"error" => "execution not found"})
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
 
           {:error, :forbidden} ->
-            conn |> put_status(404) |> json(%{"error" => "execution not found"})
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
         end
     end
   end

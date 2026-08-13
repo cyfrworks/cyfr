@@ -12,7 +12,7 @@ defmodule Sanctum.Namespace do
   persistent identity (`ctx.user_id`).
 
   Used by:
-  - `EmissaryWeb.Plugs.MCPSession.maybe_resolve_membership/1`
+  - `EmissaryWeb.Plugs.Authenticate`
   - `PrismWeb.AuthHelpers.maybe_resolve_membership/1`
   - `Sanctum.Session.row_to_context/1` (via session-resolution wrapper)
   - the configured auth provider's `authenticate/1` (after `resolve_membership/1`)

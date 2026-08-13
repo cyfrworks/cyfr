@@ -102,14 +102,6 @@ func newClient() *mcp.Client {
 // message, otherwise falls back to a contextual or generic error.
 // Pass an optional context string (e.g. "Register failed") for the fallback.
 func handleToolError(err error, context ...string) {
-	if errors.Is(err, mcp.ErrSessionExpired) {
-		output.Error("Session expired. Run 'cyfr login' to re-authenticate.")
-		return
-	}
-	if errors.Is(err, mcp.ErrSessionRequired) {
-		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
-		return
-	}
 	if errors.Is(err, mcp.ErrAuthRequired) {
 		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
 		return

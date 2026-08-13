@@ -3,11 +3,20 @@
 
 defmodule EmissaryWeb.Plugs.MCPOrigin do
   @moduledoc """
-  Plug for MCP Origin header validation per MCP 2025-11-25 spec.
+  Origin validation, the defence against DNS rebinding: a page on any origin
+  can make a browser issue requests to `localhost`, so a server bound there
+  must check who is asking.
 
-  If the Origin header is present, validates it against a configurable allowlist.
-  If invalid, responds with 403 Forbidden.
-  If absent, passes through (spec only requires validation when present).
+  "Servers MUST validate the `Origin` header on all incoming connections… If
+  the `Origin` header is present and invalid, servers MUST respond with HTTP
+  403 Forbidden." Absent is not invalid — a non-browser client sends none — so
+  an absent header passes through.
+
+  ## Options
+
+  - `:errors` — the module that renders a rejection, defaulting to
+    `EmissaryWeb.MCPError`. Use `EmissaryWeb.ApiError` on a route that does not
+    speak JSON-RPC.
 
   ## Configuration
 
@@ -19,8 +28,6 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
   import Plug.Conn
   require Logger
 
-  @protocol_version Emissary.MCP.Protocol.version()
-
   @default_allowed_origins [
     "http://localhost",
     "https://localhost",
@@ -30,9 +37,13 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
     "https://[::1]"
   ]
 
-  def init(opts), do: opts
+  @default_errors EmissaryWeb.MCPError
 
-  def call(conn, _opts) do
+  def init(opts), do: Keyword.put_new(opts, :errors, @default_errors)
+
+  def call(conn, opts) do
+    errors = Keyword.get(opts, :errors, @default_errors)
+
     case get_req_header(conn, "origin") do
       [origin | _] ->
         if valid_origin?(origin) do
@@ -40,9 +51,8 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
         else
           Logger.warning("[MCP Origin] Rejected origin: #{origin}")
 
-          conn
-          |> put_resp_header("mcp-protocol-version", @protocol_version)
-          |> EmissaryWeb.MCPError.halt(
+          errors.halt(
+            conn,
             403,
             :insufficient_permissions,
             "Origin not allowed: #{origin}"

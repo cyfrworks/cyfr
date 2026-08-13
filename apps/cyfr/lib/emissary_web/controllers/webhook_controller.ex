@@ -192,7 +192,7 @@ defmodule EmissaryWeb.WebhookController do
     )
 
     # Capture Logger metadata before spawn — `Task.Supervisor.start_child` does
-    # not inherit it. Same idiom as `EmissaryWeb.Plugs.MCPSession`.
+    # not inherit it. Same idiom as `EmissaryWeb.Plugs.Authenticate`.
     logger_metadata = Cyfr.LoggerContext.capture()
 
     # The release starts :cyfr (binding this endpoint) before :opus brings

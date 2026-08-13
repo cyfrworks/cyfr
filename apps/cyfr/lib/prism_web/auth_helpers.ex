@@ -54,7 +54,7 @@ defmodule PrismWeb.AuthHelpers do
   # Activity-based ("sliding window") session refresh. Fire-and-forget so the
   # hot path isn't blocked on a SQLite write; Session.refresh_if_stale/1 itself
   # no-ops unless the session is due for extension. Mirrors the MCP path
-  # (EmissaryWeb.Plugs.MCPSession).
+  # (EmissaryWeb.Plugs.Authenticate).
   defp slide_session(token) do
     logger_metadata = Cyfr.LoggerContext.capture()
 

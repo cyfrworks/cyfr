@@ -198,32 +198,56 @@ func TestCallTool_RPCError(t *testing.T) {
 	}
 }
 
-func TestCallTool_SessionExpired(t *testing.T) {
+// A 404 means the server does not implement the method — not that a session
+// expired. There are no sessions, and reading it the old way told an
+// authenticated user to log in again whenever they hit a missing method.
+func TestCallTool_UnknownMethodIsNotASessionProblem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		resp := JSONRPCResponse{
 			JSONRPC: "2.0",
 			ID:      1,
-			Error:   &JSONRPCError{Code: -33302, Message: "session not found"},
+			Error:   &JSONRPCError{Code: -32601, Message: "Unknown method: tasks/list"},
 		}
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SessionID = "stale-session"
+	c.SessionID = "a-perfectly-good-credential"
 	_, err := c.CallTool("test-tool", nil)
 	if err == nil {
-		t.Fatal("expected error for expired session")
+		t.Fatal("expected an error")
 	}
-	if !errors.Is(err, ErrSessionExpired) {
-		t.Errorf("expected ErrSessionExpired, got %v", err)
+	if errors.Is(err, ErrAuthRequired) {
+		t.Errorf("a missing method must not be reported as an auth problem, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Unknown method") {
+		t.Errorf("expected the server's message to survive, got %q", err.Error())
 	}
 }
 
-func TestCallTool_SessionExpired_Bare404(t *testing.T) {
-	// MCP spec: server MAY return bare HTTP 404 (no JSON-RPC body) when session expires.
-	// Client MUST treat this as session expired and auto-recover.
+// -33001 is the one auth sentinel the server still emits.
+func TestCallTool_AuthRequired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Error:   &JSONRPCError{Code: -33001, Message: "Authentication required."},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	_, err := c.CallTool("test-tool", nil)
+	if !errors.Is(err, ErrAuthRequired) {
+		t.Errorf("expected ErrAuthRequired, got %v", err)
+	}
+}
+
+func TestCallTool_Bare404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("Not Found"))
@@ -231,13 +255,12 @@ func TestCallTool_SessionExpired_Bare404(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	c.SessionID = "stale-session"
 	_, err := c.CallTool("test-tool", nil)
 	if err == nil {
 		t.Fatal("expected error for bare 404")
 	}
-	if !errors.Is(err, ErrSessionExpired) {
-		t.Errorf("expected ErrSessionExpired, got %v", err)
+	if !strings.Contains(err.Error(), "HTTP 404") {
+		t.Errorf("expected a plain HTTP error, got %q", err.Error())
 	}
 }
 
