@@ -1134,4 +1134,102 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert get_resp_header(conn, "mcp-protocol-version") == [Emissary.MCP.Protocol.version()]
     end
   end
+
+  defmodule AnonymousAuthProvider do
+    @moduledoc false
+    # An auth provider IS configured, but this caller presented no credential.
+    def current_user(_conn), do: nil
+  end
+
+  describe "subscriptions/listen gating" do
+    setup do
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, key_result} =
+        Sanctum.ApiKey.create(ctx, %{name: "listen-gate-key", type: :application})
+
+      {:ok, api_key: key_result.api_key}
+    end
+
+    test "an uncredentialed caller cannot hold a stream open", %{conn: conn} do
+      Application.put_env(:cyfr, :auth_provider, AnonymousAuthProvider)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+
+      assert conn.status == 401
+      response = json_response(conn, 401)
+      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:auth_required)
+    end
+
+    test "an install with no auth provider still refuses an uncredentialed caller", %{conn: conn} do
+      # The operator authenticates with an API key on these installs too, so
+      # a request carrying nothing is a stranger here as well.
+      Application.delete_env(:cyfr, :auth_provider)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{}}
+        })
+
+      assert conn.status == 401
+    end
+
+    test "a credentialed caller opens the stream", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{}}
+        })
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") |> hd() =~ "text/event-stream"
+    end
+
+    test "an exhausted per-user slot budget refuses with rate_limited", %{
+      conn: conn,
+      api_key: api_key
+    } do
+      original = Application.get_env(:cyfr, :mcp_subscription_max_concurrent)
+      Application.put_env(:cyfr, :mcp_subscription_max_concurrent, 0)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :mcp_subscription_max_concurrent, original),
+          else: Application.delete_env(:cyfr, :mcp_subscription_max_concurrent)
+      end)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+
+      assert conn.status == 429
+      response = json_response(conn, 429)
+      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:rate_limited)
+    end
+  end
 end

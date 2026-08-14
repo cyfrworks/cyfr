@@ -99,8 +99,9 @@ defmodule EmissaryWeb.MCPController do
     # `subscriptions/listen` is answered here rather than through the dispatcher
     # for a reason the discovery branch above did not have: its response *is* an
     # open stream that outlives the call, so it cannot return a result for
-    # someone else to encode. Everything else about it — auth, header validation
-    # — has already happened in the pipeline, same as any other request.
+    # someone else to encode. Header validation happened in the pipeline like
+    # any other request; the auth gate lives in `listen/4` itself, because the
+    # dispatcher gate this method skips is where every other caller meets it.
     case params["method"] do
       "subscriptions/listen" -> listen(conn, ctx, params, request_id)
       _ -> handle_message(conn, ctx, params, request_id, start_time)
@@ -272,10 +273,43 @@ defmodule EmissaryWeb.MCPController do
     Application.get_env(:cyfr, :mcp_subscription_max_ms, :timer.minutes(30))
   end
 
+  # An open stream pins a process and a socket for up to the full stream
+  # window, and the dispatcher's auth gate never sees this method — the stream
+  # is answered before it — so both bounds live here.
+  #
+  # A credential is required on every install, not only the ones with an auth
+  # provider: an operator authenticates with an API key either way, so a
+  # request carrying nothing at all is a stranger in both deployments.
   defp listen(conn, context, params, request_id) do
     id = params["id"]
-    filter = get_in(params, ["params", "notifications"]) || %{}
 
+    if not context.authenticated do
+      listen_error(
+        conn,
+        request_id,
+        id,
+        :auth_required,
+        "Unauthorized: subscriptions/listen requires authentication"
+      )
+    else
+      case claim_stream_slot(context) do
+        :ok ->
+          open_stream(conn, context, params, request_id, id)
+
+        {:error, :stream_limit} ->
+          listen_error(
+            conn,
+            request_id,
+            id,
+            :rate_limited,
+            "Too many concurrent subscription streams for this caller"
+          )
+      end
+    end
+  end
+
+  defp open_stream(conn, context, params, request_id, id) do
+    filter = get_in(params, ["params", "notifications"]) || %{}
     {:ok, acknowledged} = Subscriptions.listen(context, filter)
     deadline = System.monotonic_time(:millisecond) + max_stream_ms()
 
@@ -288,6 +322,30 @@ defmodule EmissaryWeb.MCPController do
     |> send_chunked(200)
     |> acknowledge(id, acknowledged)
     |> listen_loop(id, deadline)
+  end
+
+  defp listen_error(conn, request_id, id, code, message) do
+    conn
+    |> put_resp_header(@protocol_version_header, @protocol_version)
+    |> put_resp_header("x-request-id", request_id)
+    |> respond_error(code, Message.encode_error(id, code, message))
+  end
+
+  # One Registry entry per open stream, keyed by caller. The entry dies with
+  # the conn process, so slots free themselves; the count is read under the
+  # same key before registering. The window between count and register can
+  # briefly overshoot under a burst — acceptable slack for a bound whose job
+  # is stopping unbounded socket pinning.
+  defp claim_stream_slot(context) do
+    key = {context.org_id, context.user_id}
+    limit = Application.get_env(:cyfr, :mcp_subscription_max_concurrent, 8)
+
+    if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do
+      {:error, :stream_limit}
+    else
+      {:ok, _} = Registry.register(Emissary.MCP.SubscriptionRegistry, key, :stream)
+      :ok
+    end
   end
 
   # The acknowledgment must be the first message on the stream, and must carry
@@ -518,6 +576,8 @@ defmodule EmissaryWeb.MCPController do
   # that lacks this method, or a legacy server that lacks the whole endpoint.
   # Answering `400` for both makes that undecidable.
   defp http_status_for(:method_not_found), do: 404
+  defp http_status_for(:auth_required), do: 401
+  defp http_status_for(:rate_limited), do: 429
   defp http_status_for(_code), do: 400
 
   defp extract_tool(%{"method" => "tools/call", "params" => %{"name" => name}}), do: name

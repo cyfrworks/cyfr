@@ -68,6 +68,10 @@ defmodule Cyfr.Application do
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},
       {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
+      # subscriptions/listen stream slots — duplicate keys, one entry per open
+      # stream, keyed by {org_id, user_id}. An entry dies with its conn
+      # process, so a vanished client frees its slot without bookkeeping.
+      {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
       {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
       Emissary.MCP.ToolRegistry,
       Emissary.MCP.ResourceRegistry,
