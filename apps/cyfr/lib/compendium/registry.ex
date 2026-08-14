@@ -662,10 +662,8 @@ defmodule Compendium.Registry do
   end
 
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
-    # The components/ root bypasses the tenant_segments fail-closed guard, so an
-    # unresolved (org-less) non-platform context must be rejected here before it
-    # can reach a path the storage layer would not otherwise protect.
-    Context.require_tenant!(ctx)
+    # Compendium.ComponentPath raises on an unresolved org/project, the same
+    # fail-closed guard Arca.Storage applies to the data/ tree.
     path = component_storage_path(type, publisher, name, version, ctx)
 
     case Arca.put(ctx, path, bytes) do
@@ -684,10 +682,6 @@ defmodule Compendium.Registry do
     # Hook between validation and the first Arca write. Callers use it to
     # refuse a publish without leaving extracted files behind.
     before_store = Keyword.get(opts, :before_store, fn _validation -> :ok end)
-
-    # The components/ root bypasses the tenant_segments fail-closed guard, so an
-    # unresolved (org-less) non-platform context must be rejected before write.
-    Context.require_tenant!(ctx)
 
     # arca:bypass-ok=D — `:erl_tar.extract` requires a real local FS to write
     # to. After extraction we validate the bundle and write the validated

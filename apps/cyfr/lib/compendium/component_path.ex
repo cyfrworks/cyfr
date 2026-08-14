@@ -12,39 +12,41 @@ defmodule Compendium.ComponentPath do
 
   Every function takes a `tenant` — a `%Sanctum.Context{}`, a component row/map
   (anything exposing `:org_id` and `:project_id`), or an explicit
-  `{org_id, project_id}` tuple. The org/project are normalized through
-  `Arca.QueryHelpers` (`nil`/`""` collapse to the seeded `local`/`default`
-  sentinels), and the `publisher` segment is normalized through
-  `normalize_publisher/1` (`nil`/`""` collapse to the seeded `local` namespace).
-  So this module is the single chokepoint for component-path tenancy *and*
-  publisher defaulting — there is exactly one on-disk layout, no flat fallback,
-  and the segment can never diverge from the id minted by
-  `Compendium.ComponentId`, which normalizes the same way.
+  `{org_id, project_id}` tuple. The tenant must be resolved: an absent
+  org/project raises, exactly like `Arca.Storage.tenant_segments/1` for the
+  `data/` tree, so an unresolved context can never land in the shared seeded
+  `local/default` workspace. The `publisher` segment is normalized through
+  `normalize_publisher/1` (`nil`/`""` collapse to the seeded `local`
+  namespace). So this module is the single chokepoint for component-path
+  tenancy *and* publisher defaulting — there is exactly one on-disk layout,
+  no flat fallback, and the segment can never diverge from the id minted by
+  `Compendium.ComponentId`.
   """
-
-  alias Arca.QueryHelpers
 
   @type_plurals ["catalysts", "reagents", "formulas", "tinctures"]
 
   @default_publisher "local"
 
   @type tenant ::
-          %{org_id: String.t() | nil, project_id: String.t() | nil}
-          | {String.t() | nil, String.t() | nil}
+          %{org_id: String.t(), project_id: String.t()}
+          | {String.t(), String.t()}
 
-  @doc "Root prefix segments: `[\"components\", org_id, project_id]` (normalized)."
+  @doc "Root prefix segments: `[\"components\", org_id, project_id]` (requires a resolved tenant)."
   @spec base_prefix(tenant()) :: [String.t()]
   def base_prefix(%{org_id: org_id, project_id: project_id}),
     do: prefix(org_id, project_id)
 
   def base_prefix({org_id, project_id}), do: prefix(org_id, project_id)
 
+  defp prefix(org_id, project_id)
+       when is_binary(org_id) and org_id != "" and is_binary(project_id) and project_id != "" do
+    ["components", org_id, project_id]
+  end
+
   defp prefix(org_id, project_id) do
-    [
-      "components",
-      QueryHelpers.normalize_org_id(org_id),
-      QueryHelpers.normalize_project_id(project_id)
-    ]
+    raise ArgumentError,
+          "Compendium.ComponentPath: a resolved org_id/project_id is required " <>
+            "(got org_id=#{inspect(org_id)} project_id=#{inspect(project_id)})"
   end
 
   @doc """

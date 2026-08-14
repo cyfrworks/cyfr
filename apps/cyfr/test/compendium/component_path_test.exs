@@ -20,12 +20,18 @@ defmodule Compendium.ComponentPathTest do
                ["components", "acme", "proj_x"]
     end
 
-    test "normalizes nil/empty tenant to the local/default sentinels" do
-      assert ComponentPath.base_prefix({nil, nil}) == ["components", "local", "default"]
-      assert ComponentPath.base_prefix({"", ""}) == ["components", "local", "default"]
+    test "raises on an unresolved tenant — same fail-closed guard as Arca.Storage" do
+      assert_raise ArgumentError, ~r/resolved org_id\/project_id is required/, fn ->
+        ComponentPath.base_prefix({nil, nil})
+      end
 
-      assert ComponentPath.base_prefix(%{org_id: nil, project_id: nil}) ==
-               ["components", "local", "default"]
+      assert_raise ArgumentError, ~r/resolved org_id\/project_id is required/, fn ->
+        ComponentPath.base_prefix({"", ""})
+      end
+
+      assert_raise ArgumentError, ~r/resolved org_id\/project_id is required/, fn ->
+        ComponentPath.base_prefix(%{org_id: nil, project_id: nil})
+      end
     end
   end
 
