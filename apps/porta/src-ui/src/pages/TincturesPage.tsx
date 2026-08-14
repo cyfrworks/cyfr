@@ -327,10 +327,6 @@ export default function TincturesPage() {
  * BlurView from @react-native-community/blur.
  */
 function TinctureCapsule({ onClose }: { onClose: () => void }) {
-  const handleMore = () => {
-    // TODO: open menu — about, share, settings, etc. Placeholder for now.
-  };
-
   return (
     <div
       className="fixed right-4 top-4 z-[60] flex items-center rounded-full border border-white/10 bg-surface-overlay/70 shadow-lg backdrop-blur-md"
@@ -338,21 +334,8 @@ function TinctureCapsule({ onClose }: { onClose: () => void }) {
       aria-label="Tincture controls"
     >
       <button
-        onClick={handleMore}
-        className="flex h-8 w-10 items-center justify-center rounded-l-full text-text-secondary transition-colors hover:bg-white/5 hover:text-text-primary"
-        title="More"
-        aria-label="More options"
-      >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <circle cx="5" cy="12" r="1" fill="currentColor" />
-          <circle cx="12" cy="12" r="1" fill="currentColor" />
-          <circle cx="19" cy="12" r="1" fill="currentColor" />
-        </svg>
-      </button>
-      <span className="h-4 w-px bg-white/15" aria-hidden="true" />
-      <button
         onClick={onClose}
-        className="flex h-8 w-10 items-center justify-center rounded-r-full text-text-secondary transition-colors hover:bg-white/5 hover:text-text-primary"
+        className="flex h-8 w-10 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-white/5 hover:text-text-primary"
         title="Close (Esc)"
         aria-label="Close tincture"
       >
@@ -768,16 +751,12 @@ function TinctureIframe({
   // execute-only access token — never the account credential, which would end
   // up in browser history and `Referer`.
   //
-  // Sandbox: a tincture's CSP uses `'self'` for its own base/scripts/styles,
-  // which only resolves correctly if the iframe has its real origin — i.e. it
-  // needs `allow-same-origin`. That's safe ONLY when the tincture origin
-  // differs from the PWA's, otherwise an untrusted tincture could read the
-  // PWA's localStorage (API key, session). So: `allow-same-origin` when
-  // TINCTURE_ORIGIN is a distinct origin (dev: localhost:4000; prod: should be
-  // a dedicated host — TODO), else `allow-scripts` only.
-  const crossOrigin =
-    TINCTURE_ORIGIN.length > 0 && TINCTURE_ORIGIN !== window.location.origin;
-  const sandbox = crossOrigin ? "allow-scripts allow-same-origin" : "allow-scripts";
+  // Sandbox: `allow-scripts` only, never `allow-same-origin` — the same pin
+  // the server documents and the Prism shell applies. Tincture JS runs in an
+  // opaque origin with no storage and no credentialed same-origin fetch
+  // against whichever host serves it (in dev that host is the cyfr server
+  // itself, which also holds the session cookie).
+  const sandbox = "allow-scripts";
   const src = accessToken
     ? `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}?_t=${encodeURIComponent(accessToken)}`
     : `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}`;

@@ -161,18 +161,17 @@ defmodule Cyfr.TinctureHelpers do
               do: "public, max-age=3600",
               else: "private, max-age=3600"
 
+          # ACAO:* unconditionally: the consumer is a sandboxed tincture
+          # iframe with an opaque origin (`Origin: null`), whose fetch()es
+          # could not read these responses otherwise. Authorization is the
+          # capability URL (signed token on private paths), never the
+          # requesting origin, so the wildcard grants nothing extra.
           conn =
             conn
             |> put_resp_header("x-content-type-options", "nosniff")
             |> put_resp_header("cache-control", cache_control)
             |> put_resp_content_type(mime)
-
-          conn =
-            if Keyword.get(opts, :cors, false) do
-              put_resp_header(conn, "access-control-allow-origin", "*")
-            else
-              conn
-            end
+            |> put_resp_header("access-control-allow-origin", "*")
 
           case Arca.serve_to_conn(conn, ctx, version_segs ++ asset_segs, []) do
             {:ok, conn} -> conn

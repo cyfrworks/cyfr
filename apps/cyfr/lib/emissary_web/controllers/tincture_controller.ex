@@ -213,16 +213,10 @@ defmodule EmissaryWeb.TinctureController do
       _ ->
         case resolve_tincture(conn, org, project, publisher, tincture_name) do
           {:ok, tincture, :public, ctx} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
-              public: true,
-              cors: true
-            )
+            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments, public: true)
 
           {:ok, tincture, :private, ctx} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
-              public: false,
-              cors: true
-            )
+            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments, public: false)
 
           {:error, :not_found} ->
             send_resp(conn, 404, "Not Found")
@@ -238,8 +232,7 @@ defmodule EmissaryWeb.TinctureController do
         case TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
           {:ok, tincture} ->
             Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,
-              public: false,
-              cors: true
+              public: false
             )
 
           {:error, _} ->

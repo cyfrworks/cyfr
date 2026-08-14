@@ -222,22 +222,11 @@ defmodule Cyfr.TinctureHelpersTest do
   end
 
   describe "serve_asset/5 — CORS" do
-    test "sets CORS header when cors: true", %{ctx: ctx, version_segs: vs} do
-      conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"], cors: true)
-      assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == ["*"]
-    end
-
-    test "omits CORS header when cors: false", %{ctx: ctx, version_segs: vs} do
-      conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"], cors: false)
-      assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == []
-    end
-
-    test "omits CORS header by default", %{ctx: ctx, version_segs: vs} do
+    test "always sets ACAO:* — the opaque-origin iframe consumer needs it",
+         %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/app.js")
       result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"])
-      assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == []
+      assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == ["*"]
     end
   end
 end
