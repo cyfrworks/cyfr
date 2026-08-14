@@ -76,8 +76,8 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "pull",
         "push",
         "register",
-        "remove",
-        "new"
+        "delete",
+        "create"
       ]),
       make_tool("session", [
         "whoami",
@@ -312,6 +312,31 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       ctx = ctx_with([])
       ext = make_tool_no_actions("custom_tool")
       assert ToolVisibility.filter_for_context([ext], ctx) == [ext]
+    end
+  end
+
+  describe "unclassified actions are invisible (default-deny pin)" do
+    # Structural pin, independent of the completeness audit below: an action
+    # placed in NEITHER @action_permissions NOR @public_actions must be
+    # pruned for every non-wildcard caller — a forgotten classification can
+    # hide an action, never expose one.
+    test "unknown action pruned for an anonymous caller" do
+      ctx = ctx_with([])
+      tools = [make_tool("imaginary", ["made_up_action"])]
+      assert ToolVisibility.filter_for_context(tools, ctx) == []
+    end
+
+    test "unknown action pruned even for a broadly-permissioned caller" do
+      ctx = ctx_with([:execute, :admin, :storage_read, :component_manage])
+      tools = [make_tool("imaginary", ["made_up_action", "another_one"])]
+      assert ToolVisibility.filter_for_context(tools, ctx) == []
+    end
+
+    test "unknown action pruned from a tool that keeps its classified ones" do
+      ctx = ctx_with([])
+      tools = [make_tool("system", ["status", "made_up_action"])]
+      [system] = ToolVisibility.filter_for_context(tools, ctx)
+      assert action_enum(system) == ["status"]
     end
   end
 

@@ -5,14 +5,13 @@ defmodule Emissary.MCP.ToolVisibility do
   @moduledoc """
   Filters `tools/list` results based on the caller's API key permissions.
 
-  An action in `@action_permissions` requires the mapped permission atom; any
-  other action is visible to all callers. Because an *unlisted* action would
-  therefore be public, the completeness audit
-  (`test/emissary/mcp/tool_visibility_test.exs`) asserts every registered action
-  is deliberately placed in `@action_permissions` or `@public_actions` — so a
-  new sensitive tool cannot leak its schema by being forgotten, which is how
-  `vault.*`, `profile.*`, `webhook.*` and `oauth.*` had drifted into public
-  discovery.
+  Default-deny: an action in `@action_permissions` requires the mapped
+  permission atom; an action in `@public_actions` is visible to everyone;
+  an action in NEITHER is visible to no one. The completeness audit
+  (`test/emissary/mcp/tool_visibility_test.exs`) asserts every registered
+  action is deliberately classified in one of the two maps, so a forgotten
+  action fails loudly at test time instead of silently disappearing from
+  (or leaking into) discovery.
 
   External tools (namespaced with `:`, no action enum) pass through unchanged.
   """
@@ -20,7 +19,7 @@ defmodule Emissary.MCP.ToolVisibility do
   alias Sanctum.Context
 
   # "tool.action" => required permission atom
-  # Actions not listed here are public (visible to all callers).
+  # Actions in neither this map nor @public_actions are visible to no one.
   @action_permissions %{
     # :execute
     "execution.run" => :execute,
@@ -221,8 +220,10 @@ defmodule Emissary.MCP.ToolVisibility do
       actions when is_list(actions) ->
         visible =
           Enum.filter(actions, fn action ->
-            case Map.get(@action_permissions, "#{name}.#{action}") do
-              nil -> true
+            key = "#{name}.#{action}"
+
+            case Map.get(@action_permissions, key) do
+              nil -> MapSet.member?(@public_actions, key)
               perm -> Context.has_permission?(ctx, perm)
             end
           end)
