@@ -7,8 +7,8 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
   single `Sanctum.TenantScope` chokepoint (as Secrets/OAuth already do).
 
   Equivalence: normal-context behaviour is unchanged. Gap-closure: ApiKey
-  get/list/revoke/rotate previously skipped the tenant gate — under the strict
-  policy an org-less context must now be refused, not silently scoped to the
+  get/list/revoke/rotate previously skipped the tenant gate — an org-less
+  (pre-resolution) context must be refused, not silently scoped to the
   "" sentinel bucket.
   """
   use ExUnit.Case, async: false
@@ -31,7 +31,20 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
         authenticated: true
       )
 
-    {:ok, org_ctx: org_ctx, orgless: Sanctum.TestContext.local()}
+    # An authenticated context that has not resolved an org yet (the transient
+    # pre-resolution auth state) — the shape the tenant gate exists to refuse.
+    orgless =
+      Context.build(
+        user_id: "u-unresolved",
+        namespace: "ns",
+        org_id: nil,
+        permissions: [:*],
+        scope: :project,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, org_ctx: org_ctx, orgless: orgless}
   end
 
   describe "equivalence — normal context behaviour unchanged" do
@@ -53,37 +66,30 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
   end
 
   describe "ApiKey create/2 tenant gate (unchanged contract)" do
-    test "org-less context → {:error, :org_id_required} under strict policy", %{orgless: ctx} do
-      fn -> assert ApiKey.create(ctx, %{name: "nope"}) == {:error, :org_id_required} end
+    test "org-less context → {:error, :org_id_required}", %{orgless: ctx} do
+      assert ApiKey.create(ctx, %{name: "nope"}) == {:error, :org_id_required}
     end
   end
 
   describe "ApiKey read/mutate paths now enforce the tenant chokepoint (gap-closure)" do
-    test "get/list/revoke/rotate raise for an org-less context under strict policy",
-         %{orgless: ctx} do
-      fn ->
-        assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.get(ctx, "x") end
-        assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.list(ctx) end
-        assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.revoke(ctx, "x") end
-        assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.rotate(ctx, "x") end
-      end
+    test "get/list/revoke/rotate raise for an org-less context", %{orgless: ctx} do
+      assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.get(ctx, "x") end
+      assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.list(ctx) end
+      assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.revoke(ctx, "x") end
+      assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.rotate(ctx, "x") end
     end
 
-    test "a resolved-org context still works under strict policy", %{org_ctx: ctx} do
-      fn ->
-        {:ok, _} = ApiKey.create(ctx, %{name: "ok"})
-        assert {:ok, _} = ApiKey.get(ctx, "ok")
-        assert {:ok, _} = ApiKey.list(ctx)
-      end
+    test "a resolved-org context still works", %{org_ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "ok"})
+      assert {:ok, _} = ApiKey.get(ctx, "ok")
+      assert {:ok, _} = ApiKey.list(ctx)
     end
   end
 
   describe "Webhook tenant chokepoint (was already correct — pin it)" do
-    test "org-less context is refused under strict policy", %{orgless: ctx} do
-      fn ->
-        assert_raise Sanctum.UnauthorizedError, fn -> Webhook.list(ctx) end
-        assert_raise Sanctum.UnauthorizedError, fn -> Webhook.get(ctx, "x") end
-      end
+    test "org-less context is refused", %{orgless: ctx} do
+      assert_raise Sanctum.UnauthorizedError, fn -> Webhook.list(ctx) end
+      assert_raise Sanctum.UnauthorizedError, fn -> Webhook.get(ctx, "x") end
     end
   end
 end

@@ -59,35 +59,28 @@ defmodule Sanctum.TenantScopeTest do
     end
   end
 
-  describe "extract/1 — platform mode (strict tenant policy)" do
+  describe "extract/1 — tenant gate (fail-closed)" do
     test "org-less non-platform context fails closed (UnauthorizedError)" do
-      fn ->
-        assert_raise Sanctum.UnauthorizedError, fn ->
-          TenantScope.extract(Sanctum.TestContext.local())
-        end
+      # The transient pre-resolution auth state: authenticated but no org yet.
+      ctx = %Context{scope: :project, org_id: nil, project_id: "default"}
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        TenantScope.extract(ctx)
       end
     end
 
-    test "platform scope still bypasses the strict gate" do
-      fn ->
-        assert TenantScope.extract(Sanctum.system_context()) == {"platform", nil, "default"}
-      end
-    end
+    test "a resolved org passes the gate" do
+      ctx =
+        Context.build(
+          user_id: "u",
+          namespace: "ns",
+          org_id: "acme",
+          project_id: "p",
+          scope: :project,
+          authenticated: true
+        )
 
-    test "a resolved org passes the strict gate" do
-      fn ->
-        ctx =
-          Context.build(
-            user_id: "u",
-            namespace: "ns",
-            org_id: "acme",
-            project_id: "p",
-            scope: :project,
-            authenticated: true
-          )
-
-        assert TenantScope.extract(ctx) == {"project", "acme", "p"}
-      end
+      assert TenantScope.extract(ctx) == {"project", "acme", "p"}
     end
   end
 end

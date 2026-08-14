@@ -78,7 +78,7 @@ defmodule EmissaryWeb.Plugs.CORSTest do
   end
 
   # The regression this guards: `Mcp-Method` / `Mcp-Name` / `MCP-Protocol-Version`
-  # became mandatory, `MCPSession` began rejecting requests that omit them, and
+  # became mandatory, `MCPRequestMetadata` began rejecting requests that omit them, and
   # the preflight was not updated — so every cross-origin client failed in the
   # browser before reaching any code that could report why. The bundled compose
   # deployment proxies the PWA same-origin, so nothing preflights there and
@@ -90,7 +90,7 @@ defmodule EmissaryWeb.Plugs.CORSTest do
 
       assert missing == [],
              """
-             These headers are required by EmissaryWeb.Plugs.MCPSession but are not
+             These headers are required by EmissaryWeb.Plugs.MCPRequestMetadata but are not
              advertised in the CORS preflight, so a cross-origin client cannot send
              them and the browser refuses the request:
 

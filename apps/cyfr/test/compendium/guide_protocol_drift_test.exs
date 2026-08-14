@@ -34,11 +34,17 @@ defmodule Compendium.GuideProtocolDriftTest do
     tasks/list
   )
 
-  @retired_headers ~w(Mcp-Session-Id Last-Event-ID)
+  # `Last-Event-ID` is NOT retired: it left the MCP plane but lives on the
+  # non-MCP SSE endpoint (`/api/executions/:id/events`, see the router's
+  # :authenticated_api pipeline) — guides may document reconnection there.
+  @retired_headers ~w(Mcp-Session-Id)
 
-  # Revisions this server no longer accepts. `Protocol.supported/0` is the only
-  # version string a guide may show.
-  @retired_versions ~w(2024-11-05 2025-03-26 2025-06-18 2025-11-25)
+  # Version strings only ever appear in a `…protocol…version…` context in the
+  # guides (headers, `_meta` keys, client constants). Anchoring on that context
+  # catches ANY stale revision — including future ones — without a
+  # hand-maintained retired list, while ignoring unrelated dates (timestamps,
+  # provider api_version fields).
+  @version_site_re ~r/protocol[-_\/]?version[^\d]{0,10}(\d{4}-\d{2}-\d{2})/i
 
   defp guide(name), do: File.read!(Path.join(@project_root, name))
 
@@ -56,11 +62,17 @@ defmodule Compendium.GuideProtocolDriftTest do
   end
 
   for name <- @guides do
-    test "#{name} shows no retired protocol version in a sample" do
-      text = samples(unquote(name))
+    test "#{name} shows only supported protocol versions" do
+      text = guide(unquote(name))
 
-      for version <- @retired_versions do
-        refute String.contains?(text, version),
+      versions =
+        @version_site_re
+        |> Regex.scan(text, capture: :all_but_first)
+        |> List.flatten()
+        |> Enum.uniq()
+
+      for version <- versions do
+        assert version in Protocol.supported(),
                """
                #{unquote(name)} still shows protocol version #{version}.
 
@@ -103,7 +115,7 @@ defmodule Compendium.GuideProtocolDriftTest do
       assert String.contains?(String.downcase(text), header),
              """
              integration-guide.md never mentions the `#{header}` header, which
-             EmissaryWeb.Plugs.MCPSession requires on every request. A reader
+             EmissaryWeb.Plugs.MCPRequestMetadata requires on every request. A reader
              following this guide would build a client that is refused.
              """
     end

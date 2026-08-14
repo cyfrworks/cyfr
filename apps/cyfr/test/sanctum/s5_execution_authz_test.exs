@@ -71,12 +71,10 @@ defmodule Sanctum.S5ExecutionAuthzTest do
     assert {:error, _} = Context.authorize(unauth, :read, {:execution, @exec})
   end
 
-  test "cross-tenant owner is refused under the strict policy (per-record verify_tenant)" do
+  test "cross-tenant owner is refused (per-record verify_tenant)" do
     # Same user_id, different org: ownership alone must not grant access —
-    fn ->
-      # verify_tenant runs before the ownership check.
-      foreign = %{user_id: "owner-1", org_id: "org_b", project_id: "default"}
-      assert {:error, _} = Context.authorize(ctx([:storage_read]), :read, {:execution, foreign})
-    end
+    # verify_tenant runs before the ownership check.
+    foreign = %{user_id: "owner-1", org_id: "org_b", project_id: "default"}
+    assert {:error, _} = Context.authorize(ctx([:storage_read]), :read, {:execution, foreign})
   end
 end

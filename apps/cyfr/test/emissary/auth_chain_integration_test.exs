@@ -4,7 +4,7 @@
 defmodule Emissary.AuthChainIntegrationTest do
   @moduledoc """
   Integration tests for the full auth chain:
-  API key → MCPSession plug → Context.build → authorize → handler → response
+  API key → MCPRequestMetadata plug → Context.build → authorize → handler → response
 
   Verifies that permission-gated MCP tools correctly enforce authorization
   through the unified Context.authorize/2 path.

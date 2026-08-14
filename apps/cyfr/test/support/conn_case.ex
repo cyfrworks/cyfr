@@ -87,8 +87,8 @@ defmodule EmissaryWeb.ConnCase do
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     end
 
-    # Allow tasks spawned via Emissary.TaskSupervisor to access the DB sandbox.
-    # The MCPSession plug spawns async session-refresh tasks that call Arca.Repo.
+    # Allow tasks spawned via Emissary.TaskSupervisor to access the DB sandbox
+    # (async work started by request handling calls Arca.Repo).
     case Process.whereis(Emissary.TaskSupervisor) do
       pid when is_pid(pid) -> Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), pid)
       nil -> :ok

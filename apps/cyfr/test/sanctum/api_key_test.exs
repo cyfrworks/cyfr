@@ -544,9 +544,9 @@ defmodule Sanctum.ApiKeyTest do
   # ACCEPTED-RISK DESIGN (do not "fix" this into the inverse): an API key is a
   # project credential. The 192-bit hash IS the credential; org_id/project_id
   # are read back from the stored key row, never from the request, and the
-  # tenant is enforced on the resulting Context via the configured
-  # tenant_policy.require_org/1 (see Sanctum.ApiKey.context_from_metadata/1 and
-  # EmissaryWeb.Plugs.MCPSession). Key validity is intentionally DECOUPLED from
+  # tenant is enforced on the resulting Context via
+  # Sanctum.TenantPolicy.require_org/1 (see Sanctum.ApiKey.context_from_metadata/1
+  # and EmissaryWeb.Plugs.MCPRequestMetadata). Key validity is intentionally DECOUPLED from
   # the creator's *current* org membership — revocation is the control. The
   # consequence (an offboarded OIDC user's key keeps project access until the
   # key is revoked) is the deliberate model, not an oversight. Cross-tenant
