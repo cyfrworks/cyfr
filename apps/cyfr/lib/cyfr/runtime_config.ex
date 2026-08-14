@@ -100,6 +100,38 @@ defmodule Cyfr.RuntimeConfig do
   def cors_allowed_origins,
     do: Application.get_env(:cyfr, :cors_allowed_origins, ["*"])
 
+  @doc """
+  Whether cookies carry the `Secure` attribute.
+
+  `config/runtime.exs` sets it true under `:prod`; everywhere else it is
+  false so a plain-HTTP dev host still receives its session. One reader,
+  because a security default spelled out at four call sites is four
+  chances to spell it differently.
+  """
+  @spec cookie_secure?() :: boolean()
+  def cookie_secure?, do: Application.get_env(:cyfr, :cookie_secure, false)
+
+  @doc """
+  The externally reachable base URL of this instance, without a trailing
+  slash, or `nil` when the operator has not declared one.
+
+  Only the operator knows it: behind a proxy or a tunnel it is neither the
+  bind address nor the `Host` of any particular request.
+  """
+  @spec public_url() :: String.t() | nil
+  def public_url do
+    case Application.get_env(:cyfr, :public_url) do
+      url when is_binary(url) ->
+        case String.trim_trailing(String.trim(url), "/") do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
   # DNS-rebinding guard: unset means localhost-only.
   @mcp_default_origins [
     "http://localhost",

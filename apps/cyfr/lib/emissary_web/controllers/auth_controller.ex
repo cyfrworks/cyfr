@@ -414,7 +414,7 @@ defmodule EmissaryWeb.AuthController do
         max_age: 600,
         http_only: true,
         same_site: "Lax",
-        secure: Application.get_env(:cyfr, :cookie_secure, false)
+        secure: Cyfr.RuntimeConfig.cookie_secure?()
       )
     rescue
       e ->
@@ -442,7 +442,7 @@ defmodule EmissaryWeb.AuthController do
         max_age: 600,
         http_only: true,
         same_site: "Lax",
-        secure: Application.get_env(:cyfr, :cookie_secure, false)
+        secure: Cyfr.RuntimeConfig.cookie_secure?()
       )
     rescue
       e ->

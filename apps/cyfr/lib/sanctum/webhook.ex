@@ -613,7 +613,20 @@ defmodule Sanctum.Webhook do
 
   # Webhook URLs are path-only — clients prepend the host they reach the
   # deployment on.
-  defp build_url(slug) when is_binary(slug) and slug != "", do: "/hooks/" <> slug
+  # The sender needs an absolute URL, and only the operator knows the host
+  # this instance is reachable at — behind a proxy or a tunnel it is not the
+  # bind address. `CYFR_PUBLIC_URL` supplies it; without it the path alone is
+  # returned and both surfaces say what to set. The console and the CLI have
+  # been printing that instruction since before anything read the variable.
+  defp build_url(slug) when is_binary(slug) and slug != "" do
+    path = "/hooks/" <> slug
+
+    case Cyfr.RuntimeConfig.public_url() do
+      nil -> path
+      base -> base <> path
+    end
+  end
+
   defp build_url(_), do: nil
 
   # Single source of truth for the {scope, org_id, project_id} triple and the

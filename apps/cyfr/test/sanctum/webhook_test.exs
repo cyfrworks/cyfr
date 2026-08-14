@@ -52,6 +52,35 @@ defmodule Sanctum.WebhookTest do
       assert String.ends_with?(result.url, "/hooks/" <> result.slug)
     end
 
+    test "the URL is absolute when the operator declares a public URL", %{ctx: ctx} do
+      # A sender needs an absolute URL, and behind a proxy or a tunnel only
+      # the operator knows the host. Both surfaces told users to set
+      # CYFR_PUBLIC_URL long before anything read it.
+      original = Application.get_env(:cyfr, :public_url)
+      Application.put_env(:cyfr, :public_url, "https://cyfr.example.com/")
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :public_url, original),
+          else: Application.delete_env(:cyfr, :public_url)
+      end)
+
+      assert {:ok, result} = create(ctx, %{name: "absolute", target_ref: "f:local.handler"})
+      assert result.url == "https://cyfr.example.com/hooks/" <> result.slug
+    end
+
+    test "the URL is a bare path when no public URL is declared", %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :public_url)
+      Application.delete_env(:cyfr, :public_url)
+
+      on_exit(fn ->
+        if original, do: Application.put_env(:cyfr, :public_url, original)
+      end)
+
+      assert {:ok, result} = create(ctx, %{name: "relative", target_ref: "f:local.handler"})
+      assert result.url == "/hooks/" <> result.slug
+    end
+
     test "url is path-only — clients prepend their own host", %{ctx: ctx} do
       {:ok, result} = create(ctx, %{name: "url-shape", target_ref: "f:local.h"})
       assert result.url == "/hooks/" <> result.slug

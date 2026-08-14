@@ -60,7 +60,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimitTest do
 
     body = Jason.decode!(blocked.resp_body)
     assert body["jsonrpc"] == "2.0"
-    assert body["error"]["code"] == Emissary.MCP.Message.cyfr_code(:rate_limited)
+    assert body["error"]["code"] == Emissary.MCP.Message.error_code(:rate_limited)
     assert body["error"]["message"] =~ "Rate limit"
     assert body["id"] == nil
   end

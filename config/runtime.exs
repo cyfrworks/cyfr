@@ -337,6 +337,12 @@ if config_env() != :test do
   registry_url_config = env!("CYFR_REGISTRY_URL", :string, "cyfr.run")
   config :cyfr, :registry_url, registry_url_config
 
+  # The address this instance is reachable at from outside — needed to hand a
+  # webhook sender an absolute URL, which behind a proxy or a tunnel is
+  # neither the bind address nor any request's Host. Unset means the console
+  # and the CLI show the path and say to set this.
+  config :cyfr, :public_url, env!("CYFR_PUBLIC_URL", :string, nil)
+
   oci_registry_url_config =
     env!("CYFR_OCI_REGISTRY_URL", :string, "registry.#{registry_url_config}")
 

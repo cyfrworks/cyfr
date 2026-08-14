@@ -27,7 +27,7 @@ defmodule EmissaryWeb.Endpoint do
       signing_salt: salt,
       same_site: "Lax",
       http_only: true,
-      secure: Application.get_env(:cyfr, :cookie_secure, false)
+      secure: Cyfr.RuntimeConfig.cookie_secure?()
     ]
   end
 

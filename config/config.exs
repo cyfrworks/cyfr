@@ -36,6 +36,11 @@ config :cyfr,
 # minutes and must survive a restart. Tests override to the ETS store.
 config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
 
+# Consents themselves live in the database. Pinned here beside the proof
+# store rather than left to an inline default: two halves of one seam, and
+# only one of them was declared. Tests override to the Memory adapter.
+config :cyfr, :consent_source, Sanctum.Consent.Source.DB
+
 # Configures the endpoint
 config :cyfr, EmissaryWeb.Endpoint,
   url: [host: "localhost"],

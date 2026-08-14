@@ -540,20 +540,20 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   @finch_pool Sanctum.Auth.Finch
 
-  defp http_post(url, headers, body) do
-    timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
+  # One reader for the timeout, so the two verbs cannot come to disagree
+  # about how long an IdP is allowed to take.
+  defp http_timeout_ms, do: Application.get_env(:cyfr, :http_timeout_ms, 30_000)
 
+  defp http_post(url, headers, body) do
     :post
     |> Finch.build(url, headers, body)
-    |> finch_request_json(timeout)
+    |> finch_request_json(http_timeout_ms())
   end
 
   defp http_get(url, headers) do
-    timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
-
     :get
     |> Finch.build(url, headers)
-    |> finch_request_json(timeout)
+    |> finch_request_json(http_timeout_ms())
   end
 
   defp finch_request_json(req, timeout) do
