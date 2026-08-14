@@ -31,9 +31,9 @@ defmodule Sanctum.ClientIp do
 
   `resolve/1` ALWAYS returns a binary — never `nil`. A context with no
   resolvable IP yields `"0.0.0.0"`, which fails a real API-key allowlist
-  *closed* (it won't match a configured CIDR). Returning `nil` instead would
-  silently *disable* the allowlist (`Sanctum.ApiKey.validate/2` skips the
-  check when `client_ip` is nil) — the bug this module exists to prevent.
+  *closed* (it won't match a configured CIDR). `Sanctum.ApiKey.validate/2`
+  also rejects an allowlisted key outright when no `client_ip` is supplied,
+  so both halves of the check fail closed.
   """
 
   import Plug.Conn, only: [get_req_header: 2]

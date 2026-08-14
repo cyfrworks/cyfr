@@ -118,42 +118,10 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  def authenticate(%{api_key: api_key}) when is_binary(api_key) do
-    case Sanctum.ApiKey.validate(api_key) do
-      {:ok, metadata} ->
-        # Single source of truth: the SAME tenant-bound context the
-        # production MCP-session plug builds (org_id/project_id read from the
-        # key row, namespace resolved, api_key_id for audit) — not a bespoke
-        # builder that drops the tenant. In platform mode apply the same
-        # require_org gate so an org-less key context never authenticates
-        # (no API-key context without a resolved tenant).
-        ctx = Sanctum.ApiKey.context_from_metadata(metadata)
-
-        case gate_api_key_tenant(ctx) do
-          :ok ->
-            Sanctum.Telemetry.auth_event(:api_key, :success)
-            {:ok, ctx}
-
-          {:error, reason} ->
-            Sanctum.Telemetry.auth_event(:api_key, :failure, %{reason: reason})
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        Sanctum.Telemetry.auth_event(:api_key, :failure, %{reason: reason})
-        {:error, reason}
-    end
-  end
-
   def authenticate(_params) do
     Sanctum.Telemetry.auth_event(:unknown, :failure, %{reason: :invalid_credentials})
     {:error, :invalid_credentials}
   end
-
-  # An API-key context must carry a resolved tenant. Single chokepoint —
-  # `Sanctum.Context.tenant_ok/1` owns the :platform bypass and the
-  # configured-policy delegation (the default policy returns :ok).
-  defp gate_api_key_tenant(ctx), do: Sanctum.Context.tenant_ok(ctx)
 
   @impl true
   @doc """
@@ -162,7 +130,10 @@ defmodule Sanctum.Auth.OIDC do
   Looks for authentication in the following order:
   1. Session token in conn.assigns[:session_token]
   2. Authorization header with Bearer token
-  3. API key in X-API-Key header
+
+  API keys are not a console credential: they authenticate only through
+  `EmissaryWeb.Plugs.Authenticate`, which resolves the client IP and
+  enforces the key's IP allowlist.
 
   Returns nil if no valid authentication found.
   """
@@ -178,13 +149,6 @@ defmodule Sanctum.Auth.OIDC do
       # Check Authorization header
       token = get_bearer_token(conn) ->
         case Session.load(token, surface: :console) do
-          {:ok, ctx} -> ctx
-          _ -> nil
-        end
-
-      # Check API key header
-      api_key = get_api_key(conn) ->
-        case authenticate(%{api_key: api_key}) do
           {:ok, ctx} -> ctx
           _ -> nil
         end
@@ -224,15 +188,6 @@ defmodule Sanctum.Auth.OIDC do
   end
 
   defp get_bearer_token(_conn), do: nil
-
-  defp get_api_key(%Plug.Conn{} = conn) do
-    case Plug.Conn.get_req_header(conn, "x-api-key") do
-      [key] -> key
-      _ -> nil
-    end
-  end
-
-  defp get_api_key(_conn), do: nil
 
   defp default_permissions do
     # Anyone who passes the operator's configured OIDC provider is fully

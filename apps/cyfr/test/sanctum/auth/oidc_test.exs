@@ -205,44 +205,11 @@ defmodule Sanctum.Auth.OIDCTest do
     end
   end
 
-  describe "authenticate/1 with API key" do
-    setup %{test_dir: _test_dir} do
-      # Create an API key for testing
-      ctx = Sanctum.TestContext.local()
-
-      {:ok, key_result} =
-        Sanctum.ApiKey.create(ctx, %{
-          name: "test-api-key",
-          type: :application
-        })
-
-      {:ok, api_key: key_result.key}
-    end
-
-    test "authenticates with valid API key (canonical tenant-bound context)",
-         %{api_key: api_key} do
-      {:ok, ctx} = OIDC.authenticate(%{api_key: api_key})
-
-      # Same shape the production MCP-session plug produces via
-      # Sanctum.ApiKey.context_from_metadata/1 — NOT a bespoke
-      # "api_key:<name>" builder that dropped the tenant.
-      assert ctx.auth_method == :api_key
-      assert ctx.api_key_type == :application
-      assert ctx.authenticated == true
-      assert ctx.user_id == "local|local|testns"
-      assert match?(%MapSet{}, ctx.permissions)
-    end
-
-    test "returns error for invalid API key" do
-      # Keys without valid cyfr_ prefix return :invalid_key_format
-      assert {:error, :invalid_key_format} = OIDC.authenticate(%{api_key: "invalid_key"})
-    end
-
-    test "returns error for revoked API key", %{api_key: api_key} do
-      ctx = Sanctum.TestContext.local()
-      :ok = Sanctum.ApiKey.revoke(ctx, "test-api-key")
-
-      assert {:error, :revoked} = OIDC.authenticate(%{api_key: api_key})
+  describe "authenticate/1 with API key params" do
+    test "API keys are not an OIDC credential" do
+      # Keys authenticate only through EmissaryWeb.Plugs.Authenticate, which
+      # resolves the client IP for the allowlist check.
+      assert {:error, :invalid_credentials} = OIDC.authenticate(%{api_key: "cyfr_ak_anything"})
     end
   end
 

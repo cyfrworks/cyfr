@@ -411,7 +411,7 @@ defmodule Sanctum.ApiKeyTest do
       assert {:error, :ip_not_allowed} = ApiKey.validate(created.key, client_ip: "10.0.0.1")
     end
 
-    test "validate without client_ip bypasses IP check", %{ctx: ctx} do
+    test "validate without client_ip fails closed for an allowlisted key", %{ctx: ctx} do
       {:ok, created} =
         ApiKey.create(ctx, %{
           name: "ip-key-no-check",
@@ -420,9 +420,8 @@ defmodule Sanctum.ApiKeyTest do
           ip_allowlist: ["192.168.1.0/24"]
         })
 
-      # Without client_ip, IP check is bypassed
-      {:ok, validated} = ApiKey.validate(created.key)
-      assert validated.name == "ip-key-no-check"
+      # No caller-supplied IP is not proof the restriction is satisfied.
+      assert {:error, :ip_not_allowed} = ApiKey.validate(created.key)
     end
 
     test "ip_allowlist is included in list output", %{ctx: ctx} do

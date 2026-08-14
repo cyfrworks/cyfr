@@ -378,7 +378,9 @@ defmodule Sanctum.ApiKey do
 
   ## Options
 
-  - `:client_ip` - If provided and key has an IP allowlist, validates the IP.
+  - `:client_ip` - The caller's resolved client IP. A key with an IP
+    allowlist is rejected when this is absent: no IP means the restriction
+    cannot be proven satisfied, so validation fails closed.
 
   ## Examples
 
@@ -422,14 +424,22 @@ defmodule Sanctum.ApiKey do
       {:ok, row} ->
         ip_allowlist = decode_json(row.ip_allowlist, nil)
 
-        if client_ip != nil and ip_allowlist != nil and ip_allowlist != [] do
-          if ip_allowed?(client_ip, ip_allowlist) do
+        cond do
+          ip_allowlist in [nil, []] ->
             {:ok, build_key_metadata(row, key_type)}
-          else
+
+          # An allowlisted key with no caller-supplied IP fails closed:
+          # absence of the IP is not proof the restriction is satisfied
+          # (Sanctum.ClientIp.resolve/1 is total, so every request path
+          # can supply one).
+          client_ip == nil ->
             {:error, :ip_not_allowed}
-          end
-        else
-          {:ok, build_key_metadata(row, key_type)}
+
+          ip_allowed?(client_ip, ip_allowlist) ->
+            {:ok, build_key_metadata(row, key_type)}
+
+          true ->
+            {:error, :ip_not_allowed}
         end
     end
   end
