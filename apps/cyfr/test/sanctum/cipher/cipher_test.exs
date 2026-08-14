@@ -91,7 +91,7 @@ defmodule Sanctum.CipherTest do
 
     test "garbage and short inputs fail closed" do
       assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(<<0x99, 1, 2, 3>>, aad())
-      assert {:error, {:decrypt, :truncated}} = Cipher.decrypt(<<0x02, 5, "ab">>, aad())
+      assert {:error, {:decrypt, :truncated}} = Cipher.decrypt(<<0x03, 5, "ab">>, aad())
       assert {:error, {:decrypt, :invalid_input}} = Cipher.decrypt(:not_binary, aad())
     end
   end
@@ -129,27 +129,19 @@ defmodule Sanctum.CipherTest do
     end
   end
 
-  describe "T-CIPHER-V2-LEGACY: v2 rows decrypt read-only" do
-    test "a v2-sealed row decrypts under the v2 AAD layout" do
+  describe "T-CIPHER-V2-RETIRED: pre-v3 envelopes fail closed" do
+    test "a v2-sealed row is rejected as an unknown version" do
       v2 = seal_v2("legacy-material", aad(), "k1", @k1)
 
-      assert {:ok, {2, "k1"}} = Cipher.envelope(v2)
-      assert {:ok, "legacy-material"} = Cipher.decrypt(v2, aad())
+      assert :error = Cipher.envelope(v2)
+      assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(v2, aad())
     end
 
-    test "a v2 ciphertext relabeled 0x03 fails the tag check" do
-      v2 = seal_v2("legacy-material", aad(), "k1", @k1)
-      <<0x02, rest::binary>> = v2
-
-      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
-               Cipher.decrypt(<<0x03, rest::binary>>, aad())
-    end
-
-    test "a fresh v3 ciphertext relabeled 0x02 fails the tag check" do
+    test "a fresh v3 ciphertext relabeled 0x02 is rejected, not decrypted" do
       {:ok, v3} = Cipher.encrypt("fresh", aad())
       <<0x03, rest::binary>> = v3
 
-      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
+      assert {:error, {:decrypt, :unknown_version}} =
                Cipher.decrypt(<<0x02, rest::binary>>, aad())
     end
   end

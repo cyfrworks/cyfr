@@ -7,7 +7,7 @@ defmodule Sanctum.Cipher.Rotation do
 
   Operator-driven and adapter-agnostic — the batched keyset walk runs the
   same against SQLite and Postgres. Re-encrypts every at-rest credential
-  blob onto the current keyring primary (and current cipher version) so a
+  blob onto the current keyring primary so a
   retired key can be safely dropped.
 
   ## Usage
@@ -21,9 +21,7 @@ defmodule Sanctum.Cipher.Rotation do
   1. Add the new key to `CYFR_CRYPTO_KEYRING`, point `primary` at it, redeploy.
      The system keeps working with mixed labels (old keys still decrypt).
   2. `reencrypt_all/1` — per row: skip only when the row is already on
-     `primary` AND sealed in the current envelope version (idempotent,
-     resumable); a v2 row on the primary key is re-sealed too, so one pass
-     leaves every row v3. Otherwise decrypt with the embedded label and
+     `primary` (idempotent, resumable). Otherwise decrypt with the embedded label and
      re-encrypt under `primary`, rebuilding the AAD from the row's own tenant
      columns. The update is an in-place compare-and-swap on the exact old
      ciphertext, so a concurrent legitimate write is never clobbered. Any row
@@ -66,8 +64,8 @@ defmodule Sanctum.Cipher.Rotation do
   Options: `:dry_run` (default `false`) — report what would change, write
   nothing; `:batch_size` (default #{@batch}).
 
-  Returns `{:ok, %{secrets: summary, oauth_credentials: summary, webhooks:
-  summary, vault_entries: summary, dry_run: bool}}` or `{:error, {table,
+  Returns `{:ok, %{webhooks: summary, vault_entries: summary,
+  registry_tokens: summary, dry_run: bool}}` or `{:error, {table,
   reason, sample_id}}` (the run aborted fail-closed; rerun after fixing the
   cause — already-rotated rows are skipped).
   """
@@ -234,9 +232,7 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   # planned: %{col => new_ct} for columns that needed rotation. A column is
-  # finished only when it is on the primary key AND already v3 — a v2 row on
-  # the primary key still needs its re-seal, or the v2 read path could never
-  # be retired.
+  # finished only when it is already sealed on the primary key.
   defp classify(cols, primary) do
     Enum.reduce_while(cols, {:skip}, fn {col, ct, aad}, state ->
       case Cipher.envelope(ct) do

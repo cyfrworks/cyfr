@@ -15,20 +15,16 @@ defmodule Sanctum.Cipher do
 
       version(1) | key_label_len(1) | key_label(L) | iv(12) | tag(16) | ct
 
-  Two versions share that layout and differ only in the version byte and the
-  AAD it selects. **Writes always emit v3 (`0x03`)** — there is no v2 writer.
-  v2 (`0x02`) rows decrypt until a `Sanctum.Cipher.Rotation` pass re-seals
-  them; any other first byte fails closed. Minimum 31 bytes (empty
-  ciphertext, 1-byte label).
+  The version byte is `0x03`; any other first byte fails closed. Minimum
+  31 bytes (empty ciphertext, 1-byte label).
 
   ## Tenant binding (AAD)
 
   `aad_ctx` carries `:purpose` plus the caller's canonical tenant key fields —
   `org`/`project` already normalized via `Arca.QueryHelpers`, `scope` as the
   raw `to_string(ctx.scope)`, the logical row `name`, an optional `sub`
-  discriminator (e.g. the OAuth provider), and — v3 only — a `user` frame,
-  empty until per-user credentials exist, so enabling them later re-keys
-  nothing. This tuple is bound as AES-GCM additional authenticated data using
+  discriminator (e.g. the OAuth provider), and a `user` frame, empty until
+  per-user credentials exist, so enabling them later re-keys nothing. This tuple is bound as AES-GCM additional authenticated data using
   length-prefixed framing (collision-safe — `("a","bc")` cannot frame-collide
   with `("ab","c")`). The version byte and key label are bound too, so the
   otherwise-plaintext envelope header is tamper-evident. A row copied to
@@ -53,7 +49,6 @@ defmodule Sanctum.Cipher do
   """
   @type aad_ctx :: %{required(:purpose) => atom(), optional(atom()) => term()}
 
-  @version_v2 0x02
   @version_v3 0x03
   @iv_size 12
   @tag_size 16
@@ -78,7 +73,7 @@ defmodule Sanctum.Cipher do
 
   @spec decrypt(binary(), aad_ctx()) :: {:ok, binary()} | {:error, term()}
   def decrypt(<<version::8, llen::8, rest::binary>>, %{purpose: purpose} = ctx)
-      when version in [@version_v2, @version_v3] and
+      when version == @version_v3 and
              byte_size(rest) >= llen + @iv_size + @tag_size do
     <<label::binary-size(^llen), iv::binary-size(@iv_size), tag::binary-size(@tag_size),
       ct::binary>> = rest
@@ -98,14 +93,14 @@ defmodule Sanctum.Cipher do
     end
   end
 
-  def decrypt(<<version::8, _::binary>>, _ctx) when version in [@version_v2, @version_v3],
+  def decrypt(<<version::8, _::binary>>, _ctx) when version == @version_v3,
     do: {:error, {:decrypt, :truncated}}
 
   def decrypt(bin, _ctx) when is_binary(bin), do: {:error, {:decrypt, :unknown_version}}
   def decrypt(_, _ctx), do: {:error, {:decrypt, :invalid_input}}
 
   @doc """
-  Extract the key label from a v2 or v3 envelope without decrypting.
+  Extract the key label from an envelope without decrypting.
 
   Returns `:error` for anything that is not a well-formed envelope (fail
   closed — the rotation tool treats that as a row to surface, never silently
@@ -120,17 +115,14 @@ defmodule Sanctum.Cipher do
   end
 
   @doc """
-  Parse the envelope header without decrypting: `{:ok, {version, key_label}}`
-  with `version` in `[2, 3]`.
+  Parse the envelope header without decrypting: `{:ok, {version, key_label}}`.
 
   Single source of truth for the header layout. `Sanctum.Cipher.Rotation`
-  uses it to decide whether a row is already on the primary key AND the
-  current envelope version — a v2 row on the primary key still needs a
-  re-seal pass.
+  uses it to decide whether a row is already on the primary key.
   """
-  @spec envelope(binary()) :: {:ok, {2 | 3, binary()}} | :error
+  @spec envelope(binary()) :: {:ok, {3, binary()}} | :error
   def envelope(<<version::8, llen::8, rest::binary>>)
-      when version in [@version_v2, @version_v3] and byte_size(rest) >= llen and llen > 0 do
+      when version == @version_v3 and byte_size(rest) >= llen and llen > 0 do
     <<lbl::binary-size(^llen), _::binary>> = rest
     {:ok, {version, lbl}}
   end
@@ -150,9 +142,7 @@ defmodule Sanctum.Cipher do
   # Length-prefixed framing of the full identifying tuple. Absent fields frame
   # as "" so the AAD is well-defined and identical across encrypt/decrypt for
   # a given purpose. Version + key label are bound so the plaintext header
-  # cannot be tampered with undetected. v3 appends the `user` frame (empty
-  # until per-user credentials exist); v2 must keep its exact original layout
-  # or no pre-v3 row would ever decrypt again.
+  # cannot be tampered with undetected.
   defp build_aad(@version_v3, label, %{purpose: purpose} = ctx) do
     IO.iodata_to_binary([
       "cyfrv3",
@@ -165,20 +155,6 @@ defmodule Sanctum.Cipher do
       frame(field(ctx, :name)),
       frame(field(ctx, :sub)),
       frame(field(ctx, :user))
-    ])
-  end
-
-  defp build_aad(@version_v2, label, %{purpose: purpose} = ctx) do
-    IO.iodata_to_binary([
-      "cyfrv2",
-      <<@version_v2::8>>,
-      frame(label),
-      frame(Atom.to_string(purpose)),
-      frame(field(ctx, :scope)),
-      frame(field(ctx, :org)),
-      frame(field(ctx, :project)),
-      frame(field(ctx, :name)),
-      frame(field(ctx, :sub))
     ])
   end
 

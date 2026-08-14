@@ -266,22 +266,15 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT-V3: envelope upgrade" do
-    test "a v2 row on the PRIMARY key is re-sealed to v3, not skipped" do
+  describe "T-REENCRYPT-V3: retired envelope versions" do
+    test "a pre-v3 row aborts the run fail-closed instead of being skipped" do
       aad = %{purpose: :webhook_secret, scope: @scope, org: @org, project: @proj, name: "V2ROW"}
       v2_ct = seal_v2("legacy-plain", aad, "k1", @k1)
-      id = put_webhook_row("V2ROW", "ignored", nil, %{secret_encrypted: v2_ct})
+      _id = put_webhook_row("V2ROW", "ignored", nil, %{secret_encrypted: v2_ct})
 
-      # primary is still k1 — the label matches, the envelope version does not.
-      assert {:ok, %{webhooks: %{scanned: 1, rotated: 1, skipped: 0}}} =
-               Rotation.reencrypt_all()
-
-      new_ct = col("webhooks", id, :secret_encrypted)
-      assert {:ok, {3, "k1"}} = Cipher.envelope(new_ct)
-      assert {:ok, "legacy-plain"} = Cipher.decrypt(new_ct, aad)
-
-      # Second pass: now genuinely finished.
-      assert {:ok, %{webhooks: %{scanned: 1, rotated: 0, skipped: 1}}} =
+      # The v2 read path is retired: an unreadable envelope must surface,
+      # never be silently skipped past.
+      assert {:error, {:webhooks, {:not_a_cipher_envelope, _col}, _sample}} =
                Rotation.reencrypt_all()
     end
 
