@@ -103,24 +103,6 @@ defmodule Sanctum.TelemetryTest do
     end
   end
 
-  describe "attach_default_logger/0" do
-    test "attaches a handler" do
-      # Detach first in case it was attached during app startup
-      Telemetry.detach_default_logger()
-
-      assert :ok = Telemetry.attach_default_logger()
-      # Second attach should fail
-      assert {:error, :already_exists} = Telemetry.attach_default_logger()
-    end
-
-    test "can be detached" do
-      Telemetry.attach_default_logger()
-      assert :ok = Telemetry.detach_default_logger()
-      # Should be able to attach again after detach
-      assert :ok = Telemetry.attach_default_logger()
-    end
-  end
-
   describe "integration with auth providers" do
     test "telemetry auth_event can be called directly" do
       test_pid = self()

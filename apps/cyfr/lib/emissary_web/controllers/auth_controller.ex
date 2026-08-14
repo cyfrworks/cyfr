@@ -31,10 +31,7 @@ defmodule EmissaryWeb.AuthController do
 
   require Logger
 
-  # Only use Ueberauth when the module is available
-  if Code.ensure_loaded?(Ueberauth) do
-    plug Ueberauth
-  end
+  plug Ueberauth
 
   alias Sanctum.Session
 

@@ -153,49 +153,6 @@ defmodule Emissary.UUID7 do
   @spec build_id() :: String.t()
   def build_id, do: generate_id("build")
 
-  @doc """
-  Extract the timestamp from a UUID v7 string.
-
-  Returns the milliseconds since Unix epoch, or `{:error, reason}` if invalid.
-
-  ## Examples
-
-      iex> uuid = Emissary.UUID7.generate()
-      iex> {:ok, ts} = Emissary.UUID7.extract_timestamp(uuid)
-      iex> is_integer(ts) and ts > 0
-      true
-
-  """
-  @spec extract_timestamp(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def extract_timestamp(uuid) when is_binary(uuid) do
-    # Handle prefixed IDs
-    uuid_part = extract_uuid_part(uuid)
-
-    case parse_uuid(uuid_part) do
-      {:ok, binary} ->
-        <<timestamp_ms::48, _rest::80>> = binary
-        {:ok, timestamp_ms}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  @doc """
-  Check if two UUID v7s are in chronological order.
-
-  Returns `true` if `uuid1` was generated before `uuid2`.
-  """
-  @spec before?(String.t(), String.t()) :: boolean()
-  def before?(uuid1, uuid2) do
-    with {:ok, ts1} <- extract_timestamp(uuid1),
-         {:ok, ts2} <- extract_timestamp(uuid2) do
-      ts1 < ts2
-    else
-      _ -> false
-    end
-  end
-
   # ============================================================================
   # Private Functions
   # ============================================================================
@@ -215,40 +172,5 @@ defmodule Emissary.UUID7 do
     ]
     |> IO.iodata_to_binary()
     |> String.downcase()
-  end
-
-  # Parse UUID string to binary
-  defp parse_uuid(uuid) when byte_size(uuid) == 36 do
-    case String.split(uuid, "-") do
-      [a, b, c, d, e]
-      when byte_size(a) == 8 and byte_size(b) == 4 and
-             byte_size(c) == 4 and byte_size(d) == 4 and byte_size(e) == 12 ->
-        try do
-          binary = <<
-            String.to_integer(a, 16)::32,
-            String.to_integer(b, 16)::16,
-            String.to_integer(c, 16)::16,
-            String.to_integer(d, 16)::16,
-            String.to_integer(e, 16)::48
-          >>
-
-          {:ok, binary}
-        rescue
-          ArgumentError -> {:error, :invalid_uuid}
-        end
-
-      _ ->
-        {:error, :invalid_uuid}
-    end
-  end
-
-  defp parse_uuid(_), do: {:error, :invalid_uuid}
-
-  # Extract UUID part from prefixed ID
-  defp extract_uuid_part(id) do
-    case String.split(id, "_", parts: 2) do
-      [_prefix, uuid] -> uuid
-      [uuid] -> uuid
-    end
   end
 end

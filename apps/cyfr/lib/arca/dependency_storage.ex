@@ -117,44 +117,6 @@ defmodule Arca.DependencyStorage do
   end
 
   @doc """
-  Get reverse dependencies — components that depend on the given name and version.
-
-  Returns `{:ok, [dep]}` with entries where `dep_name` and `dep_version` match.
-  """
-  @spec get_reverse_dependencies(Context.t(), String.t(), String.t()) ::
-          {:ok, [map()]} | {:error, term()}
-  def get_reverse_dependencies(%Context{} = ctx, name, version)
-      when is_binary(name) and is_binary(version) do
-    query =
-      from(d in @table,
-        where: d.dep_name == ^name and d.dep_version == ^version,
-        select: %{
-          id: d.id,
-          component_id: d.component_id,
-          dependency_ref: d.dependency_ref,
-          dep_type: d.dep_type,
-          dep_namespace: d.dep_namespace,
-          dep_name: d.dep_name,
-          dep_version: d.dep_version,
-          optional: d.optional,
-          reason: d.reason,
-          inserted_at: d.inserted_at,
-          updated_at: d.updated_at
-        }
-      )
-      |> where_tenant(ctx)
-
-    {:ok, Arca.Repo.all(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[DependencyStorage] Database error in get_reverse_dependencies: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
-  end
-
-  @doc """
   Delete all dependencies for a component by its ID.
   """
   @spec delete_dependencies(Context.t(), String.t()) :: :ok | {:error, term()}

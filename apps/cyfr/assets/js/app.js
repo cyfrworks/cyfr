@@ -4,7 +4,6 @@ import {LiveSocket} from "phoenix_live_view"
 import ShellViewport from "./hooks/window_manager"
 import IframeBridge from "./hooks/iframe_bridge"
 import CommandPalette from "./hooks/command_palette"
-import AgentOverlay from "./hooks/agent_overlay"
 import PageLoadingIndicator from "./hooks/page_loading_indicator"
 import OptimisticNav from "./hooks/optimistic_nav"
 import Aqua from "./hooks/aqua"
@@ -27,28 +26,10 @@ let Hooks = {}
 Hooks.ShellViewport = ShellViewport
 Hooks.IframeBridge = IframeBridge
 Hooks.CommandPalette = CommandPalette
-Hooks.AgentOverlay = AgentOverlay
 Hooks.PageLoadingIndicator = PageLoadingIndicator
 Hooks.OptimisticNav = OptimisticNav
 Hooks.Aqua = Aqua
 Hooks.AquaChat = AquaChat
-
-Hooks.Tooltip = {
-  mounted() {
-    this._position()
-  },
-  updated() {
-    this._position()
-  },
-  _position() {
-    const anchorId = this.el.dataset.anchor
-    const anchor = anchorId && document.getElementById(anchorId)
-    if (!anchor) return
-    const rect = anchor.getBoundingClientRect()
-    this.el.style.top = rect.top + "px"
-    this.el.style.left = (rect.right + 8) + "px"
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Markdown rendering utilities
@@ -114,30 +95,6 @@ Hooks.MarkdownContent = {
   }
 }
 
-Hooks.StreamingMarkdown = {
-  mounted() {
-    this._timer = null
-    this._text = this.el.getAttribute("data-raw-content") || ""
-    if (this._text) this.el.innerHTML = renderMarkdownToHTML(this._text)
-    this.handleEvent("streaming_delta", ({ text }) => {
-      this._text = text
-      if (!this._timer) {
-        this._timer = setTimeout(() => {
-          this._timer = null
-          try {
-            this.el.innerHTML = renderMarkdownToHTML(this._text)
-          } catch (e) {
-            console.error('[StreamingMarkdown] render failed:', e)
-          }
-        }, 150)
-      }
-    })
-  },
-  destroyed() {
-    if (this._timer) clearTimeout(this._timer)
-  }
-}
-
 Hooks.FlashAutoHide = {
   mounted() {
     this.timer = setTimeout(() => {
@@ -162,56 +119,6 @@ Hooks.ScrollBottom = {
   },
   destroyed() {
     if (this.observer) this.observer.disconnect()
-  }
-}
-
-Hooks.ElapsedTimer = {
-  mounted() {
-    this._tick = () => {
-      const started = new Date(this.el.getAttribute("data-started-at"))
-      const elapsed = Math.floor((Date.now() - started.getTime()) / 1000)
-      if (elapsed < 60) {
-        this.el.textContent = `${elapsed}s`
-      } else {
-        const m = Math.floor(elapsed / 60)
-        const s = elapsed % 60
-        this.el.textContent = `${m}m ${s}s`
-      }
-    }
-    this._tick()
-    this._interval = setInterval(this._tick, 1000)
-  },
-  destroyed() {
-    if (this._interval) clearInterval(this._interval)
-  }
-}
-
-Hooks.ScrollAnchor = {
-  mounted() {
-    const messages = document.getElementById("messages")
-    const btn = document.getElementById("scroll-to-bottom")
-    if (!messages || !btn) return
-
-    // Show/hide button based on scroll position
-    this._checkScroll = () => {
-      const distFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight
-      if (distFromBottom > 150) {
-        btn.classList.remove("hidden")
-      } else {
-        btn.classList.add("hidden")
-      }
-    }
-    messages.addEventListener("scroll", this._checkScroll)
-
-    btn.addEventListener("click", () => {
-      messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" })
-    })
-  },
-  destroyed() {
-    const messages = document.getElementById("messages")
-    if (messages && this._checkScroll) {
-      messages.removeEventListener("scroll", this._checkScroll)
-    }
   }
 }
 

@@ -47,8 +47,6 @@ defmodule Compendium.ReleaseDigestTest do
         "caps" => %{"egress" => %{"domains" => ["a.example"]}}
       }
 
-      assert ReleaseDigest.security_blocks() == ~w(dependencies needs caps)
-
       for {block, value} <- blocks do
         assert compute!(%{}) != compute!(%{block => value}),
                "#{block} did not affect the release digest"

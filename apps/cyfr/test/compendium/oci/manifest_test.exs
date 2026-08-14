@@ -115,29 +115,6 @@ defmodule Compendium.OCI.ManifestTest do
     end
   end
 
-  describe "cyfr_component?/1" do
-    test "returns true for CYFR artifact type" do
-      assert Manifest.cyfr_component?(%{
-               artifact_type: "application/vnd.cyfr.component.v1",
-               config: %{}
-             })
-    end
-
-    test "returns true for CYFR config media type" do
-      assert Manifest.cyfr_component?(%{
-               artifact_type: nil,
-               config: %{"mediaType" => "application/vnd.cyfr.manifest.v1+json"}
-             })
-    end
-
-    test "returns false for non-CYFR manifest" do
-      refute Manifest.cyfr_component?(%{
-               artifact_type: nil,
-               config: %{"mediaType" => "application/vnd.oci.image.config.v1+json"}
-             })
-    end
-  end
-
   describe "wasm_layer/1" do
     test "finds WASM layer" do
       parsed = %{
@@ -162,27 +139,6 @@ defmodule Compendium.OCI.ManifestTest do
       }
 
       assert {:error, _} = Manifest.wasm_layer(parsed)
-    end
-  end
-
-  describe "component_type_from_media/1" do
-    test "detects catalyst" do
-      assert Manifest.component_type_from_media("application/vnd.cyfr.catalyst.v1+wasm") ==
-               "catalyst"
-    end
-
-    test "detects reagent" do
-      assert Manifest.component_type_from_media("application/vnd.cyfr.reagent.v1+wasm") ==
-               "reagent"
-    end
-
-    test "detects formula" do
-      assert Manifest.component_type_from_media("application/vnd.cyfr.formula.v1+wasm") ==
-               "formula"
-    end
-
-    test "returns nil for unknown" do
-      assert Manifest.component_type_from_media("application/octet-stream") == nil
     end
   end
 
@@ -395,7 +351,6 @@ defmodule Compendium.OCI.ManifestTest do
       assert parsed.config["digest"] == config_digest
       assert hd(parsed.layers)["digest"] == wasm_digest
       assert parsed.annotations["custom"] == "value"
-      assert Manifest.cyfr_component?(parsed)
     end
 
     test "roundtrip with all layers preserves layer descriptors" do
@@ -410,7 +365,6 @@ defmodule Compendium.OCI.ManifestTest do
       {:ok, parsed} = Manifest.parse(json)
 
       assert parsed.config["digest"] == config_digest
-      assert Manifest.cyfr_component?(parsed)
 
       # WASM layer
       assert {:ok, wasm_layer} = Manifest.wasm_layer(parsed)

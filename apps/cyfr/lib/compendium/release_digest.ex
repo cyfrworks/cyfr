@@ -36,19 +36,10 @@ defmodule Compendium.ReleaseDigest do
   alias Sanctum.JCS
 
   # Registration rejects the retired setup/oauth/wasi blocks, so the
-  # subset is exactly what a publishable manifest can carry. Historical
-  # rows that still name the legacy trio get recomputed digests via
-  # `mix cyfr.backfill_release_digests`; consents pinned to the old
-  # digests go needs_consent and are re-granted by hand.
+  # subset is exactly what a publishable manifest can carry.
   @security_blocks ~w(dependencies needs caps)
 
   @type error :: {:invalid_manifest, JCS.error()} | {:invalid_artifact_digest, term()}
-
-  @doc """
-  The manifest keys that contribute to a release digest.
-  """
-  @spec security_blocks() :: [String.t()]
-  def security_blocks, do: @security_blocks
 
   @doc """
   Compute the release digest from an artifact digest and a decoded manifest.

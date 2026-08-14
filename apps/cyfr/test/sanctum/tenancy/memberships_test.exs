@@ -86,15 +86,6 @@ defmodule Sanctum.Tenancy.MembershipsTest do
     end
   end
 
-  describe "get_by_user_and_org/2" do
-    test "returns membership", %{org: org} do
-      attrs = org_attrs(org.id)
-      {:ok, mem} = Memberships.create(attrs)
-      assert {:ok, found} = Memberships.get_by_user_and_org(attrs.user_id, org.id)
-      assert found.id == mem.id
-    end
-  end
-
   describe "remove/1" do
     test "deletes a membership", %{org: org} do
       {:ok, mem} = Memberships.create(org_attrs(org.id))

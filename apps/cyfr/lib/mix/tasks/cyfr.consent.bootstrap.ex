@@ -6,8 +6,7 @@ defmodule Mix.Tasks.Cyfr.Consent.Bootstrap do
 
   @moduledoc """
   Bootstrap consents for every executable local component in every tenant
-  that has components. Run `mix cyfr.backfill_release_digests` first —
-  activation resolution refuses closures with digest-less rows.
+  that has components.
 
   Idempotent; components that already carry an owner profile are skipped.
   See `Sanctum.Consent.Bootstrap` for exactly what a minted consent

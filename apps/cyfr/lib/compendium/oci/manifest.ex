@@ -35,8 +35,6 @@ defmodule Compendium.OCI.Manifest do
   @doc "CYFR config blob media type."
   def config_media_type, do: @config_media_type
 
-  @doc "CYFR artifact type."
-  def artifact_type, do: @artifact_type
 
   @doc "CYFR README layer media type."
   def readme_media_type, do: @readme_media_type
@@ -175,14 +173,6 @@ defmodule Compendium.OCI.Manifest do
     end
   end
 
-  @doc """
-  Check if a parsed manifest is a CYFR component.
-  """
-  @spec cyfr_component?(map()) :: boolean()
-  def cyfr_component?(%{artifact_type: @artifact_type}), do: true
-  def cyfr_component?(%{config: %{"mediaType" => @config_media_type}}), do: true
-  def cyfr_component?(_), do: false
-
   @type_media_type_values Map.values(@type_media_types) |> MapSet.new()
 
   @doc """
@@ -224,15 +214,6 @@ defmodule Compendium.OCI.Manifest do
     end
   end
 
-  @doc """
-  Infer the component type from a WASM layer media type.
-  """
-  @spec component_type_from_media(String.t()) :: String.t() | nil
-  def component_type_from_media(media_type) do
-    Enum.find_value(@type_media_types, fn {type, mt} ->
-      if mt == media_type, do: type
-    end)
-  end
 
   @doc """
   Extract the README layer descriptor from a parsed manifest.

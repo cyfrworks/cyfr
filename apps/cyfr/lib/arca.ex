@@ -150,25 +150,6 @@ defmodule Arca do
   def append(%Context{} = ctx, path, content), do: adapter().append(ctx, path, content)
 
   @doc """
-  Encode and append JSON content as a line to storage (JSONL format).
-
-  Automatically adds a newline after the JSON.
-
-  ## Examples
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.append_json(ctx, ["audit", "2025-01-15.jsonl"], %{"event" => "login"})
-      :ok
-
-  """
-  def append_json(%Context{} = ctx, path, data) do
-    case Jason.encode(data) do
-      {:ok, json} -> append(ctx, path, json <> "\n")
-      {:error, _} = error -> error
-    end
-  end
-
-  @doc """
   Delete content from storage.
 
   ## Examples

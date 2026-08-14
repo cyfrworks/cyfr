@@ -133,35 +133,6 @@ defmodule Compendium.OCI.Cache do
   end
 
   @doc """
-  Check if all blobs for a manifest are cached.
-  """
-  @spec all_blobs_cached?(list(String.t())) :: boolean()
-  def all_blobs_cached?(digests) when is_list(digests) do
-    Enum.all?(digests, fn digest ->
-      case get_blob(digest) do
-        {:ok, _} -> true
-        :miss -> false
-      end
-    end)
-  end
-
-  @doc """
-  Get the cached digest for a tag reference from the index.
-  """
-  @spec get_tag_digest(String.t(), String.t(), String.t()) :: {:ok, String.t()} | :miss
-  def get_tag_digest(registry, repository, tag) do
-    case read_index() do
-      {:ok, index} ->
-        key = index_key(registry, repository, tag)
-
-        case Map.get(index, key) do
-          %{"digest" => digest} -> {:ok, digest}
-          _ -> :miss
-        end
-    end
-  end
-
-  @doc """
   Clear the entire cache.
   """
   @spec clear() :: :ok | {:error, term()}

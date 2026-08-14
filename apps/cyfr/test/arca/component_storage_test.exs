@@ -240,43 +240,4 @@ defmodule Arca.ComponentStorageTest do
       refute ComponentStorage.exists?(ctx, "missing", "1.0.0")
     end
   end
-
-  describe "delete_by_source/2" do
-    test "deletes components by source", %{ctx: ctx} do
-      {:ok, _} =
-        ComponentStorage.put_component(
-          ctx,
-          component_attrs("src-a", "1.0.0", %{source: "filesystem"})
-        )
-
-      {:ok, _} =
-        ComponentStorage.put_component(
-          ctx,
-          component_attrs("src-b", "1.0.0", %{source: "filesystem"})
-        )
-
-      {:ok, _} =
-        ComponentStorage.put_component(ctx, component_attrs("src-c", "1.0.0", %{source: "oci"}))
-
-      ComponentStorage.delete_by_source(ctx, "filesystem")
-
-      assert {:error, :not_found} = ComponentStorage.get_component(ctx, "src-a", "1.0.0")
-      assert {:error, :not_found} = ComponentStorage.get_component(ctx, "src-b", "1.0.0")
-      assert {:ok, _} = ComponentStorage.get_component(ctx, "src-c", "1.0.0")
-    end
-  end
-
-  describe "search_components/3" do
-    test "delegates to list_components with query", %{ctx: ctx} do
-      {:ok, _} =
-        ComponentStorage.put_component(
-          ctx,
-          component_attrs("searchable", "1.0.0", %{description: "unique_marker"})
-        )
-
-      assert {:ok, comps} = ComponentStorage.search_components(ctx, "unique_marker")
-      assert length(comps) == 1
-      assert hd(comps).name == "searchable"
-    end
-  end
 end

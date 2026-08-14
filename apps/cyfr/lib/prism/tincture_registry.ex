@@ -40,18 +40,6 @@ defmodule Prism.TinctureRegistry do
     |> Enum.map(fn {_key, tincture} -> tincture end)
   end
 
-  @doc "Get a single tincture by publisher and name."
-  @spec get_tincture(atom(), map(), String.t(), String.t()) :: map() | nil
-  def get_tincture(server \\ __MODULE__, scope \\ %{}, publisher, tincture_name) do
-    org_id = extract_org_id(scope)
-    project_id = extract_project_id(scope)
-
-    case :ets.lookup(server, {org_id, project_id, publisher, tincture_name}) do
-      [{_key, tincture}] -> tincture
-      [] -> nil
-    end
-  end
-
   @doc "Rescan the filesystem for tinctures."
   @spec reload(atom()) :: :ok
   def reload(server \\ __MODULE__) do

@@ -39,10 +39,7 @@ defmodule Opus.MixProject do
       {:wasmex, "~> 0.13.0"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
-      {:finch, "~> 0.19"},
-      {:cyfr, in_umbrella: true},
-      {:dotenvy, "~> 0.9"},
-      {:stream_data, "~> 1.1", only: [:test, :dev]}
+      {:cyfr, in_umbrella: true}
     ]
   end
 end

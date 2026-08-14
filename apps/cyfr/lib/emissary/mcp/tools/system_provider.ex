@@ -137,13 +137,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     tools = Emissary.MCP.ToolRegistry.list_tools()
 
     # Augment with tenant-specific external MCP server tools
-    external_tools =
-      if Code.ensure_loaded?(Emissary.MCP.ExternalProvider) and
-           function_exported?(Emissary.MCP.ExternalProvider, :list_external_tools, 1) do
-        Emissary.MCP.ExternalProvider.list_external_tools(ctx)
-      else
-        []
-      end
+    external_tools = Emissary.MCP.ExternalProvider.list_external_tools(ctx)
 
     all_tools = tools ++ external_tools
     all_tools = Emissary.MCP.ToolVisibility.filter_for_context(all_tools, ctx)

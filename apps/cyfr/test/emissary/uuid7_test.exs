@@ -70,22 +70,6 @@ defmodule Emissary.UUID7Test do
       assert uuid1 < uuid2
     end
 
-    test "extract_timestamp/1 returns the embedded timestamp" do
-      # Known timestamp
-      timestamp = System.system_time(:millisecond)
-      uuid = UUID7.generate_at(timestamp)
-
-      {:ok, extracted} = UUID7.extract_timestamp(uuid)
-      assert extracted == timestamp
-    end
-
-    test "before?/2 compares UUID timestamps" do
-      uuid1 = UUID7.generate_at(1_000_000_000_000)
-      uuid2 = UUID7.generate_at(1_000_000_001_000)
-
-      assert UUID7.before?(uuid1, uuid2) == true
-      assert UUID7.before?(uuid2, uuid1) == false
-    end
   end
 
   # ============================================================================
@@ -162,41 +146,6 @@ defmodule Emissary.UUID7Test do
   # ============================================================================
   # Timestamp Extraction Tests
   # ============================================================================
-
-  describe "extract_timestamp/1" do
-    test "extracts timestamp from raw UUID" do
-      uuid = UUID7.generate()
-      {:ok, ts} = UUID7.extract_timestamp(uuid)
-
-      # Should be within 1 second of current time
-      now = System.system_time(:millisecond)
-      assert abs(ts - now) < 1000
-    end
-
-    test "extracts timestamp from prefixed ID" do
-      id = UUID7.request_id()
-      {:ok, ts} = UUID7.extract_timestamp(id)
-
-      now = System.system_time(:millisecond)
-      assert abs(ts - now) < 1000
-    end
-
-    test "returns error for invalid UUID" do
-      assert {:error, :invalid_uuid} = UUID7.extract_timestamp("invalid")
-      assert {:error, :invalid_uuid} = UUID7.extract_timestamp("not-a-uuid")
-      assert {:error, :invalid_uuid} = UUID7.extract_timestamp("")
-    end
-
-    test "returns error for malformed UUID" do
-      # Wrong length segments
-      assert {:error, :invalid_uuid} =
-               UUID7.extract_timestamp("12345678-1234-1234-1234-12345678901")
-
-      # Invalid hex characters
-      assert {:error, :invalid_uuid} =
-               UUID7.extract_timestamp("gggggggg-gggg-7ggg-8ggg-gggggggggggg")
-    end
-  end
 
   # ============================================================================
   # RFC 9562 Compliance Tests

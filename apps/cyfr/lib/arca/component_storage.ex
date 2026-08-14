@@ -282,33 +282,6 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
-  Search components by text query.
-  """
-  def search_components(%Context{} = ctx, query_text, opts \\ []) do
-    list_components(ctx, Keyword.put(opts, :query, query_text))
-  end
-
-  @doc """
-  Delete components by source.
-
-  Used by the AutoIndexer to prune stale filesystem-registered entries.
-  """
-  def delete_by_source(%Context{} = ctx, source) when is_binary(source) do
-    query =
-      from(c in Component, where: c.source == ^source)
-      |> where_tenant(ctx)
-
-    Arca.Repo.delete_all(query)
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ComponentStorage] Database error in delete_by_source: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
-  end
-
-  @doc """
   Check if a component exists by name and version, with optional publisher and component_type filters.
   """
   def exists?(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) do

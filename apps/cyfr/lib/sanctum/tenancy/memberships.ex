@@ -92,20 +92,6 @@ defmodule Sanctum.Tenancy.Memberships do
       {:error, :database_error}
   end
 
-  def get_by_user_and_org(user_id, org_id) do
-    case Arca.Repo.get_by(Membership, user_id: user_id, org_id: org_id) do
-      nil -> {:error, :not_found}
-      membership -> {:ok, membership}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "Sanctum.Tenancy.Memberships: get_by_user_and_org failed (#{Exception.message(e)})"
-      )
-
-      {:error, :database_error}
-  end
-
   def remove(%Membership{} = membership) do
     Arca.Repo.delete(membership)
   rescue

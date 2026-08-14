@@ -481,22 +481,6 @@ defmodule Arca.IntegrationTest do
       assert read_data == data
     end
 
-    test "append_json adds to JSONL file", %{ctx: ctx} do
-      path = ["json_test", "events.jsonl"]
-
-      :ok = Arca.append_json(ctx, path, %{"event" => "first"})
-      :ok = Arca.append_json(ctx, path, %{"event" => "second"})
-      :ok = Arca.append_json(ctx, path, %{"event" => "third"})
-
-      {:ok, content} = Arca.get(ctx, path)
-      lines = String.split(content, "\n", trim: true)
-
-      assert length(lines) == 3
-      assert Jason.decode!(Enum.at(lines, 0))["event"] == "first"
-      assert Jason.decode!(Enum.at(lines, 1))["event"] == "second"
-      assert Jason.decode!(Enum.at(lines, 2))["event"] == "third"
-    end
-
     test "get_json returns error for missing file", %{ctx: ctx} do
       {:error, :not_found} = Arca.get_json(ctx, ["json_test", "nonexistent.json"])
     end

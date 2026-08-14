@@ -80,19 +80,4 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
         :ok
     end
   end
-
-  @doc """
-  Stop all external server processes for a given tenant.
-  """
-  def stop_all_for_tenant(org_id, project_id) do
-    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
-    project_id = Arca.QueryHelpers.normalize_project_id(project_id)
-
-    Emissary.MCP.ExternalServerRegistry
-    |> Registry.select([
-      {{{:"$1", :"$2", :"$3"}, :"$4", :_}, [{:==, :"$2", org_id}, {:==, :"$3", project_id}],
-       [:"$4"]}
-    ])
-    |> Enum.each(&DynamicSupervisor.terminate_child(__MODULE__, &1))
-  end
 end

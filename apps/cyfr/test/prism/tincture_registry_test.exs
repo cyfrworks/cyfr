@@ -98,30 +98,6 @@ defmodule Prism.TinctureRegistryTest do
     end
   end
 
-  describe "get_tincture/3" do
-    test "finds tincture by publisher and name" do
-      name = :test_get
-      {:ok, pid} = TinctureRegistry.start_link(name: name)
-
-      t = TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "test-dash")
-      assert t != nil
-      assert t.name == "test-dash"
-      assert is_map(t.manifest)
-
-      GenServer.stop(pid)
-    end
-
-    test "returns nil for unknown tincture" do
-      name = :test_get_nil
-      {:ok, pid} = TinctureRegistry.start_link(name: name)
-
-      assert nil ==
-               TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "nonexistent")
-
-      GenServer.stop(pid)
-    end
-  end
-
   describe "version resolution" do
     test "picks latest version when multiple exist", %{components_dir: components_dir} do
       # Add a newer version
@@ -482,10 +458,7 @@ defmodule Prism.TinctureRegistryTest do
       :ok = :sys.suspend(pid)
 
       tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
-      assert length(tinctures) == 1
-
-      assert %{name: "test-dash"} =
-               TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "test-dash")
+      assert [%{name: "test-dash"}] = tinctures
 
       :ok = :sys.resume(pid)
       GenServer.stop(pid)

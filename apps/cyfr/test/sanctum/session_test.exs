@@ -212,30 +212,6 @@ defmodule Sanctum.SessionTest do
     end
   end
 
-  describe "list_active/1" do
-    test "returns empty list when no sessions", %{ctx: _ctx} do
-      ctx = Sanctum.TestContext.local()
-      {:ok, sessions} = Session.list_active(ctx)
-      assert sessions == []
-    end
-
-    test "returns active sessions with redacted tokens", %{ctx: ctx} do
-      {:ok, _} = Session.create(ctx)
-      {:ok, _} = Session.create(ctx)
-
-      local_ctx = Sanctum.TestContext.local()
-      {:ok, sessions} = Session.list_active(local_ctx)
-
-      assert length(sessions) == 2
-
-      Enum.each(sessions, fn s ->
-        assert String.ends_with?(s.token_prefix, "...")
-        assert s.user_id == "user_123"
-        assert s.email == "test@example.com"
-      end)
-    end
-  end
-
   describe "cleanup/0" do
     test "removes expired sessions", %{ctx: ctx} do
       # Create a valid session

@@ -427,15 +427,8 @@ defmodule Emissary.MCP.ToolRegistry do
 
       :miss ->
         # Try external provider for namespaced tools (e.g., "notion:create_page")
-        has_external? =
-          Code.ensure_loaded?(Emissary.MCP.ExternalProvider) and
-            function_exported?(Emissary.MCP.ExternalProvider, :try_handle, 3)
-
         external_result =
           cond do
-            not has_external? ->
-              {:error, :not_external}
-
             String.contains?(name, ":") and not ctx.authenticated ->
               # External tools carry no per-tool requires_auth metadata; all
               # of them require authentication. The HTTP router never routes

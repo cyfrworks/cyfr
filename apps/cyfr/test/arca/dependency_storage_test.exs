@@ -129,25 +129,6 @@ defmodule Arca.DependencyStorageTest do
     end
   end
 
-  describe "get_reverse_dependencies/3" do
-    test "finds components that depend on a given name/version", %{
-      component_id: component_id,
-      ctx: ctx
-    } do
-      deps = sample_deps()
-      {:ok, 2} = DependencyStorage.put_dependencies(ctx, component_id, deps)
-
-      {:ok, reverse} = DependencyStorage.get_reverse_dependencies(ctx, "claude", "0.1.0")
-      assert length(reverse) == 1
-      assert hd(reverse).component_id == component_id
-    end
-
-    test "returns empty list when no dependents exist", %{ctx: ctx} do
-      {:ok, reverse} = DependencyStorage.get_reverse_dependencies(ctx, "nonexistent", "1.0.0")
-      assert reverse == []
-    end
-  end
-
   describe "delete_dependencies/2" do
     test "deletes all dependencies for a component", %{component_id: component_id, ctx: ctx} do
       deps = sample_deps()

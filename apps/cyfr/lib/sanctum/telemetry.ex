@@ -26,7 +26,6 @@ defmodule Sanctum.Telemetry do
         nil
       )
 
-  Or use `Sanctum.Telemetry.attach_default_logger/0` for console logging.
 
   ## Example Event Flow
 
@@ -86,47 +85,4 @@ defmodule Sanctum.Telemetry do
     :telemetry.execute(@platform_context_event, %{count: 1}, metadata)
   end
 
-  @doc """
-  Attach a default console logger for auth events.
-
-  Useful for development and debugging.
-
-  ## Example
-
-      Sanctum.Telemetry.attach_default_logger()
-      # Now auth events will be logged to console
-
-  """
-  @spec attach_default_logger() :: :ok | {:error, :already_exists}
-  def attach_default_logger do
-    :telemetry.attach(
-      "sanctum-auth-logger",
-      @auth_event,
-      &log_auth_event/4,
-      nil
-    )
-  end
-
-  @doc """
-  Detach the default console logger.
-  """
-  @spec detach_default_logger() :: :ok | {:error, :not_found}
-  def detach_default_logger do
-    :telemetry.detach("sanctum-auth-logger")
-  end
-
-  defp log_auth_event(_event, measurements, metadata, _config) do
-    require Logger
-
-    case metadata.outcome do
-      :success ->
-        Logger.info("[Sanctum] Auth success: provider=#{metadata.provider}")
-
-      :failure ->
-        reason = Map.get(metadata, :reason, "unknown")
-        Logger.warning("[Sanctum] Auth failure: provider=#{metadata.provider} reason=#{reason}")
-    end
-
-    measurements
-  end
 end

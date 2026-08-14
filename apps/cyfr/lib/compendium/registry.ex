@@ -629,26 +629,6 @@ defmodule Compendium.Registry do
     end
   end
 
-  @doc """
-  List all versions of a component by name.
-  """
-  def list_versions(%Context{} = ctx, name) when is_binary(name) do
-    {:ok, components} = Arca.ComponentStorage.list_components(ctx, name: name)
-
-    versions =
-      components
-      |> Enum.map(fn row ->
-        %{
-          "version" => row.version,
-          "published_at" => row.inserted_at,
-          "digest" => row.digest
-        }
-      end)
-      |> Enum.sort_by(& &1["published_at"], :desc)
-
-    {:ok, versions}
-  end
-
   # ============================================================================
   # Storage Operations
   # ============================================================================

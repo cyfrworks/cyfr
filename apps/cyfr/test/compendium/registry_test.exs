@@ -471,45 +471,6 @@ defmodule Compendium.RegistryTest do
     end
   end
 
-  describe "list_versions/2" do
-    test "lists all versions of a component", %{ctx: ctx} do
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "versions-test",
-          version: "1.0.0",
-          type: "reagent"
-        })
-
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "versions-test",
-          version: "1.1.0",
-          type: "reagent"
-        })
-
-      {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
-          name: "versions-test",
-          version: "2.0.0",
-          type: "reagent"
-        })
-
-      {:ok, versions} = Registry.list_versions(ctx, "versions-test")
-
-      assert length(versions) == 3
-      version_nums = Enum.map(versions, & &1["version"])
-      assert "1.0.0" in version_nums
-      assert "1.1.0" in version_nums
-      assert "2.0.0" in version_nums
-    end
-
-    test "returns empty list for non-existent component", %{ctx: ctx} do
-      {:ok, versions} = Registry.list_versions(ctx, "nonexistent")
-
-      assert versions == []
-    end
-  end
-
   describe "publish_bytes/3 source field" do
     test "published components have source: published", %{ctx: ctx} do
       {:ok, component} =

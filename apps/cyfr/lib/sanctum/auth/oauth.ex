@@ -118,52 +118,6 @@ defmodule Sanctum.Auth.OAuth do
     Session.create(ctx)
   end
 
-  @doc """
-  List supported OAuth providers.
-
-  ## Examples
-
-      OAuth.supported_providers()
-      #=> [:github]
-
-  """
-  @spec supported_providers() :: [atom()]
-  def supported_providers, do: @supported_providers
-
-  @doc """
-  Check if a provider is supported.
-
-  ## Examples
-
-      OAuth.supported_provider?(:github)
-      #=> true
-
-      OAuth.supported_provider?(:okta)
-      #=> false
-
-  """
-  @spec supported_provider?(atom()) :: boolean()
-  def supported_provider?(provider), do: provider in @supported_providers
-
-  @doc """
-  Get list of configured providers based on environment.
-
-  Returns only providers that have credentials configured.
-  """
-  @spec configured_providers() :: [atom()]
-  def configured_providers do
-    @supported_providers
-    |> Enum.filter(&provider_configured?/1)
-  end
-
-  @doc """
-  Check if any OAuth provider is configured.
-  """
-  @spec any_provider_configured?() :: boolean()
-  def any_provider_configured? do
-    configured_providers() != []
-  end
-
   # ============================================================================
   # Internal
   # ============================================================================

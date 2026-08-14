@@ -150,12 +150,6 @@ defmodule PrismWeb.SettingsLive do
               </dd>
             </div>
             <div>
-              <dt class="text-xs text-gray-500 uppercase">Mode</dt>
-              <dd class="text-sm text-white mt-1">
-                {status_field(@system_status, :mode) || "default"}
-              </dd>
-            </div>
-            <div>
               <dt class="text-xs text-gray-500 uppercase">MCP Protocol</dt>
               <dd class="text-sm text-white mt-1 font-mono">
                 {status_field(@mcp, :protocol_version) || "-"}

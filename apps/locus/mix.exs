@@ -28,9 +28,8 @@ defmodule Locus.MixProject do
 
   defp deps do
     [
-      {:jason, "~> 1.4"},
-      {:cyfr, in_umbrella: true},
-      {:dotenvy, "~> 0.9"}
+      {:jason, "~> 1.4", only: :test},
+      {:cyfr, in_umbrella: true}
     ]
   end
 end

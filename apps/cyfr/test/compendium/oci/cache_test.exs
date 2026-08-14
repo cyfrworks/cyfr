@@ -67,48 +67,6 @@ defmodule Compendium.OCI.CacheTest do
     end
   end
 
-  describe "all_blobs_cached?/1" do
-    test "returns true when all blobs are cached" do
-      c1 = "content 1"
-      c2 = "content 2"
-      d1 = Compendium.OCI.Blob.compute_digest(c1)
-      d2 = Compendium.OCI.Blob.compute_digest(c2)
-      Cache.put_blob(d1, c1)
-      Cache.put_blob(d2, c2)
-
-      assert Cache.all_blobs_cached?([d1, d2])
-    end
-
-    test "returns false when some blobs are missing" do
-      c1 = "content 1"
-      d1 = Compendium.OCI.Blob.compute_digest(c1)
-      Cache.put_blob(d1, c1)
-
-      refute Cache.all_blobs_cached?([d1, "sha256:nonexistent"])
-    end
-
-    test "returns true for empty list" do
-      assert Cache.all_blobs_cached?([])
-    end
-  end
-
-  describe "index operations" do
-    test "tag digest is tracked in index" do
-      registry = "ghcr.io"
-      repo = "cyfr/reagents/test"
-      tag = "1.0.0"
-      digest = "sha256:manifest_digest"
-
-      Cache.put_manifest(registry, repo, tag, "{}", digest)
-
-      assert {:ok, ^digest} = Cache.get_tag_digest(registry, repo, tag)
-    end
-
-    test "get_tag_digest returns :miss for unknown" do
-      assert :miss = Cache.get_tag_digest("unknown.io", "test/repo", "latest")
-    end
-  end
-
   describe "clear/0" do
     test "removes all cached data" do
       content = "test"

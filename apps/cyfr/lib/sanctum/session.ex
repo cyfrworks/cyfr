@@ -324,42 +324,6 @@ defmodule Sanctum.Session do
   end
 
   @doc """
-  List active sessions scoped to a tenant context (for admin purposes).
-
-  Returns sessions with tokens redacted. Requires a `%Context{}` to scope
-  the query to the caller's org and project.
-  """
-  @spec list_active(Sanctum.Context.t()) :: {:ok, [map()]} | {:error, term()}
-  def list_active(%Sanctum.Context{} = ctx) do
-    opts = [
-      org_id: ctx.org_id,
-      project_id: ctx.project_id
-    ]
-
-    case Arca.SessionStorage.list_active_sessions(opts) do
-      {:ok, rows} ->
-        active =
-          Enum.map(rows, fn row ->
-            prefix = if row.token_prefix, do: row.token_prefix <> "...", else: "..."
-
-            %{
-              token_prefix: prefix,
-              user_id: row.user_id,
-              email: row.email,
-              provider: row.provider,
-              created_at: format_datetime(row.inserted_at),
-              expires_at: format_datetime(row.expires_at)
-            }
-          end)
-
-        {:ok, active}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  @doc """
   Clean up expired sessions.
 
   Returns the number of sessions removed.

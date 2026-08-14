@@ -623,9 +623,6 @@ defmodule PrismWeb.TopbarLive do
                 version:
                 <span class="text-gray-300 font-mono">{status_field(@system_status, :version)}</span>
               </div>
-              <div :if={status_field(@system_status, :mode)}>
-                mode: <span class="text-gray-300">{status_field(@system_status, :mode)}</span>
-              </div>
             </div>
           </:popover>
         </.indicator>

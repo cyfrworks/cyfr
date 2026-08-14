@@ -491,31 +491,6 @@ defmodule Arca.TenantIsolationTest do
       {:ok, deps_a} = Arca.DependencyStorage.get_dependencies(ctx_a, comp_id)
       assert length(deps_a) == 1
     end
-
-    test "reverse dependencies scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
-
-      comp_id = insert_stub_component(ctx_a, "dep-rev-comp", "comp_rev")
-
-      {:ok, 1} =
-        Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
-          %{
-            dependency_ref: "reagent:local.target:2.0.0",
-            dep_type: "reagent",
-            dep_namespace: "local",
-            dep_name: "target",
-            dep_version: "2.0.0",
-            optional: false,
-            reason: nil
-          }
-        ])
-
-      {:ok, rev_a} = Arca.DependencyStorage.get_reverse_dependencies(ctx_a, "target", "2.0.0")
-      assert length(rev_a) == 1
-
-      {:ok, rev_b} = Arca.DependencyStorage.get_reverse_dependencies(ctx_b, "target", "2.0.0")
-      assert rev_b == []
-    end
   end
 
   # (1c) retired with the legacy secrets plane: SecretStorage grant
@@ -1056,57 +1031,6 @@ defmodule Arca.TenantIsolationTest do
   # ============================================================================
   # SessionStorage Tenant Isolation
   # ============================================================================
-
-  describe "SessionStorage list_active_sessions tenant isolation" do
-    test "sessions scoped to tenant" do
-      hash_a = :crypto.hash(:sha256, "sess_iso_a_#{:rand.uniform(100_000)}")
-      hash_b = :crypto.hash(:sha256, "sess_iso_b_#{:rand.uniform(100_000)}")
-
-      :ok =
-        Arca.SessionStorage.create_session(hash_a, %{
-          user_id: "user_a",
-          email: "a@test.com",
-          provider: "github",
-          permissions: "[]",
-          session_id: Ecto.UUID.generate(),
-          org_id: "org_alpha",
-          project_id: "proj_1",
-          expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-          token_prefix: "sess_a_"
-        })
-
-      :ok =
-        Arca.SessionStorage.create_session(hash_b, %{
-          user_id: "user_b",
-          email: "b@test.com",
-          provider: "github",
-          permissions: "[]",
-          session_id: Ecto.UUID.generate(),
-          org_id: "org_beta",
-          project_id: "proj_2",
-          expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-          token_prefix: "sess_b_"
-        })
-
-      {:ok, sessions_a} =
-        Arca.SessionStorage.list_active_sessions(
-          org_id: "org_alpha",
-          project_id: "proj_1"
-        )
-
-      assert length(sessions_a) == 1
-      assert hd(sessions_a).user_id == "user_a"
-
-      {:ok, sessions_b} =
-        Arca.SessionStorage.list_active_sessions(
-          org_id: "org_beta",
-          project_id: "proj_2"
-        )
-
-      assert length(sessions_b) == 1
-      assert hd(sessions_b).user_id == "user_b"
-    end
-  end
 
   # ============================================================================
   # Helpers
