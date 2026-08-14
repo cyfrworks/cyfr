@@ -3,20 +3,64 @@
 
 defmodule Emissary.MCP.ToolVisibility do
   @moduledoc """
-  Filters `tools/list` results based on the caller's API key permissions.
+  Decides what a caller may see in `tools/list`, and — for a caller with no
+  credential — what they may reach at all.
 
-  Default-deny: an action in `@action_permissions` requires the mapped
-  permission atom; an action in `@public_actions` is visible to everyone;
-  an action in NEITHER is visible to no one. The completeness audit
-  (`test/emissary/mcp/tool_visibility_test.exs`) asserts every registered
-  action is deliberately classified in one of the two maps, so a forgotten
-  action fails loudly at test time instead of silently disappearing from
-  (or leaking into) discovery.
+  Two independent questions, in this order:
+
+  1. **Authentication.** A caller with no credential sees only
+     `@anonymous_actions`, the same list `Emissary.MCP.Router` gates
+     invocation with. Discovery and invocation read one declaration because
+     when they had two, discovery advertised `aqua.create` to callers whose
+     `tools/call` would be refused — schemas for doors that do not open.
+  2. **Permission.** Default-deny: an action in `@action_permissions`
+     requires the mapped permission atom; an action in `@public_actions`
+     needs none (an authenticated key with an empty scope still sees it); an
+     action in NEITHER is visible to no one.
+
+  The completeness audit (`test/emissary/mcp/tool_visibility_test.exs`)
+  asserts every registered action is deliberately classified in one of the
+  two permission maps, so a forgotten action fails loudly at test time
+  instead of silently disappearing from (or leaking into) discovery. A
+  second test binds `@anonymous_actions` to the registry's `requires_auth`
+  metadata, so this list cannot promise a door the dispatcher keeps shut.
 
   External tools (namespaced with `:`, no action enum) pass through unchanged.
   """
 
   alias Sanctum.Context
+
+  # Tool actions reachable with no credential at all. `:all` means every
+  # action on that tool.
+  #
+  # These are exactly the tools registered with `requires_auth: false`:
+  # `session`, whose device-flow and whoami actions must work before a
+  # credential exists, and `system.status`, the health check a client calls
+  # before logging in. Nothing else — an operator authenticates with an API
+  # key whether or not an auth provider is configured, so an uncredentialed
+  # request is a stranger on every install.
+  @anonymous_actions %{
+    "session" => :all,
+    "system" => ~w(status)
+  }
+
+  @doc """
+  May a caller with no credential reach this tool action?
+
+  The Router's gate and this module's discovery filter are the same
+  question asked at two moments, so they read the same map.
+  """
+  @spec anonymous_action?(String.t(), String.t()) :: boolean()
+  def anonymous_action?(name, action) do
+    case Map.get(@anonymous_actions, name) do
+      :all -> true
+      actions when is_list(actions) -> action in actions
+      nil -> false
+    end
+  end
+
+  @doc false
+  def anonymous_actions, do: @anonymous_actions
 
   # "tool.action" => required permission atom
   # Actions in neither this map nor @public_actions are visible to no one.
@@ -207,25 +251,33 @@ defmodule Emissary.MCP.ToolVisibility do
 
     case actions do
       nil ->
-        # No action enum (external tools, etc.) — pass through
-        tool_def
+        # No action enum (external tools, etc.). They carry no per-action
+        # classification, and the dispatcher refuses every one of them to a
+        # caller with no credential — so an anonymous caller is shown none.
+        if ctx.authenticated, do: tool_def, else: nil
 
       actions when is_list(actions) ->
-        visible =
-          Enum.filter(actions, fn action ->
-            key = "#{name}.#{action}"
-
-            case Map.get(@action_permissions, key) do
-              nil -> MapSet.member?(@public_actions, key)
-              perm -> Context.has_permission?(ctx, perm)
-            end
-          end)
+        visible = Enum.filter(actions, &visible_action?(name, &1, ctx))
 
         case visible do
           [] -> nil
           ^actions -> tool_def
           filtered -> put_actions(tool_def, filtered)
         end
+    end
+  end
+
+  # A caller with no credential sees only what they could actually call;
+  # everyone else is filtered on permission alone.
+  defp visible_action?(name, action, %Context{authenticated: false}),
+    do: anonymous_action?(name, action)
+
+  defp visible_action?(name, action, ctx) do
+    key = "#{name}.#{action}"
+
+    case Map.get(@action_permissions, key) do
+      nil -> MapSet.member?(@public_actions, key)
+      perm -> Context.has_permission?(ctx, perm)
     end
   end
 

@@ -401,4 +401,61 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       """
     end
   end
+
+  describe "the anonymous surface is one fact" do
+    # Discovery and invocation read the same declaration, and that
+    # declaration may only name doors the dispatcher actually opens: a tool
+    # registered `requires_auth: true` refuses every anonymous call, so
+    # promising one here would advertise a schema for a call that 401s.
+    @tag :requires_opus_modules
+    test "every anonymously-reachable tool is registered requires_auth: false" do
+      auth_free =
+        Application.get_env(:cyfr, :tool_providers, [])
+        |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :tools, 0)))
+        |> Enum.flat_map(& &1.tools())
+        |> Enum.filter(&(Map.get(&1, :requires_auth, true) == false))
+        |> Enum.map(&(&1[:name] || &1["name"]))
+        |> MapSet.new()
+
+      promised = ToolVisibility.anonymous_actions() |> Map.keys() |> MapSet.new()
+      broken = MapSet.difference(promised, auth_free)
+
+      assert MapSet.size(broken) == 0, """
+      These tools are declared anonymously reachable but the dispatcher
+      refuses them without a credential:
+
+        #{broken |> MapSet.to_list() |> Enum.sort() |> Enum.join("\n  ")}
+
+      Either drop them from @anonymous_actions or register the tool with
+      requires_auth: false.
+      """
+    end
+
+    test "an uncredentialed caller is shown only what it may call" do
+      anonymous =
+        Context.build(
+          user_id: nil,
+          org_id: nil,
+          permissions: [],
+          auth_method: nil,
+          authenticated: false
+        )
+
+      filtered = ToolVisibility.filter_for_context(sample_tools(), anonymous)
+
+      for tool <- filtered, action <- action_enum(tool) || [] do
+        assert ToolVisibility.anonymous_action?(tool["name"], action),
+               "discovery offered #{tool["name"]}.#{action} to an anonymous caller, " <>
+                 "which tools/call refuses"
+      end
+
+      names = Enum.map(filtered, & &1["name"])
+      assert "session" in names
+      assert "system" in names
+      # Writes that invocation would refuse are no longer advertised.
+      refute "aqua" in names
+      refute "component" in names
+      refute "key" in names
+    end
+  end
 end

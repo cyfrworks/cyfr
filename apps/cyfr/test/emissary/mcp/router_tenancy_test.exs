@@ -2,6 +2,16 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Emissary.MCP.RouterTenancyTest do
+  @moduledoc """
+  What a caller with no credential may reach, and that the answer is the
+  same one discovery gives.
+
+  These tests used to assert that component browsing was open on an install
+  with no auth provider. It never was: the Router waved the call through and
+  the dispatcher refused it a moment later for want of `requires_auth: false`,
+  so the assertion — "the Router did not say auth_required" — held while the
+  call still failed. The promise is gone now, and the surface is one list.
+  """
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.Router
@@ -37,101 +47,89 @@ defmodule Emissary.MCP.RouterTenancyTest do
     }
   end
 
-  describe "no auth configured — public actions" do
-    setup do
-      original = Application.get_env(:cyfr, :auth_provider)
-      Application.delete_env(:cyfr, :auth_provider)
-
-      on_exit(fn ->
-        if original, do: Application.put_env(:cyfr, :auth_provider, original)
-      end)
-
-      :ok
-    end
-
-    test "component.list is public in single-user" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "list")
-
-      # Should not return auth_required error
-      result = Router.dispatch(ctx, msg)
-      refute match?({:error, :auth_required, _}, result)
-    end
-
-    test "component.search is public in single-user" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "search")
-
-      result = Router.dispatch(ctx, msg)
-      refute match?({:error, :auth_required, _}, result)
-    end
-
-    test "component.inspect is public in single-user" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "inspect")
-
-      result = Router.dispatch(ctx, msg)
-      refute match?({:error, :auth_required, _}, result)
+  # An anonymous call is refused whether the Router turns it away or the
+  # dispatcher does. Both are "you may not", and a test that accepts only one
+  # of them mistakes a dead promise for a working door.
+  defp refused?(result) do
+    case result do
+      {:error, :auth_required, _} -> true
+      {:error, message} when is_binary(message) -> message =~ "Unauthorized"
+      {:ok, %{"isError" => true, "content" => [%{"text" => text} | _]}} -> text =~ "Unauthorized"
+      _ -> false
     end
   end
 
-  describe "auth configured — restricted actions" do
-    setup do
-      original = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, Emissary.TestAuthProvider)
+  defp with_auth_provider(provider, fun) do
+    original = Application.get_env(:cyfr, :auth_provider)
 
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:cyfr, :auth_provider, original),
-          else: Application.delete_env(:cyfr, :auth_provider)
+    if provider,
+      do: Application.put_env(:cyfr, :auth_provider, provider),
+      else: Application.delete_env(:cyfr, :auth_provider)
+
+    try do
+      fun.()
+    after
+      if original,
+        do: Application.put_env(:cyfr, :auth_provider, original),
+        else: Application.delete_env(:cyfr, :auth_provider)
+    end
+  end
+
+  # The operator authenticates with an API key on every install, so the
+  # anonymous surface does not widen when no auth provider is configured.
+  for {label, provider} <- [
+        {"no auth provider", nil},
+        {"auth provider configured", Emissary.TestAuthProvider}
+      ] do
+    describe "the anonymous surface — #{label}" do
+      @provider provider
+
+      test "session and system.status stay reachable" do
+        with_auth_provider(@provider, fn ->
+          ctx = make_context(false)
+
+          refute refused?(Router.dispatch(ctx, tool_call_msg("session", "whoami")))
+          refute refused?(Router.dispatch(ctx, tool_call_msg("system", "status")))
+        end)
+      end
+
+      test "component browsing is not reachable" do
+        with_auth_provider(@provider, fn ->
+          ctx = make_context(false)
+
+          for action <- ~w(list search inspect categories setup_plan) do
+            assert refused?(Router.dispatch(ctx, tool_call_msg("component", action))),
+                   "component.#{action} answered an anonymous caller"
+          end
+        end)
+      end
+
+      test "aqua and registry are not reachable" do
+        with_auth_provider(@provider, fn ->
+          ctx = make_context(false)
+
+          for {tool, action} <- [
+                {"aqua", "list"},
+                {"aqua", "get"},
+                {"aqua", "create"},
+                {"registry", "probe"},
+                {"registry", "claim_personal"}
+              ] do
+            assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
+                   "#{tool}.#{action} answered an anonymous caller"
+          end
+        end)
+      end
+    end
+  end
+
+  describe "an authenticated caller" do
+    test "reaches component browsing" do
+      with_auth_provider(Emissary.TestAuthProvider, fn ->
+        ctx = make_context(true)
+
+        refute refused?(Router.dispatch(ctx, tool_call_msg("component", "list")))
       end)
-
-      :ok
-    end
-
-    test "component.list requires auth in multi-tenant" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "list")
-
-      assert {:error, :auth_required, _} = Router.dispatch(ctx, msg)
-    end
-
-    test "component.search requires auth in multi-tenant" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "search")
-
-      assert {:error, :auth_required, _} = Router.dispatch(ctx, msg)
-    end
-
-    test "component.inspect requires auth in multi-tenant" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "inspect")
-
-      assert {:error, :auth_required, _} = Router.dispatch(ctx, msg)
-    end
-
-    test "component.categories remains public in multi-tenant" do
-      ctx = make_context(false)
-      msg = tool_call_msg("component", "categories")
-
-      result = Router.dispatch(ctx, msg)
-      refute match?({:error, :auth_required, _}, result)
-    end
-
-    test "session tool remains public in multi-tenant" do
-      ctx = make_context(false)
-      msg = tool_call_msg("session", "status")
-
-      result = Router.dispatch(ctx, msg)
-      refute match?({:error, :auth_required, _}, result)
-    end
-
-    test "system.status remains public in multi-tenant" do
-      ctx = make_context(false)
-      msg = tool_call_msg("system", "status")
-
-      result = Router.dispatch(ctx, msg)
-      refute match?({:error, :auth_required, _}, result)
     end
   end
 end

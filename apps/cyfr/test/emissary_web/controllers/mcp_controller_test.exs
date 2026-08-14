@@ -1188,6 +1188,18 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
 
     test "a credentialed caller opens the stream", %{conn: conn, api_key: api_key} do
+      # A test conn's chunk writes always succeed, so nothing would close the
+      # stream before its deadline — bound the window to milliseconds and let
+      # the graceful close end it.
+      original = Application.get_env(:cyfr, :mcp_subscription_max_ms)
+      Application.put_env(:cyfr, :mcp_subscription_max_ms, 50)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :mcp_subscription_max_ms, original),
+          else: Application.delete_env(:cyfr, :mcp_subscription_max_ms)
+      end)
+
       conn =
         conn
         |> put_req_header("content-type", "application/json")

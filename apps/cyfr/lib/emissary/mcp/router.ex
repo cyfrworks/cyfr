@@ -15,8 +15,8 @@ defmodule Emissary.MCP.Router do
   ## Authorization Model
 
   The Router gates; handlers authorize. The Router answers only the coarse
-  question — may an unauthenticated caller reach this tool action at all? — via
-  `@public_tool_actions`. Individual tool handlers then enforce fine-grained
+  question — may an unauthenticated caller reach this tool action at all? — by
+  asking `Emissary.MCP.ToolVisibility`. Individual tool handlers then enforce fine-grained
   authorization (does this caller have permission to perform this specific
   action?) using `Context.require_permission/2` or `Context.authorize/2`.
 
@@ -24,14 +24,11 @@ defmodule Emissary.MCP.Router do
 
   ## Public Tool Actions
 
-  `@public_tool_actions` defines tools/actions accessible without authentication.
-  These are intentionally public because they serve discovery and onboarding:
-
-  - `session` — all actions: session lifecycle (login, status) must work pre-auth
-  - `aqua` — list/get only: read-only agent discovery and docs (create/update/delete require auth)
-  - `component` search/inspect/categories/setup_plan/list — read-only component
-    browsing to let unauthenticated clients discover available components
-  - `system` status — health check endpoint
+  The anonymous surface — which tool actions a caller with no credential may
+  reach — is declared once in `Emissary.MCP.ToolVisibility`, which also
+  decides what such a caller may *see*. The Router asks it rather than
+  keeping a second copy: when discovery and invocation each held their own
+  list, discovery advertised writes that invocation refused.
 
   ## Resource Methods
 
@@ -46,34 +43,7 @@ defmodule Emissary.MCP.Router do
   """
 
   alias Emissary.MCP.{Message, Protocol, ToolRegistry, ResourceRegistry, InputValidator}
-
-  # Tools/actions accessible without authentication.
-  # :all means every action on that tool is public.
-  #
-  # `registry.probe` and `registry.claim-personal` are bootstrap actions
-  # called during the OAuth login flow — before the user has a cyfr session.
-  # They authenticate via the IdP `access_token` carried in the arguments
-  # (cyfr.run verifies it with GitHub/Google), not via a cyfr-side session.
-  # `registry.get-namespace` is public read per the cyfr.run spec.
-  @public_tool_actions %{
-    "session" => :all,
-    "aqua" => ~w(list get),
-    "component" => ~w(search inspect categories setup_plan list),
-    "registry" => ~w(probe claim_personal get_namespace),
-    "system" => ~w(status)
-  }
-
-  # When auth is configured, the anonymous surface narrows — component browsing
-  # requires a signed-in user. Registry bootstrap actions stay public: even
-  # then, claim-personal is the first-login gate, and gating it behind auth
-  # would create a deadlock.
-  @public_tool_actions_with_auth %{
-    "session" => :all,
-    "aqua" => ~w(list get),
-    "component" => ~w(categories setup_plan),
-    "registry" => ~w(probe claim_personal get_namespace),
-    "system" => ~w(status)
-  }
+  alias Emissary.MCP.ToolVisibility
 
   @server_capabilities %{
     # `listChanged: true` is a promise to actually push. It is true for tools
@@ -425,19 +395,6 @@ defmodule Emissary.MCP.Router do
   # (`Emissary.MCP.Tools.SystemProvider`), which is how a running component
   # discovers what it may call.
 
-  defp public_tool_action?(name, action) do
-    # With no auth configured the instance is public — anonymous browsing
-    # (search/inspect/list) is allowed. Once auth is configured, the anonymous
-    # surface narrows to registry bootstrap; browsing requires a signed-in user.
-    actions_map =
-      if Sanctum.auth_configured?(),
-        do: @public_tool_actions_with_auth,
-        else: @public_tool_actions
-
-    case Map.get(actions_map, name) do
-      :all -> true
-      actions when is_list(actions) -> action in actions
-      nil -> false
-    end
-  end
+  defp public_tool_action?(name, action),
+    do: ToolVisibility.anonymous_action?(name, action)
 end
