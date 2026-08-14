@@ -17,7 +17,17 @@ defmodule Sanctum.WebhookMCPTest do
       Sanctum.Test.ComponentHelpers.register_test_component(name, "1.0.0", "formula", %{})
     end
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    # A webhook binds a consented profile at create; seed one per target.
+    ctx = Sanctum.TestContext.local()
+    Sanctum.Test.ConsentFixtures.start_source!()
+
+    for name <- ["handler", "original", "updated"] do
+      Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{name}",
+        profile_id: "prof-#{name}"
+      )
+    end
+
+    {:ok, ctx: ctx}
   end
 
   describe "webhook tool definition" do
@@ -48,7 +58,8 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "github-push",
-          "target_ref" => "f:local.handler"
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
         })
 
       {:ok, result} = MCP.handle("webhook", ctx, %{"action" => "list"})
@@ -67,7 +78,8 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "stripe",
-          "target_ref" => "f:local.handler"
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
         })
 
       assert String.starts_with?(result.secret, "whsec_")
@@ -84,14 +96,16 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "dup",
-        "target_ref" => "f:local.handler"
+        "target_ref" => "f:local.handler",
+        "profile_id" => "prof-handler"
       })
 
       {:error, msg} =
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "dup",
-          "target_ref" => "f:local.handler"
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
         })
 
       assert msg =~ "already exists"
@@ -103,6 +117,7 @@ defmodule Sanctum.WebhookMCPTest do
           "action" => "create",
           "name" => "reserved",
           "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler",
           "input_template" => %{"_webhook" => "no"}
         })
 
@@ -115,6 +130,7 @@ defmodule Sanctum.WebhookMCPTest do
           "action" => "create",
           "name" => "github-style",
           "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler",
           "signature_header" => "X-Hub-Signature-256"
         })
 
@@ -127,7 +143,8 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "g",
-        "target_ref" => "f:local.handler"
+        "target_ref" => "f:local.handler",
+        "profile_id" => "prof-handler"
       })
 
       {:ok, hook} = MCP.handle("webhook", ctx, %{"action" => "get", "name" => "g"})
@@ -152,7 +169,8 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "u",
-          "target_ref" => "f:local.original"
+          "target_ref" => "f:local.original",
+          "profile_id" => "prof-original"
         })
 
       assert {:ok, _} =
@@ -182,7 +200,8 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "x",
-        "target_ref" => "f:local.handler"
+        "target_ref" => "f:local.handler",
+        "profile_id" => "prof-handler"
       })
 
       {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "update", "name" => "x"})
@@ -200,7 +219,8 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "r",
-        "target_ref" => "f:local.handler"
+        "target_ref" => "f:local.handler",
+        "profile_id" => "prof-handler"
       })
 
       {:ok, %{revoked: true}} = MCP.handle("webhook", ctx, %{"action" => "revoke", "name" => "r"})
@@ -226,7 +246,8 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "rot",
-          "target_ref" => "f:local.handler"
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
         })
 
       {:ok, rotated} = MCP.handle("webhook", ctx, %{"action" => "rotate", "name" => "rot"})

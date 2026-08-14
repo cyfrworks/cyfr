@@ -75,6 +75,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     auth
   end
 
+  @tag :requires_opus_modules
   test "no in-chain-annotated action refuses a permissioned guest at the plane" do
     pairs = in_chain_pairs()
     assert pairs != [], "no in-chain pairs found — provider config missing?"
@@ -138,6 +139,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     assert msg =~ "Denied by chain authority"
   end
 
+  @tag :requires_opus_modules
   test "call_in_chain refuses an action not reachable in-chain" do
     pairs = in_chain_pairs()
     auth = granting_authority(pairs ++ [{"execution", "force_release"}])

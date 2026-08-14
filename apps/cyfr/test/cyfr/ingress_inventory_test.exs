@@ -37,6 +37,7 @@ defmodule Cyfr.IngressInventoryTest do
   @patterns [
     "Opus.run(",
     "Opus.run_root(",
+    "Opus.run_root_edge(",
     "Opus.run_child(",
     "Opus.Chain.run_root(",
     "Opus.Chain.run_root_edge(",
@@ -66,9 +67,8 @@ defmodule Cyfr.IngressInventoryTest do
 
       #{unclassified |> MapSet.to_list() |> Enum.sort() |> Enum.join("\n  ")}
 
-    Every ingress must run under a consent-rooted authority (or be a
-    deliberate legacy fallback). Add it to @allowed here AND to the
-    per-ingress credential gate in
+    Every ingress must run under a consent-rooted authority. Add it to
+    @allowed here AND to the per-ingress credential gate in
     apps/opus/test/opus/credentialed_ingress_gate_test.exs.
     """
 

@@ -196,10 +196,10 @@ defmodule Cyfr.Application do
   end
 
   defp configure_database do
-    case Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+    case Cyfr.RuntimeConfig.repo_adapter() do
       Ecto.Adapters.SQLite3 ->
         Arca.Repo.query!("PRAGMA journal_mode=WAL")
-        Arca.Repo.query!("PRAGMA busy_timeout=5000")
+        Arca.Repo.query!("PRAGMA busy_timeout=#{Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()}")
 
       _ ->
         :ok
@@ -255,6 +255,32 @@ defmodule Cyfr.Application do
       {:raise, message} -> raise message
       {:warn, message} -> Logger.warning(message)
     end
+
+    warn_if_origin_allowlists_diverge()
+  end
+
+  # Two knobs answer "which origins may talk to this server": CORS (browser
+  # cross-origin, default "*", guarded above) and MCP Origin (DNS-rebinding
+  # guard, default localhost-only). An operator who opens one but not the
+  # other gets a half-closed deployment that fails confusingly at request
+  # time — say so at boot instead.
+  defp warn_if_origin_allowlists_diverge do
+    cors = Application.get_env(:cyfr, :cors_allowed_origins, [])
+    mcp = Application.get_env(:cyfr, :mcp_allowed_origins, [])
+
+    cors_customized? = cors != [] and "*" not in List.wrap(cors)
+    mcp_customized? = List.wrap(mcp) != []
+
+    if cors_customized? and not mcp_customized? do
+      Logger.warning(
+        "[Cyfr] CYFR_CORS_ALLOWED_ORIGINS is set but CYFR_MCP_ALLOWED_ORIGINS is not — " <>
+          "browser MCP requests from #{inspect(cors)} will pass CORS and then be " <>
+          "refused by the MCP Origin check (localhost-only default). Set " <>
+          "CYFR_MCP_ALLOWED_ORIGINS to match."
+      )
+    end
+
+    :ok
   end
 
   @doc false

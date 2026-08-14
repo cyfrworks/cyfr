@@ -512,13 +512,13 @@ defmodule Emissary.MCP.ExternalServer do
     method = body["method"]
 
     base = [
-      {"mcp-protocol-version", Protocol.version()},
-      {"mcp-method", method}
+      {Protocol.protocol_version_header(), Protocol.version()},
+      {Protocol.method_header(), method}
     ]
 
     case Protocol.named_subject(body) do
       nil -> base
-      name -> [{"mcp-name", encode_header_value(name)} | base]
+      name -> [{Protocol.name_header(), encode_header_value(name)} | base]
     end ++ param_headers(body, tools)
   end
 

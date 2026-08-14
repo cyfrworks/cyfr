@@ -6,7 +6,7 @@ defmodule PrismWeb.ShellLive do
 
   alias Phoenix.LiveView.JS
 
-  @compile {:no_warn_undefined, [Opus.Executor, Opus.Chain]}
+  @compile {:no_warn_undefined, [Opus]}
 
   require Logger
 
@@ -564,9 +564,7 @@ defmodule PrismWeb.ShellLive do
         # roots the invocation, and a tincture without one does not run —
         # granting it is the fix, and the error says so.
         run_result =
-          Opus.Chain.run_root_edge(tincture_ctx, tincture_ref, reference, input,
-            route: :protected
-          )
+          Opus.run_root_edge(tincture_ctx, tincture_ref, reference, input, route: :protected)
 
         case run_result do
           {:ok, result} ->

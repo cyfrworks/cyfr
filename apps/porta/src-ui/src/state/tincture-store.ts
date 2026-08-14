@@ -8,7 +8,8 @@ import { tinctureAccessToken } from "../api/tincture-token";
  *  server-side `@allowed_extensions` whitelist in `tincture_helpers.ex`. */
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".svg", ".gif"]);
 
-/** Max preview images shown per tincture in the picker UI. */
+/** Max preview images shown per tincture in the picker UI. Mirrors the
+ *  server-side `@media_preview_count` in `tincture_helpers.ex` — change both. */
 const MAX_PREVIEWS = 6;
 
 /** Title-case a tincture slug for display. "voxel-destroyer" → "Voxel Destroyer". */

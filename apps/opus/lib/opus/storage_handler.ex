@@ -367,8 +367,7 @@ defmodule Opus.StorageHandler do
         # MCP tool surfaces. Only meaningful on the Local adapter (S3 has no
         # real dirs); other adapters return names as-is.
         enriched =
-          if Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local) ==
-               Arca.Adapters.Local do
+          if Arca.local_adapter?() do
             base_dir = Arca.Adapters.Local.build_path(ctx, segments)
             # arca:bypass-ok=A — Local-adapter-specific stat probe to add the
             # presentation-only "/" suffix to directory entries.

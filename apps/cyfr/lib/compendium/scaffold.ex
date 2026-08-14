@@ -12,8 +12,6 @@ defmodule Compendium.Scaffold do
 
   alias Sanctum.Context
 
-  @name_pattern ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
-
   @doc """
   Create a new component scaffold.
 
@@ -87,11 +85,11 @@ defmodule Compendium.Scaffold do
   # ============================================================================
 
   defp validate_name(name) when is_binary(name) do
-    if Regex.match?(@name_pattern, name) do
-      :ok
-    else
-      {:error,
-       "Invalid component name: '#{name}'. Must be lowercase alphanumeric with hyphens, e.g. 'my-api'"}
+    # The component name grammar lives in one place; a scaffold that accepted
+    # a name registration refuses would strand the user one step later.
+    case Sanctum.ComponentRef.validate_name(name) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "Invalid component name: '#{name}'. #{reason}"}
     end
   end
 

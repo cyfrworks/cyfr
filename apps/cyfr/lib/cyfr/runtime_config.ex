@@ -83,6 +83,21 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
+  The compiled repo adapter (`config :cyfr, :repo_adapter`, set at compile
+  time from CYFR_DATABASE). One accessor with one default so runtime.exs and
+  the application's DB setup cannot disagree about what was built.
+  """
+  @spec repo_adapter() :: module()
+  def repo_adapter, do: Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3)
+
+  @doc """
+  SQLite busy timeout, used both as the Repo connection option and in the
+  boot-time PRAGMA — one constant so the two mechanisms stay in step.
+  """
+  @spec sqlite_busy_timeout_ms() :: pos_integer()
+  def sqlite_busy_timeout_ms, do: 5_000
+
+  @doc """
   Resolve the storage backend from `CYFR_STORAGE` (`local` default | `s3`).
 
   Returns `{:ok, :local}`, `{:ok, {:s3, opts}}` (a keyword list shaped for

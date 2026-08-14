@@ -54,6 +54,7 @@ defmodule EmissaryWeb.MCPController do
   alias Emissary.UUID7
 
   @protocol_version Emissary.MCP.Protocol.version()
+  @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()
 
   @doc """
   Handle MCP POST requests.
@@ -68,7 +69,7 @@ defmodule EmissaryWeb.MCPController do
   def handle(conn, %{"_json" => batch}) when is_list(batch) do
     # A batch has no single id, so `nil` here is correct rather than lossy.
     conn
-    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header(@protocol_version_header, @protocol_version)
     |> EmissaryWeb.MCPError.send(
       400,
       :invalid_request,
@@ -117,7 +118,7 @@ defmodule EmissaryWeb.MCPController do
   """
   def method_not_allowed(conn, _params) do
     conn
-    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("allow", "POST, OPTIONS")
     |> EmissaryWeb.MCPError.send(
       405,
@@ -149,7 +150,7 @@ defmodule EmissaryWeb.MCPController do
     # below is opened they can no longer be set.
     conn =
       conn
-      |> put_resp_header("mcp-protocol-version", @protocol_version)
+      |> put_resp_header(@protocol_version_header, @protocol_version)
       |> put_resp_header("x-request-id", request_id)
 
     {conn, outcome} = dispatch(conn, context, params, request_id)
@@ -279,7 +280,7 @@ defmodule EmissaryWeb.MCPController do
     deadline = System.monotonic_time(:millisecond) + max_stream_ms()
 
     conn
-    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("x-request-id", request_id)
     |> put_resp_header("content-type", "text/event-stream")
     |> put_resp_header("cache-control", "no-cache")

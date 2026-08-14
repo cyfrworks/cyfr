@@ -85,7 +85,9 @@ defmodule Opus.ComponentType do
 
   @type t :: :catalyst | :reagent | :formula
 
-  @valid_types [:catalyst, :reagent, :formula]
+  # Derived from the canonical type list so a new executable type cannot be
+  # added there and silently rejected here.
+  @valid_types Enum.map(Sanctum.ComponentRef.executable_types(), &String.to_atom/1)
 
   @doc """
   Parse a string type into an atom.

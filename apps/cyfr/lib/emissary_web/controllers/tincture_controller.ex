@@ -18,7 +18,7 @@ defmodule EmissaryWeb.TinctureController do
 
   use EmissaryWeb, :controller
 
-  @compile {:no_warn_undefined, [Opus.Executor, Opus.Chain]}
+  @compile {:no_warn_undefined, [Opus]}
 
   # A public URL is the public route regardless of authentication; the
   # private fallback is the protected route.
@@ -392,7 +392,7 @@ defmodule EmissaryWeb.TinctureController do
     # holds, and a tincture without the route's profile does not run.
     run_result =
       if engine_ready?() do
-        Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
+        Opus.run_root_edge(ctx, tincture_ref, reference, input,
           route: opts[:route],
           client_ip: Sanctum.ClientIp.resolve(conn)
         )

@@ -86,8 +86,9 @@ defmodule EmissaryWeb.Plugs.MCPRequestMetadata do
   # safe to route on if they cannot disagree with the body, so a mismatch is
   # refused here the same way a version mismatch is.
   defp check_mirrored_headers(conn, body) do
-    with :ok <- match_header(conn, "mcp-method", body["method"], "Mcp-Method"),
-         :ok <- match_header(conn, "mcp-name", Protocol.named_subject(body), "Mcp-Name") do
+    with :ok <- match_header(conn, Protocol.method_header(), body["method"], "Mcp-Method"),
+         :ok <-
+           match_header(conn, Protocol.name_header(), Protocol.named_subject(body), "Mcp-Name") do
       conn
     else
       {:error, message} -> reject(conn, :header_mismatch, message)
@@ -120,7 +121,7 @@ defmodule EmissaryWeb.Plugs.MCPRequestMetadata do
   # what the server will actually execute. So a mismatch is refused outright
   # rather than resolved in favour of either side.
   defp check_declared_version(conn, body) do
-    header = get_req_header(conn, "mcp-protocol-version") |> List.first()
+    header = get_req_header(conn, Protocol.protocol_version_header()) |> List.first()
     meta = Protocol.declared_version(body)
 
     cond do

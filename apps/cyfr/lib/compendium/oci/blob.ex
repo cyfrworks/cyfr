@@ -247,10 +247,7 @@ defmodule Compendium.OCI.Blob do
   end
 
   @doc false
-  def compute_digest(content) when is_binary(content) do
-    hash = :crypto.hash(:sha256, content)
-    "sha256:" <> Base.encode16(hash, case: :lower)
-  end
+  defdelegate compute_digest(content), to: Cyfr.Digest, as: :sha256
 
   defp get_header(headers, name) do
     Enum.find_value(headers, fn

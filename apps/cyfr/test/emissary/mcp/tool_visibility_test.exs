@@ -336,6 +336,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   end
 
   describe "classification completeness" do
+    @tag :requires_opus_modules
     test "every registered tool.action is classified as gated or public" do
       registered =
         Application.get_env(:cyfr, :tool_providers, [])

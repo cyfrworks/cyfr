@@ -274,6 +274,16 @@ defmodule Arca do
   def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []),
     do: adapter().serve_to_conn(conn, ctx, path, opts)
 
+  @doc """
+  Whether the configured storage adapter is the local filesystem.
+
+  The adapter choice is Arca's own knowledge — callers branch on this
+  predicate instead of re-reading the config key and comparing against an
+  Arca-internal module name.
+  """
+  @spec local_adapter?() :: boolean()
+  def local_adapter?, do: adapter() == Arca.Adapters.Local
+
   defp adapter do
     Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
   end

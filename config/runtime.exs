@@ -204,14 +204,14 @@ if config_env() != :test do
     # config.exs from CYFR_DATABASE; here we supply connection parameters for
     # whichever adapter was built — gated so SQLite-only keys (journal_mode,
     # busy_timeout) never bleed into a Postgres build and vice versa.
-    case Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+    case Cyfr.RuntimeConfig.repo_adapter() do
       Ecto.Adapters.SQLite3 ->
         config :cyfr, Arca.Repo,
           database: env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db"),
           pool_size:
             parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
           journal_mode: :wal,
-          busy_timeout: 5_000
+          busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
 
       Ecto.Adapters.Postgres ->
         # A Postgres build carries no connection config from config.exs, so a

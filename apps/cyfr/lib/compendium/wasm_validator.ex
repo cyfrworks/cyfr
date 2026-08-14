@@ -142,10 +142,7 @@ defmodule Compendium.WasmValidator do
   Compute SHA-256 digest of binary content.
   Returns hex-encoded string with sha256: prefix.
   """
-  def compute_digest(bytes) when is_binary(bytes) do
-    hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
-    "sha256:#{hash}"
-  end
+  defdelegate compute_digest(bytes), to: Cyfr.Digest, as: :sha256
 
   @doc """
   Suggest component type based on exported functions.

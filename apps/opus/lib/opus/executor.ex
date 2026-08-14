@@ -618,9 +618,8 @@ defmodule Opus.Executor do
          "No registry digest for #{reference} — refusing to execute unverified bytes. " <>
            "Re-register the component."}
 
-      actual_digest == "sha256:" <> expected_digest ->
-        :ok
-
+      # Cyfr.Digest is the only producer, so both sides carry the same
+      # sha256:-prefixed spelling — one comparison, no format guessing.
       actual_digest == expected_digest ->
         :ok
 
@@ -766,9 +765,7 @@ defmodule Opus.Executor do
   end
 
   defp compute_digest(wasm_bytes) when is_binary(wasm_bytes) do
-    hash = :crypto.hash(:sha256, wasm_bytes)
-    hex = Base.encode16(hash, case: :lower)
-    "sha256:#{hex}"
+    Cyfr.Digest.sha256(wasm_bytes)
   end
 
   defp maybe_verify_signature(_reference, nil, _component), do: :ok

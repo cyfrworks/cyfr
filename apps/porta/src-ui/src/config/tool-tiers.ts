@@ -58,6 +58,10 @@ const RULES: ToolRule[] = [
 /**
  * Actions that only read state, on any tool. A write-shaped action name
  * never belongs here — when in doubt, leave it out and let it gate.
+ *
+ * This is the FALLBACK classification, used only before the server's own
+ * per-action `kind` annotations arrive (see `registerToolAnnotations`). The
+ * server is the authority: if it reclassifies an action, the gate follows.
  */
 const READ_ACTIONS = new Set([
   "get",
@@ -71,17 +75,59 @@ const READ_ACTIONS = new Set([
   "probe",
 ]);
 
+/**
+ * Server-declared per-action kinds, learned from the `tools/list`
+ * annotations (`annotations.actions.<verb>.kind`). Keyed `tool.action`.
+ */
+const SERVER_KINDS = new Map<string, string>();
+
+interface AnnotatedTool {
+  name: string;
+  annotations?: { actions?: Record<string, { kind?: string }> };
+}
+
+/**
+ * Feed the server's tool annotations into the gate. Call with the
+ * `tools/list` result after connecting; safe to call repeatedly. Until this
+ * runs, classification falls back to the static read-verb allowlist —
+ * default-deny either way.
+ */
+export function registerToolAnnotations(tools: AnnotatedTool[]): void {
+  for (const tool of tools) {
+    const actions = tool.annotations?.actions;
+    if (!actions) continue;
+    for (const [action, meta] of Object.entries(actions)) {
+      if (typeof meta?.kind === "string") {
+        SERVER_KINDS.set(`${tool.name}.${action}`, meta.kind);
+      }
+    }
+  }
+}
+
+function tierFromServerKind(kind: string): Tier {
+  if (kind === "read") return "tier1";
+  if (kind === "destructive") return "tier3";
+  // write / execute / anything the server invents later: approval card.
+  return "tier2";
+}
+
 export function classifyTool(
   name: string,
   args?: Record<string, unknown>,
 ): Tier {
   const action = typeof args?.action === "string" ? args.action : undefined;
+  // RULES first: product decisions (onboarding tier0, escalated tier3) that
+  // deliberately override the server's mechanical read/write kinds.
   for (const rule of RULES) {
     if (rule.name !== name) continue;
     if (rule.action === undefined) return rule.tier;
     if (rule.action === action) return rule.tier;
   }
-  if (action !== undefined && READ_ACTIONS.has(action)) return "tier1";
+  if (action !== undefined) {
+    const declared = SERVER_KINDS.get(`${name}.${action}`);
+    if (declared !== undefined) return tierFromServerKind(declared);
+    if (READ_ACTIONS.has(action)) return "tier1";
+  }
   return "tier2";
 }
 

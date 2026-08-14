@@ -13,7 +13,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   the given sequence number).
   """
 
-  @compile {:no_warn_undefined, [Opus.ExecutionEventBuffer]}
+  @compile {:no_warn_undefined, [Opus]}
 
   use EmissaryWeb, :controller
 
@@ -21,7 +21,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
-      not Code.ensure_loaded?(Opus.ExecutionEventBuffer) ->
+      not Code.ensure_loaded?(Opus) ->
         conn
         |> put_status(503)
         |> json(%{"error" => "Execution event streaming unavailable (Opus not loaded)"})
@@ -76,10 +76,10 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # org/project, and an org- or platform-scoped viewer may carry different
   # coordinates than the record it was authorized to read.
   defp stream_events(conn, execution_id, last_seq, exec) do
-    Opus.ExecutionEventBuffer.subscribe(execution_id, exec)
+    Opus.subscribe_events(execution_id, exec)
 
     # Replay buffered events since last_seq
-    buffered = Opus.ExecutionEventBuffer.since(execution_id, last_seq, exec.org_id)
+    buffered = Opus.events_since(execution_id, last_seq, exec.org_id)
 
     {conn, terminal?} =
       Enum.reduce_while(buffered, {conn, false}, fn event, {acc_conn, _} ->
@@ -95,7 +95,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
       end)
 
     if terminal? do
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
+      Opus.unsubscribe_events(execution_id, exec)
       conn
     else
       event_loop(conn, execution_id, exec)
@@ -111,14 +111,14 @@ defmodule EmissaryWeb.ExecutionEventsController do
         case send_sse_event(conn, event) do
           {:ok, conn} ->
             if terminal_event?(event) do
-              Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
+              Opus.unsubscribe_events(execution_id, exec)
               conn
             else
               event_loop(conn, execution_id, exec)
             end
 
           {:error, _} ->
-            Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
+            Opus.unsubscribe_events(execution_id, exec)
             conn
         end
     after
@@ -128,7 +128,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
             event_loop(conn, execution_id, exec)
 
           {:error, _} ->
-            Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
+            Opus.unsubscribe_events(execution_id, exec)
             conn
         end
     end

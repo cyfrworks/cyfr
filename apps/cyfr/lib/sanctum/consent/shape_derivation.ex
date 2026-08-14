@@ -89,7 +89,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   @doc false
   def all_tool_actions do
-    for module <- Application.get_env(:cyfr, :tool_providers, []),
+    # One provider roster (loaded-and-guarded) shared with the registry, so a
+    # shape derived here can only name actions the registry can serve.
+    for module <- Emissary.MCP.ToolRegistry.available_providers(),
         tool <- module.tools(),
         {action, _annotation} <- get_in(tool, [:annotations, :actions]) || %{},
         do: "#{tool.name}.#{action}"

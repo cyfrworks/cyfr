@@ -403,10 +403,22 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - force_release action" do
-    test "admin user can force release", %{ctx: ctx} do
-      # Sanctum.TestContext.local() has wildcard permissions (:*) which includes :admin
-      {:ok, result} = MCP.handle("execution", ctx, %{"action" => "force_release"})
+    test "platform admin can force release" do
+      # Releasing every tenant's slots is a platform-wide side effect, so the
+      # action takes platform scope AND :admin — the default system context's
+      # permission set deliberately lacks :admin.
+      platform_ctx = Sanctum.internal_context(permissions: [:admin])
+
+      {:ok, result} = MCP.handle("execution", platform_ctx, %{"action" => "force_release"})
       assert result.force_released == true
+    end
+
+    test "a tenant admin is denied force_release", %{ctx: ctx} do
+      # TestContext.local() carries :admin via the wildcard — but it is
+      # project-scoped, and a per-tenant admin must not release other
+      # tenants' slots.
+      {:error, msg} = MCP.handle("execution", ctx, %{"action" => "force_release"})
+      assert msg =~ "platform-operator action"
     end
 
     test "non-admin user is denied force_release" do
@@ -420,8 +432,7 @@ defmodule Opus.MCPTest do
       }
 
       {:error, msg} = MCP.handle("execution", non_admin_ctx, %{"action" => "force_release"})
-      assert msg =~ "Unauthorized"
-      assert msg =~ "admin"
+      assert msg =~ "platform-operator action"
     end
   end
 

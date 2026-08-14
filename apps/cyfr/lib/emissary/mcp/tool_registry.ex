@@ -544,18 +544,12 @@ defmodule Emissary.MCP.ToolRegistry do
   """
   @spec audit_action_kinds() :: :ok | {:error, [map()]}
   def audit_action_kinds do
-    providers = Application.get_env(:cyfr, :tool_providers, default_providers())
-
     missing =
-      providers
+      available_providers()
       |> Enum.flat_map(fn module ->
-        if Code.ensure_loaded?(module) and function_exported?(module, :tools, 0) do
-          Enum.flat_map(module.tools(), fn tool ->
-            audit_tool(module, tool)
-          end)
-        else
-          []
-        end
+        Enum.flat_map(module.tools(), fn tool ->
+          audit_tool(module, tool)
+        end)
       end)
 
     case missing do
@@ -731,40 +725,30 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp load_providers do
-    configured_providers = Application.get_env(:cyfr, :tool_providers, nil)
-    defaults = default_providers()
-    providers = configured_providers || defaults
+    providers = available_providers()
 
     tools =
       providers
       |> Enum.flat_map(fn module ->
-        if Code.ensure_loaded?(module) and function_exported?(module, :tools, 0) do
-          module.tools()
-          |> Enum.map(fn tool ->
-            meta = %{
-              name: tool.name,
-              description: tool.description,
-              input_schema: tool.input_schema,
-              # Optional per-tool fields
-              title: Map.get(tool, :title),
-              icons: Map.get(tool, :icons),
-              output_schema: Map.get(tool, :output_schema),
-              annotations: Map.get(tool, :annotations),
-              # Default-deny: tools require ctx.authenticated unless they
-              # explicitly opt out via `requires_auth: false`.
-              requires_auth: Map.get(tool, :requires_auth, true)
-            }
+        module.tools()
+        |> Enum.map(fn tool ->
+          meta = %{
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+            # Optional per-tool fields
+            title: Map.get(tool, :title),
+            icons: Map.get(tool, :icons),
+            output_schema: Map.get(tool, :output_schema),
+            annotations: Map.get(tool, :annotations),
+            # Default-deny: tools require ctx.authenticated unless they
+            # explicitly opt out via `requires_auth: false`.
+            requires_auth: Map.get(tool, :requires_auth, true)
+          }
 
-            Arca.Cache.put({:mcp_tool, tool.name}, {module, meta}, @cache_ttl)
-            tool.name
-          end)
-        else
-          Logger.warning(
-            "Tool provider #{inspect(module)} not available — skipping. Check that the application is started and the module exists."
-          )
-
-          []
-        end
+          Arca.Cache.put({:mcp_tool, tool.name}, {module, meta}, @cache_ttl)
+          tool.name
+        end)
       end)
 
     Logger.info(
@@ -774,9 +758,27 @@ defmodule Emissary.MCP.ToolRegistry do
     length(tools)
   end
 
-  defp default_providers do
-    [
-      Emissary.MCP.Tools.SystemProvider
-    ]
+  @doc """
+  The configured tool providers that are actually loadable, warning about
+  any that aren't (an app-scoped test run without the sibling apps).
+
+  The single reader of `:cyfr, :tool_providers` — config always sets the
+  key, so the default is an empty list, never a hidden second roster.
+  """
+  @spec available_providers() :: [module()]
+  def available_providers do
+    Application.get_env(:cyfr, :tool_providers, [])
+    |> Enum.filter(fn module ->
+      if Code.ensure_loaded?(module) and function_exported?(module, :tools, 0) do
+        true
+      else
+        Logger.warning(
+          "Tool provider #{inspect(module)} not available — skipping. " <>
+            "Check that the application is started and the module exists."
+        )
+
+        false
+      end
+    end)
   end
 end

@@ -171,6 +171,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       }
     }
 
+    @tag :requires_opus_modules
     test "a needs/caps manifest sources the shape from its declarations", %{ctx: ctx} do
       publish!(ctx, "shape-caps", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
 
@@ -238,6 +239,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert drifted != live_digest
     end
 
+    @tag :requires_opus_modules
     test "a bootstrapped caps manifest loads through the production source", %{ctx: ctx} do
       publish!(ctx, "shape-caps-load", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
       {:ok, _} = Bootstrap.run(ctx)

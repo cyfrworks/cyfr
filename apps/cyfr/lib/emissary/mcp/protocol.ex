@@ -56,11 +56,27 @@ defmodule Emissary.MCP.Protocol do
   # Headers a conforming client sends on every request, lower-cased because
   # `Plug.Conn` down-cases and RFC 9110 makes field names case-insensitive.
   #
-  # This list is the reason the constant lives here rather than in the plug that
-  # validates it: the CORS preflight has to advertise exactly what the plug
-  # demands, and when the two were written apart the preflight fell behind and
+  # These names live here — with the list built FROM them — because three
+  # parties must agree exactly: the CORS preflight advertises the list, the
+  # metadata plug demands each header, and the outbound client sends them.
+  # When any of those spelled a name for itself, the copies drifted and
   # locked every cross-origin client out.
-  @request_headers ~w(mcp-protocol-version mcp-method mcp-name)
+  @protocol_version_header "mcp-protocol-version"
+  @method_header "mcp-method"
+  @name_header "mcp-name"
+  @request_headers [@protocol_version_header, @method_header, @name_header]
+
+  @doc "The header carrying the declared protocol version."
+  @spec protocol_version_header() :: String.t()
+  def protocol_version_header, do: @protocol_version_header
+
+  @doc "The header mirroring the request body's method."
+  @spec method_header() :: String.t()
+  def method_header, do: @method_header
+
+  @doc "The header mirroring the request's named subject (tool/resource)."
+  @spec name_header() :: String.t()
+  def name_header, do: @name_header
 
   # Headers a client must be able to read off the response. `x-request-id` is
   # CYFR's, not the specification's, but a client that cannot read it cannot

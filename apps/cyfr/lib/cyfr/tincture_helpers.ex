@@ -70,6 +70,7 @@ defmodule Cyfr.TinctureHelpers do
   # and S3 (which has no real directories).
   @media_icon_candidates ~w(public/media/icon.svg public/media/icon.png)
   @media_preview_extensions ~w(svg png)
+  # Mirrored by MAX_PREVIEWS in porta's tincture-store.ts — change both.
   @media_preview_count 6
 
   @doc """

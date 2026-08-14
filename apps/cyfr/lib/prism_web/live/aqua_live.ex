@@ -33,7 +33,7 @@ defmodule PrismWeb.AquaLive do
   alias PrismWeb.AquaLive.AgentState
   alias PrismWeb.AquaLive.View
 
-  @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer, Opus.Chain]}
+  @compile {:no_warn_undefined, [Opus]}
 
   @agent_ref "formula:local.aqua"
   @list_models_ref "formula:local.list-models"
@@ -150,7 +150,7 @@ defmodule PrismWeb.AquaLive do
         ctx = socket.assigns[:context]
 
         if opus_available?() do
-          if ctx, do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, ctx)
+          if ctx, do: Opus.unsubscribe_events(exec_id, ctx)
 
           case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
                  if ctx, do: Opus.cancel(ctx, exec_id)
@@ -636,7 +636,7 @@ defmodule PrismWeb.AquaLive do
       end)
 
     if socket.assigns.current_execution_id do
-      Opus.ExecutionEventBuffer.unsubscribe(
+      Opus.unsubscribe_events(
         socket.assigns.current_execution_id,
         socket.assigns.context
       )
@@ -673,7 +673,7 @@ defmodule PrismWeb.AquaLive do
         [%{role: "error", content: err, timestamp: DateTime.utc_now()}]
 
     if socket.assigns.current_execution_id do
-      Opus.ExecutionEventBuffer.unsubscribe(
+      Opus.unsubscribe_events(
         socket.assigns.current_execution_id,
         socket.assigns.context
       )
@@ -751,7 +751,7 @@ defmodule PrismWeb.AquaLive do
 
       true ->
         if opus_available?() do
-          Opus.ExecutionEventBuffer.subscribe(exec_id, socket.assigns.context)
+          Opus.subscribe_events(exec_id, socket.assigns.context)
         end
 
         {:noreply, assign(socket, :current_execution_id, exec_id)}
@@ -876,7 +876,7 @@ defmodule PrismWeb.AquaLive do
   # profile, revoked, or re-consent required) we FAIL CLOSED — never fall back
   # to the operator's context.
   defp run_approved_call(proposal, ctx, args) do
-    case Opus.Chain.authority_for(ctx, nil, @agent_ref) do
+    case Opus.authority_for(ctx, nil, @agent_ref) do
       {:ok, authority} ->
         Emissary.MCP.ToolRegistry.call_in_chain(
           proposal.tool,
@@ -1171,7 +1171,7 @@ defmodule PrismWeb.AquaLive do
       }
 
       if ctx && opus_available?() do
-        Opus.ExecutionEventBuffer.unsubscribe(exec_id, ctx)
+        Opus.unsubscribe_events(exec_id, ctx)
 
         Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
           Opus.cancel_for_restart(ctx, exec_id, payload)

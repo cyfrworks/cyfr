@@ -277,9 +277,11 @@ defmodule Opus.MCP do
             },
             "type" => %{
               "type" => "string",
-              "enum" => ["catalyst", "reagent", "formula"],
+              "enum" => Sanctum.ComponentRef.executable_types(),
               "default" => "reagent",
-              "description" => "Component type determines WASI capabilities (run action)"
+              "description" =>
+                "Asserted component type — must match the registry's type, " <>
+                  "which is authoritative (run action)"
             },
             # list action params
             "status" => %{

@@ -45,6 +45,44 @@ defmodule Opus do
   defdelegate run_root(ctx, profile_selector, reference, input, opts \\ []), to: Opus.Chain
 
   @doc """
+  Root an execution chain from a tincture (edge) ingress — the third entry
+  shape alongside `run_root`/`run_child`. The facade carries it precisely so
+  every way an execution can start is enumerable here. See
+  `Opus.Chain.run_root_edge/5`.
+  """
+  @spec run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defdelegate run_root_edge(ctx, source_ref, reference, input, opts \\ []), to: Opus.Chain
+
+  @doc """
+  Derive (without executing) the authority a `run_root` for this selector
+  and reference would run under. See `Opus.Chain.authority_for/4`.
+  """
+  @spec authority_for(Context.t(), String.t() | nil, String.t(), keyword()) ::
+          {:ok, Sanctum.Authority.t()} | {:error, term()}
+  defdelegate authority_for(ctx, profile_selector, reference, opts \\ []), to: Opus.Chain
+
+  @doc """
+  Subscribe the calling process to an execution's event stream. Pass the
+  execution's own record/context so the topic resolves to the OWNING tenant —
+  and pass the same value to `unsubscribe_events/2`, or the unsubscribe
+  targets a different topic and silently no-ops.
+  """
+  defdelegate subscribe_events(execution_id, ctx \\ nil),
+    to: Opus.ExecutionEventBuffer,
+    as: :subscribe
+
+  @doc "Unsubscribe from an execution's event stream (same ctx as subscribe)."
+  defdelegate unsubscribe_events(execution_id, ctx \\ nil),
+    to: Opus.ExecutionEventBuffer,
+    as: :unsubscribe
+
+  @doc "Buffered events after `last_sequence`, for replay on (re)connect."
+  defdelegate events_since(execution_id, last_sequence, org_id \\ nil),
+    to: Opus.ExecutionEventBuffer,
+    as: :since
+
+  @doc """
   Advance a running chain's authority through one invocation and execute
   the target — the in-chain entry. See `Opus.Chain.run_child/5`.
   """

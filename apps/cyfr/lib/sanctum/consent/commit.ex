@@ -45,19 +45,21 @@ defmodule Sanctum.Consent.Commit do
           optional(:durable_storage) => boolean()
         }
 
-  # §3.5 ZeroAuthority constants as blob limits — literals by mandate,
-  # never derived from Policy defaults (which are looser on three of the
-  # seven fields). What a public profile's source node runs under until
-  # the consent sheet grows a raise-to-ceiling knob.
-  @public_limits %{
-    "timeout" => "30s",
-    "max_memory_bytes" => 67_108_864,
-    "max_request_size" => 1_048_576,
-    "max_response_size" => 5_242_880,
-    "rate_limit" => %{"requests" => 100, "window" => "1m"},
-    "max_concurrent_tasks" => 1,
-    "batch_timeout" => "30s"
-  }
+  # §3.5 ZeroAuthority constants as blob limits — derived from the one
+  # literal source (`Sanctum.Authority.zero_limits/0`), never from Policy
+  # defaults (which are looser on three of the seven fields). What a public
+  # profile's source node runs under until the consent sheet grows a
+  # raise-to-ceiling knob. Derivation keeps the blob a user consented to
+  # and the ceiling the runtime enforces from ever drifting apart.
+  @public_limits Sanctum.Authority.zero_limits()
+                 |> Map.from_struct()
+                 |> Map.new(fn
+                   {:rate_limit, %{requests: r, window: w}} ->
+                     {"rate_limit", %{"requests" => r, "window" => w}}
+
+                   {key, value} ->
+                     {Atom.to_string(key), value}
+                 end)
 
   @readonly_storage_actions ~w(read list exists)
 

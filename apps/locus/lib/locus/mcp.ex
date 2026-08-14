@@ -239,16 +239,12 @@ defmodule Locus.MCP do
   # Private Helpers
   # ============================================================================
 
-  @valid_types ~w(reagent catalyst formula tincture)
-
   defp parse_reference(reference) do
+    # ComponentRef.parse/1 already gates the type against the canonical list;
+    # a second check here could only drift from it.
     case Sanctum.ComponentRef.parse(reference) do
       {:ok, ref} ->
-        if ref.type in @valid_types do
-          {:ok, ref.type, ref.name, ref.version}
-        else
-          {:error, "Invalid component type in reference: #{ref.type}"}
-        end
+        {:ok, ref.type, ref.name, ref.version}
 
       {:error, reason} ->
         {:error, "Invalid reference: #{reason}"}

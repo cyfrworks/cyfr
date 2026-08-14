@@ -54,9 +54,6 @@ defmodule Opus.RateLimiter do
 
   @table :opus_rate_limiter
 
-  # Default 1 minute window
-  @default_window_ms 60_000
-
   @sweep_interval_ms 60_000
 
   # ============================================================================
@@ -97,6 +94,12 @@ defmodule Opus.RateLimiter do
         nil ->
           # No rate limit configured - allow unlimited
           {:ok, :unlimited}
+
+        :invalid ->
+          # A limit WAS configured but cannot be parsed. Substituting a
+          # default window would silently rescale an enforcement value the
+          # caller consented to — deny instead.
+          {:error, :rate_limited, 0}
 
         {max_requests, window_ms} ->
           key = make_key(org_id, project_id, component_ref)
@@ -265,46 +268,27 @@ defmodule Opus.RateLimiter do
   defp get_rate_limit_config(%{rate_limit: nil}), do: nil
 
   defp get_rate_limit_config(%{rate_limit: %{requests: requests, window: window}}) do
-    window_ms = parse_window(window)
-    {requests, window_ms}
+    case parse_window(window) do
+      {:ok, window_ms} -> {requests, window_ms}
+      :error -> :invalid
+    end
   end
 
   defp get_rate_limit_config(_), do: nil
 
-  defp parse_window(window) when is_binary(window) do
-    cond do
-      String.ends_with?(window, "ms") ->
-        window |> String.trim_trailing("ms") |> String.to_integer()
-
-      String.ends_with?(window, "s") ->
-        (window |> String.trim_trailing("s") |> String.to_integer()) * 1000
-
-      String.ends_with?(window, "m") ->
-        (window |> String.trim_trailing("m") |> String.to_integer()) * 60 * 1000
-
-      String.ends_with?(window, "h") ->
-        (window |> String.trim_trailing("h") |> String.to_integer()) * 60 * 60 * 1000
-
-      true ->
-        Logger.warning(
-          "[RateLimiter] Unrecognized window format: #{inspect(window)}, using default #{@default_window_ms}ms"
-        )
-
-        @default_window_ms
-    end
-  rescue
-    e in [ArgumentError] ->
-      Logger.warning("[RateLimiter] parse_window failed for #{inspect(window)}: #{inspect(e)}")
-      @default_window_ms
-  end
-
-  defp parse_window(window) when is_integer(window), do: window
+  # Duration grammar is Sanctum.Limits' — one parser for every enforcement
+  # window, so "1h" cannot mean an hour in one limiter and a fallback minute
+  # in another. Unparseable is unparseable, never a default.
+  defp parse_window(window) when is_integer(window), do: {:ok, window}
 
   defp parse_window(window) do
-    Logger.warning(
-      "[RateLimiter] Invalid window value: #{inspect(window)}, using default #{@default_window_ms}ms"
-    )
+    case Sanctum.Limits.parse_duration(window) do
+      {:ok, ms} ->
+        {:ok, ms}
 
-    @default_window_ms
+      {:error, reason} ->
+        Logger.warning("[RateLimiter] invalid rate-limit window #{inspect(window)}: #{reason}")
+        :error
+    end
   end
 end

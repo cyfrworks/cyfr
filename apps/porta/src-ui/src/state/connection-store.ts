@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { McpClient } from "../api/mcp-client";
 import { wrapWithApprovalGate } from "../api/gated-mcp-client";
+import { registerToolAnnotations } from "../config/tool-tiers";
 import { host, type RuntimeMode } from "../host";
 
 export type { RuntimeMode };
@@ -65,6 +66,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     // approval flow. AQUA-initiated calls run server-side and aren't
     // intercepted here.
     wrapWithApprovalGate(client);
+
+    // Teach the gate the server's own per-action read/write kinds so a
+    // server-side reclassification is honored without a client release.
+    // Fire-and-forget: until it lands (or if it fails offline), the gate's
+    // static default-deny fallback applies.
+    client
+      .listTools()
+      .then((tools) => registerToolAnnotations(tools))
+      .catch(() => {});
 
     set({ mcpClient: client });
     return client;

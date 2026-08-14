@@ -202,8 +202,12 @@ defmodule Opus.ExecutionEventBuffer do
     %Sanctum.Context{org_id: org_id, project_id: Map.get(coords, :project_id) || "default"}
   end
 
-  defp resolve_topic_ctx(_),
-    do: %Sanctum.Context{org_id: "local", project_id: "default"}
+  defp resolve_topic_ctx(_) do
+    %Sanctum.Context{
+      org_id: Arca.Tenant.local_org(),
+      project_id: Arca.Tenant.default_project()
+    }
+  end
 
   # ============================================================================
   # GenServer - Per-execution buffer serialization

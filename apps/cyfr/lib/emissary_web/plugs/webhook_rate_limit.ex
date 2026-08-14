@@ -114,12 +114,11 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
     end
   end
 
+  # One duration grammar for every enforcement window (Sanctum.Limits) —
+  # this also gains ms support the local parser lacked.
   defp parse_window(spec) do
-    case Integer.parse(spec) do
-      {n, "s"} when n > 0 -> {:ok, n * 1_000}
-      {n, "m"} when n > 0 -> {:ok, n * 60_000}
-      {n, "h"} when n > 0 -> {:ok, n * 3_600_000}
-      {n, ""} when n > 0 -> {:ok, n * 1_000}
+    case Sanctum.Limits.parse_duration(spec) do
+      {:ok, ms} when ms > 0 -> {:ok, ms}
       _ -> :error
     end
   end
