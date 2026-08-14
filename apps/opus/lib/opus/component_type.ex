@@ -16,9 +16,9 @@ defmodule Opus.ComponentType do
   | `wasi:logging/logging`        | ✅        | ✅       | ✅       |
   | `wasi:clocks/wall-clock`      | ✅        | ✅       | ✅       |
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
-  | `cyfr:secrets/read`           | ✅*       | ❌       | ❌       |
+  | `cyfr:vault/read`           | ✅*       | ❌       | ❌       |
 
-  *`cyfr:secrets/read` resolves fields from the Vault entry a consent edge binds
+  *`cyfr:vault/read` resolves fields from the Vault entry a consent edge binds
   †`cyfr:oauth/token` resolves a token from the Vault OAuth entry a consent edge binds
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
@@ -31,13 +31,13 @@ defmodule Opus.ComponentType do
 
   ## Secrets Access
 
-  Only Catalysts can read secrets via the `cyfr:secrets/read` WASI import. The
+  Only Catalysts can read secrets via the `cyfr:vault/read` WASI import. The
   value comes from a Vault entry that a consent edge binds to the running node —
   the operator maps the catalyst's named need to one of their Connections at
   consent time; there is no per-secret grant API and no project-wide secret
   namespace.
 
-      # Catalysts call cyfr:secrets/read.get("url") to read a projected field of
+      # Catalysts call cyfr:vault/read.get("url") to read a projected field of
       # the bound Vault entry. A node with no bound entry gets "access-denied".
       # Reagents and Formulas never receive the secrets import.
 
@@ -85,9 +85,11 @@ defmodule Opus.ComponentType do
 
   @type t :: :catalyst | :reagent | :formula
 
-  # Derived from the canonical type list so a new executable type cannot be
-  # added there and silently rejected here.
-  @valid_types Enum.map(Sanctum.ComponentRef.executable_types(), &String.to_atom/1)
+  # Both the string and atom parse paths derive from the canonical type
+  # list, so a new executable type added there is accepted here without a
+  # second edit.
+  @valid_type_strings Sanctum.ComponentRef.executable_types()
+  @valid_types Enum.map(@valid_type_strings, &String.to_atom/1)
 
   @doc """
   Parse a string type into an atom.
@@ -97,13 +99,14 @@ defmodule Opus.ComponentType do
   @spec parse(String.t() | atom() | nil) :: {:ok, t()} | {:error, String.t()}
   def parse(nil), do: {:ok, :reagent}
   def parse(type) when type in @valid_types, do: {:ok, type}
-  def parse("catalyst"), do: {:ok, :catalyst}
-  def parse("reagent"), do: {:ok, :reagent}
-  def parse("formula"), do: {:ok, :formula}
+
+  def parse(type) when type in @valid_type_strings,
+    do: {:ok, String.to_existing_atom(type)}
 
   def parse(invalid) do
     {:error,
-     "Invalid component type: #{inspect(invalid)}. Must be one of: catalyst, reagent, formula"}
+     "Invalid component type: #{inspect(invalid)}. " <>
+       "Must be one of: #{Enum.join(@valid_type_strings, ", ")}"}
   end
 
   @doc """

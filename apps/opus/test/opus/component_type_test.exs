@@ -28,6 +28,14 @@ defmodule Opus.ComponentTypeTest do
       assert msg =~ "Invalid component type"
       assert msg =~ "catalyst, reagent, formula"
     end
+
+    test "every canonical executable type round-trips as string and atom" do
+      for type <- Sanctum.ComponentRef.executable_types() do
+        atom = String.to_existing_atom(type)
+        assert {:ok, ^atom} = ComponentType.parse(type)
+        assert {:ok, ^atom} = ComponentType.parse(atom)
+      end
+    end
   end
 
   describe "wasi_options/1" do

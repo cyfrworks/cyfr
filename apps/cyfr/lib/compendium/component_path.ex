@@ -23,7 +23,7 @@ defmodule Compendium.ComponentPath do
   `Compendium.ComponentId`.
   """
 
-  @type_plurals ["catalysts", "reagents", "formulas", "tinctures"]
+  @type_plurals Enum.map(Sanctum.ComponentRef.valid_types(), &(&1 <> "s"))
 
   @default_publisher "local"
 
