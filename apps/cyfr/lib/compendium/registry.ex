@@ -1497,7 +1497,7 @@ defmodule Compendium.Registry do
     case Arca.ProfileStorage.list_for_source(ctx.org_id, ctx.project_id, name_ref) do
       {:ok, profiles} ->
         Enum.each(profiles, fn profile ->
-          Arca.ProfileStorage.set_status(ctx.org_id, profile.id, "revoked")
+          Arca.ProfileStorage.set_status(ctx.org_id, ctx.project_id, profile.id, "revoked")
         end)
 
       _ ->

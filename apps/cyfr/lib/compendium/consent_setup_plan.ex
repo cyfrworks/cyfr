@@ -113,7 +113,7 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   defp check_ref(ctx, ref) do
-    case Arca.VaultStorage.get(ctx.org_id, ref.vault_entry_id) do
+    case Arca.VaultStorage.get(ctx.org_id, ctx.project_id, ref.vault_entry_id) do
       {:ok, %{status: "active"} = entry} ->
         case VaultReader.binding_digest(entry) do
           {:ok, digest} ->

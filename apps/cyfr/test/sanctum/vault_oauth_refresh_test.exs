@@ -53,8 +53,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       Payload.encode_material(%{}, %{"access_token" => token, "token_type" => "bearer"})
 
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-    {:ok, fresh} = Arca.VaultStorage.get(ctx.org_id, entry.id)
-    :ok = Arca.VaultStorage.rotate_payload(ctx.org_id, entry.id, fresh.payload_rev, sealed)
+    {:ok, fresh} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
+    :ok = Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, entry.id, fresh.payload_rev, sealed)
   end
 
   defp attach_attempt_counter do
@@ -159,12 +159,12 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     test "the loser of a revision race gets payload_conflict", %{ctx: ctx} do
       {entry, _resource} = mint_oauth_entry(ctx, @expired)
 
-      assert :ok = Arca.VaultStorage.rotate_payload(ctx.org_id, entry.id, 0, "sealed-a")
+      assert :ok = Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, entry.id, 0, "sealed-a")
 
       assert {:error, :payload_conflict} =
-               Arca.VaultStorage.rotate_payload(ctx.org_id, entry.id, 0, "sealed-b")
+               Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, entry.id, 0, "sealed-b")
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.org_id, entry.id)
+      {:ok, row} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
       assert row.payload_rev == 1
       assert row.sealed_payload == "sealed-a"
     end

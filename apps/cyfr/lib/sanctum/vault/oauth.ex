@@ -47,8 +47,8 @@ defmodule Sanctum.Vault.OAuth do
 
       RefreshLock.run(
         lock_key,
-        fn -> refresh_as_leader(entry.org_id, entry.id, provider) end,
-        fn -> recheck(entry.org_id, entry.id) end
+        fn -> refresh_as_leader(entry.org_id, entry.project_id, entry.id, provider) end,
+        fn -> recheck(entry.org_id, entry.project_id, entry.id) end
       )
     end
   end
@@ -77,8 +77,8 @@ defmodule Sanctum.Vault.OAuth do
   # The leader re-reads the row inside the lock: a refresh that completed
   # between the caller's unseal and lock acquisition must be returned, not
   # repeated (the provider may have rotated the refresh token).
-  defp refresh_as_leader(org_id, entry_id, provider) do
-    with {:ok, entry, payload} <- load_fresh(org_id, entry_id) do
+  defp refresh_as_leader(org_id, project_id, entry_id, provider) do
+    with {:ok, entry, payload} <- load_fresh(org_id, project_id, entry_id) do
       oauth = payload["oauth"]
 
       cond do
@@ -101,8 +101,8 @@ defmodule Sanctum.Vault.OAuth do
 
   # A follower re-reads after the leader finished; :stale hands leadership
   # to the next caller (bounded by RefreshLock's retry count).
-  defp recheck(org_id, entry_id) do
-    case load_fresh(org_id, entry_id) do
+  defp recheck(org_id, project_id, entry_id) do
+    case load_fresh(org_id, project_id, entry_id) do
       {:ok, _entry, %{"oauth" => oauth}} when is_map(oauth) ->
         if token_valid?(oauth), do: {:ok, oauth["access_token"]}, else: :stale
 
@@ -149,13 +149,19 @@ defmodule Sanctum.Vault.OAuth do
 
     with {:ok, json} <- encode_payload(new_payload),
          {:ok, sealed} <- Sanctum.Cipher.encrypt(json, aad) do
-      case Arca.VaultStorage.rotate_payload(entry.org_id, entry.id, entry.payload_rev, sealed) do
+      case Arca.VaultStorage.rotate_payload(
+             entry.org_id,
+             entry.project_id,
+             entry.id,
+             entry.payload_rev,
+             sealed
+           ) do
         :ok ->
           emit_telemetry(entry, entry.provider_hint, :ok)
           {:ok, get_in(new_payload, ["oauth", "access_token"])}
 
         {:error, :payload_conflict} ->
-          case recheck(entry.org_id, entry.id) do
+          case recheck(entry.org_id, entry.project_id, entry.id) do
             {:ok, token} -> {:ok, token}
             :stale -> {:error, :payload_conflict}
           end
@@ -176,8 +182,8 @@ defmodule Sanctum.Vault.OAuth do
   # Pieces
   # ---------------------------------------------------------------------------
 
-  defp load_fresh(org_id, entry_id) do
-    with {:ok, entry} <- Arca.VaultStorage.get(org_id, entry_id),
+  defp load_fresh(org_id, project_id, entry_id) do
+    with {:ok, entry} <- Arca.VaultStorage.get(org_id, project_id, entry_id),
          {:ok, sealed} <- fetch_sealed(entry) do
       aad = CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
 

@@ -6,6 +6,10 @@ defmodule Arca.VaultStorage do
   Persistence mechanics for vault entries. Sealing, binding-digest
   derivation and every consent semantic live in the `Sanctum.*` layer —
   `sealed_payload` arrives encrypted and leaves encrypted.
+
+  Every id-keyed row filter carries the full tenant: `project_id` is a
+  boundary exactly like `org_id`, so an entry id learned in one project
+  cannot resolve, mutate, or decrypt in another.
   """
 
   import Ecto.Query
@@ -32,11 +36,13 @@ defmodule Arca.VaultStorage do
       {:error, :database_error}
   end
 
-  @spec get(String.t(), String.t()) :: {:ok, VaultEntry.t()} | {:error, :not_found}
-  def get(org_id, id) do
+  @spec get(String.t(), String.t(), String.t()) ::
+          {:ok, VaultEntry.t()} | {:error, :not_found}
+  def get(org_id, project_id, id) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
-    case Arca.Repo.get_by(VaultEntry, id: id, org_id: org_id) do
+    case Arca.Repo.get_by(VaultEntry, id: id, org_id: org_id, project_id: project_id) do
       nil -> {:error, :not_found}
       entry -> {:ok, entry}
     end
@@ -95,12 +101,16 @@ defmodule Arca.VaultStorage do
   end
 
   @doc "Update the mutable label. Everything else has its own verb."
-  @spec update_meta(String.t(), String.t(), %{name: String.t()}) :: :ok | {:error, term()}
-  def update_meta(org_id, id, %{name: name}) when is_binary(name) and name != "" do
+  @spec update_meta(String.t(), String.t(), String.t(), %{name: String.t()}) ::
+          :ok | {:error, term()}
+  def update_meta(org_id, project_id, id, %{name: name}) when is_binary(name) and name != "" do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     case Arca.Repo.update_all(
-           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           from(v in VaultEntry,
+             where: v.id == ^id and v.org_id == ^org_id and v.project_id == ^project_id
+           ),
            set: [name: name, updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)]
          ) do
       {1, _} -> :ok
@@ -112,12 +122,15 @@ defmodule Arca.VaultStorage do
       {:error, :database_error}
   end
 
-  @spec set_status(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def set_status(org_id, id, status) when is_binary(status) do
+  @spec set_status(String.t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def set_status(org_id, project_id, id, status) when is_binary(status) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     case Arca.Repo.update_all(
-           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           from(v in VaultEntry,
+             where: v.id == ^id and v.org_id == ^org_id and v.project_id == ^project_id
+           ),
            set: [
              status: status,
              updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -137,12 +150,15 @@ defmodule Arca.VaultStorage do
   The partial unique index ignores tombstoned rows, so the name is
   immediately reusable.
   """
-  @spec tombstone(String.t(), String.t()) :: :ok | {:error, term()}
-  def tombstone(org_id, id) do
+  @spec tombstone(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def tombstone(org_id, project_id, id) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     case Arca.Repo.update_all(
-           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           from(v in VaultEntry,
+             where: v.id == ^id and v.org_id == ^org_id and v.project_id == ^project_id
+           ),
            set: [
              status: "tombstoned",
              sealed_payload: nil,
@@ -163,9 +179,10 @@ defmodule Arca.VaultStorage do
   `oauth_scopes`) plus the cached `binding_digest`. `provider_hint` is
   absent by design — it sits in the AEAD AAD and is immutable per row.
   """
-  @spec update_binding(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def update_binding(org_id, id, changes) when is_map(changes) do
+  @spec update_binding(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def update_binding(org_id, project_id, id, changes) when is_map(changes) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     set =
       changes
@@ -174,7 +191,9 @@ defmodule Arca.VaultStorage do
       |> Keyword.put(:updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond))
 
     case Arca.Repo.update_all(
-           from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+           from(v in VaultEntry,
+             where: v.id == ^id and v.org_id == ^org_id and v.project_id == ^project_id
+           ),
            set: set
          ) do
       {1, _} -> :ok
@@ -191,16 +210,19 @@ defmodule Arca.VaultStorage do
   (compare-and-swap). The winning writer bumps the revision; a loser gets
   `{:error, :payload_conflict}` and must re-read.
   """
-  @spec rotate_payload(String.t(), String.t(), non_neg_integer(), binary()) ::
+  @spec rotate_payload(String.t(), String.t(), String.t(), non_neg_integer(), binary()) ::
           :ok | {:error, :payload_conflict}
-  def rotate_payload(org_id, id, expected_rev, sealed)
+  def rotate_payload(org_id, project_id, id, expected_rev, sealed)
       when is_integer(expected_rev) and is_binary(sealed) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     result =
       Arca.Repo.update_all(
         from(v in VaultEntry,
-          where: v.id == ^id and v.org_id == ^org_id and v.payload_rev == ^expected_rev
+          where:
+            v.id == ^id and v.org_id == ^org_id and v.project_id == ^project_id and
+              v.payload_rev == ^expected_rev
         ),
         set: [
           sealed_payload: sealed,
@@ -219,12 +241,15 @@ defmodule Arca.VaultStorage do
       {:error, :database_error}
   end
 
-  @spec touch_last_used(String.t(), String.t()) :: :ok
-  def touch_last_used(org_id, id) do
+  @spec touch_last_used(String.t(), String.t(), String.t()) :: :ok
+  def touch_last_used(org_id, project_id, id) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     Arca.Repo.update_all(
-      from(v in VaultEntry, where: v.id == ^id and v.org_id == ^org_id),
+      from(v in VaultEntry,
+             where: v.id == ^id and v.org_id == ^org_id and v.project_id == ^project_id
+           ),
       set: [last_used_at: DateTime.utc_now()]
     )
 

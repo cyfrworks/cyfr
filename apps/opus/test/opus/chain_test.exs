@@ -419,7 +419,7 @@ defmodule Opus.ChainTest do
         })
 
       {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-      :ok = Arca.VaultStorage.set_status(ctx.org_id, entry.id, "revoked")
+      :ok = Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, entry.id, "revoked")
       {entry, digest}
     end
 

@@ -177,7 +177,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp prepare(ctx, %{publish_from: owner_profile_id} = decisions)
        when is_binary(owner_profile_id) do
-    with {:ok, owner_profile} <- Arca.ProfileStorage.get(ctx.org_id, owner_profile_id),
+    with {:ok, owner_profile} <- Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, owner_profile_id),
          :ok <- check_owner_profile(owner_profile),
          {:ok, owner_consent} <- Source.impl().head_consent(ctx, owner_profile_id),
          {:ok, published} <-
@@ -484,7 +484,7 @@ defmodule Sanctum.Consent.Commit do
   defp fetch_active_entry(_ctx, nil), do: {:error, {:invalid_binding, :entry_id_required}}
 
   defp fetch_active_entry(ctx, entry_id) do
-    case Arca.VaultStorage.get(ctx.org_id, entry_id) do
+    case Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry_id) do
       {:ok, %{status: "active"} = entry} -> {:ok, entry}
       {:ok, %{status: status}} -> {:error, {:entry_unavailable, entry_id, status}}
       {:error, reason} -> {:error, {:entry_unavailable, entry_id, reason}}
@@ -745,7 +745,7 @@ defmodule Sanctum.Consent.Commit do
   defp pinned_version(_prep), do: ""
 
   defp current_head_id(ctx, profile_id) do
-    case Arca.ConsentStorage.get_head(ctx.org_id, profile_id) do
+    case Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, profile_id) do
       {:ok, head, _refs} -> {:ok, head.id}
       {:error, :no_head} -> {:ok, nil}
       {:error, reason} -> {:error, reason}
@@ -771,9 +771,9 @@ defmodule Sanctum.Consent.Commit do
   # A profile blocked at needs_consent is unblocked by exactly this act —
   # a fresh revision IS the re-consent.
   defp reactivate_profile(ctx, %{profile_id: profile_id}) when is_binary(profile_id) do
-    case Arca.ProfileStorage.get(ctx.org_id, profile_id) do
+    case Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id) do
       {:ok, %{status: "needs_consent"}} ->
-        Arca.ProfileStorage.set_status(ctx.org_id, profile_id, "active")
+        Arca.ProfileStorage.set_status(ctx.org_id, ctx.project_id, profile_id, "active")
 
       _ ->
         :ok

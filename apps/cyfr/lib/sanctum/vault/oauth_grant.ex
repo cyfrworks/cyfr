@@ -144,7 +144,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp resolve_target(ctx, %{entry_id: id}) when is_binary(id) do
-    with {:ok, entry} <- Arca.VaultStorage.get(ctx.org_id, id) do
+    with {:ok, entry} <- Arca.VaultStorage.get(ctx.org_id, ctx.project_id, id) do
       cond do
         entry.status == "tombstoned" ->
           {:error, :not_found}
@@ -296,7 +296,9 @@ defmodule Sanctum.Vault.OAuthGrant do
       with {:ok, entry} <- Arca.VaultStorage.put(attrs),
            {:ok, digest} <- VaultReader.binding_digest(entry),
            :ok <-
-             Arca.VaultStorage.update_binding(pending.org_id, id, %{binding_digest: digest}) do
+             Arca.VaultStorage.update_binding(pending.org_id, pending.project_id, id, %{
+               binding_digest: digest
+             }) do
         broadcast(pending, id, :create)
         {:ok, %{entry_id: id, name: target.name, provider: target.provider, rebound: false}}
       end
@@ -304,7 +306,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   defp apply_grant(%{target: %{kind: :existing} = target} = pending, bundle) do
-    with {:ok, entry} <- Arca.VaultStorage.get(pending.org_id, target.entry_id),
+    with {:ok, entry} <- Arca.VaultStorage.get(pending.org_id, pending.project_id, target.entry_id),
          :ok <- still_living(entry) do
       fields = current_fields(entry)
 
@@ -314,12 +316,18 @@ defmodule Sanctum.Vault.OAuthGrant do
 
         {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
-        case Arca.VaultStorage.rotate_payload(entry.org_id, entry.id, entry.payload_rev, sealed) do
+        case Arca.VaultStorage.rotate_payload(
+                 entry.org_id,
+                 entry.project_id,
+                 entry.id,
+                 entry.payload_rev,
+                 sealed
+               ) do
           :ok ->
             rebound = maybe_rebind(entry, target)
 
             if entry.status == "needs_reauth" do
-              Arca.VaultStorage.set_status(entry.org_id, entry.id, "active")
+              Arca.VaultStorage.set_status(entry.org_id, entry.project_id, entry.id, "active")
             end
 
             broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
@@ -341,7 +349,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   defp retry_grant(%{target: target} = pending, bundle) do
-    case Arca.VaultStorage.get(pending.org_id, target.entry_id) do
+    case Arca.VaultStorage.get(pending.org_id, pending.project_id, target.entry_id) do
       {:ok, entry} ->
         with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle) do
           aad =
@@ -349,7 +357,13 @@ defmodule Sanctum.Vault.OAuthGrant do
 
           {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
-          case Arca.VaultStorage.rotate_payload(entry.org_id, entry.id, entry.payload_rev, sealed) do
+          case Arca.VaultStorage.rotate_payload(
+                 entry.org_id,
+                 entry.project_id,
+                 entry.id,
+                 entry.payload_rev,
+                 sealed
+               ) do
             :ok ->
               rebound = maybe_rebind(entry, target)
               broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
@@ -415,13 +429,14 @@ defmodule Sanctum.Vault.OAuthGrant do
            :ok <-
              Arca.VaultStorage.update_binding(
                entry.org_id,
+               entry.project_id,
                entry.id,
                Map.put(changes, :binding_digest, digest)
              ),
            {:ok, affected} <-
              Arca.ConsentStorage.head_profiles_referencing(entry.org_id, entry.id) do
         Enum.each(affected, fn profile_id ->
-          Arca.ProfileStorage.set_status(entry.org_id, profile_id, "needs_consent")
+          Arca.ProfileStorage.set_status(entry.org_id, entry.project_id, profile_id, "needs_consent")
         end)
 
         true

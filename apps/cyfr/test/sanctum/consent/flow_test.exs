@@ -150,7 +150,7 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-via")
       {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.flow-via")
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, profile_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, profile_id)
       assert head.granted_via == "interactive"
       assert head.granted_by == ctx.user_id
     end
@@ -299,7 +299,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, %{affected: [^profile_id]}} =
         Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
 
-      {:ok, blocked} = Arca.ProfileStorage.get(ctx.org_id, profile_id)
+      {:ok, blocked} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id)
       assert blocked.status == "needs_consent"
 
       # Re-consenting with the rebound entry unblocks it.
@@ -308,7 +308,7 @@ defmodule Sanctum.Consent.FlowTest do
                  bindings: [%{need: "@ingress", entry_id: entry.id}]
                })
 
-      {:ok, unblocked} = Arca.ProfileStorage.get(ctx.org_id, profile_id)
+      {:ok, unblocked} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id)
       assert unblocked.status == "active"
     end
   end
@@ -345,7 +345,7 @@ defmodule Sanctum.Consent.FlowTest do
           expected_consent_revision: 0
         })
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, profile_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, profile_id)
       blob = Jason.decode!(head.resolved_policy)
 
       [grant] =
@@ -397,7 +397,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert {:ok, %{profile_id: public_id, revision: 1}} = publish_walk!(ctx, staged)
       refute public_id == owner_id
 
-      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.org_id, public_id)
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, public_id)
       assert head.scope == "pinned"
       assert head.pinned_version == "1.0.0"
       assert head.invoke_mode == "edge_only"
@@ -433,7 +433,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner_id})
       {:ok, %{profile_id: public_id}} = publish_walk!(ctx, staged)
 
-      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.org_id, public_id)
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, public_id)
       assert refs == []
 
       blob = Jason.decode!(head.resolved_policy)

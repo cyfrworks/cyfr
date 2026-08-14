@@ -86,14 +86,14 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id)
     assert profile.status == "revoked"
 
     # Consents are insert-only history — the revoked status is the gate.
     assert Arca.Repo.get(Arca.Schemas.Consent, consent.id)
 
     # Vault entries are the operator's and outlive the component.
-    assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(ctx.org_id, entry.id)
+    assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
   end
 
   test "a webhook pointed at the removed component is disabled", %{ctx: ctx} do
@@ -126,7 +126,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-multi", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id)
     assert profile.status == "active"
   end
 
@@ -137,7 +137,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-a", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, other_id)
+    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, other_id)
     assert profile.status == "active"
   end
 end

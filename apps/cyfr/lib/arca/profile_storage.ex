@@ -31,11 +31,12 @@ defmodule Arca.ProfileStorage do
       {:error, :database_error}
   end
 
-  @spec get(String.t(), String.t()) :: {:ok, Profile.t()} | {:error, :not_found}
-  def get(org_id, id) do
+  @spec get(String.t(), String.t(), String.t()) :: {:ok, Profile.t()} | {:error, :not_found}
+  def get(org_id, project_id, id) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
-    case Arca.Repo.get_by(Profile, id: id, org_id: org_id) do
+    case Arca.Repo.get_by(Profile, id: id, org_id: org_id, project_id: project_id) do
       nil -> {:error, :not_found}
       profile -> {:ok, profile}
     end
@@ -68,12 +69,15 @@ defmodule Arca.ProfileStorage do
       {:error, :database_error}
   end
 
-  @spec set_status(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def set_status(org_id, id, status) when is_binary(status) do
+  @spec set_status(String.t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def set_status(org_id, project_id, id, status) when is_binary(status) do
     org_id = QueryHelpers.normalize_org_id(org_id)
+    project_id = QueryHelpers.normalize_project_id(project_id)
 
     case Arca.Repo.update_all(
-           from(p in Profile, where: p.id == ^id and p.org_id == ^org_id),
+           from(p in Profile,
+             where: p.id == ^id and p.org_id == ^org_id and p.project_id == ^project_id
+           ),
            set: [status: status, updated_at: DateTime.utc_now()]
          ) do
       {1, _} -> :ok
@@ -90,6 +94,10 @@ defmodule Arca.ProfileStorage do
   only when the stored head still equals `expected` (or is NULL for the
   bootstrap revision) — a concurrent advance makes this return
   `{:error, :head_moved}` and the caller re-plans.
+
+  Org-scoped only by design: the sole caller is the consent-commit
+  transaction, which fetched the profile project-scoped moments earlier in
+  the same flow — the id is already tenant-verified when it reaches here.
   """
   @spec advance_head(String.t(), String.t(), String.t() | nil, String.t()) ::
           :ok | {:error, :head_moved | term()}

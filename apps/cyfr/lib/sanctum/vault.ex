@@ -106,7 +106,10 @@ defmodule Sanctum.Vault do
 
       with {:ok, entry} <- Arca.VaultStorage.put(attrs),
            {:ok, digest} <- VaultReader.binding_digest(entry),
-           :ok <- Arca.VaultStorage.update_binding(ctx.org_id, id, %{binding_digest: digest}) do
+           :ok <-
+           Arca.VaultStorage.update_binding(ctx.org_id, ctx.project_id, id, %{
+             binding_digest: digest
+           }) do
         broadcast(ctx, id, :create)
         {:ok, view(%{entry | binding_digest: digest})}
       end
@@ -123,7 +126,7 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_living(ctx, id),
          :ok <- check_name_free(ctx, new_name) do
-      Arca.VaultStorage.update_meta(ctx.org_id, id, %{name: new_name})
+      Arca.VaultStorage.update_meta(ctx.org_id, ctx.project_id, id, %{name: new_name})
     end
   end
 
@@ -152,10 +155,10 @@ defmodule Sanctum.Vault do
       aad = CipherAAD.vault_entry(ctx.org_id, entry.project_id, entry.id, entry.provider_hint)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
-      case Arca.VaultStorage.rotate_payload(ctx.org_id, id, expected, sealed) do
+      case Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, id, expected, sealed) do
         :ok ->
           if entry.status == "needs_reauth" do
-            Arca.VaultStorage.set_status(ctx.org_id, id, "active")
+            Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, id, "active")
           end
 
           broadcast(ctx, id, :rotate)
@@ -198,13 +201,14 @@ defmodule Sanctum.Vault do
              :ok <-
                Arca.VaultStorage.update_binding(
                  ctx.org_id,
+                 ctx.project_id,
                  id,
                  Map.put(changes, :binding_digest, digest)
                ),
              {:ok, affected} <-
                Arca.ConsentStorage.head_profiles_referencing(ctx.org_id, id) do
           Enum.each(affected, fn profile_id ->
-            Arca.ProfileStorage.set_status(ctx.org_id, profile_id, "needs_consent")
+            Arca.ProfileStorage.set_status(ctx.org_id, ctx.project_id, profile_id, "needs_consent")
           end)
 
           broadcast(ctx, id, :rebind)
@@ -227,7 +231,7 @@ defmodule Sanctum.Vault do
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_living(ctx, id),
-         :ok <- Arca.VaultStorage.set_status(ctx.org_id, id, "revoked"),
+         :ok <- Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, id, "revoked"),
          {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(ctx.org_id, id) do
       broadcast(ctx, id, :revoke)
       {:ok, %{affected: Enum.sort(affected)}}
@@ -239,7 +243,7 @@ defmodule Sanctum.Vault do
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_any(ctx, id),
-         :ok <- Arca.VaultStorage.tombstone(ctx.org_id, id) do
+         :ok <- Arca.VaultStorage.tombstone(ctx.org_id, ctx.project_id, id) do
       broadcast(ctx, id, :delete)
       :ok
     end
@@ -279,7 +283,7 @@ defmodule Sanctum.Vault do
     end
   end
 
-  defp get_any(ctx, id), do: Arca.VaultStorage.get(ctx.org_id, id)
+  defp get_any(ctx, id), do: Arca.VaultStorage.get(ctx.org_id, ctx.project_id, id)
 
   defp get_living(ctx, id) do
     case get_any(ctx, id) do

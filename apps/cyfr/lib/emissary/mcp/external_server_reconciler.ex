@@ -119,7 +119,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   defp reconcile(org_id, project_id, entry_id) do
     ctx = Sanctum.Context.internal(org_id: org_id, project_id: project_id, scope: :project)
 
-    case Arca.VaultStorage.get(org_id, entry_id) do
+    case Arca.VaultStorage.get(org_id, project_id, entry_id) do
       {:ok, entry} ->
         with {:ok, servers} <- Arca.McpServerStorage.list(ctx) do
           stop_affected(servers, entry, org_id, project_id, entry_id, ctx)

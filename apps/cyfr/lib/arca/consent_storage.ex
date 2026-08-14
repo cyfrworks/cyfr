@@ -124,12 +124,12 @@ defmodule Arca.ConsentStorage do
   defp insert_refs(rows), do: Arca.Repo.insert_all(ConsentVaultRef, rows)
 
   @doc "The head consent revision of a profile, with its vault refs."
-  @spec get_head(String.t(), String.t()) ::
+  @spec get_head(String.t(), String.t(), String.t()) ::
           {:ok, Consent.t(), [ConsentVaultRef.t()]} | {:error, :not_found | :no_head | term()}
-  def get_head(org_id, profile_id) do
+  def get_head(org_id, project_id, profile_id) do
     org_id = QueryHelpers.normalize_org_id(org_id)
 
-    with {:ok, profile} <- Arca.ProfileStorage.get(org_id, profile_id),
+    with {:ok, profile} <- Arca.ProfileStorage.get(org_id, project_id, profile_id),
          head_id when is_binary(head_id) <- profile.head_consent_id || {:error, :no_head},
          %Consent{} = consent <- Arca.Repo.get_by(Consent, id: head_id, org_id: org_id) do
       refs =

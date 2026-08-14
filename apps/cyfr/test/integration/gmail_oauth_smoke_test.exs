@@ -293,7 +293,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     refute rendered =~ "sealed_payload"
 
     # And the sealed column really is sealed.
-    {:ok, row} = Arca.VaultStorage.get(ctx.org_id, entry.id)
+    {:ok, row} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
     refute row.sealed_payload =~ "ya29.super-secret"
 
     aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, entry.id, @provider)

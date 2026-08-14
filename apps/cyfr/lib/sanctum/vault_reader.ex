@@ -104,7 +104,7 @@ defmodule Sanctum.VaultReader do
     with {:ok, entry} <- Arca.VaultStorage.get_by_name(org_id, project_id, name),
          :ok <- check_status(entry),
          {:ok, %{"v" => 2, "fields" => fields}} <- unseal_material(org_id, entry) do
-      Arca.VaultStorage.touch_last_used(org_id, entry.id)
+      Arca.VaultStorage.touch_last_used(org_id, project_id, entry.id)
       {:ok, fields}
     else
       {:error, reason} -> {:error, reason}
@@ -135,11 +135,11 @@ defmodule Sanctum.VaultReader do
   defp load_and_unseal(%Context{anonymous: true}, _resource), do: {:error, :anonymous_denied}
 
   defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource) do
-    with {:ok, entry} <- Arca.VaultStorage.get(ctx.org_id, entry_id),
+    with {:ok, entry} <- Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry_id),
          :ok <- check_status(entry),
          :ok <- check_binding(entry, resource),
          {:ok, payload} <- unseal(ctx, entry) do
-      Arca.VaultStorage.touch_last_used(ctx.org_id, entry.id)
+      Arca.VaultStorage.touch_last_used(ctx.org_id, ctx.project_id, entry.id)
       {:ok, entry, payload}
     end
   end

@@ -215,8 +215,37 @@ defmodule MultiTenantIsolationTest do
 
       # Storage-level get is org-scoped: tenant_b's entry id is invisible
       # through tenant_a's org.
-      assert {:error, :not_found} = Arca.VaultStorage.get(ctx_a.org_id, b_only.id)
-      assert {:ok, _} = Arca.VaultStorage.get(ctx_b.org_id, b_only.id)
+      assert {:error, :not_found} = Arca.VaultStorage.get(ctx_a.org_id, ctx_a.project_id, b_only.id)
+      assert {:ok, _} = Arca.VaultStorage.get(ctx_b.org_id, ctx_b.project_id, b_only.id)
+    end
+
+    test "a project-scoped caller cannot reach a sibling project's entry by id",
+         %{a: ctx_a} do
+      ctx_p2 = %{ctx_a | project_id: "sibling"}
+      {:ok, p2_entry} = Sanctum.Vault.create(ctx_p2, %{name: "p2-cred", kind: "api_key"})
+
+      # Same org, different project: the id must not resolve through any
+      # Sanctum.Vault verb — read, rename, revoke, rotate or delete.
+      assert {:error, :not_found} = Sanctum.Vault.rename(ctx_a, p2_entry.id, "stolen")
+      assert {:error, :not_found} = Sanctum.Vault.revoke(ctx_a, p2_entry.id)
+      assert {:error, :not_found} = Sanctum.Vault.delete(ctx_a, p2_entry.id)
+
+      assert {:error, _} =
+               Sanctum.Vault.rotate(ctx_a, %{
+                 id: p2_entry.id,
+                 fields: %{"k" => "v"},
+                 expected_payload_rev: 0
+               })
+
+      # And the consent walk cannot bind it: the commit-side entry fetch is
+      # project-scoped too.
+      assert {:error, :not_found} =
+               Arca.VaultStorage.get(ctx_a.org_id, ctx_a.project_id, p2_entry.id)
+
+      # The owner project still sees it untouched.
+      assert {:ok, row} = Arca.VaultStorage.get(ctx_p2.org_id, "sibling", p2_entry.id)
+      assert row.status == "active"
+      assert row.name == "p2-cred"
     end
   end
 

@@ -147,7 +147,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
                  key_capability: capability
                )
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, committed.profile_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, committed.profile_id)
       assert head.granted_via == "scoped_key"
     end
 

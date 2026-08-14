@@ -31,7 +31,7 @@ defmodule Sanctum.VaultTest do
   end
 
   defp resource_for(ctx, id) do
-    {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, id)
+    {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, id)
     {:ok, digest} = VaultReader.binding_digest(entry)
     %{entry_id: id, binding_digest: digest}
   end
@@ -162,12 +162,12 @@ defmodule Sanctum.VaultTest do
 
     test "rotating a needs_reauth entry reactivates it", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "v"}})
-      :ok = Arca.VaultStorage.set_status(ctx.org_id, view.id, "needs_reauth")
+      :ok = Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, view.id, "needs_reauth")
 
       assert {:ok, 1} =
                Vault.rotate(ctx, %{id: view.id, fields: %{"key" => "v2"}, expected_payload_rev: 0})
 
-      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, view.id)
+      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
       assert entry.status == "active"
     end
 
@@ -216,7 +216,7 @@ defmodule Sanctum.VaultTest do
       # The old consent's digest no longer verifies.
       assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, old_resource)
 
-      {:ok, reloaded} = Arca.ProfileStorage.get(ctx.org_id, profile.id)
+      {:ok, reloaded} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile.id)
       assert reloaded.status == "needs_consent"
     end
 
@@ -245,7 +245,7 @@ defmodule Sanctum.VaultTest do
 
       assert :ok = Vault.delete(ctx, view.id)
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.org_id, view.id)
+      {:ok, row} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
       assert row.status == "tombstoned"
       assert row.sealed_payload == nil
 

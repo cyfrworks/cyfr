@@ -30,7 +30,7 @@ defmodule Sanctum.Consent.Source.DB do
 
   @impl Sanctum.Consent.Source
   def head_consent(%Context{} = ctx, profile_id) do
-    with {:ok, consent, refs} <- Arca.ConsentStorage.get_head(ctx.org_id, profile_id) do
+    with {:ok, consent, refs} <- Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, profile_id) do
       decode_consent(consent, refs)
     end
   end

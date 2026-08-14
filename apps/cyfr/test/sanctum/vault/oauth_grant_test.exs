@@ -111,8 +111,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end)
   end
 
-  defp unseal!(entry_id, org_id) do
-    {:ok, entry} = Arca.VaultStorage.get(org_id, entry_id)
+  defp unseal!(entry_id, org_id, project_id \\ "default") do
+    {:ok, entry} = Arca.VaultStorage.get(org_id, project_id, entry_id)
     aad = CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
     {:ok, plaintext} = Sanctum.Cipher.decrypt(entry.sealed_payload, aad)
     {:ok, payload} = Payload.decode(plaintext)
@@ -286,8 +286,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           oauth_scopes: @scopes
         })
 
-      :ok = Arca.VaultStorage.set_status(ctx.org_id, view.id, "needs_reauth")
-      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, view.id)
+      :ok = Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, view.id, "needs_reauth")
+      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
       digest_before = entry.binding_digest
 
       stub_token_endpoint(bypass, %{"access_token" => "at-2", "refresh_token" => "rt-2"})
@@ -345,7 +345,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           expected_consent_revision: plan.expected_consent_revision
         })
 
-      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, view.id)
+      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
       digest_before = entry.binding_digest
 
       stub_token_endpoint(bypass, %{"access_token" => "at-3"})
@@ -356,7 +356,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert {:ok, %{rebound: true}} =
                OAuthGrant.complete(state, "code-3", pending.redirect_uri)
 
-      {:ok, after_entry} = Arca.VaultStorage.get(ctx.org_id, view.id)
+      {:ok, after_entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
       assert after_entry.binding_digest != digest_before
       assert Jason.decode!(after_entry.oauth_scopes) |> Enum.sort() == Enum.sort(wider)
 
