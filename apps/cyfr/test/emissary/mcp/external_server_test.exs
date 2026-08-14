@@ -269,4 +269,23 @@ defmodule Emissary.MCP.ExternalServerTest do
       assert is_binary(reason)
     end
   end
+
+  describe "crash-report redaction" do
+    # OTP prints `inspect(state)` in every GenServer crash/exit report. The
+    # state holds resolved plaintext credentials in `headers` (and possibly
+    # inline ones in `raw_headers`), so both must be invisible to Inspect.
+    test "inspect(state) never shows header values" do
+      state = %ExternalServer.State{
+        name: "leaky",
+        url: "https://mcp.example.com",
+        raw_headers: %{"authorization" => "vault:github-token"},
+        headers: %{"authorization" => "Bearer ghp_plaintext_credential"}
+      }
+
+      rendered = inspect(state)
+      refute rendered =~ "ghp_plaintext_credential"
+      refute rendered =~ "vault:github-token"
+      assert rendered =~ "leaky"
+    end
+  end
 end

@@ -116,26 +116,45 @@ defmodule Emissary.MCP.ExternalServer do
   # GenServer Callbacks
   # ============================================================================
 
+  defmodule State do
+    @moduledoc false
+    # `headers` holds RESOLVED credential values (vault references already
+    # unsealed to plaintext) and `raw_headers` may carry inline ones. OTP
+    # prints `inspect(state)` in every GenServer crash/exit report, so both
+    # are excluded from Inspect — a crashed call must not write bearer
+    # tokens into the log stream.
+    @derive {Inspect, except: [:headers, :raw_headers]}
+    defstruct [
+      :name,
+      :url,
+      :timeout_ms,
+      :org_id,
+      :project_id,
+      :server_info,
+      :error,
+      :last_init_attempt,
+      # Which era this peer speaks. Determined once per connection and
+      # cached: it is a property of the server, not of a request, and
+      # re-probing on every call would double the traffic to a legacy peer
+      # forever.
+      :era,
+      raw_headers: %{},
+      headers: %{},
+      status: :disconnected,
+      tools: [],
+      request_id: 0
+    ]
+  end
+
   @impl true
   def init(config) do
-    state = %{
+    state = %State{
       name: config[:name],
       url: config[:url],
       raw_headers: config[:headers] || %{},
-      headers: %{},
       timeout_ms: config[:timeout_ms] || @default_timeout_ms,
       org_id: Arca.QueryHelpers.normalize_org_id(config[:org_id]),
-      project_id: Arca.QueryHelpers.normalize_project_id(config[:project_id]),
-      status: :disconnected,
-      tools: [],
-      server_info: nil,
-      request_id: 0,
-      error: nil,
-      last_init_attempt: nil,
-      # Which era this peer speaks. Determined once per connection and cached:
-      # it is a property of the server, not of a request, and re-probing on
-      # every call would double the traffic to a legacy peer forever.
-      era: nil
+      project_id: Arca.QueryHelpers.normalize_project_id(config[:project_id])
     }
 
     {:ok, state}
