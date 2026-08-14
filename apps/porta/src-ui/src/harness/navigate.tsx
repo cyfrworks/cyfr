@@ -9,7 +9,7 @@ let _path = "/";
  * function and the current path to non-React callers (the intent dispatcher
  * and the porta-context snapshot). Returns null.
  */
-export function NavigatorShim() {
+export function NavigatorBridge() {
   const nav = useNavigate();
   const location = useLocation();
 
@@ -28,7 +28,7 @@ export function NavigatorShim() {
 }
 
 /**
- * Navigate to a path from outside the React tree. No-op until <NavigatorShim />
+ * Navigate to a path from outside the React tree. No-op until <NavigatorBridge />
  * has mounted. Paths should already be validated by the caller (the intent
  * parser enforces an allowlist).
  */

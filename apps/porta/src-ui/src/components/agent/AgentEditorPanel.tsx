@@ -17,7 +17,7 @@ export function AgentEditorPanel({ onClose }: { onClose: () => void }) {
   // Always reload agents and providers when the modal opens (matches LiveView behavior)
   useEffect(() => {
     const { providers: provs } = useProviderStore.getState();
-    const hasAny = provs.some((p) => p.ready || p.secretSet);
+    const hasAny = provs.some((p) => p.ready || p.configured);
     if (!hasAny) useProviderStore.getState().loadAll();
 
     (async () => {

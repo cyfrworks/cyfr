@@ -3,7 +3,7 @@
  *
  * Errors can arrive as:
  *   - JSON strings: {"message":"...", "type":"dispatch_error"}
- *   - Structured messages with CLI hints: "Failed to resolve 1 secret(s) for ... Grant access with: cyfr secret grant ..."
+ *   - Structured host errors: "access-denied: NAME not granted to REF"
  *   - Plain text from stderr
  */
 
@@ -11,7 +11,7 @@ interface ParsedError {
   /** User-friendly message */
   message: string;
   /** Error category for conditional UI (e.g. showing a "Set up" action) */
-  kind: "secret_missing" | "secret_not_granted" | "auth" | "not_found" | "generic";
+  kind: "credential_not_granted" | "auth" | "generic";
 }
 
 /** Known error patterns mapped to friendly messages and kinds */
@@ -26,28 +26,10 @@ const PATTERNS: {
   rewrite: (match: RegExpMatchArray) => string;
 }[] = [
   {
-    // "Failed to resolve N secret(s) for <ref>: SECRET_NAME. Grant access with: ..."
-    test: /Failed to resolve \d+ secret\(s\) for [^:]+:[^:]+:\S+:\s*(\S+)/,
-    kind: "secret_not_granted",
-    rewrite: (m) => `${g(m, 1)} is not configured. Add your API key to enable this provider.`,
-  },
-  {
-    // "Secret 'NAME' not granted to component 'REF'. Grant with: ..."
-    test: /Secret '([^']+)' not granted to component '([^']+)'/,
-    kind: "secret_not_granted",
-    rewrite: (m) => `${g(m, 1)} not granted to ${shortRef(g(m, 2))}.`,
-  },
-  {
-    // "access-denied: NAME not granted to REF"
+    // Vault read denial from the host: "access-denied: NAME not granted to REF"
     test: /access-denied:\s*(\S+) not granted to (\S+)/,
-    kind: "secret_not_granted",
+    kind: "credential_not_granted",
     rewrite: (m) => `${g(m, 1)} not granted to ${shortRef(g(m, 2))}.`,
-  },
-  {
-    // "Secret not found: NAME"
-    test: /Secret not found:\s*(\S+)/,
-    kind: "secret_missing",
-    rewrite: (m) => `${g(m, 1)} is not set. Add your API key to enable this provider.`,
   },
   {
     // Session / auth errors
@@ -59,24 +41,6 @@ const PATTERNS: {
     test: /[Nn]ot logged in|[Aa]uthentication required/,
     kind: "auth",
     rewrite: () => "Not logged in. Please log in to continue.",
-  },
-  {
-    // "Policy not found: REF"
-    test: /Policy not found:\s*(\S+)/,
-    kind: "not_found",
-    rewrite: (m) => `Policy not found for ${shortRef(g(m, 1))}.`,
-  },
-  {
-    // "'REF' has no capabilities configured"
-    test: /'([^']+)' has no capabilities configured/,
-    kind: "secret_missing",
-    rewrite: (m) => `${shortRef(g(m, 1))} needs to be set up before use.`,
-  },
-  {
-    // "'REF' has no allowed_domains configured"
-    test: /'([^']+)' has no allowed_domains configured/,
-    kind: "secret_missing",
-    rewrite: (m) => `${shortRef(g(m, 1))} has no allowed domains configured.`,
   },
 ];
 

@@ -3,7 +3,7 @@ import { useAgentStore, type Message, type Segment } from "../../state/agent-sto
 import { Markdown } from "../common/Markdown";
 import { ToolActivityCard } from "./ToolActivityCard";
 import { ErrorMessage } from "./ErrorMessage";
-import { stripPortaActionBlocks } from "../../harness/porta-actions-parser";
+import { stripPortaActionBlocks } from "../../harness/aqua-actions-parser";
 
 export function MessageList() {
   const [, forceRender] = useState(0);

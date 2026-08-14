@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useConnectionStore } from "./state/connection-store";
 import { useAuthStore } from "./state/auth-store";
-import { useOverlayStore } from "./state/overlay-store";
 import { useProjectStore } from "./state/project-store";
 import LoginPage from "./pages/LoginPage";
 import ClaimNamespacePage from "./pages/ClaimNamespacePage";
@@ -14,20 +13,6 @@ import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
 import TincturesPage from "./pages/TincturesPage";
 import * as cyfrMcp from "./api/cyfr-mcp";
-
-/**
- * Deep-link `/ask` now maps to "open the overlay to full." It redirects to
- * the Apps page underneath so the user lands on a real view when they close.
- */
-function AskRedirect() {
-  const open = useOverlayStore((s) => s.open);
-  const focusInput = useOverlayStore((s) => s.focusInput);
-  useEffect(() => {
-    open("full");
-    focusInput();
-  }, [open, focusInput]);
-  return <Navigate to="/tinctures" replace />;
-}
 
 export default function App() {
   const getMcpClient = useConnectionStore((s) => s.getMcpClient);
@@ -218,18 +203,11 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/tinctures" replace />} />
-        {/* /ask is kept for backwards-compat and deep-linking; it opens the
-            AQUA overlay to full and lands the user on the Apps page. */}
-        <Route path="/ask" element={<AskRedirect />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/components" element={<ComponentsPage />} />
         <Route path="/tinctures" element={<TincturesPage />} />
         <Route path="/mcp-servers" element={<McpServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        {/* Redirects from old routes */}
-        <Route path="/tasks" element={<Navigate to="/schedules" replace />} />
-        <Route path="/integrations" element={<Navigate to="/components" replace />} />
-        <Route path="/activity" element={<Navigate to="/mcp-servers" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/tinctures" replace />} />
     </Routes>

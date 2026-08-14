@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useActivityStore, type ActivityEntry } from "../../state/activity-store";
-import type { Intent } from "../../harness/porta-actions-parser";
+import type { Intent } from "../../harness/aqua-actions-parser";
 
 /**
  * Small collapsible button in the sidebar that surfaces what the shell has

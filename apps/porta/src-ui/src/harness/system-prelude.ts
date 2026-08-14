@@ -8,7 +8,7 @@ import type { PortaContext } from "../state/porta-context-store";
  * via {@link buildPortaContextBlock} so it doesn't invalidate the cached
  * prefix on every turn.
  */
-export const TEXT_INTENT_PRELUDE = `
+const TEXT_INTENT_PRELUDE = `
 
 ---
 
@@ -18,7 +18,7 @@ You are running inside Porta, a desktop assistant shell. When you want to
 change the user's view, open an app, or copy something to the clipboard,
 emit a fenced block at the end of your reply:
 
-\`\`\`porta-actions
+\`\`\`aqua-actions
 [
   {"kind": "ui.tincture.open", "publisher": "local", "name": "weather-dashboard"}
 ]

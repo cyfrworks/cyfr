@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Intent } from "../harness/porta-actions-parser";
+import type { Intent } from "../harness/aqua-actions-parser";
 
 /**
  * Activity lane records: every dispatched intent, failed dispatch, and

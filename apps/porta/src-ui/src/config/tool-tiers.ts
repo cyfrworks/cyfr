@@ -11,7 +11,7 @@
  *   tier3 — External or irreversible (approval card, high risk)
  *
  * Cyfr's MCP convention puts the sub-action in `args.action` (e.g.
- * `client.callTool("policy", { action: "set", ... })`), so tier entries are
+ * `client.callTool("vault", { action: "list" })`), so tier entries are
  * (tool name, optional action) pairs. Omitting `action` matches any action
  * on that tool.
  *

@@ -12,35 +12,30 @@ const PROVIDERS = [
     key: "claude",
     label: "Claude",
     catalystRef: "catalyst:moonmoon69.claude:1.0.0",
-    secretName: "ANTHROPIC_API_KEY",
     keyUrl: "https://console.anthropic.com/settings/keys",
   },
   {
     key: "openai",
     label: "OpenAI",
     catalystRef: "catalyst:moonmoon69.openai:1.0.0",
-    secretName: "OPENAI_API_KEY",
     keyUrl: "https://platform.openai.com/api-keys",
   },
   {
     key: "gemini",
     label: "Gemini",
     catalystRef: "catalyst:moonmoon69.gemini:1.0.0",
-    secretName: "GEMINI_API_KEY",
     keyUrl: "https://aistudio.google.com/apikey",
   },
   {
     key: "grok",
     label: "Grok",
     catalystRef: "catalyst:moonmoon69.grok:1.0.0",
-    secretName: "GROK_API_KEY",
     keyUrl: "https://console.x.ai",
   },
   {
     key: "openrouter",
     label: "OpenRouter",
     catalystRef: "catalyst:moonmoon69.openrouter:1.0.0",
-    secretName: "OPENROUTER_API_KEY",
     keyUrl: "https://openrouter.ai/keys",
   },
 ] as const;
@@ -51,45 +46,51 @@ export interface ProviderInfo {
   key: ProviderKey;
   label: string;
   catalystRef: string;
-  secretName: string;
   keyUrl: string;
+  /** The provider's consent is bound and live (server `setup_plan.ready`). */
+  configured: boolean;
+  /** A configured provider that also answered `list-models`. */
   ready: boolean;
-  secretSet: boolean;
   models: string[];
   error: string | null;
-  loading: boolean;
 }
 
 export interface ProviderState {
   providers: ProviderInfo[];
   loading: boolean;
   registering: boolean;
+  /** Load-level failure surfaced to the UI — never swallowed. */
+  error: string | null;
 
   loadAll: () => Promise<void>;
-  setupProvider: (key: ProviderKey, apiKey: string) => Promise<void>;
-  removeProvider: (key: ProviderKey) => Promise<void>;
 }
 
+/**
+ * Read-only provider status. Granting an API key is a consent decision made
+ * in the Prism console (Connections + the consent sheet); Porta reports each
+ * provider's `setup_plan` state and the models it serves once bound.
+ */
 export const useProviderStore = create<ProviderState>((set, get) => ({
   providers: PROVIDERS.map((p) => ({
     ...p,
+    configured: false,
     ready: false,
-    secretSet: false,
     models: [],
     error: null,
-    loading: false,
   })),
   loading: false,
   registering: false,
+  error: null,
 
   loadAll: async () => {
-    set({ loading: true });
+    set({ loading: true, error: null });
 
     try {
       const client = await getClient();
       const mode = useConnectionStore.getState().mode;
 
-      // Check if catalysts are registered (skip register in remote mode)
+      // Check the provider catalysts are registered (skip register in remote
+      // mode — registration scans the server's local components tree).
       try {
         const listResult = await cyfrMcp.listComponents(client, "catalyst");
         const components = (listResult.components as Record<string, unknown>[]) ?? [];
@@ -101,30 +102,33 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
           await cyfrMcp.registerComponents(client);
           set({ registering: false });
         }
-      } catch {
-        // Registration may fail — continue
-        set({ registering: false });
+      } catch (e) {
+        set({ registering: false, error: friendlyError(e) });
       }
 
-      // Check which secrets exist
-      const existingSecrets = new Set<string>();
-      try {
-        const secretResult = await cyfrMcp.listSecrets(client);
-        const secrets = (secretResult.secrets as string[]) ?? [];
-        for (const s of secrets) existingSecrets.add(s);
-      } catch {
-        // May need auth — continue with empty set
-      }
+      // Configured-state per provider from the server's setup plan.
+      const configured = new Map<ProviderKey, boolean>();
+      await Promise.all(
+        PROVIDERS.map(async (p) => {
+          try {
+            const plan = (await cyfrMcp.setupPlan(client, p.catalystRef)) as {
+              ready?: boolean;
+            };
+            configured.set(p.key, plan?.ready === true);
+          } catch {
+            configured.set(p.key, false);
+          }
+        }),
+      );
 
-      // Update secret status
       set({
         providers: get().providers.map((p) => ({
           ...p,
-          secretSet: existingSecrets.has(p.secretName),
+          configured: configured.get(p.key) ?? false,
         })),
       });
 
-      // Load models via list-models formula
+      // Load models via the list-models formula.
       try {
         const modelsResult = await cyfrMcp.runComponent(
           client,
@@ -160,8 +164,8 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
           providers: get().providers.map((p) => {
             const models = modelsMap[p.key] ?? [];
             const rawError = errorsMap[p.key] ?? null;
-            // Don't show errors for providers without a key — that's expected
-            const error = rawError && p.secretSet ? friendlyError(rawError) : null;
+            // Errors for unconfigured providers are expected — not surfaced.
+            const error = rawError && p.configured ? friendlyError(rawError) : null;
             const ref = refsMap[p.key] ?? p.catalystRef;
             return {
               ...p,
@@ -172,120 +176,13 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
             };
           }),
         });
-      } catch {
-        // Model loading failed — providers show based on secret status only
+      } catch (e) {
+        set({ error: friendlyError(e) });
       }
-    } catch {
-      // Top-level failure
+    } catch (e) {
+      set({ error: friendlyError(e) });
     }
 
     set({ loading: false });
-  },
-
-  setupProvider: async (key, apiKey) => {
-    const provider = get().providers.find((p) => p.key === key);
-    if (!provider) return;
-
-    set({
-      providers: get().providers.map((p) =>
-        p.key === key ? { ...p, loading: true, error: null } : p,
-      ),
-    });
-
-    try {
-      const client = await getClient();
-
-      // Step 1: Set secret
-      await cyfrMcp.setSecret(client, provider.secretName, apiKey);
-
-      // Step 2: Grant secret to catalyst (name-level, covers all versions)
-      const nameRef = provider.catalystRef.replace(/:[^:]+$/, "");
-      await cyfrMcp.grantSecret(client, nameRef, provider.secretName);
-
-      // Step 3: Mark as set, try to load models
-      set({
-        providers: get().providers.map((p) =>
-          p.key === key ? { ...p, secretSet: true } : p,
-        ),
-      });
-
-      // Step 4: Load models for this provider
-      try {
-        const modelsResult = await cyfrMcp.runComponent(
-          client,
-          "formula:local.list-models",
-          { providers: [key] },
-        );
-
-        const result = (modelsResult.result ?? modelsResult) as Record<string, unknown>;
-        const rawModels = (result.models ?? {}) as Record<string, unknown>;
-        const errorsMap = (result.errors ?? {}) as Record<string, string>;
-        const providerData = rawModels[key] as Record<string, unknown> | undefined;
-        let models: string[] = [];
-        if (providerData) {
-          if (key === "gemini") {
-            const list = (providerData.models ?? []) as Record<string, unknown>[];
-            models = list
-              .map((m) => ((m.name ?? "") as string).replace(/^models\//, ""))
-              .filter((id) => id !== "");
-          } else {
-            const list = (providerData.data ?? []) as Record<string, unknown>[];
-            models = list
-              .map((m) => (m.id ?? "") as string)
-              .filter((id) => id !== "");
-          }
-        }
-
-        const rawError = errorsMap[key] ?? null;
-        const error = rawError ? friendlyError(rawError) : null;
-
-        set({
-          providers: get().providers.map((p) =>
-            p.key === key
-              ? { ...p, models, error, ready: models.length > 0, loading: false }
-              : p,
-          ),
-        });
-      } catch {
-        // Mark as ready based on secret being set
-        set({
-          providers: get().providers.map((p) =>
-            p.key === key ? { ...p, ready: true, loading: false } : p,
-          ),
-        });
-      }
-    } catch (err) {
-      set({
-        providers: get().providers.map((p) =>
-          p.key === key
-            ? {
-                ...p,
-                loading: false,
-                error: friendlyError(err),
-              }
-            : p,
-        ),
-      });
-    }
-  },
-
-  removeProvider: async (key) => {
-    const provider = get().providers.find((p) => p.key === key);
-    if (!provider) return;
-
-    try {
-      const client = await getClient();
-      await cyfrMcp.deleteSecret(client, provider.secretName);
-    } catch {
-      // Best-effort
-    }
-
-    set({
-      providers: get().providers.map((p) =>
-        p.key === key
-          ? { ...p, ready: false, secretSet: false, models: [], error: null }
-          : p,
-      ),
-    });
   },
 }));

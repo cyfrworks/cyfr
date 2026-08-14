@@ -3,7 +3,7 @@
 
 defmodule Prism.AquaActionsConsistencyTest do
   # `Prism.AquaActions` (Elixir, drives the Prism console) is a port of
-  # `apps/porta/src-ui/src/harness/porta-actions-parser.ts` (drives the Porta
+  # `apps/porta/src-ui/src/harness/aqua-actions-parser.ts` (drives the Porta
   # PWA). The two frontends have different views, so surface-specific actions
   # legitimately differ — Prism has execution/activity focus, Porta has tincture
   # open/close. What must NOT drift is the shared protocol core: the primitives
@@ -15,7 +15,7 @@ defmodule Prism.AquaActionsConsistencyTest do
 
   @parser_ts Path.join([
                __DIR__,
-               "../../../../apps/porta/src-ui/src/harness/porta-actions-parser.ts"
+               "../../../../apps/porta/src-ui/src/harness/aqua-actions-parser.ts"
              ])
 
   # Protocol primitives both surfaces must interpret identically.
@@ -47,7 +47,7 @@ defmodule Prism.AquaActionsConsistencyTest do
 
   defp assert_ts_present do
     assert File.exists?(@parser_ts),
-           "porta-actions-parser.ts not found at #{@parser_ts} — update the path"
+           "aqua-actions-parser.ts not found at #{@parser_ts} — update the path"
   end
 
   test "the Elixir parser handles every shared-core protocol kind" do
@@ -64,7 +64,7 @@ defmodule Prism.AquaActionsConsistencyTest do
 
     for core <- @shared_core do
       assert MapSet.member?(kinds, core),
-             "porta-actions-parser.ts dropped shared-core kind #{core}"
+             "aqua-actions-parser.ts dropped shared-core kind #{core}"
     end
   end
 

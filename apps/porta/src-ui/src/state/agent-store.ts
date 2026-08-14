@@ -14,7 +14,7 @@ import { useConnectionStore } from "./connection-store";
 import { friendlyError } from "../api/errors";
 import * as cyfrMcp from "../api/cyfr-mcp";
 import { buildSystemPrelude, buildPortaContextBlock } from "../harness/system-prelude";
-import { parsePortaActions } from "../harness/porta-actions-parser";
+import { parsePortaActions } from "../harness/aqua-actions-parser";
 import { dispatchIntents } from "../harness/intent-dispatcher";
 import { getPortaContext } from "./porta-context-store";
 import { useActivityStore } from "./activity-store";
@@ -193,7 +193,7 @@ function providerProgressLabel(catalystRef: string): string {
  * Parse a single @mention from a message targeting an orchestrator.
  * Returns { task: cleaned text, mentionName: matched name or null }
  */
-export function parseOrchestratorMention(
+function parseOrchestratorMention(
   message: string,
   orchestratorNames: string[],
 ): { task: string; mentionName: string | null } {
@@ -1097,7 +1097,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       ? Math.round((Date.now() - state.startedAt) / 1000)
       : 0;
 
-    // Parse any porta-actions block out of the completed message. Blocks are
+    // Parse any aqua-actions block out of the completed message. Blocks are
     // stripped from the displayed content; intents are dispatched fire-and-
     // forget after the state transition so the UI updates promptly.
     const parseResult = parsePortaActions(state.streamingText);

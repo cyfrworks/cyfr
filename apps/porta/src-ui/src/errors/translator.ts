@@ -60,12 +60,12 @@ const RULES: Rule[] = [
     }),
   },
 
-  // ── Missing/ungranted secret ──────────────────────────────────────────
+  // ── Ungranted credential (host vault-read denial) ─────────────────────
   {
-    test: /Secret '([^']+)' not granted to component '([^']+)'|access-denied:\s*(\S+) not granted to (\S+)|Failed to resolve \d+ secret\(s\) for ([^:]+:[^:]+:\S+):\s*(\S+)/,
+    test: /access-denied:\s*(\S+) not granted to (\S+)/,
     translate: (m, raw) => {
-      const secret = m[1] ?? m[3] ?? m[6] ?? "a credential";
-      const ref = m[2] ?? m[4] ?? m[5] ?? "";
+      const secret = m[1] ?? "a credential";
+      const ref = m[2] ?? "";
       return {
         title: "Credential needed",
         body: `${humanizeSecret(secret)} is required${ref ? ` for ${shortRef(ref)}` : ""}. Grant access to continue.`,
@@ -211,13 +211,10 @@ function extractText(raw: unknown): string {
 
 function titleFromKind(kind: string): string {
   switch (kind) {
-    case "secret_missing":
-    case "secret_not_granted":
+    case "credential_not_granted":
       return "Credential needed";
     case "auth":
       return "Sign-in required";
-    case "not_found":
-      return "Not found";
     default:
       return "Something went wrong";
   }
@@ -225,8 +222,7 @@ function titleFromKind(kind: string): string {
 
 function defaultActionsForKind(kind: string): ErrorAction[] {
   switch (kind) {
-    case "secret_missing":
-    case "secret_not_granted":
+    case "credential_not_granted":
       return [{ kind: "open_components", label: "Set up" }];
     case "auth":
       return [{ kind: "reconnect", label: "Sign in" }];

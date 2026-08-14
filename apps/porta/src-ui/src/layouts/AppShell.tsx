@@ -5,7 +5,7 @@ import { SetupFormHost } from "../components/agent/SetupFormHost";
 import { AquaOverlay } from "../components/overlay/AquaOverlay";
 import { ActivityLane } from "../components/activity/ActivityLane";
 import { ProjectSwitcher } from "../components/projects/ProjectSwitcher";
-import { NavigatorShim } from "../harness/navigator-shim";
+import { NavigatorBridge } from "../harness/navigate";
 import { label } from "../config/labels";
 
 interface NavItem {
@@ -110,7 +110,7 @@ export default function AppShell() {
 
       <AquaOverlay />
       <SetupFormHost />
-      <NavigatorShim />
+      <NavigatorBridge />
     </div>
   );
 }

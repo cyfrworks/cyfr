@@ -22,15 +22,19 @@ function titleFromName(name: string): string {
 }
 
 /** Canonical tincture path `/t/<org>/<project>/<publisher>/<name>` — the single
- *  source of truth for the tincture URL shape on the client. */
+ *  source of truth for the tincture URL shape on the client. Absent org/project
+ *  collapse to the seeded `local`/`default` sentinels, matching the server's
+ *  `Cyfr.TinctureHelpers.tincture_path/4` normalization. */
 export function tincturePath(
   org: string,
   project: string,
   publisher: string,
   name: string,
 ): string {
-  return `/t/${encodeURIComponent(org)}/${encodeURIComponent(
-    project,
+  const o = org || "local";
+  const p = project || "default";
+  return `/t/${encodeURIComponent(o)}/${encodeURIComponent(
+    p,
   )}/${encodeURIComponent(publisher)}/${encodeURIComponent(name)}`;
 }
 

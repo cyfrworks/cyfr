@@ -73,16 +73,6 @@ export function registryWhoami(client: McpClient): Promise<RegistryWhoami> {
   return client.callTool("registry", { action: "whoami" }) as unknown as Promise<RegistryWhoami>;
 }
 
-/**
- * @deprecated Since the whoami split, callers must fetch both
- * `sessionWhoami` and `registryWhoami` and merge in state. This helper
- * remains only as a call-site grep anchor; new code should use the split
- * functions directly.
- */
-export function whoami(client: McpClient): Promise<Json> {
-  return client.callTool("session", { action: "whoami" });
-}
-
 /** Claim the caller's one-time personal namespace on cyfr.run. */
 export function registryClaimPersonal(
   client: McpClient,
@@ -228,20 +218,6 @@ export function devicePoll(
 }
 
 // ===========================================================================
-// System
-// ===========================================================================
-
-/** `cyfr status` — service health for opus, sanctum, emissary, arca, compendium, registry. */
-export function systemStatus(client: McpClient, scope = "all"): Promise<Json> {
-  return client.callTool("system", { action: "status", scope });
-}
-
-/** `cyfr notify` — dispatch a webhook event. */
-export function notify(client: McpClient, event: string, target: string): Promise<Json> {
-  return client.callTool("system", { action: "notify", event, target });
-}
-
-// ===========================================================================
 // Components
 // ===========================================================================
 
@@ -250,14 +226,6 @@ export function listComponents(client: McpClient, type?: string): Promise<Json> 
   const args: Json = { action: "list" };
   if (type) args.type = type;
   return client.callTool("component", args);
-}
-
-/** `cyfr search <query>` — search the registry. */
-export function searchComponents(
-  client: McpClient,
-  query: string,
-): Promise<Json> {
-  return client.callTool("component", { action: "search", query });
 }
 
 /** `cyfr register` — scan components/ on the server and register them. */
@@ -270,15 +238,7 @@ export function registerComponents(
   return client.callTool("component", args);
 }
 
-/** `cyfr inspect <ref>` — full metadata, policy, dependency tree, README. */
-export function inspectComponent(
-  client: McpClient,
-  reference: string,
-): Promise<Json> {
-  return client.callTool("component", { action: "inspect", reference });
-}
-
-/** `cyfr setup <ref>` — fetch the recommended secrets, grants, and policy plan. */
+/** `cyfr setup <ref>` — fetch the component's needs/consent/ready state. */
 export function setupPlan(client: McpClient, reference: string): Promise<Json> {
   return client.callTool("component", {
     action: "setup_plan",
@@ -292,87 +252,6 @@ export function removeComponent(
   reference: string,
 ): Promise<Json> {
   return client.callTool("component", { action: "delete", reference });
-}
-
-// ===========================================================================
-// Policy
-// ===========================================================================
-
-/** `cyfr policy set <ref> <field> <value>` — update one policy field. */
-export function updatePolicyField(
-  client: McpClient,
-  componentRef: string,
-  field: string,
-  value: string,
-): Promise<Json> {
-  return client.callTool("policy", {
-    action: "patch",
-    component_ref: componentRef,
-    field,
-    value,
-  });
-}
-
-/** `cyfr policy show <ref>` — fetch the full policy doc. */
-export function getPolicy(
-  client: McpClient,
-  componentRef: string,
-): Promise<Json> {
-  return client.callTool("policy", { action: "get", component_ref: componentRef });
-}
-
-// ===========================================================================
-// Secrets
-// ===========================================================================
-
-/** `cyfr secret set NAME=VALUE` — store a secret server-side (encrypted). */
-export function setSecret(
-  client: McpClient,
-  name: string,
-  value: string,
-): Promise<Json> {
-  return client.callTool("secret", { action: "set", name, value });
-}
-
-/** `cyfr secret get NAME` — fetch a secret (server returns masked unless requested). */
-export function getSecret(client: McpClient, name: string): Promise<Json> {
-  return client.callTool("secret", { action: "get", name });
-}
-
-/** `cyfr secret list` — list all stored secret names. */
-export function listSecrets(client: McpClient): Promise<Json> {
-  return client.callTool("secret", { action: "list" });
-}
-
-/** `cyfr secret delete NAME` — remove a secret and all grants. */
-export function deleteSecret(client: McpClient, name: string): Promise<Json> {
-  return client.callTool("secret", { action: "delete", name });
-}
-
-/** `cyfr secret grant <ref> NAME` — allow a component to read the secret. */
-export function grantSecret(
-  client: McpClient,
-  componentRef: string,
-  name: string,
-): Promise<Json> {
-  return client.callTool("secret", {
-    action: "grant",
-    component_ref: componentRef,
-    name,
-  });
-}
-
-/** `cyfr secret revoke <ref> NAME` — revoke a component's access. */
-export function revokeSecret(
-  client: McpClient,
-  componentRef: string,
-  name: string,
-): Promise<Json> {
-  return client.callTool("secret", {
-    action: "revoke",
-    component_ref: componentRef,
-    name,
-  });
 }
 
 // ===========================================================================
@@ -390,11 +269,6 @@ export function runComponent(
   return client.callTool("execution", args);
 }
 
-/** `cyfr run --list` — list recent executions. */
-export function listExecutions(client: McpClient): Promise<Json> {
-  return client.callTool("execution", { action: "list" });
-}
-
 /** `cyfr run --logs <id>` — fetch logs for a specific execution. */
 export function getExecutionLogs(
   client: McpClient,
@@ -406,90 +280,3 @@ export function getExecutionLogs(
   });
 }
 
-/** `cyfr run --cancel <id>` — cancel a running execution. */
-export function cancelExecution(
-  client: McpClient,
-  executionId: string,
-): Promise<Json> {
-  return client.callTool("execution", {
-    action: "cancel",
-    execution_id: executionId,
-  });
-}
-
-// ===========================================================================
-// API keys
-// ===========================================================================
-
-/** `cyfr key create` — create a new API key. */
-export function createApiKey(
-  client: McpClient,
-  args: {
-    name: string;
-    type: "application" | "service" | "admin";
-    scope?: string[];
-    rate_limit?: string;
-    ip_allowlist?: string[];
-  },
-): Promise<Json> {
-  return client.callTool("key", { action: "create", ...args });
-}
-
-/** `cyfr key list` — list all API keys. */
-export function listApiKeys(client: McpClient): Promise<Json> {
-  return client.callTool("key", { action: "list" });
-}
-
-/** `cyfr key revoke <name>` — revoke an API key by name. */
-export function revokeApiKey(client: McpClient, name: string): Promise<Json> {
-  return client.callTool("key", { action: "revoke", name });
-}
-
-// ===========================================================================
-// OAuth
-// ===========================================================================
-
-/** Start OAuth authorization for a component+provider. */
-export function oauthAuthorize(
-  client: McpClient,
-  componentRef: string,
-  provider: string,
-): Promise<Json> {
-  return client.callTool("oauth", {
-    action: "authorize",
-    component_ref: componentRef,
-    provider,
-  });
-}
-
-// ===========================================================================
-// Tincture visibility
-// ===========================================================================
-
-/** Get a tincture's public/private visibility setting. */
-export function getTinctureVisibility(
-  client: McpClient,
-  publisher: string,
-  name: string,
-): Promise<Json> {
-  return client.callTool("tincture_visibility", {
-    action: "get",
-    publisher,
-    name,
-  });
-}
-
-/** Set a tincture's public/private visibility. */
-export function setTinctureVisibility(
-  client: McpClient,
-  publisher: string,
-  name: string,
-  isPublic: boolean,
-): Promise<Json> {
-  return client.callTool("tincture_visibility", {
-    action: "set",
-    publisher,
-    name,
-    public: isPublic,
-  });
-}

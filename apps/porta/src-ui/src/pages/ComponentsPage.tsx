@@ -14,48 +14,6 @@ async function getClient() {
   return useConnectionStore.getState().getMcpClient();
 }
 
-/**
- * Compatibility shim for the legacy `cyfr(["sub", "command", ...])` pattern.
- * Translates each command shape to the right cyfr-mcp call so the existing
- * call sites in this file don't need to be rewritten one by one.
- */
-async function cyfr(args: string[]): Promise<Record<string, unknown>> {
-  const client = await getClient();
-  const [head, ...rest] = args;
-
-  switch (head) {
-    case "list":
-      return cyfrMcp.listComponents(client);
-    case "setup":
-      return cyfrMcp.setupPlan(client, rest[0]!);
-    case "remove":
-      return cyfrMcp.removeComponent(client, rest[0]!);
-    case "secret": {
-      const action = rest[0];
-      if (action === "set") {
-        // "NAME=VALUE" → split
-        const [name, ...valParts] = rest[1]!.split("=");
-        return cyfrMcp.setSecret(client, name!, valParts.join("="));
-      }
-      if (action === "grant") {
-        return cyfrMcp.grantSecret(client, rest[1]!, rest[2]!);
-      }
-      if (action === "delete") {
-        return cyfrMcp.deleteSecret(client, rest[1]!);
-      }
-      throw new Error(`Unsupported secret action: ${action}`);
-    }
-    case "policy": {
-      if (rest[0] === "set") {
-        return cyfrMcp.updatePolicyField(client, rest[1]!, rest[2]!, rest[3]!);
-      }
-      throw new Error(`Unsupported policy action: ${rest[0]}`);
-    }
-    default:
-      throw new Error(`Unsupported command: ${head}`);
-  }
-}
-
 interface ComponentEntry {
   component_ref: string;
   name: string;
@@ -66,21 +24,34 @@ interface ComponentEntry {
   source: string;
 }
 
-interface SetupSecret {
+interface DeclaredNeed {
   name: string;
-  description: string;
+  kind: string;
+  qualifier: string;
+  reason?: string | null;
   required: boolean;
-  already_set: boolean;
-  already_granted: boolean;
+}
+
+interface ConsentNeed {
+  need?: string;
+  entry_id?: string;
+  satisfied: boolean;
+  detail?: string | null;
+}
+
+interface ConsentSection {
+  profile_id: string;
+  profile_status: string;
+  revision: number | null;
+  needs: ConsentNeed[];
+  ready: boolean;
 }
 
 interface SetupPlan {
   component_ref: string;
   ready: boolean;
-  secrets: SetupSecret[];
-  policy_current: Record<string, unknown> | null;
-  policy_recommended: Record<string, unknown> | null;
-  configurable_fields: string[];
+  needs: DeclaredNeed[];
+  consent: ConsentSection | null;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -99,7 +70,7 @@ function versionlessRef(ref: string): string {
   return ref;
 }
 
-/** Versionless refs for the known provider catalysts (managed in Provider Keys section) */
+/** Versionless refs for the known provider catalysts (shown in the Providers section) */
 function getProviderRefs(): Set<string> {
   return new Set(
     useProviderStore
@@ -127,15 +98,17 @@ function dedupeByRef(components: ComponentEntry[]): ComponentEntry[] {
 export default function ComponentsPage() {
   const [components, setComponents] = useState<ComponentEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadComponents = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const client = await getClient();
       const parsed = await cyfrMcp.listComponents(client);
       setComponents((parsed.components as ComponentEntry[]) ?? []);
-    } catch {
-      // Non-fatal
+    } catch (e) {
+      setLoadError(friendlyError(e));
     }
     setLoading(false);
   }, []);
@@ -144,7 +117,7 @@ export default function ComponentsPage() {
     loadComponents();
   }, [loadComponents]);
 
-  // Exclude provider catalysts (handled by Provider Keys section)
+  // Exclude provider catalysts (shown in the Providers section)
   const providerRefs = getProviderRefs();
   const nonProvider = components.filter(
     (c) => !providerRefs.has(versionlessRef(c.component_ref)),
@@ -161,11 +134,12 @@ export default function ComponentsPage() {
   return (
     <PageLayout
       title="Components"
-      subtitle="Manage installed components, provider keys, and system components."
+      subtitle="Installed components, AI providers, and system components. Grants are managed in the Prism console."
     >
       {loading && (
         <p className="text-xs text-text-muted">Loading components...</p>
       )}
+      {loadError && <p className="text-xs text-status-error">{loadError}</p>}
 
       {/* Section 1: Installed */}
       {!loading && (
@@ -178,7 +152,7 @@ export default function ComponentsPage() {
         />
       )}
 
-      {/* Section 2: Provider Keys */}
+      {/* Section 2: Providers */}
       <ProvidersSection />
 
       {/* Section 3: System */}
@@ -220,12 +194,13 @@ function ComponentSection({
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const client = await getClient();
       const results: Record<string, SetupPlan | null> = {};
       await Promise.all(
         components.map(async (c) => {
           const nameRef = versionlessRef(c.component_ref);
           try {
-            const result = await cyfr(["setup", nameRef]);
+            const result = await cyfrMcp.setupPlan(client, nameRef);
             if (!cancelled) results[nameRef] = result as unknown as SetupPlan;
           } catch {
             if (!cancelled) results[nameRef] = null;
@@ -238,19 +213,6 @@ function ComponentSection({
       cancelled = true;
     };
   }, [components]);
-
-  const refreshPlan = useCallback(
-    async (component: ComponentEntry) => {
-      const nameRef = versionlessRef(component.component_ref);
-      try {
-        const result = await cyfr(["setup", nameRef]);
-        setPlans((prev) => ({ ...prev, [nameRef]: result as unknown as SetupPlan }));
-      } catch {
-        setPlans((prev) => ({ ...prev, [nameRef]: null }));
-      }
-    },
-    [],
-  );
 
   if (components.length === 0) {
     return (
@@ -303,7 +265,6 @@ function ComponentSection({
                   }
                   canRemove={canRemove}
                   onRemoved={onRemoved}
-                  onPlanChanged={() => refreshPlan(c)}
                 />
               );
             })}
@@ -315,7 +276,7 @@ function ComponentSection({
 }
 
 // ---------------------------------------------------------------------------
-// Single component card with expandable setup
+// Single component card with expandable read-only setup state
 // ---------------------------------------------------------------------------
 
 function ComponentCard({
@@ -325,7 +286,6 @@ function ComponentCard({
   onToggle,
   canRemove,
   onRemoved,
-  onPlanChanged,
 }: {
   component: ComponentEntry;
   plan: SetupPlan | null | undefined;
@@ -333,7 +293,6 @@ function ComponentCard({
   onToggle: () => void;
   canRemove: boolean;
   onRemoved: () => void;
-  onPlanChanged: () => void;
 }) {
   // undefined = still loading, null = no setup required, SetupPlan = has plan
   const ready = plan === undefined ? undefined : plan === null ? true : plan.ready;
@@ -394,7 +353,6 @@ function ComponentCard({
             plan={plan ?? null}
             canRemove={canRemove}
             onRemoved={onRemoved}
-            onPlanChanged={onPlanChanged}
           />
         </div>
       )}
@@ -403,7 +361,7 @@ function ComponentCard({
 }
 
 // ---------------------------------------------------------------------------
-// Expanded setup view — secrets + policies + remove
+// Expanded view — read-only needs/consent state + remove
 // ---------------------------------------------------------------------------
 
 function ComponentSetup({
@@ -411,112 +369,22 @@ function ComponentSetup({
   plan,
   canRemove,
   onRemoved,
-  onPlanChanged,
 }: {
   component: ComponentEntry;
   plan: SetupPlan | null;
   canRemove: boolean;
   onRemoved: () => void;
-  onPlanChanged: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Secret inputs: { secretName: value }
-  const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
-  // Policy inputs: { fieldName: value }
-  const [policyInputs, setPolicyInputs] = useState<Record<string, string>>({});
-
-  const startEditing = () => {
-    if (!plan) return;
-    // Initialize inputs from current stored values only (not recommended)
-    const si: Record<string, string> = {};
-    for (const s of plan.secrets ?? []) {
-      si[s.name] = "";
-    }
-    const pi: Record<string, string> = {};
-    for (const field of plan.configurable_fields ?? []) {
-      const current = plan.policy_current?.[field];
-      if (current != null) {
-        pi[field] = typeof current === "string" ? current : JSON.stringify(current);
-      } else {
-        pi[field] = "";
-      }
-    }
-    setSecretInputs(si);
-    setPolicyInputs(pi);
-    setEditing(true);
-    setError(null);
-  };
-
-  const hasRecommended =
-    Object.keys(plan?.policy_recommended ?? {}).length > 0 ||
-    Object.keys(plan?.policy_current ?? {}).length > 0;
-
-  const fillRecommended = () => {
-    if (!plan) return;
-    setPolicyInputs((prev) => {
-      const next = { ...prev };
-      for (const field of plan.configurable_fields ?? []) {
-        if (next[field]) continue; // Don't overwrite user-entered values
-        // Prefer setup.policy recommended, fall back to current stored value
-        const rec = plan.policy_recommended?.[field] ?? plan.policy_current?.[field];
-        if (rec != null) {
-          next[field] = typeof rec === "string" ? rec : JSON.stringify(rec);
-        }
-      }
-      return next;
-    });
-  };
-
-  const handleSave = async () => {
-    if (!plan) return;
-    setSaving(true);
-    setError(null);
-
-    // Name-level ref (without version) for grants/policies
-    const nameRef = versionlessRef(component.component_ref);
-
-    try {
-      // Save secrets
-      for (const secret of plan.secrets ?? []) {
-        const inputVal = secretInputs[secret.name] ?? "";
-        if (inputVal) {
-          // New secret value provided
-          await cyfr(["secret", "set", `${secret.name}=${inputVal}`]);
-          await cyfr(["secret", "grant", nameRef, secret.name]);
-        } else if (secret.already_set && !secret.already_granted) {
-          // Just grant existing secret
-          await cyfr(["secret", "grant", nameRef, secret.name]);
-        }
-      }
-
-      // Save policy fields
-      for (const field of plan.configurable_fields ?? []) {
-        const val = policyInputs[field] ?? "";
-        if (val) {
-          await cyfr(["policy", "set", nameRef, field, val]);
-        }
-      }
-
-      // Refresh plan in parent
-      onPlanChanged();
-      setEditing(false);
-    } catch (err) {
-      setError(friendlyError(err));
-    }
-    setSaving(false);
-  };
-
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleRemove = async () => {
     setRemoving(true);
     setError(null);
     try {
-      await cyfr(["remove", component.component_ref]);
+      const client = await getClient();
+      await cyfrMcp.removeComponent(client, component.component_ref);
       onRemoved();
     } catch (err) {
       setError(friendlyError(err));
@@ -525,209 +393,100 @@ function ComponentSetup({
     }
   };
 
+  const removeButton = canRemove && (
+    <RemoveButton
+      confirmRemove={confirmRemove}
+      setConfirmRemove={setConfirmRemove}
+      removing={removing}
+      onRemove={handleRemove}
+    />
+  );
+
   if (!plan) {
     return (
       <div className="flex items-center justify-between">
         <p className="text-xs text-text-muted">No setup required</p>
-        {canRemove && <RemoveButton confirmRemove={confirmRemove} setConfirmRemove={setConfirmRemove} removing={removing} onRemove={handleRemove} />}
+        {removeButton}
       </div>
     );
   }
 
-  const hasSecrets = (plan.secrets ?? []).length > 0;
-  const hasPolicy = (plan.configurable_fields ?? []).length > 0;
+  const consentNeeds = plan.consent?.needs ?? [];
+  const declaredNeeds = plan.needs ?? [];
 
-  // View mode
-  if (!editing) {
-    return (
-      <div>
-        {/* Readiness indicator */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                plan.ready ? "bg-status-success" : "bg-status-error"
-              }`}
-            />
-            <span className="text-xs text-text-secondary">
-              {plan.ready ? "Ready" : "Setup required"}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={startEditing}
-              className="text-xs text-accent-primary hover:text-accent-hover"
-            >
-              Edit
-            </button>
-            {canRemove && <RemoveButton confirmRemove={confirmRemove} setConfirmRemove={setConfirmRemove} removing={removing} onRemove={handleRemove} />}
-          </div>
-        </div>
-
-        {/* Secrets status */}
-        {hasSecrets && (
-          <div className="mt-3">
-            <span className="text-[10px] font-medium uppercase text-text-muted">
-              Secrets
-            </span>
-            <div className="mt-1 space-y-1">
-              {plan.secrets.map((s) => (
-                <div key={s.name} className="flex items-center justify-between">
-                  <span className="font-mono text-xs text-text-secondary">
-                    {s.name}
-                  </span>
-                  <SecretBadge secret={s} />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Policy summary */}
-        {hasPolicy && (
-          <div className="mt-3">
-            <span className="text-[10px] font-medium uppercase text-text-muted">
-              Policy
-            </span>
-            <div className="mt-1 space-y-1">
-              {plan.configurable_fields.map((field) => {
-                const current = plan.policy_current?.[field];
-                const recommended = plan.policy_recommended?.[field];
-                const val = current ?? recommended;
-                const display =
-                  val == null
-                    ? "—"
-                    : typeof val === "string"
-                      ? val
-                      : JSON.stringify(val);
-                return (
-                  <div
-                    key={field}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <span className="text-xs text-text-secondary">{field}</span>
-                    <span
-                      className={`truncate text-xs ${
-                        current != null ? "text-text-primary" : "text-text-muted italic"
-                      }`}
-                    >
-                      {display}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {error && <p className="mt-2 text-xs text-status-error">{error}</p>}
-      </div>
-    );
-  }
-
-  // Edit mode
   return (
     <div>
-      {/* Secrets */}
-      {hasSecrets && (
-        <div>
-          <span className="text-[10px] font-medium uppercase text-text-muted">
-            Secrets
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className={`h-2 w-2 rounded-full ${
+              plan.ready ? "bg-status-success" : "bg-status-error"
+            }`}
+          />
+          <span className="text-xs text-text-secondary">
+            {plan.ready ? "Ready" : "Setup required"}
           </span>
-          <div className="mt-1.5 space-y-2">
-            {plan.secrets.map((s) => (
-              <div key={s.name}>
-                <div className="flex items-center justify-between">
-                  <label className="font-mono text-xs text-text-secondary">
-                    {s.name}
-                    {s.required && (
-                      <span className="ml-1 text-status-error">*</span>
-                    )}
-                  </label>
-                  <SecretBadge secret={s} />
-                </div>
-                {s.already_set ? (
-                  <p className="mt-1 text-[10px] text-text-muted">
-                    Already set. Leave blank to keep current value.
-                  </p>
-                ) : null}
-                <input
-                  type="password"
-                  value={secretInputs[s.name] ?? ""}
-                  onChange={(e) =>
-                    setSecretInputs((prev) => ({
-                      ...prev,
-                      [s.name]: e.target.value,
-                    }))
-                  }
-                  placeholder={s.already_set ? "Leave blank to keep" : s.name}
-                  className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
-                />
-              </div>
-            ))}
+        </div>
+        {removeButton}
+      </div>
+
+      {(consentNeeds.length > 0 || declaredNeeds.length > 0) && (
+        <div className="mt-3">
+          <span className="text-[10px] font-medium uppercase text-text-muted">
+            Connections
+          </span>
+          <div className="mt-1 space-y-1">
+            {consentNeeds.length > 0
+              ? consentNeeds.map((n, i) => (
+                  <NeedRow
+                    key={n.need ?? n.entry_id ?? i}
+                    label={n.need ?? n.entry_id ?? `binding ${i + 1}`}
+                    satisfied={n.satisfied}
+                    detail={n.detail}
+                  />
+                ))
+              : declaredNeeds.map((n) => (
+                  <NeedRow
+                    key={n.name}
+                    label={n.name}
+                    satisfied={plan.ready}
+                    detail={n.reason ?? (n.required ? "required" : "optional")}
+                  />
+                ))}
           </div>
         </div>
       )}
 
-      {/* Policy fields */}
-      {hasPolicy && (
-        <div className={hasSecrets ? "mt-4" : ""}>
-          <span className="text-[10px] font-medium uppercase text-text-muted">
-            Policy
-          </span>
-          <div className="mt-1.5 space-y-2">
-            {plan.configurable_fields.map((field) => {
-              const recommended = plan.policy_recommended?.[field] ?? plan.policy_current?.[field];
-              const source = plan.policy_recommended?.[field] != null ? "recommended" : "current";
-              const placeholder = recommended != null
-                ? `${typeof recommended === "string" ? recommended : JSON.stringify(recommended)} (${source})`
-                : field;
-              return (
-                <div key={field}>
-                  <label className="text-xs text-text-secondary">{field}</label>
-                  <input
-                    value={policyInputs[field] ?? ""}
-                    onChange={(e) =>
-                      setPolicyInputs((prev) => ({
-                        ...prev,
-                        [field]: e.target.value,
-                      }))
-                    }
-                    placeholder={placeholder}
-                    className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      {!plan.ready && (
+        <p className="mt-3 text-xs text-text-muted">
+          Grant connections in the Prism console, then reload this page.
+        </p>
       )}
 
       {error && <p className="mt-2 text-xs text-status-error">{error}</p>}
+    </div>
+  );
+}
 
-      {/* Save / Cancel / Fill Recommended */}
-      <div className="mt-3 flex justify-end gap-2">
-        {hasRecommended && (
-          <button
-            onClick={fillRecommended}
-            className="mr-auto rounded-md border border-border-default px-3 py-1.5 text-xs text-text-muted transition-colors hover:bg-surface-base hover:text-text-secondary"
-          >
-            Fill Recommended
-          </button>
-        )}
-        <button
-          onClick={() => setEditing(false)}
-          className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-base"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="btn-primary rounded-md px-3 py-1.5 text-xs"
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
+function NeedRow({
+  label,
+  satisfied,
+  detail,
+}: {
+  label: string;
+  satisfied: boolean;
+  detail?: string | null;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <span
+        className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+          satisfied ? "bg-status-success" : "bg-status-error"
+        }`}
+      />
+      <div className="min-w-0">
+        <span className="font-mono text-xs text-text-secondary">{label}</span>
+        {detail && <p className="truncate text-xs text-text-muted">{detail}</p>}
       </div>
     </div>
   );
@@ -781,81 +540,21 @@ function RemoveButton({
 }
 
 // ---------------------------------------------------------------------------
-// Secret status badge
-// ---------------------------------------------------------------------------
-
-function SecretBadge({ secret }: { secret: SetupSecret }) {
-  if (secret.already_set && secret.already_granted) {
-    return (
-      <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-[10px] font-medium text-green-400">
-        Set &amp; Granted
-      </span>
-    );
-  }
-  if (secret.already_set) {
-    return (
-      <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-medium text-yellow-400">
-        Set (not granted)
-      </span>
-    );
-  }
-  return (
-    <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-400">
-      Not configured
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Provider Keys section
+// Providers section — read-only status; keys are granted in the Prism console
 // ---------------------------------------------------------------------------
 
 function ProvidersSection() {
-  const { providers, loading, loadAll } = useProviderStore();
+  const { providers, loading, error, loadAll } = useProviderStore();
   const [expanded, setExpanded] = useState<ProviderKey | null>(null);
-  const [plans, setPlans] = useState<Record<string, SetupPlan | null>>({});
 
   useEffect(() => {
     loadAll();
   }, [loadAll]);
 
-  // Fetch setup plans for all provider catalysts
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const results: Record<string, SetupPlan | null> = {};
-      await Promise.all(
-        providers.map(async (p) => {
-          const nameRef = versionlessRef(p.catalystRef);
-          try {
-            const result = await cyfr(["setup", nameRef]);
-            if (!cancelled) results[p.key] = result as unknown as SetupPlan;
-          } catch {
-            if (!cancelled) results[p.key] = null;
-          }
-        }),
-      );
-      if (!cancelled) setPlans(results);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [providers]);
-
-  const refreshPlan = useCallback(async (provider: ProviderInfo) => {
-    const nameRef = versionlessRef(provider.catalystRef);
-    try {
-      const result = await cyfr(["setup", nameRef]);
-      setPlans((prev) => ({ ...prev, [provider.key]: result as unknown as SetupPlan }));
-    } catch {
-      setPlans((prev) => ({ ...prev, [provider.key]: null }));
-    }
-  }, []);
-
   return (
     <section className="mt-10">
       <div className="flex items-center gap-2">
-        <h2 className="text-sm font-medium text-text-primary">Provider Keys</h2>
+        <h2 className="text-sm font-medium text-text-primary">Providers</h2>
         {loading && (
           <svg className="h-3 w-3 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -864,20 +563,17 @@ function ProvidersSection() {
         )}
       </div>
       <p className="mt-1 text-xs text-text-secondary">
-        API keys for AI model providers.
+        AI model providers. Connect an API key in the Prism console.
       </p>
+      {error && <p className="mt-2 text-xs text-status-error">{error}</p>}
 
       <div className="mt-4 space-y-2">
         {providers.map((p) => (
           <ProviderCard
             key={p.key}
             provider={p}
-            plan={plans[p.key]}
             expanded={expanded === p.key}
-            onToggle={() =>
-              setExpanded(expanded === p.key ? null : p.key)
-            }
-            onPlanChanged={() => refreshPlan(p)}
+            onToggle={() => setExpanded(expanded === p.key ? null : p.key)}
           />
         ))}
       </div>
@@ -887,42 +583,32 @@ function ProvidersSection() {
 
 function ProviderCard({
   provider,
-  plan,
   expanded,
   onToggle,
-  onPlanChanged,
 }: {
   provider: ProviderInfo;
-  plan: SetupPlan | null | undefined;
   expanded: boolean;
   onToggle: () => void;
-  onPlanChanged: () => void;
 }) {
-  // Build a ComponentEntry so we can reuse ComponentSetup for secrets/policy editing
-  const componentEntry: ComponentEntry = {
-    component_ref: provider.catalystRef,
-    name: provider.label,
-    component_type: "catalyst",
-    description: "",
-    publisher: "",
-    version: "",
-    source: "filesystem",
-  };
+  const status = provider.ready
+    ? "Ready"
+    : provider.configured && provider.error
+      ? "Error"
+      : provider.configured
+        ? "Connected"
+        : "Setup needed";
 
-  // Filter the plan to exclude the provider's main API key secret (already managed above)
-  const filteredPlan =
-    plan != null
-      ? {
-          ...plan,
-          secrets: plan.secrets.filter((s) => s.name !== provider.secretName),
-        }
-      : plan;
+  const dotColor = provider.ready
+    ? "bg-status-success"
+    : provider.configured && provider.error
+      ? "bg-status-error"
+      : "bg-text-muted";
 
-  // Only show ComponentSetup if there are additional secrets or policy fields
-  const hasExtra =
-    filteredPlan != null &&
-    ((filteredPlan.secrets?.length ?? 0) > 0 ||
-      (filteredPlan.configurable_fields?.length ?? 0) > 0);
+  const textColor = provider.ready
+    ? "text-status-success"
+    : provider.configured && provider.error
+      ? "text-status-error"
+      : "text-text-muted";
 
   return (
     <div className="overflow-hidden rounded-lg border border-border-default bg-surface-raised">
@@ -930,191 +616,47 @@ function ProviderCard({
         onClick={onToggle}
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
       >
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${
-            provider.ready
-              ? "bg-status-success"
-              : provider.secretSet && provider.error
-                ? "bg-status-error"
-                : "bg-text-muted"
-          }`}
-        />
+        <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
         <div className="flex-1 min-w-0">
           <span className="text-sm font-medium text-text-primary">
             {provider.label}
           </span>
         </div>
-        <span
-          className={`shrink-0 text-xs ${
-            provider.ready
-              ? "text-status-success"
-              : provider.secretSet && provider.error
-                ? "text-status-error"
-                : "text-text-muted"
-          }`}
-        >
-          {provider.loading
-            ? "Setting up..."
-            : provider.ready
-              ? "Ready"
-              : provider.secretSet && provider.error
-                ? "Error"
-                : "Setup needed"}
-        </span>
+        <span className={`shrink-0 text-xs ${textColor}`}>{status}</span>
         <ChevronIcon expanded={expanded} />
       </button>
 
       {expanded && (
         <div className="border-t border-border-default px-4 py-3">
-          {provider.ready || provider.secretSet ? (
-            <ReadyProviderView provider={provider} />
+          {provider.ready ? (
+            <p className="text-xs text-text-muted">
+              {provider.models.length} model
+              {provider.models.length === 1 ? "" : "s"} available.
+            </p>
           ) : (
-            <SetupProviderView provider={provider} />
-          )}
-          {hasExtra && (
-            <div className="mt-3 border-t border-border-default pt-3">
-              <ComponentSetup
-                component={componentEntry}
-                plan={filteredPlan}
-                canRemove={false}
-                onRemoved={() => {}}
-                onPlanChanged={onPlanChanged}
-              />
+            <div>
+              <p className="text-xs text-text-muted">
+                Connect your {provider.label} API key in the Prism console
+                (Components page), then reload.
+              </p>
+              <a
+                href={provider.keyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 inline-block text-xs text-accent-primary hover:text-accent-hover"
+                onClick={(e) => {
+                  e.preventDefault();
+                  host.openUrl(provider.keyUrl);
+                }}
+              >
+                Get your API key &rarr;
+              </a>
             </div>
           )}
+          {provider.error && (
+            <p className="mt-2 text-xs text-status-error">{provider.error}</p>
+          )}
         </div>
-      )}
-    </div>
-  );
-}
-
-function SetupProviderView({ provider }: { provider: ProviderInfo }) {
-  const [apiKey, setApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const setupProvider = useProviderStore((s) => s.setupProvider);
-
-  const handleSave = async () => {
-    if (!apiKey.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await setupProvider(provider.key, apiKey.trim());
-      setApiKey("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setSaving(false);
-  };
-
-  return (
-    <div>
-      <label className="mb-1.5 block text-xs text-text-muted">API Key</label>
-      <div className="flex gap-2">
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSave();
-          }}
-          placeholder={provider.secretName}
-          className="flex-1 rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
-        />
-        <button
-          onClick={handleSave}
-          disabled={!apiKey.trim() || saving}
-          className="btn-primary text-xs"
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
-      </div>
-      <a
-        href={provider.keyUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-2 inline-block text-xs text-accent-primary hover:text-accent-hover"
-        onClick={(e) => {
-          e.preventDefault();
-          host.openUrl(provider.keyUrl);
-        }}
-      >
-        Get your API key &rarr;
-      </a>
-      {(error ?? provider.error) && (
-        <p className="mt-2 text-xs text-status-error">
-          {error ?? provider.error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ReadyProviderView({ provider }: { provider: ProviderInfo }) {
-  const [showChange, setShowChange] = useState(false);
-  const [newKey, setNewKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const setupProvider = useProviderStore((s) => s.setupProvider);
-  const removeProvider = useProviderStore((s) => s.removeProvider);
-
-  const handleChange = async () => {
-    if (!newKey.trim()) return;
-    setSaving(true);
-    await setupProvider(provider.key, newKey.trim());
-    setNewKey("");
-    setShowChange(false);
-    setSaving(false);
-  };
-
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-text-muted">API Key:</span>
-          <span className="font-mono text-xs text-text-secondary">
-            ••••••••
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowChange(!showChange)}
-            className="text-xs text-text-muted hover:text-text-secondary"
-          >
-            Change
-          </button>
-          <button
-            onClick={() => removeProvider(provider.key)}
-            className="text-xs text-text-muted hover:text-status-error"
-          >
-            Remove Key
-          </button>
-        </div>
-      </div>
-
-      {showChange && (
-        <div className="mt-2 flex gap-2">
-          <input
-            type="password"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleChange();
-            }}
-            placeholder="New API key"
-            className="flex-1 rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
-          />
-          <button
-            onClick={handleChange}
-            disabled={!newKey.trim() || saving}
-            className="btn-primary text-xs"
-          >
-            {saving ? "..." : "Update"}
-          </button>
-        </div>
-      )}
-
-      {provider.error && (
-        <p className="mt-2 text-xs text-status-error">{provider.error}</p>
       )}
     </div>
   );

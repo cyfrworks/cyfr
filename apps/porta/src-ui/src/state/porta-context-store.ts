@@ -11,7 +11,7 @@
 import { useTinctureStore } from "./tincture-store";
 import { useOverlayStore, type OverlayState } from "./overlay-store";
 import { useAgentStore } from "./agent-store";
-import { getCurrentPath } from "../harness/navigator-shim";
+import { getCurrentPath } from "../harness/navigate";
 
 export interface FocusedApp {
   publisher: string;

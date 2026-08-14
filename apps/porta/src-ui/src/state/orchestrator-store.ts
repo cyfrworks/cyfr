@@ -3,7 +3,7 @@ import type { McpClient } from "../api/mcp-client";
 import type { Orchestrator, AgentDetail } from "../api/types";
 
 const AVAILABLE_TOOLS = [
-  "component", "build", "execution", "aqua", "secret", "policy",
+  "component", "build", "execution", "aqua",
   "system", "request_setup", "files", "storage", "schedule", "http",
   "oauth", "native_search",
 ];

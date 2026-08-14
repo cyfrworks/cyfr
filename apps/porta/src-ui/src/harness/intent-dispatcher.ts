@@ -2,8 +2,8 @@ import { useOverlayStore } from "../state/overlay-store";
 import { useTinctureStore } from "../state/tincture-store";
 import { useApprovalStore } from "../state/approval-store";
 import { useAgentStore } from "../state/agent-store";
-import { navigate } from "./navigator-shim";
-import type { Intent } from "./porta-actions-parser";
+import { navigate } from "./navigate";
+import type { Intent } from "./aqua-actions-parser";
 
 export interface DispatchRecord {
   intent: Intent;
@@ -19,7 +19,7 @@ export interface DispatchRecord {
  * Today's handlers are all safe / auto-dispatch (no approval card, no
  * mcp_proxy interception); risky-intent handling is a future addition.
  */
-export async function dispatchIntent(intent: Intent): Promise<DispatchRecord> {
+async function dispatchIntent(intent: Intent): Promise<DispatchRecord> {
   const timestamp = Date.now();
   try {
     switch (intent.kind) {
@@ -50,18 +50,16 @@ export async function dispatchIntent(intent: Intent): Promise<DispatchRecord> {
         if (idx >= 0) store.setFocusedIndex(idx);
         break;
       }
+      // The three focus intents navigate to the page; the target id is
+      // carried in the intent but no store exposes per-item focus yet.
       case "ui.schedules.focus":
         navigate("/schedules");
-        // TODO(phase3): focus the specific schedule id once the schedules
-        // store exposes a setFocusedId action.
         break;
       case "ui.components.focus":
         navigate("/components");
-        // TODO(phase3): focus the specific component ref.
         break;
       case "ui.mcp.focus":
         navigate("/mcp-servers");
-        // TODO(phase3): focus the specific server name.
         break;
       case "ui.copy_clipboard":
         await navigator.clipboard.writeText(intent.text);

@@ -8,7 +8,7 @@ import type {
 } from "./types";
 import { MCP_ERROR_AUTH_REQUIRED } from "./types";
 
-export class AuthRequiredError extends Error {
+class AuthRequiredError extends Error {
   constructor() {
     super("Authentication required");
     this.name = "AuthRequiredError";

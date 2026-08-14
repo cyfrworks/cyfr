@@ -2,7 +2,7 @@ import { useState } from "react";
 import { translateError, type ErrorAction } from "../../errors/translator";
 import { useOverlayStore } from "../../state/overlay-store";
 import { useAgentStore } from "../../state/agent-store";
-import { navigate } from "../../harness/navigator-shim";
+import { navigate } from "../../harness/navigate";
 
 /**
  * Renders a translated error message inline in the transcript with optional

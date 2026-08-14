@@ -1,8 +1,8 @@
 /**
- * Extracts, validates, and strips `porta-actions` fenced blocks from an
+ * Extracts, validates, and strips `aqua-actions` fenced blocks from an
  * assistant message.
  *
- * The block must open with exactly ` ```porta-actions ` (no language
+ * The block must open with exactly ` ```aqua-actions ` (no language
  * aliasing) and contain a JSON array of discriminated-union entries. Parse
  * or validation failures drop individual entries; the entire block is still
  * removed from the rendered content so the user never sees raw JSON, even
@@ -44,17 +44,17 @@ const ALLOWED_OVERLAY_STATES = new Set<string>(["peek", "half", "full"]);
 
 const ALLOWED_RISKS = new Set<string>(["low", "medium", "high"]);
 
-// Match fenced blocks opening exactly with ```porta-actions on its own line.
+// Match fenced blocks opening exactly with ```aqua-actions on its own line.
 // The `g` flag lets us replace every block in one pass; `[\s\S]` handles
 // multi-line bodies since JS regex `.` does not cross newlines by default.
-const BLOCK_RE = /```porta-actions[ \t]*\r?\n([\s\S]*?)```/g;
+const BLOCK_RE = /```aqua-actions[ \t]*\r?\n([\s\S]*?)```/g;
 
 // Render-time strip regex: matches closed blocks OR open-but-unclosed tails
 // at end-of-string. Used during streaming so partial blocks never flash.
-const RENDER_STRIP_RE = /```porta-actions[ \t]*\r?\n[\s\S]*?(?:```|$)/g;
+const RENDER_STRIP_RE = /```aqua-actions[ \t]*\r?\n[\s\S]*?(?:```|$)/g;
 
 /**
- * Remove any porta-actions blocks (closed or mid-stream) from a text chunk
+ * Remove any aqua-actions blocks (closed or mid-stream) from a text chunk
  * for display. This is the safe-for-rendering variant; it does not parse or
  * validate — use {@link parsePortaActions} for dispatch.
  */
@@ -63,7 +63,7 @@ export function stripPortaActionBlocks(content: string): string {
 }
 
 export interface ParseResult {
-  /** Assistant content with all porta-actions blocks removed and trimmed. */
+  /** Assistant content with all aqua-actions blocks removed and trimmed. */
   strippedContent: string;
   /** Validated intents in emission order. */
   intents: Intent[];
