@@ -119,8 +119,8 @@ namespace on cyfr.run — required before you can push components.`,
 			status, _ := pollResult["status"].(string)
 			switch status {
 			case "complete":
-				// Save session ID from the auth response
-				sessionID, _ := pollResult["session_id"].(string)
+				// Save the session token from the auth response
+				sessionID, _ := pollResult["session_token"].(string)
 				cfg, _ := config.Load()
 				if cfg.Current() != nil {
 					if sessionID != "" {

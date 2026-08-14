@@ -217,7 +217,7 @@ defmodule Sanctum.MCPTest do
           "name" => "test-key"
         })
 
-      assert String.starts_with?(result.key, "cyfr_pk_")
+      assert String.starts_with?(result.api_key, "cyfr_pk_")
       assert result.name == "test-key"
 
       {:ok, result} = MCP.handle("key", ctx, %{"action" => "get", "name" => "test-key"})
@@ -249,8 +249,8 @@ defmodule Sanctum.MCPTest do
 
       {:ok, rotated} = MCP.handle("key", ctx, %{"action" => "rotate", "name" => "rotate-key"})
       assert rotated.name == "rotate-key"
-      assert String.starts_with?(rotated.key, "cyfr_pk_")
-      assert rotated.key != original.key
+      assert String.starts_with?(rotated.api_key, "cyfr_pk_")
+      assert rotated.api_key != original.api_key
     end
 
     test "get missing key returns error", %{ctx: ctx} do
@@ -285,7 +285,7 @@ defmodule Sanctum.MCPTest do
           "type" => "application"
         })
 
-      assert String.starts_with?(result.key, "cyfr_pk_")
+      assert String.starts_with?(result.api_key, "cyfr_pk_")
 
       # Service key type
       {:ok, result} =
@@ -295,7 +295,7 @@ defmodule Sanctum.MCPTest do
           "type" => "service"
         })
 
-      assert String.starts_with?(result.key, "cyfr_sk_")
+      assert String.starts_with?(result.api_key, "cyfr_sk_")
 
       # Admin key type
       {:ok, result} =
@@ -305,7 +305,7 @@ defmodule Sanctum.MCPTest do
           "type" => "admin"
         })
 
-      assert String.starts_with?(result.key, "cyfr_ak_")
+      assert String.starts_with?(result.api_key, "cyfr_ak_")
     end
   end
 

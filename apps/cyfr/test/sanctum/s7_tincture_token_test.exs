@@ -65,7 +65,7 @@ defmodule Sanctum.S7TinctureTokenTest do
 
   describe "header-preferred resolution" do
     test "Authorization: Bearer cyfr_… authenticates with no query string", %{ctx: ctx} do
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "bearer-key"})
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "bearer-key"})
 
       assert {:ok, %Context{auth_method: :api_key}} =
                TinctureAuth.authenticate(conn("", [{"authorization", "Bearer #{key}"}]))
@@ -82,7 +82,7 @@ defmodule Sanctum.S7TinctureTokenTest do
     end
 
     test "the header is what authenticates, whatever the query string says", %{ctx: ctx} do
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "order-key"})
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "order-key"})
 
       cn = conn("_key=cyfr_pk_bogus", [{"authorization", "Bearer #{key}"}])
       assert {:ok, %Context{auth_method: :api_key}} = TinctureAuth.authenticate(cn)
@@ -91,7 +91,7 @@ defmodule Sanctum.S7TinctureTokenTest do
 
   describe "account credentials are not accepted from a query string" do
     test "a valid ?_key=cyfr_… no longer authenticates", %{ctx: ctx} do
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "legacy-key"})
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "legacy-key"})
 
       # This path was kept while Porta still built iframe URLs with a raw
       # credential. Porta now mints the scoped ?_t= token instead, so the

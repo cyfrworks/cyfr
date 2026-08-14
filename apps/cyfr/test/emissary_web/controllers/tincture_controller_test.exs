@@ -172,7 +172,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     setup do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, %{key: key}} =
+      {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{
           name: "tincture-render-key-#{:rand.uniform(1_000_000)}",
           type: :service,
@@ -243,7 +243,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       key_name = "tincture-test-key-#{:rand.uniform(1_000_000)}"
 
-      {:ok, %{key: key}} =
+      {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{
           name: key_name,
           type: :service,

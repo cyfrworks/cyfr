@@ -281,9 +281,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               return;
             }
 
-            // Save the session id so non-UI MCP callers pick it up
-            const sessionId =
-              (pollResult.session_id as string) || client.sessionId;
+            // Save the session token so non-UI MCP callers pick it up
+            const sessionId = pollResult.session_token as string;
             if (sessionId) client.sessionId = sessionId;
             host.setSessionId(client.sessionId);
 

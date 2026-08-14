@@ -16,7 +16,7 @@ defmodule Sanctum.Sanitizer do
     password secret token api_key apikey access_token refresh_token
     private_key secret_key auth bearer credential credentials
     passwd pwd api-key x-api-key authorization session_token
-    registry_token cosign_key signing_key jwt client_secret
+    session_id registry_token cosign_key signing_key jwt client_secret
     device_code stripe basic_auth
   )
 

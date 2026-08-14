@@ -107,6 +107,93 @@ defmodule Emissary.MCP.RequestLogTest do
     end
   end
 
+  describe "log_completed/3 output redaction (tools/call wire shape)" do
+    # The router re-encodes the tool's structured result as a JSON string
+    # under "content"[]."text" before the controller logs it. A credential a
+    # tool legitimately returns to its caller (created API key, webhook
+    # secret, session token) must not be persisted verbatim.
+    test "redacts credentials inside the content text JSON", %{
+      request_id: request_id,
+      ctx: ctx
+    } do
+      :ok = RequestLog.log_started(ctx, request_id, %{tool: "key", action: "create", input: %{}})
+
+      wire_result = %{
+        "content" => [
+          %{
+            "type" => "text",
+            "text" =>
+              Jason.encode!(%{
+                "api_key" => "cyfr_pk_super_secret_value",
+                "session_token" => "raw-session-token",
+                "secret" => "whsec_value",
+                "name" => "my-key"
+              })
+          }
+        ],
+        "isError" => false
+      }
+
+      :ok =
+        RequestLog.log_completed(ctx, request_id, %{
+          output: wire_result,
+          duration_ms: 5,
+          routed_to: "sanctum"
+        })
+
+      log = get_log!(request_id)
+      refute log.output =~ "cyfr_pk_super_secret_value"
+      refute log.output =~ "raw-session-token"
+      refute log.output =~ "whsec_value"
+
+      [%{"text" => text}] = decode_json(log.output)["content"]
+      inner = Jason.decode!(text)
+      assert inner["api_key"] == "[REDACTED]"
+      assert inner["session_token"] == "[REDACTED]"
+      assert inner["secret"] == "[REDACTED]"
+      assert inner["name"] == "my-key"
+    end
+
+    test "redacts credentials in structuredContent", %{request_id: request_id, ctx: ctx} do
+      :ok = RequestLog.log_started(ctx, request_id, %{tool: "webhook", action: "create", input: %{}})
+
+      :ok =
+        RequestLog.log_completed(ctx, request_id, %{
+          output: %{
+            "content" => [%{"type" => "text", "text" => "created"}],
+            "structuredContent" => %{"secret" => "whsec_value", "slug" => "hook-1"},
+            "isError" => false
+          },
+          duration_ms: 5,
+          routed_to: "sanctum"
+        })
+
+      log = get_log!(request_id)
+      refute log.output =~ "whsec_value"
+      output = decode_json(log.output)
+      assert output["structuredContent"]["secret"] == "[REDACTED]"
+      assert output["structuredContent"]["slug"] == "hook-1"
+    end
+
+    test "leaves prose text blocks untouched", %{request_id: request_id, ctx: ctx} do
+      :ok = RequestLog.log_started(ctx, request_id, %{tool: "system", action: "status", input: %{}})
+
+      :ok =
+        RequestLog.log_completed(ctx, request_id, %{
+          output: %{
+            "content" => [%{"type" => "text", "text" => "all services healthy"}],
+            "isError" => false
+          },
+          duration_ms: 5,
+          routed_to: "emissary"
+        })
+
+      log = get_log!(request_id)
+      [%{"text" => text}] = decode_json(log.output)["content"]
+      assert text == "all services healthy"
+    end
+  end
+
   describe "log_failed/2" do
     test "updates log with error status and error info", %{request_id: request_id, ctx: ctx} do
       :ok =

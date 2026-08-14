@@ -48,7 +48,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   describe "authenticate/1 — credentials are never accepted from a query string" do
     test "a valid API key in ?_key= does not authenticate", %{ctx: ctx} do
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "query-key"})
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "query-key"})
 
       # Valid credential, wrong channel. A URL reaches browser history, Referer
       # and proxy logs, so only the scoped ?_t= token may travel there.
@@ -106,7 +106,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   describe "authenticate/1 — API key path" do
     test "a bearer API key yields an :api_key context", %{ctx: ctx} do
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "tincture-key"})
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "tincture-key"})
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(key))
       assert out.auth_method == :api_key
@@ -119,7 +119,7 @@ defmodule Sanctum.TinctureAuthTest do
       # local/0 has the "" sentinel org; the key row inherits it. Under the
       # strict policy `tenant_resolved?/1` flips an otherwise-valid auth to
       # :unauthenticated (the tincture HTTP isolation guarantee).
-      {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "orgless-key"})
+      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "orgless-key"})
 
       fn -> assert TinctureAuth.authenticate(bearer_conn(key)) == :unauthenticated end
     end

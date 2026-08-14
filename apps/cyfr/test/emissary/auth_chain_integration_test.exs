@@ -64,7 +64,7 @@ defmodule Emissary.AuthChainIntegrationTest do
       end
     end)
 
-    {:ok, limited_key: limited_key.key, reader_key: reader_key.key}
+    {:ok, limited_key: limited_key.api_key, reader_key: reader_key.api_key}
   end
 
   defp mcp_call(conn, api_key, tool, arguments) do

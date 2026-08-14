@@ -197,12 +197,12 @@ defmodule PrismWeb.ApiKeysLive do
           </p>
           <div class="flex items-start gap-2">
             <code class="flex-1 block bg-gray-950 rounded p-3 text-sm text-green-400 font-mono break-all">
-              {@new_key[:key] || inspect(@new_key)}
+              {@new_key[:api_key] || inspect(@new_key)}
             </code>
             <.button
               variant="secondary"
               size="sm"
-              phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_key[:key] || ""})}
+              phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_key[:api_key] || ""})}
             >
               Copy
             </.button>
@@ -321,7 +321,7 @@ defmodule PrismWeb.ApiKeysLive do
     "type" => :type,
     "scope" => :scope,
     "created_at" => :created_at,
-    "key" => :key,
+    "api_key" => :api_key,
     "id" => :id
   }
 

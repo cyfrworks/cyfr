@@ -87,7 +87,7 @@ defmodule Emissary.MCP.RequestLog do
            status: "success",
            duration_ms: data[:duration_ms] || data["duration_ms"],
            routed_to: data[:routed_to] || data["routed_to"],
-           output: encode_json(sanitize_input(data[:output] || data["output"]))
+           output: encode_json(sanitize_output(data[:output] || data["output"]))
          }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
@@ -190,6 +190,35 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec sanitize_input(term()) :: term()
   defdelegate sanitize_input(input), to: Sanctum.Sanitizer, as: :sanitize
+
+  # The tools/call wire shape re-encodes the tool's structured result as an
+  # opaque JSON string under `"content"[]."text"`. Key-based redaction cannot
+  # see inside a string, so a credential a tool legitimately returns to its
+  # caller (a created API key, a webhook secret, a session token) would be
+  # persisted verbatim. Decode each text block that parses as JSON, sanitize
+  # the structure, and re-encode; prose text passes through untouched. The
+  # client response is built before logging and is never affected.
+  defp sanitize_output(nil), do: nil
+
+  defp sanitize_output(%{"content" => blocks} = output) when is_list(blocks) do
+    %{output | "content" => Enum.map(blocks, &sanitize_text_block/1)}
+    |> sanitize_input()
+  end
+
+  defp sanitize_output(output), do: sanitize_input(output)
+
+  defp sanitize_text_block(%{"type" => "text", "text" => text} = block)
+       when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, decoded} when is_map(decoded) or is_list(decoded) ->
+        %{block | "text" => Jason.encode!(sanitize_input(decoded))}
+
+      _ ->
+        block
+    end
+  end
+
+  defp sanitize_text_block(block), do: block
 
   # ============================================================================
   # Private

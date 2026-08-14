@@ -16,7 +16,7 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
 
   test "GET /t/access-token with a valid Bearer key → 200 + a usable ?_t= token",
        %{conn: conn} do
-    {:ok, %{key: key}} =
+    {:ok, %{api_key: key}} =
       Sanctum.ApiKey.create(Sanctum.TestContext.local(), %{name: "mint-key"})
 
     resp =

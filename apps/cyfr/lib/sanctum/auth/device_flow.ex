@@ -97,7 +97,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
-  - `{:ok, %{status: "complete", session_id: id, user: user_info,
+  - `{:ok, %{status: "complete", session_token: token, user: user_info,
       needs_personal_namespace: bool, suggested_username: string | nil,
       access_token: string (optional), probe_error: string (optional),
       reauthenticate: true (optional),
@@ -123,7 +123,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       case DeviceFlow.poll_for_session("github", device_code) do
         {:ok, %{status: "pending"}} ->
           # Keep polling
-        {:ok, %{status: "complete", session_id: sid}} ->
+        {:ok, %{status: "complete", session_token: token}} ->
           # Success!
         {:ok, %{status: "expired"}} ->
           # Need to restart flow
@@ -153,7 +153,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
               base = %{
                 status: "complete",
-                session_id: session.token,
+                session_token: session.token,
                 user: %{
                   id: user_info.id,
                   email: user_info.email,

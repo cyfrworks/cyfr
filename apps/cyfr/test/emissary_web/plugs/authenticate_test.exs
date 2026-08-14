@@ -406,7 +406,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         end
       end)
 
-      {:ok, test_dir: test_dir, api_key: key_result.key}
+      {:ok, test_dir: test_dir, api_key: key_result.api_key}
     end
 
     test "authenticates with valid API key", %{conn: conn, api_key: api_key} do

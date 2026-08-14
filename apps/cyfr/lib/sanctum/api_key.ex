@@ -15,7 +15,7 @@ defmodule Sanctum.ApiKey do
       ctx = Sanctum.TestContext.local()
 
       # Create a new API key
-      {:ok, %{key: "cyfr_pk_...", name: "frontend-key"}} =
+      {:ok, %{api_key: "cyfr_pk_...", name: "frontend-key"}} =
         Sanctum.ApiKey.create(ctx, %{name: "frontend-key", type: :application, scope: ["execution"]})
 
       # List all keys (keys are redacted)
@@ -28,7 +28,7 @@ defmodule Sanctum.ApiKey do
       :ok = Sanctum.ApiKey.revoke(ctx, "frontend-key")
 
       # Rotate a key (creates new key, revokes old)
-      {:ok, %{key: "cyfr_pk_...", name: "frontend-key"}} = Sanctum.ApiKey.rotate(ctx, "frontend-key")
+      {:ok, %{api_key: "cyfr_pk_...", name: "frontend-key"}} = Sanctum.ApiKey.rotate(ctx, "frontend-key")
 
       # Validate a key
       {:ok, %{name: "frontend-key", scope: [...]}} = Sanctum.ApiKey.validate("cyfr_pk_...")
@@ -251,7 +251,7 @@ defmodule Sanctum.ApiKey do
 
     case Arca.ApiKeyStorage.create_key(attrs) do
       :ok ->
-        {:ok, %{key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
+        {:ok, %{api_key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
 
       {:error, :already_exists} ->
         # The unique index is partial (WHERE NOT revoked), so a violation
@@ -351,7 +351,7 @@ defmodule Sanctum.ApiKey do
                  ) do
               :ok ->
                 {:ok,
-                 %{key: new_key, name: name, type: key_type, scope: scope_list, rotated_at: now}}
+                 %{api_key: new_key, name: name, type: key_type, scope: scope_list, rotated_at: now}}
 
               error ->
                 error

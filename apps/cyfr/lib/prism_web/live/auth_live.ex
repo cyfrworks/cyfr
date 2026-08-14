@@ -74,7 +74,7 @@ defmodule PrismWeb.AuthLive do
     case socket.assigns.flow_state do
       :waiting ->
         case DeviceFlow.poll_for_session(socket.assigns.provider, socket.assigns.device_code) do
-          {:ok, %{status: "complete", session_id: token}} ->
+          {:ok, %{status: "complete", session_token: token}} ->
             # Device flow creates the session — redirect to a controller
             # that stores the token in the cookie and redirects to /
             code = Prism.AuthExchange.create(token)

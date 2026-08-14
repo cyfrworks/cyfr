@@ -201,7 +201,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         end
       end)
 
-      {:ok, api_key: key_result.key}
+      {:ok, api_key: key_result.api_key}
     end
 
     test "tools/list works with API key (no session)", %{conn: conn, api_key: api_key} do

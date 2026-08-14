@@ -188,8 +188,8 @@ export function deviceInit(client: McpClient, provider = "github"): Promise<Json
 /**
  * Poll for device flow completion.
  *
- * Post-refactor the response on `status: "complete"` includes auth-refactor
- * fields alongside the legacy `session_id` + `user`:
+ * The response on `status: "complete"` carries `session_token` (the Sanctum
+ * bearer credential) + `user`, plus:
  *
  *  - `needs_personal_namespace: boolean` — true when the user hasn't claimed
  *    a personal slug on cyfr.run yet. Route to claim-namespace UI.

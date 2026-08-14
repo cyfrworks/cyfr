@@ -116,7 +116,7 @@ defmodule Sanctum.S3ClientIpTest do
     test "an allowlisted key with an unresolvable IP is REJECTED (was: bypassed)" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, %{key: key}} =
+      {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
 
       # Pre-S3 the tincture path passed client_ip: nil here, and
@@ -135,7 +135,7 @@ defmodule Sanctum.S3ClientIpTest do
       Application.put_env(:cyfr, :trust_x_forwarded_for, true)
       ctx = Sanctum.TestContext.local()
 
-      {:ok, %{key: key}} =
+      {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})
 
       # Attacker at 8.8.8.8 claims an allowlisted IP; the proxy appends the

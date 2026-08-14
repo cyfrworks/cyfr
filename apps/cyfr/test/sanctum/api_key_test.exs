@@ -24,7 +24,7 @@ defmodule Sanctum.ApiKeyTest do
 
       assert result.name == "test-key"
       assert result.type == :application
-      assert String.starts_with?(result.key, @public_prefix)
+      assert String.starts_with?(result.api_key, @public_prefix)
       assert result.scope == ["execute", "component_read", "storage_read"]
       assert result.created_at != nil
     end
@@ -33,21 +33,21 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, result} = ApiKey.create(ctx, %{name: "public-key", type: :application, scope: []})
 
       assert result.type == :application
-      assert String.starts_with?(result.key, @public_prefix)
+      assert String.starts_with?(result.api_key, @public_prefix)
     end
 
     test "creates secret key", %{ctx: ctx} do
       {:ok, result} = ApiKey.create(ctx, %{name: "secret-key", type: :service, scope: []})
 
       assert result.type == :service
-      assert String.starts_with?(result.key, @secret_prefix)
+      assert String.starts_with?(result.api_key, @secret_prefix)
     end
 
     test "creates admin key", %{ctx: ctx} do
       {:ok, result} = ApiKey.create(ctx, %{name: "admin-key", type: :admin, scope: []})
 
       assert result.type == :admin
-      assert String.starts_with?(result.key, @admin_prefix)
+      assert String.starts_with?(result.api_key, @admin_prefix)
     end
 
     test "returns error for invalid key type", %{ctx: ctx} do
@@ -59,7 +59,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, r1} = ApiKey.create(ctx, %{name: "key1", scope: []})
       {:ok, r2} = ApiKey.create(ctx, %{name: "key2", scope: []})
 
-      assert r1.key != r2.key
+      assert r1.api_key != r2.api_key
     end
 
     test "returns error for duplicate name", %{ctx: ctx} do
@@ -94,7 +94,7 @@ defmodule Sanctum.ApiKeyTest do
       assert String.ends_with?(retrieved.key_prefix, "...")
       assert String.starts_with?(retrieved.key_prefix, @public_prefix)
       # Full key should not be returned
-      refute retrieved.key_prefix == created.key
+      refute retrieved.key_prefix == created.api_key
     end
 
     test "retrieves secret key with correct type", %{ctx: ctx} do
@@ -160,7 +160,7 @@ defmodule Sanctum.ApiKeyTest do
       assert :ok = ApiKey.revoke(ctx, "to-revoke")
 
       # Validate should fail
-      assert {:error, :revoked} = ApiKey.validate(created.key)
+      assert {:error, :revoked} = ApiKey.validate(created.api_key)
     end
 
     test "returns error for non-existent key", %{ctx: ctx} do
@@ -174,11 +174,11 @@ defmodule Sanctum.ApiKeyTest do
       assert {:ok, second} =
                ApiKey.create(ctx, %{name: "reusable", scope: ["execute", "storage_read"]})
 
-      refute second.key == first.key
+      refute second.api_key == first.api_key
 
       # The old credential stays dead; the new one works
-      assert {:error, :revoked} = ApiKey.validate(first.key)
-      assert {:ok, _} = ApiKey.validate(second.key)
+      assert {:error, :revoked} = ApiKey.validate(first.api_key)
+      assert {:ok, _} = ApiKey.validate(second.api_key)
     end
 
     test "an active key still blocks duplicate names", %{ctx: ctx} do
@@ -195,7 +195,7 @@ defmodule Sanctum.ApiKeyTest do
       :ok = ApiKey.revoke(ctx, "recycled")
 
       assert {:ok, third} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
-      assert {:ok, _} = ApiKey.validate(third.key)
+      assert {:ok, _} = ApiKey.validate(third.api_key)
     end
 
     test "revoke by name targets the active row, not a revoked namesake", %{ctx: ctx} do
@@ -204,7 +204,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, active} = ApiKey.create(ctx, %{name: "target", scope: ["execute"]})
 
       assert :ok = ApiKey.revoke(ctx, "target")
-      assert {:error, :revoked} = ApiKey.validate(active.key)
+      assert {:error, :revoked} = ApiKey.validate(active.api_key)
     end
 
     # A3: revocation must take effect on the IMMEDIATELY following request.
@@ -216,22 +216,22 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-revoke", scope: []})
 
       # Warm: a successful validation (would populate any future cache).
-      assert {:ok, _} = ApiKey.validate(created.key)
+      assert {:ok, _} = ApiKey.validate(created.api_key)
 
       assert :ok = ApiKey.revoke(ctx, "warm-then-revoke")
 
       # Immediately after — no sleep, no TTL window.
-      assert {:error, :revoked} = ApiKey.validate(created.key)
+      assert {:error, :revoked} = ApiKey.validate(created.api_key)
     end
 
     test "a validated key fails immediately after rotate (old secret dies)", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-rotate", scope: []})
-      assert {:ok, _} = ApiKey.validate(created.key)
+      assert {:ok, _} = ApiKey.validate(created.api_key)
 
-      assert {:ok, %{key: new_key}} = ApiKey.rotate(ctx, "warm-then-rotate")
-      refute new_key == created.key
+      assert {:ok, %{api_key: new_key}} = ApiKey.rotate(ctx, "warm-then-rotate")
+      refute new_key == created.api_key
 
-      assert {:error, :invalid_key} = ApiKey.validate(created.key)
+      assert {:error, :invalid_key} = ApiKey.validate(created.api_key)
       assert {:ok, _} = ApiKey.validate(new_key)
     end
   end
@@ -243,8 +243,8 @@ defmodule Sanctum.ApiKeyTest do
 
       assert rotated.name == "rotating"
       assert rotated.type == :application
-      assert rotated.key != original.key
-      assert String.starts_with?(rotated.key, @public_prefix)
+      assert rotated.api_key != original.api_key
+      assert String.starts_with?(rotated.api_key, @public_prefix)
       assert rotated.rotated_at != nil
     end
 
@@ -253,7 +253,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, rotated} = ApiKey.rotate(ctx, "secret-rotating")
 
       assert rotated.type == :service
-      assert String.starts_with?(rotated.key, @secret_prefix)
+      assert String.starts_with?(rotated.api_key, @secret_prefix)
     end
 
     test "preserves admin key type on rotation", %{ctx: ctx} do
@@ -261,14 +261,14 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, rotated} = ApiKey.rotate(ctx, "admin-rotating")
 
       assert rotated.type == :admin
-      assert String.starts_with?(rotated.key, @admin_prefix)
+      assert String.starts_with?(rotated.api_key, @admin_prefix)
     end
 
     test "old key no longer works after rotation", %{ctx: ctx} do
       {:ok, original} = ApiKey.create(ctx, %{name: "rotating", scope: []})
       {:ok, _rotated} = ApiKey.rotate(ctx, "rotating")
 
-      assert {:error, :invalid_key} = ApiKey.validate(original.key)
+      assert {:error, :invalid_key} = ApiKey.validate(original.api_key)
     end
 
     test "new key works after rotation", %{ctx: ctx} do
@@ -277,7 +277,7 @@ defmodule Sanctum.ApiKeyTest do
 
       {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
 
-      {:ok, validated} = ApiKey.validate(rotated.key)
+      {:ok, validated} = ApiKey.validate(rotated.api_key)
       assert validated.name == "rotating"
       assert validated.scope == ["secrets_read"]
     end
@@ -297,7 +297,7 @@ defmodule Sanctum.ApiKeyTest do
           rate_limit: "50/1m"
         })
 
-      {:ok, validated} = ApiKey.validate(created.key)
+      {:ok, validated} = ApiKey.validate(created.api_key)
 
       assert validated.name == "valid-key"
       assert validated.type == :service
@@ -308,7 +308,7 @@ defmodule Sanctum.ApiKeyTest do
     test "validates secret key and returns correct type", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "secret-valid", type: :service, scope: []})
 
-      {:ok, validated} = ApiKey.validate(created.key)
+      {:ok, validated} = ApiKey.validate(created.api_key)
 
       assert validated.type == :service
     end
@@ -316,7 +316,7 @@ defmodule Sanctum.ApiKeyTest do
     test "validates admin key and returns correct type", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "admin-valid", type: :admin, scope: []})
 
-      {:ok, validated} = ApiKey.validate(created.key)
+      {:ok, validated} = ApiKey.validate(created.api_key)
 
       assert validated.type == :admin
     end
@@ -326,9 +326,9 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, sk} = ApiKey.create(ctx, %{name: "sk", type: :service, scope: []})
       {:ok, ak} = ApiKey.create(ctx, %{name: "ak", type: :admin, scope: []})
 
-      {:ok, pk_val} = ApiKey.validate(pk.key)
-      {:ok, sk_val} = ApiKey.validate(sk.key)
-      {:ok, ak_val} = ApiKey.validate(ak.key)
+      {:ok, pk_val} = ApiKey.validate(pk.api_key)
+      {:ok, sk_val} = ApiKey.validate(sk.api_key)
+      {:ok, ak_val} = ApiKey.validate(ak.api_key)
 
       assert pk_val.type == :application
       assert sk_val.type == :service
@@ -352,7 +352,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, created} = ApiKey.create(ctx, %{name: "revoked-key", scope: []})
       ApiKey.revoke(ctx, "revoked-key")
 
-      assert {:error, :revoked} = ApiKey.validate(created.key)
+      assert {:error, :revoked} = ApiKey.validate(created.api_key)
     end
   end
 
@@ -373,11 +373,11 @@ defmodule Sanctum.ApiKeyTest do
     test "validate allows key without IP check when no allowlist", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "no-ip-key", scope: []})
 
-      {:ok, validated} = ApiKey.validate(created.key)
+      {:ok, validated} = ApiKey.validate(created.api_key)
       assert validated.name == "no-ip-key"
 
       # Also works with explicit IP
-      {:ok, validated2} = ApiKey.validate(created.key, client_ip: "1.2.3.4")
+      {:ok, validated2} = ApiKey.validate(created.api_key, client_ip: "1.2.3.4")
       assert validated2.name == "no-ip-key"
     end
 
@@ -391,11 +391,11 @@ defmodule Sanctum.ApiKeyTest do
         })
 
       # Exact match
-      {:ok, validated1} = ApiKey.validate(created.key, client_ip: "192.168.1.10")
+      {:ok, validated1} = ApiKey.validate(created.api_key, client_ip: "192.168.1.10")
       assert validated1.name == "ip-allowed-key"
 
       # CIDR match
-      {:ok, validated2} = ApiKey.validate(created.key, client_ip: "10.255.255.255")
+      {:ok, validated2} = ApiKey.validate(created.api_key, client_ip: "10.255.255.255")
       assert validated2.name == "ip-allowed-key"
     end
 
@@ -408,7 +408,7 @@ defmodule Sanctum.ApiKeyTest do
           ip_allowlist: ["192.168.1.0/24"]
         })
 
-      assert {:error, :ip_not_allowed} = ApiKey.validate(created.key, client_ip: "10.0.0.1")
+      assert {:error, :ip_not_allowed} = ApiKey.validate(created.api_key, client_ip: "10.0.0.1")
     end
 
     test "validate without client_ip fails closed for an allowlisted key", %{ctx: ctx} do
@@ -421,7 +421,7 @@ defmodule Sanctum.ApiKeyTest do
         })
 
       # No caller-supplied IP is not proof the restriction is satisfied.
-      assert {:error, :ip_not_allowed} = ApiKey.validate(created.key)
+      assert {:error, :ip_not_allowed} = ApiKey.validate(created.api_key)
     end
 
     test "ip_allowlist is included in list output", %{ctx: ctx} do
@@ -556,7 +556,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, created} = ApiKey.create(ctx, %{name: "ext-validate-key", scope: []})
 
       # Switch to multi-tenant and validate without org_id
-      {:ok, validated} = ApiKey.validate(created.key)
+      {:ok, validated} = ApiKey.validate(created.api_key)
       assert validated.name == "ext-validate-key"
     end
   end
@@ -594,7 +594,7 @@ defmodule Sanctum.ApiKeyTest do
 
       # validate/2 takes no caller org/project: it returns the key's OWN
       # (org_id, project_id) straight from the stored row — authoritative.
-      assert {:ok, meta} = ApiKey.validate(created.key)
+      assert {:ok, meta} = ApiKey.validate(created.api_key)
       assert meta.org_id == "acme"
       assert meta.project_id == "proj_a"
 
@@ -623,7 +623,7 @@ defmodule Sanctum.ApiKeyTest do
       end)
 
       {:ok, created} = ApiKey.create(ctx_a, %{name: "no-override-key", scope: []})
-      {:ok, meta} = ApiKey.validate(created.key)
+      {:ok, meta} = ApiKey.validate(created.api_key)
 
       ctx = ApiKey.context_from_metadata(meta)
       assert ctx.org_id == "acme"
