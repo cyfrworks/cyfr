@@ -158,10 +158,10 @@ defmodule Cyfr.Application do
   # "database is locked" errors from pool connections racing with
   # migration DDL statements on first startup.
   #
-  # A database created before the 0.6.0 baseline has the old versions in
-  # `schema_migrations`, so this runs nothing and the schema stays whatever
-  # it was. That release has no upgrade path: drop the database (or the
-  # volume) and let the baseline create it.
+  # A database created before the baseline migration has the older versions
+  # recorded in `schema_migrations`, so this runs nothing and the schema
+  # stays whatever it was. There is no upgrade path across the baseline:
+  # drop the database (or the volume) and let it be created fresh.
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])

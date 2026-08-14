@@ -10,7 +10,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   meant anything to an installation upgrading from a version that no longer
   exists, and four adapter-conditional type corrections for columns that are
   simply declared correctly here. None of that history is reachable from a
-  fresh install, and the release it belonged to has no upgrade path.
+  fresh install, and there is no upgrade path across this baseline.
 
   There is deliberately no `down/0`. A baseline's inverse is an empty
   database, which `mix ecto.drop` already expresses.
