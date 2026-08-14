@@ -131,5 +131,8 @@ defmodule Sanctum.Consent.Proof do
 
   defp validate_bindings(_bindings), do: {:error, {:invalid_bindings, :bindings}}
 
-  defp store, do: Application.get_env(:cyfr, :consent_proof_store, __MODULE__.Memory)
+  # The in-code default matches the shipped config (config.exs): proofs are
+  # single-use REPLAY protection, so an unset key must not silently downgrade
+  # to a node-local in-memory store. Tests override to Memory explicitly.
+  defp store, do: Application.get_env(:cyfr, :consent_proof_store, __MODULE__.DB)
 end

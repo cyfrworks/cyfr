@@ -4,6 +4,7 @@
 defmodule Sanctum.WebhookTest do
   use ExUnit.Case, async: false
 
+  alias Sanctum.Test.ConsentFixtures
   alias Sanctum.Webhook
 
   setup do
@@ -15,12 +16,31 @@ defmodule Sanctum.WebhookTest do
     Sanctum.Test.ComponentHelpers.register_test_component("handler", "1.0.0", "formula", %{})
     Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{})
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    # A webhook binds a consented profile at create; these tests focus on
+    # other behaviour, so seed one owner profile per target.
+    ctx = Sanctum.TestContext.local()
+    ConsentFixtures.start_source!()
+    ConsentFixtures.bindable_profile(ctx, "f:local.handler", profile_id: "prof-handler")
+    ConsentFixtures.bindable_profile(ctx, "f:local.h", profile_id: "prof-h")
+
+    {:ok, ctx: ctx}
+  end
+
+  # Injects the seeded profile for the target so each test stays a one-liner;
+  # a test may still pass its own :profile_id to exercise binding behaviour.
+  defp create(ctx, opts) do
+    profile =
+      case opts[:target_ref] do
+        "f:local.h" -> "prof-h"
+        _ -> "prof-handler"
+      end
+
+    Webhook.create(ctx, Map.put_new(opts, :profile_id, profile))
   end
 
   describe "create/2" do
     test "generates whsec_/wh_ prefixed credentials and stores", %{ctx: ctx} do
-      assert {:ok, result} = Webhook.create(ctx, %{name: "github", target_ref: "f:local.handler"})
+      assert {:ok, result} = create(ctx, %{name: "github", target_ref: "f:local.handler"})
 
       assert String.starts_with?(result.secret, "whsec_")
       assert String.starts_with?(result.slug, "wh_")
@@ -37,11 +57,11 @@ defmodule Sanctum.WebhookTest do
 
       try do
         Application.put_env(:cyfr, :public_url, "https://cyfr.example.com")
-        {:ok, result} = Webhook.create(ctx, %{name: "url-set", target_ref: "f:local.h"})
+        {:ok, result} = create(ctx, %{name: "url-set", target_ref: "f:local.h"})
         assert result.url == "https://cyfr.example.com/hooks/" <> result.slug
 
         Application.delete_env(:cyfr, :public_url)
-        {:ok, result2} = Webhook.create(ctx, %{name: "url-unset", target_ref: "f:local.h"})
+        {:ok, result2} = create(ctx, %{name: "url-unset", target_ref: "f:local.h"})
         assert result2.url == "/hooks/" <> result2.slug
       after
         if original,
@@ -55,7 +75,7 @@ defmodule Sanctum.WebhookTest do
 
       try do
         Application.put_env(:cyfr, :public_url, "https://cyfr.example.com/")
-        {:ok, result} = Webhook.create(ctx, %{name: "trailing-slash", target_ref: "f:local.h"})
+        {:ok, result} = create(ctx, %{name: "trailing-slash", target_ref: "f:local.h"})
         refute String.contains?(result.url, "//hooks/")
         assert String.starts_with?(result.url, "https://cyfr.example.com/hooks/")
       after
@@ -67,7 +87,7 @@ defmodule Sanctum.WebhookTest do
 
     test "stores input_template and reads it back via get/2", %{ctx: ctx} do
       {:ok, _} =
-        Webhook.create(ctx, %{
+        create(ctx, %{
           name: "with-template",
           target_ref: "f:local.handler",
           input_template: %{"channel" => "alerts", "priority" => "high"}
@@ -81,7 +101,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects input_template containing reserved key _webhook (string)", %{ctx: ctx} do
       assert {:error, :reserved_key} =
-               Webhook.create(ctx, %{
+               create(ctx, %{
                  name: "reserved",
                  target_ref: "f:local.handler",
                  input_template: %{"_webhook" => %{"foo" => "bar"}}
@@ -91,7 +111,7 @@ defmodule Sanctum.WebhookTest do
     test "rejects input_template containing reserved key :_webhook (atom)", %{ctx: ctx} do
       # Direct Elixir callers may pass atom-keyed maps; defense-in-depth check.
       assert {:error, :reserved_key} =
-               Webhook.create(ctx, %{
+               create(ctx, %{
                  name: "reserved-atom",
                  target_ref: "f:local.handler",
                  input_template: %{_webhook: %{"foo" => "bar"}}
@@ -100,7 +120,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects input_template that is not a map", %{ctx: ctx} do
       assert {:error, :invalid_input_template} =
-               Webhook.create(ctx, %{
+               create(ctx, %{
                  name: "bad",
                  target_ref: "f:local.handler",
                  input_template: ["not", "an", "object"]
@@ -111,7 +131,7 @@ defmodule Sanctum.WebhookTest do
       huge = %{"data" => String.duplicate("x", 17 * 1024)}
 
       assert {:error, :input_template_too_large} =
-               Webhook.create(ctx, %{
+               create(ctx, %{
                  name: "big",
                  target_ref: "f:local.handler",
                  input_template: huge
@@ -119,20 +139,20 @@ defmodule Sanctum.WebhookTest do
     end
 
     test "duplicate name returns already_exists", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "dup", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "dup", target_ref: "f:local.handler"})
 
       assert {:error, :already_exists} =
-               Webhook.create(ctx, %{name: "dup", target_ref: "f:local.handler"})
+               create(ctx, %{name: "dup", target_ref: "f:local.handler"})
     end
 
     test "missing required fields returns error", %{ctx: ctx} do
-      assert {:error, _} = Webhook.create(ctx, %{})
-      assert {:error, _} = Webhook.create(ctx, %{name: "only-name"})
+      assert {:error, _} = create(ctx, %{})
+      assert {:error, _} = create(ctx, %{name: "only-name"})
     end
 
     test "lowercases custom signature_header", %{ctx: ctx} do
       {:ok, result} =
-        Webhook.create(ctx, %{
+        create(ctx, %{
           name: "case",
           target_ref: "f:local.handler",
           signature_header: "X-Hub-Signature-256"
@@ -143,7 +163,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects a target_ref that names no registered component", %{ctx: ctx} do
       assert {:error, message} =
-               Webhook.create(ctx, %{name: "ghost", target_ref: "f:local.never-published"})
+               create(ctx, %{name: "ghost", target_ref: "f:local.never-published"})
 
       assert message =~ "never-published"
     end
@@ -151,8 +171,8 @@ defmodule Sanctum.WebhookTest do
 
   describe "list/1, get/2" do
     test "list excludes secrets", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "a", target_ref: "f:local.handler"})
-      {:ok, _} = Webhook.create(ctx, %{name: "b", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "a", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "b", target_ref: "f:local.handler"})
 
       {:ok, hooks} = Webhook.list(ctx)
       assert length(hooks) >= 2
@@ -171,7 +191,7 @@ defmodule Sanctum.WebhookTest do
   describe "update/3" do
     test "changes input_template without rotating secret", %{ctx: ctx} do
       {:ok, %{secret: original_secret}} =
-        Webhook.create(ctx, %{name: "u", target_ref: "f:local.handler"})
+        create(ctx, %{name: "u", target_ref: "f:local.handler"})
 
       assert {:ok, updated} =
                Webhook.update(ctx, "u", %{input_template: %{"v" => 1}})
@@ -183,14 +203,14 @@ defmodule Sanctum.WebhookTest do
     end
 
     test "rejects update with reserved key in input_template", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "r", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "r", target_ref: "f:local.handler"})
 
       assert {:error, :reserved_key} =
                Webhook.update(ctx, "r", %{input_template: %{"_webhook" => 1}})
     end
 
     test "ignores unknown fields", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "i", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "i", target_ref: "f:local.handler"})
 
       assert {:error, :no_fields} = Webhook.update(ctx, "i", %{not_a_field: "x"})
     end
@@ -200,7 +220,7 @@ defmodule Sanctum.WebhookTest do
     end
 
     test "rejects repointing at an unregistered target_ref", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "repoint", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "repoint", target_ref: "f:local.handler"})
 
       assert {:error, message} =
                Webhook.update(ctx, "repoint", %{target_ref: "f:local.never-published"})
@@ -212,7 +232,7 @@ defmodule Sanctum.WebhookTest do
     end
 
     test "repointing at a registered target_ref succeeds", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "repoint-ok", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "repoint-ok", target_ref: "f:local.handler"})
 
       assert {:ok, %{target_ref: "f:local.h"}} =
                Webhook.update(ctx, "repoint-ok", %{target_ref: "f:local.h"})
@@ -221,7 +241,7 @@ defmodule Sanctum.WebhookTest do
 
   describe "revoke/2" do
     test "soft-disables and excludes from list", %{ctx: ctx} do
-      {:ok, _} = Webhook.create(ctx, %{name: "rev", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "rev", target_ref: "f:local.handler"})
       assert :ok = Webhook.revoke(ctx, "rev")
 
       {:ok, hooks} = Webhook.list(ctx)
@@ -233,7 +253,7 @@ defmodule Sanctum.WebhookTest do
     test "old secret keeps verifying during the grace window, dropped after expiry",
          %{ctx: ctx} do
       {:ok, %{secret: old_secret, slug: slug, url: url}} =
-        Webhook.create(ctx, %{name: "rot", target_ref: "f:local.handler"})
+        create(ctx, %{name: "rot", target_ref: "f:local.handler"})
 
       assert {:ok, rotated} = Webhook.rotate(ctx, "rot")
       assert rotated.secret != old_secret
@@ -265,7 +285,7 @@ defmodule Sanctum.WebhookTest do
   describe "verify_with_grace/3" do
     test "verifies a correctly-signed payload", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(ctx, %{name: "v", target_ref: "f:local.handler"})
+        create(ctx, %{name: "v", target_ref: "f:local.handler"})
 
       body = ~s({"hello":"world"})
       assert :ok = verify_with_slug(slug, secret, body)
@@ -273,7 +293,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects tampered body", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(ctx, %{name: "tamper", target_ref: "f:local.handler"})
+        create(ctx, %{name: "tamper", target_ref: "f:local.handler"})
 
       body = ~s({"hello":"world"})
       sig = "sha256=" <> hmac_hex(secret, body)
@@ -286,7 +306,7 @@ defmodule Sanctum.WebhookTest do
     end
 
     test "rejects malformed signature header", %{ctx: ctx} do
-      {:ok, %{slug: slug}} = Webhook.create(ctx, %{name: "m", target_ref: "f:local.handler"})
+      {:ok, %{slug: slug}} = create(ctx, %{name: "m", target_ref: "f:local.handler"})
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
 
       assert {:error, :malformed_signature} =
@@ -300,7 +320,7 @@ defmodule Sanctum.WebhookTest do
   describe "verify_with_grace/4 (replay protection)" do
     test "verifies a timestamped payload within the skew window", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(ctx, %{
+        create(ctx, %{
           name: "ts-ok",
           target_ref: "f:local.handler",
           timestamp_header: "X-Cyfr-Timestamp"
@@ -319,7 +339,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects timestamps outside the skew window", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(ctx, %{
+        create(ctx, %{
           name: "ts-skew",
           target_ref: "f:local.handler",
           timestamp_header: "X-Cyfr-Timestamp"
@@ -338,7 +358,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects malformed (non-integer) timestamps", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(ctx, %{name: "ts-bad", target_ref: "f:local.handler"})
+        create(ctx, %{name: "ts-bad", target_ref: "f:local.handler"})
 
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
 
@@ -352,7 +372,7 @@ defmodule Sanctum.WebhookTest do
     test "without a timestamp arg, body-only HMAC still verifies (backward compat)",
          %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(ctx, %{name: "no-ts", target_ref: "f:local.handler"})
+        create(ctx, %{name: "no-ts", target_ref: "f:local.handler"})
 
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
       body = ~s({"a":1})
@@ -364,7 +384,7 @@ defmodule Sanctum.WebhookTest do
 
     test "empty timestamp_header on create stores nil (replay protection off)", %{ctx: ctx} do
       {:ok, %{slug: slug}} =
-        Webhook.create(ctx, %{
+        create(ctx, %{
           name: "empty-ts",
           target_ref: "f:local.handler",
           timestamp_header: ""
@@ -376,7 +396,7 @@ defmodule Sanctum.WebhookTest do
 
     test "update can clear timestamp_header by passing empty string", %{ctx: ctx} do
       {:ok, %{slug: slug}} =
-        Webhook.create(ctx, %{
+        create(ctx, %{
           name: "clear-ts",
           target_ref: "f:local.handler",
           timestamp_header: "X-Cyfr-Timestamp"

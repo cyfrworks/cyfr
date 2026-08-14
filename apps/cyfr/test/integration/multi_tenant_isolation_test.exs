@@ -39,7 +39,7 @@ defmodule MultiTenantIsolationTest do
           :admin
         ],
         scope: :project,
-        auth_method: :api_key,
+        auth_method: :oidc,
         namespace: "testns",
         authenticated: true
       )
@@ -58,15 +58,19 @@ defmodule MultiTenantIsolationTest do
           :admin
         ],
         scope: :project,
-        auth_method: :api_key,
+        auth_method: :oidc,
         namespace: "testns",
         authenticated: true
       )
 
     # Webhook creation validates target_ref existence tenant-scoped, so the
-    # target must be registered in each tenant.
+    # target must be registered in each tenant — and binds a consented
+    # profile, seeded per tenant (the consent source partitions by tenant).
     Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx_a)
     Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx_b)
+    Sanctum.Test.ConsentFixtures.start_source!()
+    Sanctum.Test.ConsentFixtures.bindable_profile(ctx_a, "f:local.h", profile_id: "prof-h")
+    Sanctum.Test.ConsentFixtures.bindable_profile(ctx_b, "f:local.h", profile_id: "prof-h")
 
     {:ok, a: ctx_a, b: ctx_b}
   end
@@ -74,8 +78,19 @@ defmodule MultiTenantIsolationTest do
   describe "Sanctum.Webhook tenant isolation" do
     test "list/1 from tenant_a does not return webhooks created by tenant_b",
          %{a: ctx_a, b: ctx_b} do
-      {:ok, _} = Sanctum.Webhook.create(ctx_a, %{name: "hk_a", target_ref: "f:local.h"})
-      {:ok, _} = Sanctum.Webhook.create(ctx_b, %{name: "hk_b", target_ref: "f:local.h"})
+      {:ok, _} =
+        Sanctum.Webhook.create(ctx_a, %{
+          name: "hk_a",
+          target_ref: "f:local.h",
+          profile_id: "prof-h"
+        })
+
+      {:ok, _} =
+        Sanctum.Webhook.create(ctx_b, %{
+          name: "hk_b",
+          target_ref: "f:local.h",
+          profile_id: "prof-h"
+        })
 
       {:ok, list_a} = Sanctum.Webhook.list(ctx_a)
       {:ok, list_b} = Sanctum.Webhook.list(ctx_b)
@@ -92,7 +107,12 @@ defmodule MultiTenantIsolationTest do
 
     test "get/2 from tenant_a returns :not_found for tenant_b's webhook",
          %{a: ctx_a, b: ctx_b} do
-      {:ok, _} = Sanctum.Webhook.create(ctx_b, %{name: "private", target_ref: "f:local.h"})
+      {:ok, _} =
+        Sanctum.Webhook.create(ctx_b, %{
+          name: "private",
+          target_ref: "f:local.h",
+          profile_id: "prof-h"
+        })
 
       assert {:error, :not_found} = Sanctum.Webhook.get(ctx_a, "private")
     end
@@ -100,10 +120,18 @@ defmodule MultiTenantIsolationTest do
     test "same name in different tenants is allowed and they don't collide",
          %{a: ctx_a, b: ctx_b} do
       assert {:ok, %{slug: slug_a}} =
-               Sanctum.Webhook.create(ctx_a, %{name: "shared", target_ref: "f:local.h"})
+               Sanctum.Webhook.create(ctx_a, %{
+                 name: "shared",
+                 target_ref: "f:local.h",
+                 profile_id: "prof-h"
+               })
 
       assert {:ok, %{slug: slug_b}} =
-               Sanctum.Webhook.create(ctx_b, %{name: "shared", target_ref: "f:local.h"})
+               Sanctum.Webhook.create(ctx_b, %{
+                 name: "shared",
+                 target_ref: "f:local.h",
+                 profile_id: "prof-h"
+               })
 
       refute slug_a == slug_b
 
@@ -176,11 +204,6 @@ defmodule MultiTenantIsolationTest do
   # credential store, so the credential-store isolation smoke lives there now.
   describe "Sanctum.Vault tenant isolation" do
     test "tenant_a cannot read or enumerate tenant_b's vault entries", %{a: ctx_a, b: ctx_b} do
-      # Vault mutations are interactive-class (:oidc surface); the shared
-      # contexts authenticate via API key, so re-surface them for this test.
-      ctx_a = %{ctx_a | auth_method: :oidc}
-      ctx_b = %{ctx_b | auth_method: :oidc}
-
       {:ok, _} = Sanctum.Vault.create(ctx_a, %{name: "shared-name", kind: "api_key"})
       {:ok, _} = Sanctum.Vault.create(ctx_b, %{name: "shared-name", kind: "api_key"})
       {:ok, b_only} = Sanctum.Vault.create(ctx_b, %{name: "b-only", kind: "api_key"})

@@ -59,13 +59,14 @@ defmodule Opus.SignatureVerifier do
         {:error,
          "Component pulled from OCI registry without signature verification. Re-pull to verify."}
 
-      # Unknown source — allow (future-proofing)
+      # Unknown source — a verifier fails CLOSED. The source vocabulary is
+      # closed (oci/filesystem/published); a new value must be classified
+      # here before its components may execute.
       true ->
-        :ok
+        {:error, "Unknown component source #{inspect(source)} — signature policy undefined"}
     end
   end
 
-  # Fallback for non-map (shouldn't happen after executor changes)
   def verify(_component, _identity, _issuer) do
     {:error, "Invalid component data for signature verification"}
   end

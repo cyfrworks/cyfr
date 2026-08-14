@@ -6,25 +6,7 @@ import type {
   Tool,
   ToolsListResult,
 } from "./types";
-import {
-  MCP_ERROR_SESSION_EXPIRED,
-  MCP_ERROR_SESSION_REQUIRED,
-  MCP_ERROR_AUTH_REQUIRED,
-} from "./types";
-
-export class SessionExpiredError extends Error {
-  constructor() {
-    super("Session expired");
-    this.name = "SessionExpiredError";
-  }
-}
-
-export class SessionRequiredError extends Error {
-  constructor() {
-    super("Session required");
-    this.name = "SessionRequiredError";
-  }
-}
+import { MCP_ERROR_AUTH_REQUIRED } from "./types";
 
 export class AuthRequiredError extends Error {
   constructor() {
@@ -286,29 +268,19 @@ export class McpClient {
     });
 
     if (resp.status !== 200) {
-      if (resp.status === 404 && this.sessionId) {
-        throw new SessionExpiredError();
-      }
-
+      // A 404 is not an auth signal in this revision: the server has no
+      // sessions and answers 404 with -32601 for an unimplemented method.
+      // The JSON-RPC error body is the only source of meaning.
+      let parsed: JSONRPCResponse | null = null;
       try {
-        const errResp = JSON.parse(resp.body) as JSONRPCResponse;
-        if (errResp.error) {
-          const code = (errResp.error as JSONRPCError).code;
-          if (code === MCP_ERROR_SESSION_EXPIRED)
-            throw new SessionExpiredError();
-          if (code === MCP_ERROR_SESSION_REQUIRED)
-            throw new SessionRequiredError();
-          if (code === MCP_ERROR_AUTH_REQUIRED) throw new AuthRequiredError();
-          throw new Error(errResp.error.message);
-        }
-      } catch (parseErr) {
-        if (
-          parseErr instanceof SessionExpiredError ||
-          parseErr instanceof SessionRequiredError ||
-          parseErr instanceof AuthRequiredError
-        ) {
-          throw parseErr;
-        }
+        parsed = JSON.parse(resp.body) as JSONRPCResponse;
+      } catch {
+        parsed = null;
+      }
+      const error = parsed?.error as JSONRPCError | undefined;
+      if (error) {
+        if (error.code === MCP_ERROR_AUTH_REQUIRED) throw new AuthRequiredError();
+        throw new Error(error.message);
       }
       throw new Error(`HTTP ${resp.status}: ${resp.body}`);
     }

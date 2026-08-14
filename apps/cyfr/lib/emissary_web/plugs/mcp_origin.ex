@@ -85,6 +85,11 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
   end
 
   defp localhost_with_port?(origin, base) do
-    String.starts_with?(origin, base <> ":")
+    # The suffix must be digits only — a prefix check alone would accept
+    # `http://localhost:3000.evil.com`.
+    case String.split(origin, base <> ":", parts: 2) do
+      ["", port] -> port =~ ~r/^\d+$/
+      _ -> false
+    end
   end
 end

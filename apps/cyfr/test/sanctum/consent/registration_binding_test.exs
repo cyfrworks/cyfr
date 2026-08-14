@@ -167,9 +167,20 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert row.profile_id == "prof-bind"
     end
 
+    test "an unbound webhook cannot be created at all", %{ctx: ctx} do
+      assert {:error, message} =
+               Sanctum.Webhook.create(ctx, %{name: "unbound", target_ref: "#{@target}:1.0.0"})
+
+      assert message =~ "profile_id is required"
+    end
+
     test "webhook update cannot re-point to a profile without the class", %{ctx: ctx} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx, %{name: "plain-hook", target_ref: "#{@target}:1.0.0"})
+        Sanctum.Webhook.create(ctx, %{
+          name: "plain-hook",
+          target_ref: "#{@target}:1.0.0",
+          profile_id: "prof-bind"
+        })
 
       key_ctx = %{ctx | auth_method: :api_key}
 
@@ -181,6 +192,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert {:ok, _} = Sanctum.Webhook.update(ctx, "plain-hook", %{profile_id: "prof-bind"})
     end
 
+    @tag :requires_opus
     test "schedule create with a profile binding requires the consent class", %{ctx: ctx} do
       key_ctx = %{ctx | auth_method: :api_key}
 

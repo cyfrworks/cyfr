@@ -148,7 +148,9 @@ defmodule Opus.ExecutionSemaphore do
     try do
       GenServer.call(__MODULE__, :force_release_all)
     catch
-      :exit, _reason -> :ok
+      # A dead semaphore has nothing to release — but reporting :ok would
+      # tell the operator a recovery happened when it didn't.
+      :exit, _reason -> {:error, :semaphore_unavailable}
     end
   end
 

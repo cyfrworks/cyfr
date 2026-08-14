@@ -99,10 +99,16 @@ defmodule Compendium.RegistryRemoveCascadeTest do
   test "a webhook pointed at the removed component is disabled", %{ctx: ctx} do
     publish!(ctx, "cascade-hooked", "1.0.0")
 
+    Sanctum.Test.ConsentFixtures.start_source!()
+
+    profile =
+      Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.cascade-hooked:1.0.0")
+
     {:ok, _} =
       Sanctum.Webhook.create(ctx, %{
         name: "cascade-hook",
-        target_ref: "reagent:local.cascade-hooked:1.0.0"
+        target_ref: "reagent:local.cascade-hooked:1.0.0",
+        profile_id: profile
       })
 
     :ok = Compendium.Registry.delete(ctx, "cascade-hooked", "1.0.0", "local")

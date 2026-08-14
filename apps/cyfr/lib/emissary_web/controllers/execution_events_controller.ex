@@ -95,37 +95,40 @@ defmodule EmissaryWeb.ExecutionEventsController do
       end)
 
     if terminal? do
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+      Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
       conn
     else
-      event_loop(conn, execution_id)
+      event_loop(conn, execution_id, exec)
     end
   end
 
-  defp event_loop(conn, execution_id) do
+  # `exec` rides along so unsubscribe targets the SAME tenant-scoped topic
+  # subscribe used — dropping it resolves to the local/default sentinel and
+  # silently leaves the process subscribed for any other org.
+  defp event_loop(conn, execution_id, exec) do
     receive do
       {:execution_event, event} ->
         case send_sse_event(conn, event) do
           {:ok, conn} ->
             if terminal_event?(event) do
-              Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+              Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
               conn
             else
-              event_loop(conn, execution_id)
+              event_loop(conn, execution_id, exec)
             end
 
           {:error, _} ->
-            Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+            Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
             conn
         end
     after
       @keep_alive_interval_ms ->
         case chunk(conn, ": keep-alive\n\n") do
           {:ok, conn} ->
-            event_loop(conn, execution_id)
+            event_loop(conn, execution_id, exec)
 
           {:error, _} ->
-            Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+            Opus.ExecutionEventBuffer.unsubscribe(execution_id, exec)
             conn
         end
     end

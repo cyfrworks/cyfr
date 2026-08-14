@@ -32,6 +32,7 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:editing_name, nil)
      |> assign(:form_name, "")
      |> assign(:form_target_ref, "")
+     |> assign(:form_profile_id, "")
      |> assign(:form_signature_header, @default_signature_header)
      |> assign(:form_description, "")
      |> assign(:form_rate_limit, "")
@@ -87,6 +88,7 @@ defmodule PrismWeb.WebhooksLive do
          |> assign(:editing_name, name)
          |> assign(:form_name, hook[:name] || "")
          |> assign(:form_target_ref, hook[:target_ref] || "")
+         |> assign(:form_profile_id, hook[:profile_id] || "")
          |> assign(:form_signature_header, hook[:signature_header] || @default_signature_header)
          |> assign(:form_description, hook[:description] || "")
          |> assign(:form_rate_limit, hook[:rate_limit] || "")
@@ -101,6 +103,7 @@ defmodule PrismWeb.WebhooksLive do
      socket
      |> assign(:form_name, params["name"] || socket.assigns.form_name)
      |> assign(:form_target_ref, params["target_ref"] || socket.assigns.form_target_ref)
+     |> assign(:form_profile_id, params["profile_id"] || socket.assigns.form_profile_id)
      |> assign(
        :form_signature_header,
        params["signature_header"] || socket.assigns.form_signature_header
@@ -202,6 +205,7 @@ defmodule PrismWeb.WebhooksLive do
     %{
       "name" => params["name"],
       "target_ref" => params["target_ref"],
+      "profile_id" => default_or_value(params["profile_id"]),
       "input_template" => template_map,
       "signature_header" => default_or_value(params["signature_header"]),
       "description" => default_or_value(params["description"]),
@@ -221,6 +225,7 @@ defmodule PrismWeb.WebhooksLive do
     |> assign(:editing_name, nil)
     |> assign(:form_name, "")
     |> assign(:form_target_ref, "")
+    |> assign(:form_profile_id, "")
     |> assign(:form_signature_header, @default_signature_header)
     |> assign(:form_description, "")
     |> assign(:form_rate_limit, "")
@@ -380,6 +385,15 @@ defmodule PrismWeb.WebhooksLive do
                 placeholder="f:local.handle-github-push"
               />
             </div>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">Profile</label>
+            <.input name="profile_id" value={@form_profile_id} required placeholder="profile id" />
+            <p class="text-xs text-gray-600 mt-1">
+              Deliveries run under this profile's consented authority. Grant one from the
+              target component's consent sheet, then bind its id here.
+            </p>
           </div>
 
           <div class="grid grid-cols-2 gap-4">

@@ -63,8 +63,6 @@ export interface ToolsListResult {
 }
 
 // MCP error codes
-export const MCP_ERROR_SESSION_EXPIRED = -33302;
-export const MCP_ERROR_SESSION_REQUIRED = -33301;
 export const MCP_ERROR_AUTH_REQUIRED = -33001;
 
 // Execution event types

@@ -55,12 +55,16 @@ defmodule Opus.Runtime do
   - `:digest` - Content digest (for cache validation)
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
   - `:authority` - The `Sanctum.Authority` this execution runs under
-  - `:authority_required` - When true, a nil `:authority` raises instead of
-    executing (a WASM run always carries one; this is the final invariant guard)
+  - `:authority_required` - Defaults to true: a nil `:authority` raises instead
+    of executing (a WASM run always carries one; this is the final invariant
+    guard). Pass `false` only for authority-free harness runs in tests.
 
   ## Examples
 
-      iex> {:ok, result} = Opus.Runtime.execute_component(wasm_bytes, %{"a" => 5, "b" => 3})
+      iex> {:ok, result} =
+      ...>   Opus.Runtime.execute_component(wasm_bytes, %{"a" => 5, "b" => 3},
+      ...>     authority: authority
+      ...>   )
       iex> result
       %{"sum" => 8}
 
@@ -90,7 +94,7 @@ defmodule Opus.Runtime do
     # filter between the caller and here dropped :authority but kept the
     # requirement flag, the execution must die rather than run on ambient
     # permissions.
-    if Keyword.get(opts, :authority_required, false) and is_nil(authority) do
+    if Keyword.get(opts, :authority_required, true) and is_nil(authority) do
       raise ArgumentError,
             "execution requires an authority but none reached the runtime " <>
               "(reference: #{inspect(reference)}) — an opts filter dropped it"

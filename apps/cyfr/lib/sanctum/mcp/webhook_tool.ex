@@ -177,6 +177,7 @@ defmodule Sanctum.MCP.WebhookTool do
     Enum.reduce(
       [
         {"target_ref", :target_ref},
+        {"profile_id", :profile_id},
         {"input_template", :input_template},
         {"signature_header", :signature_header},
         {"timestamp_header", :timestamp_header},

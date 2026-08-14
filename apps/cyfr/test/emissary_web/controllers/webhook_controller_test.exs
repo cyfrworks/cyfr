@@ -40,11 +40,13 @@ defmodule EmissaryWeb.WebhookControllerTest do
 
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+    Sanctum.Test.ConsentFixtures.start_source!()
+    profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
       Webhook.create(
         ctx,
-        Map.merge(%{name: name, target_ref: "f:local.#{comp}"}, opts)
+        Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
       )
 
     result
@@ -94,9 +96,15 @@ defmodule EmissaryWeb.WebhookControllerTest do
 
       comp = "wh-orphan-#{System.unique_integer([:positive])}"
       Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+      Sanctum.Test.ConsentFixtures.start_source!()
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(departed_ctx, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(departed_ctx, %{name: "orphaned", target_ref: "f:local.#{comp}"})
+        Webhook.create(departed_ctx, %{
+          name: "orphaned",
+          target_ref: "f:local.#{comp}",
+          profile_id: profile
+        })
 
       body = ~s({})
       conn = post_signed(conn, slug, secret, body)
@@ -162,6 +170,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       assert conn.status == 401
     end
 
+    @tag :requires_opus
     test "passes signature check with custom header configured", %{conn: conn, ctx: ctx} do
       %{slug: slug, secret: secret} =
         create_hook!(ctx, "github-style", %{signature_header: "X-Hub-Signature-256"})
@@ -188,6 +197,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   describe "POST /hooks/:slug — async dispatch on valid signature" do
+    @tag :requires_opus
     test "returns 200 accepted with request_id immediately; missing component surfaces via :invoke, :stop telemetry",
          %{
            conn: conn,
@@ -214,6 +224,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
                      2_000
     end
 
+    @tag :requires_opus
     test "valid signature with input_template merges into invoke envelope", %{
       conn: conn,
       ctx: ctx
@@ -240,6 +251,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   describe "POST /hooks/:slug — body integrity" do
+    @tag :requires_opus
     test "raw body preservation across Plug.Parsers (signature verifies because body_reader cached the bytes)",
          %{
            conn: conn,

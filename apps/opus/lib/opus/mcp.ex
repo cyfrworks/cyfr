@@ -537,8 +537,10 @@ defmodule Opus.MCP do
     end
   end
 
-  # Force release action - emergency semaphore recovery (admin only)
-  def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
+  # Force release action - emergency semaphore recovery. Releasing EVERY
+  # tenant's slots is a platform-wide side effect, so a tenant-scoped :admin
+  # is not enough — only the operator (platform scope) may pull this lever.
+  def handle("execution", %Context{scope: :platform} = ctx, %{"action" => "force_release"}) do
     with :ok <- require_permission(ctx, :admin) do
       Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
 
@@ -548,10 +550,19 @@ defmodule Opus.MCP do
         %{user_id: ctx.user_id, auth_method: ctx.auth_method}
       )
 
-      Opus.ExecutionSemaphore.force_release_all()
-      status = Opus.ExecutionSemaphore.status()
-      {:ok, Map.put(status, :force_released, true)}
+      case Opus.ExecutionSemaphore.force_release_all() do
+        {:error, :semaphore_unavailable} ->
+          {:error, "Execution semaphore is not running — nothing was released"}
+
+        _released ->
+          status = scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())
+          {:ok, Map.put(status, :force_released, true)}
+      end
     end
+  end
+
+  def handle("execution", %Context{}, %{"action" => "force_release"}) do
+    {:error, "force_release is a platform-operator action (releases every tenant's slots)"}
   end
 
   # Invalid action

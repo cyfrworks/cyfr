@@ -11,11 +11,16 @@ defmodule Opus.Executor do
 
   ## Usage
 
+  Every execution roots under a `Sanctum.Authority` — production callers go
+  through the `Opus` facade (`run_root`/`run_child`), which derives one from
+  the caller's consented profile. Calling the executor directly requires
+  passing the authority explicitly:
+
       ctx = Sanctum.TestContext.local()
       reference = "reagent:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
-      {:ok, result} = Opus.Executor.run(ctx, reference, input)
+      {:ok, result} = Opus.Executor.run(ctx, reference, input, authority: authority)
       # result contains: output, execution_id, duration_ms, etc.
 
   ## Component Types
@@ -38,9 +43,6 @@ defmodule Opus.Executor do
   alias Opus.ExecutionRecord
   alias Opus.ExecutionEventBuffer
   alias Opus.ExecutionPipeline
-
-  # Default timeouts per component type
-  @default_timeout_ms %{catalyst: 180_000, formula: 300_000, reagent: 60_000}
 
   @doc """
   Execute a WASM component with the given input.
@@ -94,9 +96,7 @@ defmodule Opus.Executor do
   defp do_execute(ctx, resolved_reference, resolved_from, input, opts) do
     case inspect_component(ctx, resolved_reference) do
       {:ok, component_ref, extracted_type, component} ->
-        raw_type = extracted_type || opts[:type]
-
-        case parse_component_type(raw_type) do
+        case authoritative_type(extracted_type, opts[:type], resolved_reference) do
           {:ok, component_type} ->
             opts =
               if resolved_from, do: Keyword.put(opts, :resolved_from, resolved_from), else: opts
@@ -109,6 +109,33 @@ defmodule Opus.Executor do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # The registry's type is authoritative — type selects WASI capabilities, so
+  # a caller-supplied :type may assert but never decide. A missing registry
+  # type or a mismatched assertion refuses.
+  defp authoritative_type(nil, _asserted, reference) do
+    {:error, "Component '#{reference}' has no registry type — re-register it"}
+  end
+
+  defp authoritative_type(extracted, asserted, reference) do
+    with {:ok, component_type} <- parse_component_type(extracted) do
+      case asserted && parse_component_type(asserted) do
+        nil ->
+          {:ok, component_type}
+
+        {:ok, ^component_type} ->
+          {:ok, component_type}
+
+        {:ok, other} ->
+          {:error,
+           "Requested type #{other} does not match the registry type " <>
+             "#{component_type} for '#{reference}'"}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -250,21 +277,18 @@ defmodule Opus.Executor do
     limits = Sanctum.Authority.limits(authority)
     edge = edge_resources(authority)
 
-    timeout_ms =
-      case Sanctum.Limits.timeout_ms(limits) do
-        {:ok, ms} -> ms
-        {:error, _} -> Map.get(@default_timeout_ms, p.component_type, 60_000)
-      end
-
-    exec_opts = [
-      component_type: p.component_type,
-      timeout_ms: timeout_ms,
-      max_memory_bytes: limits.max_memory_bytes,
-      edge: edge,
-      limits: limits
-    ]
-
-    with {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
+    # An unparseable consented timeout fails the execution rather than
+    # substituting a default — a fallback here would silently run the node
+    # under a ceiling nobody consented to (mirrors Sanctum.Limits.new/1).
+    with {:ok, timeout_ms} <- node_timeout_ms(limits, p.component_ref),
+         exec_opts = [
+           component_type: p.component_type,
+           timeout_ms: timeout_ms,
+           max_memory_bytes: limits.max_memory_bytes,
+           edge: edge,
+           limits: limits
+         ],
+         {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
          :ok <- check_authority_rate_limit(p.ctx, p.component_ref, limits),
          :ok <- check_public_rate_buckets(p, authority, limits) do
       Enforcement.record(
@@ -283,6 +307,13 @@ defmodule Opus.Executor do
       )
 
       {:ok, %{p | exec_opts: exec_opts, edge: edge}}
+    end
+  end
+
+  defp node_timeout_ms(limits, component_ref) do
+    case Sanctum.Limits.timeout_ms(limits) do
+      {:ok, ms} -> {:ok, ms}
+      {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
     end
   end
 
@@ -481,11 +512,9 @@ defmodule Opus.Executor do
   end
 
   defp check_response_size(p, masked_output) do
-    max_response =
-      case Keyword.get(p.exec_opts, :limits) do
-        %Sanctum.Limits{max_response_size: max} -> max
-        _ -> 5_242_880
-      end
+    # Limits ride exec_opts from enforce_authority; their absence here means
+    # the pipeline was bypassed — refuse rather than substitute a ceiling.
+    %Sanctum.Limits{max_response_size: max_response} = Keyword.fetch!(p.exec_opts, :limits)
 
     case Jason.encode(masked_output) do
       {:ok, output_json} ->
@@ -582,8 +611,12 @@ defmodule Opus.Executor do
 
     cond do
       is_nil(expected_digest) ->
-        # No digest in registry — skip integrity check
-        :ok
+        # The registry column is NOT NULL, so a missing digest here means the
+        # cached component map lost its shape or bypassed registration — bytes
+        # without a pinned digest never reach the runtime.
+        {:error,
+         "No registry digest for #{reference} — refusing to execute unverified bytes. " <>
+           "Re-register the component."}
 
       actual_digest == "sha256:" <> expected_digest ->
         :ok
@@ -602,11 +635,8 @@ defmodule Opus.Executor do
   # Validate input size against the node's limits.
   # Returns {:ok, encoded_json} on success so callers can reuse the encoded form.
   defp validate_input_size(input, exec_opts, ctx, component_ref) do
-    max_size =
-      case Keyword.get(exec_opts, :limits) do
-        %Sanctum.Limits{max_request_size: max} -> max
-        _ -> 1_048_576
-      end
+    # Same posture as check_response_size: no limits, no execution.
+    %Sanctum.Limits{max_request_size: max_size} = Keyword.fetch!(exec_opts, :limits)
 
     case Jason.encode(input) do
       {:ok, input_json} ->
@@ -722,12 +752,7 @@ defmodule Opus.Executor do
     })
   end
 
-  defp parse_component_type(nil) do
-    Logger.warning("[Opus.Executor] No component type specified, defaulting to :reagent")
-    {:ok, :reagent}
-  end
-
-  defp parse_component_type(type) when is_atom(type) do
+  defp parse_component_type(type) when is_atom(type) and not is_nil(type) do
     if Opus.ComponentType.valid?(type) do
       {:ok, type}
     else
@@ -766,15 +791,20 @@ defmodule Opus.Executor do
     # back to ambient permissions. Checked before the semaphore so nothing is
     # consumed; the pipeline's rescue converts this into a failed execution
     # with the message intact.
-    if Keyword.get(opts, :authority_required, Keyword.get(exec_opts, :authority_required, false)) and
+    if Keyword.get(opts, :authority_required, Keyword.get(exec_opts, :authority_required, true)) and
          is_nil(Keyword.get(opts, :authority, Keyword.get(exec_opts, :authority))) do
       raise ArgumentError,
             "execution requires an authority but none was provided (reference: " <>
               "#{inspect(Keyword.get(exec_opts, :reference))})"
     end
 
-    type_default = Map.get(@default_timeout_ms, component_type, 60_000)
-    timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
+    # The pipeline always derives timeout_ms from the consented limits; a
+    # missing value means an opts filter dropped it — refuse rather than
+    # substitute a ceiling nobody consented to.
+    timeout_ms =
+      exec_opts[:timeout_ms] || opts[:timeout_ms] ||
+        raise(ArgumentError, "execution reached the runtime without a timeout — limits dropped")
+
     semaphore_timeout = min(timeout_ms, 30_000)
 
     tenant =

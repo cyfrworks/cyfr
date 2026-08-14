@@ -145,7 +145,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_parent-123", limits: limits)
+        FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -173,7 +176,10 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "works without limits (defaults)", %{ctx: ctx} do
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_parent-123")
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_parent-123",
+          authority: Sanctum.Authority.zero()
+        )
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -672,7 +678,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cancel_check", limits: limits)
+        FormulaHandler.build_formula_imports(ctx, "exec_cancel_check",
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       assert Map.has_key?(invoke_ns, "cancel")
@@ -764,7 +773,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {_imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_cleanup", limits: limits)
+        FormulaHandler.build_formula_imports(ctx, "exec_cleanup",
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       assert Process.alive?(tracker_pid)
       assert :ok == FormulaHandler.cleanup_registry(tracker_pid)
@@ -786,7 +798,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_test", limits: limits)
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_test",
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -804,7 +819,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_seq", limits: limits)
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_seq",
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -824,7 +842,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, "exec_emit_bad", limits: limits)
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_bad",
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -832,7 +853,9 @@ defmodule Opus.FormulaHandlerTest do
       result = emit_fn.("not valid json")
       parsed = Jason.decode!(result)
 
-      assert parsed["ok"] == true
+      # Under an authority a malformed emit is refused loudly, not
+      # swallowed: the guest gets a typed error envelope.
+      assert parsed["error"]["type"] == "invalid_request"
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -842,7 +865,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id, limits: limits)
+        FormulaHandler.build_formula_imports(ctx, execution_id,
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       # Subscribe to the execution events topic
       Opus.ExecutionEventBuffer.subscribe(execution_id)
@@ -868,7 +894,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id, limits: limits)
+        FormulaHandler.build_formula_imports(ctx, execution_id,
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -911,7 +940,10 @@ defmodule Opus.FormulaHandlerTest do
       limits = Sanctum.Limits.defaults(:formula)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(ctx, execution_id, limits: limits)
+        FormulaHandler.build_formula_imports(ctx, execution_id,
+          limits: limits,
+          authority: Sanctum.Authority.zero()
+        )
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -940,7 +972,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(ctx, parent_id,
           root_execution_id: root_id,
-          limits: limits
+          limits: limits,
+          authority: Sanctum.Authority.zero()
         )
 
       # Subscribe to both root and parent

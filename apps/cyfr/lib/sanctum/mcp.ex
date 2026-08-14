@@ -379,6 +379,13 @@ defmodule Sanctum.MCP do
               "description" =>
                 "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
             },
+            "profile_id" => %{
+              "type" => "string",
+              "description" =>
+                "Profile the webhook fires under (required on create). Deliveries run " <>
+                  "with this profile's consented authority; binding takes the consent " <>
+                  "authorization class, so an interactive session or consent-capable key is needed."
+            },
             "input_template" => %{
               "type" => "object",
               "description" =>

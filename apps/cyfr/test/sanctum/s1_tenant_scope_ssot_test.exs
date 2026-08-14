@@ -57,8 +57,12 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
 
     test "Webhook create/get/list still work", %{org_ctx: ctx} do
       Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx)
+      Sanctum.Test.ConsentFixtures.start_source!()
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
 
-      {:ok, %{name: "h1"}} = Webhook.create(ctx, %{name: "h1", target_ref: "f:local.h"})
+      {:ok, %{name: "h1"}} =
+        Webhook.create(ctx, %{name: "h1", target_ref: "f:local.h", profile_id: profile})
+
       assert {:ok, _} = Webhook.get(ctx, "h1")
       {:ok, list} = Webhook.list(ctx)
       assert Enum.any?(list, &(&1.name == "h1"))

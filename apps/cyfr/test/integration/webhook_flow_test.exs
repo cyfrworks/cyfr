@@ -58,11 +58,13 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     # execution fails cleanly, which is the path these tests observe.
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+    Sanctum.Test.ConsentFixtures.start_source!()
+    profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
       Webhook.create(
         ctx,
-        Map.merge(%{name: name, target_ref: "f:local.#{comp}"}, opts)
+        Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
       )
 
     result
@@ -72,6 +74,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
   end
 
+  @tag :requires_opus
   test "happy-path POST reaches controller and accepts async (proves W1 + W2 + body_reader pipeline)",
        %{conn: conn, ctx: ctx} do
     %{slug: slug, secret: secret} = create_hook!(ctx, "happy-path")
@@ -116,6 +119,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     assert conn.status == 401
   end
 
+  @tag :requires_opus
   test "idempotency dedup returns 200 with status:duplicate on repeat delivery",
        %{conn: conn, ctx: ctx} do
     %{slug: slug, secret: secret} =
@@ -194,6 +198,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     assert Plug.Exception.status(err) == 413
   end
 
+  @tag :requires_opus
   test "body within webhook size cap passes through the body reader",
        %{conn: conn, ctx: ctx} do
     Application.put_env(:cyfr, :webhook_max_body_bytes, 4096)

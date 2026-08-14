@@ -199,19 +199,12 @@ defmodule Opus.ExecutionRecord do
   def cancel(%Context{} = ctx, id) do
     case get(ctx, id) do
       {:ok, %{status: :running} = record} ->
-        now = DateTime.utc_now()
-        duration_ms = DateTime.diff(now, record.started_at, :millisecond)
-
-        cancelled_record = %{
-          record
-          | status: :cancelled,
-            completed_at: now,
-            duration_ms: duration_ms
-        }
-
-        case write_failed(cancelled_record) do
-          :ok -> {:ok, cancelled_record}
-          error -> error
+        # `get/2` authorized the READ; cancelling is a mutation and takes the
+        # :cancel action (:execute permission) — every ingress funnels through
+        # here, so a viewer credential cannot kill executions.
+        case Context.authorize(ctx, :cancel, {:execution, Map.from_struct(record)}) do
+          :ok -> do_cancel(record)
+          {:error, _} = error -> error
         end
 
       {:ok, _record} ->
@@ -219,6 +212,23 @@ defmodule Opus.ExecutionRecord do
 
       {:error, :not_found} ->
         {:error, :not_found}
+    end
+  end
+
+  defp do_cancel(record) do
+    now = DateTime.utc_now()
+    duration_ms = DateTime.diff(now, record.started_at, :millisecond)
+
+    cancelled_record = %{
+      record
+      | status: :cancelled,
+        completed_at: now,
+        duration_ms: duration_ms
+    }
+
+    case write_failed(cancelled_record) do
+      :ok -> {:ok, cancelled_record}
+      error -> error
     end
   end
 

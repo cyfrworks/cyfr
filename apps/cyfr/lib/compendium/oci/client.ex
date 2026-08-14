@@ -212,7 +212,7 @@ defmodule Compendium.OCI.Client do
          push_cref = %{cref | namespace: publisher},
          {:ok, component} <- get_local_component(ctx, cref),
          {:ok, content_bytes} <- get_component_content(ctx, component),
-         config_json = get_full_config(ctx, component, publisher, cref),
+         {:ok, config_json} <- get_full_config(ctx, publisher, cref),
          {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
          {:ok, _content_digest} <-
            Blob.upload(ctx, oci_ref, content_bytes, Manifest.wasm_media_type(cref.type)),
@@ -662,39 +662,13 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp build_config_json(component, publisher) do
-    config = %{
-      "name" => component[:name],
-      "version" => component[:version],
-      "type" => component[:component_type],
-      "publisher" => publisher,
-      "description" => component[:description] || "",
-      "tags" => decode_if_string(component[:tags], []),
-      "category" => component[:category],
-      "license" => component[:license],
-      "exports" => decode_if_string(component[:exports], [])
-    }
-
-    # Preserve dependencies from manifest if present
-    config =
-      case extract_manifest_dependencies(component) do
-        nil -> config
-        deps -> Map.put(config, "dependencies", deps)
-      end
-
-    case Jason.encode(config) do
-      {:ok, json} ->
-        json
-
-      {:error, reason} ->
-        Logger.error("[Compendium.OCI.Client] Failed to encode config JSON: #{inspect(reason)}")
-        "{}"
-    end
-  end
-
-  # Read full cyfr-manifest.json from the component's filesystem directory.
-  # Falls back to build_config_json if the manifest file doesn't exist (legacy).
-  defp get_full_config(ctx, component, publisher, cref) do
+  # Read the full cyfr-manifest.json from the component's filesystem
+  # directory. Every creation path writes it (scaffold, register, pull,
+  # tincture publish, fork), so a missing or unreadable manifest fails the
+  # push — synthesizing a config from the DB row would publish a second
+  # identity for the same artifact, and a transient storage error would do
+  # so silently.
+  defp get_full_config(ctx, publisher, cref) do
     manifest_path =
       Compendium.ComponentPath.file_path(
         cref.type,
@@ -705,27 +679,19 @@ defmodule Compendium.OCI.Client do
         ctx
       )
 
-    case Arca.get(ctx, manifest_path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, manifest} ->
-            updated =
-              manifest
-              |> Map.delete("id")
-              |> Map.put("publisher", publisher)
-              |> Map.put("name", cref.name)
-
-            case Jason.encode(updated) do
-              {:ok, json} -> json
-              {:error, _} -> build_config_json(component, publisher)
-            end
-
-          {:error, _} ->
-            build_config_json(component, publisher)
-        end
-
-      {:error, _} ->
-        build_config_json(component, publisher)
+    with {:ok, content} <- Arca.get(ctx, manifest_path),
+         {:ok, manifest} <- Jason.decode(content),
+         updated =
+           manifest
+           |> Map.delete("id")
+           |> Map.put("publisher", publisher)
+           |> Map.put("name", cref.name),
+         {:ok, json} <- Jason.encode(updated) do
+      {:ok, json}
+    else
+      {:error, reason} ->
+        {:error,
+         "cannot read cyfr-manifest.json for #{cref.name}@#{cref.version}: #{inspect(reason)}"}
     end
   end
 
@@ -844,44 +810,6 @@ defmodule Compendium.OCI.Client do
       :none -> opts
     end
   end
-
-  defp extract_manifest_dependencies(component) do
-    manifest = component[:manifest]
-
-    manifest =
-      case manifest do
-        nil ->
-          nil
-
-        m when is_map(m) ->
-          m
-
-        m when is_binary(m) ->
-          case Jason.decode(m) do
-            {:ok, decoded} -> decoded
-            _ -> nil
-          end
-      end
-
-    case manifest do
-      nil -> nil
-      m -> m["dependencies"]
-    end
-  end
-
-  defp decode_if_string(value, default) when is_binary(value) do
-    case Jason.decode(value) do
-      {:ok, decoded} ->
-        decoded
-
-      _ ->
-        Logger.debug("[Compendium.OCI.Client] JSON decode failed for value, using default")
-        default
-    end
-  end
-
-  defp decode_if_string(value, _default) when is_list(value), do: value
-  defp decode_if_string(_, default), do: default
 
   defp parse_config(config_bytes) do
     case Jason.decode(config_bytes) do

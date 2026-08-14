@@ -92,15 +92,17 @@ defmodule Opus.FormulaHandler do
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
   - `:limits` - The node's `Sanctum.Limits` (batch timeout, max concurrent tasks)
-  - `:authority` - The `Sanctum.Authority` the chain runs under. Execution
-    dispatch goes through `Opus.Chain` and every other tool through
-    `ToolRegistry.call_in_chain/5`. A formula run always carries one; a nil
-    authority raises upstream (`Opus.Executor.stage_enforce_policy`).
+  - `:authority` - The `Sanctum.Authority` the chain runs under (required).
+    Execution dispatch goes through `Opus.Chain` and every other tool through
+    `ToolRegistry.call_in_chain/5`. A formula run always carries one — the
+    executor raises before reaching here (`Opus.Executor.stage_enforce_policy`),
+    and this fetch keeps a direct caller honest too.
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
     for this node's onward invocations
   """
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
+    authority = Keyword.fetch!(opts, :authority)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     limits = opts[:limits]
 
@@ -123,7 +125,7 @@ defmodule Opus.FormulaHandler do
     emit_counter = :atomics.new(1, signed: false)
 
     authority_opts = [
-      authority: opts[:authority],
+      authority: authority,
       declared_needs: opts[:declared_needs],
       activation_digest: opts[:activation_digest]
     ]
@@ -181,7 +183,7 @@ defmodule Opus.FormulaHandler do
         "emit" =>
           {:fn,
            fn json_event ->
-             handle_emit(json_event, root_execution_id, emit_counter, ctx, opts[:authority])
+             handle_emit(json_event, root_execution_id, emit_counter, ctx, authority)
            end}
       }
     }
@@ -678,22 +680,9 @@ defmodule Opus.FormulaHandler do
   end
 
   # Guest text accumulates into buffers that trusted UI parses into
-  # pending cards, so under an authority every emit is transition-checked,
-  # size-capped by the node's own request limit, and attributed — the
-  # consumer can always tell a guest event from the host's.
-  defp handle_emit(json_event, execution_id, counter, ctx, nil) do
-    case Jason.decode(json_event) do
-      {:ok, data} ->
-        seq = :atomics.add_get(counter, 1, 1)
-        Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx)
-        Opus.Telemetry.formula_emit(execution_id, seq)
-        safe_encode(%{"ok" => true, "sequence" => seq})
-
-      {:error, _} ->
-        safe_encode(%{"ok" => true})
-    end
-  end
-
+  # pending cards, so every emit is transition-checked, size-capped by the
+  # node's own request limit, and attributed — the consumer can always tell
+  # a guest event from the host's.
   defp handle_emit(json_event, execution_id, counter, ctx, %Sanctum.Authority{} = authority) do
     limits = Sanctum.Authority.limits(authority)
 
@@ -742,9 +731,12 @@ defmodule Opus.FormulaHandler do
          }) do
       {:ok, _remaining} -> :ok
       {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
-      # A limiter malfunction must not silence a legitimate stream.
-      _ -> :ok
     end
+  catch
+    # A dead or unreachable limiter fails CLOSED, same as the executor's
+    # invocation gate: a configured limit must be enforceable, so
+    # unavailability denies rather than allowing an unbounded stream.
+    :exit, _reason -> {:error, :emit_rate_limited}
   end
 
   defp decode_emit_event(json_event) do

@@ -37,6 +37,7 @@ defmodule Sanctum.CipherIntegrationTest do
       project_id: "default",
       scope: :project,
       permissions: [:execute, :secrets_read, :secrets_write],
+      auth_method: :oidc,
       authenticated: true
     )
   end
@@ -53,9 +54,15 @@ defmodule Sanctum.CipherIntegrationTest do
     test "create → verify; rotate → old (grace) + new both verify; tenant-mismatch fails closed",
          %{ctx: ctx} do
       Sanctum.Test.ComponentHelpers.register_test_component("x", "1.0.0", "catalyst", %{}, ctx)
+      Sanctum.Test.ConsentFixtures.start_source!()
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "catalyst:local.x:1.0.0")
 
       {:ok, %{secret: secret, slug: slug}} =
-        Webhook.create(ctx, %{name: "h", target_ref: "catalyst:local.x:1.0.0"})
+        Webhook.create(ctx, %{
+          name: "h",
+          target_ref: "catalyst:local.x:1.0.0",
+          profile_id: profile
+        })
 
       {:ok, row} = Arca.WebhookStorage.get_by_slug(slug)
       body = "event-body"

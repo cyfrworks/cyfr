@@ -410,9 +410,12 @@ defmodule Sanctum.Webhook do
 
   # Binding a registration to a profile mints a standing conduit for that
   # profile's authority — it takes the consent authorization class, not a
-  # permission a wildcard key would satisfy. Absent or nil means unbound
-  # (legacy firing path) and needs nothing extra.
-  defp authorize_profile_binding(_ctx, _target_ref, nil), do: :ok
+  # permission a wildcard key would satisfy. A webhook fires under its bound
+  # profile's consent or not at all, so an unbound registration is refused at
+  # creation rather than minted as a row that can never fire.
+  defp authorize_profile_binding(_ctx, _target_ref, nil) do
+    {:error, "profile_id is required — a webhook fires under its bound profile's consent"}
+  end
 
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do

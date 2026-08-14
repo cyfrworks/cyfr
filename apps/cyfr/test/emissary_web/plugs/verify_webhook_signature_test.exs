@@ -16,12 +16,14 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
 
   defp create_hook!(ctx, name, opts \\ []) do
     Sanctum.Test.ComponentHelpers.register_test_component("handler", "1.0.0", "formula", %{})
+    Sanctum.Test.ConsentFixtures.start_source!()
+    profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.handler")
 
     {:ok, result} =
       Webhook.create(
         ctx,
         Map.merge(
-          %{name: name, target_ref: "f:local.handler"},
+          %{name: name, target_ref: "f:local.handler", profile_id: profile},
           Map.new(opts)
         )
       )
