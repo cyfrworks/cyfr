@@ -24,10 +24,9 @@ defmodule Sanctum.Policy.Enforcement do
     * `policy_consultation` — policy was consulted, decision allowed
     * `domain_blocked` — HTTP egress blocked by `allowed_domains`
     * `method_blocked` — HTTP egress blocked by `allowed_methods`
+    * `scheme_blocked` — HTTP egress blocked by scheme
     * `rate_limit` — rate limit exceeded
     * `request_size` — input/output exceeded `max_request_size`/`max_response_size`
-    * `dependency_unsatisfied` — formula dependency not installed/granted
-    * `policy_unconfigured` — catalyst with no `allowed_domains`/`allowed_paths`
     * `denied` — catch-all when a more specific type doesn't fit
 
   ## Telemetry
@@ -52,8 +51,6 @@ defmodule Sanctum.Policy.Enforcement do
           | :scheme_blocked
           | :rate_limit
           | :request_size
-          | :dependency_unsatisfied
-          | :policy_unconfigured
           | :denied
 
   @doc """

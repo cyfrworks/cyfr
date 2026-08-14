@@ -662,15 +662,17 @@ defmodule Emissary.MCP.ExternalServer do
 
   def resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
 
-  # The secrets plane is gone: a stale `secret:` header reference fails
-  # closed with a server-side hint. Errors stay opaque outward.
+  # `vault:` is the only credential reference. `secret:` is refused rather
+  # than falling through to the literal clause below, which would send the
+  # operator's reference text to a third party as the header value — a
+  # request that silently fails to authenticate while looking like it tried.
   defp resolve_value("secret:" <> _name, org_id, _project_id) do
     Logger.warning(
-      "[ExternalServer] secret: header references are no longer resolvable — " <>
-        "rebind the header to vault:CONNECTION (org=#{org_id})"
+      "[ExternalServer] 'secret:' is not a credential reference — " <>
+        "use vault:<entry name> (org=#{org_id})"
     )
 
-    {:error, :secret_ref_retired}
+    {:error, :unknown_credential_reference}
   end
 
   # A vault-backed header: `vault:<entry name>` resolves the entry's single

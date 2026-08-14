@@ -163,7 +163,7 @@ defmodule Compendium.RegistryTest do
           name: "dup-test",
           version: "1.0.0",
           type: "reagent",
-          publisher: "cyfr"
+          publisher: "acme"
         })
 
       assert {:error, {:already_exists, "dup-test", "1.0.0"}} =
@@ -171,7 +171,7 @@ defmodule Compendium.RegistryTest do
                  name: "dup-test",
                  version: "1.0.0",
                  type: "reagent",
-                 publisher: "cyfr"
+                 publisher: "acme"
                })
     end
 
@@ -827,7 +827,7 @@ defmodule Compendium.RegistryTest do
           name: "pub-test",
           version: "1.0.0",
           type: "reagent",
-          publisher: "cyfr"
+          publisher: "acme"
         })
 
       # Without publisher, should return a component
@@ -838,9 +838,9 @@ defmodule Compendium.RegistryTest do
       {:ok, local_comp} = Registry.get(ctx, "pub-test", "1.0.0", "local")
       assert local_comp.publisher == "local"
 
-      # With publisher "cyfr", should return the cyfr one
-      {:ok, cyfr_comp} = Registry.get(ctx, "pub-test", "1.0.0", "cyfr")
-      assert cyfr_comp.publisher == "cyfr"
+      # With publisher "acme", should return the acme one
+      {:ok, acme_comp} = Registry.get(ctx, "pub-test", "1.0.0", "acme")
+      assert acme_comp.publisher == "acme"
 
       # With non-existent publisher, should return not_found
       assert {:error, :not_found} = Registry.get(ctx, "pub-test", "1.0.0", "nonexistent")
@@ -858,24 +858,49 @@ defmodule Compendium.RegistryTest do
           description: "Local version"
         })
 
-      {:ok, cyfr} =
+      {:ok, acme} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
           name: "collision-test",
           version: "1.0.0",
           type: "reagent",
-          publisher: "cyfr",
-          description: "CYFR version"
+          publisher: "acme",
+          description: "Acme version"
         })
 
       assert local.publisher == "local"
-      assert cyfr.publisher == "cyfr"
+      assert acme.publisher == "acme"
 
       # Both should be retrievable by publisher filter
       {:ok, got_local} = Registry.get(ctx, "collision-test", "1.0.0", "local")
-      {:ok, got_cyfr} = Registry.get(ctx, "collision-test", "1.0.0", "cyfr")
+      {:ok, got_acme} = Registry.get(ctx, "collision-test", "1.0.0", "acme")
 
       assert got_local.description == "Local version"
-      assert got_cyfr.description == "CYFR version"
+      assert got_acme.description == "Acme version"
+    end
+
+    test "the 'cyfr' namespace is reserved for platform-scoped callers", %{ctx: ctx} do
+      # The gate used to ask for a `:cyfr_publish` permission no vocabulary
+      # contains, so only the `:*` wildcard every interactive login carries
+      # ever passed it — the reservation held against nobody.
+      assert {:error, {:namespace_reserved, _}} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "reserved-test",
+                 version: "1.0.0",
+                 type: "reagent",
+                 publisher: "cyfr"
+               })
+
+      platform_ctx = %{ctx | scope: :platform}
+
+      assert {:ok, component} =
+               Registry.publish_bytes(platform_ctx, @valid_wasm, %{
+                 name: "reserved-test",
+                 version: "1.0.0",
+                 type: "reagent",
+                 publisher: "cyfr"
+               })
+
+      assert component.publisher == "cyfr"
     end
   end
 

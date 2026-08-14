@@ -26,10 +26,9 @@ defmodule PrismWeb.EnforcementsLive do
     {"policy_consultation", "policy_consultation"},
     {"domain_blocked", "domain_blocked"},
     {"method_blocked", "method_blocked"},
+    {"scheme_blocked", "scheme_blocked"},
     {"rate_limit", "rate_limit"},
     {"request_size", "request_size"},
-    {"dependency_unsatisfied", "dependency_unsatisfied"},
-    {"policy_unconfigured", "policy_unconfigured"},
     {"denied", "denied"}
   ]
 
@@ -193,10 +192,9 @@ defmodule PrismWeb.EnforcementsLive do
       "policy_consultation" -> "bg-emerald-900/30 text-emerald-300 border-emerald-800/50"
       "domain_blocked" -> "bg-red-900/30 text-red-300 border-red-800/50"
       "method_blocked" -> "bg-red-900/30 text-red-300 border-red-800/50"
+      "scheme_blocked" -> "bg-red-900/30 text-red-300 border-red-800/50"
       "rate_limit" -> "bg-amber-900/30 text-amber-300 border-amber-800/50"
       "request_size" -> "bg-amber-900/30 text-amber-300 border-amber-800/50"
-      "dependency_unsatisfied" -> "bg-purple-900/30 text-purple-300 border-purple-800/50"
-      "policy_unconfigured" -> "bg-purple-900/30 text-purple-300 border-purple-800/50"
       "denied" -> "bg-red-900/30 text-red-300 border-red-800/50"
       _ -> "bg-gray-800 text-gray-300 border-gray-700"
     end

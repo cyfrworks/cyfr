@@ -443,11 +443,6 @@ if config_env() != :test do
       raise message
   end
 
-  # Vault Configuration (optional)
-  # (Removed: :cyfr_run_api_url. The REST host now lives under :registry_url
-  # above — set via CYFR_REGISTRY_URL. The CyfrRun.Client reads that key to
-  # build `https://<registry_url>` as its base URL.)
-
   # Sigstore Configuration
   if cosign_key = env!("CYFR_COSIGN_KEY", :string, nil) do
     config :cyfr, :sigstore,

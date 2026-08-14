@@ -1080,16 +1080,18 @@ defmodule Compendium.Registry do
     end
   end
 
-  # The "cyfr" namespace is reserved for first-party components.
-  # Publishing to it requires the :cyfr_publish permission.
+  # The "cyfr" namespace is reserved for first-party components: only a
+  # platform-scoped caller may publish there. The gate used to ask for a
+  # `:cyfr_publish` permission that appears in no vocabulary and can be
+  # granted to nobody — `Sanctum.Atoms` would strip it off a key — so the
+  # only thing that ever passed was the `:*` wildcard every interactive
+  # login carries, which is to say the reservation held against no one.
   # "local" is unrestricted; all other namespaces are open.
-  defp validate_publish_namespace("cyfr", %Context{} = ctx) do
-    if Context.has_permission?(ctx, :cyfr_publish) do
-      :ok
-    else
-      {:error,
-       {:namespace_reserved, "the 'cyfr' namespace is reserved for CYFR first-party components"}}
-    end
+  defp validate_publish_namespace("cyfr", %Context{scope: :platform}), do: :ok
+
+  defp validate_publish_namespace("cyfr", %Context{}) do
+    {:error,
+     {:namespace_reserved, "the 'cyfr' namespace is reserved for CYFR first-party components"}}
   end
 
   defp validate_publish_namespace(_publisher, _ctx), do: :ok
