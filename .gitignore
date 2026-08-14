@@ -97,7 +97,3 @@ tmp/
 
 # Docs symlink (points to external directory)
 docs
-
-# Porta (Tauri desktop app)
-apps/porta/target/
-apps/porta/gen/
