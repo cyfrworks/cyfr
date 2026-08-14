@@ -319,18 +319,4 @@ defmodule MultiTenantIsolationTest do
       assert is_nil(result) or is_binary(result)
     end
   end
-
-  describe "Sanctum.Permission tenant isolation (tenant-scoped by design)" do
-    test "permissions set by tenant_a are not visible to tenant_b", %{a: ctx_a, b: ctx_b} do
-      :ok = Sanctum.Permission.set(ctx_a, "alice", ["execute", "storage_read"])
-
-      assert {:ok, ["execute", "storage_read"]} = Sanctum.Permission.get(ctx_a, "alice")
-      assert {:ok, []} = Sanctum.Permission.get(ctx_b, "alice")
-
-      {:ok, list_a} = Sanctum.Permission.list(ctx_a)
-      {:ok, list_b} = Sanctum.Permission.list(ctx_b)
-      assert Enum.any?(list_a, &(&1.subject == "alice"))
-      refute Enum.any?(list_b, &(&1.subject == "alice"))
-    end
-  end
 end

@@ -11,8 +11,7 @@ defmodule Arca.R6OrgLessFailClosedTest do
      forgets the Sanctum chokepoint still cannot read the seeded local org's
      rows. The bare-key `where_org_id/2` filter canonicalizes nil/"" to the
      local sentinel (org strings carry no authentication state to judge).
-  2. Write path / chokepoint — `Sanctum.Permission` calls
-     `Context.require_tenant!`, and `Arca.Storage.tenant_segments/1` fails
+  2. Write path / chokepoint — `Arca.Storage.tenant_segments/1` fails
      closed for a nil/"" org. The seeded `"local"` org substitutes the
      namespace (single-user layout); a genuinely org-less context raises.
   """
@@ -60,22 +59,6 @@ defmodule Arca.R6OrgLessFailClosedTest do
   end
 
   describe "Sanctum chokepoints reject an org-less context" do
-    test "Sanctum.Permission.{get,set,list,delete} reject an org-less context" do
-      ctx = Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
-
-      assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.get(ctx, "subj") end
-
-      assert_raise Sanctum.UnauthorizedError, fn ->
-        Sanctum.Permission.set(ctx, "subj", ["execute"])
-      end
-
-      assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.list(ctx) end
-      assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.delete(ctx, "subj") end
-      # has?/check_permission go through get/2 → inherit the chokepoint.
-      assert_raise Sanctum.UnauthorizedError, fn ->
-        Sanctum.Permission.has?(ctx, "subj", "execute")
-      end
-    end
 
     test "Arca.Storage.tenant_segments/1 fails closed for an org-less context" do
       ctx = Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)

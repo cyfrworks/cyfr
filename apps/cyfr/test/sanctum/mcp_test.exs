@@ -35,14 +35,16 @@ defmodule Sanctum.MCPTest do
   describe "tools/0" do
     test "returns 8 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 8
+      assert length(tools) == 7
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
       # No "secret" tool: the legacy secrets plane retired; vault entries
       # are the only credential store.
       refute "secret" in tool_names
-      assert "permission" in tool_names
+      # No "permission" tool: memberships are presence-only, there are no
+      # roles, and the decorative RBAC store is gone.
+      refute "permission" in tool_names
       assert "key" in tool_names
       assert "vault" in tool_names
       assert "profile" in tool_names
@@ -82,12 +84,8 @@ defmodule Sanctum.MCPTest do
   end
 
   describe "resource_templates/0" do
-    test "returns permission template" do
-      templates = MCP.resource_templates()
-      assert length(templates) == 1
-
-      template = hd(templates)
-      assert template.uriTemplate == "sanctum://permissions/{reference}"
+    test "returns no templates" do
+      assert MCP.resource_templates() == []
     end
   end
 
@@ -106,15 +104,6 @@ defmodule Sanctum.MCPTest do
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
-      assert is_list(content["permissions"])
-    end
-
-    test "reads resource-specific permissions", %{ctx: ctx} do
-      {:ok, result} = MCP.read(ctx, "sanctum://permissions/components/test-component:1.0")
-      assert result.mimeType == "application/json"
-
-      content = Jason.decode!(result.content)
-      assert content["reference"] == "components/test-component:1.0"
       assert is_list(content["permissions"])
     end
 
@@ -207,62 +196,6 @@ defmodule Sanctum.MCPTest do
     test "the secret tool is no longer routable", %{ctx: ctx} do
       {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list"})
       assert msg =~ "Unknown tool"
-    end
-  end
-
-  # ============================================================================
-  # Permission Tool
-  # ============================================================================
-
-  describe "permission tool" do
-    test "list returns empty initially", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("permission", ctx, %{"action" => "list"})
-      assert result.permissions == []
-      assert result.count == 0
-    end
-
-    test "set and get permissions", %{ctx: ctx} do
-      {:ok, result} =
-        MCP.handle("permission", ctx, %{
-          "action" => "set",
-          "subject" => "user@example.com",
-          "permissions" => ["execute", "component.push"]
-        })
-
-      assert result.updated == true
-
-      {:ok, result} =
-        MCP.handle("permission", ctx, %{
-          "action" => "get",
-          "subject" => "user@example.com"
-        })
-
-      assert result.permissions == ["execute", "component.push"]
-    end
-
-    test "get missing subject returns empty permissions", %{ctx: ctx} do
-      {:ok, result} =
-        MCP.handle("permission", ctx, %{
-          "action" => "get",
-          "subject" => "unknown@example.com"
-        })
-
-      assert result.permissions == []
-    end
-
-    test "set without permissions returns error", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("permission", ctx, %{
-          "action" => "set",
-          "subject" => "user@example.com"
-        })
-
-      assert msg =~ "Missing required"
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("permission", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid permission action"
     end
   end
 
@@ -408,64 +341,6 @@ defmodule Sanctum.MCPTest do
 
       assert msg =~ "Unauthorized"
       assert msg =~ "admin"
-    end
-
-    test "permission:set prevents self-escalation without admin", %{restricted_ctx: _ctx} do
-      # A user with users_manage but not admin cannot set their own permissions
-      manage_ctx = %Context{
-        user_id: "restricted_user",
-        org_id: nil,
-        permissions: MapSet.new([:users_manage, :execute]),
-        scope: :project,
-        auth_method: :api_key,
-        api_key_type: :application,
-        authenticated: true
-      }
-
-      {:error, msg} =
-        MCP.handle("permission", manage_ctx, %{
-          "action" => "set",
-          "subject" => "restricted_user",
-          "permissions" => ["admin"]
-        })
-
-      assert msg =~ "Cannot modify own permissions"
-    end
-
-    test "permission:set prevents granting permissions the caller lacks", %{restricted_ctx: _ctx} do
-      # A user with users_manage cannot grant permissions they don't have
-      manage_ctx = %Context{
-        user_id: "manager_user",
-        org_id: nil,
-        permissions: MapSet.new([:users_manage, :execute]),
-        scope: :project,
-        auth_method: :api_key,
-        api_key_type: :application,
-        authenticated: true
-      }
-
-      {:error, msg} =
-        MCP.handle("permission", manage_ctx, %{
-          "action" => "set",
-          "subject" => "other_user",
-          "permissions" => ["admin", "policy_manage"]
-        })
-
-      assert msg =~ "Cannot grant permissions you do not possess"
-      assert msg =~ "admin"
-      assert msg =~ "policy_manage"
-    end
-
-    test "permission:set allows admin to set any permissions for any subject", %{ctx: ctx} do
-      # ctx is Sanctum.TestContext.local() which has :* (wildcard) permission
-      {:ok, result} =
-        MCP.handle("permission", ctx, %{
-          "action" => "set",
-          "subject" => ctx.user_id,
-          "permissions" => ["admin", "policy_manage", "secrets_write"]
-        })
-
-      assert result.updated == true
     end
   end
 

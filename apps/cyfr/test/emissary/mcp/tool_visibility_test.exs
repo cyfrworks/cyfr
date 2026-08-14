@@ -98,7 +98,6 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "delete",
         "re_resolve"
       ]),
-      make_tool("permission", ["get", "list", "set"]),
       make_tool("record", ["get", "list"]),
       make_tool("retention", ["get", "set", "cleanup"]),
       make_tool("mcp_log", ["list", "get", "correlate", "stats"]),

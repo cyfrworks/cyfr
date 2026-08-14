@@ -8,7 +8,6 @@ defmodule Sanctum.MCP do
   ## Tools
 
   - `session` - Session management (login, logout, whoami)
-  - `permission` - Permission management (get, set, list)
   - `key` - API key management (create, get, list, revoke, rotate)
   - `tincture_visibility` - Tincture public/private visibility (set, get)
 
@@ -19,9 +18,9 @@ defmodule Sanctum.MCP do
 
   ## Architecture Note
 
-  This module lives in the `sanctum` app, keeping tool definitions
-  close to their implementation. Authentication tools (login/logout)
-  are handled differently as they require browser redirects.
+  Tool definitions live next to their implementation under `lib/sanctum`.
+  Authentication tools (login/logout) are handled differently as they
+  require browser redirects.
   """
 
   @behaviour Emissary.MCP.ToolProvider
@@ -57,14 +56,7 @@ defmodule Sanctum.MCP do
   Returns Sanctum resource templates (RFC 6570 URI templates).
   """
   def resource_templates do
-    [
-      %{
-        uriTemplate: "sanctum://permissions/{reference}",
-        name: "Resource Permissions",
-        description: "Access permissions for a specific resource",
-        mimeType: "application/json"
-      }
-    ]
+    []
   end
 
   @doc """
@@ -88,28 +80,6 @@ defmodule Sanctum.MCP do
       end
 
     {:ok, %{content: content, mimeType: "application/json"}}
-  end
-
-  def read(%Context{} = ctx, "sanctum://permissions/" <> reference) do
-    case Sanctum.Permission.get_for_resource(ctx, reference) do
-      {:ok, perms} ->
-        content =
-          case Jason.encode(%{reference: reference, permissions: perms}) do
-            {:ok, json} -> json
-            {:error, _} -> ~s({"error":"encoding_error"})
-          end
-
-        {:ok, %{content: content, mimeType: "application/json"}}
-
-      {:error, _} ->
-        content =
-          case Jason.encode(%{reference: reference, permissions: []}) do
-            {:ok, json} -> json
-            {:error, _} -> ~s({"error":"encoding_error"})
-          end
-
-        {:ok, %{content: content, mimeType: "application/json"}}
-    end
   end
 
   def read(_ctx, uri) do
@@ -159,10 +129,9 @@ defmodule Sanctum.MCP do
                   "default OAuth provider (`auth_provider = Sanctum.Auth.OAuth`); " <>
                   "deployments with a configured OIDC auth provider authenticate " <>
                   "via the web OIDC flow at " <>
-                  "`/auth/<provider>`. Push-token identity (cyfr.run) is a " <>
-                  "separate `registry` tool under Compendium — the legacy " <>
-                  "`registry-login` action is no longer supported; use the " <>
-                  "`registry` tool's `probe` and `claim_personal` actions instead."
+                  "`/auth/<provider>`. Push-token identity (cyfr.run) lives on the " <>
+                  "separate `registry` tool under Compendium — see its " <>
+                  "`probe` and `claim_personal` actions."
             },
             "provider" => %{
               "type" => "string",
@@ -209,44 +178,6 @@ defmodule Sanctum.MCP do
             "client_secret" => %{
               "type" => "string",
               "description" => "The OAuth app's client secret (omit for public clients)"
-            }
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "permission",
-        title: "Permission Management",
-        description: "Manage RBAC permissions - get, set, or list permissions",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: false,
-          actions: %{
-            "get" => %{kind: :read, planes: [:external]},
-            "set" => %{kind: :write, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external]}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get", "set", "list"],
-              "description" => "Action to perform"
-            },
-            "subject" => %{
-              "type" => "string",
-              "description" => "User or resource identifier"
-            },
-            "permissions" => %{
-              "type" => "array",
-              "items" => %{"type" => "string"},
-              "description" => "List of permissions to set"
-            },
-            "resource" => %{
-              "type" => "string",
-              "description" => "Resource path (e.g., 'components/...')"
             }
           },
           "required" => ["action"]
@@ -574,7 +505,6 @@ defmodule Sanctum.MCP do
 
   def handle("session", ctx, args), do: Sanctum.MCP.SessionTool.handle(ctx, args)
   def handle("oauth", ctx, args), do: Sanctum.MCP.OAuthTool.handle(ctx, args)
-  def handle("permission", ctx, args), do: Sanctum.MCP.PermissionTool.handle(ctx, args)
   def handle("key", ctx, args), do: Sanctum.MCP.KeyTool.handle(ctx, args)
 
   def handle("tincture_visibility", ctx, args),

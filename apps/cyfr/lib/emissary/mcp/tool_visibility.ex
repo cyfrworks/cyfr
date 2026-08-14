@@ -88,13 +88,6 @@ defmodule Emissary.MCP.ToolVisibility do
     "registry.members_update" => :component_manage,
     "registry.members_remove" => :component_manage,
 
-    # :users_read
-    "permission.get" => :users_read,
-    "permission.list" => :users_read,
-
-    # :users_manage
-    "permission.set" => :users_manage,
-
     # :storage_read
     "record.get" => :storage_read,
     "record.list" => :storage_read,

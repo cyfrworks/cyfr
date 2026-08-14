@@ -20,7 +20,11 @@ defmodule Sanctum.Atoms do
   """
 
   # Known permission atoms — only scopes that are actually enforced via require_permission
-  @known_permissions ~w(secrets_read secrets_write users_manage admin * execute storage_read storage_write execution_write component_read component_manage policy_read policy_manage users_read)
+  @known_permissions ~w(secrets_read secrets_write admin * execute storage_read storage_write execution_write component_read component_manage)
+
+  @doc "The permission vocabulary — the one list every granted scope must appear in."
+  @spec known_permissions() :: [String.t()]
+  def known_permissions, do: @known_permissions
 
   # Known provider atoms
   @known_providers ~w(github google okta azure local oidc)

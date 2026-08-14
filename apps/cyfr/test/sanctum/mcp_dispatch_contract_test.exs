@@ -17,12 +17,11 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   alias Sanctum.MCP
 
-  @tool_names ~w(session oauth permission key tincture_visibility webhook vault profile)
+  @tool_names ~w(session oauth key tincture_visibility webhook vault profile)
 
   @action_enums %{
     "session" => ["login", "logout", "whoami", "device_init", "device_poll"],
     "oauth" => ["set_client"],
-    "permission" => ["get", "set", "list"],
     "key" => ["create", "get", "list", "revoke", "rotate"],
     "tincture_visibility" => ["set", "get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
@@ -34,7 +33,6 @@ defmodule Sanctum.MCPDispatchContractTest do
     "session" =>
       "Invalid session action. Use: login, logout, whoami, device_init, or device_poll",
     "oauth" => "Invalid oauth action. Use: set_client",
-    "permission" => "Invalid permission action. Use: get, set, or list",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: set, get",
     "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
@@ -44,7 +42,7 @@ defmodule Sanctum.MCPDispatchContractTest do
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 10 tools, in order" do
+    test "exactly these 7 tools, in order" do
       assert Enum.map(MCP.tools(), & &1.name) == @tool_names
     end
 
@@ -90,14 +88,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     end
 
     test "resource_templates/0" do
-      assert MCP.resource_templates() == [
-               %{
-                 uriTemplate: "sanctum://permissions/{reference}",
-                 name: "Resource Permissions",
-                 description: "Access permissions for a specific resource",
-                 mimeType: "application/json"
-               }
-             ]
+      assert MCP.resource_templates() == []
     end
   end
 
@@ -123,13 +114,6 @@ defmodule Sanctum.MCPDispatchContractTest do
                MCP.read(ctx, "sanctum://permissions")
 
       assert Map.has_key?(Jason.decode!(content), "permissions")
-    end
-
-    test "sanctum://permissions/{ref} returns a content map", %{ctx: ctx} do
-      assert {:ok, %{content: content, mimeType: "application/json"}} =
-               MCP.read(ctx, "sanctum://permissions/catalyst:local.foo")
-
-      assert Map.has_key?(Jason.decode!(content), "reference")
     end
 
     test "unknown URI → exact error string", %{ctx: ctx} do

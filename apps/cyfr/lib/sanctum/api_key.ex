@@ -57,12 +57,11 @@ defmodule Sanctum.ApiKey do
 
   # Default scopes applied when none are specified
   @type_defaults %{
-    application: ["execute", "component_read", "policy_read", "storage_read"],
+    application: ["execute", "component_read", "storage_read"],
     service: [
       "execute",
       "secrets_read",
       "component_read",
-      "policy_read",
       "storage_read",
       "storage_write"
     ],
@@ -71,22 +70,24 @@ defmodule Sanctum.ApiKey do
 
   # Maximum allowed scopes per key type
   @type_ceilings %{
-    application: ["execute", "secrets_read", "component_read", "policy_read", "storage_read"],
+    application: ["execute", "secrets_read", "component_read", "storage_read"],
     service: [
       "execute",
       "secrets_read",
       "secrets_write",
       "component_read",
       "component_manage",
-      "policy_read",
-      "policy_manage",
-      "users_read",
       "storage_read",
       "storage_write",
       "execution_write"
     ],
-    admin: ["secrets_read", "secrets_write", "users_manage", "admin", "*"]
+    admin: ["secrets_read", "secrets_write", "admin", "*"]
   }
+
+  @doc false
+  def type_defaults, do: @type_defaults
+  @doc false
+  def type_ceilings, do: @type_ceilings
 
   # ============================================================================
   # Public API

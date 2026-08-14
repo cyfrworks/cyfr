@@ -420,9 +420,9 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
       assert ctx.auth_method == :api_key
       assert ctx.api_key_type == :application
-      # Application keys get default scopes: execute, component_read, policy_read, storage_read
+      # Application keys get default scopes: execute, component_read, storage_read
       assert ctx.permissions ==
-               MapSet.new([:execute, :component_read, :policy_read, :storage_read])
+               MapSet.new([:execute, :component_read, :storage_read])
 
       assert conn.assigns[:auth_method] == :api_key
     end

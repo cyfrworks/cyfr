@@ -579,7 +579,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr call vault '{"action":"list",…}'` | Manage Connections (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Connections page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
-| `cyfr permission get/set/list` | Manage RBAC permissions `[i]` |
 | `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Connections page |
 
 ### Administration

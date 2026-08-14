@@ -800,7 +800,6 @@ defmodule EmissaryWeb.MCPControllerTest do
       {"component", "compendium"},
       {"retention", "arca"},
       {"session", "sanctum"},
-      {"permission", "sanctum"},
       {"key", "sanctum"},
       {"system", "emissary"}
     ]
