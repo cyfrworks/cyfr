@@ -12,28 +12,10 @@ defmodule Emissary.MCP.Progress do
   stream with the response. There is no separate stream to open and nothing to
   correlate by hand.
 
-  ## Why this replaced a buffer keyed by session
-
-  The previous design pushed progress into `Emissary.MCP.SSEBuffer` under a
-  per-credential session key, and expected the caller to be holding a
-  `GET /mcp` stream keyed the same way. Three things were wrong with it, and
-  only the third was a conformance problem:
-
-    * **It did not work.** A bearer-authenticated caller's session came from
-      `Session.for_credential/2`, which is deliberately never stored, so the
-      stream's own liveness check (`Session.exists?/1`) failed and closed it
-      after the first keep-alive. Progress for API-key callers — which is every
-      CLI user — died 15 seconds in.
-
-    * **The key was too coarse.** It was stable per credential, so two
-      concurrent calls by the same caller shared one channel and each received
-      the other's progress.
-
-    * The standalone stream and its `Last-Event-ID` resumption were removed from
-      the protocol.
-
-  Keying on `context.request_id` fixes the second point by construction: it is
-  minted per request, so a channel belongs to exactly one call.
+  Channels are keyed on `context.request_id`, which is minted per request, so
+  a channel belongs to exactly one call. A key that was stable per credential
+  would hand two concurrent calls by the same caller a shared channel, and
+  each would receive the other's progress.
 
   ## Contract
 

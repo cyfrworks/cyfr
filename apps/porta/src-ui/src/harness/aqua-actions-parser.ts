@@ -29,8 +29,6 @@ export type Intent =
       action_description: string;
     };
 
-export type IntentKind = Intent["kind"];
-
 const ALLOWED_PATHS = new Set<string>([
   "/",
   "/tinctures",

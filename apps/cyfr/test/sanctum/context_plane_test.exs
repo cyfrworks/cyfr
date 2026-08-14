@@ -65,10 +65,6 @@ defmodule Sanctum.ContextPlaneTest do
       assert Context.has_permission?(guest, :admin)
       assert {:error, message} = Context.require_permission(guest, :admin)
       assert message =~ "guest-plane"
-
-      assert_raise Sanctum.UnauthorizedError, fn ->
-        Context.require_permission!(guest, :admin)
-      end
     end
 
     test "every permission is refused, not just wildcards" do
@@ -83,7 +79,7 @@ defmodule Sanctum.ContextPlaneTest do
     end
   end
 
-  describe "require_permission_for_plane/2 (the shared provider shim)" do
+  describe "require_permission_for_plane/2 (the gate providers call)" do
     test "external plane fails closed, exactly like require_permission/2" do
       external = Context.build(%{user_id: "u", permissions: [:execute]})
       assert :ok = Context.require_permission_for_plane(external, :execute)

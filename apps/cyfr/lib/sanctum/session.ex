@@ -376,6 +376,23 @@ defmodule Sanctum.Session do
     |> Base.url_encode64(padding: false)
   end
 
+  @doc """
+  The row key for a session token: its SHA-256.
+
+  Handed to a context so a caller can retire its own session without the
+  token travelling any further than the plug that read it.
+  """
+  @spec token_hash(String.t()) :: binary()
+  def token_hash(token) when is_binary(token), do: hash_token(token)
+
+  @doc """
+  Destroy a session addressed by its row key rather than its token.
+  """
+  @spec destroy_by_hash(binary()) :: :ok | {:error, term()}
+  def destroy_by_hash(hash) when is_binary(hash) do
+    Arca.SessionStorage.delete_session(hash)
+  end
+
   defp hash_token(token), do: :crypto.hash(:sha256, token)
 
   defp row_to_context(row, surface) do

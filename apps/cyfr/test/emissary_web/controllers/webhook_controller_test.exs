@@ -52,6 +52,13 @@ defmodule EmissaryWeb.WebhookControllerTest do
     result
   end
 
+  # Ecto.Query's `where` is a macro, so the pin lives inside a function that
+  # imports it rather than at the call site.
+  defp unbind_query(slug) do
+    import Ecto.Query, only: [where: 3]
+    where(Arca.Schemas.Webhook, [w], w.slug == ^slug)
+  end
+
   defp hmac_hex(secret, body) do
     :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
   end
@@ -219,6 +226,31 @@ defmodule EmissaryWeb.WebhookControllerTest do
       # `{:error, _}`. The spawned task records this via `[:invoke, :stop]`
       # telemetry with `status: :error`. The HTTP response went out before
       # this fired — async dispatch is the whole point of P0.2.
+      assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
+                      %{request_id: ^request_id, status: :error}},
+                     2_000
+    end
+
+    @tag :requires_opus
+    test "an unbound registration refuses rather than running with ambient authority", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      # A webhook fires under its bound profile's consent or not at all.
+      # `create/2` requires profile_id, so an unbound row can only be forced
+      # here — which is the point: if one ever exists, it must refuse rather
+      # than fall back to the caller's ambient authority.
+      %{slug: slug, secret: secret} = create_hook!(ctx, "unbound")
+
+      {1, _} =
+        Arca.Repo.update_all(unbind_query(slug), set: [profile_id: nil])
+
+      body = ~s({"event":"x"})
+      conn = post_signed(conn, slug, secret, body)
+
+      assert conn.status == 200
+      request_id = json_response(conn, 200)["request_id"]
+
       assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
                       %{request_id: ^request_id, status: :error}},
                      2_000

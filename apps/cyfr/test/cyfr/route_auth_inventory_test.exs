@@ -69,8 +69,6 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/activities"} => :browser_authenticated,
     {:get, "/enforcements"} => :browser_authenticated,
     {:get, "/executions"} => :browser_authenticated,
-    {:get, "/logs"} => :browser_authenticated,
-    {:get, "/logs/:id"} => :browser_authenticated,
     {:get, "/components"} => :browser_authenticated,
     {:get, "/components/:ref"} => :browser_authenticated,
     {:get, "/registry"} => :browser_authenticated,

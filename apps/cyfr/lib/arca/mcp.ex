@@ -281,8 +281,6 @@ defmodule Arca.MCP do
   # Health Check (ping) — must be before tool-specific catch-all clauses
   # ============================================================================
 
-  def handle(_tool, _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
-
   # ============================================================================
   # Execution Tool
   # ============================================================================

@@ -88,7 +88,7 @@ defmodule PrismWeb.ComponentDetailLive do
         {:noreply,
          socket
          |> put_flash(:info, "Execution started.")
-         |> push_navigate(to: ~p"/logs")}
+         |> push_navigate(to: ~p"/activities")}
 
       {:ok, result} ->
         {:noreply, put_flash(socket, :info, "Execution started: #{inspect(result)}")}

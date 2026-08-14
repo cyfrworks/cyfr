@@ -198,4 +198,17 @@ defmodule Emissary.MCP.ToolProvider do
   """
   @callback handle(tool_name :: String.t(), ctx :: Context.t(), args :: map()) ::
               handle_result()
+
+  @doc """
+  Report whether the provider is answering.
+
+  `system.status` asks this. It used to ask by calling `handle/3` with an
+  undeclared `"ping"` action — a verb absent from every `input_schema`
+  enum, so no client could call it and no audit could see it, which made
+  four providers carry a second, invisible entry point. A provider that
+  does not implement this is simply reported as loaded or not.
+  """
+  @callback health() :: :ok | {:error, term()}
+
+  @optional_callbacks health: 0
 end

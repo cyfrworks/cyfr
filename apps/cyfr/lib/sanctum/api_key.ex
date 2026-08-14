@@ -579,7 +579,7 @@ defmodule Sanctum.ApiKey do
   True when `key` carries a recognized `cyfr_` API-key prefix.
 
   Single source of truth for "is this string an API key at all", shared by the
-  MCP session plug and the tincture auth resolver so the prefix check cannot
+  authentication plug and the tincture auth resolver so the prefix check cannot
   drift between entry points.
   """
   @spec looks_like_key?(term()) :: boolean()

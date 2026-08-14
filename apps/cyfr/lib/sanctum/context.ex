@@ -53,6 +53,7 @@ defmodule Sanctum.Context do
           api_key_type: api_key_type(),
           request_id: String.t() | nil,
           api_key_id: String.t() | nil,
+          session_token_hash: binary() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
           plane: plane()
@@ -71,6 +72,12 @@ defmodule Sanctum.Context do
     :api_key_type,
     :request_id,
     :api_key_id,
+    # The session row's key, when a Sanctum session token authenticated the
+    # request. It is the SHA-256 of the token, so it addresses the row
+    # without being usable to authenticate as it — the same class of
+    # identifier as :api_key_id, and what `session.logout` needs to retire
+    # exactly the session that called it.
+    :session_token_hash,
     authenticated: false,
     # True when the ORIGINATING caller presented no credentials (public
     # tincture invocation). Ingress adapters may still mint an authenticated
@@ -130,6 +137,7 @@ defmodule Sanctum.Context do
   - `:auth_method` - Authentication method atom
   - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
+  - `:session_token_hash` - session row key (SHA-256 of the session token)
   - `:request_id` - MCP request ID
   - `:authenticated` - Boolean (default: false)
 
@@ -623,7 +631,7 @@ defmodule Sanctum.Context do
   end
 
   @doc """
-  Plane-aware permission gate — the one sanctioned shim for an MCP tool provider.
+  Plane-aware permission gate — the one gate an MCP tool provider calls.
 
   Guest-planed callers get the identity conjunct (`require_identity_permission/2`),
   because the authority conjunct was already applied at the dispatch chokepoint;
@@ -637,30 +645,6 @@ defmodule Sanctum.Context do
 
   def require_permission_for_plane(%__MODULE__{} = ctx, permission),
     do: require_permission(ctx, permission)
-
-  @doc """
-  Require permission, raises `Sanctum.UnauthorizedError` if missing.
-
-  Fails closed on guest-plane contexts, like `require_permission/2`.
-
-  ## Examples
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Sanctum.Context.require_permission!(ctx, :execute)
-      :ok
-
-  """
-  def require_permission!(%__MODULE__{plane: :guest}, permission) do
-    raise Sanctum.UnauthorizedError, permission: permission
-  end
-
-  def require_permission!(ctx, permission) do
-    unless has_permission?(ctx, permission) do
-      raise Sanctum.UnauthorizedError, permission: permission
-    end
-
-    :ok
-  end
 
   @doc """
   Enforce that a tenant-scoped operation has a resolved tenant.
@@ -822,19 +806,6 @@ defmodule Sanctum.Context do
     with :ok <- require_permission(ctx, action_to_permission(action)),
          :ok <- verify_tenant(ctx, record) do
       :ok
-    end
-  end
-
-  @doc """
-  Like `authorize/3` but raises `Sanctum.UnauthorizedError` on failure.
-  """
-  @spec authorize!(t(), atom(), term()) :: :ok
-  def authorize!(%__MODULE__{} = ctx, action), do: authorize!(ctx, action, nil)
-
-  def authorize!(%__MODULE__{} = ctx, action, resource) do
-    case authorize(ctx, action, resource) do
-      :ok -> :ok
-      {:error, _reason} -> raise Sanctum.UnauthorizedError, action: action
     end
   end
 

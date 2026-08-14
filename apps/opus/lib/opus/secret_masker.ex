@@ -3,26 +3,25 @@
 
 defmodule Opus.SecretMasker do
   @moduledoc """
-  Masks secret values in execution output to prevent leakage in logs.
+  Masks credential values in execution output to prevent leakage in logs.
 
-  When a component has access to secrets, those secret values should not
-  appear in execution logs or audit records. This module replaces any
-  occurrences of secret values with `[REDACTED]`.
+  A component that reads a credential must not have it echoed back into
+  execution logs or audit records, so every value it was handed is replaced
+  with `[REDACTED]` before the output is recorded.
 
   ## Usage
 
-      # Get the list of secret values the component can access
-      secret_values = Opus.SecretMasker.get_granted_secrets(ctx, component_ref)
+  The caller supplies the values, because it is the caller that dispensed
+  them: `Opus.Executor` masks with the fields it preloaded from the vault
+  plus whatever `Opus.OAuthHandler` dispensed during the run.
 
-      # After execution, mask any secrets in the output
       masked_output = Opus.SecretMasker.mask(output, secret_values)
 
   ## Security Note
 
-  This is a defense-in-depth measure. The primary security control is
-  that secrets are only accessible via the WASI interface with explicit
-  grants. Masking provides an additional layer of protection against
-  accidental exposure in logs.
+  This is a defense-in-depth measure. The primary control is that a
+  credential reaches a component only through a consent edge; masking
+  covers the case where the component puts one in its own output.
   """
 
   require Logger

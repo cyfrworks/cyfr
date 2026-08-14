@@ -23,7 +23,6 @@ defmodule Sanctum.Test.AuthorityGen do
   @max_nodes 5
   @max_edges 10
 
-  def needs_vocabulary, do: @needs
 
   @doc "A name-level ref from a small alphabet, so collisions are common."
   def ref do

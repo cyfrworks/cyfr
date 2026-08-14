@@ -995,50 +995,30 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["error"]["message"] =~ "Missing required MCP-Protocol-Version"
     end
 
-    test "CYFR error codes are in correct ranges" do
+    test "CYFR error codes keep their numbers" do
       alias Emissary.MCP.Message
 
-      # Transport errors: -33300 to -33399.
-      # -33301/-33302 were session_required/session_expired and are retired
-      # with the session concept; they are not reallocated.
-      assert Message.cyfr_code(:invalid_protocol) == -33303
-      assert Message.cyfr_code(:rate_limited) == -33304
-      assert Message.cyfr_code(:request_cancelled) == -33305
+      # The wire numbers are a contract with clients; a live code must not
+      # drift. Codes with no producer were retired rather than kept as an
+      # aspirational table, and retired numbers are never reallocated.
+      # Transport: -33300 to -33399 (-33301/-33302 were the session pair).
+      assert Message.error_code(:rate_limited) == -33304
+      assert Message.error_code(:request_cancelled) == -33305
 
-      # Auth errors: -33000 to -33099
-      assert Message.cyfr_code(:auth_required) == -33001
-      assert Message.cyfr_code(:auth_invalid) == -33002
-      assert Message.cyfr_code(:auth_expired) == -33003
-      assert Message.cyfr_code(:insufficient_permissions) == -33004
+      # Auth: -33000 to -33099
+      assert Message.error_code(:auth_required) == -33001
+      assert Message.error_code(:auth_invalid) == -33002
+      assert Message.error_code(:insufficient_permissions) == -33004
 
-      # Execution errors: -33100 to -33199
-      assert Message.cyfr_code(:execution_failed) == -33100
-      assert Message.cyfr_code(:execution_timeout) == -33101
-      assert Message.cyfr_code(:capability_denied) == -33102
+      # Execution: -33100 to -33199
+      assert Message.error_code(:execution_failed) == -33100
 
-      # Registry errors: -33200 to -33299
-      assert Message.cyfr_code(:component_not_found) == -33200
-      assert Message.cyfr_code(:component_invalid) == -33201
-      assert Message.cyfr_code(:registry_unavailable) == -33202
+      # Registry: -33200 to -33299
+      assert Message.error_code(:component_not_found) == -33200
+      assert Message.error_code(:registry_unavailable) == -33202
 
-      # Signature errors: -33400 to -33499
-      assert Message.cyfr_code(:signature_invalid) == -33400
-      assert Message.cyfr_code(:signature_expired) == -33401
-      assert Message.cyfr_code(:signature_missing) == -33402
-    end
-
-    test "cyfr_error?/1 correctly identifies CYFR error codes" do
-      alias Emissary.MCP.Message
-
-      # CYFR codes should return true
-      assert Message.cyfr_error?(-33000) == true
-      assert Message.cyfr_error?(-33301) == true
-      assert Message.cyfr_error?(-33499) == true
-
-      # JSON-RPC standard codes should return false
-      assert Message.cyfr_error?(-32700) == false
-      assert Message.cyfr_error?(-32600) == false
-      assert Message.cyfr_error?(0) == false
+      # An unknown atom falls back to the JSON-RPC internal error.
+      assert Message.error_code(:no_such_error) == -32603
     end
 
     test "encode_error/4 handles CYFR error code atoms", %{conn: _conn} do

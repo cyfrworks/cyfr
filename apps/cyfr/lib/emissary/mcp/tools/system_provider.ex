@@ -77,7 +77,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         name: "tools",
         title: "Tools",
         description:
-          "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (respects restricted tools and policy).",
+          "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (formulas see their in-chain plane).",
         # Tool discovery is anonymous-safe by design: the dispatcher returns
         # only public metadata, and per-tool handlers still gate any
         # destructive actions.
@@ -100,7 +100,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
             "component_ref" => %{
               "type" => "string",
               "description" =>
-                "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). Applies restricted tools and policy filtering."
+                "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). A formula sees its in-chain plane; other types see the full list."
             }
           },
           "required" => ["action"]
@@ -205,17 +205,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   defp check_service_by_scope(_ctx, "emissary"), do: "ok"
 
-  defp check_service_by_scope(ctx, "sanctum"),
-    do: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx)
-
-  defp check_service_by_scope(ctx, "arca"),
-    do: check_service(Arca.MCP, "retention", %{"action" => "ping"}, ctx)
-
-  defp check_service_by_scope(ctx, "opus"),
-    do: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx)
-
-  defp check_service_by_scope(ctx, "compendium"),
-    do: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
+  defp check_service_by_scope(_ctx, "sanctum"), do: check_service(Sanctum.MCP)
+  defp check_service_by_scope(_ctx, "arca"), do: check_service(Arca.MCP)
+  defp check_service_by_scope(_ctx, "opus"), do: check_service(Opus.MCP)
+  defp check_service_by_scope(_ctx, "compendium"), do: check_service(Compendium.MCP)
 
   defp check_service_by_scope(_ctx, "registry"), do: check_registry_health()
 
@@ -278,7 +271,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
 
       {:ok, %{type: type}} ->
-        # Non-formula types have no restricted tools today — return full list
+        # Only formulas have an in-chain plane to narrow to — return full list
         {:ok,
          %{tools: tools, component_ref: component_ref, component_type: type, filtered: false}}
 
@@ -291,13 +284,13 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # Health Checks
   # ============================================================================
 
-  defp check_all_services(ctx) do
+  defp check_all_services(_ctx) do
     %{
       emissary: "ok",
-      sanctum: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx),
-      arca: check_service(Arca.MCP, "retention", %{"action" => "ping"}, ctx),
-      opus: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx),
-      compendium: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx),
+      sanctum: check_service(Sanctum.MCP),
+      arca: check_service(Arca.MCP),
+      opus: check_service(Opus.MCP),
+      compendium: check_service(Compendium.MCP),
       registry: check_registry_health()
     }
   end
@@ -328,21 +321,33 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       "error"
   end
 
-  defp check_service(module, tool, args, ctx) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :handle, 3) do
-      case module.handle(tool, ctx, args) do
-        {:ok, _} ->
-          "ok"
+  # Providers answer health on a declared callback. This used to call
+  # `handle/3` with an undeclared "ping" action, which meant four providers
+  # carried an entry point absent from their own schemas — invisible to the
+  # action audit and unreachable from the wire.
+  defp check_service(module) do
+    cond do
+      not Code.ensure_loaded?(module) ->
+        "not_loaded"
 
-        {:error, reason} ->
-          Logger.warning(
-            "[SystemProvider] Service #{inspect(module)} returned error: #{inspect(reason)}"
-          )
+      function_exported?(module, :health, 0) ->
+        case module.health() do
+          :ok ->
+            "ok"
 
-          "error"
-      end
-    else
-      "not_loaded"
+          {:error, reason} ->
+            Logger.warning(
+              "[SystemProvider] Service #{inspect(module)} reported #{inspect(reason)}"
+            )
+
+            "error"
+        end
+
+      function_exported?(module, :handle, 3) ->
+        "ok"
+
+      true ->
+        "not_loaded"
     end
   rescue
     e ->

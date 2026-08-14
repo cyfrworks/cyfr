@@ -76,12 +76,6 @@ defmodule Sanctum.Policy.Ceiling do
   defp lower_of(_field, _value, hard_max), do: hard_max
 
   @doc """
-  Returns the effective ceiling for a context — the platform ceiling.
-  """
-  @spec effective_ceiling(Sanctum.Context.t()) :: map()
-  def effective_ceiling(%Sanctum.Context{} = _ctx), do: platform_ceiling()
-
-  @doc """
   The clamped field names, as spelled on the clamped structs.
 
   `Sanctum.Limits` locks its field set to this list by test. Note the
@@ -103,25 +97,6 @@ defmodule Sanctum.Policy.Ceiling do
     |> clamp_numeric_fields(ceiling)
     |> clamp_duration_fields(ceiling)
     |> clamp_rate_limit(ceiling)
-  end
-
-  @doc """
-  Validate a policy map against ceiling limits (pre-save).
-
-  Returns `:ok` or `{:error, "descriptive message"}`.
-  Handles both atom-keyed and string-keyed policy maps.
-  """
-  @spec validate(map(), map()) :: :ok | {:error, String.t()}
-  def validate(policy_map, ceiling) when is_map(policy_map) and is_map(ceiling) do
-    errors =
-      validate_numeric_fields(policy_map, ceiling) ++
-        validate_duration_fields(policy_map, ceiling) ++
-        validate_rate_limit_field(policy_map, ceiling)
-
-    case errors do
-      [] -> :ok
-      [first | _] -> {:error, first}
-    end
   end
 
   # ============================================================================
@@ -176,70 +151,6 @@ defmodule Sanctum.Policy.Ceiling do
 
       _ ->
         limits
-    end
-  end
-
-  # ============================================================================
-  # Private: Validation
-  # ============================================================================
-
-  defp validate_numeric_fields(policy_map, ceiling) do
-    Enum.flat_map(@numeric_fields, fn field ->
-      val = get_field(policy_map, field)
-      max = Map.get(ceiling, field)
-
-      case {val, max} do
-        {v, m} when is_number(v) and is_number(m) and v > m ->
-          ["Policy value for #{field} (#{v}) exceeds maximum (#{m})"]
-
-        _ ->
-          []
-      end
-    end)
-  end
-
-  defp validate_duration_fields(policy_map, ceiling) do
-    Enum.flat_map(@duration_fields, fn field ->
-      val = get_field(policy_map, field)
-      max = Map.get(ceiling, field)
-
-      case {val, max} do
-        {v, m} when is_binary(v) and is_binary(m) ->
-          with {:ok, val_ms} <- Sanctum.Limits.parse_duration(v),
-               {:ok, max_ms} <- Sanctum.Limits.parse_duration(m) do
-            if val_ms > max_ms do
-              ["Policy value for #{field} (#{v}) exceeds maximum (#{m})"]
-            else
-              []
-            end
-          else
-            _ -> []
-          end
-
-        _ ->
-          []
-      end
-    end)
-  end
-
-  defp validate_rate_limit_field(policy_map, ceiling) do
-    rl = get_field(policy_map, :rate_limit)
-    max = Map.get(ceiling, :rate_limit_requests)
-
-    case {rl, max} do
-      {%{requests: req}, m} when is_number(req) and is_number(m) and req > m ->
-        ["Policy value for rate_limit.requests (#{req}) exceeds maximum (#{m})"]
-
-      _ ->
-        []
-    end
-  end
-
-  # Read a field from a policy map, handling both atom and string keys.
-  defp get_field(policy_map, field) when is_atom(field) do
-    case Map.get(policy_map, field) do
-      nil -> Map.get(policy_map, Atom.to_string(field))
-      val -> val
     end
   end
 end

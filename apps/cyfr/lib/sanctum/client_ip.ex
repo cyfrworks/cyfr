@@ -11,7 +11,7 @@ defmodule Sanctum.ClientIp do
   reverse proxy). Unconditional XFF trust would let any client spoof an
   API-key IP allowlist; ignoring XFF behind a proxy would make every allowlist
   check see the proxy IP. Both failure modes are closed here, once, for every
-  caller (the MCP session plug, the tincture auth resolver, and the tincture
+  caller (the authentication plug, the tincture auth resolver, and the tincture
   rate-limit bucket) so the trust decision cannot drift between entry points.
 
   ## Hop selection

@@ -224,8 +224,14 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     case Sanctum.Session.load(token, surface: :console) do
       {:ok, ctx} ->
         case context_from_session(ctx) do
-          {:error, :missing_tenant} -> {:error, :missing_tenant}
-          %Context{} = resolved -> {:ok, resolved, :session_token}
+          {:error, :missing_tenant} ->
+            {:error, :missing_tenant}
+
+          %Context{} = resolved ->
+            # The row key, not the token: enough for the caller to retire its
+            # own session, useless for authenticating as it.
+            resolved = %{resolved | session_token_hash: Sanctum.Session.token_hash(token)}
+            {:ok, resolved, :session_token}
         end
 
       {:error, :namespace_unavailable} ->

@@ -175,9 +175,22 @@ defmodule Sanctum.MCPTest do
       assert result.redirect == "/auth/login"
     end
 
-    test "logout succeeds", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("session", ctx, %{"action" => "logout"})
+    test "logout retires the session that called it", %{ctx: ctx} do
+      {:ok, session} = Sanctum.Session.create(ctx)
+      assert {:ok, _} = Sanctum.Session.load(session.token, surface: :console)
+
+      session_ctx = %{ctx | session_token_hash: Sanctum.Session.token_hash(session.token)}
+
+      {:ok, result} = MCP.handle("session", session_ctx, %{"action" => "logout"})
       assert result.message =~ "Logged out"
+
+      # The whole point: the credential must not survive its own logout.
+      assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
+    end
+
+    test "logout refuses when an API key authenticated the call", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("session", ctx, %{"action" => "logout"})
+      assert msg =~ "No session to log out"
     end
 
     test "invalid action returns error", %{ctx: ctx} do

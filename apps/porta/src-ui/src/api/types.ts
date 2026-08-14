@@ -7,12 +7,6 @@ export interface JSONRPCRequest {
   params?: unknown;
 }
 
-export interface JSONRPCNotification {
-  jsonrpc: "2.0";
-  method: string;
-  params?: unknown;
-}
-
 export interface JSONRPCResponse {
   jsonrpc: "2.0";
   id: number | string;
@@ -27,17 +21,6 @@ export interface JSONRPCError {
 }
 
 // MCP types
-
-export interface InitializeResult {
-  protocolVersion: string;
-  capabilities: Record<string, unknown>;
-  serverInfo?: { name: string; version: string };
-}
-
-export interface ToolCallParams {
-  name: string;
-  arguments: Record<string, unknown>;
-}
 
 export interface ToolCallResult {
   content: ContentBlock[];
@@ -91,43 +74,6 @@ export interface ErrorEventData {
   error?: string;
   message?: string;
   execution_id?: string;
-}
-
-// Agent-specific event data shapes
-
-export interface TextDeltaData {
-  kind: "text_delta";
-  content: string;
-}
-
-export interface ToolUseData {
-  kind: "tool_use";
-  tool: string;
-  tool_call_id?: string;
-  turn?: number;
-  input?: unknown;
-}
-
-export interface ToolResultData {
-  kind: "tool_result";
-  tool: string;
-  preview?: string;
-}
-
-export interface UsageData {
-  kind: "usage";
-  input_tokens: number;
-  output_tokens: number;
-}
-
-export interface ConversationCompleteData {
-  kind: "conversation_complete";
-  messages: unknown[];
-}
-
-export interface TurnStartData {
-  kind: "turn_start";
-  turn: number;
 }
 
 // Orchestrators (agents loaded from backend)

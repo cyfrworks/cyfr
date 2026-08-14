@@ -13,8 +13,6 @@ defmodule Sanctum.MCP.SessionTool do
 
   alias Sanctum.Context
 
-  def handle(_ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
-
   def handle(%Context{authenticated: false}, %{"action" => "whoami"}) do
     {:error, "Not authenticated. Run 'cyfr login' to sign in."}
   end
@@ -36,9 +34,30 @@ defmodule Sanctum.MCP.SessionTool do
     {:ok, %{message: "Login requires browser authentication", redirect: "/auth/login"}}
   end
 
-  def handle(%Context{} = _ctx, %{"action" => "logout"}) do
-    # Logout is a no-op in Sanctum (stateless)
-    {:ok, %{message: "Logged out successfully"}}
+  # The MCP transport is stateless; a Sanctum session is not. This action
+  # used to report success without retiring anything, so `cyfr logout` and
+  # the Porta sign-out left a working 30-day credential behind.
+  def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
+      when is_binary(hash) do
+    case Sanctum.Session.destroy_by_hash(hash) do
+      :ok ->
+        {:ok, %{message: "Logged out successfully"}}
+
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] logout failed: #{inspect(reason)}")
+        {:error, "Logout failed"}
+    end
+  end
+
+  # An API key authenticated this call, so there is no session to end. Say
+  # so rather than reporting a logout that did not happen — a key is
+  # retired with `key.revoke`.
+  def handle(%Context{authenticated: true}, %{"action" => "logout"}) do
+    {:error, "No session to log out: this call authenticated with an API key. Use key.revoke."}
+  end
+
+  def handle(%Context{}, %{"action" => "logout"}) do
+    {:error, "Not authenticated."}
   end
 
   def handle(%Context{} = _ctx, %{"action" => "device_init"} = args) do

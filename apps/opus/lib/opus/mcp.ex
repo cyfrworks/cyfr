@@ -326,8 +326,6 @@ defmodule Opus.MCP do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
-  def handle("execution", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
-
   # A guest-planed context reaching run/run_stream would re-root a fresh
   # Authority from an in-chain call — the confused-deputy shape run_child
   # exists to prevent. Components invoke children through the formula host,

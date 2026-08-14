@@ -26,8 +26,6 @@ defmodule Sanctum.Test.AuthorityFixtures do
 
   def formula_ref, do: @formula
   def catalyst_ref, do: @catalyst
-  def http_ref, do: @http
-  def reagent_ref, do: @reagent
   def server_digest, do: @server_digest
 
   def limits_map(overrides \\ %{}) do

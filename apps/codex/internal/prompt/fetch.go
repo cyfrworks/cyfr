@@ -23,75 +23,6 @@ func FetchComponents(client *mcp.Client) ([]Option, error) {
 	return extractComponents(result)
 }
 
-// FetchLocalComponents calls component list and returns options for selection.
-// Uses the "list" action which is a fast local-only operation.
-func FetchLocalComponents(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("component", map[string]any{
-		"action": "list",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch local components: %w", err)
-	}
-	return extractComponents(result)
-}
-
-// FetchLocalComponentsLatest calls component list and deduplicates results
-// by base ref (type:namespace.name), keeping only the highest version per
-// component. The label shows the base ref for a clean picker, but the value
-// is the full versioned ref (needed for manifest lookup).
-func FetchLocalComponentsLatest(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("component", map[string]any{
-		"action": "list",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch local components: %w", err)
-	}
-	return extractComponentsLatest(result)
-}
-
-// extractComponentsLatest builds options deduped by base ref.
-// For each unique type:namespace.name, keeps the highest version.
-// The label is the base ref, the value is the full versioned ref.
-func extractComponentsLatest(result map[string]any) ([]Option, error) {
-	raw, ok := result["components"]
-	if !ok {
-		return nil, nil
-	}
-	items, ok := raw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("unexpected type for components: expected array")
-	}
-
-	type entry struct {
-		baseRef    string
-		versionRef string
-		version    string
-	}
-	best := make(map[string]entry)
-	for _, item := range items {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		r, _ := m["component_ref"].(string)
-		if r == "" {
-			continue
-		}
-		v, _ := m["version"].(string)
-		baseRef := StripVersion(r)
-		if prev, exists := best[baseRef]; !exists || ref.CompareVersions(v, prev.version) > 0 {
-			best[baseRef] = entry{baseRef: baseRef, versionRef: r, version: v}
-		}
-	}
-
-	var opts []Option
-	for _, e := range best {
-		opts = append(opts, Option{Label: e.baseRef, Value: e.versionRef})
-	}
-	sort.Slice(opts, func(i, j int) bool { return opts[i].Label < opts[j].Label })
-	return opts, nil
-}
-
 // StripVersion removes the version segment from a component ref string.
 // "catalyst:local.claude:0.1.0" → "catalyst:local.claude"
 // If the ref has no version (already a base ref), returns it unchanged.
@@ -211,17 +142,6 @@ func FetchKeys(client *mcp.Client) ([]Option, error) {
 		return nil, fmt.Errorf("fetch keys: %w", err)
 	}
 	return extractOptions(result, "keys", "name", "name")
-}
-
-// FetchPermissionSubjects calls permission list and returns options for selection.
-func FetchPermissionSubjects(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("permission", map[string]any{
-		"action": "list",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch permissions: %w", err)
-	}
-	return extractOptions(result, "permissions", "subject", "subject")
 }
 
 // FetchGuides calls aqua list and returns options for selection.

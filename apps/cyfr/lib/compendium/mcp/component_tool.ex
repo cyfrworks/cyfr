@@ -21,8 +21,6 @@ defmodule Compendium.MCP.ComponentTool do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
-  def handle(_ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
-
   # Search action - search for components. Searches the local registry and,
   # unless the caller restricts to source: "local", augments with the
   # configured registry's REST API (cyfr.run by default), merging results.

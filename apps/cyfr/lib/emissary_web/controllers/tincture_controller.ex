@@ -7,8 +7,9 @@ defmodule EmissaryWeb.TinctureController do
 
   All clients (Prism shell, Porta desktop, CLI, API keys) access tinctures
   through this single controller. Authentication is delegated to
-  `Sanctum.TinctureAuth` which supports Phoenix signed tokens, MCP sessions,
-  and API keys via query parameters.
+  `Sanctum.TinctureAuth`, which accepts a Phoenix signed token (`?_t=`) or an
+  `Authorization: Bearer` credential. Account credentials are never read from
+  a query string.
 
   GET  /t/access-token                        — mint a short-lived ?_t= token
   GET  /t/:publisher/:tincture_name           — serve index.html

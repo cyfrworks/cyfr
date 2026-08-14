@@ -56,7 +56,6 @@ defmodule Emissary.MCP.Message do
   # CYFR-specific error codes.
   # Transport errors: -33300 to -33399
   @cyfr_transport_codes %{
-    invalid_protocol: -33303,
     rate_limited: -33304,
     # Never reaches a client — by the time it is recorded the caller has already
     # closed the stream. It exists so the request log distinguishes "the caller
@@ -68,42 +67,25 @@ defmodule Emissary.MCP.Message do
   @cyfr_auth_codes %{
     auth_required: -33001,
     auth_invalid: -33002,
-    auth_expired: -33003,
     insufficient_permissions: -33004
   }
 
   # Execution errors: -33100 to -33199
   @cyfr_execution_codes %{
-    execution_failed: -33100,
-    execution_timeout: -33101,
-    capability_denied: -33102
+    execution_failed: -33100
   }
 
   # Registry/Compendium errors: -33200 to -33299
   @cyfr_registry_codes %{
     component_not_found: -33200,
-    component_invalid: -33201,
     registry_unavailable: -33202
   }
 
-  # Signature verification errors: -33400 to -33499
-  @cyfr_signature_codes %{
-    signature_invalid: -33400,
-    signature_expired: -33401,
-    signature_missing: -33402
-  }
-
   # Combined CYFR error codes for lookup
-  @cyfr_error_codes Map.merge(
-                      @cyfr_transport_codes,
-                      Map.merge(
-                        @cyfr_auth_codes,
-                        Map.merge(
-                          @cyfr_execution_codes,
-                          Map.merge(@cyfr_registry_codes, @cyfr_signature_codes)
-                        )
-                      )
-                    )
+  @cyfr_error_codes @cyfr_transport_codes
+                    |> Map.merge(@cyfr_auth_codes)
+                    |> Map.merge(@cyfr_execution_codes)
+                    |> Map.merge(@cyfr_registry_codes)
 
   @doc """
   Decode a JSON-RPC message from a map (already parsed from JSON).
@@ -281,19 +263,4 @@ defmodule Emissary.MCP.Message do
       -32603
   end
 
-  @doc """
-  Get the CYFR transport error code for session-related errors.
-  """
-  def cyfr_code(atom) when is_atom(atom) do
-    Map.get(@cyfr_error_codes, atom)
-  end
-
-  @doc """
-  Check if a code is a CYFR-specific error code.
-  """
-  def cyfr_error?(code) when is_integer(code) do
-    code <= -33000 and code >= -33499
-  end
-
-  def cyfr_error?(_), do: false
 end

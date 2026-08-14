@@ -52,10 +52,6 @@ defmodule PrismWeb.Router do
       # tree, component_digest, host_policy, WASI trace). Distinct from
       # /activities which is request-anchored.
       live "/executions", ExecutionsLive, :index
-      # /logs and /logs/:id are folded into /activities (request-anchored
-      # view). Thin redirects preserve old bookmarks.
-      live "/logs", LogsRedirectLive, :index
-      live "/logs/:id", LogsRedirectLive, :show
       live "/components", ComponentsLive, :index
       live "/components/:ref", ComponentDetailLive, :show
       live "/registry", RegistryLive, :index

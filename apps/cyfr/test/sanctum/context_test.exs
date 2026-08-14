@@ -167,26 +167,6 @@ defmodule Sanctum.ContextTest do
     end
   end
 
-  describe "require_permission!/2" do
-    test "returns :ok when permission exists" do
-      ctx = Sanctum.TestContext.local()
-      assert :ok == Context.require_permission!(ctx, :execute)
-    end
-
-    test "raises when permission missing" do
-      ctx = %Context{
-        user_id: "test",
-        org_id: nil,
-        permissions: MapSet.new([]),
-        scope: :project
-      }
-
-      assert_raise Sanctum.UnauthorizedError, fn ->
-        Context.require_permission!(ctx, :execute)
-      end
-    end
-  end
-
   describe "require_permission/2" do
     test "returns :ok when permission granted" do
       ctx = Sanctum.TestContext.local()
@@ -478,28 +458,6 @@ defmodule Sanctum.ContextTest do
         )
 
       assert :ok == Context.authorize(ctx, :read, {:owned, %{user_id: "u1"}})
-    end
-  end
-
-  describe "authorize!/3" do
-    test "raises on unauthorized" do
-      ctx =
-        Context.build(
-          user_id: "u1",
-          permissions: [],
-          namespace: "testns",
-          authenticated: true,
-          auth_method: :oidc
-        )
-
-      assert_raise Sanctum.UnauthorizedError, fn ->
-        Context.authorize!(ctx, :execute)
-      end
-    end
-
-    test "returns :ok on authorized" do
-      ctx = Sanctum.TestContext.local()
-      assert :ok == Context.authorize!(ctx, :execute)
     end
   end
 

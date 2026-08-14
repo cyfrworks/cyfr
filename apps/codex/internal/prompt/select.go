@@ -35,41 +35,6 @@ func SelectOne(title string, options []Option) (string, error) {
 	return selected, nil
 }
 
-// SelectMany presents a multi-select prompt with filtering and returns selected values.
-// preSelected contains values that should be checked by default.
-func SelectMany(title string, options []Option, preSelected ...string) ([]string, error) {
-	var selected []string
-
-	pre := make(map[string]bool, len(preSelected))
-	for _, v := range preSelected {
-		pre[v] = true
-	}
-
-	huhOpts := make([]huh.Option[string], len(options))
-	for i, o := range options {
-		opt := huh.NewOption(o.Label, o.Value)
-		if pre[o.Value] {
-			opt = opt.Selected(true)
-		}
-		huhOpts[i] = opt
-	}
-
-	err := newForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title(title).
-				Description("space to select, enter to confirm").
-				Options(huhOpts...).
-				Value(&selected).
-				Height(12),
-		),
-	).Run()
-	if err != nil {
-		return nil, err
-	}
-	return selected, nil
-}
-
 // Confirm presents a yes/no confirmation prompt.
 func Confirm(title string) (bool, error) {
 	var confirmed bool
@@ -100,31 +65,6 @@ func InputText(title, placeholder string, initialValue ...string) (string, error
 	input := huh.NewInput().
 		Title(title).
 		Value(&value)
-	if placeholder != "" {
-		input = input.Placeholder(placeholder)
-	}
-
-	err := newForm(
-		huh.NewGroup(input),
-	).Run()
-	if err != nil {
-		return "", err
-	}
-	return value, nil
-}
-
-// InputSecret presents a masked text input prompt and returns the entered value.
-// If initialValue is non-empty, the field is pre-filled (shown masked).
-func InputSecret(title, placeholder string, initialValue ...string) (string, error) {
-	var value string
-	if len(initialValue) > 0 {
-		value = initialValue[0]
-	}
-
-	input := huh.NewInput().
-		Title(title).
-		Value(&value).
-		EchoMode(huh.EchoModePassword)
 	if placeholder != "" {
 		input = input.Placeholder(placeholder)
 	}

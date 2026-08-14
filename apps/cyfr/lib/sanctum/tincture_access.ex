@@ -48,9 +48,9 @@ defmodule Sanctum.TinctureAccess do
 
   Requires a `%Sanctum.Context{}` with `authenticated: false`, built at
   the Phoenix boundary. MUST NOT call `Context.authorize/2-3` — that
-  rejects unauthenticated contexts. Checks the tincture's policy `is_public`
-  store (not the manifest) for public visibility. Returns `:not_found`
-  for both missing and non-public tinctures (indistinguishable 404).
+  rejects unauthenticated contexts. Public visibility comes from a published
+  profile (not the manifest). Returns `:not_found` for both missing and
+  non-public tinctures (indistinguishable 404).
   """
   @spec get_public(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get_public(%Context{} = ctx, publisher, tincture_name) do

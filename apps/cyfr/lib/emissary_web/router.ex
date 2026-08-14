@@ -152,7 +152,7 @@ defmodule EmissaryWeb.Router do
     delete "/", MCPController, :method_not_allowed
   end
 
-  # Tincture serving — auth via query params (token, MCP session, API key)
+  # Tincture serving — auth via signed `?_t=` token or Authorization bearer
   # No session cookie auth (EmissaryWeb and PrismWeb have separate session stores).
   pipeline :tincture do
     plug :accepts, ["html", "json"]
