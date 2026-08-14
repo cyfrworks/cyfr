@@ -41,8 +41,7 @@ defmodule Opus.OAuthHandler do
   """
   @spec build_oauth_imports(Context.t(), String.t(), String.t(), keyword()) :: map()
   def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, opts \\ []) do
-    # The resolver is edge-supplied (vault-reader-backed) — the
-    # callee-keyed default died with the legacy execution path. Provider
+    # The resolver is edge-supplied (vault-reader-backed). Provider
     # matching and endpoint integrity live behind it: the vault entry is
     # provider-checked at dispense and its endpoints are covered by the
     # consent's binding digest.

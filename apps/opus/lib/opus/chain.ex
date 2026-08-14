@@ -234,8 +234,8 @@ defmodule Opus.Chain do
 
   A bound target that no longer resolves is `setup_required` — the consent
   names a dependency the installed world cannot satisfy. An unresolvable
-  *unbound* target proceeds to the executor and fails there exactly as the
-  legacy path does, so dynamic dispatch to a bad ref keeps its error shape.
+  *unbound* target proceeds to the executor and fails there, so dynamic
+  dispatch to a bad ref keeps the executor's error shape.
   """
   @spec execute_child(child_decision(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def execute_child(decision, input, opts) do

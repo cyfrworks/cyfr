@@ -27,9 +27,9 @@ defmodule Arca.MCP do
 
   ## Architecture Note
 
-  This module lives in the `arca` app, keeping tool definitions
-  close to their implementation. Emissary discovers this provider
-  via configuration and delegates calls here.
+  Tool definitions live next to their implementation under `lib/arca`.
+  Emissary discovers this provider via configuration and delegates
+  calls here.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
   which is validated at runtime by Emissary.MCP.ToolRegistry.
@@ -528,7 +528,7 @@ defmodule Arca.MCP do
   # Policy Log Tool
   # ============================================================================
 
-  # Policy log writing is kernel-only (internal to Sanctum.Policy.Enforcement)
+  # Policy-log writing is kernel-only (`Sanctum.Policy.Enforcement`).
   # External clients may only read logs via list, get, correlate actions
   def handle("policy_log", _ctx, %{"action" => "log"}) do
     {:error,

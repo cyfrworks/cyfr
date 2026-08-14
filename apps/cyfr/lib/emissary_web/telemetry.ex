@@ -53,11 +53,6 @@ defmodule EmissaryWeb.Telemetry do
   def metrics do
     [
       # MCP Metrics
-      #
-      # There is no session counter. It measured a protocol session's
-      # create/terminate lifecycle, and this revision has neither — a metric with
-      # no emitter reads as "zero sessions", which is indistinguishable from a
-      # broken emitter and worse than an absent series.
       distribution("cyfr.emissary.request.duration",
         tags: [:method, :tool, :status],
         unit: {:native, :millisecond},

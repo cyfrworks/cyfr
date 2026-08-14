@@ -11,10 +11,11 @@ defmodule Sanctum.TinctureAccess do
   Public access (`get_public/3`) requires an unauthenticated `Sanctum.Context`
   (built at the Phoenix boundary via `TinctureHelpers.build_public_context/0`).
   It does NOT call `Context.authorize` — that function rejects all
-  unauthenticated contexts. Instead it checks the tincture's policy for
-  `is_public: true`, then looks up the component via `Compendium.Registry`,
-  and returns `:not_found` for both missing and private tinctures
-  (indistinguishable 404 to avoid leaking existence).
+  unauthenticated contexts. Instead it checks whether an active public
+  profile exists for the tincture (what `profile.publish` mints), then
+  looks up the component via `Compendium.Registry`, and returns
+  `:not_found` for both missing and private tinctures (indistinguishable
+  404 to avoid leaking existence).
 
   Tincture lookups go through `Compendium.Registry` (the authoritative
   component store), not `Prism.TinctureRegistry` (a shell-only UI cache).

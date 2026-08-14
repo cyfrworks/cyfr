@@ -34,8 +34,8 @@ defmodule Cyfr.TinctureHelpers do
   APIs (`Arca.ComponentStorage`, `QueryHelpers.where_tenant`) work with a
   consistent type instead of ad-hoc maps. The workspace `(org_id, project_id)`
   comes from the request URL — a public tincture is served from the workspace
-  that owns it. Visibility is still gated by the tincture's `is_public` policy
-  in that workspace (checked by `Sanctum.TinctureAccess.get_public/3`).
+  that owns it. Visibility is still gated by whether an active public profile
+  exists in that workspace (checked by `Sanctum.TinctureAccess.get_public/3`).
   """
   @spec build_public_context(String.t(), String.t()) :: Sanctum.Context.t()
   def build_public_context(org_id, project_id)

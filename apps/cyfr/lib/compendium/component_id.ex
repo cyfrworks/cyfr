@@ -12,10 +12,9 @@ defmodule Compendium.ComponentId do
   on-disk path uses), so `nil`/`""` collapse to the seeded `local`/`default`
   sentinels and the id can never diverge from the component's storage path.
 
-  The registry (live publish), the id-rehash task, and the path-migration task
-  all compute ids through this one function so they can never diverge — an
-  org-less row hashed `local` in one place and `""` in another would mint two
-  different ids for the same component.
+  Every id is computed through this one function so producers can never
+  diverge — an org-less row hashed `local` in one place and `""` in another
+  would mint two different ids for the same component.
   """
 
   alias Arca.QueryHelpers

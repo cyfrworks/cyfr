@@ -14,9 +14,6 @@ import (
 const protocolVersion = "2026-07-28"
 
 // ErrAuthRequired is returned when the caller presented no usable credential.
-// The server-side session sentinels that used to sit alongside it (-33301 /
-// -33302) are retired: the protocol has no sessions, so the server never emits
-// them and nothing can produce these errors.
 var ErrAuthRequired = fmt.Errorf("authentication required")
 
 // ErrUnsupportedProtocol is returned when the server's protocol version doesn't match the client's.

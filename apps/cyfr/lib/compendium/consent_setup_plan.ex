@@ -11,10 +11,9 @@ defmodule Compendium.ConsentSetupPlan do
   binding digest matches what the consent recorded? A rebind or a
   revocation makes a profile not-ready without touching the manifest.
 
-  The legacy manifest-sourced fields stay in the response — surfaces
-  still read them, and their truthfulness is what keeps the old setup
-  paths from looping — so this adds a `consent` section and takes over
-  `ready` rather than replacing the shape.
+  `Compendium.Component.setup_plan/2` embeds this as the `consent` section
+  of its response and derives the top-level `ready` from it — the consent
+  state is the only thing that answers "is this component set up".
   """
 
   alias Sanctum.Consent.Source
@@ -23,7 +22,7 @@ defmodule Compendium.ConsentSetupPlan do
 
   @doc """
   The consent section for a source ref, or `nil` when no profile exists
-  (the caller keeps the legacy plan verbatim).
+  (the component then reads ready only if it requires nothing).
   """
   @spec section(Context.t(), String.t()) :: map() | nil
   def section(%Context{} = ctx, source_ref) do

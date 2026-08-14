@@ -222,8 +222,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp fetch_pending(state) do
-    # Single-use: consumed on read, exactly like the legacy flow — a
-    # replayed callback with the same state finds nothing.
+    # Single-use: consumed on read — a replayed callback with the same
+    # state finds nothing.
     case Arca.Cache.get({:vault_oauth_pending, state}) do
       {:ok, pending} ->
         Arca.Cache.invalidate({:vault_oauth_pending, state})

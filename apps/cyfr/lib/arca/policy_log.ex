@@ -139,8 +139,8 @@ defmodule Arca.PolicyLog do
 
   # §4.5 stored-vs-derived: attribution is JOINED from the consent, never
   # copied onto the row. Consents are immutable, so the join is stable —
-  # and a hot-path write stays small. Rows with no consent_id (the legacy
-  # path) come back untouched.
+  # and a hot-path write stays small. Rows with no consent_id come back
+  # untouched.
   defp join_consents(rows, org_id) do
     consent_ids = rows |> Enum.map(& &1.consent_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
