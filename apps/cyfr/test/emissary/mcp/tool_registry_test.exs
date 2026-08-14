@@ -351,7 +351,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
   end
 
-  describe "optional MCP 2025-11-25 fields" do
+  describe "optional tool-definition fields" do
     test "tools may include title field" do
       {:ok, tool} = ToolRegistry.get_tool("system")
 

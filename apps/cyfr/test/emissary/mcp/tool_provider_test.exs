@@ -105,7 +105,7 @@ defmodule Emissary.MCP.ToolProviderTest do
     end
 
     test "optional fields include title, icons, output_schema, annotations" do
-      # This is a documentation/specification test for optional MCP 2025-11-25 fields
+      # A documentation test for the optional tool-definition fields
       full_tool = %{
         name: "service/action",
         description: "Does something useful",

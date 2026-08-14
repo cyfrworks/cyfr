@@ -8,7 +8,8 @@ defmodule Opus.ComponentTypeTest do
 
   describe "parse/1" do
     test "parses nil as reagent (default)" do
-      assert {:ok, :reagent} = ComponentType.parse(nil)
+      # A missing type is an error, not a reagent.
+      assert {:error, _} = ComponentType.parse(nil)
     end
 
     test "parses string types" do

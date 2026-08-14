@@ -497,7 +497,7 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("formula", reference, _template) do
     [
-      "Edit cyfr-manifest.json to configure allowed_tools and dependencies",
+      "Edit cyfr-manifest.json to declare the needs and caps blocks",
       "Edit src/src/lib.rs to implement your formula logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"

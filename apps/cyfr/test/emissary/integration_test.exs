@@ -18,30 +18,12 @@ defmodule Emissary.IntegrationTest do
 
   describe "an ordinary request, end to end" do
     test "a tool call needs no handshake and leaves nothing behind", %{conn: conn} do
-      # Step 1: Initialize session
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
-
-      assert json_response(init_conn, 200)
-
-      # Step 2: Send initialized notification
-      notif_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "method" => "notifications/initialized"
-        })
-
-      assert response(notif_conn, 202)
-
-      # Step 3: Make a tool call
+      # No discovery, no notification, no session — the first thing this
+      # connection ever sends is the call itself. The test used to perform a
+      # handshake before the call it claimed needed none, which proved only
+      # that a handshake is tolerated.
       tool_conn =
         conn
-        |> recycle()
         |> put_req_header("content-type", "application/json")
         |> mcp_post(%{
           "jsonrpc" => "2.0",
@@ -317,7 +299,6 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 2,
@@ -340,7 +321,6 @@ defmodule Emissary.IntegrationTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> mcp_post(%{
           "jsonrpc" => "1.0",
           "id" => 1,

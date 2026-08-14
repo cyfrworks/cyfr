@@ -24,9 +24,10 @@ defmodule Opus.ComponentType do
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects
   - **Formula**: Orchestration — dispatches MCP tool calls via `cyfr:formula/invoke@0.1.0` host function.
-    All capabilities (component execution, registry search, build, guides) are governed by `allowed_tools`
-    policy. Sub-invocations run through the full Executor pipeline (policy, rate limit, secrets, WASM,
-    masking, record write, telemetry). Each gets its own `exec_<uuid7>` ID and stores
+    All capabilities (component execution, registry search, build, guides) are governed by the
+    consent edges its authority carries. Sub-invocations run through the full Executor pipeline
+    (edge check, rate limit, credentials, WASM, masking, record write, telemetry). Each gets its
+    own `exec_<uuid7>` ID and stores
     `parent_execution_id` for lineage tracking.
 
   ## Secrets Access
@@ -96,8 +97,10 @@ defmodule Opus.ComponentType do
 
   Returns `{:ok, atom}` or `{:error, reason}`.
   """
-  @spec parse(String.t() | atom() | nil) :: {:ok, t()} | {:error, String.t()}
-  def parse(nil), do: {:ok, :reagent}
+  # No nil clause: a missing type is not a reagent. Every caller either
+  # guards on `is_binary/1` or decides its own default, so inventing one
+  # here only hid the question.
+  @spec parse(String.t() | atom()) :: {:ok, t()} | {:error, String.t()}
   def parse(type) when type in @valid_types, do: {:ok, type}
 
   def parse(type) when type in @valid_type_strings,
@@ -133,29 +136,11 @@ defmodule Opus.ComponentType do
   @spec wasi_options(t(), map()) :: WasiP2Options.t() | nil
   def wasi_options(type, env \\ %{})
 
-  def wasi_options(:catalyst, env) do
-    %WasiP2Options{
-      allow_http: false,
-      inherit_stdin: false,
-      inherit_stdout: true,
-      inherit_stderr: true,
-      args: [],
-      env: env
-    }
-  end
-
-  def wasi_options(:reagent, env) do
-    %WasiP2Options{
-      allow_http: false,
-      inherit_stdin: false,
-      inherit_stdout: true,
-      inherit_stderr: true,
-      args: [],
-      env: env
-    }
-  end
-
-  def wasi_options(:formula, env) do
+  # Every executable type gets the same sandbox: `allow_http: false`, because
+  # egress goes through the host function where the edge is enforced, never
+  # through `wasi:http`. Three identical clauses invited the reading that the
+  # types differ here. They do not.
+  def wasi_options(type, env) when type in @valid_types do
     %WasiP2Options{
       allow_http: false,
       inherit_stdin: false,

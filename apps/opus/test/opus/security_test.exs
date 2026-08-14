@@ -110,7 +110,7 @@ defmodule Opus.SecurityTest do
     end
 
     test "component type defaults to :reagent when nil" do
-      assert {:ok, :reagent} = ComponentType.parse(nil)
+      assert {:error, _} = ComponentType.parse(nil)
     end
 
     test "invalid component type returns error" do

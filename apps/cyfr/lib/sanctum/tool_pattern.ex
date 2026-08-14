@@ -12,7 +12,7 @@ defmodule Sanctum.ToolPattern do
   `readwrite_danger`, so anything with a `*` placed other than as the whole
   pattern or a trailing `.*` is invalid.
 
-  Used for policy `allowed_tools`, consent tool expansion, and external
+  Used for consent tool expansion and external
   tool-server `tool_patterns`. External MCP tool names often carry no dot
   segments; for those, grants are exact names or `"*"` by construction.
   """

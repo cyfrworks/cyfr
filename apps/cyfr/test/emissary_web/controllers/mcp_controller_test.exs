@@ -149,7 +149,6 @@ defmodule EmissaryWeb.MCPControllerTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => 5,
@@ -341,11 +340,11 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
   end
 
-  # Note: Batch requests are not supported via HTTP per MCP 2025-11-25 spec
+  # Note: Batch requests are not supported via HTTP in this revision
   # Batch request support is only available through the internal API (Emissary.MCP)
 
   describe "POST /mcp - notifications" do
-    test "handles notifications/initialized", %{conn: conn} do
+    test "an unknown notification is accepted and dropped", %{conn: conn} do
       conn =
         conn
         |> recycle()
@@ -495,7 +494,6 @@ defmodule EmissaryWeb.MCPControllerTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> mcp_post(%{
           "jsonrpc" => "2.0",
           "id" => nil,
