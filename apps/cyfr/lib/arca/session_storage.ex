@@ -37,7 +37,6 @@ defmodule Arca.SessionStorage do
       email: attrs[:email],
       provider: attrs.provider,
       permissions: attrs.permissions,
-      session_id: attrs[:session_id],
       # NOTE: org_id "" is intentional here — an org-less session is the signal
       # that membership re-resolution must run on the next load
       # (`Sanctum.Session.restore_workspace/1`). Do not normalize it to "local",
@@ -77,7 +76,6 @@ defmodule Arca.SessionStorage do
           :email,
           :provider,
           :permissions,
-          :session_id,
           :org_id,
           :project_id,
           :scope,
@@ -145,43 +143,6 @@ defmodule Arca.SessionStorage do
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
-      {:error, :database_error}
-  end
-
-  @doc """
-  List active (non-expired) sessions scoped to a tenant.
-
-  Requires `:org_id` and `:project_id` in opts. Does not include token_hash.
-  """
-  @spec list_active_sessions(keyword()) :: {:ok, [Session.t()]} | {:error, :database_error}
-  def list_active_sessions(opts) when is_list(opts) do
-    now = DateTime.utc_now()
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
-
-    query =
-      from(s in Session,
-        where: s.expires_at > ^now,
-        select: [
-          :token_prefix,
-          :user_id,
-          :email,
-          :provider,
-          :org_id,
-          :project_id,
-          :expires_at,
-          :inserted_at
-        ],
-        order_by: [desc: s.inserted_at]
-      )
-
-    query = Arca.QueryHelpers.where_org_id(query, org_id)
-    query = Arca.QueryHelpers.where_project_id(query, project_id)
-
-    {:ok, Arca.Repo.all(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in list_active_sessions: #{Exception.message(e)}")
       {:error, :database_error}
   end
 

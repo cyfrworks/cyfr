@@ -17,7 +17,6 @@ defmodule Arca.Schemas.Session do
     field :email, :string
     field :provider, :string
     field :permissions, :string
-    field :session_id, :string
     field :expires_at, :utc_datetime_usec
     field :org_id, :string
     field :project_id, :string

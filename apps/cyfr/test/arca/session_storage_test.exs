@@ -23,7 +23,6 @@ defmodule Arca.SessionStorageTest do
         email: "user@example.com",
         provider: "github",
         permissions: "[\"execute\",\"component:read\"]",
-        session_id: Ecto.UUID.generate(),
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
         token_prefix: "cyfr_"
       },
@@ -124,83 +123,6 @@ defmodule Arca.SessionStorageTest do
     test "succeeds for nonexistent session" do
       hash = make_token_hash("delete_missing")
       assert :ok = SessionStorage.delete_session(hash)
-    end
-  end
-
-  describe "list_active_sessions/1" do
-    test "lists non-expired sessions scoped to tenant" do
-      hash = make_token_hash("active")
-
-      :ok =
-        SessionStorage.create_session(
-          hash,
-          session_attrs(%{
-            user_id: "active_user",
-            org_id: "org_list",
-            project_id: "proj_list"
-          })
-        )
-
-      {:ok, sessions} =
-        SessionStorage.list_active_sessions(org_id: "org_list", project_id: "proj_list")
-
-      assert Enum.any?(sessions, &(&1.user_id == "active_user"))
-    end
-
-    test "excludes expired sessions" do
-      hash = make_token_hash("expired_list")
-
-      attrs =
-        session_attrs(%{
-          user_id: "expired_user",
-          org_id: "org_list2",
-          project_id: "proj_list2",
-          expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
-        })
-
-      :ok = SessionStorage.create_session(hash, attrs)
-
-      {:ok, sessions} =
-        SessionStorage.list_active_sessions(org_id: "org_list2", project_id: "proj_list2")
-
-      refute Enum.any?(sessions, &(&1.user_id == "expired_user"))
-    end
-
-    test "scopes to tenant — other tenant's sessions not visible" do
-      hash_a = make_token_hash("tenant_a")
-      hash_b = make_token_hash("tenant_b")
-
-      :ok =
-        SessionStorage.create_session(
-          hash_a,
-          session_attrs(%{
-            user_id: "user_a",
-            org_id: "org_a",
-            project_id: "proj_a"
-          })
-        )
-
-      :ok =
-        SessionStorage.create_session(
-          hash_b,
-          session_attrs(%{
-            user_id: "user_b",
-            org_id: "org_b",
-            project_id: "proj_b"
-          })
-        )
-
-      {:ok, sessions_a} =
-        SessionStorage.list_active_sessions(org_id: "org_a", project_id: "proj_a")
-
-      assert length(sessions_a) == 1
-      assert hd(sessions_a).user_id == "user_a"
-
-      {:ok, sessions_b} =
-        SessionStorage.list_active_sessions(org_id: "org_b", project_id: "proj_b")
-
-      assert length(sessions_b) == 1
-      assert hd(sessions_b).user_id == "user_b"
     end
   end
 
