@@ -287,13 +287,13 @@ defmodule Arca.Adapters.Local do
 
   @doc "Get the expanded components path for component storage."
   def components_path do
-    Application.get_env(:cyfr, :components_path, "./components")
+    Application.fetch_env!(:cyfr, :components_path)
     |> Path.expand()
   end
 
   @doc "Get the expanded aqua path for AQUA agent prompts."
   def aqua_path do
-    Application.get_env(:cyfr, :aqua_path, "./aqua")
+    Application.fetch_env!(:cyfr, :aqua_path)
     |> Path.expand()
   end
 end

@@ -43,10 +43,6 @@ defmodule EmissaryWeb.Plugs.CORS do
   # plug that *requires* these headers reads the same list. A preflight that
   # omits a required header rejects the request in the browser, before any of
   # this server's own error handling can explain why.
-  #
-  # `mcp-session-id` is gone: nothing reads it. It was kept while
-  # `Sanctum.TinctureAuth` still accepted it as a credential, and that path was
-  # retired without this list following.
   @base_headers ~w(content-type authorization accept)
 
   @default_headers @base_headers
@@ -55,8 +51,7 @@ defmodule EmissaryWeb.Plugs.CORS do
 
   @expose_headers Emissary.MCP.Protocol.exposed_headers() |> Enum.join(", ")
 
-  # No mount serves DELETE. It was advertised for the retired session-termination
-  # verb; each mount now declares the verbs it actually routes.
+  # Each mount declares the verbs it actually routes.
   @default_methods ~w(GET POST)
 
   @max_age "86400"
@@ -143,7 +138,5 @@ defmodule EmissaryWeb.Plugs.CORS do
     end
   end
 
-  defp allowed_origins do
-    Application.get_env(:cyfr, :cors_allowed_origins, ["*"])
-  end
+  defp allowed_origins, do: Cyfr.RuntimeConfig.cors_allowed_origins()
 end

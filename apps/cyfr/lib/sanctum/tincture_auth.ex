@@ -43,6 +43,10 @@ defmodule Sanctum.TinctureAuth do
   @access_token_salt "tincture_access_v2"
   @access_token_max_age 3600
 
+  @doc "Access-token lifetime in seconds — the value verify enforces and the API reports."
+  @spec access_token_max_age() :: pos_integer()
+  def access_token_max_age, do: @access_token_max_age
+
   @doc """
   Mint a short-lived tincture access token from an authenticated context.
 
@@ -89,11 +93,6 @@ defmodule Sanctum.TinctureAuth do
   # caller has one place to put it. This is what lets a client mint a scoped
   # `?_t=` token from `GET /t/access-token` without falling back to a query
   # parameter.
-  #
-  # An `Mcp-Session-Id` header used to be accepted here as a third credential
-  # form. It went out with the protocol session it was named for: it carried the
-  # same Sanctum session token this branch already resolves, so it was a second
-  # spelling of one credential rather than a second credential.
 
   defp try_bearer_header(conn) do
     case get_req_header(conn, "authorization") do

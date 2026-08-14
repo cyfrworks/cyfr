@@ -52,37 +52,9 @@ defmodule Sanctum.WebhookTest do
       assert String.ends_with?(result.url, "/hooks/" <> result.slug)
     end
 
-    test "uses CYFR_PUBLIC_URL when set, path-only fallback when unset", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :public_url)
-
-      try do
-        Application.put_env(:cyfr, :public_url, "https://cyfr.example.com")
-        {:ok, result} = create(ctx, %{name: "url-set", target_ref: "f:local.h"})
-        assert result.url == "https://cyfr.example.com/hooks/" <> result.slug
-
-        Application.delete_env(:cyfr, :public_url)
-        {:ok, result2} = create(ctx, %{name: "url-unset", target_ref: "f:local.h"})
-        assert result2.url == "/hooks/" <> result2.slug
-      after
-        if original,
-          do: Application.put_env(:cyfr, :public_url, original),
-          else: Application.delete_env(:cyfr, :public_url)
-      end
-    end
-
-    test "trailing slash on CYFR_PUBLIC_URL is stripped", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :public_url)
-
-      try do
-        Application.put_env(:cyfr, :public_url, "https://cyfr.example.com/")
-        {:ok, result} = create(ctx, %{name: "trailing-slash", target_ref: "f:local.h"})
-        refute String.contains?(result.url, "//hooks/")
-        assert String.starts_with?(result.url, "https://cyfr.example.com/hooks/")
-      after
-        if original,
-          do: Application.put_env(:cyfr, :public_url, original),
-          else: Application.delete_env(:cyfr, :public_url)
-      end
+    test "url is path-only — clients prepend their own host", %{ctx: ctx} do
+      {:ok, result} = create(ctx, %{name: "url-shape", target_ref: "f:local.h"})
+      assert result.url == "/hooks/" <> result.slug
     end
 
     test "stores input_template and reads it back via get/2", %{ctx: ctx} do

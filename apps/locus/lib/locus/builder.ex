@@ -337,7 +337,7 @@ defmodule Locus.Builder do
   end
 
   defp wit_source_path(target_type) do
-    wit_base = Application.get_env(:cyfr, :wit_path, "./wit") |> Path.expand()
+    wit_base = Application.fetch_env!(:cyfr, :wit_path) |> Path.expand()
     Path.join(wit_base, to_string(target_type))
   end
 

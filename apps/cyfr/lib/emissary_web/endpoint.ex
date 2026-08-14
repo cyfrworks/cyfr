@@ -57,7 +57,12 @@ defmodule EmissaryWeb.Endpoint do
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),
-    length: 8_000_000,
+    # Sized for the 20 MB attachment cap both chat UIs enforce (Porta's
+    # agent-store MAX_ATTACHMENT_SIZE and aqua_live's max_file_size):
+    # attachments arrive base64-encoded through POST /mcp, so 20 MB × 4/3
+    # plus JSON envelope headroom. Webhooks keep their own smaller cap in
+    # RawBodyReader.
+    length: 28_000_000,
     body_reader: {EmissaryWeb.Plugs.RawBodyReader, :read_body, []}
   )
 

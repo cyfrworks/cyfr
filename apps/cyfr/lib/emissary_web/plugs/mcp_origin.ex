@@ -28,15 +28,6 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
   import Plug.Conn
   require Logger
 
-  @default_allowed_origins [
-    "http://localhost",
-    "https://localhost",
-    "http://127.0.0.1",
-    "https://127.0.0.1",
-    "http://[::1]",
-    "https://[::1]"
-  ]
-
   @default_errors EmissaryWeb.MCPError
 
   def init(opts), do: Keyword.put_new(opts, :errors, @default_errors)
@@ -65,7 +56,7 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
   end
 
   defp valid_origin?(origin) do
-    allowed = Application.get_env(:cyfr, :mcp_allowed_origins, @default_allowed_origins)
+    allowed = Cyfr.RuntimeConfig.mcp_allowed_origins()
 
     Enum.any?(allowed, fn allowed_origin ->
       origin_matches?(origin, allowed_origin)

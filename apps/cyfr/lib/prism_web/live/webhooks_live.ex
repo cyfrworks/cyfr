@@ -303,9 +303,8 @@ defmodule PrismWeb.WebhooksLive do
   defp format_tool_error(reason) when is_binary(reason), do: reason
   defp format_tool_error(reason), do: inspect(reason)
 
-  # Display the URL exactly as the server returned it. The server uses
-  # `Application.get_env(:cyfr, :public_url)` to build a full URL when set,
-  # or falls back to a path. The LiveView never reconstructs it.
+  # Display the URL exactly as the server returned it (a path — clients
+  # prepend their own host). The LiveView never reconstructs it.
   defp display_url(%{url: url}) when is_binary(url) and url != "", do: url
   defp display_url(%{slug: slug}) when is_binary(slug) and slug != "", do: "/hooks/" <> slug
   defp display_url(_), do: ""

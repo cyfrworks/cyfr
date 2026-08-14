@@ -66,7 +66,10 @@ defmodule EmissaryWeb.TinctureController do
       {:ok, ctx} ->
         conn
         |> put_status(200)
-        |> json(%{token: Sanctum.TinctureAuth.issue_access_token(ctx), expires_in: 3600})
+        |> json(%{
+          token: Sanctum.TinctureAuth.issue_access_token(ctx),
+          expires_in: Sanctum.TinctureAuth.access_token_max_age()
+        })
 
       :unauthenticated ->
         # RFC 9110 §15.5.2 makes a challenge mandatory on a 401.

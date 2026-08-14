@@ -593,19 +593,9 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  # Build the full webhook URL using the configured public URL. Returns the
-  # path-only form when CYFR_PUBLIC_URL is unset (dev/test without explicit
-  # config) — clients then need to prepend their own host.
-  defp build_url(slug) when is_binary(slug) and slug != "" do
-    case Application.get_env(:cyfr, :public_url) do
-      base when is_binary(base) and base != "" ->
-        String.trim_trailing(base, "/") <> "/hooks/" <> slug
-
-      _ ->
-        "/hooks/" <> slug
-    end
-  end
-
+  # Webhook URLs are path-only — clients prepend the host they reach the
+  # deployment on.
+  defp build_url(slug) when is_binary(slug) and slug != "", do: "/hooks/" <> slug
   defp build_url(_), do: nil
 
   # Single source of truth for the {scope, org_id, project_id} triple and the

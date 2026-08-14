@@ -108,6 +108,8 @@ defmodule PrismWeb.AquaLive do
      |> allow_upload(:attachments,
        accept: :any,
        max_entries: 10,
+       # 20 MB — sized with EmissaryWeb.Endpoint's Plug.Parsers :length so a
+       # base64-encoded attachment of this size fits through POST /mcp.
        max_file_size: 20_000_000,
        auto_upload: true
      ), layout: false}

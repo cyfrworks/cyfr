@@ -7,8 +7,8 @@ defmodule Compendium.Cosign do
 
   Reads configuration from `Application.get_env(:cyfr, :sigstore)`:
 
-  - `mode: :keyed` — verify with a specific public key (`key_path`)
-  - `mode: :keyless` — verify via Sigstore's keyless (Fulcio + Rekor) flow
+  - `verification: :keyed` — verify with a specific public key (`key_path`)
+  - `verification: :keyless` — verify via Sigstore's keyless (Fulcio + Rekor) flow
 
   Returns signer identity, issuer, and verification timestamp on success.
   """
@@ -29,7 +29,7 @@ defmodule Compendium.Cosign do
          "cosign not found in PATH. Install: https://docs.sigstore.dev/cosign/system_config/installation/"}
 
       cosign_path ->
-        config = Application.get_env(:cyfr, :sigstore, mode: :keyless)
+        config = Application.get_env(:cyfr, :sigstore, verification: :keyless)
         do_verify(cosign_path, oci_ref, config)
     end
   end
@@ -47,7 +47,7 @@ defmodule Compendium.Cosign do
   end
 
   defp build_args(oci_ref, config) do
-    case Keyword.get(config, :mode, :keyless) do
+    case Keyword.get(config, :verification, :keyless) do
       :keyed ->
         key_path = Keyword.fetch!(config, :key_path)
         # "--" terminates flag parsing so an oci_ref starting with "-" can never

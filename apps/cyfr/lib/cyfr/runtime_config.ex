@@ -91,6 +91,35 @@ defmodule Cyfr.RuntimeConfig do
   def repo_adapter, do: Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3)
 
   @doc """
+  Browser cross-origin allowlist. Unset means the wildcard default — the
+  single source of that default, read by both the CORS plug (enforcement)
+  and the boot guard (which refuses a wildcard once an auth provider is
+  configured). The two must never disagree about what "unset" means.
+  """
+  @spec cors_allowed_origins() :: [String.t()]
+  def cors_allowed_origins,
+    do: Application.get_env(:cyfr, :cors_allowed_origins, ["*"])
+
+  # DNS-rebinding guard: unset means localhost-only.
+  @mcp_default_origins [
+    "http://localhost",
+    "https://localhost",
+    "http://127.0.0.1",
+    "https://127.0.0.1",
+    "http://[::1]",
+    "https://[::1]"
+  ]
+
+  @doc """
+  MCP Origin-header allowlist (DNS-rebinding guard). Unset means the
+  localhost-only default — single source, read by the Origin plug and the
+  boot-time divergence warning.
+  """
+  @spec mcp_allowed_origins() :: [String.t()]
+  def mcp_allowed_origins,
+    do: Application.get_env(:cyfr, :mcp_allowed_origins, @mcp_default_origins)
+
+  @doc """
   SQLite busy timeout, used both as the Repo connection option and in the
   boot-time PRAGMA — one constant so the two mechanisms stay in step.
   """

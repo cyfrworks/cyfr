@@ -323,10 +323,9 @@ if config_env() != :test do
   # `"registry.#{registry_url}"`. Self-hosted deployments may override both
   # independently for co-host or split topologies.
   #
-  # The legacy `:cyfr, :registry` keyword list and `CYFR_REGISTRY_USERNAME` /
-  # `CYFR_REGISTRY_PASSWORD` env vars are REMOVED post auth refactor: cyfr.run
-  # issues per-user push tokens automatically via `/v1/identity/probe` after
-  # login, so there is no static username/password to configure at deploy time.
+  # cyfr.run issues per-user push tokens automatically via
+  # `/v1/identity/probe` after login, so there is no static
+  # username/password to configure at deploy time.
   registry_url_config = env!("CYFR_REGISTRY_URL", :string, "cyfr.run")
   config :cyfr, :registry_url, registry_url_config
 
@@ -444,11 +443,11 @@ if config_env() != :test do
   # Sigstore Configuration
   if cosign_key = env!("CYFR_COSIGN_KEY", :string, nil) do
     config :cyfr, :sigstore,
-      mode: :keyed,
+      verification: :keyed,
       key_path: cosign_key,
       password: env!("CYFR_COSIGN_PASSWORD", :string, nil)
   else
-    config :cyfr, :sigstore, mode: :keyless
+    config :cyfr, :sigstore, verification: :keyless
   end
 
   # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is

@@ -245,7 +245,7 @@ defmodule Cyfr.Application do
     decision =
       cors_enforcement(
         Sanctum.auth_configured?(),
-        Application.get_env(:cyfr, :cors_allowed_origins, []),
+        Cyfr.RuntimeConfig.cors_allowed_origins(),
         System.get_env("RELEASE_ROOT") != nil
       )
 
@@ -264,11 +264,13 @@ defmodule Cyfr.Application do
   # other gets a half-closed deployment that fails confusingly at request
   # time — say so at boot instead.
   defp warn_if_origin_allowlists_diverge do
-    cors = Application.get_env(:cyfr, :cors_allowed_origins, [])
-    mcp = Application.get_env(:cyfr, :mcp_allowed_origins, [])
+    cors = Cyfr.RuntimeConfig.cors_allowed_origins()
 
-    cors_customized? = cors != [] and "*" not in List.wrap(cors)
-    mcp_customized? = List.wrap(mcp) != []
+    # "Customized" asks whether the operator SET the key, not what it
+    # resolves to — so the MCP side reads key presence, not the accessor's
+    # localhost default.
+    cors_customized? = "*" not in cors
+    mcp_customized? = Application.get_env(:cyfr, :mcp_allowed_origins, []) != []
 
     if cors_customized? and not mcp_customized? do
       Logger.warning(

@@ -214,7 +214,9 @@ function parseOrchestratorMention(
   return { task: message, mentionName: null };
 }
 
-const MAX_ATTACHMENT_SIZE = 20_000_000; // 20MB
+// 20 MB — sized with EmissaryWeb.Endpoint's Plug.Parsers :length so a
+// base64-encoded attachment of this size fits through POST /mcp.
+const MAX_ATTACHMENT_SIZE = 20_000_000;
 const MAX_ATTACHMENTS = 10;
 
 export const useAgentStore = create<AgentState>((set, get) => ({

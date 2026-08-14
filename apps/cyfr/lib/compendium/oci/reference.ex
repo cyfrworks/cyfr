@@ -30,16 +30,11 @@ defmodule Compendium.OCI.Reference do
 
   defstruct [:registry, :repository, :tag, :digest, default_registry: false]
 
-  # Compile-time fallback for the OCI host when neither `:cyfr, :oci_registry_url`
-  # nor an explicit registry-prefix in the ref is available. At runtime we
-  # prefer `default_registry/0` below so a self-hosted-registry build with
-  # `CYFR_OCI_REGISTRY_URL` picked up there too.
-  @default_registry_fallback "registry.cyfr.run"
   @default_tag "latest"
 
-  defp default_registry do
-    Application.get_env(:cyfr, :oci_registry_url, @default_registry_fallback)
-  end
+  # Compendium.Registry.canonical_host/0 owns the host default — one source
+  # for what an unprefixed ref resolves to.
+  defp default_registry, do: Compendium.Registry.canonical_host()
 
   @doc """
   Parse an OCI reference string into a `%Reference{}`.
@@ -147,7 +142,7 @@ defmodule Compendium.OCI.Reference do
       [publisher, type_plural, name] ->
         type = String.trim_trailing(type_plural, "s")
 
-        if type in ~w(catalyst reagent formula tincture) do
+        if type in Sanctum.ComponentRef.valid_types() do
           {:ok,
            %Sanctum.ComponentRef{
              type: type,

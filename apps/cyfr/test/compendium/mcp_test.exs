@@ -94,6 +94,9 @@ defmodule Compendium.MCPTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
+    original_base_path = Application.fetch_env!(:cyfr, :base_path)
+    original_components_path = Application.fetch_env!(:cyfr, :components_path)
+    original_aqua_path = Application.fetch_env!(:cyfr, :aqua_path)
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
@@ -111,7 +114,9 @@ defmodule Compendium.MCPTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
-      Application.delete_env(:cyfr, :aqua_path)
+      Application.put_env(:cyfr, :base_path, original_base_path)
+      Application.put_env(:cyfr, :components_path, original_components_path)
+      Application.put_env(:cyfr, :aqua_path, original_aqua_path)
 
       if original_registry_url,
         do: Application.put_env(:cyfr, :registry_url, original_registry_url),
