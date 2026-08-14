@@ -77,7 +77,7 @@ defmodule Opus.Runtime do
     wasi_env = Keyword.get(opts, :wasi_env, %{})
     wasi_opts = Opus.ComponentType.wasi_options(component_type, wasi_env)
 
-    preloaded_secrets = Keyword.get(opts, :preloaded_secrets, %{})
+    preloaded_fields = Keyword.get(opts, :preloaded_fields, %{})
     component_ref = Keyword.get(opts, :component_ref)
     edge = Keyword.get(opts, :edge)
     limits = Keyword.get(opts, :limits)
@@ -127,7 +127,7 @@ defmodule Opus.Runtime do
     {imports, cleanup_refs} =
       build_imports_and_cleanup(
         component_type,
-        preloaded_secrets,
+        preloaded_fields,
         component_ref,
         edge,
         limits,
@@ -230,7 +230,7 @@ defmodule Opus.Runtime do
   # a missing import.
   defp build_imports_and_cleanup(
          component_type,
-         preloaded_secrets,
+         preloaded_fields,
          component_ref,
          edge,
          limits,
@@ -239,9 +239,9 @@ defmodule Opus.Runtime do
          root_execution_id,
          authority_info
        ) do
-    secrets_imports =
+    vault_imports =
       if component_type == :catalyst do
-        build_secrets_imports(preloaded_secrets, component_ref)
+        build_vault_imports(preloaded_fields, component_ref)
       else
         %{}
       end
@@ -302,7 +302,7 @@ defmodule Opus.Runtime do
       end
 
     all_imports =
-      secrets_imports
+      vault_imports
       |> Map.merge(http_imports)
       |> Map.merge(stream_imports)
       |> Map.merge(storage_imports)
@@ -339,9 +339,9 @@ defmodule Opus.Runtime do
   # Build secrets host functions for WASI import from pre-resolved secrets map.
   # The map is built once per execution by the Executor, so each get() is a
   # simple Map.get with no file I/O or PBKDF2 derivation.
-  defp build_secrets_imports(preloaded, component_ref) when is_map(preloaded) do
+  defp build_vault_imports(preloaded, component_ref) when is_map(preloaded) do
     %{
-      "cyfr:secrets/read@0.1.0" => %{
+      "cyfr:vault/read@0.1.0" => %{
         "get" =>
           {:fn,
            fn name ->

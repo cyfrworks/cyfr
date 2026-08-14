@@ -205,7 +205,7 @@ Two different credential types serve two different purposes: API keys authentica
 |---|----------|-----------------------------------|----------------------|
 | **Purpose** | Authenticate your **app** to **CYFR** | Authenticate **components** to **service APIs** | Authenticate **components** to **user-scoped APIs** |
 | **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack grants |
-| **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:secrets/read`) | WASM components (via `cyfr:oauth/token`) |
+| **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:vault/read`) | WASM components (via `cyfr:oauth/token`) |
 | **Stored where** | Your app's environment | CYFR's vault (sealed, encrypted at rest) | CYFR's vault (sealed, encrypted at rest) |
 | **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Connections page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
 | **Lifecycle** | Static — set once | Static — rotate without re-consent | Dynamic — host auto-refreshes |

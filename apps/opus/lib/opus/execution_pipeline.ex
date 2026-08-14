@@ -25,7 +25,7 @@ defmodule Opus.ExecutionPipeline do
           exec_opts: keyword(),
           host_policy: map() | nil,
           edge: Sanctum.Authority.Blob.Edge.t() | nil,
-          preloaded_secrets: map(),
+          preloaded_fields: map(),
           started_written: reference() | nil,
           opts: keyword()
         }
@@ -41,7 +41,7 @@ defmodule Opus.ExecutionPipeline do
     :host_policy,
     :edge,
     exec_opts: [],
-    preloaded_secrets: %{},
+    preloaded_fields: %{},
     started_written: nil,
     opts: []
   ]

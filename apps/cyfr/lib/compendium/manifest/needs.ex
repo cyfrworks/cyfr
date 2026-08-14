@@ -26,7 +26,7 @@ defmodule Compendium.Manifest.Needs do
   the prose the operator sees instead of the developer's key names.
   `fields` are the guest-visible read keys, served from the bound entry's
   material as the projection — the names the binary already passes to
-  `cyfr:secrets/read.get`, so no interface changes. `scopes` applies to
+  `cyfr:vault/read.get`, so no interface changes. `scopes` applies to
   OAuth kinds only.
   """
 

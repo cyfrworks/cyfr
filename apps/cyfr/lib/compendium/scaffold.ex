@@ -344,7 +344,7 @@ defmodule Compendium.Scaffold do
   def cargo_toml_for(:catalyst, opts) do
     wit_deps =
       [
-        ~s("cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }),
+        ~s("cyfr:vault" = { path = "wit/deps/cyfr-vault" }),
         ~s("cyfr:http" = { path = "wit/deps/cyfr-http" }),
         ~s("cyfr:storage" = { path = "wit/deps/cyfr-storage" })
       ] ++
@@ -433,7 +433,7 @@ defmodule Compendium.Scaffold do
   # arca:bypass-ok=C — compile-time embed of WIT templates. The Path.wildcard
   # + File.read! calls below run only at module compilation; runtime never
   # touches the filesystem for templates.
-  for type <- ~w(catalyst formula reagent) do
+  for type <- Sanctum.ComponentRef.executable_types() do
     type_dir = Path.join(@wit_root, type)
 
     files =
@@ -488,7 +488,7 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("catalyst", reference, _template) do
     [
-      "Edit cyfr-manifest.json to configure allowed_domains and secrets",
+      "Edit cyfr-manifest.json to declare the needs and caps blocks",
       "Edit src/src/lib.rs to implement your catalyst logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"

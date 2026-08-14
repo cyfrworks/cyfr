@@ -56,7 +56,7 @@ components/local/default/catalysts/local/my-api/0.1.0/
 | Pure compute | Yes | Yes | Yes | — |
 | HTTP requests | — | `cyfr:http/fetch` | — | — |
 | HTTP streaming | — | `cyfr:http/streaming` | — | — |
-| Secrets | — | `cyfr:secrets/read` | — | — |
+| Secrets | — | `cyfr:vault/read` | — | — |
 | OAuth tokens | — | `cyfr:oauth/token` | — | — |
 | File storage | — | `cyfr:storage/files` | — | — |
 | Invoke sub-components | — | — | `cyfr:formula/invoke` | — |
@@ -137,7 +137,7 @@ path = "wit"
 
 # Only include dependencies for interfaces your world.wit imports
 [package.metadata.component.target.dependencies]
-"cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }
+"cyfr:vault" = { path = "wit/deps/cyfr-vault" }
 "cyfr:http" = { path = "wit/deps/cyfr-http" }
 # "cyfr:storage" = { path = "wit/deps/cyfr-storage" }  # uncomment if you import storage
 # "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }      # uncomment if you import oauth
@@ -162,7 +162,7 @@ world catalyst {
     export run;
     import cyfr:http/fetch@0.1.0;
     import cyfr:http/streaming@0.1.0;
-    import cyfr:secrets/read@0.1.0;
+    import cyfr:vault/read@0.1.0;
 }
 ```
 
@@ -511,7 +511,7 @@ Named roles the component asks the operator to satisfy with **Connections**. Two
 | (key) | string | Yes | The need name — the slot the operator binds a Connection to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
 | `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`) |
 | `reason` | string | Yes | Prose the operator sees on the consent sheet instead of your key names |
-| `fields` | string[] | No | The exact key names your binary already passes to `cyfr:secrets/read.get` — served from the bound Connection's material as the projection. No interface change, no rebuild |
+| `fields` | string[] | No | The exact key names your binary already passes to `cyfr:vault/read.get` — served from the bound Connection's material as the projection. No interface change, no rebuild |
 | `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
 | `required` | bool | No | Default `true`. Optional needs may be left unbound |
 
@@ -777,7 +777,7 @@ streaming::close(handle);
 | `invalid_handle` | Unknown or already-closed handle |
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 
-### `cyfr:secrets/read` — `get(name) -> result<string, string>`
+### `cyfr:vault/read` — `get(name) -> result<string, string>`
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Values are served from the bound Connection's material, projected to the `fields` the need declared — credentials live in host memory and never enter WASM at rest. Requires a granted profile whose Connection projection includes `name`.
 
 ### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
@@ -897,7 +897,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 
 Components never hold credentials. A **Connection** is a vault entry the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The mapping happens in the console's Connections page or `cyfr profile grant <ref>` — a component never writes or learns a vault entry name, and reads only the `fields` its need declared. Reagents cannot access credentials at all.
 
-At runtime nothing changes for your binary: `cyfr:secrets/read.get("ANTHROPIC_API_KEY")` is served from the bound Connection's material, projected to the need's `fields`. Declare the key names your code already reads and no interface change or rebuild is needed.
+At runtime nothing changes for your binary: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` is served from the bound Connection's material, projected to the need's `fields`. Declare the key names your code already reads and no interface change or rebuild is needed.
 
 **The credential rule**: *if a value can appear in a log, arguments are fine; otherwise use the sealed path.* Read configuration from input arguments if present, else fall back to the projected Connection fields (args-first, vault-fallback). A dev who owns both ends — say, their own Supabase project — needs no Connection at all: pass public-by-design values (URLs, anon keys) as call arguments.
 
@@ -977,7 +977,7 @@ Registration rejects manifests still carrying `setup.policy`, `setup.secrets`, `
 | `oauth` block | a need of type `oauth:<provider>` + `scopes` |
 | `wasi` | delete — it was never runtime-parsed |
 
-Your binary is untouched: the need's `fields` are the same names it already passes to `cyfr:secrets/read.get`, and OAuth catalysts keep calling `get-access-token("<provider>")`.
+Your binary is untouched: the need's `fields` are the same names it already passes to `cyfr:vault/read.get`, and OAuth catalysts keep calling `get-access-token("<provider>")`.
 
 ### Example: API-key catalyst (claude 1.0.0 → 1.1.0)
 
@@ -1202,7 +1202,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 
 - [ ] `wasm-tools validate` passes (correct exports, no forbidden imports)
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
-- [ ] `needs.fields` match the exact names the binary passes to `cyfr:secrets/read.get`
+- [ ] `needs.fields` match the exact names the binary passes to `cyfr:vault/read.get`
 - [ ] Tested with `cyfr run` using representative input
 - [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (`cyfr profile grant c:<ref>`)
 - [ ] OAuth catalysts: need of type `oauth:<provider>` declares every scope your operations use

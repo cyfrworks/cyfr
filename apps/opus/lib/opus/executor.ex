@@ -179,7 +179,7 @@ defmodule Opus.Executor do
       with {:ok, p} <- stage_enforce_policy(p, input),
            {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),
            {:ok, p} <- stage_record_start(p),
-           {:ok, p} <- stage_resolve_secrets(p),
+           {:ok, p} <- stage_resolve_vault_fields(p),
            {:ok, p, output, exec_metadata} <- stage_execute(p, wasm_bytes, input) do
         finalize_execution(p, output, exec_metadata)
       else
@@ -372,12 +372,12 @@ defmodule Opus.Executor do
   # consulted: credentials come only from the current edge's vault
   # resource, projected by the vault reader. No vault edge means no
   # secrets — an ungranted read denies exactly as an empty resolution.
-  defp stage_resolve_secrets(%ExecutionPipeline{} = p) do
+  defp stage_resolve_vault_fields(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
       %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
         case Sanctum.VaultReader.fetch(p.ctx, vault) do
           {:ok, secrets} ->
-            {:ok, %{p | preloaded_secrets: secrets}}
+            {:ok, %{p | preloaded_fields: secrets}}
 
           {:error, reason} ->
             # A consented vault edge that cannot produce material is a
@@ -395,7 +395,7 @@ defmodule Opus.Executor do
         end
 
       _ ->
-        {:ok, %{p | preloaded_secrets: %{}}}
+        {:ok, %{p | preloaded_fields: %{}}}
     end
   end
 
@@ -405,7 +405,7 @@ defmodule Opus.Executor do
 
     exec_opts_final =
       Keyword.merge(p.exec_opts,
-        preloaded_secrets: p.preloaded_secrets,
+        preloaded_fields: p.preloaded_fields,
         component_ref: p.component_ref,
         ctx: p.ctx,
         execution_id: p.record.id,
@@ -431,7 +431,7 @@ defmodule Opus.Executor do
 
   defp finalize_execution(%ExecutionPipeline{} = p, output, exec_metadata) do
     oauth_tokens = Opus.OAuthHandler.collect_dispensed(p.record.id)
-    secret_values = Map.values(p.preloaded_secrets) ++ oauth_tokens
+    secret_values = Map.values(p.preloaded_fields) ++ oauth_tokens
     masked_output = Opus.SecretMasker.mask(output, secret_values)
 
     with :ok <- check_application_error(p, masked_output),
@@ -821,7 +821,7 @@ defmodule Opus.Executor do
             |> Keyword.take([
               :component_type,
               :max_memory_bytes,
-              :preloaded_secrets,
+              :preloaded_fields,
               :component_ref,
               :edge,
               :limits,
@@ -1018,7 +1018,8 @@ defmodule Opus.Executor do
               "message" => failure_message(reason)
             },
             System.unique_integer([:positive]),
-            ctx
+            ctx,
+            origin: "host"
           )
 
         :not_setup_error ->
@@ -1291,44 +1292,4 @@ defmodule Opus.Executor do
     end
   end
 
-  # ===========================================================================
-  # Startup sweep for BEAM crash recovery
-  # ===========================================================================
-
-  @doc """
-  One-time sweep to mark stale "running" executions as failed.
-
-  Called at startup to clean up records from previous BEAM instances that
-  crashed without running cleanup code. Only marks records older than 10
-  minutes to avoid racing with legitimately running executions.
-  """
-  def sweep_stale_on_startup do
-    cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
-    stale = Arca.Execution.list_stale_running(cutoff)
-
-    for record <- stale do
-      should_sweep =
-        case Registry.lookup(Opus.ExecutionRegistry, record.id) do
-          [{pid, _}] -> not Process.alive?(pid)
-          _ -> true
-        end
-
-      if should_sweep do
-        now = DateTime.utc_now()
-
-        {count, _} =
-          Arca.Execution.mark_failed_if_running(record.id, %{
-            completed_at: now,
-            duration_ms: DateTime.diff(now, record.started_at, :millisecond),
-            error_message: "Execution terminated: BEAM process exited (startup recovery)"
-          })
-
-        if count > 0 do
-          Logger.info("[Opus] Startup sweep: marked #{record.id} as failed")
-        end
-      end
-    end
-
-    :ok
-  end
 end

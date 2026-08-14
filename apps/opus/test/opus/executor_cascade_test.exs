@@ -227,59 +227,6 @@ defmodule Opus.ExecutorCascadeTest do
     end
   end
 
-  describe "sweep_stale_on_startup/0" do
-    test "marks old running executions as failed" do
-      old_id = "exec_stale_sweep_#{System.unique_integer([:positive])}"
-      old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
-
-      create_execution(%{
-        id: old_id,
-        started_at: old_time
-      })
-
-      # Run the sweep
-      assert :ok = Opus.Executor.sweep_stale_on_startup()
-
-      ctx =
-        Sanctum.Context.build(
-          user_id: "user_cascade_test",
-          permissions: [:execution_read],
-          scope: :platform,
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
-        )
-
-      record = Execution.get_tenant(ctx, old_id)
-      assert record.status == "failed"
-      assert record.error_message =~ "startup recovery"
-    end
-
-    test "does not touch recent running executions" do
-      recent_id = "exec_recent_sweep_#{System.unique_integer([:positive])}"
-
-      create_execution(%{
-        id: recent_id,
-        started_at: DateTime.utc_now()
-      })
-
-      assert :ok = Opus.Executor.sweep_stale_on_startup()
-
-      ctx =
-        Sanctum.Context.build(
-          user_id: "user_cascade_test",
-          permissions: [:execution_read],
-          scope: :platform,
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
-        )
-
-      record = Execution.get_tenant(ctx, recent_id)
-      assert record.status == "running"
-    end
-  end
-
   describe "cancel/2 tenant isolation" do
     test "a foreign tenant cannot cancel another tenant's running execution" do
       exec_id = "exec_cancel_xtenant_#{System.unique_integer([:positive])}"

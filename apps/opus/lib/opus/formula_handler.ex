@@ -295,8 +295,8 @@ defmodule Opus.FormulaHandler do
     ]
   end
 
-  # Deny reasons map onto the guest error vocabulary the legacy path
-  # already speaks, so guests need no second taxonomy.
+  # Deny reasons map onto the guest error vocabulary, so guests need
+  # no second taxonomy.
   defp encode_child_error({:invoke_denied, reason})
        when reason in [:depth_cap, :invoke_budget_exhausted],
        do: encode_error(:resource_limit, "Invocation denied: #{reason}")
@@ -815,7 +815,8 @@ defmodule Opus.FormulaHandler do
         "message" => message
       },
       seq,
-      ctx
+      ctx,
+      origin: "host"
     )
   end
 

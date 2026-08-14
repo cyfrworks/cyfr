@@ -64,10 +64,10 @@ defmodule Opus.ExecutionEventBuffer do
 
   ## Options
 
-  - `:origin` - `"guest"` with `:node` (the emitting component) on the
-    authority path, so consumers can tell guest-authored events from the
-    host's. The legacy path emits the bare envelope; a consumer must
-    treat an origin-less event as untrusted.
+  - `:origin` - `"guest"` (with `:node`, the emitting component) for
+    guest-authored events on the authority path, `"host"` for events the
+    host itself emits (setup_required). Every producer stamps one; a
+    consumer must still treat an origin-less event as untrusted.
   """
   def push(execution_id, data, sequence, ctx \\ nil, opts \\ []) do
     org_id = extract_org_id(ctx)
