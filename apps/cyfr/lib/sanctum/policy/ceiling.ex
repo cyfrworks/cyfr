@@ -41,13 +41,39 @@ defmodule Sanctum.Policy.Ceiling do
   @doc """
   Returns the platform ceiling (absolute infrastructure max).
 
-  Config overrides individual fields via `:cyfr, :platform_ceiling`.
+  Config may lower individual fields via `:cyfr, :platform_ceiling`; it may
+  not raise them. "Absolute infrastructure max" has to mean the compiled
+  number is the highest this instance will ever hand out — a plain merge let
+  a config key move the roof up, which is the one thing a ceiling exists to
+  prevent. An override that is not lower is ignored.
   """
   @spec platform_ceiling() :: map()
   def platform_ceiling do
     overrides = Application.get_env(:cyfr, :platform_ceiling, %{})
-    Map.merge(@platform_ceiling, overrides)
+
+    Enum.reduce(overrides, @platform_ceiling, fn {field, value}, acc ->
+      case Map.fetch(acc, field) do
+        {:ok, hard_max} -> Map.put(acc, field, lower_of(field, value, hard_max))
+        # A field the compiled ceiling does not know is not a ceiling field;
+        # ignore it rather than inventing a bound nothing clamps against.
+        :error -> acc
+      end
+    end)
   end
+
+  defp lower_of(field, value, hard_max) when field in @duration_fields do
+    with {:ok, value_ms} <- Sanctum.Limits.parse_duration(value),
+         {:ok, max_ms} <- Sanctum.Limits.parse_duration(hard_max) do
+      if value_ms < max_ms, do: value, else: hard_max
+    else
+      _ -> hard_max
+    end
+  end
+
+  defp lower_of(_field, value, hard_max) when is_number(value) and is_number(hard_max),
+    do: min(value, hard_max)
+
+  defp lower_of(_field, _value, hard_max), do: hard_max
 
   @doc """
   Returns the effective ceiling for a context — the platform ceiling.

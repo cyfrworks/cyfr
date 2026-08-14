@@ -206,12 +206,18 @@ defmodule Cyfr.RuntimeConfig do
            "(e.g. postgres://user:pass@host:5432/dbname)."}
 
       url ->
-        {:ok,
-         [
-           url: url,
-           pool_size: parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")),
-           ssl: getenv.("CYFR_DB_SSL") == "true"
-         ]}
+        case parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")) do
+          {:ok, pool_size} ->
+            {:ok,
+             [
+               url: url,
+               pool_size: pool_size,
+               ssl: getenv.("CYFR_DB_SSL") == "true"
+             ]}
+
+          {:error, _} = err ->
+            err
+        end
     end
   end
 
@@ -228,12 +234,19 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp parse_pool_size(nil), do: 20
+  # Set-or-default, never silent fallback: an unset variable takes the
+  # default, but a variable the operator set and got wrong fails the boot.
+  # Quietly serving 20 connections to someone who asked for 200 is a
+  # capacity incident discovered under load.
+  defp parse_pool_size(nil), do: {:ok, 20}
 
   defp parse_pool_size(raw) do
     case Integer.parse(String.trim(raw)) do
-      {n, ""} when n > 0 -> n
-      _ -> 20
+      {n, ""} when n > 0 ->
+        {:ok, n}
+
+      _ ->
+        {:error, "CYFR_DB_POOL_SIZE must be a positive integer, got #{inspect(raw)}."}
     end
   end
 end

@@ -165,6 +165,23 @@ defmodule Cyfr.RuntimeConfigTest do
       assert opts[:ssl] == true
     end
 
+    # Set-or-default, never silent fallback: quietly serving 20 connections
+    # to an operator who asked for 200 is a capacity incident found under
+    # load, not at boot.
+    test "a malformed pool size fails the boot instead of defaulting" do
+      for bad <- ["nope", "0", "-4", "12x", "1.5"] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_postgres(
+                   env(%{
+                     "CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db",
+                     "CYFR_DB_POOL_SIZE" => bad
+                   })
+                 )
+
+        assert message =~ "CYFR_DB_POOL_SIZE"
+      end
+    end
+
     test "missing url => error (no silent localhost attempt)" do
       assert {:error, msg} = RuntimeConfig.resolve_postgres(env(%{}))
       assert msg =~ "CYFR_DATABASE_URL"

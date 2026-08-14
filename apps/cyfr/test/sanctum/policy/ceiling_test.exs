@@ -42,23 +42,56 @@ defmodule Sanctum.Policy.CeilingTest do
       assert ceiling.batch_timeout == "30m"
     end
 
-    test "config override merges with defaults" do
-      Application.put_env(:cyfr, :platform_ceiling, %{timeout: "1h", max_concurrent_tasks: 100})
+    test "config may lower a field" do
+      Application.put_env(:cyfr, :platform_ceiling, %{timeout: "5m", max_concurrent_tasks: 10})
 
       ceiling = Ceiling.platform_ceiling()
-      assert ceiling.timeout == "1h"
-      assert ceiling.max_concurrent_tasks == 100
+      assert ceiling.timeout == "5m"
+      assert ceiling.max_concurrent_tasks == 10
       # Other fields keep defaults
       assert ceiling.max_memory_bytes == 256 * 1024 * 1024
       assert ceiling.rate_limit_requests == 10_000
     end
 
-    test "partial override only affects specified fields" do
-      Application.put_env(:cyfr, :platform_ceiling, %{max_memory_bytes: 512 * 1024 * 1024})
+    # The compiled number is the absolute maximum. Config that tries to raise
+    # it is ignored rather than honoured — otherwise the "infrastructure
+    # protection" ceiling is only ever as high as the last operator typo.
+    test "config cannot raise a field above the compiled maximum" do
+      Application.put_env(:cyfr, :platform_ceiling, %{
+        timeout: "1h",
+        batch_timeout: "90m",
+        max_memory_bytes: 512 * 1024 * 1024,
+        max_concurrent_tasks: 100,
+        rate_limit_requests: 1_000_000
+      })
 
       ceiling = Ceiling.platform_ceiling()
-      assert ceiling.max_memory_bytes == 512 * 1024 * 1024
       assert ceiling.timeout == "30m"
+      assert ceiling.batch_timeout == "30m"
+      assert ceiling.max_memory_bytes == 256 * 1024 * 1024
+      assert ceiling.max_concurrent_tasks == 50
+      assert ceiling.rate_limit_requests == 10_000
+    end
+
+    test "partial override only affects specified fields" do
+      Application.put_env(:cyfr, :platform_ceiling, %{max_memory_bytes: 128 * 1024 * 1024})
+
+      ceiling = Ceiling.platform_ceiling()
+      assert ceiling.max_memory_bytes == 128 * 1024 * 1024
+      assert ceiling.timeout == "30m"
+    end
+
+    test "a malformed or unknown override never widens the ceiling" do
+      Application.put_env(:cyfr, :platform_ceiling, %{
+        timeout: "not-a-duration",
+        max_memory_bytes: "lots",
+        nonsense_field: 1
+      })
+
+      ceiling = Ceiling.platform_ceiling()
+      assert ceiling.timeout == "30m"
+      assert ceiling.max_memory_bytes == 256 * 1024 * 1024
+      refute Map.has_key?(ceiling, :nonsense_field)
     end
   end
 

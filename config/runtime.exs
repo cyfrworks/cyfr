@@ -98,15 +98,23 @@ if config_env() != :test do
         You can generate one by calling: mix phx.gen.secret
         """
 
-    parse_ip = fn ip_string ->
+    # A misspelled bind address used to fall back to loopback, which starts
+    # the server on an interface nobody asked for and reads as "the deploy
+    # worked" until the first request from outside never arrives.
+    parse_ip = fn var, ip_string ->
       case :inet.parse_address(String.to_charlist(ip_string)) do
-        {:ok, ip_tuple} -> ip_tuple
-        {:error, _} -> {127, 0, 0, 1}
+        {:ok, ip_tuple} ->
+          ip_tuple
+
+        {:error, _} ->
+          raise "environment variable #{var} is not a valid IP address: #{inspect(ip_string)}"
       end
     end
 
-    emissary_bind = parse_ip.(env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
-    prism_bind = parse_ip.(env!("CYFR_PRISM_BIND_ADDRESS", :string, "0.0.0.0"))
+    emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
+
+    prism_bind =
+      parse_ip.("CYFR_PRISM_BIND_ADDRESS", env!("CYFR_PRISM_BIND_ADDRESS", :string, "0.0.0.0"))
 
     host = env!("CYFR_HOST", :string, "localhost")
     port = parse_integer.("CYFR_PORT", env!("CYFR_PORT", :string, "4000"))
