@@ -179,28 +179,14 @@ defmodule Sanctum.Auth.OAuth do
 
   defp extract_user_info(_), do: {:error, :invalid_auth_data}
 
+  # `Authorization: Bearer` and nothing else. The cookie fallback that used
+  # to sit here read `"cyfr_session_token"`, a key nothing has ever written —
+  # every writer and reader uses `:sanctum_session_token` — so it always
+  # returned nil. Restoring it under the real key would hand `POST /mcp`,
+  # which carries no CSRF protection, an ambient browser credential.
   defp get_session_token(conn) do
-    # Check Authorization header first
-    case get_auth_header(conn) do
-      {:ok, token} ->
-        token
-
-      :error ->
-        # Fall back to session cookie
-        get_session_cookie(conn)
-    end
-  end
-
-  defp get_auth_header(conn) do
     case Plug.Conn.get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> {:ok, token}
-      _ -> :error
-    end
-  end
-
-  defp get_session_cookie(conn) do
-    case conn.private[:plug_session] do
-      %{"cyfr_session_token" => token} -> token
+      ["Bearer " <> token] -> token
       _ -> nil
     end
   end

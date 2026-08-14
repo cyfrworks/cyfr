@@ -178,7 +178,7 @@ defmodule EmissaryWeb.AuthController do
     probe → 412 → /legal/accept → /auth/post-legal-accept → probe → ok
   """
   def post_legal_accept(conn, _params) do
-    conn = fetch_cookies(conn, signed: ["_cyfr_pending_probe"])
+    conn = fetch_cookies(conn, encrypted: ["_cyfr_pending_probe"])
     access_token = conn.cookies["_cyfr_pending_probe"]
     session_token = get_session(conn, :sanctum_session_token)
 
@@ -407,7 +407,10 @@ defmodule EmissaryWeb.AuthController do
     # re-authenticate to retry the probe.
     try do
       put_resp_cookie(conn, "_cyfr_pending_probe", access_token,
-        sign: true,
+        # Encrypted, not merely signed: a signed cookie's value is plaintext
+        # to anyone who can read it, and this one holds a live IdP access
+        # token.
+        encrypt: true,
         max_age: 600,
         http_only: true,
         same_site: "Lax",
@@ -432,7 +435,10 @@ defmodule EmissaryWeb.AuthController do
   defp stash_pending_probe(conn, access_token) when is_binary(access_token) do
     try do
       put_resp_cookie(conn, "_cyfr_pending_probe", access_token,
-        sign: true,
+        # Encrypted, not merely signed: a signed cookie's value is plaintext
+        # to anyone who can read it, and this one holds a live IdP access
+        # token.
+        encrypt: true,
         max_age: 600,
         http_only: true,
         same_site: "Lax",
@@ -483,15 +489,14 @@ defmodule EmissaryWeb.AuthController do
   @doc """
   Logout - destroys the session.
 
-  Accepts session token via:
-  - Authorization: Bearer {token}
-  - Request body: {"token": "..."}
+  The credential comes from `Authorization: Bearer` and nowhere else. It
+  used to be accepted from the request body too, which put a live session
+  token into access logs and `Referer` headers for the one request whose
+  whole purpose is retiring it — and `whoami`, next door, has always
+  required the header.
   """
-  def logout(conn, params) do
-    token =
-      get_bearer_token(conn) ||
-        params["token"] ||
-        safe_get_session(conn, :session_token)
+  def logout(conn, _params) do
+    token = get_bearer_token(conn)
 
     if token && token != "" do
       case Session.destroy(token) do
@@ -556,13 +561,6 @@ defmodule EmissaryWeb.AuthController do
       ["Bearer " <> token] -> token
       _ -> nil
     end
-  end
-
-  # Safe session access - returns nil if session not fetched (e.g., API routes)
-  defp safe_get_session(conn, key) do
-    get_session(conn, key)
-  rescue
-    ArgumentError -> nil
   end
 
   # Safe session drop - no-op if session not fetched (e.g., API routes)

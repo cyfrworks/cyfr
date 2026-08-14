@@ -365,16 +365,25 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert json_response(conn, 400)["error"] == "missing_token"
     end
 
-    test "accepts token via POST body", %{conn: conn} do
-      # Session.destroy is idempotent - destroying nonexistent token returns :ok
+    test "refuses a token in the request body", %{conn: conn} do
+      # A credential in a body or query string lands in access logs and
+      # Referer headers. The header is the only way in, and POST is no
+      # longer routed at all.
       conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> post(~p"/auth/logout", Jason.encode!(%{"token" => "nonexistent_token"}))
 
-      response = json_response(conn, 200)
-      assert response["ok"] == true
-      assert response["message"] == "Logged out successfully"
+      assert conn.status == 404
+    end
+
+    test "ignores a body token on the routed verb", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> delete(~p"/auth/logout", Jason.encode!(%{"token" => "nonexistent_token"}))
+
+      assert json_response(conn, 400)["error"] == "missing_token"
     end
 
     test "accepts token via Bearer header", %{conn: conn} do

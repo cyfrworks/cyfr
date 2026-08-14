@@ -35,7 +35,6 @@ defmodule Cyfr.RouteAuthInventoryTest do
     # EmissaryWeb — controller self-gates (401/400 without a token), now
     # rate-limited via :auth_api_throttle
     {:delete, "/auth/logout"} => :handler_auth,
-    {:post, "/auth/logout"} => :handler_auth,
     {:get, "/auth/whoami"} => :handler_auth,
 
     # EmissaryWeb — tincture surface: auth + tenancy in the controller helper

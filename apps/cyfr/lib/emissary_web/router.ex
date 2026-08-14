@@ -63,7 +63,6 @@ defmodule EmissaryWeb.Router do
     pipe_through [:api, :auth_api_throttle]
 
     delete "/logout", AuthController, :logout
-    post "/logout", AuthController, :logout
     get "/whoami", AuthController, :whoami
   end
 
