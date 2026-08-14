@@ -25,7 +25,6 @@ defmodule Emissary.MCP.ExternalServer do
   @default_timeout_ms 30_000
   @initialize_timeout_ms 15_000
   @registry Emissary.MCP.ExternalServerRegistry
-  @version Mix.Project.config()[:version] || "0.1.0"
 
   # The revision to offer a peer that turns out not to speak the current one.
   # `2025-03-26` rather than the newest legacy revision because it is the widest
@@ -389,7 +388,7 @@ defmodule Emissary.MCP.ExternalServer do
         "capabilities" => %{},
         "clientInfo" => %{
           "name" => "cyfr",
-          "version" => @version
+          "version" => Cyfr.Version.current()
         }
       }
     }
@@ -515,7 +514,7 @@ defmodule Emissary.MCP.ExternalServer do
 
     meta = %{
       Protocol.meta_protocol_version_key() => Protocol.version(),
-      Protocol.meta_client_info_key() => %{"name" => "cyfr", "version" => @version},
+      Protocol.meta_client_info_key() => %{"name" => "cyfr", "version" => Cyfr.Version.current()},
       Protocol.meta_client_capabilities_key() => %{}
     }
 

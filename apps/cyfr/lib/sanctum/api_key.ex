@@ -60,7 +60,7 @@ defmodule Sanctum.ApiKey do
     application: ["execute", "component_read", "storage_read"],
     service: [
       "execute",
-      "secrets_read",
+      "vault_read",
       "component_read",
       "storage_read",
       "storage_write"
@@ -70,18 +70,18 @@ defmodule Sanctum.ApiKey do
 
   # Maximum allowed scopes per key type
   @type_ceilings %{
-    application: ["execute", "secrets_read", "component_read", "storage_read"],
+    application: ["execute", "vault_read", "component_read", "storage_read"],
     service: [
       "execute",
-      "secrets_read",
-      "secrets_write",
+      "vault_read",
+      "vault_write",
       "component_read",
       "component_manage",
       "storage_read",
       "storage_write",
       "execution_write"
     ],
-    admin: ["secrets_read", "secrets_write", "admin", "*"]
+    admin: ["vault_read", "vault_write", "admin", "*"]
   }
 
   @doc false

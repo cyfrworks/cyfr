@@ -28,6 +28,16 @@ defmodule Sanctum.Webhook do
 
   require Logger
 
+  # The header a sender puts the HMAC in when it does not name one. Read by
+  # webhook creation, the console's form, and the controller's redaction of
+  # the echoed request — three places that each used to spell it out, one of
+  # them the redaction fallback, where a drifted copy leaks the signature
+  # back to the caller.
+  @default_signature_header "x-cyfr-signature"
+
+  @doc false
+  def default_signature_header, do: @default_signature_header
+
   alias Sanctum.Context
   alias Arca.WebhookStorage
 
@@ -459,8 +469,8 @@ defmodule Sanctum.Webhook do
 
   defp signature_header_value(opts) do
     case Map.get(opts, :signature_header) do
-      nil -> "x-cyfr-signature"
-      "" -> "x-cyfr-signature"
+      nil -> @default_signature_header
+      "" -> @default_signature_header
       header when is_binary(header) -> String.downcase(header)
     end
   end

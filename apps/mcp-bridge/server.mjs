@@ -57,7 +57,12 @@ const PROTOCOL_VERSION = "2026-07-28";
 // handshake. Those children are third-party packages on their own release
 // cadence; `initialize` is what they answer to, and that is a genuine interop
 // concern rather than a leftover.
-const CHILD_PROTOCOL_VERSION = "2024-11-05";
+//
+// One legacy revision, not two: this used to be 2024-11-05 while cyfr's own
+// outbound fallback offered 2025-03-26, so "the legacy version" meant two
+// different dates depending on which hop you asked. A drift test binds this
+// literal to Emissary.MCP.ExternalServer's.
+const CHILD_PROTOCOL_VERSION = "2025-03-26";
 
 // Reverse-DNS `_meta` keys defined by the specification.
 const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
@@ -466,7 +471,11 @@ function wrapError(message) {
 // ============================================================================
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+// Sized to match cyfr's own MCP body cap (EmissaryWeb.Endpoint: 28 MB, which
+// is the 20 MB attachment cap both chat UIs enforce, base64-expanded). At
+// 10 MB the bridge rejected attachments cyfr itself accepts, so the same
+// request succeeded or 413'd depending on whether it went through the bridge.
+app.use(express.json({ limit: "28mb" }));
 
 // Constant-time bearer check. Returns true when no token is configured
 // (open mode) or when the request carries the matching bearer.

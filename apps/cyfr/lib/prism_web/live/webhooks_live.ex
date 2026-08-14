@@ -18,7 +18,9 @@ defmodule PrismWeb.WebhooksLive do
   alias Phoenix.LiveView.JS
   require Logger
 
-  @default_signature_header "x-cyfr-signature"
+  @default_signature_header Sanctum.Webhook.default_signature_header()
+
+  defp default_signature_header, do: @default_signature_header
 
   @impl true
   def mount(_params, _session, socket) do
@@ -401,7 +403,7 @@ defmodule PrismWeb.WebhooksLive do
               <.input
                 name="signature_header"
                 value={@form_signature_header}
-                placeholder="x-cyfr-signature"
+                placeholder={default_signature_header()}
               />
             </div>
             <div>

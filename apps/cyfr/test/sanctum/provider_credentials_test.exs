@@ -67,17 +67,17 @@ defmodule Sanctum.ProviderCredentialsTest do
   end
 
   describe "permission gates" do
-    test "put requires :secrets_write" do
+    test "put requires :vault_write" do
       ctx = narrow_ctx([:execute])
       assert {:error, _} = ProviderCredentials.put(ctx, "google", "id", "sec")
     end
 
-    test "delete requires :secrets_write" do
-      ctx = narrow_ctx([:execute, :secrets_read])
+    test "delete requires :vault_write" do
+      ctx = narrow_ctx([:execute, :vault_read])
       assert {:error, _} = ProviderCredentials.delete(ctx, "google")
     end
 
-    test "configured? requires :secrets_read" do
+    test "configured? requires :vault_read" do
       ctx = narrow_ctx([:execute])
       assert {:error, _} = ProviderCredentials.configured?(ctx, "google")
     end
@@ -119,7 +119,7 @@ defmodule Sanctum.ProviderCredentialsTest do
       assert {:error, _} = Sanctum.MCP.OAuthTool.handle(ctx, %{"action" => "set_client"})
     end
 
-    test "requires :secrets_write" do
+    test "requires :vault_write" do
       ctx = narrow_ctx([:execute])
 
       assert {:error, _} =

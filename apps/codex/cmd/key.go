@@ -20,7 +20,7 @@ func init() {
 
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
 	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
-	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, secrets_read, secrets_write, component_read, component_manage, storage_read, storage_write, users_read, users_manage, execution_write, admin)")
+	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, vault_write, component_read, component_manage, storage_read, storage_write, users_read, users_manage, execution_write, admin)")
 	keyCreateCmd.Flags().String("rate-limit", "", "Rate limit (e.g., '100/1m')")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
 }
@@ -40,7 +40,7 @@ Run without --name for an interactive form.
 
 Default scopes per type (applied when --scope is omitted):
   application: execute, component_read, storage_read
-  service:     execute, secrets_read, component_read, storage_read, storage_write
+  service:     execute, vault_read, component_read, storage_read, storage_write
   admin:       * (all permissions)`,
 	Example: `  cyfr key create --name my-service --type service
   cyfr key create --name ci-runner --type application --scope execute,component_read

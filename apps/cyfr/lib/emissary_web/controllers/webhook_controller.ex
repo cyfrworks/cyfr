@@ -154,7 +154,7 @@ defmodule EmissaryWeb.WebhookController do
   defp parsed_body_json(_), do: nil
 
   defp safe_headers(conn, signature_header) do
-    drop = String.downcase(signature_header || "x-cyfr-signature")
+    drop = String.downcase(signature_header || Sanctum.Webhook.default_signature_header())
 
     conn.req_headers
     |> Enum.filter(fn {name, _} -> String.downcase(name) in @safe_header_allowlist end)

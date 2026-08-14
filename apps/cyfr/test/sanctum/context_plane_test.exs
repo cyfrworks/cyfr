@@ -70,10 +70,10 @@ defmodule Sanctum.ContextPlaneTest do
     test "every permission is refused, not just wildcards" do
       guest =
         Context.enter_guest(
-          Context.build(%{user_id: "u", permissions: [:execute, :secrets_read]})
+          Context.build(%{user_id: "u", permissions: [:execute, :vault_read]})
         )
 
-      for permission <- [:execute, :secrets_read, :component_read] do
+      for permission <- [:execute, :vault_read, :component_read] do
         assert {:error, _} = Context.require_permission(guest, permission)
       end
     end

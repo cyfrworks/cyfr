@@ -12,14 +12,12 @@ defmodule Emissary.MCP.ActionCoverageTest do
   """
   use ExUnit.Case, async: false
 
-  @all_providers [
-    Sanctum.MCP,
-    Arca.MCP,
-    Compendium.MCP,
-    Opus.MCP,
-    Opus.CronMCP,
-    Locus.MCP
-  ]
+  # The registered providers, read from config rather than listed again
+  # here. A second list meant the two could disagree, and they did:
+  # ExternalProvider and SystemProvider were registered but absent from this
+  # test, so the audit that exists to catch an action with no handler clause
+  # silently skipped two providers.
+  @all_providers Application.compile_env(:cyfr, :tool_providers, [])
 
   # Filter to only providers available in this app's compilation context.
   # Opus.MCP, Opus.CronMCP, and Locus.MCP are cross-app modules that aren't

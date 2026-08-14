@@ -76,7 +76,7 @@ defmodule Sanctum.ApiKeyTest do
         ApiKey.create(ctx, %{
           name: "limited-key",
           type: :service,
-          scope: ["secrets_read"],
+          scope: ["vault_read"],
           rate_limit: "100/1m"
         })
 
@@ -273,13 +273,13 @@ defmodule Sanctum.ApiKeyTest do
 
     test "new key works after rotation", %{ctx: ctx} do
       {:ok, _original} =
-        ApiKey.create(ctx, %{name: "rotating", type: :service, scope: ["secrets_read"]})
+        ApiKey.create(ctx, %{name: "rotating", type: :service, scope: ["vault_read"]})
 
       {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
 
       {:ok, validated} = ApiKey.validate(rotated.api_key)
       assert validated.name == "rotating"
-      assert validated.scope == ["secrets_read"]
+      assert validated.scope == ["vault_read"]
     end
 
     test "returns error for non-existent key", %{ctx: ctx} do
@@ -293,7 +293,7 @@ defmodule Sanctum.ApiKeyTest do
         ApiKey.create(ctx, %{
           name: "valid-key",
           type: :service,
-          scope: ["secrets_read", "secrets_write"],
+          scope: ["vault_read", "vault_write"],
           rate_limit: "50/1m"
         })
 
@@ -301,7 +301,7 @@ defmodule Sanctum.ApiKeyTest do
 
       assert validated.name == "valid-key"
       assert validated.type == :service
-      assert validated.scope == ["secrets_read", "secrets_write"]
+      assert validated.scope == ["vault_read", "vault_write"]
       assert validated.rate_limit == "50/1m"
     end
 

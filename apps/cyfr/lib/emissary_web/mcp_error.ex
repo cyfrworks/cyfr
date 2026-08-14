@@ -25,6 +25,7 @@ defmodule EmissaryWeb.MCPError do
   alias Emissary.MCP.Message
 
   @protocol_version Emissary.MCP.Protocol.version()
+  @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()
 
   @doc """
   Render a JSON-RPC error, echoing the request id when the body carried one.
@@ -37,7 +38,7 @@ defmodule EmissaryWeb.MCPError do
     # Declared here rather than at each call site. Every rejection from the MCP
     # endpoint has to carry it, and when each caller remembered separately one
     # of them eventually forgot.
-    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_resp_header(@protocol_version_header, @protocol_version)
     |> challenge(status)
     |> put_status(status)
     |> Phoenix.Controller.json(Message.encode_error(request_id(conn), code, message))

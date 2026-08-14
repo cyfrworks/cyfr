@@ -14,7 +14,7 @@ defmodule Sanctum.ProviderCredentials do
   client secret by name. This store separates the planes:
 
   - **Management** (`put/4`, `delete/2`, `configured?/2`) is caller-gated:
-    tenant scope plus `:secrets_write` / `:secrets_read`.
+    tenant scope plus `:vault_write` / `:vault_read`.
   - **Use** (`fetch_for_oauth/3`) takes explicit tenant coordinates and no
     caller context at all — it is reachable only from the host's OAuth
     exchange/refresh plane, never through a caller's permission set, and
@@ -33,7 +33,7 @@ defmodule Sanctum.ProviderCredentials do
   """
   @spec put(Context.t(), String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
   def put(%Context{} = ctx, provider, client_id, client_secret \\ nil) do
-    with :ok <- Context.require_permission(ctx, :secrets_write),
+    with :ok <- Context.require_permission(ctx, :vault_write),
          :ok <- validate_provider(provider),
          :ok <- validate_client_id(client_id) do
       {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
@@ -58,7 +58,7 @@ defmodule Sanctum.ProviderCredentials do
   @doc "Delete a provider's client credentials for the caller's tenant."
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, provider) do
-    with :ok <- Context.require_permission(ctx, :secrets_write),
+    with :ok <- Context.require_permission(ctx, :vault_write),
          :ok <- validate_provider(provider) do
       {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
       Arca.ProviderCredentialStorage.delete(org_id, project_id, provider)
@@ -68,7 +68,7 @@ defmodule Sanctum.ProviderCredentials do
   @doc "Whether client credentials are stored for a provider (presence only)."
   @spec configured?(Context.t(), String.t()) :: boolean() | {:error, term()}
   def configured?(%Context{} = ctx, provider) do
-    with :ok <- Context.require_permission(ctx, :secrets_read),
+    with :ok <- Context.require_permission(ctx, :vault_read),
          :ok <- validate_provider(provider) do
       {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
       Arca.ProviderCredentialStorage.exists?(org_id, project_id, provider)

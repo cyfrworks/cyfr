@@ -294,7 +294,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
 
   describe "fully-gated tool dropped" do
     test "key tool dropped for non-admin" do
-      ctx = ctx_with([:execute, :secrets_read])
+      ctx = ctx_with([:execute, :vault_read])
       tools = [make_tool("key", ["create", "get", "list", "revoke", "rotate"])]
       assert ToolVisibility.filter_for_context(tools, ctx) == []
     end

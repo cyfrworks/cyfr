@@ -21,7 +21,7 @@ defmodule Sanctum.MCP.OAuthTool do
         %{"action" => "set_client", "provider" => provider, "client_id" => client_id} = args
       )
       when is_binary(provider) and is_binary(client_id) do
-    with :ok <- Shared.require_permission(ctx, :secrets_write) do
+    with :ok <- Shared.require_permission(ctx, :vault_write) do
       case Sanctum.ProviderCredentials.put(ctx, provider, client_id, args["client_secret"]) do
         :ok ->
           {:ok,

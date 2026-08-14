@@ -36,7 +36,7 @@ defmodule Sanctum.CipherIntegrationTest do
       org_id: org,
       project_id: "default",
       scope: :project,
-      permissions: [:execute, :secrets_read, :secrets_write],
+      permissions: [:execute, :vault_read, :vault_write],
       auth_method: :oidc,
       authenticated: true
     )

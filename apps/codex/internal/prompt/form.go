@@ -41,8 +41,8 @@ func RunKeyCreateForm() (*KeyCreateForm, error) {
 				Description("Leave empty for type defaults (application: execute, component_read, storage_read)").
 				Options(
 					huh.NewOption("execute", "execute"),
-					huh.NewOption("secrets_read", "secrets_read"),
-					huh.NewOption("secrets_write", "secrets_write"),
+					huh.NewOption("vault_read", "vault_read"),
+					huh.NewOption("vault_write", "vault_write"),
 					huh.NewOption("component_read", "component_read"),
 					huh.NewOption("component_manage", "component_manage"),
 					huh.NewOption("storage_read", "storage_read"),

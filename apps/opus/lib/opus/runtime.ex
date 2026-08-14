@@ -37,9 +37,11 @@ defmodule Opus.Runtime do
 
   require Logger
 
-  # Default resource limits for sandboxed execution
-  # 64MB
-  @default_max_memory_bytes 64 * 1024 * 1024
+  # Default resource limits for sandboxed execution. Spelled the same way as
+  # every other statement of this cap (Sanctum.Limits, Sanctum.Authority), so
+  # grepping the number finds all of them.
+  # 64 MiB
+  @default_max_memory_bytes 67_108_864
 
   @doc """
   Execute a WASM component with JSON input, returning JSON output.

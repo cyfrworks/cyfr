@@ -76,7 +76,7 @@ defmodule Sanctum.Limits do
   @type_defaults %{
     catalyst: %{
       timeout: "3m",
-      max_memory_bytes: 64 * 1024 * 1024,
+      max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       rate_limit: %{requests: 100, window: "1m"},
@@ -85,7 +85,7 @@ defmodule Sanctum.Limits do
     },
     formula: %{
       timeout: "5m",
-      max_memory_bytes: 64 * 1024 * 1024,
+      max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       rate_limit: %{requests: 100, window: "1m"},
@@ -94,7 +94,7 @@ defmodule Sanctum.Limits do
     },
     reagent: %{
       timeout: "1m",
-      max_memory_bytes: 64 * 1024 * 1024,
+      max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       rate_limit: %{requests: 100, window: "1m"},
@@ -103,7 +103,7 @@ defmodule Sanctum.Limits do
     },
     tincture: %{
       timeout: "1m",
-      max_memory_bytes: 64 * 1024 * 1024,
+      max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       rate_limit: %{requests: 100, window: "1m"},

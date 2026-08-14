@@ -81,7 +81,7 @@ defmodule Emissary.MCP.Protocol do
   # Headers a client must be able to read off the response. `x-request-id` is
   # CYFR's, not the specification's, but a client that cannot read it cannot
   # correlate a failure with a server log.
-  @exposed_headers ~w(mcp-protocol-version x-request-id)
+  @exposed_headers [@protocol_version_header, "x-request-id"]
 
   # `x-mcp-header` mirrors a tool argument into `Mcp-Param-{Name}`. A preflight
   # cannot advertise a prefix, so each one would have to be named explicitly —
@@ -122,15 +122,7 @@ defmodule Emissary.MCP.Protocol do
   @doc "This server's name and version, for a result's `_meta`."
   @spec server_info() :: %{String.t() => String.t()}
   def server_info do
-    %{"name" => @server_name, "version" => version_string()}
-  end
-
-  defp version_string do
-    case :application.get_key(:cyfr, :vsn) do
-      {:ok, vsn} -> List.to_string(vsn)
-      # Only reachable before the application is loaded — in practice, tooling.
-      :undefined -> "unknown"
-    end
+    %{"name" => @server_name, "version" => Cyfr.Version.current()}
   end
 
   @doc """

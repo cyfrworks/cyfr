@@ -986,9 +986,11 @@ defmodule Compendium.OCI.Client do
   end
 
   defp cyfr_repo?(repo) do
-    # CYFR convention: publisher/types/name where types is catalysts|reagents|formulas|tinctures
+    # CYFR convention: publisher/<type plural>/name. The plurals are derived
+    # from the canonical type list rather than written out again, so a new
+    # component type is recognized here without a second edit.
     parts = String.split(repo, "/")
-    length(parts) == 3 and Enum.at(parts, 1) in ~w(catalysts reagents formulas tinctures)
+    length(parts) == 3 and Enum.at(parts, 1) in Compendium.ComponentPath.type_plurals()
   end
 
   defp maybe_filter_namespace(repos, nil), do: repos

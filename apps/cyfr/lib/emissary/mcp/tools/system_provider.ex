@@ -17,8 +17,6 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   alias Sanctum.Context
   require Logger
 
-  @version Mix.Project.config()[:version] || "0.1.0"
-
   @valid_scopes ["all", "opus", "sanctum", "compendium", "emissary", "arca", "registry"]
 
   # ============================================================================
@@ -176,7 +174,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     {:ok,
      %{
        status: overall,
-       version: @version,
+       version: Cyfr.Version.current(),
        uptime_seconds: uptime(),
        services: services,
        mcp: %{
@@ -193,7 +191,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     {:ok,
      %{
        status: if(service_status in ["ok", "stub"], do: "ok", else: "degraded"),
-       version: @version,
+       version: Cyfr.Version.current(),
        uptime_seconds: uptime(),
        services: %{String.to_existing_atom(scope) => service_status}
      }}
@@ -367,7 +365,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       {:ok, body} ->
         headers = [
           {"content-type", "application/json"},
-          {"user-agent", "CYFR/0.1.0"}
+          {"user-agent", "CYFR/" <> Cyfr.Version.current()}
         ]
 
         # The pinned path resolves-validates once, connects to the validated

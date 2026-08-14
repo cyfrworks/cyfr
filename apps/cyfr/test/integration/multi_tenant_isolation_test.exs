@@ -34,8 +34,8 @@ defmodule MultiTenantIsolationTest do
           :execute,
           :storage_read,
           :storage_write,
-          :secrets_read,
-          :secrets_write,
+          :vault_read,
+          :vault_write,
           :admin
         ],
         scope: :project,
@@ -53,8 +53,8 @@ defmodule MultiTenantIsolationTest do
           :execute,
           :storage_read,
           :storage_write,
-          :secrets_read,
-          :secrets_write,
+          :vault_read,
+          :vault_write,
           :admin
         ],
         scope: :project,
@@ -264,7 +264,7 @@ defmodule MultiTenantIsolationTest do
            user_id: "u1",
            namespace: "u1",
            org_id: nil,
-           permissions: [:secrets_read, :secrets_write],
+           permissions: [:vault_read, :vault_write],
            authenticated: true
          )}
     end
