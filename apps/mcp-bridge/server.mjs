@@ -692,14 +692,11 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 (async () => {
-  const persisted = await loadPersisted();
-  for (const entry of persisted) {
-    if (!entry?.name || !entry?.command) continue;
-    console.log(`[mcp-bridge] reviving '${entry.name}': ${entry.command}`);
-    spawnBackend(entry.name, entry.command, entry.env);
-    // Fire-and-forget — children come online in parallel.
-    initializeBackend(entry.name).catch(() => {});
-  }
+  // The refusal comes first, before any persisted command is read or run.
+  // It used to sit after the revival loop, so an operator locking down a
+  // compromised bridge by removing its token still executed every command
+  // the attacker had persisted — and process.exit does not kill children
+  // already spawned with piped stdio, so those outlived the refusal.
   if (!AUTH_TOKEN) {
     // add_backend spawns arbitrary `sh -c`, so an unauthenticated /mcp is
     // remote code execution for anyone who can reach the port. Refuse to
@@ -722,6 +719,16 @@ process.on("SIGINT", () => shutdown("SIGINT"));
       process.exit(1);
     }
   }
+
+  const persisted = await loadPersisted();
+  for (const entry of persisted) {
+    if (!entry?.name || !entry?.command) continue;
+    console.log(`[mcp-bridge] reviving '${entry.name}': ${entry.command}`);
+    spawnBackend(entry.name, entry.command, entry.env);
+    // Fire-and-forget — children come online in parallel.
+    initializeBackend(entry.name).catch(() => {});
+  }
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[mcp-bridge] /mcp on :${PORT} (data: ${PERSIST}, auth: ${AUTH_TOKEN ? "on" : "off"})`);
   });

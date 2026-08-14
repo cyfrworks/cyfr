@@ -23,7 +23,10 @@ defmodule PrismWeb.LiveClaimGate do
 
   def on_mount(:require_claim, _params, _session, socket) do
     case socket.assigns[:current_user] do
-      %{id: user_id} when is_binary(user_id) and user_id != "" ->
+      # `current_user` is a %Sanctum.Context{}, which keys its identity as
+      # `:user_id`. Matching `:id` here meant this clause never ran and the
+      # gate silently passed everyone through.
+      %{user_id: user_id} when is_binary(user_id) and user_id != "" ->
         registry = registry_url()
 
         case PersonalNamespaceCache.claimed?(user_id, registry) do

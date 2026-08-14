@@ -156,7 +156,11 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "set_client" => %{kind: :write, planes: [:external, :in_chain]}
+            # External only, like every other credential write (key.create,
+            # vault.create, webhook.create). This one writes the operator's
+            # OAuth *client* secret, so a component reaching it from inside
+            # the sandbox would be the widest of the set, not the narrowest.
+            "set_client" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{

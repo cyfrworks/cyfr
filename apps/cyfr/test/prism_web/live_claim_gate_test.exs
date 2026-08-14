@@ -20,6 +20,19 @@ defmodule PrismWeb.LiveClaimGateTest do
   # Synthetic LiveView socket with the minimal assigns the hook touches.
   defp socket_with(assigns), do: %Phoenix.LiveView.Socket{assigns: assigns}
 
+  # PrismWeb.LiveAuth assigns a real %Sanctum.Context{}, which keys its
+  # identity as :user_id. A bare %{id: ...} map here once let the gate's
+  # never-matching :id clause look correct in tests while it passed everyone
+  # through in production.
+  defp context_for(user_id) do
+    Sanctum.Context.build(
+      user_id: user_id,
+      permissions: [:*],
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
   setup do
     # Each test uses a unique user_id so the process-global cache can't
     # leak state between cases. The shared SQL sandbox is needed because
@@ -41,14 +54,14 @@ defmodule PrismWeb.LiveClaimGateTest do
       registry = Application.get_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
 
       PersonalNamespaceCache.put_claimed(user, registry)
-      socket = socket_with(%{current_user: %{id: user}})
+      socket = socket_with(%{current_user: context_for(user)})
 
       assert {:cont, _} = LiveClaimGate.on_mount(:require_claim, %{}, %{}, socket)
     end
 
     test "redirects to /claim-namespace when cache empty and no stored credential" do
       user = unique_user()
-      socket = socket_with(%{current_user: %{id: user}})
+      socket = socket_with(%{current_user: context_for(user)})
 
       {:halt, returned_socket} = LiveClaimGate.on_mount(:require_claim, %{}, %{}, socket)
 
@@ -75,7 +88,7 @@ defmodule PrismWeb.LiveClaimGateTest do
           label: "test"
         })
 
-      socket = socket_with(%{current_user: %{id: user}})
+      socket = socket_with(%{current_user: context_for(user)})
 
       assert {:cont, _} = LiveClaimGate.on_mount(:require_claim, %{}, %{}, socket)
       # Second mount should hit the cache; proves put_claimed was called.
@@ -97,7 +110,7 @@ defmodule PrismWeb.LiveClaimGateTest do
           label: "test"
         })
 
-      socket = socket_with(%{current_user: %{id: user}})
+      socket = socket_with(%{current_user: context_for(user)})
 
       assert {:halt, _} = LiveClaimGate.on_mount(:require_claim, %{}, %{}, socket)
     end
