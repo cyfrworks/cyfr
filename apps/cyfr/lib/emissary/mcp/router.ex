@@ -161,7 +161,7 @@ defmodule Emissary.MCP.Router do
 
           case InputValidator.validate(
                  arguments,
-                 tool_def["inputSchema"] || tool_def[:input_schema] || %{}
+                 tool_def["inputSchema"] || %{}
                ) do
             {:error, validation_msg} ->
               {:error, :invalid_params, validation_msg}

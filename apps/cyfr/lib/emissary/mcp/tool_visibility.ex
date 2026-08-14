@@ -281,10 +281,12 @@ defmodule Emissary.MCP.ToolVisibility do
     end
   end
 
+  # One shape reaches here. `Emissary.MCP.ToolRegistry` emits the wire
+  # spelling for registered tools and `ExternalProvider` maps a peer's
+  # "parameters" onto it at ingest, so this reads "inputSchema" and nothing
+  # else — a second accepted spelling only invites a third.
   defp extract_actions(tool_def) do
-    schema = tool_def["inputSchema"] || Map.get(tool_def, :input_schema)
-
-    case schema do
+    case tool_def["inputSchema"] do
       %{"properties" => %{"action" => %{"enum" => actions}}} when is_list(actions) ->
         actions
 
@@ -294,11 +296,8 @@ defmodule Emissary.MCP.ToolVisibility do
   end
 
   defp put_actions(tool_def, actions) do
-    schema_key =
-      if Map.has_key?(tool_def, "inputSchema"), do: "inputSchema", else: :input_schema
-
-    schema = Map.get(tool_def, schema_key, %{})
+    schema = Map.get(tool_def, "inputSchema", %{})
     updated_schema = put_in(schema, ["properties", "action", "enum"], actions)
-    Map.put(tool_def, schema_key, updated_schema)
+    Map.put(tool_def, "inputSchema", updated_schema)
   end
 end
