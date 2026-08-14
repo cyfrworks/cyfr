@@ -417,20 +417,11 @@ defmodule Locus.Builder do
   end
 
   defp compute_output_digest(output_files) do
-    {hash_state, total_size} =
-      output_files
-      |> Enum.sort_by(fn {path, _} -> path end)
-      |> Enum.reduce({:crypto.hash_init(:sha256), 0}, fn {path, content}, {state, size} ->
-        new_state =
-          state
-          |> :crypto.hash_update(path)
-          |> :crypto.hash_update(content)
+    sorted = Enum.sort_by(output_files, fn {path, _} -> path end)
+    total_size = Enum.reduce(sorted, 0, fn {_, content}, size -> size + byte_size(content) end)
+    chunks = Enum.flat_map(sorted, fn {path, content} -> [path, content] end)
 
-        {new_state, size + byte_size(content)}
-      end)
-
-    digest = "sha256:" <> (:crypto.hash_final(hash_state) |> Base.encode16(case: :lower))
-    {digest, total_size}
+    {Cyfr.Digest.sha256_stream(chunks), total_size}
   end
 
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do

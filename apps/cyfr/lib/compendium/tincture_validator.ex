@@ -152,28 +152,22 @@ defmodule Compendium.TinctureValidator do
   end
 
   # arca:bypass-ok=D — tar-extract tmp dir; see module note.
+  # Digest format is Cyfr.Digest's — a tincture digest compares byte-equal
+  # with every other component digest in the components table.
   defp compute_digest(directory_path) do
     files =
       directory_path
       |> list_files_recursive()
       |> Enum.sort()
 
-    {hash_state, total_size} =
-      Enum.reduce(files, {:crypto.hash_init(:sha256), 0}, fn file, {state, size} ->
+    {chunks, total_size} =
+      Enum.reduce(files, {[], 0}, fn file, {acc, size} ->
         relative = Path.relative_to(file, directory_path)
         {:ok, content} = File.read(file)
-        file_size = byte_size(content)
-
-        new_state =
-          state
-          |> :crypto.hash_update(relative)
-          |> :crypto.hash_update(content)
-
-        {new_state, size + file_size}
+        {[content, relative | acc], size + byte_size(content)}
       end)
 
-    digest = :crypto.hash_final(hash_state) |> Base.encode16(case: :lower)
-    {digest, total_size}
+    {Cyfr.Digest.sha256_stream(Enum.reverse(chunks)), total_size}
   end
 
   # arca:bypass-ok=D — tar-extract tmp dir walk; see module note.
@@ -231,21 +225,13 @@ defmodule Compendium.TinctureValidator do
     end
   end
 
+  # Digest format is Cyfr.Digest's — see compute_digest/1.
   defp compute_digest_from_pairs(files) do
     sorted = files |> Map.to_list() |> Enum.sort_by(fn {k, _} -> k end)
 
-    {hash_state, total_size} =
-      Enum.reduce(sorted, {:crypto.hash_init(:sha256), 0}, fn {relative, content},
-                                                              {state, size} ->
-        new_state =
-          state
-          |> :crypto.hash_update(relative)
-          |> :crypto.hash_update(content)
+    total_size = Enum.reduce(sorted, 0, fn {_, content}, size -> size + byte_size(content) end)
+    chunks = Enum.flat_map(sorted, fn {relative, content} -> [relative, content] end)
 
-        {new_state, size + byte_size(content)}
-      end)
-
-    digest = :crypto.hash_final(hash_state) |> Base.encode16(case: :lower)
-    {digest, total_size}
+    {Cyfr.Digest.sha256_stream(chunks), total_size}
   end
 end

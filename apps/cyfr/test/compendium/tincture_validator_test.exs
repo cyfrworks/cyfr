@@ -20,8 +20,8 @@ defmodule Compendium.TinctureValidatorTest do
       dir = setup_valid_tincture(base)
 
       assert {:ok, result} = TinctureValidator.validate(dir)
-      assert is_binary(result.digest)
-      assert byte_size(result.digest) == 64
+      assert "sha256:" <> hex = result.digest
+      assert byte_size(hex) == 64
       assert result.size > 0
       assert result.exports == []
     end

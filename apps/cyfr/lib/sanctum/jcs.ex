@@ -83,12 +83,11 @@ defmodule Sanctum.JCS do
   @doc """
   Hash an already-canonical binary. Exposed so callers that concatenate a
   canonical form with other material (a release digest binds an artifact
-  digest to its manifest subset) hash it the same way.
+  digest to its manifest subset) hash it the same way. Delegates to
+  `Cyfr.Digest` — one producer, one spelling.
   """
   @spec hash_binary(binary()) :: String.t()
-  def hash_binary(binary) when is_binary(binary) do
-    "sha256:" <> Base.encode16(:crypto.hash(:sha256, binary), case: :lower)
-  end
+  defdelegate hash_binary(binary), to: Cyfr.Digest, as: :sha256
 
   # ============================================================================
   # Private: serialization

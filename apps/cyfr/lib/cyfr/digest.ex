@@ -18,4 +18,19 @@ defmodule Cyfr.Digest do
   def sha256(bytes) when is_binary(bytes) do
     "sha256:" <> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
   end
+
+  @doc """
+  SHA-256 over a chunk sequence, formatted `sha256:<lowercase hex>`.
+
+  Same result as `sha256(IO.iodata_to_binary(chunks))` without materializing
+  the concatenation — for producers that hash many files or interleave
+  name/content pairs.
+  """
+  @spec sha256_stream(Enumerable.t()) :: String.t()
+  def sha256_stream(chunks) do
+    chunks
+    |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
+    |> :crypto.hash_final()
+    |> then(&("sha256:" <> Base.encode16(&1, case: :lower)))
+  end
 end
