@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Phase1g.CacheEvictionTest do
+defmodule Arca.CacheEvictionTest do
   # Eviction runs on Arca.Cache.Sweeper's timer, not the put/3 hot path.
   use ExUnit.Case, async: false
 

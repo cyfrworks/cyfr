@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Highlight.js theme, bundled into app.css — nothing else builds or copies
+ * vendor assets into priv/static, so a separate <link> 404s in a fresh build. */
+@import "../vendor/github-dark.css";
 
 /* =============================================================================
  * Shared design tokens — kept in sync with apps/porta/src-ui/src/index.css.

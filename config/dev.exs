@@ -51,8 +51,7 @@ config :cyfr,
   secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
 # Do not include metadata nor timestamps in development logs
-config :logger, :default_formatter,
-  format: "[$level] $message\n"
+config :logger, :default_formatter, format: "[$level] $message\n"
 
 # Enable telemetry console reporter in development
 config :cyfr, telemetry_console_enabled: true

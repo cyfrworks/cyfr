@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.ShellCompat do
+defmodule PrismWeb.EmbeddedShell do
   @moduledoc """
   on_mount hook that detects shell-embedded mode and sends :shell_init
   so LiveViews can load data via handle_info instead of handle_params

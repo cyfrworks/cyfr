@@ -2,9 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.MCPCutoverTest do
-  # The CLI/MCP ingress cutover is data-driven: a profile roots the
-  # execution under its consent, no profile runs the legacy path
-  # explicitly, and selection never guesses.
+  # The CLI/MCP ingress is data-driven: a profile roots the execution
+  # under its consent, no profile refuses with consent guidance (nothing
+  # runs), and selection never guesses.
   use ExUnit.Case, async: false
 
   alias Sanctum.Consent.Source

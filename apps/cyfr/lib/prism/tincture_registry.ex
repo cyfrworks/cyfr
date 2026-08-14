@@ -14,7 +14,6 @@ defmodule Prism.TinctureRegistry do
   slow on an object-store backend). The table is named after the registered
   process name, so `server` must be that name (an atom), not a pid.
 
-  Replaces the legacy `Prism.AppRegistry`.
   """
 
   use GenServer

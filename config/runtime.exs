@@ -45,7 +45,9 @@ if config_env() != :test do
   # Maximum concurrent WASM executions (default: 128)
   # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions
   if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :string, nil) do
-    config :cyfr, :max_concurrent_executions, parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
+    config :cyfr,
+           :max_concurrent_executions,
+           parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
   end
 
   # Maximum concurrent WASM executions per tenant (default: 16)
@@ -79,7 +81,6 @@ if config_env() != :test do
 
     config :cyfr, :session_ttl_hours, ttl_hours
   end
-
 
   # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
   # In production, this env var is required. In dev/test, the config file provides a static key.
@@ -180,17 +181,23 @@ if config_env() != :test do
       server: true
 
     # Derive signing salts from secret_key_base (or use explicit env overrides)
-    emissary_salt = env!("CYFR_EMISSARY_SESSION_SALT", :string, nil) ||
-      (:crypto.hash(:sha256, "emissary_session" <> secret_key_base)
-       |> Base.url_encode64(padding: false) |> binary_part(0, 16))
+    emissary_salt =
+      env!("CYFR_EMISSARY_SESSION_SALT", :string, nil) ||
+        :crypto.hash(:sha256, "emissary_session" <> secret_key_base)
+        |> Base.url_encode64(padding: false)
+        |> binary_part(0, 16)
 
-    prism_salt = env!("CYFR_PRISM_SESSION_SALT", :string, nil) ||
-      (:crypto.hash(:sha256, "prism_session" <> secret_key_base)
-       |> Base.url_encode64(padding: false) |> binary_part(0, 16))
+    prism_salt =
+      env!("CYFR_PRISM_SESSION_SALT", :string, nil) ||
+        :crypto.hash(:sha256, "prism_session" <> secret_key_base)
+        |> Base.url_encode64(padding: false)
+        |> binary_part(0, 16)
 
-    prism_lv_salt = env!("CYFR_PRISM_LV_SALT", :string, nil) ||
-      (:crypto.hash(:sha256, "prism_live_view" <> secret_key_base)
-       |> Base.url_encode64(padding: false) |> binary_part(0, 16))
+    prism_lv_salt =
+      env!("CYFR_PRISM_LV_SALT", :string, nil) ||
+        :crypto.hash(:sha256, "prism_live_view" <> secret_key_base)
+        |> Base.url_encode64(padding: false)
+        |> binary_part(0, 16)
 
     config :cyfr, :emissary_session_salt, emissary_salt
     config :cyfr, :prism_session_salt, prism_salt
@@ -228,10 +235,11 @@ if config_env() != :test do
 
     # Warn if plain HTTP in production without a reverse proxy declaration
     unless env!("CYFR_BEHIND_PROXY", :string, nil) do
-      IO.puts(:stderr,
+      IO.puts(
+        :stderr,
         "[warning] CYFR is running plain HTTP in production. " <>
-        "Set CYFR_BEHIND_PROXY=true if behind a TLS-terminating reverse proxy, " <>
-        "and set CYFR_BIND_ADDRESS=127.0.0.1 to bind only to localhost."
+          "Set CYFR_BEHIND_PROXY=true if behind a TLS-terminating reverse proxy, " <>
+          "and set CYFR_BIND_ADDRESS=127.0.0.1 to bind only to localhost."
       )
     end
 
@@ -267,7 +275,10 @@ if config_env() != :test do
   if cors_origins = env!("CYFR_CORS_ALLOWED_ORIGINS", :string, nil) do
     config :cyfr,
            :cors_allowed_origins,
-           cors_origins |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+           cors_origins
+           |> String.split(",")
+           |> Enum.map(&String.trim/1)
+           |> Enum.reject(&(&1 == ""))
   end
 
   # GitHub OAuth

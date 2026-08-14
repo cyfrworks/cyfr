@@ -6,7 +6,7 @@ defmodule Compendium.Registry.CredentialStore do
   Encrypted server-side registry credential storage.
 
   Backed by the `registry_tokens` table via `Arca.RegistryTokenStorage`;
-  values are sealed here with the configured `Sanctum.Cipher` under the
+  values are sealed here with `Sanctum.Cipher` under the
   `:registry_token` AAD purpose (the storage layer holds ciphertext only).
 
   ## Stored shape

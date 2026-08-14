@@ -5,9 +5,9 @@ defmodule Emissary.MCP.ExternalServerEraTest do
   @moduledoc """
   CYFR is a client as well as a server, and the ecosystem it talks to is mixed.
 
-  The fallback here is not politeness: `apps/mcp-bridge` speaks `2024-11-05` and
-  the bundled deployment registers it as an ordinary external server, so a
-  modern-only client would silently drop every stdio backend behind it.
+  The fallback exists for third-party servers on the older revision — the
+  bundled `apps/mcp-bridge` speaks the current one inbound, so the default
+  deployment never takes it.
 
   What has to hold is that the fallback triggers on the right signal. A modern
   server also answers `4xx` — for an unsupported version, a missing capability,

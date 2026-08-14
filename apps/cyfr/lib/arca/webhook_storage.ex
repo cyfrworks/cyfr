@@ -6,7 +6,7 @@ defmodule Arca.WebhookStorage do
   Storage operations for inbound webhooks.
 
   Webhooks are receiver records bound to a target component. Each row stores
-  an HMAC secret encrypted at rest (`secret_encrypted` via the configured `Sanctum.Cipher`)
+  an HMAC secret encrypted at rest (`secret_encrypted` via `Sanctum.Cipher`)
   because verification requires the raw secret — secrets here are *not* hashed.
 
   Webhooks have two unique indexes:

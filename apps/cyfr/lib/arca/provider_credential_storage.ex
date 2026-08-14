@@ -5,10 +5,9 @@ defmodule Arca.ProviderCredentialStorage do
   @moduledoc """
   Storage for OAuth provider client credentials.
 
-  Persistence mechanics only — sealing, permission checks and the
-  legacy-secret fallback live in `Sanctum.ProviderCredentials`. Tenant
-  coordinates are normalized at every boundary so nil/"" sentinel variance
-  cannot split the partition.
+  Persistence mechanics only — sealing and permission checks live in
+  `Sanctum.ProviderCredentials`. Tenant coordinates are normalized at every
+  boundary so nil/"" sentinel variance cannot split the partition.
   """
 
   import Ecto.Query

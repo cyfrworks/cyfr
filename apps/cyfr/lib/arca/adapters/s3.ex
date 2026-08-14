@@ -45,8 +45,8 @@ defmodule Arca.Adapters.S3 do
   `{:error, :not_found}` by design — callers must enumerate via `list/2`.
 
   Each append is one S3 PUT. High-volume callers (per-event audit logs)
-  should prefer batched sinks like `Arca.AuditSinks.Postgres` rather than
-  rely on this adapter for fan-out append traffic.
+  should batch writes rather than rely on this adapter for fan-out
+  append traffic.
 
   ## Configuration
 

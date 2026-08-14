@@ -48,7 +48,7 @@ defmodule PrismWeb do
       # When embedded in the shell via live_render, handle_params won't be called.
       # This on_mount hook detects shell mode and sends :shell_init so the LiveView
       # can load data in handle_info instead.
-      on_mount {PrismWeb.ShellCompat, :maybe_shell}
+      on_mount {PrismWeb.EmbeddedShell, :maybe_shell}
 
       unquote(html_helpers())
     end

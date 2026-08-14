@@ -369,7 +369,7 @@ defmodule Sanctum.WebhookTest do
                Webhook.verify_with_grace(hook, body, sig, "not-a-number")
     end
 
-    test "without a timestamp arg, body-only HMAC still verifies (backward compat)",
+    test "without a timestamp arg, body-only HMAC verifies (replay protection off)",
          %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
         create(ctx, %{name: "no-ts", target_ref: "f:local.handler"})

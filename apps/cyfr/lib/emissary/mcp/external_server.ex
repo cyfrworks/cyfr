@@ -6,12 +6,14 @@ defmodule Emissary.MCP.ExternalServer do
   GenServer managing a connection to a single external MCP server.
 
   One process per active connection, keyed by `{name, org_id, project_id}`.
-  Performs the MCP handshake (initialize → initialized → tools/list) lazily
-  on first access and caches discovered tool definitions.
+  Connects lazily on first access: a stateless `tools/list` probe under the
+  current protocol revision, falling back to the legacy
+  initialize → initialized handshake for third-party servers still on the
+  older revision (see `connect/1`). Discovered tool definitions are cached.
 
   ## HTTP Transport
 
-  Uses Streamlined HTTP (JSON-RPC 2.0 over HTTP POST) as defined by the
+  Uses Streamable HTTP (JSON-RPC 2.0 over HTTP POST) as defined by the
   MCP spec. Each request gets a fresh HTTP request — no persistent connection.
   """
 

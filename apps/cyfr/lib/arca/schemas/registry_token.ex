@@ -9,7 +9,7 @@ defmodule Arca.Schemas.RegistryToken do
   holds one personal-namespace token plus one per publisher membership on a
   registry.
 
-  `credential_ciphertext` is encrypted via the configured `Sanctum.Cipher`
+  `credential_ciphertext` is encrypted via `Sanctum.Cipher`
   (the `:registry_token` purpose); plaintext never reaches this schema —
   encryption is applied by the caller, and this schema stores the ciphertext
   verbatim.

@@ -20,14 +20,12 @@ defmodule Sanctum.Vault.OAuthGrant do
 
     * same binding (ordinary re-auth) — material replaced under the
       `payload_rev` CAS; no consent is disturbed; `needs_reauth` clears.
-    * changed binding (first grant on a legacy pointer, or scopes that
-      differ) — the derived binding digest moves and every profile whose
-      head consent references the entry flips to `needs_consent`.
-      Re-auth is the converter for OAuth pointers, and a conversion is a
-      binding change by definition.
+    * changed binding (scopes or endpoints that differ) — the derived
+      binding digest moves and every profile whose head consent references
+      the entry flips to `needs_consent`.
 
-  `complete/3` runs with no browser Context, exactly like the legacy
-  callback: proof-of-initiation is the single-use 256-bit `state`
+  `complete/3` runs with no browser Context:
+  proof-of-initiation is the single-use 256-bit `state`
   (delete-on-read, 2-minute TTL) plus the server-held PKCE verifier, and
   the interactive-class check happened at `authorize_url/2` when the
   pending record was minted.
@@ -119,8 +117,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   semantics, and clear `needs_reauth`.
 
   Returns `{:ok, %{entry_id, name, provider, rebound: bool}}`;
-  `{:error, :unknown_state}` when no vault pending matches — the caller
-  falls through to the legacy component-keyed exchange.
+  `{:error, :unknown_state}` when no pending grant matches — the callback
+  answers 400, since an expired or foreign `state` proves nothing.
   """
   @spec complete(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def complete(state, code, redirect_uri) do

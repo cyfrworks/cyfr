@@ -36,8 +36,8 @@ defmodule Sanctum.Consent.Source.Memory do
   def reset, do: GenServer.call(__MODULE__, :reset)
 
   # An unstarted server means no fixtures were seeded: no profiles, no
-  # heads. Tests that never touch consent then take the legacy fallback
-  # instead of crashing into a missing GenServer.
+  # heads. Tests that never touch consent then get empty results instead
+  # of crashing into a missing GenServer.
   @impl Sanctum.Consent.Source
   def profiles(%Context{} = ctx, source_ref) do
     if Process.whereis(__MODULE__) do

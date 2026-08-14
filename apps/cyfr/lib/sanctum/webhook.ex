@@ -11,7 +11,7 @@ defmodule Sanctum.Webhook do
   Unlike API keys (which are hashed for indexed lookup), webhook secrets must
   be reproducible at verification time — every inbound POST recomputes the
   HMAC against the stored secret. So secrets are encrypted at rest via the
-  configured `Sanctum.Cipher` (the `:webhook_secret` purpose) and decrypted
+  `Sanctum.Cipher` (the `:webhook_secret` purpose) and decrypted
   just-in-time. Inbound verification (`verify_with_grace/4`) binds the
   webhook row's tenant identity into the cipher's AAD.
 
@@ -53,7 +53,8 @@ defmodule Sanctum.Webhook do
   @doc """
   Create a new webhook. Returns the plaintext secret exactly once.
 
-  Required: `name`, `target_ref`. Optional: `input_template` (map; default
+  Required: `name`, `target_ref`, `profile_id` (deliveries fire under the
+  bound profile's consent). Optional: `input_template` (map; default
   `%{}`), `signature_header` (default `x-cyfr-signature`), `description`,
   `rate_limit`.
   """
@@ -130,8 +131,8 @@ defmodule Sanctum.Webhook do
   @doc """
   Update mutable webhook fields without rotating the secret.
 
-  Allowed fields: `target_ref`, `signature_header`, `input_template`,
-  `description`, `rate_limit`. Unknown fields are ignored.
+  Allowed fields: `target_ref`, `profile_id`, `signature_header`,
+  `input_template`, `description`, `rate_limit`. Unknown fields are ignored.
   """
   @spec update(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def update(%Context{} = ctx, name, attrs) when is_binary(name) and is_map(attrs) do

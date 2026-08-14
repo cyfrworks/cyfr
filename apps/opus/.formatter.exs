@@ -5,6 +5,6 @@
   import_deps: [:ecto, :ecto_sql],
   inputs: [
     "{mix,.formatter}.exs",
-    "{config,lib,test}/**/*.{ex,exs}"
+    "{lib,test}/**/*.{ex,exs}"
   ]
 ]

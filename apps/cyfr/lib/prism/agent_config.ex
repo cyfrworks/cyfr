@@ -165,8 +165,8 @@ defmodule Prism.AgentConfig do
   - Native-tool-only agents (those whose allowlist names a native tool such as
     `native_search`) get `"visible_tools" => ["native_search"]` and no
     `"tool_policy"` — model-side native tools can't coexist with custom MCP
-    tools, so the agent gets *only* the native tool. The formula's legacy
-    `visible_tools` path handles this unchanged.
+    tools, so the agent gets *only* the native tool, via the formula's
+    `visible_tools` field.
   - Everyone else gets `"tool_policy" => allowlist`; the formula filters each
     tool's `action` enum to its directly-callable verbs (read-kind or `"auto"`)
     and the `"ask"` actions reach the agent via the system-prompt approval

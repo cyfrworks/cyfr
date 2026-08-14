@@ -6,7 +6,7 @@ defmodule Sanctum.CipherAAD do
   Single builder for the at-rest cipher's additional-authenticated-data (AAD)
   tuple.
 
-  The configured `Sanctum.Cipher` binds this map as AES-GCM AAD. Encrypt-time,
+  `Sanctum.Cipher` binds this map as AES-GCM AAD. Encrypt-time,
   decrypt-time, and the operator-run re-encryption tool MUST produce a
   byte-identical tuple for a given row, or decryption fails closed. Defining
   the per-purpose shape in exactly one place removes the risk of those sites

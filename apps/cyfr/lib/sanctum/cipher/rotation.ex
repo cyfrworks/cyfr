@@ -5,9 +5,10 @@ defmodule Sanctum.Cipher.Rotation do
   @moduledoc """
   Key-rotation / re-encryption tooling for `Sanctum.Cipher`.
 
-  Operator-driven, Postgres-only (multi-row UPDATE semantics don't apply to
-  single-user SQLite deployments). Re-encrypts every at-rest credential blob
-  onto the current keyring primary so a retired key can be safely dropped.
+  Operator-driven and adapter-agnostic — the batched keyset walk runs the
+  same against SQLite and Postgres. Re-encrypts every at-rest credential
+  blob onto the current keyring primary (and current cipher version) so a
+  retired key can be safely dropped.
 
   ## Usage
 

@@ -7,9 +7,8 @@ defmodule PrismWeb.DisplayHelpers do
   """
 
   @doc """
-  Format an execution reference for display.
-
-  Handles both legacy JSON-decoded map references and new canonical string references.
+  Format an execution reference for display. Non-binary values render via
+  `inspect/1` as a defensive fallback.
   """
   def format_ref(nil), do: "-"
   def format_ref(ref) when is_binary(ref), do: ref

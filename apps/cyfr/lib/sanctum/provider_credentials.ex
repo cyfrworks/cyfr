@@ -15,13 +15,12 @@ defmodule Sanctum.ProviderCredentials do
 
   - **Management** (`put/4`, `delete/2`, `configured?/2`) is caller-gated:
     tenant scope plus `:secrets_write` / `:secrets_read`.
-  - **Use** (`fetch_for_oauth/4`) takes explicit tenant coordinates and no
+  - **Use** (`fetch_for_oauth/3`) takes explicit tenant coordinates and no
     caller context at all — it is reachable only from the host's OAuth
     exchange/refresh plane, never through a caller's permission set, and
-    every read emits telemetry.
-
-  `fetch_for_oauth/4` falls back to the legacy secret names a manifest's
-  oauth block declares (`client_id_secret` / `client_secret_secret`) and
+    every read emits telemetry. A provider with no stored credentials is
+    an error carrying the operator's setup instructions; there is no
+    fallback source.
   """
 
   alias Sanctum.CipherAAD

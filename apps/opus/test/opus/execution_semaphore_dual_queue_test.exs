@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Phase1g.ExecutionSemaphoreDualQueueTest do
+defmodule Opus.ExecutionSemaphoreDualQueueTest do
   use ExUnit.Case, async: false
 
   test "high-priority waiters are served before normal-priority" do

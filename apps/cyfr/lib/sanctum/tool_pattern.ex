@@ -54,8 +54,9 @@ defmodule Sanctum.ToolPattern do
   Expand `patterns` against a catalog of concrete names: `"*"` takes the
   whole catalog, `prefix.*` its dot-boundary matches, an exact name only
   itself and only if the catalog contains it. Unknown or invalid patterns
-  expand to nothing — legacy policies may hold stale entries, and an
-  expansion is an allowlist, so dropping them is the fail-safe direction.
+  expand to nothing — a consent blob may hold entries for tools that no
+  longer exist, and an expansion is an allowlist, so dropping them is the
+  fail-safe direction.
   Result is sorted and unique.
   """
   @spec expand([String.t()], [String.t()]) :: [String.t()]

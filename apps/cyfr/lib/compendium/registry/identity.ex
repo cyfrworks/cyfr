@@ -106,18 +106,13 @@ defmodule Compendium.Registry.Identity do
   # ============================================================================
 
   # The user's personal credentials (registry push tokens) are the only
-  # credential source — the org-level "tenant credential" rode the retired
-  # legacy secret store. The same path serves every deployment.
-  defp list_user_credentials(%Sanctum.Context{} = ctx, oci_host) do
-    resolve_local_credentials(ctx, oci_host)
-  end
-
-  defp resolve_local_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
+  # credential source; the same path serves every deployment.
+  defp list_user_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
        when is_binary(user_id) and user_id != "" do
     CredentialStore.list_for_user(user_id, oci_host)
   end
 
-  defp resolve_local_credentials(_ctx, _oci_host), do: []
+  defp list_user_credentials(_ctx, _oci_host), do: []
 
   # Best-effort per-token probe. Transient errors keep the entry with nil
   # `last_used_at`; 401/403 drops it (token revoked or namespace ownership

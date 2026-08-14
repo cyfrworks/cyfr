@@ -13,7 +13,7 @@ defmodule EmissaryWeb.WebhookController do
 
   Build the invoke envelope, merge with the webhook's stored
   `input_template`, and **fire** the target component asynchronously through
-  `Opus.Executor.run/3` via `Task.Supervisor.start_child/2`. The HTTP request
+  `Opus.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
   GitHub / Twilio / PayPal docs all converge on this). Component outcome is
@@ -21,11 +21,9 @@ defmodule EmissaryWeb.WebhookController do
   :invoke, :stop]` telemetry from inside the spawned task, correlated to the
   HTTP response by `request_id`.
 
-  No controller-level timeout: `Opus.Executor` enforces per-component
-  timeouts (`:catalyst` 180s, `:formula` 300s, `:reagent` 60s — see
-  `Opus.Executor.@default_timeout_ms`) and policy-derived `timeout_ms`. A
-  layered controller timeout would just produce inconsistent error reasons
-  for the same kill.
+  No controller-level timeout: the executor enforces the consented node
+  timeout (`Sanctum.Limits`). A layered controller timeout would just
+  produce inconsistent error reasons for the same kill.
   """
 
   use EmissaryWeb, :controller
@@ -236,7 +234,7 @@ defmodule EmissaryWeb.WebhookController do
   end
 
   # Task body. Wrapped in try/rescue so the audit trail (`RequestLog` row +
-  # `:invoke, :stop` telemetry) closes whether `Opus.Executor.run/3` returns
+  # `:invoke, :stop` telemetry) closes whether `Opus.run_root/5` returns
   # `{:ok, _}`, `{:error, _}`, or raises. The supervisor would log a crash
   # otherwise, but the structured audit row would dangle in `pending`.
   defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time) do

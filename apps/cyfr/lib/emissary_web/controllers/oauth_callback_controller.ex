@@ -3,16 +3,16 @@
 
 defmodule EmissaryWeb.OAuthCallbackController do
   @moduledoc """
-  Handles OAuth callback redirects for catalyst OAuth providers.
+  Handles the OAuth callback for Connection grants (`vault.authorize`).
 
   This is separate from the user authentication OAuth flow (AuthController).
-  It handles code exchange for catalyst component tokens.
+  It completes the code exchange into a vault entry's token bundle.
 
   No user Context is required: proof-of-initiation is the single-use,
   unguessable `state` (256-bit, delete-on-read, 2-minute TTL) plus the
   server-held PKCE `code_verifier`. The pending record written when
-  `oauth.authorize` ran carries the originating org/project/component that
-  the resulting tokens are stored under.
+  `vault.authorize` ran carries the originating org/project and target
+  Connection that the resulting tokens are stored under.
   """
 
   use EmissaryWeb, :controller
@@ -67,7 +67,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
 
   # -- HTML responses --
 
-  defp success_html(provider, component_ref) do
+  defp success_html(provider, connection_name) do
     provider_display = provider |> to_string() |> String.capitalize()
 
     callback_html(
@@ -75,7 +75,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
       """
       <div class="icon">&#10003;</div>
       <h1>Connected to #{html_escape(provider_display)}</h1>
-      <p class="detail">#{html_escape(component_ref)}</p>
+      <p class="detail">#{html_escape(connection_name)}</p>
       <p>You can close this window and return to your terminal.</p>
       """,
       "#10b981"

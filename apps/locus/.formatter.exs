@@ -2,9 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 
 [
-  import_deps: [],
   inputs: [
     "{mix,.formatter}.exs",
-    "{config,lib,test}/**/*.{ex,exs}"
+    "{lib,test}/**/*.{ex,exs}"
   ]
 ]

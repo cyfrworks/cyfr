@@ -29,7 +29,7 @@ const VERSION = JSON.parse(
 // so anything that can POST to /mcp gets remote code execution *by design*. It
 // is meant to run on a trusted container network only — docker-compose uses
 // `expose` (never `ports:`), so the port is reachable from sibling containers
-// (cyfr, neko) but not the host. Binding 0.0.0.0 is required for that
+// (cyfr) but not the host. Binding 0.0.0.0 is required for that
 // cross-container reachability; do NOT change it to loopback and do NOT publish
 // the port to the host.
 //
