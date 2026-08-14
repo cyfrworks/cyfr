@@ -334,12 +334,12 @@ defmodule Sanctum.MCP do
             "timestamp_header" => %{
               "type" => "string",
               "description" =>
-                "Optional. HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Empty string clears the field."
+                "HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. LEFT UNSET, A CAPTURED DELIVERY CAN BE REPLAYED INDEFINITELY — a signature stays valid forever, so anyone who reads one off a proxy log or mirrored traffic can re-fire the bound component. Set it to whatever the sender emits ('stripe-signature' carries its own; GitHub has no timestamp header). Empty string clears the field."
             },
             "idempotency_key_header" => %{
               "type" => "string",
               "description" =>
-                "Optional. HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id within ~24h short-circuit to a 200 with status 'duplicate'. Empty string clears the field."
+                "HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id within ~24h short-circuit to a 200 with status 'duplicate'. Left unset, a sender's own retries each run the bound component again. Empty string clears the field."
             },
             "description" => %{
               "type" => "string",

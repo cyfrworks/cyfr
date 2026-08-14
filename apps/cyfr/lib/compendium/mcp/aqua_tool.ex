@@ -260,7 +260,11 @@ defmodule Compendium.MCP.AquaTool do
     else
       content = Map.get(args, "content", "")
 
+      # The prompt file is keyed by name alone, so a sub-agent named after an
+      # existing agent would overwrite that agent's system prompt — a way to
+      # rewrite what another agent is, dressed up as creating a new one.
       with {:ok, manifest} <- read_agent_manifest(ctx),
+           :ok <- refute_name_taken(manifest, parent, name),
            true <- Map.has_key?(manifest["agents"] || %{}, parent) do
         sa_config =
           %{
@@ -282,9 +286,27 @@ defmodule Compendium.MCP.AquaTool do
         end
       else
         false -> {:error, "Parent orchestrator '#{parent}' not found"}
+        {:error, :name_taken} -> {:error, "Agent '#{name}' already exists"}
         {:error, reason} -> {:error, "Failed to read manifest: #{inspect(reason)}"}
       end
     end
+  end
+
+  # A name is taken by any orchestrator, or by a sub-agent under any parent —
+  # every one of them stores its prompt at `aqua/<name>.md`.
+  defp refute_name_taken(manifest, _parent, name) do
+    agents = manifest["agents"] || %{}
+
+    taken? =
+      Map.has_key?(agents, name) or
+        Enum.any?(agents, fn {_agent_name, config} ->
+          config
+          |> Kernel.||(%{})
+          |> Map.get("sub_agents", %{})
+          |> Map.has_key?(name)
+        end)
+
+    if taken?, do: {:error, :name_taken}, else: :ok
   end
 
   defp create_aqua_orchestrator(ctx, name, args) do

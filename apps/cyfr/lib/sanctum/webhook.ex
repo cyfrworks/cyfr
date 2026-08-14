@@ -57,6 +57,14 @@ defmodule Sanctum.Webhook do
   bound profile's consent). Optional: `input_template` (map; default
   `%{}`), `signature_header` (default `x-cyfr-signature`), `description`,
   `rate_limit`.
+
+  `timestamp_header` and `idempotency_key_header` are unset by default,
+  which means replay protection is off: an HMAC signature over a raw body
+  stays valid forever, so a delivery captured from a proxy log or mirrored
+  traffic re-fires the bound component as often as it is replayed. They
+  cannot be defaulted on — the sender decides which headers it emits, and
+  naming one it does not send would reject every real delivery — so a
+  webhook that faces the internet should name whatever its sender provides.
   """
   @spec create(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def create(%Context{} = ctx, %{name: name, target_ref: target_ref} = opts)
