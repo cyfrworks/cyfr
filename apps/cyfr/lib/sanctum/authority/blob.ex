@@ -94,12 +94,6 @@ defmodule Sanctum.Authority.Blob do
           | {:invalid_limits, String.t(), {:invalid_limit, atom(), String.t()}}
           | {:invalid_resource, String.t(), String.t(), atom(), String.t()}
 
-  @doc """
-  The reserved root-ingress edge key.
-  """
-  @spec ingress_key() :: String.t()
-  def ingress_key, do: @ingress_key
-
   # ============================================================================
   # Parse
   # ============================================================================

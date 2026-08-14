@@ -1291,16 +1291,6 @@ defmodule Compendium.MCPTest do
       assert result.content =~ "Integration Guide"
     end
 
-    test "get agent-guide returns aqua prompt (backward compat)", %{ctx: ctx} do
-      {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "agent-guide"})
-
-      assert result.name == "aqua"
-      assert result.format == "markdown"
-      assert is_binary(result.content)
-      assert result.content =~ "A.Q.U.A."
-    end
-
     test "get aqua returns orchestrator prompt with metadata", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})

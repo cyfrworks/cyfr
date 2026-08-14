@@ -38,17 +38,11 @@ defmodule Opus.EdgeGuard do
   @spec domains(edge()) :: [String.t()]
   def domains(edge), do: egress(edge, :domains)
 
-  @doc "Allowed HTTP methods for an edge (empty = deny all)."
-  @spec methods(edge()) :: [String.t()]
-  def methods(edge), do: egress(edge, :methods)
-
-  @doc "Allowed URL schemes for an edge (empty = deny all)."
-  @spec schemes(edge()) :: [String.t()]
-  def schemes(edge), do: egress(edge, :schemes)
-
-  @doc "Allowed private IPs/CIDRs for an edge (empty = deny all)."
-  @spec private_ips(edge()) :: [String.t()]
-  def private_ips(edge), do: egress(edge, :private_ips)
+  # Internal accessors for the checks below — external callers use the
+  # check_* predicates, never the raw lists.
+  defp methods(edge), do: egress(edge, :methods)
+  defp schemes(edge), do: egress(edge, :schemes)
+  defp private_ips(edge), do: egress(edge, :private_ips)
 
   @doc "Allowed storage paths for an edge (empty = deny all)."
   @spec paths(edge()) :: [String.t()]

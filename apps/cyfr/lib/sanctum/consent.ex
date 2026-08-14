@@ -58,6 +58,14 @@ defmodule Sanctum.Consent do
   @type scope :: :versionless | :pinned
   @type invoke_mode :: :open_inert | :edge_only
   @type profile_kind :: :owner | :public
+
+  @typedoc """
+  How a consent revision was granted. `:bootstrap` marks machine-minted
+  revisions — connections bind through the walk, so these carry no vault
+  resource and no human granted them. Recording them as `:interactive`
+  would render a false audit line ("you, interactive") into every
+  enforcement display forever.
+  """
   @type granted_via :: :interactive | :scoped_key | :bootstrap
 
   @type conflict_cause :: :stale_plan | :digest_changed | :race
@@ -104,16 +112,4 @@ defmodule Sanctum.Consent do
   """
   @spec scopes() :: [scope()]
   def scopes, do: [:versionless, :pinned]
-
-  @doc """
-  The ways a consent can have been granted, as recorded on the revision.
-
-  `:bootstrap` marks machine-minted revisions — connections bind through the
-  walk, so these carry no vault resource and no human granted them. Recording
-  them as `:interactive` would render a false audit line ("you, interactive")
-  into every enforcement display forever; the vocabulary says what actually
-  happened instead.
-  """
-  @spec granted_via_values() :: [granted_via()]
-  def granted_via_values, do: [:interactive, :scoped_key, :bootstrap]
 end

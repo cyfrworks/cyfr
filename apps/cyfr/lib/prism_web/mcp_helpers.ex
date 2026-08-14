@@ -25,16 +25,6 @@ defmodule PrismWeb.MCPHelpers do
     end
   end
 
-  @doc """
-  Call an MCP tool, returning the result or a default on error.
-  """
-  def call_tool!(socket, tool_name, args \\ %{}, default \\ nil) do
-    case call_tool(socket, tool_name, args) do
-      {:ok, result} -> result
-      {:error, _} -> default
-    end
-  end
-
   defp normalize_tool_call(tool_name, args) do
     case String.split(tool_name, "/", parts: 2) do
       [name, action] -> {name, Map.put(args, "action", action)}

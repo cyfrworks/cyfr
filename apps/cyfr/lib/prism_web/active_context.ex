@@ -130,32 +130,6 @@ defmodule PrismWeb.ActiveContext do
   def session_id(session), do: session_id_from_session(session)
 
   @doc """
-  Open the AQUA overlay with `prompt` pre-filled in its composer.
-
-  Returns the socket unchanged — the overlay listens on the per-session
-  topic and reacts to the broadcast in `handle_info/2`. Callers use it
-  in `handle_event` returns:
-
-      {:noreply, PrismWeb.ActiveContext.seed_aqua(socket, "Help me with X")}
-
-  No-op (returns the socket as-is) when no per-session topic is wired,
-  e.g. before the LiveView has fully mounted or in test scaffolds without
-  the session hook.
-  """
-  @spec seed_aqua(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
-  def seed_aqua(%Phoenix.LiveView.Socket{} = socket, prompt) when is_binary(prompt) do
-    case socket.assigns[:prism_session_id] do
-      sid when is_binary(sid) ->
-        Phoenix.PubSub.broadcast(Emissary.PubSub, topic(sid), {:aqua_seed, prompt})
-
-      _ ->
-        :ok
-    end
-
-    socket
-  end
-
-  @doc """
   Attach a page snapshot to the active context and re-broadcast so the AQUA
   overlay sees it. Snapshot describes "what is currently on screen" — a
   small list of items the user is looking at, so the agent can reason

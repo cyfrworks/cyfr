@@ -113,9 +113,7 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
-    # Handle "agent-guide" alias for backward compat
-    lookup = if name == "agent-guide", do: "aqua", else: name
-    lookup_agent_guide(ctx, lookup)
+    lookup_agent_guide(ctx, name)
   end
 
   def handle(_ctx, %{"action" => "get"}) do

@@ -137,10 +137,8 @@ defmodule Sanctum.Vault do
   accepting a different shape here would smuggle a binding change past
   re-consent.
 
-  A v1 secrets-only legacy pointer converts to v2 material in place (the
-  AAD and binding fields are unchanged, so no consent notices). A pointer
-  carrying OAuth refuses — an operator cannot type a token bundle;
-  re-authorization is the converter.
+  A retired v1 pointer row cannot rotate — its payload no longer decodes
+  (`:legacy_pointer_retired`); recreate the entry with real material.
   """
   @spec rotate(Context.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
   def rotate(%Context{} = ctx, %{id: id, fields: fields, expected_payload_rev: expected} = params)
@@ -326,21 +324,10 @@ defmodule Sanctum.Vault do
   end
 
   # What the rotated payload's oauth block becomes. A supplied bundle wins;
-  # otherwise v2 keeps its current bundle. A v1 pointer converts only when
-  # it carries no OAuth — a pointer's token lives in the legacy store, and
-  # dropping it silently would revoke by accident.
+  # otherwise the current bundle is kept — rotating the secret fields must
+  # not silently revoke a live grant.
   defp rotation_oauth(%{"v" => 2} = current, nil), do: {:ok, current["oauth"]}
   defp rotation_oauth(%{"v" => 2}, oauth) when is_map(oauth), do: {:ok, oauth}
-
-  defp rotation_oauth(%{"v" => 1} = current, supplied) do
-    case get_in(current, ["legacy", "oauth"]) do
-      pointers when is_list(pointers) and pointers != [] ->
-        {:error, :oauth_pointer_requires_reauth}
-
-      _ ->
-        {:ok, supplied}
-    end
-  end
 
   defp put_change(changes, key, params, encoder) do
     case Map.fetch(params, key) do

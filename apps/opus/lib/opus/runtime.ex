@@ -451,9 +451,4 @@ defmodule Opus.Runtime do
   end
 
   defp add_execution_metadata({:error, _} = error, _metadata), do: error
-
-  @doc false
-  def build_secrets_imports_for_test(preloaded, component_ref) do
-    build_secrets_imports(preloaded, component_ref)
-  end
 end

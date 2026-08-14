@@ -70,24 +70,6 @@ defmodule Prism.AgentConfig do
     [@grants_prefix, digest <> ".json"]
   end
 
-  @doc "List available top-level orchestrators."
-  def list_orchestrators(%Context{} = ctx) do
-    case call_guide(ctx, %{"action" => "list", "type" => "orchestrator"}) do
-      {:ok, %{guides: guides}} when is_list(guides) ->
-        Enum.map(guides, fn g ->
-          %{name: g[:name] || g["name"], title: g[:title] || g["title"]}
-        end)
-
-      {:ok, %{"guides" => guides}} when is_list(guides) ->
-        Enum.map(guides, fn g ->
-          %{name: g["name"], title: g["title"]}
-        end)
-
-      _ ->
-        []
-    end
-  end
-
   @doc """
   Load full config for an orchestrator (prompt content + resolved catalyst).
 

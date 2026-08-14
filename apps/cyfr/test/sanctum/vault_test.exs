@@ -171,7 +171,7 @@ defmodule Sanctum.VaultTest do
       assert entry.status == "active"
     end
 
-    test "a secrets-only legacy pointer converts to material in place", %{ctx: ctx} do
+    test "a retired v1 pointer row cannot rotate — recreate the entry", %{ctx: ctx} do
       id = Emissary.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "legacy")
       pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
@@ -182,50 +182,19 @@ defmodule Sanctum.VaultTest do
           id: id,
           org_id: ctx.org_id,
           project_id: ctx.project_id,
-          name: "legacy:conv",
+          name: "legacy:ptr",
           provider_hint: "legacy",
           kind: "bundle",
           field_names: Jason.encode!(["PTR_KEY"]),
           sealed_payload: sealed
         })
 
-      resource = resource_for(ctx, id)
-
-      assert {:ok, 1} =
+      assert {:error, :legacy_pointer_retired} =
                Vault.rotate(ctx, %{
                  id: id,
                  fields: %{"PTR_KEY" => "typed-fresh"},
                  expected_payload_rev: 0
                })
-
-      # Resolves as material now — no legacy store row exists to point at.
-      assert {:ok, %{"PTR_KEY" => "typed-fresh"}} = VaultReader.fetch(ctx, resource)
-    end
-
-    test "an OAuth-bearing pointer refuses conversion — re-auth is the converter",
-         %{ctx: ctx} do
-      id = Emissary.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "legacy")
-
-      pointer =
-        ~s({"v":1,"legacy":{"oauth":[{"component_ref":"catalyst:local.gmail","provider":"google"}]}})
-
-      {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
-
-      {:ok, _} =
-        Arca.VaultStorage.put(%{
-          id: id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
-          name: "legacy:oauth",
-          provider_hint: "legacy",
-          kind: "bundle",
-          field_names: "[]",
-          sealed_payload: sealed
-        })
-
-      assert {:error, :oauth_pointer_requires_reauth} =
-               Vault.rotate(ctx, %{id: id, fields: %{}, expected_payload_rev: 0})
     end
   end
 

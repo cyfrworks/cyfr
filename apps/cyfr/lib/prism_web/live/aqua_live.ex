@@ -541,24 +541,6 @@ defmodule PrismWeb.AquaLive do
     {:noreply, assign(socket, :active_context, ctx)}
   end
 
-  # Seeded prompt from a cockpit page (e.g. "Ask AQUA about this row" buttons).
-  # Open overlay to half if it was closed, lazy-load orchestrators, prefill input.
-  def handle_info({:aqua_seed, prompt}, socket) when is_binary(prompt) do
-    socket =
-      if socket.assigns.orchestrators_loaded, do: socket, else: load_orchestrator(socket)
-
-    next_state =
-      case socket.assigns.sheet_state do
-        "closed" -> "half"
-        s -> s
-      end
-
-    {:noreply,
-     socket
-     |> set_sheet_state(next_state)
-     |> assign(:input, prompt)}
-  end
-
   # Editor reloads agents + the chat-side orchestrator picker after any
   # mutation. Cheap — single MCP call per agent.
   def handle_info(:editor_refresh, socket) do
@@ -1141,14 +1123,6 @@ defmodule PrismWeb.AquaLive do
   defp handle_emit(socket, "conversation_complete", data) do
     messages = data["messages"] || data[:messages] || []
     assign(socket, :conversation_history, messages)
-  end
-
-  # Backward-compat shim: pre-`kind` emit events delivered text directly
-  # under the `text` key. Treat that as a text_delta so existing flows
-  # continue to render while richer events become wired up.
-  defp handle_emit(socket, _kind, %{} = data) when is_map_key(data, "text") do
-    chunk = data["text"] || ""
-    assign(socket, :streaming_text, socket.assigns.streaming_text <> chunk)
   end
 
   defp handle_emit(socket, _kind, _data), do: socket

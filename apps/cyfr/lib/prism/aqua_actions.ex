@@ -58,7 +58,7 @@ defmodule Prism.AquaActions do
     /
     /activities /enforcements /executions /schedules
     /components /builds /registry /tinctures
-    /secrets /api-keys /webhooks /mcp-servers /settings
+    /connections /api-keys /webhooks /mcp-servers /settings
     /reports /legal
   )
 

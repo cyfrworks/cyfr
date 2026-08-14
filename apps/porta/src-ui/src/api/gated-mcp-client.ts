@@ -62,21 +62,9 @@ function summaryFor(name: string, args: Record<string, unknown>): string {
   if (name === "component" && action === "delete") {
     return "Permanently remove this item.";
   }
-  if (name === "policy" && (action === "set" || action === "patch")) {
-    return "Change a permission value.";
-  }
-  if (name === "policy" && action === "delete") {
-    return "Remove permissions entirely.";
-  }
-  if (name === "secret" && action === "set") return "Store a credential.";
-  if (name === "secret" && action === "delete") {
+  if (name === "vault" && action === "create") return "Store a credential.";
+  if (name === "vault" && action === "delete") {
     return "Delete a stored credential.";
-  }
-  if (name === "secret" && action === "grant") {
-    return "Grant a component access to a credential.";
-  }
-  if (name === "secret" && action === "revoke") {
-    return "Revoke credential access.";
   }
   if (name === "mcp_servers" && action === "create") {
     return "Add an external connection.";

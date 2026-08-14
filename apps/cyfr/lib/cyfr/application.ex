@@ -66,7 +66,6 @@ defmodule Cyfr.Application do
       Cyfr.RateLimiter,
       # Emissary web layer
       EmissaryWeb.Telemetry,
-      {DNSCluster, query: Application.get_env(:cyfr, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Emissary.PubSub},
       {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
       {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},

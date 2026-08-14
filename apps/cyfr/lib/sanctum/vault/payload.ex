@@ -3,22 +3,20 @@
 
 defmodule Sanctum.Vault.Payload do
   @moduledoc """
-  The sealed vault-entry payload document, both versions:
+  The sealed vault-entry payload document:
 
-      v1 — legacy pointer into the pre-vault stores
-      {"v":1,"legacy":{"secrets":[{"name":"KEY","scope":"project"}],
-                       "oauth":[{"component_ref":"catalyst:local.gmail",
-                                 "provider":"google"}]}}
-
-      v2 — the material itself
       {"v":2,"fields":{"url":"https://…","anon_key":"…"},
        "oauth":{"access_token":"…","refresh_token":"…",
                 "expires_at":"2026-08-07T12:00:00Z","token_type":"bearer"}}
 
   Decoding is strict: unknown top-level keys, non-string field values and
   malformed oauth blocks are refused, so a tampered or mis-written payload
-  fails before any of it is dispensed. v1 pointer internals are validated
-  by the reader that resolves them.
+  fails before any of it is dispensed.
+
+  The retired v1 pointer document (`{"v":1,"legacy":…}`, which pointed into
+  credential stores that no longer exist) is refused HERE, in the one place
+  every read decodes through, as `:legacy_pointer_retired` — recreate the
+  entry to store real material.
   """
 
   @type t :: map()
@@ -26,7 +24,8 @@ defmodule Sanctum.Vault.Payload do
   @oauth_keys ~w(access_token refresh_token expires_at token_type scopes)
 
   @doc "Decode and validate a sealed payload's plaintext."
-  @spec decode(binary()) :: {:ok, t()} | {:error, {:invalid_payload, term()}}
+  @spec decode(binary()) ::
+          {:ok, t()} | {:error, {:invalid_payload, term()} | :legacy_pointer_retired}
   def decode(plaintext) when is_binary(plaintext) do
     case Jason.decode(plaintext) do
       {:ok, decoded} -> validate(decoded)
@@ -51,23 +50,11 @@ defmodule Sanctum.Vault.Payload do
     end
   end
 
-  @doc "Whether a decoded payload is a v1 legacy pointer."
-  @spec legacy?(t()) :: boolean()
-  def legacy?(%{"v" => 1}), do: true
-  def legacy?(_), do: false
-
   # ---------------------------------------------------------------------------
   # Validation
   # ---------------------------------------------------------------------------
 
-  defp validate(%{"v" => 1, "legacy" => legacy} = doc) when is_map(legacy) do
-    with :ok <- only_keys(doc, ~w(v legacy)),
-         :ok <- only_keys(legacy, ~w(secrets oauth)),
-         :ok <- check_pointer_list(legacy, "secrets"),
-         :ok <- check_pointer_list(legacy, "oauth") do
-      {:ok, doc}
-    end
-  end
+  defp validate(%{"v" => 1}), do: {:error, :legacy_pointer_retired}
 
   defp validate(%{"v" => 2, "fields" => fields} = doc) when is_map(fields) do
     with :ok <- only_keys(doc, ~w(v fields oauth)),
@@ -83,14 +70,6 @@ defmodule Sanctum.Vault.Payload do
     case Map.keys(map) -- allowed do
       [] -> :ok
       extra -> {:error, {:invalid_payload, {:unknown_keys, Enum.sort(extra)}}}
-    end
-  end
-
-  defp check_pointer_list(legacy, key) do
-    case Map.get(legacy, key) do
-      nil -> :ok
-      list when is_list(list) -> if Enum.all?(list, &is_map/1), do: :ok, else: bad(key)
-      _ -> bad(key)
     end
   end
 

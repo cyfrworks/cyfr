@@ -34,39 +34,12 @@ defmodule PrismWeb.DisplayHelpers do
   def format_bytes(val), do: to_string(val)
 
   @doc """
-  Returns Tailwind class string for status badges.
-  """
-  def status_badge_class(status) do
-    base = "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-
-    case to_string(status) do
-      "success" -> "#{base} bg-green-900 text-green-300"
-      "error" -> "#{base} bg-red-900 text-red-300"
-      "pending" -> "#{base} bg-yellow-900 text-yellow-300"
-      _ -> "#{base} bg-gray-800 text-gray-400"
-    end
-  end
-
-  @doc """
   Formats integer ms to a display string like "123ms".
   """
   def format_duration("-"), do: "-"
   def format_duration(nil), do: "-"
   def format_duration(ms) when is_integer(ms), do: "#{ms}ms"
   def format_duration(ms), do: "#{ms}ms"
-
-  @doc """
-  Accesses a map field with atom key, falling back to string key.
-  """
-  def log_field(map, key), do: map[key] || map[to_string(key)] || "-"
-
-  @doc """
-  Checks if a field is present and non-empty in a map.
-  """
-  def has_field?(map, key) do
-    val = map[key] || map[to_string(key)]
-    val != nil && val != "" && val != "-"
-  end
 
   @doc """
   Pretty-prints JSON strings or maps for display.

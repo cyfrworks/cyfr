@@ -15,14 +15,11 @@ defmodule Prism.TelemetryBridge do
   ## Topics
 
   - `prism:executions` — Execution lifecycle events
-  - `prism:system` — System status changes
   - `prism:requests` — MCP request events
   - `prism:components` — Component install/remove events
   - `prism:builds` — Locus build lifecycle events
   - `prism:schedules` — Cron schedule firing events
-  - `prism:secrets` — Secret grant/revoke events
   - `prism:tinctures` — Tincture invoke lifecycle events
-  - `prism:aqua_approvals` — AQUA approval card decisions (approve/decline)
   - `prism:enforcement` — Policy enforcement decisions (allow/deny audit trail)
   """
 
@@ -47,19 +44,15 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :opus, :execute, :stop], :execution_stop},
       {[:cyfr, :opus, :execute, :exception], :execution_exception},
       {[:cyfr, :emissary, :request], :request},
-      {[:cyfr, :sanctum, :auth], :auth},
       {[:cyfr, :sanctum, :policy, :decision], :policy_decision},
       {[:cyfr, :locus, :build, :start], :build_start},
       {[:cyfr, :locus, :build, :progress], :build_progress},
       {[:cyfr, :locus, :build, :stop], :build_stop},
       {[:cyfr, :opus, :schedule, :fired], :schedule_fired},
-      {[:cyfr, :sanctum, :secret, :grant], :secret_grant},
-      {[:cyfr, :sanctum, :secret, :revoke], :secret_revoke},
       {[:cyfr, :compendium, :component, :install], :component_install},
       {[:cyfr, :compendium, :component, :remove], :component_remove},
       {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
-      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop},
-      {[:prism, :aqua, :approval], :aqua_approval}
+      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop}
     ]
 
     for {event, id} <- events do
@@ -88,10 +81,6 @@ defmodule Prism.TelemetryBridge do
     safe_broadcast("prism:requests", metadata, {:request, metadata, measurements})
   end
 
-  def handle_event([:cyfr, :sanctum, :auth], measurements, metadata, _config) do
-    safe_broadcast("prism:system", metadata, {:auth_event, metadata, measurements})
-  end
-
   def handle_event([:cyfr, :sanctum, :policy, :decision], measurements, metadata, _config) do
     safe_broadcast("prism:enforcement", metadata, {:policy_decision, metadata, measurements})
   end
@@ -110,14 +99,6 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :opus, :schedule, :fired], measurements, metadata, _config) do
     safe_broadcast("prism:schedules", metadata, {:schedule_fired, metadata, measurements})
-  end
-
-  def handle_event([:cyfr, :sanctum, :secret, :grant], measurements, metadata, _config) do
-    safe_broadcast("prism:secrets", metadata, {:secret_granted, metadata, measurements})
-  end
-
-  def handle_event([:cyfr, :sanctum, :secret, :revoke], measurements, metadata, _config) do
-    safe_broadcast("prism:secrets", metadata, {:secret_revoked, metadata, measurements})
   end
 
   def handle_event([:cyfr, :compendium, :component, :install], measurements, metadata, _config) do
@@ -147,10 +128,6 @@ defmodule Prism.TelemetryBridge do
       metadata,
       {:tincture_invoke_stopped, metadata, measurements}
     )
-  end
-
-  def handle_event([:prism, :aqua, :approval], measurements, metadata, _config) do
-    safe_broadcast("prism:aqua_approvals", metadata, {:aqua_approval, metadata, measurements})
   end
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok

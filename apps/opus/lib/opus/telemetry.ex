@@ -198,60 +198,6 @@ defmodule Opus.Telemetry do
   end
 
   @doc """
-  Emit `[:cyfr, :opus, :formula, :invoke]` event when a formula invokes a sub-component.
-
-  ## Measurements
-
-  - `system_time` - System time when invocation occurred (native time unit)
-
-  ## Metadata
-
-  - `parent_execution_id` - The formula's execution ID
-  - `child_execution_id` - The sub-component's execution ID
-  - `component_ref` - The sub-component reference string
-  - `status` - Outcome (:ok or :error)
-  """
-  @spec formula_invoke(String.t(), String.t() | nil, String.t(), atom()) :: :ok
-  def formula_invoke(parent_execution_id, child_execution_id, component_ref, status) do
-    :telemetry.execute(
-      [:cyfr, :opus, :formula, :invoke],
-      %{system_time: System.system_time()},
-      %{
-        parent_execution_id: parent_execution_id,
-        child_execution_id: child_execution_id,
-        component_ref: component_ref,
-        status: status
-      }
-    )
-  end
-
-  @doc """
-  Emit `[:cyfr, :opus, :formula, :batch]` event when a formula launches a parallel batch.
-
-  ## Measurements
-
-  - `system_time` - System time when batch was created (native time unit)
-
-  ## Metadata
-
-  - `parent_execution_id` - The formula's execution ID
-  - `batch_handle` - The batch handle string
-  - `count` - Number of invocations in the batch
-  """
-  @spec formula_batch(String.t(), String.t(), non_neg_integer()) :: :ok
-  def formula_batch(parent_execution_id, batch_handle, count) do
-    :telemetry.execute(
-      [:cyfr, :opus, :formula, :batch],
-      %{system_time: System.system_time()},
-      %{
-        parent_execution_id: parent_execution_id,
-        batch_handle: batch_handle,
-        count: count
-      }
-    )
-  end
-
-  @doc """
   Emit `[:cyfr, :opus, :mcp_tool, :call]` event when a formula calls an MCP tool.
 
   ## Measurements

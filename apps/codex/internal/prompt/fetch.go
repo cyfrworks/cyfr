@@ -202,43 +202,6 @@ func FetchVersions(client *mcp.Client, name, namespace, componentType string) ([
 	return versions, nil
 }
 
-// FetchSecrets calls secret list and returns options for selection.
-func FetchSecrets(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("secret", map[string]any{
-		"action": "list",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch secrets: %w", err)
-	}
-	return extractOptions(result, "secrets", "name", "name")
-}
-
-// FetchGrantedSecrets returns the names of secrets already granted to a component.
-func FetchGrantedSecrets(client *mcp.Client, componentRef string) ([]string, error) {
-	result, err := client.CallTool("secret", map[string]any{
-		"action":        "list_component_grants",
-		"component_ref": componentRef,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch granted secrets: %w", err)
-	}
-	secrets, ok := result["granted_secrets"]
-	if !ok {
-		return nil, nil
-	}
-	arr, ok := secrets.([]any)
-	if !ok {
-		return nil, nil
-	}
-	names := make([]string, 0, len(arr))
-	for _, v := range arr {
-		if s, ok := v.(string); ok {
-			names = append(names, s)
-		}
-	}
-	return names, nil
-}
-
 // FetchKeys calls key list and returns options for selection.
 func FetchKeys(client *mcp.Client) ([]Option, error) {
 	result, err := client.CallTool("key", map[string]any{
@@ -259,17 +222,6 @@ func FetchPermissionSubjects(client *mcp.Client) ([]Option, error) {
 		return nil, fmt.Errorf("fetch permissions: %w", err)
 	}
 	return extractOptions(result, "permissions", "subject", "subject")
-}
-
-// FetchPolicies calls policy list and returns options for selection.
-func FetchPolicies(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("policy", map[string]any{
-		"action": "list",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fetch policies: %w", err)
-	}
-	return extractOptions(result, "policies", "component_ref", "component_ref")
 }
 
 // FetchGuides calls aqua list and returns options for selection.

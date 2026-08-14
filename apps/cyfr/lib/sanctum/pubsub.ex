@@ -21,7 +21,6 @@ defmodule Sanctum.PubSub do
   - `"prism:executions"` — Prism execution list updates
   - `"prism:components"` — Prism component list updates
   - `"prism:requests"` — Prism request log updates
-  - `"prism:system"` — Prism system metrics
 
   The `"sanctum:sessions"` topic is intentionally global (not routed
   through `topic/2`) because it is an internal auth signal only.

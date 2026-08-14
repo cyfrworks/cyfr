@@ -50,14 +50,6 @@ defmodule Prism.TelemetryBridgeTest do
       assert_receive {:request, %{method: "tools/call"}, %{count: 1}}
     end
 
-    test "broadcasts auth events to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:system"))
-
-      :telemetry.execute([:cyfr, :sanctum, :auth], %{count: 1}, %{user: "test"})
-
-      assert_receive {:auth_event, %{user: "test"}, %{count: 1}}
-    end
-
     test "broadcasts policy decisions to enforcement subscribers" do
       Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:enforcement"))
 
@@ -93,7 +85,6 @@ defmodule Prism.TelemetryBridgeTest do
         {[:cyfr, :opus, :execute, :stop], "prism-execution_stop"},
         {[:cyfr, :opus, :execute, :exception], "prism-execution_exception"},
         {[:cyfr, :emissary, :request], "prism-request"},
-        {[:cyfr, :sanctum, :auth], "prism-auth"},
         {[:cyfr, :sanctum, :policy, :decision], "prism-policy_decision"}
       ]
 

@@ -29,12 +29,9 @@ defmodule Sanctum.VaultReader do
   requested scopes must be a subset of what the entry was authorized
   for, because an issued token cannot be attenuated after the fact.
 
-  ## The retired v1 pointer
-
-  A pre-capability-model sealed payload could be a v1 **pointer** into the
-  now-deleted secret/OAuth stores rather than material. Those stores are gone,
-  so a v1 pointer resolves to `{:error, :legacy_pointer_retired}` — it can
-  dispense nothing. `vault.rotate` with fresh material is the converter.
+  A retired pre-capability-model v1 pointer payload decodes to
+  `{:error, :legacy_pointer_retired}` inside `Sanctum.Vault.Payload` itself —
+  nothing here needs to know that document shape existed.
   """
 
   require Logger
@@ -110,7 +107,6 @@ defmodule Sanctum.VaultReader do
       Arca.VaultStorage.touch_last_used(org_id, entry.id)
       {:ok, fields}
     else
-      {:ok, _other_version} -> {:error, :legacy_pointer_retired}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -200,11 +196,6 @@ defmodule Sanctum.VaultReader do
     {:ok, projected}
   end
 
-  # The legacy stores are gone; a v1 pointer cannot dispense anything.
-  # vault.rotate with fresh material is the converter.
-  defp resolve_secrets(_ctx, _entry, %{"legacy" => _}, _fields),
-    do: {:error, :legacy_pointer_retired}
-
   defp resolve_secrets(_ctx, _entry, payload, _fields), do: {:error, {:invalid_payload, payload}}
 
   # ---------------------------------------------------------------------------
@@ -212,7 +203,7 @@ defmodule Sanctum.VaultReader do
   # ---------------------------------------------------------------------------
 
   defp check_provider_hint(%{provider_hint: hint}, provider)
-       when hint in [nil, "", "legacy"],
+       when hint in [nil, ""],
        do: check_provider_hint_ok(provider)
 
   defp check_provider_hint(%{provider_hint: hint}, provider) when hint == provider,
@@ -241,13 +232,6 @@ defmodule Sanctum.VaultReader do
       %{} = oauth -> Sanctum.Vault.OAuth.dispense(entry, oauth, provider)
       _ -> {:error, :no_oauth_material}
     end
-  end
-
-  defp resolve_oauth(_ctx, _entry, %{"legacy" => %{"oauth" => pointers}}, _provider)
-       when is_list(pointers) do
-    # The callee-keyed token plane is gone; a legacy OAuth pointer cannot
-    # dispense. Re-authorize the Connection (vault.authorize) to convert.
-    {:error, :legacy_pointer_retired}
   end
 
   defp resolve_oauth(_ctx, _entry, payload, _provider), do: {:error, {:invalid_payload, payload}}

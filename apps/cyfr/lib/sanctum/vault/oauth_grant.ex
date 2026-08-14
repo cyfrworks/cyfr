@@ -159,7 +159,7 @@ defmodule Sanctum.Vault.OAuthGrant do
 
           provider =
             case entry.provider_hint do
-              hint when is_binary(hint) and hint not in ["", "legacy"] -> hint
+              hint when is_binary(hint) and hint != "" -> hint
               _ -> endpoints["provider"] || ""
             end
 

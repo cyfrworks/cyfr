@@ -7,10 +7,10 @@ defmodule Sanctum.Vault.PayloadTest do
   alias Sanctum.Vault.Payload
 
   describe "decode/1" do
-    test "accepts a v1 legacy pointer" do
+    test "refuses the retired v1 pointer document" do
       json = ~s({"v":1,"legacy":{"secrets":[{"name":"K","scope":"project"}],"oauth":[]}})
 
-      assert {:ok, %{"v" => 1}} = Payload.decode(json)
+      assert {:error, :legacy_pointer_retired} = Payload.decode(json)
     end
 
     test "accepts v2 material with and without oauth" do
@@ -33,7 +33,10 @@ defmodule Sanctum.Vault.PayloadTest do
                Payload.decode(~s({"v":2,"fields":{},"oauth":{"refresh_token":"r"}}))
 
       assert {:error, {:invalid_payload, _}} = Payload.decode("not json")
-      assert {:error, {:invalid_payload, _}} = Payload.decode(~s({"v":1,"legacy":{"other":[]}}))
+
+      # ANY v1 document — well-formed or not — is the retired pointer shape.
+      assert {:error, :legacy_pointer_retired} =
+               Payload.decode(~s({"v":1,"legacy":{"other":[]}}))
     end
   end
 
