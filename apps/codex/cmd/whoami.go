@@ -195,11 +195,3 @@ func personalSlug(registry map[string]any) string {
 	slug, _ := personal["slug"].(string)
 	return slug
 }
-
-func printField(label string, v any) {
-	s, ok := v.(string)
-	if !ok || s == "" {
-		return
-	}
-	fmt.Printf("%s: %s\n", label, s)
-}
