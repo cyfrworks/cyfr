@@ -33,7 +33,7 @@ standard MCP protocol. External server tools appear alongside built-in
 tools in tools/list as server_name:tool_name.
 
 Config uses the same JSON format as mcp.json entries. Header values
-can reference stored secrets with the secret: prefix.`,
+can reference a stored Connection with the vault: prefix.`,
 }
 
 var mcpAddCmd = &cobra.Command{
@@ -43,8 +43,8 @@ var mcpAddCmd = &cobra.Command{
 in the same format as an mcp.json server entry. The server is initialized
 immediately and its tools are discovered.
 
-Header values can reference stored secrets with the secret: prefix.`,
-	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"secret:NOTION_KEY"}}'
+Header values can reference a stored Connection with the vault: prefix.`,
+	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
   cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'`,
 	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {

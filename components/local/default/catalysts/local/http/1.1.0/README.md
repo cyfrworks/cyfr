@@ -64,12 +64,12 @@ Issues an HTTP HEAD request. Returns status and headers without downloading the 
 ## Setup
 
 ```bash
-cyfr setup c:local.web
+cyfr profile grant c:local.web
 ```
 
 | What | Value |
 |------|-------|
-| Secrets | None |
+| Connections | None |
 | Domains | `*` (all) |
 
 ## Usage

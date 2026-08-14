@@ -17,7 +17,7 @@ var removeCmd = &cobra.Command{
 	Use:     "remove [type] [reference]",
 	Short:   "Remove a component [interactive]",
 	GroupID: "component",
-	Long:    "Remove a component from the local registry. Also removes its associated policies and secret grants.\nRun without arguments for interactive selection.",
+	Long:    "Remove a component from the local registry. Also revokes its profiles and consents.\nRun without arguments for interactive selection.",
 	Example: `  cyfr remove c:local.claude:0.2.0
   cyfr remove r local.sentiment:1.0.0
   cyfr remove`,

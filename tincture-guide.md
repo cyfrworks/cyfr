@@ -1,12 +1,12 @@
 # Tincture Reference
 
-Build, test, and deploy tinctures for CYFR. Tinctures are full-stack frontend experiences (HTML/JS/CSS) that invoke CYFR components as their backend. Unlike WASM components, tinctures run in the browser — they call backend components via `cyfr.invoke()` and CYFR handles execution, secrets, and policy enforcement server-side.
+Build, test, and deploy tinctures for CYFR. Tinctures are full-stack frontend experiences (HTML/JS/CSS) that invoke CYFR components as their backend. Unlike WASM components, tinctures run in the browser — they call backend components via `cyfr.invoke()` and CYFR handles execution, credentials, and consent enforcement server-side.
 
 ---
 
 ## Architecture
 
-Tinctures are served at `/t/:publisher/:name`. They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving secrets, enforcing policy), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
+Tinctures are served at `/t/:publisher/:name`. They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving Connections, enforcing the consented authority), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
 
 ### Private vs Public
 
@@ -15,11 +15,11 @@ Tinctures are **private by default** — only authenticated users can access the
 | | Private | Public |
 |---|---|---|
 | **Access** | Authenticated users only | Anyone |
-| **How to set** | Default | `policy.set` or `tincture_visibility.set` MCP tool |
-| **Invoke rate limit** | Policy-configured (default 100/min per user) | Policy-configured (default 100/min per IP) |
+| **How to set** | Default | `tincture_visibility.set` MCP tool |
+| **Invoke rate limit** | Consent-configured (default 100/min per user) | Consent-configured (default 100/min per IP) |
 | **`cyfr.invoke()`** | Works the same | Works the same |
 
-The `tincture.public` field in the manifest is a **metadata hint only** — actual access control is managed via the policy system (`is_public` field). Use `policy.set` with `component_type: "tincture"` or the `tincture_visibility.set` convenience tool.
+The `tincture.public` field in the manifest is a **metadata hint only** — actual access control is the stored `is_public` visibility flag. Set it with the `tincture_visibility.set` MCP tool (or `cyfr tincture visibility set`).
 
 ---
 
@@ -132,7 +132,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 | `entry` | string | `"index.html"` | Entry point file |
 | `icon` | string | `"palette"` | Glyph fallback used by the picker when no `public/media/icon.{svg,png}` exists. Accepts an emoji (e.g. `"🎮"`) or a Lucide icon name (e.g. `"palette"`) |
 | `tagline` | string | — | Short one-line tagline shown under the title in the Porta tincture picker. Distinct from `description`, which is used as the card title |
-| `public` | boolean | `false` | Metadata hint. Actual public access is controlled via the policy system (`is_public` field) — set with `policy.set` or `tincture_visibility.set` MCP tool |
+| `public` | boolean | `false` | Metadata hint. Actual public access is the stored `is_public` visibility flag — set with the `tincture_visibility.set` MCP tool |
 | `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
 | `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
 | `sandbox` | object | `{}` | iframe sandbox config — `allow_scripts` only (no `allow_same_origin`) |
@@ -173,7 +173,7 @@ Both SVG and PNG are accepted. Keep individual files under ~500 KB to keep the p
 
 **`cyfr new tincture`** scaffolds both placeholder files for you. Replace them with your real artwork — the picker updates automatically on the next refresh, no manifest edits.
 
-**Escape hatch for non-standard layouts:** if you must keep media files outside `public/media/`, the legacy `tincture.media.icon` and `tincture.media.previews` manifest fields still work and override discovery. You almost certainly don't need them — and the docs and scaffold no longer mention them for new tinctures.
+**Escape hatch for non-standard layouts:** if you must keep media files outside `public/media/`, the `tincture.media.icon` and `tincture.media.previews` manifest fields override discovery. You almost certainly don't need them — and the docs and scaffold no longer mention them for new tinctures.
 
 ### `dependencies.static` Block
 
@@ -263,7 +263,7 @@ Tinctures run in a sandboxed iframe (`sandbox="allow-scripts"`, no `allow-same-o
 | Max query rows | 1,000 | Response includes `truncated: true`, excess rows dropped |
 | Query timeout | 2,000ms | Returns `"query timeout exceeded"` error |
 | DB size | 50MB | Writes rejected beyond limit |
-| Rate limit | 100 req/min (default, policy-configurable) | HTTP 429 / `"rate_limited"` error. Public: per IP. Private: per user |
+| Rate limit | 100 req/min (default; the consented node limits configure it) | HTTP 429 / `"rate_limited"` error. Public: per IP. Private: per user |
 | SDK request timeout | 30 seconds | Promise rejects with `"Request timed out"` |
 | Query cache TTL | 30s default | Override with `cache_ttl` in manifest query definition |
 | Allowed asset extensions | `.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map` | Other extensions return 404 |
@@ -432,9 +432,9 @@ All tinctures are served from a unified `/t/` path. Public tinctures are accessi
 - **No secrets in responses** — component output is secret-masked before returning to the browser
 - **Sandbox iframe** — `allow-scripts` only, no `allow-same-origin`
 - **Sensitive file denylist** — `cyfr-manifest.json`, `schema.sql`, dotfiles never served
-- **Policy-managed** — tinctures use the same policy system as other component types for rate limits and visibility (`is_public`). Configurable via `policy.set` or `tincture_visibility.set` MCP tool
+- **Visibility- and rate-managed** — invoke rate limits come from the consented node limits; visibility (`is_public`) is set with the `tincture_visibility.set` MCP tool
 - **No `sessionStorage`/`localStorage`** — sandboxed iframes without `allow-same-origin` cannot access browser storage; store state in memory or via backend components
-- **Rate limited** — default 100 req/min (policy-configurable). Public: per IP. Private: per user. Clamped by platform ceiling
+- **Rate limited** — default 100 req/min (consent-configured). Public: per IP. Private: per user. Clamped by platform ceiling
 
 ### Invoke Formulas, Not Raw Catalysts
 
@@ -470,8 +470,8 @@ Why formulas are safer:
 | Error | Context | Fix |
 |-------|---------|-----|
 | `component not in dependencies` | Invoke ref not in manifest deps | Add the component to `dependencies.static` in `cyfr-manifest.json` |
-| `Rate limit exceeded` | Public tincture hit rate limit | Wait for `Retry-After` header value. Limit is policy-configurable (default 100/min) |
-| `rate_limited` | Private tincture hit rate limit | Reduce invoke frequency or batch requests in a formula. Limit is policy-configurable |
+| `Rate limit exceeded` | Public tincture hit rate limit | Wait for `Retry-After` header value. Limit is consent-configured (default 100/min) |
+| `rate_limited` | Private tincture hit rate limit | Reduce invoke frequency or batch requests in a formula. Limit is consent-configured |
 | `Request timed out` | SDK got no response in 30s | Check if shell is responsive, check component execution time |
 | Blank page / nothing renders | Inline `<script>` blocked by CSP | Move all JS to external `.js` files |
 | 404 on asset | File extension not in allowlist | Only `.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map` are served |
@@ -485,7 +485,7 @@ Why formulas are safer:
 - [ ] **No inline `<script>` blocks** — all JS in external `.js` files loaded via `<script src="...">`
 - [ ] `cyfr.ready()` called in the external JS (SDK is auto-injected — no `<script>` tag needed for SDK)
 - [ ] All queries use named params (`:param`), never string concatenation
-- [ ] `tincture.public` matches intended visibility (actual access controlled via `policy.set` or `tincture_visibility.set` MCP tool)
+- [ ] `tincture.public` matches intended visibility (actual access controlled via the `tincture_visibility.set` MCP tool)
 - [ ] If public: tested both authenticated and unauthenticated access at `/t/:publisher/:name`
 - [ ] For React tinctures: `vite.config.ts` uses `base: "./"` (required for subpath serving)
 - [ ] For React tinctures: `cyfr build compile t:local.<name>:<version>` succeeds before registering

@@ -129,15 +129,15 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | Scope | What It Allows |
 |-------|----------------|
 | `execute` | Run components, manage schedules, compile builds |
-| `secrets_read` | Read/list secrets and grants |
-| `secrets_write` | Create/delete secrets, grant/revoke access |
+| `secrets_read` | Read stored credential metadata (Connections; material never leaves the vault) |
+| `secrets_write` | Store/replace provider credentials (e.g. `oauth set_client`) |
 | `component_read` | Get component blobs, discover components |
 | `component_manage` | Pull, push, register, remove, scaffold components |
-| `policy_read` | View policies, ceilings, type defaults |
-| `policy_manage` | Set/update/delete policies and type defaults |
+| `policy_read` | View limit ceilings and type defaults |
+| `policy_manage` | Manage limit ceilings and type defaults |
 | `users_read` | View permissions |
 | `users_manage` | Set permissions |
-| `storage_read` | View execution records, MCP logs, policy logs, retention config |
+| `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies |
 | `execution_write` | Service-level execution management |
 | `admin` | API key management, retention cleanup, session operations, force-release |
@@ -410,7 +410,7 @@ Most tool calls require authentication (session login or API key). The following
 
 When an auth provider **is** configured, this anonymous surface narrows: component browsing requires sign-in, so only `component` `categories` and `setup_plan` stay public (alongside `session`, `aqua` `list`/`get`, the registry bootstrap actions, and `system status`).
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `secret.*`, `oauth.*`, `key.*`, `permission.*`, `policy.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `permission.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -1001,7 +1001,7 @@ Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`,
 
 Tinctures don't have their own database. They get data two ways:
 
-- **Live data** — call your backend components from the browser with `cyfr.invoke()` (see the SDK in the [Tincture Guide](tincture-guide.md)). The component fetches from your real data source server-side and returns the result; secrets and policy are enforced for you.
+- **Live data** — call your backend components from the browser with `cyfr.invoke()` (see the SDK in the [Tincture Guide](tincture-guide.md)). The component fetches from your real data source server-side and returns the result; credentials and consent are enforced for you.
 - **Static seed data** — ship a `data.db` (or any file) as a static asset in the tincture and read it client-side. It's just another shipped file; CYFR serves it like any other asset.
 
 A typical live-data pipeline:

@@ -18,7 +18,7 @@ var callCmd = &cobra.Command{
 	Long:    "Directly invoke any registered MCP tool by name, passing an optional JSON object as arguments. Useful for debugging, scripting, and accessing tools that don't have a dedicated CLI command.",
 	Example: `  cyfr call system '{"action":"status"}'
   cyfr call component '{"action":"search","query":"sentiment"}'
-  cyfr call secret '{"action":"list"}'`,
+  cyfr call vault '{"action":"list"}'`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		toolName := args[0]

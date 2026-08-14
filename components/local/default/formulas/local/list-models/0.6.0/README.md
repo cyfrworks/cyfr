@@ -4,19 +4,21 @@ Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemi
 
 ## Prerequisites
 
-This formula invokes five sub-catalysts. Set up each one with `cyfr setup`:
+This formula invokes five sub-catalysts. Grant each one a profile with
+`cyfr profile grant` (or from the console's consent sheet):
 
 ```bash
-cyfr setup c:local.claude
-cyfr setup c:local.openai
-cyfr setup c:local.gemini
-cyfr setup c:local.grok
-cyfr setup c:local.openrouter
+cyfr profile grant c:local.claude
+cyfr profile grant c:local.openai
+cyfr profile grant c:local.gemini
+cyfr profile grant c:local.grok
+cyfr profile grant c:local.openrouter
 ```
 
-Each command reads the catalyst manifest and prompts for the API key, grants access, and applies the host policy.
+Each grant walks the catalyst's declared needs, binds the API-key Connection,
+and mints the consent the component runs under.
 
-| Catalyst | Secret | Domain |
+| Catalyst | Connection field | Domain |
 |----------|--------|--------|
 | Claude | `ANTHROPIC_API_KEY` | `api.anthropic.com` |
 | OpenAI | `OPENAI_API_KEY` | `api.openai.com` |

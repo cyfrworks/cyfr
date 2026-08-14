@@ -470,7 +470,7 @@ See `components/local/default/formulas/local/list-models/0.5.0` for a production
 
 The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Connections page).
 
-> The legacy `setup`, `oauth`, and `wasi` blocks are replaced by `needs` and `caps`. Registration rejects manifests still carrying them in the next major — see [Migrating from setup/oauth blocks](#migrating-from-setupoauth-blocks).
+> The retired `setup`, `oauth`, and `wasi` blocks are replaced by `needs` and `caps`. Registration rejects manifests still carrying them — see [Migrating from setup/oauth blocks](#migrating-from-setupoauth-blocks).
 
 ### Field Reference
 
@@ -871,7 +871,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr inspect` | `component` | `inspect` | `reference` |
 | `cyfr list` | `component` | `list` | `type` |
 | — | `component` | `setup_plan` | `reference` (shows the component's needs and whether each is bound + live) |
-| — | `tools` | `list` | `component_ref` (optional — filters by policy) |
+| — | `tools` | `list` | `component_ref` (optional — filters to the component's consented tool allowlist) |
 | `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `input` |
 | `cyfr schedule list` | `schedule` | `list` | `limit` |
 | `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
@@ -960,7 +960,7 @@ A consent covers every release of the component line unless the operator pins a 
 
 ## Migrating from setup/oauth blocks
 
-Registration rejects manifests still carrying `setup.policy`, `setup.secrets`, `oauth`, or `wasi` in the next major. The migration is mechanical; republish at a new version.
+Registration rejects manifests still carrying `setup.policy`, `setup.secrets`, `oauth`, or `wasi`. The migration is mechanical; republish at a new version.
 
 ### Field mapping
 

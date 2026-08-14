@@ -28,8 +28,8 @@ var rootCmd = &cobra.Command{
 	Short: "CYFR CLI — sandboxed component runtime for AI agents",
 	Long: `cyfr is the command-line interface for CYFR — a sandboxed runtime
 where AI agents execute WASM tools and serve tincture frontends via MCP.
-Use cyfr to manage components, secrets, policies, and executions from
-the terminal or scripts.`,
+Use cyfr to manage components, connections, consents, and executions
+from the terminal or scripts.`,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		// MCP spec: clients SHOULD send DELETE to terminate sessions on exit.
 		if activeClient != nil {

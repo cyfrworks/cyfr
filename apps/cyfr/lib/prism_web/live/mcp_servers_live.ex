@@ -9,7 +9,7 @@ defmodule PrismWeb.McpServersLive do
   @placeholder_config Jason.encode!(
                         %{
                           "url" => "https://mcp.example.com/mcp",
-                          "headers" => %{"Authorization" => "secret:MY_API_KEY"}
+                          "headers" => %{"Authorization" => "vault:my-connection"}
                         },
                         pretty: true
                       )
@@ -250,8 +250,9 @@ defmodule PrismWeb.McpServersLive do
               class="font-mono"
             />
             <p class="text-xs text-gray-600 mt-1">
-              Use <code class="text-gray-500">secret:NAME</code>
-              in header values to reference stored secrets.
+              Use <code class="text-gray-500">vault:CONNECTION</code>
+              in header values to reference a stored Connection
+              (create one on the Connections page).
             </p>
           </div>
           <div :if={@json_error} class="text-sm text-red-400">{@json_error}</div>

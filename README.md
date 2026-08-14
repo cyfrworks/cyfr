@@ -6,7 +6,7 @@
 
 Prompts can tell a model what not to do. CYFR controls what it can actually reach.
 
-CYFR is a self-hosted runtime for agents that call APIs, use data, and run workflows. If AI models are the new electricity, CYFR is the electrical system that routes that power through controlled circuits before it reaches your systems. The model proposes an action; CYFR checks it against policy; a sandboxed component performs it.
+CYFR is a self-hosted runtime for agents that call APIs, use data, and run workflows. If AI models are the new electricity, CYFR is the electrical system that routes that power through controlled circuits before it reaches your systems. The model proposes an action; CYFR checks it against the authority you consented to; a sandboxed component performs it.
 
 **The brain is rented; the keys stay with you.**
 
@@ -16,7 +16,7 @@ When a task becomes routine, run it as a reusable component instead of asking a 
 
 ## How CYFR works
 
-CYFR exposes components to agents as structured tools over [MCP](https://modelcontextprotocol.io/), avoiding brittle UI automation while the runtime handles secrets, policy enforcement, and execution records.
+CYFR exposes components to agents as structured tools over [MCP](https://modelcontextprotocol.io/), avoiding brittle UI automation while the runtime handles credentials, consent enforcement, and execution records.
 
 Components are the appliances in that system — purpose-built, sandboxed, and composable units:
 
@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes three surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, policies, connections, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
+- **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, enforcements, connections, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
 - **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, schedules, components, MCP servers, and settings.
 
 ## Quick Start
@@ -101,9 +101,9 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Ask AQUA** — AI agent harness with builder, artisan, explorer, planner, web, and arcade specialists for interactive component development and web research
 - **Executions** — monitor running and past executions in real-time
 - **Activities** — unified MCP-log + execution feed with request-anchored causal chains
-- **Components** — browse registered components and their policies
+- **Components** — browse registered components and their consent profiles
 - **Builds** — compilation tracking and history
-- **Policies / Enforcements** — host policies and enforcement records
+- **Enforcements** — per-execution enforcement decisions and audit records
 - **Connections** — manage sealed credential Connections and the consent grants that bind them to components
 - **API Keys** — create and manage tiered API keys for external access
 - **Schedules** — cron-based recurring component execution
@@ -289,7 +289,7 @@ Connect external MCP-compatible servers (Context7, GitHub, custom tools) to make
 ```bash
 # Add an external server (config is a JSON object)
 cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
-cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"secret:NOTION_KEY"}}'
+cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
 
 # Test the connection
 cyfr mcp test github
@@ -300,7 +300,9 @@ cyfr mcp list
 # Server tools appear as github:tool_name in your tool list
 ```
 
-Header values support secret references (`secret:KEY_NAME`) so credentials stay encrypted.
+Header values support vault references (`vault:CONNECTION_NAME`) — the named Connection's
+single field is resolved at request time, so credentials stay encrypted at rest and never
+appear in the server config.
 
 ## Deploy to a Server
 
@@ -537,10 +539,9 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr build toolchains` | List available build toolchains |
 | `cyfr search <query>` | Search the component registry |
 | `cyfr list` | List installed components |
-| `cyfr inspect <ref>` | Show component details, policy, and dependency tree `[i]` |
+| `cyfr inspect <ref>` | Show component details, declared needs/caps, and dependency tree `[i]` |
 | `cyfr pull <ref>` | Fetch a component and its dependencies from the registry |
 | `cyfr register` | Scan and register all local components (auto-pulls dependencies) |
-| `cyfr setup <ref>` | Legacy setup: secrets, grants, policy `[i]` — removed in the next major |
 | `cyfr profile grant <ref>` | Grant a component the connections it needs `[i]` |
 | `cyfr profile list <ref>` | Show a component's profiles and consent revisions |
 | `cyfr profile revoke <id>` | Revoke a profile, effective on the next run |
@@ -576,9 +577,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr secret set/get/list/delete` | Manage encrypted secrets (e.g. for MCP-server header references) `[i]` |
-| `cyfr secret grant/revoke` | Legacy component-secret grants `[i]` — replaced by Connections, removed in the next major |
-| `cyfr policy set/show/list/reset/effective` | Manage and inspect host policies `[i]` |
+| `cyfr call vault '{"action":"list",…}'` | Manage Connections (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Connections page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr permission get/set/list` | Manage RBAC permissions `[i]` |
 | `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Connections page |

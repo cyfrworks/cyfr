@@ -7,8 +7,8 @@ defmodule Sanctum.ToolServerDigest do
   what a consent's `tool_server` resource pins (§3.8).
 
   `JCS({url, enabled, header_templates, tool_patterns})` over the stored
-  header **templates** (`secret:NAME` references and non-credential
-  literals), never resolved values: rotating a referenced secret must
+  header **templates** (`vault:CONNECTION` references and non-credential
+  literals), never resolved values: rotating a referenced Connection must
   not move the digest, while re-pointing the URL or swapping a header
   reference must. There is deliberately no stored digest column — a
   stored digest is a cache someone forgets to recompute; deriving at

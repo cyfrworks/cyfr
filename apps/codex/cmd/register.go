@@ -19,8 +19,8 @@ var registerCmd = &cobra.Command{
 	GroupID: "component",
 	Long: `Scan the components/ directory for local components (catalysts, reagents,
 formulas, and tinctures) and register them in the Compendium registry, making
-them available for search and execution. Run 'cyfr setup' afterwards to
-configure secrets and policies for WASM components.`,
+them available for search and execution. Run 'cyfr profile grant <ref>'
+afterwards to consent a component's declared needs before it can run.`,
 	Example: `  cyfr register
   cyfr register --json`,
 	Args: cobra.NoArgs,
