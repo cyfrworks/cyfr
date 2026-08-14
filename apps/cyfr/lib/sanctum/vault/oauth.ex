@@ -242,26 +242,44 @@ defmodule Sanctum.Vault.OAuth do
   end
 
   @doc false
+  # The token URL is caller-supplied (vault.create / vault.rebind
+  # oauth_endpoints), so this POST rides the pinned SSRF path like every
+  # other outbound request: resolve-validate once, connect to the validated
+  # IP, never follow redirects. Private targets follow the deployment-wide
+  # posture — a single-operator install may run an internal IdP; once an
+  # auth provider is configured, private IPs refuse and the exchange must
+  # ride https.
   def http_post(url, headers, body) do
-    req = Finch.build(:post, url, headers, body)
+    multi_user? = Sanctum.auth_configured?()
 
-    # Credential-bearing provider HTTP rides the sanctum-owned pool, never
-    # Compendium's — registry pull/publish bursts must not contend with
-    # token refresh, and the pool split is the supervision-level statement
-    # of that boundary (see the Finch children in Cyfr.Application).
-    case Finch.request(req, Sanctum.Auth.Finch, receive_timeout: 15_000, request_timeout: 20_000) do
-      {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
-        case Jason.decode(resp_body) do
-          {:ok, data} -> {:ok, data}
-          {:error, _} -> {:error, "invalid JSON response from token endpoint"}
-        end
+    with :ok <- require_https(url, multi_user?) do
+      case Cyfr.Network.pinned_request(:post, url, headers, body,
+             allow_private: not multi_user?,
+             receive_timeout: 15_000
+           ) do
+        {:ok, status, _resp_headers, resp_body} when status in 200..299 ->
+          case Jason.decode(resp_body) do
+            {:ok, data} -> {:ok, data}
+            {:error, _} -> {:error, "invalid JSON response from token endpoint"}
+          end
 
-      {:ok, %Finch.Response{status: status}} ->
-        {:error, "token exchange failed (status #{status})"}
+        {:ok, status, _resp_headers, _resp_body} ->
+          {:error, "token exchange failed (status #{status})"}
 
-      {:error, reason} ->
-        Logger.warning("[Sanctum.Vault.OAuth] HTTP request failed: #{inspect(reason)}")
-        {:error, "token endpoint unreachable"}
+        {:error, reason} ->
+          Logger.warning("[Sanctum.Vault.OAuth] HTTP request failed: #{inspect(reason)}")
+          {:error, "token endpoint unreachable"}
+      end
+    end
+  end
+
+  defp require_https(_url, false), do: :ok
+
+  defp require_https(url, true) do
+    if String.starts_with?(url, "https://") do
+      :ok
+    else
+      {:error, "token_url must use https://"}
     end
   end
 

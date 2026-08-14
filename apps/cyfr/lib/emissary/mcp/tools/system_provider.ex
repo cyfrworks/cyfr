@@ -355,37 +355,35 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
 
   defp send_webhook(target, notification) do
-    with :ok <- Cyfr.Network.validate_redirect_url(target) do
-      case Jason.encode(notification) do
-        {:error, _} ->
-          {:error, "Failed to encode webhook payload"}
+    case Jason.encode(notification) do
+      {:error, _} ->
+        {:error, "Failed to encode webhook payload"}
 
-        {:ok, body} ->
-          headers = [
-            {~c"Content-Type", ~c"application/json"},
-            {~c"User-Agent", ~c"CYFR/0.1.0"}
-          ]
+      {:ok, body} ->
+        headers = [
+          {"content-type", "application/json"},
+          {"user-agent", "CYFR/0.1.0"}
+        ]
 
-          case :httpc.request(
-                 :post,
-                 {String.to_charlist(target), headers, ~c"application/json",
-                  String.to_charlist(body)},
-                 [{:timeout, 10_000}, {:connect_timeout, 5_000}],
-                 []
-               ) do
-            {:ok, {{_version, status_code, _reason}, _headers, _body}} ->
-              Logger.debug("Webhook sent to #{target}: status #{status_code}")
-              {:ok, status_code}
+        # The pinned path resolves-validates once, connects to the validated
+        # IP, and never follows redirects — a target that 302s toward a
+        # metadata endpoint goes nowhere. Private targets stay blocked
+        # unconditionally, as they always were on this surface.
+        case Cyfr.Network.pinned_request(:post, target, headers, body,
+               receive_timeout: 10_000
+             ) do
+          {:ok, status_code, _resp_headers, _resp_body} ->
+            Logger.debug("Webhook sent to #{target}: status #{status_code}")
+            {:ok, status_code}
 
-            {:error, reason} ->
-              Logger.warning("Webhook failed to #{target}: #{inspect(reason)}")
-              {:error, inspect(reason)}
-          end
-      end
-    else
-      {:error, reason} ->
-        Logger.warning("[SystemProvider] Webhook URL blocked: #{reason}")
-        {:error, "Webhook URL validation failed: #{reason}"}
+          {:error, reason} when is_binary(reason) ->
+            Logger.warning("[SystemProvider] Webhook URL blocked: #{reason}")
+            {:error, "Webhook URL validation failed: #{reason}"}
+
+          {:error, reason} ->
+            Logger.warning("Webhook failed to #{target}: #{inspect(reason)}")
+            {:error, inspect(reason)}
+        end
     end
   end
 

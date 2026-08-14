@@ -122,6 +122,45 @@ defmodule Cyfr.NetworkTest do
       assert Network.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE})
     end
 
+    test "IPv4 CGNAT (100.64.0.0/10, RFC 6598)" do
+      assert Network.private_ip?({100, 64, 0, 1})
+      assert Network.private_ip?({100, 127, 255, 255})
+      refute Network.private_ip?({100, 63, 255, 255})
+      refute Network.private_ip?({100, 128, 0, 0})
+    end
+
+    test "IPv4 reserved blocks" do
+      # 192.0.0.0/24 IETF protocol assignments
+      assert Network.private_ip?({192, 0, 0, 170})
+      refute Network.private_ip?({192, 0, 1, 1})
+      # 198.18.0.0/15 benchmarking
+      assert Network.private_ip?({198, 18, 0, 1})
+      assert Network.private_ip?({198, 19, 255, 255})
+      refute Network.private_ip?({198, 20, 0, 1})
+      # multicast + reserved + broadcast
+      assert Network.private_ip?({224, 0, 0, 251})
+      assert Network.private_ip?({239, 255, 255, 255})
+      assert Network.private_ip?({240, 0, 0, 1})
+      assert Network.private_ip?({255, 255, 255, 255})
+      refute Network.private_ip?({223, 255, 255, 255})
+    end
+
+    test "NAT64 well-known prefix embeds the IPv4 verdict (64:ff9b::/96)" do
+      # 64:ff9b::a9fe:a9fe ≡ 169.254.169.254 behind a NAT64 gateway
+      assert Network.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE})
+      # 64:ff9b::a00:1 ≡ 10.0.0.1
+      assert Network.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
+      # 64:ff9b::808:808 ≡ 8.8.8.8 — public stays public
+      refute Network.private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, 0x0808, 0x0808})
+    end
+
+    test "6to4 embeds the IPv4 verdict (2002::/16)" do
+      # 2002:a9fe:a9fe:: ≡ 169.254.169.254
+      assert Network.private_ip?({0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1})
+      # 2002:808:808:: ≡ 8.8.8.8
+      refute Network.private_ip?({0x2002, 0x0808, 0x0808, 0, 0, 0, 0, 1})
+    end
+
     test "IPv6 public" do
       refute Network.private_ip?({0x2607, 0xF8B0, 0x4004, 0x800, 0, 0, 0, 0x200E})
     end

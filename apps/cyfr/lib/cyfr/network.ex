@@ -24,7 +24,7 @@ defmodule Cyfr.Network do
 
   import Bitwise
 
-  # Private IPv4 ranges (CIDR notation as {base, mask} tuples)
+  # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
   @private_ranges [
     # 127.0.0.0/8 - loopback
     {bsl(127, 24), 0xFF000000},
@@ -37,7 +37,18 @@ defmodule Cyfr.Network do
     # 169.254.0.0/16 - link-local / cloud metadata
     {bsl(169, 24) + bsl(254, 16), 0xFFFF0000},
     # 0.0.0.0/8 - current network
-    {0, 0xFF000000}
+    {0, 0xFF000000},
+    # 100.64.0.0/10 - CGNAT (RFC 6598); internal service ranges on several
+    # clouds and overlay networks
+    {bsl(100, 24) + bsl(64, 16), 0xFFC00000},
+    # 192.0.0.0/24 - IETF protocol assignments (RFC 6890)
+    {bsl(192, 24), 0xFFFFFF00},
+    # 198.18.0.0/15 - benchmarking (RFC 2544)
+    {bsl(198, 24) + bsl(18, 16), 0xFFFE0000},
+    # 224.0.0.0/4 - multicast
+    {bsl(224, 24), 0xF0000000},
+    # 240.0.0.0/4 - reserved, includes 255.255.255.255 broadcast
+    {bsl(240, 24), 0xF0000000}
   ]
 
   @doc """
@@ -239,6 +250,18 @@ defmodule Cyfr.Network do
 
   # IPv4-mapped IPv6 (::ffff:x.x.x.x) — delegate to IPv4 check
   def private_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
+    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
+  end
+
+  # NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) — the embedded IPv4
+  # decides. Without this, 64:ff9b::a9fe:a9fe reaches 169.254.169.254
+  # through a NAT64 gateway.
+  def private_ip?({0x64, 0xFF9B, 0, 0, 0, 0, ab, cd}) do
+    private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
+  end
+
+  # 6to4 2002::/16 (RFC 3056) — the embedded IPv4 decides.
+  def private_ip?({0x2002, ab, cd, _, _, _, _, _}) do
     private_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
   end
 
