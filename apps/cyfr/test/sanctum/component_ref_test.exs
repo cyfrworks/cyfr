@@ -215,9 +215,9 @@ defmodule Sanctum.ComponentRefTest do
                ComponentRef.normalize("c:local.my-tool:0.1.0")
     end
 
-    test "rejects typed ref with latest version (normalized to nil)" do
+    test "rejects a typed ref with a literal 'latest' version token" do
       assert {:error, msg} = ComponentRef.normalize("c:local.my-tool:latest")
-      assert msg =~ "version must be explicit"
+      assert msg =~ "'latest' is not a version"
     end
 
     test "returns error for empty" do
@@ -318,9 +318,9 @@ defmodule Sanctum.ComponentRefTest do
       assert msg =~ "version must be valid semver"
     end
 
-    test "rejects version-less ref (latest normalized to nil)" do
+    test "rejects a literal 'latest' version token" do
       assert {:error, msg} = ComponentRef.validate("c:local.my-tool:latest")
-      assert msg =~ "version is required"
+      assert msg =~ "'latest' is not a version"
     end
 
     test "rejects non-string input" do
@@ -592,13 +592,9 @@ defmodule Sanctum.ComponentRefTest do
     end
   end
 
-  # ============================================================================
-  # backward compat: "latest" string normalizes to nil
-  # ============================================================================
-
-  describe "backward compat: latest string" do
-    test "parse normalizes 'latest' to nil in typed ref" do
-      assert {:ok, %ComponentRef{version: nil}} = ComponentRef.parse("c:local.claude:latest")
+  describe "the version segment has one spelling" do
+    test "'latest' is not a version token — omit the segment instead" do
+      assert {:error, _} = ComponentRef.parse("c:local.claude:latest")
     end
   end
 

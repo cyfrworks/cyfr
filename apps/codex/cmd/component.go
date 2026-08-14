@@ -90,13 +90,8 @@ var searchCmd = &cobra.Command{
 			reference := strVal(comp, "component_ref")
 			if reference == "" {
 				name := strVal(comp, "name")
-				// The server returns the owning slug in `namespace_slug`. Older
-				// server responses used `publisher`; keep it as a fallback for
-				// mixed-version deploys. The legacy `publisher_name` field is gone.
+				// The server returns the owning slug in `namespace_slug`.
 				publisher := strVal(comp, "namespace_slug")
-				if publisher == "" {
-					publisher = strVal(comp, "publisher")
-				}
 				if publisher != "" && name != "" {
 					reference = publisher + "." + name
 				} else if name != "" {

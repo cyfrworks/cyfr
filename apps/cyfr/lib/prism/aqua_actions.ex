@@ -54,18 +54,16 @@ defmodule Prism.AquaActions do
   @block_re ~r/```aqua-actions[ \t]*\r?\n(.*?)```/s
   @render_strip_re ~r/```aqua-actions[ \t]*\r?\n.*?(```|\z)/s
 
-  @default_allowed_routes ~w(
-    /
-    /activities /enforcements /executions /schedules
-    /components /builds /registry /tinctures
-    /connections /api-keys /webhooks /mcp-servers /settings
-    /reports /legal
-  )
+  # Live navigation targets, derived from the router at first use (see
+  # `allowed_routes/0`) so the allowlist cannot drift from what actually
+  # mounts. Redirect stubs and parameterized detail routes are excluded —
+  # an agent navigates to pages, not to individual records.
+  @excluded_routes ~w(/logs /logs/:id /components/:ref)
 
   @allowed_overlay_states ~w(half full)
-  # Hinted risk values agents may put in `ui.request_approval`. The harness
-  # ignores this advisory hint — it derives risk from the action's `kind`.
-  # Kept as an enum for backwards-compat parsing; intent shape unchanged.
+  # Risk values for `ui.request_approval`. Prism derives its own risk from
+  # the action's `kind`; Porta displays this field on the approval card, so
+  # the vocabulary is shared intent shape, not advisory decoration.
   @allowed_risks ~w(low medium high)
 
   @id_re ~r/^[\w.\-]+$/
@@ -384,7 +382,7 @@ defmodule Prism.AquaActions do
   end
 
   defp check_allowed_path(path) do
-    routes = Application.get_env(:cyfr, :aqua_actions_allowed_paths, @default_allowed_routes)
+    routes = Application.get_env(:cyfr, :aqua_actions_allowed_paths, allowed_routes())
 
     cond do
       path in routes -> :ok
@@ -397,6 +395,26 @@ defmodule Prism.AquaActions do
     case String.split(path, "?", parts: 2) do
       [base, _query] -> base in routes
       _ -> false
+    end
+  end
+
+  # GET-mounted router paths minus the exclusions — memoized, since the
+  # router's route table is fixed for the VM lifetime.
+  defp allowed_routes do
+    case :persistent_term.get({__MODULE__, :allowed_routes}, :miss) do
+      :miss ->
+        routes =
+          PrismWeb.Router.__routes__()
+          |> Enum.filter(&(&1.verb == :get and not String.contains?(&1.path, ":")))
+          |> Enum.map(& &1.path)
+          |> Enum.uniq()
+          |> Kernel.--(@excluded_routes)
+
+        :persistent_term.put({__MODULE__, :allowed_routes}, routes)
+        routes
+
+      routes ->
+        routes
     end
   end
 

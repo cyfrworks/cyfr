@@ -123,7 +123,12 @@ defmodule EmissaryWeb.WebhookController do
       org_id: webhook.org_id,
       project_id: webhook.project_id || "default",
       auth_method: :webhook,
+      # authenticated gates tool dispatch; anonymous gates credentials.
+      # A webhook context is not anonymous: the hook is operator-created
+      # and consented (profile_id is required at create), so its bound
+      # executions may read their vault material.
       authenticated: true,
+      anonymous: false,
       request_id: request_id
     )
   end

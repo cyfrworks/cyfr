@@ -311,7 +311,7 @@ defmodule Sanctum.ComponentRef do
 
   """
   @spec from_path(String.t()) :: {:ok, t()} | {:error, String.t()}
-  @component_type_dirs ~w(catalysts reagents formulas tinctures)
+  @component_type_dirs Enum.map(@valid_types, &(&1 <> "s"))
   def from_path(path) when is_binary(path) do
     parts = Path.split(path)
 
@@ -474,27 +474,33 @@ defmodule Sanctum.ComponentRef do
 
   # Parse "namespace.name:version" or "namespace.name" (remainder after type prefix stripped).
   # Split on LAST ':' for version, then LAST '.' for namespace/name.
-  # `version == "latest"` is normalized to `nil` to preserve existing semantics.
   defp parse_ns_name(ref) do
     {ns_name, version} = split_version(ref)
 
-    case split_last(ns_name, ".") do
-      {namespace, name} when namespace != "" and name != "" ->
-        {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
-
-      _ ->
+    cond do
+      # Omitting the version segment already means "latest" — a literal
+      # token would be a second spelling of the same request.
+      version == "latest" ->
         {:error,
-         "invalid component ref format: must be namespace.name[:version] " <>
-           "(e.g., local.my-tool:1.0.0 or stripe.com.api:0.1.0)"}
+         "'latest' is not a version — omit the version segment instead " <>
+           "(e.g., c:local.my-tool)"}
+
+      true ->
+        case split_last(ns_name, ".") do
+          {namespace, name} when namespace != "" and name != "" ->
+            {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
+
+          _ ->
+            {:error,
+             "invalid component ref format: must be namespace.name[:version] " <>
+               "(e.g., local.my-tool:1.0.0 or stripe.com.api:0.1.0)"}
+        end
     end
   end
 
   defp split_version(ref) do
     case split_last(ref, ":") do
       {ns_name, ""} ->
-        {ns_name, nil}
-
-      {ns_name, "latest"} ->
         {ns_name, nil}
 
       {ns_name, version} ->
