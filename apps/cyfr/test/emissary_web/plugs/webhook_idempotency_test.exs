@@ -82,14 +82,19 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotencyTest do
       assert is_binary(body["first_seen_at"])
     end
 
-    test "missing header on a webhook configured for it passes through (no fail-closed)",
+    test "missing header on a webhook configured for it is refused",
          %{ctx: ctx} do
+      # Configuring the header is the operator's statement that every real
+      # delivery carries it. Letting a header-less request through made the
+      # dedup opt-out per request — a replayer just stripped the header.
       webhook = create_hook!(ctx, "missing", %{idempotency_key_header: "X-Cyfr-Delivery"})
 
       conn = build_conn_with_webhook(webhook, [])
       result = WebhookIdempotency.call(conn, [])
 
-      refute result.halted
+      assert result.halted
+      assert result.status == 400
+      assert Jason.decode!(result.resp_body)["error"] == "missing_idempotency_key"
     end
 
     test "different keys do not collide", %{ctx: ctx} do

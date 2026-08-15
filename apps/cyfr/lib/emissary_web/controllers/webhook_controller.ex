@@ -153,12 +153,19 @@ defmodule EmissaryWeb.WebhookController do
   defp parsed_body_json(%Plug.Conn{body_params: %{} = params}), do: params
   defp parsed_body_json(_), do: nil
 
+  # Every known signature-carrying header is dropped, not just the one this
+  # webhook verifies with: a GitHub-configured hook has no business handing
+  # the target component a Stripe or Twilio signature that happened to ride
+  # along on the request.
+  @signature_headers ~w(x-hub-signature-256 stripe-signature x-twilio-signature)
+
   defp safe_headers(conn, signature_header) do
-    drop = String.downcase(signature_header || Sanctum.Webhook.default_signature_header())
+    drop = [String.downcase(signature_header || Sanctum.Webhook.default_signature_header())]
+    drop = drop ++ @signature_headers
 
     conn.req_headers
     |> Enum.filter(fn {name, _} -> String.downcase(name) in @safe_header_allowlist end)
-    |> Enum.reject(fn {name, _} -> String.downcase(name) == drop end)
+    |> Enum.reject(fn {name, _} -> String.downcase(name) in drop end)
     |> Map.new(fn {name, value} -> {String.downcase(name), value} end)
   end
 

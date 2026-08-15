@@ -14,10 +14,12 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
     * If the webhook row has no `idempotency_key_header` set → noop, request
       proceeds to the controller.
-    * If the header is configured but absent on the request → noop. Webhook
-      senders that don't provide an event id can't be dedup'd; we don't
-      fail-closed because that would break first-time integrations that
-      haven't enabled the header on their side yet.
+    * If the header is configured but absent on the request → **400**.
+      Configuring the header is the operator's statement that every real
+      delivery carries it — a request without it is either a sender
+      misconfiguration or a replayer who stripped the header to skate past
+      dedup, and letting it through would make the dedup opt-out per
+      request, attacker's choice.
     * On a fresh `(webhook_id, key)` insert → request proceeds, controller
       runs the target component.
     * On a duplicate hit → 200 with `{"status": "duplicate", "first_seen_at": "..."}`,
@@ -46,12 +48,25 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
       true ->
         case fetch_key(conn, webhook.idempotency_key_header) do
           nil ->
-            conn
+            missing_key(conn, webhook.idempotency_key_header)
 
           key ->
             handle_lookup(conn, webhook.id, key)
         end
     end
+  end
+
+  defp missing_key(conn, header) do
+    body =
+      Jason.encode!(%{
+        "error" => "missing_idempotency_key",
+        "message" => "this webhook requires the '#{header}' header on every delivery"
+      })
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(400, body)
+    |> halt()
   end
 
   defp fetch_key(conn, header) do

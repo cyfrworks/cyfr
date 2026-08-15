@@ -36,6 +36,10 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_target_ref, "")
      |> assign(:form_profile_id, "")
      |> assign(:form_signature_header, @default_signature_header)
+    |> assign(:form_timestamp_header, "")
+    |> assign(:form_idempotency_key_header, "")
+     |> assign(:form_timestamp_header, "")
+     |> assign(:form_idempotency_key_header, "")
      |> assign(:form_description, "")
      |> assign(:form_rate_limit, "")
      |> assign(:form_input_template, "{}")
@@ -92,6 +96,8 @@ defmodule PrismWeb.WebhooksLive do
          |> assign(:form_target_ref, hook[:target_ref] || "")
          |> assign(:form_profile_id, hook[:profile_id] || "")
          |> assign(:form_signature_header, hook[:signature_header] || @default_signature_header)
+         |> assign(:form_timestamp_header, hook[:timestamp_header] || "")
+         |> assign(:form_idempotency_key_header, hook[:idempotency_key_header] || "")
          |> assign(:form_description, hook[:description] || "")
          |> assign(:form_rate_limit, hook[:rate_limit] || "")
          |> assign(:form_input_template, encode_template_for_form(hook[:input_template]))
@@ -109,6 +115,14 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(
        :form_signature_header,
        params["signature_header"] || socket.assigns.form_signature_header
+     )
+     |> assign(
+       :form_timestamp_header,
+       params["timestamp_header"] || socket.assigns.form_timestamp_header
+     )
+     |> assign(
+       :form_idempotency_key_header,
+       params["idempotency_key_header"] || socket.assigns.form_idempotency_key_header
      )
      |> assign(:form_description, params["description"] || socket.assigns.form_description)
      |> assign(:form_rate_limit, params["rate_limit"] || socket.assigns.form_rate_limit)
@@ -210,6 +224,8 @@ defmodule PrismWeb.WebhooksLive do
       "profile_id" => default_or_value(params["profile_id"]),
       "input_template" => template_map,
       "signature_header" => default_or_value(params["signature_header"]),
+      "timestamp_header" => default_or_value(params["timestamp_header"]),
+      "idempotency_key_header" => default_or_value(params["idempotency_key_header"]),
       "description" => default_or_value(params["description"]),
       "rate_limit" => default_or_value(params["rate_limit"])
     }
@@ -409,6 +425,35 @@ defmodule PrismWeb.WebhooksLive do
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Rate limit</label>
               <.input name="rate_limit" value={@form_rate_limit} placeholder="100/1m" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Timestamp header</label>
+              <.input
+                name="timestamp_header"
+                value={@form_timestamp_header}
+                placeholder="X-Cyfr-Timestamp"
+              />
+              <p class="mt-1 text-xs text-amber-500">
+                Left unset, a captured delivery can be replayed indefinitely — its
+                signature stays valid forever.
+              </p>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">
+                Idempotency key header
+              </label>
+              <.input
+                name="idempotency_key_header"
+                value={@form_idempotency_key_header}
+                placeholder="X-Cyfr-Delivery"
+              />
+              <p class="mt-1 text-xs text-gray-500">
+                Repeat deliveries with the same key are answered without re-running
+                the target. Once set, deliveries missing the header are refused.
+              </p>
             </div>
           </div>
 

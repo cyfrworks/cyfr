@@ -342,7 +342,7 @@ defmodule Sanctum.MCP do
             "idempotency_key_header" => %{
               "type" => "string",
               "description" =>
-                "HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id within ~24h short-circuit to a 200 with status 'duplicate'. Left unset, a sender's own retries each run the bound component again. Empty string clears the field."
+                "HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id short-circuit to a 200 with status 'duplicate' for as long as the delivery record is retained (the retention scheduler's cadence; unbounded when retention is off), and deliveries MISSING the header are refused with 400. Left unset, a sender's own retries each run the bound component again. Empty string clears the field."
             },
             "description" => %{
               "type" => "string",
