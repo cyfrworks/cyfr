@@ -38,7 +38,8 @@ defmodule Compendium.TinctureValidator do
          {:ok, manifest} <- decode_json(raw),
          :ok <- check_type(manifest),
          :ok <- check_entry(directory_path, manifest),
-         :ok <- check_reserved_dirs(directory_path) do
+         :ok <- check_reserved_dirs(directory_path),
+         :ok <- check_no_symlinks(directory_path, directory_path) do
       {digest, size} = compute_digest(directory_path)
       # exports always [] — tinctures have no WASM exports; kept for return-shape
       # compatibility with WasmValidator so Registry can use either validator uniformly
@@ -168,6 +169,33 @@ defmodule Compendium.TinctureValidator do
       end)
 
     {Cyfr.Digest.sha256_stream(Enum.reverse(chunks)), total_size}
+  end
+
+  # Symlinks are refused before any walk: the digest and store walkers use
+  # File.dir?/File.read, which FOLLOW links — a self-referential link would
+  # recurse forever and an absolute-target link would pull host files into
+  # the archive's content. lstat looks at the entry itself, so this check
+  # never follows what it rejects.
+  defp check_no_symlinks(base_dir, dir) do
+    dir
+    |> File.ls!()
+    |> Enum.reduce_while(:ok, fn entry, :ok ->
+      path = Path.join(dir, entry)
+
+      case File.lstat(path) do
+        {:ok, %File.Stat{type: :symlink}} ->
+          {:halt, {:error, "tincture contains a symlink: #{Path.relative_to(path, base_dir)}"}}
+
+        {:ok, %File.Stat{type: :directory}} ->
+          case check_no_symlinks(base_dir, path) do
+            :ok -> {:cont, :ok}
+            {:error, _} = error -> {:halt, error}
+          end
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
   end
 
   # arca:bypass-ok=D — tar-extract tmp dir walk; see module note.

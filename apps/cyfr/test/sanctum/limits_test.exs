@@ -53,6 +53,17 @@ defmodule Sanctum.LimitsTest do
       end
     end
 
+    test "rejects negative durations" do
+      # parse_duration accepts a leading minus, so "does it parse" alone let
+      # "-1s" through — a deadline that already fired.
+      for {field, value} <- [{:timeout, "-1s"}, {:batch_timeout, "-500ms"}] do
+        assert {:error, {:invalid_limit, ^field, msg}} =
+                 @valid |> Map.put(field, value) |> Limits.new()
+
+        assert msg =~ "non-negative"
+      end
+    end
+
     test "rejects unknown keys" do
       assert {:error, {:invalid_limit, :unknown_field, _}} =
                @valid |> Map.put(:allowed_domains, ["x.com"]) |> Limits.new()

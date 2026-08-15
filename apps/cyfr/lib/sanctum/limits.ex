@@ -281,11 +281,14 @@ defmodule Sanctum.Limits do
   end
 
   defp validate_field(field, value) when field in @duration_fields do
+    # Non-negative, matching the numeric fields: parse_duration accepts a
+    # leading minus ("-1s" → -1000ms), and a negative deadline downstream
+    # is a timeout that already fired or never does.
     with true <- is_binary(value),
-         {:ok, _ms} <- parse_duration(value) do
+         {:ok, ms} when ms >= 0 <- parse_duration(value) do
       {:ok, value}
     else
-      _ -> {:error, "must be a duration string like \"30s\", got: #{inspect(value)}"}
+      _ -> {:error, "must be a non-negative duration string like \"30s\", got: #{inspect(value)}"}
     end
   end
 

@@ -790,16 +790,24 @@ defmodule Compendium.Registry do
       path = Path.join(current_dir, entry)
 
       result =
-        if File.dir?(path) do
-          store_tincture_files(ctx, base_dir, path, arca_base)
-        else
-          rel = Path.relative_to(path, base_dir)
-          segments = arca_base ++ String.split(rel, "/")
+        cond do
+          # lstat, not stat: File.dir?/File.read follow symlinks, so a link
+          # here would recurse into itself or copy a host file into Arca.
+          # The validator refuses links too; this is the store-side backstop.
+          match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path)) ->
+            {:error, {:tincture_symlink_rejected, Path.relative_to(path, base_dir)}}
 
-          case File.read(path) do
-            {:ok, content} -> Arca.put(ctx, segments, content)
-            {:error, reason} -> {:error, {:tincture_read_failed, rel, reason}}
-          end
+          File.dir?(path) ->
+            store_tincture_files(ctx, base_dir, path, arca_base)
+
+          true ->
+            rel = Path.relative_to(path, base_dir)
+            segments = arca_base ++ String.split(rel, "/")
+
+            case File.read(path) do
+              {:ok, content} -> Arca.put(ctx, segments, content)
+              {:error, reason} -> {:error, {:tincture_read_failed, rel, reason}}
+            end
         end
 
       case result do
@@ -1402,6 +1410,12 @@ defmodule Compendium.Registry do
       :identical ->
         :ok
 
+      {:error, reason} ->
+        # A database fault must not read as "no prior release" — that would
+        # let a republish overwrite an existing version with different bytes
+        # during the exact window this check exists to close.
+        {:error, {:release_status_unavailable, reason}}
+
       :differs ->
         {:error,
          {:release_immutable,
@@ -1421,8 +1435,11 @@ defmodule Compendium.Registry do
           do: :identical,
           else: :differs
 
-      {:error, _} ->
+      {:error, :not_found} ->
         :absent
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

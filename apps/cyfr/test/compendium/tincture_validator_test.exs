@@ -34,6 +34,19 @@ defmodule Compendium.TinctureValidatorTest do
       assert {:error, "cyfr-manifest.json not found"} = TinctureValidator.validate(dir)
     end
 
+    test "rejects a tincture containing a symlink", %{base: base} do
+      # The digest and store walkers follow links; a self-referential one
+      # recurses forever and an absolute-target one reads host files into
+      # the archive. lstat-based refusal must fire before either walk.
+      dir = setup_valid_tincture(base, "symlinked")
+      File.mkdir_p!(Path.join(dir, "assets"))
+      :ok = File.ln_s(dir, Path.join(dir, "assets/loop"))
+
+      assert {:error, message} = TinctureValidator.validate(dir)
+      assert message =~ "symlink"
+      assert message =~ "assets/loop"
+    end
+
     test "returns error for invalid JSON manifest", %{base: base} do
       dir = Path.join(base, "bad-json")
       File.mkdir_p!(dir)
