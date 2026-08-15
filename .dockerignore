@@ -27,3 +27,8 @@ docker-compose*.yml
 !aqua/
 .formatter.exs
 tmp/
+.env
+.env.*
+components/
+apps/*/test/
+_build_pg/

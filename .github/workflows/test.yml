@@ -14,6 +14,15 @@ on:
       - 'component-guide.md'
       - 'tincture-guide.md'
       - 'integration-guide.md'
+      # Release-critical surfaces with no workflow of their own: run the
+      # suite so a change here at least builds against a green tree.
+      - 'Dockerfile*'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - 'docker-entrypoint.sh'
+      - '.env.example'
+      - 'wit/**'
+      - 'aqua/**'
   pull_request:
     paths:
       - 'apps/cyfr/**'
@@ -27,6 +36,15 @@ on:
       - 'component-guide.md'
       - 'tincture-guide.md'
       - 'integration-guide.md'
+      # Release-critical surfaces with no workflow of their own: run the
+      # suite so a change here at least builds against a green tree.
+      - 'Dockerfile*'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - 'docker-entrypoint.sh'
+      - '.env.example'
+      - 'wit/**'
+      - 'aqua/**'
 permissions:
   contents: read
 env:
@@ -80,6 +98,22 @@ jobs:
             _build
           key: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Cache cargo-component
+        id: cargo-component-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-component
+          key: ${{ runner.os }}-cargo-component-0.21.1
+      # Locus's compile-path tests are tagged :requires_cargo_component and
+      # excluded when the binary is absent — install it so they actually run.
+      # The runner ships rustup; only the wasm targets and the tool are added.
+      - name: Install cargo-component
+        run: |
+          rustup target add wasm32-wasip1 wasm32-wasip2
+          if [ "${{ steps.cargo-component-cache.outputs.cache-hit }}" != "true" ]; then
+            cargo install cargo-component --version 0.21.1 --locked
+          fi
+          cargo-component --version
       - name: Install dependencies
         run: mix deps.get
       - name: Compile with warnings as errors
@@ -117,7 +151,7 @@ jobs:
               echo "$calls"
               fail=1
             fi
-          done < <(git ls-files 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/**/*.ex')
+          done < <(git ls-files 'apps/cyfr/lib/*.ex' 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/*.ex' 'apps/locus/lib/**/*.ex')
           if [ "$fail" -ne 0 ]; then
             echo "Untagged filesystem I/O found. Route it through Arca, or tag it # arca:bypass-ok=<A|B|C|D>."
             exit 1
