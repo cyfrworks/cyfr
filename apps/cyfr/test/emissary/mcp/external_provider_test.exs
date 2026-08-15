@@ -170,6 +170,32 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert "s1" in names
       assert "s2" in names
     end
+
+    test "listing starts no server processes", %{ctx: ctx} do
+      # A read must read: listing used to ensure_started every enabled
+      # server, so any authenticated caller could open outbound connections
+      # as a side effect. Invocation starts servers on demand instead.
+      Arca.McpServerStorage.put(ctx, %{name: "lazy-1", url: "https://a.com/mcp", enabled: true})
+
+      assert {:ok, %{servers: [server]}} =
+               ExternalProvider.handle("mcp_servers", ctx, %{"action" => "list"})
+
+      assert server.status == "disconnected"
+
+      assert Registry.lookup(
+               Emissary.MCP.ExternalServerRegistry,
+               {"lazy-1", ctx.org_id, ctx.project_id}
+             ) == []
+    end
+
+    test "list and get are not in-chain reachable" do
+      [tool] = ExternalProvider.tools()
+
+      for action <- ["list", "get"] do
+        planes = get_in(tool, [:annotations, :actions, action, :planes])
+        assert planes == [:external], "mcp_servers.#{action} must not be a chain capability"
+      end
+    end
   end
 
   describe "handle/3 - get" do

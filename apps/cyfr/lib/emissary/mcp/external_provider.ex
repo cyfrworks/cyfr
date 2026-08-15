@@ -38,8 +38,13 @@ defmodule Emissary.MCP.ExternalProvider do
           actions: %{
             "create" => %{kind: :write, planes: [:external], permission: :admin},
             "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
-            "list" => %{kind: :read, planes: [:external, :in_chain]},
-            "get" => %{kind: :read, planes: [:external, :in_chain]},
+            # Connection config (URLs, header maps, vault binding names) is
+            # shared operator infrastructure, readable by any authenticated
+            # user — but it is not a chain capability: a formula uses the
+            # connected servers' TOOLS through its authority grants, it never
+            # reads the wiring behind them.
+            "list" => %{kind: :read, planes: [:external]},
+            "get" => %{kind: :read, planes: [:external]},
             "test" => %{kind: :execute, planes: [:external], permission: :admin},
             "refresh" => %{kind: :write, planes: [:external], permission: :admin},
             "enable" => %{kind: :write, planes: [:external], permission: :admin},
@@ -602,12 +607,9 @@ defmodule Emissary.MCP.ExternalProvider do
       {:ok, servers} ->
         server_list =
           Enum.map(servers, fn server ->
-            # Auto-start enabled servers so status reflects reality
-            if server.enabled do
-              server_config = build_server_config(server, ctx)
-              Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config)
-            end
-
+            # Listing reads; it does not connect. A server that has never
+            # been used reports :disconnected here — invocation (and get,
+            # which reports the live tool catalogue) starts it on demand.
             status =
               Emissary.MCP.ExternalServer.status(
                 server.name,
