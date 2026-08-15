@@ -24,4 +24,58 @@ defmodule Arca.CacheEvictionTest do
 
     Arca.Cache.invalidate({:eviction_test, :fresh})
   end
+
+  test "binary values are bounded in bytes, oldest-expiring evicted first" do
+    original = Application.get_env(:cyfr, :cache_max_binary_bytes)
+    Application.put_env(:cyfr, :cache_max_binary_bytes, 1_000)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:cyfr, :cache_max_binary_bytes, original),
+        else: Application.delete_env(:cyfr, :cache_max_binary_bytes)
+
+      for tag <- [:old, :mid, :new], do: Arca.Cache.invalidate({:bytes_test, tag})
+    end)
+
+    blob = String.duplicate("b", 600)
+    # Distinct TTLs order eviction: the entry cap sorts by expiry, so under
+    # a 1000-byte budget the two nearest-to-expiry blobs go first.
+    Arca.Cache.put({:bytes_test, :old}, blob, 10_000)
+    Arca.Cache.put({:bytes_test, :mid}, blob, 20_000)
+    Arca.Cache.put({:bytes_test, :new}, blob, 30_000)
+
+    Arca.Cache.Sweeper.sweep()
+
+    assert Arca.Cache.get({:bytes_test, :old}) == :miss
+    assert Arca.Cache.get({:bytes_test, :mid}) == :miss
+    assert {:ok, _} = Arca.Cache.get({:bytes_test, :new})
+  end
+
+  test "compiled components get their own entry cap — byte_size cannot see NIF memory" do
+    original = Application.get_env(:cyfr, :cache_max_compiled_components)
+    Application.put_env(:cyfr, :cache_max_compiled_components, 2)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:cyfr, :cache_max_compiled_components, original),
+        else: Application.delete_env(:cyfr, :cache_max_compiled_components)
+
+      for i <- 1..4, do: Arca.Cache.invalidate({:compiled_component, "o", "p", "ref#{i}"})
+    end)
+
+    for i <- 1..4 do
+      Arca.Cache.put(
+        {:compiled_component, "o", "p", "ref#{i}"},
+        {:fake_resource, i},
+        :timer.minutes(i)
+      )
+    end
+
+    Arca.Cache.Sweeper.sweep()
+
+    assert Arca.Cache.get({:compiled_component, "o", "p", "ref1"}) == :miss
+    assert Arca.Cache.get({:compiled_component, "o", "p", "ref2"}) == :miss
+    assert {:ok, _} = Arca.Cache.get({:compiled_component, "o", "p", "ref3"})
+    assert {:ok, _} = Arca.Cache.get({:compiled_component, "o", "p", "ref4"})
+  end
 end

@@ -85,20 +85,24 @@ defmodule Arca.Cache do
     :ok
   rescue
     ArgumentError ->
+      # Recreate through the supervised Sweeper, never from here: an
+      # :ets.new in this rescue would make the CALLING request process the
+      # table's owner, and the whole cache would vanish again when it exits.
       Logger.warning("[Arca.Cache] ETS table #{@table_name} missing during put, re-initializing")
-      init()
 
-      try do
-        expires_at = System.monotonic_time(:millisecond) + ttl_ms
-        :ets.insert(@table_name, {key, value, expires_at})
-        :ok
-      rescue
-        ArgumentError ->
-          Logger.error(
-            "[Arca.Cache] ETS table #{@table_name} re-initialization failed during put(#{inspect(key)})"
-          )
+      with :ok <- Arca.Cache.Sweeper.ensure_table() do
+        try do
+          expires_at = System.monotonic_time(:millisecond) + ttl_ms
+          :ets.insert(@table_name, {key, value, expires_at})
+          :ok
+        rescue
+          ArgumentError ->
+            Logger.error(
+              "[Arca.Cache] ETS table #{@table_name} re-initialization failed during put(#{inspect(key)})"
+            )
 
-          {:error, :cache_unavailable}
+            {:error, :cache_unavailable}
+        end
       end
   end
 
