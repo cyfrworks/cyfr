@@ -151,8 +151,23 @@ defmodule Locus.Builder do
     if total_size > @max_source_size do
       {:error, {:source_too_large, total_size, @max_source_size}}
     else
-      :ok
+      validate_source_paths(source_files)
     end
+  end
+
+  # Every key lands under the build tmp dir via Path.join, which neutralizes
+  # a leading `/` but not `..` — so keys are held to PathSafety's relative-
+  # path rules before any directory exists. write_source_files/2 keeps an
+  # expand-prefix backstop at the actual write.
+  defp validate_source_paths(source_files) do
+    source_files
+    |> Map.keys()
+    |> Enum.reduce_while(:ok, fn path, :ok ->
+      case Cyfr.PathSafety.validate_relative_path(path) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:invalid_source_path, path, reason}}}
+      end
+    end)
   end
 
   defp check_toolchain(language) do
@@ -282,13 +297,31 @@ defmodule Locus.Builder do
     |> Enum.reduce_while(:ok, fn {rel_path, content}, :ok ->
       dest = Path.join(tmp_dir, rel_path)
 
-      with :ok <- File.mkdir_p(Path.dirname(dest)),
+      # compile/3 is a public API taking an arbitrary path=>content map; the
+      # shipped callers derive keys from Arca basenames, but this is the
+      # filesystem boundary and it holds its own line: PathSafety refuses
+      # `..` (the live escape — Path.join neutralizes a leading `/`, not a
+      # traversal), and the expand-prefix check backstops anything the
+      # segment rules miss.
+      with :ok <- Cyfr.PathSafety.validate_relative_path(rel_path),
+           :ok <- contained_in(tmp_dir, dest),
+           :ok <- File.mkdir_p(Path.dirname(dest)),
            :ok <- File.write(dest, content) do
         {:cont, :ok}
       else
         {:error, reason} -> {:halt, {:error, {:write_failed, rel_path, reason}}}
       end
     end)
+  end
+
+  defp contained_in(tmp_dir, dest) do
+    root = Path.expand(tmp_dir)
+
+    if String.starts_with?(Path.expand(dest), root <> "/") do
+      :ok
+    else
+      {:error, "path escapes the build directory"}
+    end
   end
 
   @doc """

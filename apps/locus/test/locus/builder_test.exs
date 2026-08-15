@@ -61,6 +61,32 @@ defmodule Locus.BuilderTest do
       assert {:error, {:toolchain_not_found, :python}} =
                Builder.compile(%{"src/lib.rs" => "some code"}, :python)
     end
+
+    test "rejects a source key that traverses out of the build directory" do
+      # Path.join neutralizes a leading `/` on the key; `..` is the live
+      # escape — a key like this used to land the write outside the tmp dir.
+      sources = %{
+        "src/lib.rs" => "pub fn hello() {}",
+        "../../../../tmp/escape.rs" => "pwned"
+      }
+
+      assert {:error, {:invalid_source_path, "../../../../tmp/escape.rs", reason}} =
+               Builder.compile(sources, :rust)
+
+      assert reason =~ "traversal"
+    end
+
+    test "nested relative keys are still accepted" do
+      # The refusal is about `..`, not depth: validation must pass so the
+      # (toolchain-gated) compile proceeds to its next check.
+      sources = %{
+        "src/lib.rs" => "pub fn hello() {}",
+        "src/nested/deep/util.rs" => "pub fn util() {}"
+      }
+
+      result = Builder.compile(sources, :python)
+      assert result == {:error, {:toolchain_not_found, :python}}
+    end
   end
 
   # ============================================================================
