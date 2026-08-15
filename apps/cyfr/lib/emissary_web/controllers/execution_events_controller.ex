@@ -32,7 +32,8 @@ defmodule EmissaryWeb.ExecutionEventsController do
         with {:auth, %Sanctum.Context{authenticated: true} = ctx} <- {:auth, ctx},
              {:exec, %Arca.Execution{} = exec} <-
                {:exec, Arca.Execution.get_tenant(ctx, execution_id)},
-             :ok <- authorize_execution_read(ctx, exec) do
+             :ok <- authorize_execution_read(ctx, exec),
+             :ok <- claim_stream_slot(ctx) do
           last_seq = parse_last_event_id(conn)
 
           conn
@@ -53,9 +54,37 @@ defmodule EmissaryWeb.ExecutionEventsController do
 
           {:error, :forbidden} ->
             EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
+
+          {:error, :stream_limit} ->
+            EmissaryWeb.ApiError.send(
+              conn,
+              429,
+              :too_many_streams,
+              "Concurrent event-stream limit reached"
+            )
         end
     end
   end
+
+  # Same leash as `subscriptions/listen`: a per-user cap on concurrent
+  # streams and a hard deadline on each. The slot is a SubscriptionRegistry
+  # entry under a TAGGED key with its own budget — sharing the listen key
+  # would let one surface starve the other. Registry entries die with this
+  # process, so a vanished client frees its slot without bookkeeping.
+  defp claim_stream_slot(ctx) do
+    key = {:exec_events, ctx.org_id, ctx.user_id}
+    limit = Application.get_env(:cyfr, :execution_events_max_concurrent, 8)
+
+    if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do
+      {:error, :stream_limit}
+    else
+      {:ok, _} = Registry.register(Emissary.MCP.SubscriptionRegistry, key, :stream)
+      :ok
+    end
+  end
+
+  defp max_stream_ms,
+    do: Application.get_env(:cyfr, :execution_events_max_ms, :timer.minutes(30))
 
   # Single authorization chokepoint: `Sanctum.Context.authorize/3` with the
   # `{:execution, record}` resource performs require_permission(:storage_read)
@@ -98,39 +127,47 @@ defmodule EmissaryWeb.ExecutionEventsController do
       Opus.unsubscribe_events(execution_id, exec)
       conn
     else
-      event_loop(conn, execution_id, exec)
+      deadline = System.monotonic_time(:millisecond) + max_stream_ms()
+      event_loop(conn, execution_id, exec, deadline)
     end
   end
 
   # `exec` rides along so unsubscribe targets the SAME tenant-scoped topic
   # subscribe used — dropping it resolves to the local/default sentinel and
-  # silently leaves the process subscribed for any other org.
-  defp event_loop(conn, execution_id, exec) do
-    receive do
-      {:execution_event, event} ->
-        case send_sse_event(conn, event) do
-          {:ok, conn} ->
-            if terminal_event?(event) do
+  # silently leaves the process subscribed for any other org. The deadline
+  # bounds a stream whose execution never reaches a terminal event — the
+  # client reconnects with Last-Event-ID and misses nothing.
+  defp event_loop(conn, execution_id, exec, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      Opus.unsubscribe_events(execution_id, exec)
+      conn
+    else
+      receive do
+        {:execution_event, event} ->
+          case send_sse_event(conn, event) do
+            {:ok, conn} ->
+              if terminal_event?(event) do
+                Opus.unsubscribe_events(execution_id, exec)
+                conn
+              else
+                event_loop(conn, execution_id, exec, deadline)
+              end
+
+            {:error, _} ->
               Opus.unsubscribe_events(execution_id, exec)
               conn
-            else
-              event_loop(conn, execution_id, exec)
-            end
+          end
+      after
+        @keep_alive_interval_ms ->
+          case chunk(conn, ": keep-alive\n\n") do
+            {:ok, conn} ->
+              event_loop(conn, execution_id, exec, deadline)
 
-          {:error, _} ->
-            Opus.unsubscribe_events(execution_id, exec)
-            conn
-        end
-    after
-      @keep_alive_interval_ms ->
-        case chunk(conn, ": keep-alive\n\n") do
-          {:ok, conn} ->
-            event_loop(conn, execution_id, exec)
-
-          {:error, _} ->
-            Opus.unsubscribe_events(execution_id, exec)
-            conn
-        end
+            {:error, _} ->
+              Opus.unsubscribe_events(execution_id, exec)
+              conn
+          end
+      end
     end
   end
 
