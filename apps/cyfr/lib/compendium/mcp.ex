@@ -298,7 +298,7 @@ defmodule Compendium.MCP do
         name: "aqua",
         title: "AQUA Agent System",
         description:
-          "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent|doc on create).",
+          "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only).",
         annotations: %{
           readOnlyHint: false,
           destructiveHint: true,
@@ -327,7 +327,7 @@ defmodule Compendium.MCP do
               "type" => "string",
               "enum" => ["list", "get", "create", "update", "delete"],
               "description" =>
-                "Action: list/get agents and guides, or create/update/delete to manage agents. For create, pass type=orchestrator|sub-agent|doc to choose the entry kind."
+                "Action: list/get agents and guides, or create/update/delete to manage agents. For create, pass type=orchestrator|sub-agent to choose the agent kind (docs are read-only)."
             },
             "name" => %{
               "type" => "string",
@@ -335,7 +335,7 @@ defmodule Compendium.MCP do
             },
             "type" => %{
               "type" => "string",
-              "enum" => ["doc", "orchestrator", "sub-agent"],
+              "enum" => ["orchestrator", "sub-agent"],
               "description" => "Filter by type (for list action)"
             },
             "parent" => %{

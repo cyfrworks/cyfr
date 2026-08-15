@@ -12,7 +12,7 @@ defmodule Opus.FormulaHandler do
   ## Unified MCP Dispatch
 
   All formula capabilities go through `Emissary.MCP.ToolRegistry`. Component
-  execution, registry search, build, guides — everything is an MCP tool call.
+  execution, registry search, build, aqua — everything is an MCP tool call.
   Tool access is decided by the authority's transition relation over the
   consent edge's granted tools.
 

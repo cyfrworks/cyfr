@@ -3,9 +3,9 @@
 
 defmodule Prism.AgentConfig do
   @moduledoc """
-  Builds agent configuration for formula input by querying the `guide` MCP tool.
+  Builds agent configuration for formula input by querying the `aqua` MCP tool.
 
-  All prompt and metadata access goes through the guide tool, which reads from
+  All prompt and metadata access goes through the aqua tool, which reads from
   `aqua/agent.json` at runtime. This ensures a single canonical API for both
   internal and external harnesses.
   """
@@ -73,13 +73,13 @@ defmodule Prism.AgentConfig do
   @doc """
   Load full config for an orchestrator (prompt content + resolved catalyst).
 
-  Uses the guide tool to fetch prompt content and metadata. Resolves the
+  Uses the aqua tool to fetch prompt content and metadata. Resolves the
   versionless catalyst_ref to the latest installed version.
   """
   def orchestrator_config(%Context{} = ctx, agent_name \\ "aqua") do
     name = agent_name || "aqua"
 
-    with {:ok, guide} <- call_guide(ctx, %{"action" => "get", "name" => name}),
+    with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
          content when is_binary(content) <- guide["content"],
          catalyst_ref_raw <- guide["catalyst_ref"],
          {:ok, catalyst_ref} <- resolve_catalyst(ctx, catalyst_ref_raw) do
@@ -101,11 +101,11 @@ defmodule Prism.AgentConfig do
   @doc """
   Build sub-agent definitions for formula input.
 
-  Fetches all sub-agents via the guide tool and resolves per-role
+  Fetches all sub-agents via the aqua tool and resolves per-role
   catalyst/model (inheriting from the orchestrator when not set).
   """
   def sub_agent_definitions(%Context{} = ctx, agent_name, fallback_catalyst, fallback_model) do
-    with {:ok, list_result} <- call_guide(ctx, %{"action" => "list", "type" => "sub-agent"}) do
+    with {:ok, list_result} <- call_aqua(ctx, %{"action" => "list", "type" => "sub-agent"}) do
       guides = extract_guides(list_result)
 
       # Filter to sub-agents belonging to this orchestrator
@@ -130,7 +130,7 @@ defmodule Prism.AgentConfig do
   # --- Private helpers ---
 
   defp build_sub_agent(ctx, name, fallback_catalyst, fallback_model) do
-    with {:ok, guide} <- call_guide(ctx, %{"action" => "get", "name" => name}) do
+    with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
       content = guide["content"] || ""
       description = guide["description"] || ""
       title = guide["title"] || name
@@ -223,7 +223,7 @@ defmodule Prism.AgentConfig do
     end
   end
 
-  defp call_guide(ctx, args) do
+  defp call_aqua(ctx, args) do
     case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
       {:ok, result} -> {:ok, stringify_deep(result)}
       other -> other
@@ -252,10 +252,10 @@ defmodule Prism.AgentConfig do
 
   @doc """
   Build the full system prompt for an orchestrator: base prompt fetched
-  via the guide tool, plus a runtime-context block (date, key paths)
+  via the aqua tool, plus a runtime-context block (date, key paths)
   appended after a separator.
 
-  Falls back to a generic prompt if the guide lookup fails — keeps the
+  Falls back to a generic prompt if the aqua lookup fails — keeps the
   agent usable while AQUA configuration is still being set up.
   """
   @spec build_system_prompt(Context.t(), String.t()) :: String.t()

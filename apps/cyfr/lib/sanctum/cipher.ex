@@ -183,6 +183,10 @@ defmodule Sanctum.Cipher do
         # possible across a redeploy/test reconfig — the keyring is otherwise
         # boot-immutable). Keying the memo on the master binary keeps a stale
         # derived key from ever being returned.
+        # Load-bearing literal: this info string is baked into every derived
+        # key, so renaming it (even to match the v3 envelope) orphans every
+        # blob encrypted so far. Pinned by test; change only with a
+        # rotate-everything migration.
         info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
         dk = :crypto.pbkdf2_hmac(:sha256, master, info, iterations(), @key_len)
         :persistent_term.put(pt_key, {master, dk})

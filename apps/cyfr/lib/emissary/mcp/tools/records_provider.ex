@@ -287,18 +287,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # Execution Tool
   # ============================================================================
 
-  # Execution record writing is kernel-only (internal to Opus.Executor)
-  # External clients may only read records via get/list actions
-  def handle("record", _ctx, %{"action" => "record_start"}) do
-    {:error,
-     "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
-  end
-
-  def handle("record", _ctx, %{"action" => "record_complete"}) do
-    {:error,
-     "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
-  end
-
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- tenant_gate(ctx) do
       case Arca.Execution.get_tenant(ctx, id) do
@@ -344,23 +332,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # MCP Log Tool
   # ============================================================================
 
-  # MCP log writing is kernel-only (internal to Emissary.MCP.RequestLog)
-  # External clients may only read logs via list, get, correlate, stats actions
-  def handle("mcp_log", _ctx, %{"action" => "log_started"}) do
-    {:error,
-     "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
-  end
-
-  def handle("mcp_log", _ctx, %{"action" => "log_completed"}) do
-    {:error,
-     "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
-  end
-
-  def handle("mcp_log", _ctx, %{"action" => "log_failed"}) do
-    {:error,
-     "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
-  end
-
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- tenant_gate(ctx) do
       case Arca.McpLog.get_tenant(ctx, id) do
@@ -395,11 +366,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
       end
     end
-  end
-
-  # Audit logs are append-only — deletion is not permitted to preserve non-repudiation
-  def handle("mcp_log", _ctx, %{"action" => "delete"}) do
-    {:error, "Audit log deletion is not permitted. MCP logs are append-only."}
   end
 
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
@@ -528,13 +494,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # Policy Log Tool
   # ============================================================================
 
-  # Policy-log writing is kernel-only (`Sanctum.Policy.Enforcement`).
-  # External clients may only read logs via list, get, correlate actions
-  def handle("policy_log", _ctx, %{"action" => "log"}) do
-    {:error,
-     "Policy log writing is not permitted via MCP. Logs are created internally by the policy enforcer."}
-  end
-
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- tenant_gate(ctx) do
       record =
@@ -570,11 +529,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       records = Arca.PolicyLog.list(opts)
       {:ok, %{logs: Enum.map(records, &policy_log_to_map/1)}}
     end
-  end
-
-  # Audit logs are append-only — deletion is not permitted to preserve non-repudiation
-  def handle("policy_log", _ctx, %{"action" => "delete"}) do
-    {:error, "Audit log deletion is not permitted. Policy logs are append-only."}
   end
 
   def handle("policy_log", %Context{} = ctx, %{

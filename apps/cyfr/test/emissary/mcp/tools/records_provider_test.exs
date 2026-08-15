@@ -187,38 +187,6 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # Record Tool (Execution Records)
   # ============================================================================
 
-  # ============================================================================
-  # Record Tool - Write Actions Denied (kernel-only)
-  # ============================================================================
-
-  describe "record.record_start action (kernel-only)" do
-    test "record_start is denied via MCP", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("record", ctx, %{
-          "action" => "record_start",
-          "id" => "exec_test",
-          "reference" => "reagent:local.test:0.1.0",
-          "user_id" => "local|local|testns",
-          "component_type" => "reagent"
-        })
-
-      assert msg =~ "not permitted via MCP"
-    end
-  end
-
-  describe "record.record_complete action (kernel-only)" do
-    test "record_complete is denied via MCP", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("record", ctx, %{
-          "action" => "record_complete",
-          "id" => "exec_test",
-          "status" => "completed"
-        })
-
-      assert msg =~ "not permitted via MCP"
-    end
-  end
-
   describe "record.get action" do
     test "returns execution by id", %{ctx: ctx} do
       exec_id = "exec_get_#{:rand.uniform(100_000)}"
@@ -600,78 +568,29 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # MCP Log Write Actions Denied (kernel-only)
   # ============================================================================
 
-  describe "mcp_log.log_started action (kernel-only)" do
-    test "log_started is denied via MCP", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("mcp_log", ctx, %{
-          "action" => "log_started",
-          "id" => "req_test"
-        })
+  describe "retired write/delete verbs are unknown at dispatch" do
+    test "kernel-only and append-only verbs no longer exist on the surface", %{ctx: ctx} do
+      # These clauses used to live in the handler as polite refusals, but
+      # their verbs are absent from every action enum: the dispatcher's
+      # default-deny (and the HTTP schema validator) refuse them before any
+      # handler could. The audit pins that they stay unknown.
+      retired = [
+        {"record", "record_start"},
+        {"record", "record_complete"},
+        {"mcp_log", "log_started"},
+        {"mcp_log", "log_completed"},
+        {"mcp_log", "log_failed"},
+        {"mcp_log", "delete"},
+        {"policy_log", "log"},
+        {"policy_log", "delete"}
+      ]
 
-      assert msg =~ "not permitted via MCP"
-    end
-  end
+      for {tool, verb} <- retired do
+        {:error, msg} =
+          Emissary.MCP.ToolRegistry.call_external(tool, ctx, %{"action" => verb})
 
-  describe "mcp_log.log_completed action (kernel-only)" do
-    test "log_completed is denied via MCP", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("mcp_log", ctx, %{
-          "action" => "log_completed",
-          "id" => "req_test"
-        })
-
-      assert msg =~ "not permitted via MCP"
-    end
-  end
-
-  describe "mcp_log.log_failed action (kernel-only)" do
-    test "log_failed is denied via MCP", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("mcp_log", ctx, %{
-          "action" => "log_failed",
-          "id" => "req_test"
-        })
-
-      assert msg =~ "not permitted via MCP"
-    end
-  end
-
-  # ============================================================================
-  # Policy Log Write Action Denied (kernel-only)
-  # ============================================================================
-
-  describe "policy_log.log action (kernel-only)" do
-    test "log is denied via MCP", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("policy_log", ctx, %{
-          "action" => "log",
-          "component_ref" => "catalyst:local.test:1.0.0",
-          "decision" => "allow"
-        })
-
-      assert msg =~ "not permitted via MCP"
-    end
-  end
-
-  # ============================================================================
-  # MCP Log Delete Action
-  # ============================================================================
-
-  describe "mcp_log.delete action (append-only)" do
-    test "deletion is denied for audit integrity", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("mcp_log", ctx, %{"action" => "delete", "id" => "any_id"})
-      assert msg =~ "not permitted"
-    end
-  end
-
-  # ============================================================================
-  # Policy Log Delete Action
-  # ============================================================================
-
-  describe "policy_log.delete action (append-only)" do
-    test "deletion is denied for audit integrity", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("policy_log", ctx, %{"action" => "delete", "id" => "any_id"})
-      assert msg =~ "not permitted"
+        assert msg =~ "Unknown action: #{tool}.#{verb}"
+      end
     end
   end
 

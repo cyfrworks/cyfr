@@ -86,6 +86,9 @@ defmodule Opus.ComponentType do
 
   alias Wasmex.Wasi.WasiP2Options
 
+  # Hand-written because a typespec cannot derive from a runtime list; a
+  # test pins it to @valid_types so a new executable type fails loudly here
+  # instead of leaving the spec silently stale.
   @type t :: :catalyst | :reagent | :formula
 
   # Both the string and atom parse paths derive from the canonical type

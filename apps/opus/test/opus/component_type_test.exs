@@ -95,6 +95,11 @@ defmodule Opus.ComponentTypeTest do
 
   describe "valid_types/0" do
     test "returns list of valid types" do
+      # Also the @type t pin: the typespec is hand-written (`:catalyst |
+      # :reagent | :formula`) beside a derived value list. A new executable
+      # type in Sanctum.ComponentRef fails this literal until BOTH the
+      # assertion and the typespec are updated — the spec cannot go silently
+      # stale.
       assert ComponentType.valid_types() == [:catalyst, :reagent, :formula]
     end
   end

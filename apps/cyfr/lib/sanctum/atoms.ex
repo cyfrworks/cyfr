@@ -24,10 +24,10 @@ defmodule Sanctum.Atoms do
 
   ## Usage
 
-      iex> Sanctum.Atoms.safe_to_atom("execute")
+      iex> Sanctum.Atoms.safe_to_permission_atom("execute")
       :execute
 
-      iex> Sanctum.Atoms.safe_to_atom("unknown_permission")
+      iex> Sanctum.Atoms.safe_to_permission_atom("unknown_permission")
       "unknown_permission"
 
   """
@@ -45,46 +45,24 @@ defmodule Sanctum.Atoms do
   # Known scope atoms
   @known_scopes ~w(org project platform)
 
-  @all_known_strings @known_permissions ++ @known_providers ++ @known_scopes
-
   # Force every allowlisted atom to exist at compile time so the
-  # membership-first converters below can use String.to_atom/1 without ever
-  # creating an atom that wasn't declared here.
-  @all_known_atoms Enum.map(@all_known_strings, &String.to_atom/1)
+  # membership-first converter below can use String.to_atom/1 without ever
+  # creating an atom that wasn't declared here. Scopes and providers are
+  # listed for the same guarantee even though only permissions convert —
+  # their consumers pattern-match string values directly.
+  @all_known_atoms Enum.map(
+                     @known_permissions ++ @known_providers ++ @known_scopes,
+                     &String.to_atom/1
+                   )
   @doc false
   def __known_atoms__, do: @all_known_atoms
 
   @doc """
-  Convert a string to an atom safely.
-
-  Allowlist-membership first; unknown strings are returned as-is.
-
-  ## Examples
-
-      iex> Sanctum.Atoms.safe_to_atom("execute")
-      :execute
-
-      iex> Sanctum.Atoms.safe_to_atom(:execute)
-      :execute
-
-      iex> Sanctum.Atoms.safe_to_atom("malicious_atom_bomb_attempt")
-      "malicious_atom_bomb_attempt"
-
-  """
-  @spec safe_to_atom(String.t() | atom() | any()) :: atom() | any()
-  def safe_to_atom(str) when is_binary(str) do
-    if str in @all_known_strings, do: String.to_atom(str), else: str
-  end
-
-  def safe_to_atom(atom) when is_atom(atom), do: atom
-  def safe_to_atom(other), do: other
-
-  @doc """
   Convert a string to a permission atom safely.
 
-  Like `safe_to_atom/1` but against the permission vocabulary only — a
-  retired or foreign name comes back as the string, which no permission
-  check matches.
+  Membership-first against the permission vocabulary — a retired or
+  foreign name comes back as the string, which no permission check
+  matches.
   """
   @spec safe_to_permission_atom(String.t() | atom()) :: atom() | String.t()
   def safe_to_permission_atom(str) when is_binary(str) do
@@ -92,14 +70,4 @@ defmodule Sanctum.Atoms do
   end
 
   def safe_to_permission_atom(atom) when is_atom(atom), do: atom
-
-  @doc """
-  Convert a string to a provider atom safely.
-  """
-  @spec safe_to_provider_atom(String.t() | atom()) :: atom() | String.t()
-  def safe_to_provider_atom(str) when is_binary(str) do
-    if str in @known_providers, do: String.to_atom(str), else: str
-  end
-
-  def safe_to_provider_atom(atom) when is_atom(atom), do: atom
 end
