@@ -7,7 +7,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
 
   - `GET /claim-namespace` — renders a form prompting the user for a slug
     (default = suggested username from the OAuth provider login).
-  - `POST /claim-namespace/submit` — validates the signed `_cyfr_pending_probe`
+  - `POST /claim-namespace/submit` — decrypts the `_cyfr_pending_probe`
     cookie, invokes `Compendium.Registry.Client.claim_personal_namespace/4`,
     stores the issued push token, and redirects to the configured post-login
     landing target via `EmissaryWeb.SafeRedirect`.
@@ -169,13 +169,17 @@ defmodule EmissaryWeb.ClaimNamespaceController do
     )
   end
 
-  # Reads (but does NOT delete) the signed `_cyfr_pending_probe` cookie. The
-  # caller must call `clear_pending_probe/1` on the success path — a failed
-  # claim (e.g. `slug_taken` 409) re-renders the form and the user retries
-  # with the same access_token. Deleting here would doom the retry to 400
-  # "Login session expired" after a single typo.
+  # Reads (but does NOT delete) the encrypted `_cyfr_pending_probe` cookie.
+  # `AuthController.maybe_stash_pending_probe/3` writes it with `encrypt: true`
+  # (the value is a provider access token — plaintext in a signed cookie would
+  # leak it to anyone who reads the jar), so it must be fetched as `encrypted:`;
+  # fetching it `signed:` fails verification and reads as nil. The caller must
+  # call `clear_pending_probe/1` on the success path — a failed claim (e.g.
+  # `slug_taken` 409) re-renders the form and the user retries with the same
+  # access_token. Deleting here would doom the retry to 400 "Login session
+  # expired" after a single typo.
   defp pop_pending_probe(conn) do
-    conn = fetch_cookies(conn, signed: ["_cyfr_pending_probe"])
+    conn = fetch_cookies(conn, encrypted: ["_cyfr_pending_probe"])
 
     case conn.cookies["_cyfr_pending_probe"] do
       token when is_binary(token) and token != "" ->

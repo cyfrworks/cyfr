@@ -104,51 +104,63 @@ defmodule EmissaryWeb.ClaimNamespaceControllerTest do
       assert Regex.match?(~r/name="_csrf_token" value="[A-Za-z0-9_+\/=-]+"/, body)
     end
 
-    test "pending_probe cookie survives a failed claim so the user can retry" do
-      # Regression for the cookie-retry bug: pop_pending_probe/1 used to delete
-      # the cookie unconditionally on every successful read. A registry error
-      # (e.g. slug_taken 409) would re-render the form with the cookie already
-      # gone, dooming retries to 400 "Login session expired." Fix keeps the
-      # cookie and only deletes it inside the CredentialStore.put success arm.
+    test "submit without a probe cookie reports the expired session" do
       csrf = get_csrf_from_form(build_conn())
-      access_token = "gho_fake_probe_token"
 
-      # Build a signed cookie the same way AuthController.maybe_stash_pending_probe
-      # does. put_resp_cookie + sign: true uses conn.secret_key_base — supply
-      # one explicitly since build_conn/0 returns a bare conn without it.
-      test_secret = String.duplicate("x", 64)
-
-      signing_conn =
-        build_conn()
-        |> Map.put(:secret_key_base, test_secret)
-        |> Plug.Test.init_test_session(%{sanctum_session_token: "fake-session"})
-        |> put_resp_cookie("_cyfr_pending_probe", access_token,
-          sign: true,
-          max_age: 600,
-          http_only: true,
-          same_site: "Lax"
-        )
-
-      %{value: signed_value} = signing_conn.resp_cookies["_cyfr_pending_probe"]
-
-      # The endpoint's real secret_key_base must match for verify to succeed.
-      # If they differ, the cookie is silently discarded as unsigned → returns
-      # {:expired, conn} which also wouldn't delete anything. That's acceptable
-      # here — the assertion is about deletion markers on the response.
       conn =
         build_conn()
         |> Plug.Test.init_test_session(%{sanctum_session_token: "fake-session"})
-        |> Plug.Test.put_req_cookie("_cyfr_pending_probe", signed_value)
         |> post(~p"/claim-namespace/submit", %{
           "_csrf_token" => csrf,
           "username" => "alice"
         })
 
-      # Controller either re-renders the form with an error (200), bounces
-      # through a 400/500 (depending on failure mode) — what matters is that
-      # no `_cyfr_pending_probe` deletion marker is on the response, because
-      # the claim never succeeded. delete_resp_cookie writes a header with
-      # max-age=0 (and a historical expires=1970 date).
+      assert response(conn, 400) =~ "Login session expired"
+    end
+
+    test "a probe cookie minted by the writer's scheme is readable on submit" do
+      # Scheme-drift tripwire: AuthController.maybe_stash_pending_probe/3 writes
+      # this cookie with `encrypt: true`, and pop_pending_probe/1 must fetch it
+      # with the matching `encrypted:` option. A mismatch (e.g. reading it as
+      # `signed:`) makes the cookie verify-fail to nil, and every submit — even
+      # right after login — dead-ends in "Login session expired". Mint the
+      # cookie exactly as the writer does, against the endpoint's real secret,
+      # and assert the controller gets PAST the expired branch.
+      csrf = get_csrf_from_form(build_conn())
+      access_token = "gho_fake_probe_token"
+      endpoint_secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+
+      writing_conn =
+        build_conn()
+        |> Map.put(:secret_key_base, endpoint_secret)
+        |> put_resp_cookie("_cyfr_pending_probe", access_token,
+          encrypt: true,
+          max_age: 600,
+          http_only: true,
+          same_site: "Lax"
+        )
+
+      %{value: cookie_value} = writing_conn.resp_cookies["_cyfr_pending_probe"]
+
+      conn =
+        build_conn()
+        |> Plug.Test.init_test_session(%{sanctum_session_token: "fake-session"})
+        |> Plug.Test.put_req_cookie("_cyfr_pending_probe", cookie_value)
+        |> post(~p"/claim-namespace/submit", %{
+          "_csrf_token" => csrf,
+          "username" => "alice"
+        })
+
+      # With a readable probe the flow proceeds to the session lookup (the fake
+      # session token fails there, which is fine) — it must NOT stall on the
+      # cookie. If this renders "Login session expired", the write/read cookie
+      # schemes have drifted apart again.
+      refute response_body(conn) =~ "Login session expired"
+
+      # Regression for the cookie-retry bug: pop_pending_probe/1 must not
+      # delete the cookie on read — a failed claim (e.g. slug_taken 409)
+      # re-renders the form and the retry needs the same access_token.
+      # delete_resp_cookie writes max-age=0 (and a 1970 expires date).
       deletion_markers =
         conn
         |> get_resp_header("set-cookie")
@@ -163,6 +175,11 @@ defmodule EmissaryWeb.ClaimNamespaceControllerTest do
                "See ClaimNamespaceController.pop_pending_probe/1."
     end
   end
+
+  # The submit failure pages render with varying status codes depending on the
+  # branch (400 expired, 302 not-logged-in redirect, 200 form re-render); read
+  # whatever body came back without pinning the status.
+  defp response_body(conn), do: conn.resp_body || ""
 
   # The test pipeline renders the form with a CSRF token; pull it out and
   # reuse for the subsequent POST. Keeps tests independent of Phoenix's

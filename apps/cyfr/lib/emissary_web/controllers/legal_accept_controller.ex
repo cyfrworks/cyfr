@@ -12,7 +12,7 @@ defmodule EmissaryWeb.LegalAcceptController do
     * `ClaimNamespaceController.submit` — when cyfr.run returns 412
       `POLICY_ACCEPTANCE_REQUIRED` on a claim attempt.
 
-  The IdP `access_token` is read from the same signed
+  The IdP `access_token` is read from the same encrypted
   `_cyfr_pending_probe` cookie that `ClaimNamespaceController` consumes
   (so the user's OAuth roundtrip happens once and feeds both the
   acceptance and the claim).
@@ -181,8 +181,10 @@ defmodule EmissaryWeb.LegalAcceptController do
   defp current_provider(_conn, %{"provider" => p}) when p in ["github", "google"], do: {:ok, p}
   defp current_provider(conn, _params), do: {:ok, current_provider(conn)}
 
+  # `AuthController.maybe_stash_pending_probe/3` writes this cookie with
+  # `encrypt: true`; fetching it `signed:` fails verification and reads as nil.
   defp pop_pending_probe(conn) do
-    conn = fetch_cookies(conn, signed: ["_cyfr_pending_probe"])
+    conn = fetch_cookies(conn, encrypted: ["_cyfr_pending_probe"])
 
     case conn.cookies["_cyfr_pending_probe"] do
       token when is_binary(token) and token != "" ->
