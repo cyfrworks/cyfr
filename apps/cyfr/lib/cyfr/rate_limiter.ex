@@ -20,9 +20,12 @@ defmodule Cyfr.RateLimiter do
       end
 
   Counters are node-local (single-node deployment; the same clustering caveat as
-  the rest of the ETS-backed state). A throttle failing open on an unavailable
-  table is deliberate — availability over strictness for a rate limit, unlike an
-  authorization gate.
+  the rest of the ETS-backed state). An unavailable table fails CLOSED: this
+  limiter fronts login brute-force, MCP, tincture and webhook ingress, and the
+  table exists from boot — it is only missing while the supervision tree is
+  dying, which is not the moment to wave throttled surfaces through. That
+  includes `/health` (routed through the same throttle), so a limiter outage
+  429s liveness probes and the orchestrator restarts the node — intended.
   """
 
   use GenServer
@@ -63,8 +66,8 @@ defmodule Cyfr.RateLimiter do
     end
   rescue
     ArgumentError ->
-      Logger.warning("[Cyfr.RateLimiter] table unavailable; allowing request")
-      :ok
+      Logger.error("[Cyfr.RateLimiter] table unavailable; denying request")
+      {:deny, 1}
   end
 
   @impl true
