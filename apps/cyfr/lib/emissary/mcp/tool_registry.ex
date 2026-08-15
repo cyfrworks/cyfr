@@ -403,6 +403,82 @@ defmodule Emissary.MCP.ToolRegistry do
     end
   end
 
+  @doc false
+  # The dispatch gate: enforce the action's access annotation — auth,
+  # permission, consent — before the handler runs. Handlers keep only the
+  # residual checks the annotation cannot express (tenant presence,
+  # ownership, definition authority, the domain's finer consent arms).
+  # Public solely so the discovery-parity test can ask the exact question
+  # dispatch answers without executing any handler.
+  @spec authorize_annotated_action(String.t(), map(), Context.t(), map()) ::
+          :ok | {:error, String.t()}
+  def authorize_annotated_action(name, meta, ctx, args) do
+    action = args["action"] || args[:action]
+    annotation = action && get_in(meta, [:annotations, :actions, action])
+
+    cond do
+      is_nil(action) ->
+        {:error, "Missing required argument: action"}
+
+      is_nil(annotation) ->
+        # Default-deny: an action without an access declaration is not
+        # dispatchable, whatever the handler would have said. The HTTP path
+        # never gets here (InputValidator enforces the schema enum first);
+        # this refuses the in-process callers.
+        {:error, "Unknown action: #{name}.#{action}"}
+
+      true ->
+        with :ok <- check_auth(name, ctx, annotation),
+             :ok <- check_permission(ctx, annotation) do
+          check_consent(ctx, annotation)
+        end
+    end
+  end
+
+  defp check_auth(name, ctx, annotation) do
+    if Map.get(annotation, :auth, :required) == :anonymous or ctx.authenticated do
+      :ok
+    else
+      {:error, "Unauthorized: tool '#{name}' requires authentication"}
+    end
+  end
+
+  defp check_permission(ctx, annotation) do
+    case Map.get(annotation, :permission) do
+      nil -> :ok
+      permission -> Context.require_permission_for_plane(ctx, permission)
+    end
+  end
+
+  defp check_consent(ctx, annotation) do
+    case Map.get(annotation, :consent) do
+      nil ->
+        :ok
+
+      :interactive ->
+        case Sanctum.Consent.Authz.authorize_interactive(ctx) do
+          {:ok, :interactive} -> :ok
+          {:error, refusal} -> {:error, consent_refusal(refusal)}
+        end
+
+      :staging ->
+        case Sanctum.Consent.Authz.authorize_staging(ctx) do
+          :ok -> :ok
+          {:error, refusal} -> {:error, consent_refusal(refusal)}
+        end
+    end
+  end
+
+  # The same vocabulary Sanctum.MCP.ProfileTool speaks for domain-level
+  # refusals, so a caller sees one phrasing whichever layer refused.
+  defp consent_refusal({:surface_not_permitted, method}),
+    do: "consent_class_required: this surface (#{method}) cannot consent"
+
+  defp consent_refusal(:guest_plane),
+    do: "consent_class_required: guest-plane contexts cannot consent"
+
+  defp consent_refusal(other), do: "consent_class_required: #{inspect(other)}"
+
   defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
     in_chain? = Keyword.get(opts, :in_chain, false)
 
@@ -447,10 +523,12 @@ defmodule Emissary.MCP.ToolRegistry do
     case Arca.Cache.get({:mcp_tool, name}) do
       {:ok, {module, meta}} ->
         result =
-          if meta.requires_auth and not ctx.authenticated do
-            {:error, "Unauthorized: tool '#{name}' requires authentication"}
-          else
-            execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+          case authorize_annotated_action(name, meta, ctx, args) do
+            :ok ->
+              execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+
+            {:error, _} = refusal ->
+              refusal
           end
 
         if should_log? do
@@ -607,10 +685,9 @@ defmodule Emissary.MCP.ToolRegistry do
     enum =
       get_in(tool, [Access.key(:input_schema, %{}), "properties", "action", "enum"]) || []
 
-    actions_meta =
-      get_in(tool, [Access.key(:annotations, %{}), :actions]) ||
-        get_in(tool, [Access.key(:annotations, %{}), "actions"]) ||
-        %{}
+    # Every provider writes atom-keyed annotations with string verb keys;
+    # there is deliberately no second accepted spelling.
+    actions_meta = get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{}
 
     Enum.flat_map(enum, fn verb ->
       case audit_action(Map.get(actions_meta, verb)) do
@@ -621,20 +698,33 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   @valid_planes [:external, :in_chain]
+  @valid_auth [:anonymous, :required]
+  @valid_consent [:interactive, :staging]
 
   defp audit_action(%{} = annotation) do
-    kind = Map.get(annotation, :kind) || Map.get(annotation, "kind")
-    planes = Map.get(annotation, :planes) || Map.get(annotation, "planes")
+    kind = Map.get(annotation, :kind)
+    planes = Map.get(annotation, :planes)
+    auth = Map.get(annotation, :auth, :required)
+    permission = Map.get(annotation, :permission)
+    consent = Map.get(annotation, :consent)
 
     cond do
-      not (is_atom(kind) or is_binary(kind)) or is_nil(kind) -> {:error, :missing_kind}
+      is_nil(kind) or not is_atom(kind) -> {:error, :missing_kind}
       not is_list(planes) or planes == [] -> {:error, :missing_planes}
       not Enum.all?(planes, &(&1 in @valid_planes)) -> {:error, :invalid_planes}
+      auth not in @valid_auth -> {:error, :invalid_auth}
+      not (is_nil(permission) or known_permission?(permission)) -> {:error, :invalid_permission}
+      not (is_nil(consent) or consent in @valid_consent) -> {:error, :invalid_consent}
       true -> :ok
     end
   end
 
   defp audit_action(_annotation), do: {:error, :missing_annotation}
+
+  defp known_permission?(permission) when is_atom(permission),
+    do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
+
+  defp known_permission?(_), do: false
 
   @doc """
   The planes an action may be annotated with.
@@ -785,10 +875,9 @@ defmodule Emissary.MCP.ToolRegistry do
             title: Map.get(tool, :title),
             icons: Map.get(tool, :icons),
             output_schema: Map.get(tool, :output_schema),
-            annotations: Map.get(tool, :annotations),
-            # Default-deny: tools require ctx.authenticated unless they
-            # explicitly opt out via `requires_auth: false`.
-            requires_auth: Map.get(tool, :requires_auth, true)
+            # Per-action access declarations ride in annotations.actions —
+            # the dispatch gate and discovery both read them from here.
+            annotations: Map.get(tool, :annotations)
           }
 
           Arca.Cache.put({:mcp_tool, tool.name}, {module, meta}, @cache_ttl)

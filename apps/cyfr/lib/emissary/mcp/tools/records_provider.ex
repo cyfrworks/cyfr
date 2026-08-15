@@ -113,8 +113,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "get" => %{kind: :read, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external]}
+            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "list" => %{kind: :read, planes: [:external], permission: :storage_read}
           }
         },
         input_schema: %{
@@ -157,11 +157,11 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "list" => %{kind: :read, planes: [:external]},
-            "get" => %{kind: :read, planes: [:external]},
-            "correlate" => %{kind: :read, planes: [:external]},
-            "fan_outs" => %{kind: :read, planes: [:external]},
-            "stats" => %{kind: :read, planes: [:external]}
+            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "correlate" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "fan_outs" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "stats" => %{kind: :read, planes: [:external], permission: :storage_read}
           }
         },
         input_schema: %{
@@ -204,9 +204,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "list" => %{kind: :read, planes: [:external]},
-            "get" => %{kind: :read, planes: [:external]},
-            "correlate" => %{kind: :read, planes: [:external]}
+            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "correlate" => %{kind: :read, planes: [:external], permission: :storage_read}
           }
         },
         input_schema: %{
@@ -236,9 +236,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "get" => %{kind: :read, planes: [:external]},
-            "set" => %{kind: :write, planes: [:external]},
-            "cleanup" => %{kind: :destructive, planes: [:external]}
+            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
+            "set" => %{kind: :write, planes: [:external], permission: :storage_write},
+            "cleanup" => %{kind: :destructive, planes: [:external], permission: :admin}
           }
         },
         input_schema: %{

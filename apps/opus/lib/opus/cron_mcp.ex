@@ -32,14 +32,16 @@ defmodule Opus.CronMCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "create" => %{kind: :write, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external, :in_chain]},
-            "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "update" => %{kind: :write, planes: [:external]},
-            "pause" => %{kind: :write, planes: [:external]},
-            "resume" => %{kind: :write, planes: [:external]},
-            "delete" => %{kind: :destructive, planes: [:external]},
-            "re_resolve" => %{kind: :write, planes: [:external]}
+            # create/update also require the registration's consent binding —
+            # a conditional Authz check that stays in the handler.
+            "create" => %{kind: :write, planes: [:external], permission: :execute},
+            "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
+            "get" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
+            "update" => %{kind: :write, planes: [:external], permission: :execute},
+            "pause" => %{kind: :write, planes: [:external], permission: :execute},
+            "resume" => %{kind: :write, planes: [:external], permission: :execute},
+            "delete" => %{kind: :destructive, planes: [:external], permission: :execute},
+            "re_resolve" => %{kind: :write, planes: [:external], permission: :execute}
           }
         },
         input_schema: %{

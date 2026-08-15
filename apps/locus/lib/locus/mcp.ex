@@ -39,10 +39,10 @@ defmodule Locus.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "compile" => %{kind: :execute, planes: [:external, :in_chain]},
+            "compile" => %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
             "validate" => %{kind: :read, planes: [:external, :in_chain]},
             "toolchains" => %{kind: :read, planes: [:external, :in_chain]},
-            "status" => %{kind: :read, planes: [:external, :in_chain]}
+            "status" => %{kind: :read, planes: [:external, :in_chain], permission: :execute}
           }
         },
         input_schema: %{

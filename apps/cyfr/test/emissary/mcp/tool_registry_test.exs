@@ -241,9 +241,19 @@ defmodule Emissary.MCP.ToolRegistryTest do
     @crash_tool "crash_barrier_test_tool"
 
     defp register_crashing_tool do
+      # The dispatch gate refuses actions without an access declaration, so
+      # the injected meta must annotate every action the tests drive.
+      annotations = %{
+        actions: %{
+          "raise" => %{kind: :execute, planes: [:external]},
+          "exit" => %{kind: :execute, planes: [:external]},
+          "ok" => %{kind: :read, planes: [:external]}
+        }
+      }
+
       Arca.Cache.put(
         {:mcp_tool, @crash_tool},
-        {Emissary.MCP.ToolRegistryTest.CrashingProvider, %{requires_auth: false}},
+        {Emissary.MCP.ToolRegistryTest.CrashingProvider, %{annotations: annotations}},
         :timer.minutes(1)
       )
 
@@ -263,7 +273,9 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # The whole point: Task.async would have propagated a link exit and killed
       # this process, so reaching the next line at all is the assertion.
       assert Process.alive?(caller)
-      assert {:ok, %{"ok" => true}} = ToolRegistry.call_external(@crash_tool, ctx, %{})
+
+      assert {:ok, %{"ok" => true}} =
+               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "ok"})
     end
 
     test "an exiting handler yields a typed error and the caller survives" do
@@ -377,9 +389,11 @@ defmodule Emissary.MCP.ToolRegistryTest do
     @blocking_tool "cancellation_test_tool"
 
     defp register_blocking_tool do
+      annotations = %{actions: %{"block" => %{kind: :execute, planes: [:external]}}}
+
       Arca.Cache.put(
         {:mcp_tool, @blocking_tool},
-        {Emissary.MCP.ToolRegistryTest.BlockingProvider, %{requires_auth: false}},
+        {Emissary.MCP.ToolRegistryTest.BlockingProvider, %{annotations: annotations}},
         :timer.minutes(1)
       )
 
@@ -396,7 +410,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       caller = self()
 
       spawn(fn ->
-        args = %{reply_to: caller}
+        args = %{"action" => "block", :reply_to => caller}
         send(caller, {:result, ToolRegistry.call_external(@blocking_tool, ctx, args)})
       end)
 

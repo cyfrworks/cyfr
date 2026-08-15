@@ -245,17 +245,20 @@ defmodule Opus.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "run" => %{kind: :execute, planes: [:external, :in_chain]},
-            "run_stream" => %{kind: :execute, planes: [:external, :in_chain]},
-            "list" => %{kind: :read, planes: [:external, :in_chain]},
-            "logs" => %{kind: :read, planes: [:external, :in_chain]},
-            "cancel" => %{kind: :write, planes: [:external, :in_chain]},
+            "run" => %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
+            "run_stream" =>
+              %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
+            "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
+            "logs" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
+            "cancel" => %{kind: :write, planes: [:external, :in_chain], permission: :execute},
             # Semaphore diagnostics are tenant-operational: global counters
             # with no chain grain to scope them to. Classify it out of the
             # in-chain plane rather than serve a number that means nothing
             # to the caller.
-            "status" => %{kind: :read, planes: [:external]},
-            "force_release" => %{kind: :destructive, planes: [:external]}
+            "status" => %{kind: :read, planes: [:external], permission: :execute},
+            # The handler additionally requires platform scope — a residual
+            # the annotation cannot express.
+            "force_release" => %{kind: :destructive, planes: [:external], permission: :admin}
           }
         },
         input_schema: %{

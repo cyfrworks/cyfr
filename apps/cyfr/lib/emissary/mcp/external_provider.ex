@@ -36,14 +36,14 @@ defmodule Emissary.MCP.ExternalProvider do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "create" => %{kind: :write, planes: [:external]},
-            "delete" => %{kind: :destructive, planes: [:external]},
+            "create" => %{kind: :write, planes: [:external], permission: :admin},
+            "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
             "list" => %{kind: :read, planes: [:external, :in_chain]},
             "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "test" => %{kind: :execute, planes: [:external]},
-            "refresh" => %{kind: :write, planes: [:external]},
-            "enable" => %{kind: :write, planes: [:external]},
-            "disable" => %{kind: :write, planes: [:external]}
+            "test" => %{kind: :execute, planes: [:external], permission: :admin},
+            "refresh" => %{kind: :write, planes: [:external], permission: :admin},
+            "enable" => %{kind: :write, planes: [:external], permission: :admin},
+            "disable" => %{kind: :write, planes: [:external], permission: :admin}
           }
         },
         input_schema: %{

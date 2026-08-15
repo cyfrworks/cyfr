@@ -17,6 +17,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
   alias Sanctum.Context
 
+  setup do
+    # PrismWeb.ConnCase does no sandbox setup (its other users never touch
+    # the DB); the plan walk does, including from tasks the dispatcher spawns.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
+
   defp oidc_ctx do
     Context.build(
       user_id: "consent_sheet_test_user",

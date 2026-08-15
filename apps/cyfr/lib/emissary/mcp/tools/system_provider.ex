@@ -30,16 +30,14 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         name: "system",
         title: "System",
         description: "System health checks and notifications",
-        # Anonymous-allowed: `status` action is a health check that callers
-        # need before logging in. The `notify` action is auth-checked at the
-        # handler level via existing permission gates.
-        requires_auth: false,
         annotations: %{
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "status" => %{kind: :read, planes: [:external, :in_chain]},
-            "notify" => %{kind: :write, planes: [:external]}
+            # Anonymous-allowed: the health check a client calls before
+            # logging in.
+            "status" => %{kind: :read, planes: [:external, :in_chain], auth: :anonymous},
+            "notify" => %{kind: :write, planes: [:external], permission: :admin}
           }
         },
         input_schema: %{
@@ -76,14 +74,13 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         title: "Tools",
         description:
           "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (formulas see their in-chain plane).",
-        # Tool discovery is anonymous-safe by design: the dispatcher returns
-        # only public metadata, and per-tool handlers still gate any
-        # destructive actions.
-        requires_auth: false,
         annotations: %{
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
+            # Authenticated-only, matching the HTTP surface (which has always
+            # 401'd an anonymous tools.list): an uncredentialed caller's
+            # discovery is the anonymous action set, nothing more.
             "list" => %{kind: :read, planes: [:external, :in_chain]}
           }
         },

@@ -98,18 +98,18 @@ defmodule Sanctum.MCP do
         description:
           "Manage user sessions — login, logout, get local identity, or run device-flow OAuth. " <>
             "Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
-        # Anonymous-allowed: `whoami` and the device-flow login actions need
-        # to work before the user is authenticated.
-        requires_auth: false,
         annotations: %{
           readOnlyHint: false,
           destructiveHint: false,
+          # Anonymous-allowed: `whoami` and the device-flow login actions need
+          # to work before a credential exists, and `logout` only ever
+          # destroys the caller's own session.
           actions: %{
-            "login" => %{kind: :write, planes: [:external]},
-            "logout" => %{kind: :write, planes: [:external]},
-            "whoami" => %{kind: :read, planes: [:external]},
-            "device_init" => %{kind: :write, planes: [:external]},
-            "device_poll" => %{kind: :write, planes: [:external]}
+            "login" => %{kind: :write, planes: [:external], auth: :anonymous},
+            "logout" => %{kind: :write, planes: [:external], auth: :anonymous},
+            "whoami" => %{kind: :read, planes: [:external], auth: :anonymous},
+            "device_init" => %{kind: :write, planes: [:external], auth: :anonymous},
+            "device_poll" => %{kind: :write, planes: [:external], auth: :anonymous}
           }
         },
         input_schema: %{
@@ -160,7 +160,7 @@ defmodule Sanctum.MCP do
             # vault.create, webhook.create). This one writes the operator's
             # OAuth *client* secret, so a component reaching it from inside
             # the sandbox would be the widest of the set, not the narrowest.
-            "set_client" => %{kind: :write, planes: [:external]}
+            "set_client" => %{kind: :write, planes: [:external], permission: :vault_write}
           }
         },
         input_schema: %{
@@ -195,11 +195,11 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "create" => %{kind: :write, planes: [:external]},
-            "get" => %{kind: :read, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external]},
-            "revoke" => %{kind: :write, planes: [:external]},
-            "rotate" => %{kind: :write, planes: [:external]}
+            "create" => %{kind: :write, planes: [:external], permission: :admin},
+            "get" => %{kind: :read, planes: [:external], permission: :admin},
+            "list" => %{kind: :read, planes: [:external], permission: :admin},
+            "revoke" => %{kind: :write, planes: [:external], permission: :admin},
+            "rotate" => %{kind: :write, planes: [:external], permission: :admin}
           }
         },
         input_schema: %{
@@ -251,8 +251,8 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "set" => %{kind: :write, planes: [:external]},
-            "get" => %{kind: :read, planes: [:external, :in_chain]}
+            "set" => %{kind: :write, planes: [:external], permission: :execute},
+            "get" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read}
           }
         },
         input_schema: %{
@@ -289,12 +289,15 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "create" => %{kind: :write, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external, :in_chain]},
-            "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "update" => %{kind: :write, planes: [:external]},
-            "revoke" => %{kind: :write, planes: [:external]},
-            "rotate" => %{kind: :write, planes: [:external]}
+            # create/update also require the registration's consent binding —
+            # a conditional Authz check the annotation cannot express; it
+            # stays in Sanctum.Webhook.
+            "create" => %{kind: :write, planes: [:external], permission: :admin},
+            "list" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read},
+            "get" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read},
+            "update" => %{kind: :write, planes: [:external], permission: :admin},
+            "revoke" => %{kind: :write, planes: [:external], permission: :admin},
+            "rotate" => %{kind: :write, planes: [:external], permission: :admin}
           }
         },
         input_schema: %{
@@ -366,14 +369,17 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "list" => %{kind: :read, planes: [:external]},
-            "create" => %{kind: :write, planes: [:external]},
-            "rename" => %{kind: :write, planes: [:external]},
-            "rotate" => %{kind: :write, planes: [:external]},
-            "rebind" => %{kind: :write, planes: [:external]},
-            "authorize" => %{kind: :write, planes: [:external]},
-            "revoke" => %{kind: :destructive, planes: [:external]},
-            "delete" => %{kind: :destructive, planes: [:external]}
+            # Mutations are interactive-consent surfaces (OIDC sessions only,
+            # by owner decision — no permission conjunct); list admits the
+            # staging class so keys can enumerate entries.
+            "list" => %{kind: :read, planes: [:external], consent: :staging},
+            "create" => %{kind: :write, planes: [:external], consent: :interactive},
+            "rename" => %{kind: :write, planes: [:external], consent: :interactive},
+            "rotate" => %{kind: :write, planes: [:external], consent: :interactive},
+            "rebind" => %{kind: :write, planes: [:external], consent: :interactive},
+            "authorize" => %{kind: :write, planes: [:external], consent: :interactive},
+            "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive},
+            "delete" => %{kind: :destructive, planes: [:external], consent: :interactive}
           }
         },
         input_schema: %{
@@ -445,12 +451,15 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "plan" => %{kind: :write, planes: [:external]},
-            "preview" => %{kind: :write, planes: [:external]},
-            "commit" => %{kind: :write, planes: [:external]},
-            "publish" => %{kind: :write, planes: [:external]},
-            "list" => %{kind: :read, planes: [:external]},
-            "revoke" => %{kind: :destructive, planes: [:external]}
+            # Dispatch applies the coarse consent class; the domain applies
+            # the exact one (commit's digest-pinned key-capability arm lives
+            # in Sanctum.Consent.Commit and stays there).
+            "plan" => %{kind: :write, planes: [:external], consent: :staging},
+            "preview" => %{kind: :write, planes: [:external], consent: :staging},
+            "commit" => %{kind: :write, planes: [:external], consent: :staging},
+            "publish" => %{kind: :write, planes: [:external], consent: :staging},
+            "list" => %{kind: :read, planes: [:external], consent: :staging},
+            "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive}
           }
         },
         input_schema: %{

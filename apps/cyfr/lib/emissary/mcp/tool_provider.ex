@@ -86,9 +86,30 @@ defmodule Emissary.MCP.ToolProvider do
   """
   @type plane :: :external | :in_chain
 
+  @typedoc """
+  Per-action access declaration — the gate, not a hint.
+
+  `Emissary.MCP.ToolRegistry.do_call/4` enforces these keys at dispatch and
+  `Emissary.MCP.ToolVisibility` derives discovery from the same map, so what
+  a caller is shown and what a caller may invoke cannot drift apart.
+
+  - `:auth` — `:anonymous` serves uncredentialed callers (device flow,
+    health); the default `:required` refuses them.
+  - `:permission` — a `Sanctum.Atoms` permission atom, enforced through
+    `Sanctum.Context.require_permission_for_plane/2`. Absent means any
+    authenticated caller.
+  - `:consent` — the consent surface class (`Sanctum.Consent.Authz`):
+    `:interactive` admits interactive OIDC sessions only, `:staging` also
+    admits API keys. The domain keeps its own finer Authz checks (the
+    digest-pinned commit arm, conditional registration bindings) — dispatch
+    applies the coarse class, the domain the exact one.
+  """
   @type action_annotation :: %{
           required(:kind) => action_kind(),
-          required(:planes) => [plane(), ...]
+          required(:planes) => [plane(), ...],
+          optional(:auth) => :anonymous | :required,
+          optional(:permission) => atom(),
+          optional(:consent) => :interactive | :staging
         }
 
   @type tool_definition :: %{
@@ -98,12 +119,7 @@ defmodule Emissary.MCP.ToolProvider do
           optional(:title) => String.t(),
           optional(:icons) => [icon()],
           optional(:output_schema) => map(),
-          optional(:annotations) => map(),
-          # When false, the dispatcher does NOT require ctx.authenticated.
-          # Defaults to true (default-deny). Set false for tools whose handlers
-          # legitimately serve anonymous callers (e.g. tool discovery,
-          # health checks, `session whoami`). See Emissary.MCP.ToolRegistry.
-          optional(:requires_auth) => boolean()
+          optional(:annotations) => map()
         }
 
   @type handle_result :: {:ok, map()} | {:error, String.t()}
@@ -139,6 +155,13 @@ defmodule Emissary.MCP.ToolProvider do
     `:read` is no-state-change, `:write` is recoverable mutation, `:execute`
     runs code or hits external/billable systems, `:destructive` is
     irreversible.
+
+    The same per-action map carries the access declaration (`auth`,
+    `permission`, `consent` — see `t:action_annotation/0`), which the
+    dispatcher enforces and discovery derives from. A handler may keep
+    residual checks the annotation cannot express (tenant presence,
+    ownership, definition authority, the domain's own consent arms), but
+    never a plain permission gate — that lives here.
 
     Every action listed in the tool's
     `input_schema.properties.action.enum` MUST have a matching key in

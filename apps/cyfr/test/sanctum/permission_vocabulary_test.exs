@@ -27,16 +27,26 @@ defmodule Sanctum.PermissionVocabularyTest do
     end
   end
 
-  test "every permission the tool-visibility map gates is a known permission" do
+  test "every permission an action annotation gates is a known permission" do
     known =
       Sanctum.Atoms.known_permissions()
       |> Enum.map(&String.to_atom/1)
       |> MapSet.new()
 
+    providers = Application.fetch_env!(:cyfr, :tool_providers)
+
     gated =
-      Emissary.MCP.ToolVisibility.action_permissions()
-      |> Map.values()
-      |> MapSet.new()
+      for module <- providers,
+          Code.ensure_loaded?(module),
+          tool <- module.tools(),
+          {_verb, annotation} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
+          perm = Map.get(annotation, :permission),
+          not is_nil(perm),
+          into: MapSet.new() do
+        perm
+      end
+
+    assert MapSet.size(gated) > 0
 
     for perm <- gated do
       assert perm in known, "gated permission #{inspect(perm)} not in Sanctum.Atoms"

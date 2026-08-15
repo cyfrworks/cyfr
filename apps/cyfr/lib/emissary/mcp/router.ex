@@ -14,27 +14,31 @@ defmodule Emissary.MCP.Router do
 
   ## Authorization Model
 
-  The Router gates; handlers authorize. The Router answers only the coarse
-  question — may an unauthenticated caller reach this tool action at all? — by
-  asking `Emissary.MCP.ToolVisibility`. Individual tool handlers then enforce fine-grained
-  authorization (does this caller have permission to perform this specific
-  action?) using `Context.require_permission/2` or `Context.authorize/2`.
+  The Router gates; the dispatcher authorizes. The Router answers only the
+  coarse question — may an unauthenticated caller reach this tool action at
+  all? — by asking `Emissary.MCP.ToolVisibility`, which reads the action's
+  access annotation. `Emissary.MCP.ToolRegistry` then enforces the same
+  annotation (`auth`, `permission`, `consent`) at dispatch, and handlers keep
+  only the residual checks an annotation cannot express (tenant presence,
+  ownership, definition authority, the domain's finer consent arms) — via
+  `Context.require_permission_for_plane/2` and friends, never a second copy
+  of the permission gate.
 
   Authentication itself happens earlier, in `EmissaryWeb.Plugs.Authenticate`.
 
   ## Public Tool Actions
 
   The anonymous surface — which tool actions a caller with no credential may
-  reach — is declared once in `Emissary.MCP.ToolVisibility`, which also
-  decides what such a caller may *see*. The Router asks it rather than
-  keeping a second copy: when discovery and invocation each held their own
-  list, discovery advertised writes that invocation refused.
+  reach — is the set of actions annotated `auth: :anonymous`, read through
+  `Emissary.MCP.ToolVisibility`, which also decides what such a caller may
+  *see*. Discovery and invocation read one declaration: when each held its
+  own list, discovery advertised writes that invocation refused.
 
   ## Resource Methods
 
   `resources/list`, `resources/templates/list` are intentionally unauthenticated
   at the Router level. Resource metadata is non-sensitive; individual `resources/read`
-  handlers enforce their own authorization (e.g. `Context.authorize(ctx, :read)`).
+  handlers enforce their own authorization.
 
   ## Dispatch Flow
 
