@@ -43,7 +43,12 @@ defmodule Locus.Builder do
   require Logger
 
   @max_source_size Application.compile_env(:cyfr, :max_source_size, 1_024 * 1_024)
-  @default_timeout_ms Application.compile_env(:cyfr, :compile_timeout_ms, 300_000)
+  # 30s under the MCP tool layer's 5-minute brutal-kill deadline, so a build
+  # that exhausts its budget dies here — a graceful {:error, :compilation_timeout}
+  # with the slot released — instead of losing the race to the caller's kill.
+  # The margin also has to absorb the work outside the timed command: source
+  # collection from Arca, WASM validation, and the artifact store.
+  @default_timeout_ms Application.compile_env(:cyfr, :compile_timeout_ms, 270_000)
 
   @doc """
   Compile source code using the appropriate toolchain.
