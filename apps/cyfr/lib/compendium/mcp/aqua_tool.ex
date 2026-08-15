@@ -10,7 +10,6 @@ defmodule Compendium.MCP.AquaTool do
   """
 
   alias Sanctum.Context
-  alias Compendium.MCP.Shared
 
   # Repo root — used for compile-time doc embedding. Resolved by walking up from
   # this file until the guide files are found, rather than hard-coding the number
@@ -126,7 +125,7 @@ defmodule Compendium.MCP.AquaTool do
   # orchestrator. Pass `type: "doc"` to create a markdown guide entry.
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage),
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage),
          :ok <- require_definition_authority(ctx),
          :ok <- validate_tool_policy(args["tool_policy"]) do
       type = inferred_aqua_create_type(args)
@@ -146,7 +145,7 @@ defmodule Compendium.MCP.AquaTool do
   # --- update ---
 
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage),
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage),
          :ok <- require_definition_authority(ctx),
          :ok <- validate_tool_policy(args["tool_policy"]),
          {:ok, manifest} <- read_agent_manifest(ctx),
@@ -196,7 +195,7 @@ defmodule Compendium.MCP.AquaTool do
   # --- delete ---
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
-    with :ok <- Shared.require_permission(ctx, :component_manage),
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage),
          :ok <- require_definition_authority(ctx),
          {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do

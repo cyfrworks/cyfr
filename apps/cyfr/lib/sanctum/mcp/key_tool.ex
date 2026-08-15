@@ -12,10 +12,9 @@ defmodule Sanctum.MCP.KeyTool do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.MCP.Shared
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       case Sanctum.ApiKey.list(ctx) do
         {:ok, keys} ->
           {:ok, %{keys: keys, count: length(keys)}}
@@ -28,7 +27,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       case Sanctum.ApiKey.get(ctx, name) do
         {:ok, key_info} ->
           {:ok, key_info}
@@ -44,7 +43,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- Shared.require_permission(ctx, :admin),
+    with :ok <- Context.require_permission_for_plane(ctx, :admin),
          {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "application")) do
       scope = Map.get(args, "scope", [])
 
@@ -90,7 +89,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "name" => name} = _args) do
-    with :ok <- Shared.require_permission(ctx, :admin),
+    with :ok <- Context.require_permission_for_plane(ctx, :admin),
          :ok <- Sanctum.ApiKey.revoke(ctx, name) do
       broadcast_api_keys_changed(ctx)
       {:ok, %{revoked: true, name: name}}
@@ -112,7 +111,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "rotate", "name" => name} = _args) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       case Sanctum.ApiKey.rotate(ctx, name) do
         {:ok, result} ->
           broadcast_api_keys_changed(ctx)

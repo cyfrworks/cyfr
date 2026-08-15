@@ -25,7 +25,7 @@ defmodule Compendium.MCP.RegistryTool do
 
   def handle(%Context{} = ctx, %{"action" => action} = args)
       when action in @identity_mutations do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       handle_gated(ctx, args)
     end
   end

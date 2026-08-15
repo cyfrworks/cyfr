@@ -82,7 +82,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
         url: "https://127.0.0.1:9/mcp",
         config_json:
           Jason.encode!(%{
-            "headers" => %{"authorization" => "secret:SOME_TOKEN"},
+            "headers" => %{"authorization" => "vault:SOME_TOKEN"},
             "timeout_ms" => 1_000
           })
       })

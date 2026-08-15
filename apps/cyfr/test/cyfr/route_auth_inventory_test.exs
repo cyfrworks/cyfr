@@ -6,8 +6,8 @@ defmodule Cyfr.RouteAuthInventoryTest do
   A mechanical inventory of every HTTP route and how it is authenticated —
   the route-level analogue of `Cyfr.IngressInventoryTest`.
 
-  Auth for a route lives in one of a few places: an MCP-session or webhook-HMAC
-  plug on the pipeline, a LiveView `live_session` `on_mount`, the controller
+  Auth for a route lives in one of a few places: a bearer-credential or
+  webhook-HMAC plug on the pipeline, a LiveView `live_session` `on_mount`, the controller
   itself (tincture, whoami/logout), or nowhere by design (health, login). None
   of those is a single boolean the router exposes, so instead every route is
   classified here against a literal map. A NEW route fails this test until it is

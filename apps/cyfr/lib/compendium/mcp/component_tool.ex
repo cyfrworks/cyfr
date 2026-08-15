@@ -111,7 +111,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Pull action - pull component from registry (local or OCI)
   def handle(%Context{} = ctx, %{"action" => "pull"} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       progress_id = args["progress_id"]
 
       case args["reference"] do
@@ -160,7 +160,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Push action — upload an already-registered local component to an OCI registry.
   def handle(%Context{} = ctx, %{"action" => "push"} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       reference = args["reference"]
       registry = args["registry"] || default_registry()
       progress_id = args["progress_id"]
@@ -224,7 +224,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Create action - scaffold a new component project
   def handle(%Context{} = ctx, %{"action" => "create"} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       name = args["name"]
       type = args["type"]
       version = args["version"] || "0.1.0"
@@ -243,7 +243,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Register action - scan and register all local components
   def handle(%Context{} = ctx, %{"action" => "register"} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       register_id = args["register_id"]
 
       broadcast_register_progress(
@@ -361,7 +361,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Delete action - delete a component from the registry
   def handle(%Context{} = ctx, %{"action" => "delete", "reference" => reference}) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       case Sanctum.ComponentRef.parse(reference) do
         {:ok, %{version: nil} = cref} ->
           # Check if name is even valid before giving version error
@@ -406,7 +406,7 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Get blob action - get component WASM binary by digest
   def handle(%Context{} = ctx, %{"action" => "get_blob", "digest" => digest}) do
-    with :ok <- Shared.require_permission(ctx, :component_read) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_read) do
       case Registry.get_blob(ctx, digest) do
         {:ok, bytes} ->
           {:ok, %{bytes: Base.encode64(bytes), digest: digest}}
@@ -428,7 +428,7 @@ defmodule Compendium.MCP.ComponentTool do
   # Discover action - list components on the configured registry (cyfr.run
   # REST API). The registry host is set via CYFR_REGISTRY_URL.
   def handle(%Context{} = ctx, %{"action" => "discover"} = args) do
-    with :ok <- Shared.require_permission(ctx, :component_read) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_read) do
       registry = args["registry"] || default_registry()
 
       case Compendium.Registry.validate_host(registry) do
@@ -468,7 +468,7 @@ defmodule Compendium.MCP.ComponentTool do
         %Context{} = ctx,
         %{"action" => "fork", "reference" => reference} = args
       ) do
-    with :ok <- Shared.require_permission(ctx, :component_manage) do
+    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
       case Sanctum.ComponentRef.parse(reference) do
         {:ok, %{version: nil}} ->
           {:error, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}

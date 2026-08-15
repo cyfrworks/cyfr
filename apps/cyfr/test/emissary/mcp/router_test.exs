@@ -227,35 +227,19 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with notifications" do
-    test "handles notifications/initialized", %{context: ctx} do
-      msg = %Message{
-        type: :notification,
-        method: "notifications/initialized",
-        params: nil
-      }
-
-      assert :ok = Router.dispatch(ctx, msg)
-    end
-
-    test "handles notifications/cancelled", %{context: ctx} do
-      msg = %Message{
-        type: :notification,
-        method: "notifications/cancelled",
-        params: %{"requestId" => 123}
-      }
-
-      assert :ok = Router.dispatch(ctx, msg)
-    end
-
-    test "handles unknown notification gracefully", %{context: ctx} do
-      msg = %Message{
-        type: :notification,
-        method: "notifications/unknown",
-        params: nil
-      }
-
-      # Should not crash, just logs warning
-      assert :ok = Router.dispatch(ctx, msg)
+    test "any notification is logged and absorbed, never dispatched", %{context: ctx} do
+      # There is deliberately no notification clause besides the catch-all:
+      # on Streamable HTTP the only cancellation signal is the caller
+      # closing its own stream, so `notifications/cancelled` must NOT be a
+      # second way in — it lands in the same absorb-and-log arm as anything
+      # else.
+      for {method, params} <- [
+            {"notifications/cancelled", %{"requestId" => 123}},
+            {"notifications/unknown", nil}
+          ] do
+        msg = %Message{type: :notification, method: method, params: params}
+        assert :ok = Router.dispatch(ctx, msg)
+      end
     end
   end
 

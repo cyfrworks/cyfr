@@ -42,10 +42,10 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp executable_local_components(ctx) do
-    # Tinctures are not executable, but post-cutover a profile is what
-    # makes one invocable at all — the route selects it. Owner profiles
-    # mint here; public ones only ever through profile.publish.
-    types = Enum.map(Sanctum.ComponentRef.executable_types(), &to_string/1) ++ ["tincture"]
+    # Every valid type is profile-bearing: tinctures are not executable,
+    # but a profile is what makes one invocable at all — the route selects
+    # it. Owner profiles mint here; public ones only via profile.publish.
+    types = Sanctum.ComponentRef.valid_types()
 
     case Arca.ComponentStorage.list_components(ctx, publisher: "local") do
       {:ok, rows} ->

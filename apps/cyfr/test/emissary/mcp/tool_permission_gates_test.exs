@@ -119,13 +119,24 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  })
                )
 
-      # The secrets plane is retired: a secret: reference is just a
-      # literal now, and a credential-shaped literal is rejected.
-      assert {:error, _} =
+      # The secrets plane is retired: a secret: reference is rejected at
+      # create with a message naming the vault: replacement.
+      assert {:error, msg} =
                Emissary.MCP.ExternalProvider.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{"Authorization" => "secret:MY_TOKEN"})
+               )
+
+      assert msg =~ "vault:"
+
+      # Even in a header whose NAME is not credential-shaped — otherwise the
+      # row persists and only fails at server boot.
+      assert {:error, _} =
+               Emissary.MCP.ExternalProvider.handle(
+                 "mcp_servers",
+                 ctx,
+                 create_args(%{"X-Thing" => "secret:MY_TOKEN"})
                )
     end
   end

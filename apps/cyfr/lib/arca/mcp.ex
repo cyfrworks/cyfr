@@ -80,7 +80,7 @@ defmodule Arca.MCP do
   end
 
   def read(%Context{} = ctx, "arca://files/" <> path) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
       case Arca.get(ctx, segments) do
@@ -298,7 +298,7 @@ defmodule Arca.MCP do
   end
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       case Arca.Execution.get_tenant(ctx, id) do
         nil ->
           {:error, "Execution not found: #{id}"}
@@ -316,7 +316,7 @@ defmodule Arca.MCP do
   end
 
   def handle("record", ctx, %{"action" => "list"} = args) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -360,7 +360,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
           {:error, "MCP log not found: #{id}"}
@@ -376,7 +376,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -401,7 +401,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       mcp_logs =
         [request_id: request_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id]
         |> Arca.McpLog.list()
@@ -460,7 +460,7 @@ defmodule Arca.MCP do
   # queries.
   def handle("mcp_log", %Context{} = ctx, %{"action" => "fan_outs", "request_ids" => ids})
       when is_list(ids) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       ids = Enum.filter(ids, &is_binary/1)
 
       counts =
@@ -498,7 +498,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       since_hours = args["since_hours"] || 1
 
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
@@ -534,7 +534,7 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       record =
         Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
 
@@ -553,7 +553,7 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -579,7 +579,7 @@ defmodule Arca.MCP do
         "action" => "correlate",
         "request_id" => request_id
       }) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       opts =
         [
           request_id: request_id,
@@ -609,7 +609,7 @@ defmodule Arca.MCP do
   # ============================================================================
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
-    with :ok <- authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :storage_read) do
       settings = Arca.Retention.get_settings(ctx)
       {:ok, %{action: "get", settings: settings}}
     end
@@ -617,7 +617,7 @@ defmodule Arca.MCP do
 
   def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
-    with :ok <- authorize(ctx, :write) do
+    with :ok <- authorize(ctx, :storage_write) do
       case Arca.Retention.set_settings(ctx, settings) do
         :ok ->
           new_settings = Arca.Retention.get_settings(ctx)
@@ -634,7 +634,7 @@ defmodule Arca.MCP do
   end
 
   def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
-    with :ok <- authorize(ctx, :delete) do
+    with :ok <- authorize(ctx, :admin) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
@@ -703,7 +703,6 @@ defmodule Arca.MCP do
       input: decode_json(Map.get(exec, :input)),
       output: decode_json(Map.get(exec, :output)),
       host_policy: decode_json(Map.get(exec, :host_policy)),
-      wasi_trace: decode_json(Map.get(exec, :wasi_trace)),
       parent_execution_id: Map.get(exec, :parent_execution_id)
     }
   end
@@ -785,7 +784,9 @@ defmodule Arca.MCP do
 
   # In-chain callers arrive guest-planed with the authority conjunct already
   # applied at the dispatch chokepoint; the provider supplies the identity
-  # conjunct. External callers keep the fail-closed plane gate.
+  # conjunct plus the tenant gate. External callers keep the fail-closed
+  # plane gate. Call sites pass PERMISSIONS (:storage_read/:storage_write/
+  # :admin), never bare action verbs, so both arms check the same thing.
   defp authorize(%Context{plane: :guest} = ctx, permission) do
     with :ok <- Context.require_identity_permission(ctx, permission) do
       Context.tenant_ok(ctx)

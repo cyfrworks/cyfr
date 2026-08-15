@@ -11,7 +11,6 @@ defmodule Sanctum.MCP.Shared do
   to `def` so the tool modules can call them.
   """
 
-  alias Sanctum.Context
 
   def format_permissions(permissions) do
     permissions
@@ -20,8 +19,4 @@ defmodule Sanctum.MCP.Shared do
     |> Enum.sort()
   end
 
-  # The plane-aware gate lives in Sanctum.Context (guest → identity conjunct,
-  # external → fail-closed), so every provider shares one rule.
-  def require_permission(ctx, permission),
-    do: Context.require_permission_for_plane(ctx, permission)
 end

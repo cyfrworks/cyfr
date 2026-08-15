@@ -117,7 +117,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   def handle("system", %Context{} = ctx, %{"action" => "notify"} = args) do
     # Emits platform notification events — an operator action, and the one
     # write on this otherwise-read-only tool.
-    with :ok <- require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       handle_notify(ctx, args)
     end
   end
@@ -417,8 +417,4 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     end
   end
 
-  # The plane-aware gate lives in Sanctum.Context (guest → identity conjunct,
-  # external → fail-closed), so every provider shares one rule.
-  defp require_permission(ctx, permission),
-    do: Context.require_permission_for_plane(ctx, permission)
 end

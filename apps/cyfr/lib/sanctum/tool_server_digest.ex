@@ -43,6 +43,18 @@ defmodule Sanctum.ToolServerDigest do
 
   def compute(other), do: {:error, {:invalid_server_config, other}}
 
+  @doc """
+  The ONE place a peer's schema spelling is normalized on the way in.
+
+  Some upstream servers publish `parameters` instead of `inputSchema`; both
+  the descriptions digest (here) and the exposed tool definition
+  (`Emissary.MCP.ExternalProvider`) must apply the identical mapping, or the
+  digest silently stops covering the schema it is supposed to pin.
+  """
+  def normalize_input_schema(tool) when is_map(tool) do
+    tool["inputSchema"] || tool["parameters"] || %{}
+  end
+
   @doc "The digest for a stored `Arca.Schemas.McpServer` row."
   @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
   def from_server(server) do
@@ -92,7 +104,7 @@ defmodule Sanctum.ToolServerDigest do
     |> Enum.reduce_while({:ok, %{}}, fn tool, {:ok, acc} ->
       input = %{
         "description" => tool["description"] || "",
-        "inputSchema" => tool["inputSchema"] || tool["parameters"] || %{}
+        "inputSchema" => normalize_input_schema(tool)
       }
 
       case JCS.hash(input) do

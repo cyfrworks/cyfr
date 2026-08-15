@@ -7,9 +7,10 @@ defmodule Sanctum.ContextPlaneTest do
 
   # The D1 plane split, Context half: a context that has entered a guest
   # closure can never authorize an external-plane call — even with the :*
-  # wildcard, which short-circuits every permission check. The field is
-  # dark until the Authority cutover: every builder defaults to :external
-  # and no production code calls enter_guest/1 yet.
+  # wildcard, which short-circuits every permission check. Every builder
+  # defaults to :external; the guest plane is stamped one-way by
+  # enter_guest/1 (Opus.Executor before a guest run, AquaLive before an
+  # approved in-chain call).
 
   describe "defaults" do
     test "every construction path starts on the external plane" do

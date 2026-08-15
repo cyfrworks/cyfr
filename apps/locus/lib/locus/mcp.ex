@@ -93,7 +93,7 @@ defmodule Locus.MCP do
     else
       case Base.decode64(wasm_base64) do
         {:ok, bytes} ->
-          case Locus.Validator.validate(bytes) do
+          case Compendium.WasmValidator.validate(bytes) do
             {:ok, meta} ->
               {:ok,
                %{
@@ -120,7 +120,7 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    with :ok <- require_permission(ctx, :execute) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
       build_id = args["build_id"]
 
       build_meta = %{
@@ -434,8 +434,4 @@ defmodule Locus.MCP do
     end
   end
 
-  # The plane-aware gate lives in Sanctum.Context (guest → identity conjunct,
-  # external → fail-closed), so every provider shares one rule.
-  defp require_permission(ctx, permission),
-    do: Context.require_permission_for_plane(ctx, permission)
 end

@@ -35,13 +35,15 @@ defmodule Cyfr.IngressInventoryTest do
   }
 
   @patterns [
-    "Opus.run(",
     "Opus.run_root(",
     "Opus.run_root_edge(",
     "Opus.run_child(",
     "Opus.Chain.run_root(",
     "Opus.Chain.run_root_edge(",
     "Opus.Chain.run_child(",
+    "Opus.Chain.run_child_stream(",
+    "Opus.Chain.step_invoke(",
+    "Opus.Chain.execute_child(",
     "Opus.Executor.run("
   ]
 

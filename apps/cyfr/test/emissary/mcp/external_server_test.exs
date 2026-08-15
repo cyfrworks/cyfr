@@ -33,7 +33,7 @@ defmodule Emissary.MCP.ExternalServerTest do
       org_id: org_id,
       project_id: project_id
     } do
-      raw = %{"Authorization" => "secret:MY_KEY", "X-Custom" => "plain-value"}
+      raw = %{"Authorization" => "vault:MY_KEY", "X-Custom" => "plain-value"}
 
       config = [
         name: name,
@@ -118,7 +118,7 @@ defmodule Emissary.MCP.ExternalServerTest do
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
-        headers: %{"authorization" => "secret:RECON_TOKEN"},
+        headers: %{"authorization" => "vault:RECON_TOKEN"},
         org_id: org_id,
         project_id: project_id
       ]
@@ -136,14 +136,14 @@ defmodule Emissary.MCP.ExternalServerTest do
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
-        headers: %{"authorization" => "secret:OLD_TOKEN"},
+        headers: %{"authorization" => "vault:OLD_TOKEN"},
         org_id: org_id,
         project_id: project_id
       ]
 
       {:ok, pid1} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
 
-      changed = Keyword.put(config, :headers, %{"authorization" => "secret:NEW_TOKEN"})
+      changed = Keyword.put(config, :headers, %{"authorization" => "vault:NEW_TOKEN"})
       {:ok, pid2} = Emissary.MCP.ExternalServerSupervisor.ensure_started(changed)
 
       refute pid1 == pid2
@@ -194,7 +194,7 @@ defmodule Emissary.MCP.ExternalServerTest do
     defp masking_state do
       %{
         raw_headers: %{
-          "authorization" => "secret:MASK_TOKEN",
+          "authorization" => "vault:MASK_TOKEN",
           "x-custom-key" => "literal-credential-value",
           "content-type" => "application/json"
         },

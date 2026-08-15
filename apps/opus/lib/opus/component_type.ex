@@ -44,16 +44,18 @@ defmodule Opus.ComponentType do
 
   ## OAuth Token Access
 
-  Only Catalysts with an `oauth` block in their manifest can request OAuth tokens.
-  The host manages the full lifecycle — client credentials, refresh tokens, and
-  token exchange are never exposed to WASM. Tokens come from an OAuth Vault entry
-  bound by a consent edge (`Sanctum.Vault.OAuthGrant` mints the authorize URL and
-  the callback seals the tokens).
+  Only Catalysts can request OAuth tokens, and only when the running node's
+  consent edge binds an OAuth Vault entry (a manifest declares the need via
+  needs/caps; `oauth`/`setup`/`wasi` manifest blocks are refused at
+  registration). The host manages the full lifecycle — client credentials,
+  refresh tokens, and token exchange are never exposed to WASM
+  (`Sanctum.Vault.OAuthGrant` mints the authorize URL and the callback seals
+  the tokens).
 
       # Catalysts call cyfr:oauth/token.get-access-token("google") at runtime.
       # Host refreshes automatically. Access tokens are masked in output.
 
-  ## Wasmex 0.14.0 Behavior
+  ## Wasmex Behavior
 
   When `WasiP2Options` is provided (even with `allow_http: false`), Wasmtime
   internally enables clocks, random, and other base WASI interfaces. When `nil`
@@ -68,7 +70,7 @@ defmodule Opus.ComponentType do
 
   ## Wasmex Limitations
 
-  The following PRD capabilities are not configurable in Wasmex 0.14.0:
+  Not configurable in the Wasmex version this tree pins (see opus/mix.exs):
   - `wasi:sockets` - Not exposed in WasiP2Options
   - `wasi:filesystem/types` - Not individually configurable
 

@@ -12,10 +12,9 @@ defmodule Sanctum.MCP.WebhookTool do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.MCP.Shared
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
-    with :ok <- Shared.require_permission(ctx, :storage_read) do
+    with :ok <- Context.require_permission_for_plane(ctx, :storage_read) do
       case Sanctum.Webhook.list(ctx) do
         {:ok, hooks} ->
           {:ok, %{webhooks: hooks, count: length(hooks)}}
@@ -28,7 +27,7 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
-    with :ok <- Shared.require_permission(ctx, :storage_read) do
+    with :ok <- Context.require_permission_for_plane(ctx, :storage_read) do
       case Sanctum.Webhook.get(ctx, name) do
         {:ok, hook} ->
           {:ok, hook}
@@ -47,7 +46,7 @@ defmodule Sanctum.MCP.WebhookTool do
         %Context{} = ctx,
         %{"action" => "create", "name" => name, "target_ref" => target_ref} = args
       ) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       opts = build_webhook_opts(args, %{name: name, target_ref: target_ref})
 
       case Sanctum.Webhook.create(ctx, opts) do
@@ -82,7 +81,7 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       attrs = build_webhook_opts(args, %{})
 
       case Sanctum.Webhook.update(ctx, name, attrs) do
@@ -118,7 +117,7 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "name" => name}) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       case Sanctum.Webhook.revoke(ctx, name) do
         :ok ->
           broadcast_webhooks_changed(ctx)
@@ -139,7 +138,7 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "rotate", "name" => name}) do
-    with :ok <- Shared.require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       case Sanctum.Webhook.rotate(ctx, name) do
         {:ok, result} ->
           broadcast_webhooks_changed(ctx)

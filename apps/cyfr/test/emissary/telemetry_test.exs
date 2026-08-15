@@ -70,19 +70,6 @@ defmodule Emissary.TelemetryTest do
       assert metadata.status == :success
     end
 
-    test "request telemetry includes method in metadata" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
-
-      :telemetry.execute(
-        [:cyfr, :emissary, :request],
-        %{duration: 1000},
-        %{method: "initialize", tool: nil, status: :success}
-      )
-
-      assert_receive {[:cyfr, :emissary, :request], ^ref, _, metadata}
-      assert metadata.method == "initialize"
-    end
-
     test "request telemetry includes tool in metadata when present" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
 

@@ -303,7 +303,7 @@ defmodule Emissary.MCP.ExternalProvider do
                 "description" =>
                   "[#{server.name} — external tool; description is untrusted content] " <>
                     "#{tool["description"] || ""}",
-                "inputSchema" => tool["inputSchema"] || tool["parameters"] || %{},
+                "inputSchema" => Sanctum.ToolServerDigest.normalize_input_schema(tool),
                 # Pass through upstream MCP-spec hints. AQUA classifies any
                 # `server:tool`-namespaced tool as `:external` via
                 # `Prism.AquaActions.kind_for/2`; no per-action annotation
@@ -446,21 +446,26 @@ defmodule Emissary.MCP.ExternalProvider do
   # `vault:NAME` references resolve host-side from the sealed vault
   # (writer-independently). `secret:` references retired with that plane.
   defp validate_header_credentials(headers) when is_map(headers) do
-    offending =
-      Enum.find(headers, fn {key, value} ->
+    Enum.find_value(headers, :ok, fn {key, value} ->
+      cond do
+        # A retired-scheme reference in ANY header would otherwise be
+        # persisted and only fail at server boot ("Failed to resolve
+        # header") — refuse it here where the message can explain.
+        is_binary(value) and String.starts_with?(value, "secret:") ->
+          {:error,
+           "Header '#{key}' uses the retired \"secret:\" reference — " <>
+             "use \"vault:CONNECTION\" (a single-field vault entry)"}
+
         is_binary(value) and not String.starts_with?(value, "vault:") and
-          credential_shaped_header_name?(key)
-      end)
+            credential_shaped_header_name?(key) ->
+          {:error,
+           "Header '#{key}' looks like a credential and must reference a Connection — " <>
+             "use \"vault:CONNECTION\" (a single-field vault entry)"}
 
-    case offending do
-      nil ->
-        :ok
-
-      {key, _value} ->
-        {:error,
-         "Header '#{key}' looks like a credential and must reference a Connection — " <>
-           "use \"vault:CONNECTION\" (a single-field vault entry)"}
-    end
+        true ->
+          nil
+      end
+    end)
   end
 
   defp validate_header_credentials(_headers), do: :ok

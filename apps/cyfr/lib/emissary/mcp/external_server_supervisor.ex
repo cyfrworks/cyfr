@@ -57,7 +57,7 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
 
   @doc """
   Digest over the config a server process serves — the raw header TEMPLATE
-  (names and `secret:` references, never resolved values), url and timeout.
+  (names and `vault:` references, never resolved values), url and timeout.
   Secret rotation does not change the digest (`reinitialize` re-resolves
   values); editing the template does.
   """

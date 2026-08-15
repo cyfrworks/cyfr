@@ -24,7 +24,7 @@ defmodule Arca.McpServerStorageTest do
     end
 
     test "stores config_json verbatim (caller serializes)", %{ctx: ctx} do
-      json = ~s({"headers":{"Authorization":"secret:GH_TOKEN"},"timeout_ms":15000})
+      json = ~s({"headers":{"Authorization":"vault:GH_TOKEN"},"timeout_ms":15000})
 
       attrs = %{
         name: "github",

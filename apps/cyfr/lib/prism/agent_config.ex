@@ -80,17 +80,17 @@ defmodule Prism.AgentConfig do
     name = agent_name || "aqua"
 
     with {:ok, guide} <- call_guide(ctx, %{"action" => "get", "name" => name}),
-         content when is_binary(content) <- guide[:content] || guide["content"],
-         catalyst_ref_raw <- guide[:catalyst_ref] || guide["catalyst_ref"],
+         content when is_binary(content) <- guide["content"],
+         catalyst_ref_raw <- guide["catalyst_ref"],
          {:ok, catalyst_ref} <- resolve_catalyst(ctx, catalyst_ref_raw) do
       {:ok,
        %{
          name: name,
-         title: guide[:title] || guide["title"],
+         title: guide["title"],
          content: content,
          catalyst_ref: catalyst_ref,
-         model: guide[:model] || guide["model"],
-         tool_policy: guide[:tool_policy] || guide["tool_policy"] || %{}
+         model: guide["model"],
+         tool_policy: guide["tool_policy"] || %{}
        }}
     else
       nil -> {:error, :no_content}
@@ -101,9 +101,8 @@ defmodule Prism.AgentConfig do
   @doc """
   Build sub-agent definitions for formula input.
 
-  Fetches all sub-agents via the guide tool, resolves per-role catalyst/model
-  (inheriting from the orchestrator when not set), and enforces the
-  native_search exclusivity constraint.
+  Fetches all sub-agents via the guide tool and resolves per-role
+  catalyst/model (inheriting from the orchestrator when not set).
   """
   def sub_agent_definitions(%Context{} = ctx, agent_name, fallback_catalyst, fallback_model) do
     with {:ok, list_result} <- call_guide(ctx, %{"action" => "list", "type" => "sub-agent"}) do
@@ -113,13 +112,13 @@ defmodule Prism.AgentConfig do
       parent_agents =
         guides
         |> Enum.filter(fn g ->
-          parent = g[:parent] || g["parent"]
+          parent = g["parent"]
           parent == agent_name
         end)
 
       parent_agents
       |> Enum.map(fn g ->
-        name = g[:name] || g["name"]
+        name = g["name"]
         build_sub_agent(ctx, name, fallback_catalyst, fallback_model)
       end)
       |> Enum.reject(&is_nil/1)
@@ -132,12 +131,12 @@ defmodule Prism.AgentConfig do
 
   defp build_sub_agent(ctx, name, fallback_catalyst, fallback_model) do
     with {:ok, guide} <- call_guide(ctx, %{"action" => "get", "name" => name}) do
-      content = guide[:content] || guide["content"] || ""
-      description = guide[:description] || guide["description"] || ""
-      title = guide[:title] || guide["title"] || name
-      tool_policy = guide[:tool_policy] || guide["tool_policy"] || %{}
-      raw_catalyst = guide[:catalyst_ref] || guide["catalyst_ref"]
-      raw_model = guide[:model] || guide["model"]
+      content = guide["content"] || ""
+      description = guide["description"] || ""
+      title = guide["title"] || name
+      tool_policy = guide["tool_policy"] || %{}
+      raw_catalyst = guide["catalyst_ref"]
+      raw_model = guide["model"]
 
       # Resolve per-role catalyst, falling back to orchestrator's
       {catalyst_ref, model} =
@@ -187,15 +186,21 @@ defmodule Prism.AgentConfig do
 
   @doc false
   def resolve_catalyst(%Context{} = ctx, versionless_ref) when is_binary(versionless_ref) do
-    case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-           "action" => "list",
-           "type" => "catalyst"
-         }) do
-      {:ok, %{components: components}} when is_list(components) ->
-        find_matching_catalyst(components, versionless_ref)
+    result =
+      Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+        "action" => "list",
+        "type" => "catalyst"
+      })
 
-      {:ok, %{"components" => components}} when is_list(components) ->
-        find_matching_catalyst(components, versionless_ref)
+    case result do
+      {:ok, listing} when is_map(listing) ->
+        case stringify_deep(listing) do
+          %{"components" => components} when is_list(components) ->
+            find_matching_catalyst(components, versionless_ref)
+
+          _ ->
+            {:error, :catalyst_lookup_failed}
+        end
 
       _ ->
         {:error, :catalyst_lookup_failed}
@@ -209,26 +214,35 @@ defmodule Prism.AgentConfig do
 
     match =
       components
-      |> Enum.filter(fn c ->
-        ref = c["reference"] || to_string(c[:reference] || "")
-        String.starts_with?(ref, prefix)
-      end)
-      |> Enum.max_by(
-        fn c -> c["version"] || c[:version] || "0" end,
-        fn -> nil end
-      )
+      |> Enum.filter(fn c -> String.starts_with?(c["reference"] || "", prefix) end)
+      |> Enum.max_by(fn c -> c["version"] || "0" end, fn -> nil end)
 
     case match do
       nil -> {:error, :catalyst_not_found}
-      c -> {:ok, c["reference"] || to_string(c[:reference])}
+      c -> {:ok, c["reference"]}
     end
   end
 
   defp call_guide(ctx, args) do
-    Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args)
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
+      {:ok, result} -> {:ok, stringify_deep(result)}
+      other -> other
+    end
   end
 
-  defp extract_guides(%{guides: guides}) when is_list(guides), do: guides
+  @doc """
+  Deep-convert a tool result's keys to strings — one spelling on the way in.
+
+  In-process tool providers return atom-keyed maps while wire round-trips
+  return string keys; normalizing at the call boundary means every consumer
+  reads exactly one spelling instead of carrying `m[:k] || m["k"]` pairs.
+  """
+  def stringify_deep(map) when is_map(map) and not is_struct(map),
+    do: Map.new(map, fn {k, v} -> {to_string(k), stringify_deep(v)} end)
+
+  def stringify_deep(list) when is_list(list), do: Enum.map(list, &stringify_deep/1)
+  def stringify_deep(other), do: other
+
   defp extract_guides(%{"guides" => guides}) when is_list(guides), do: guides
   defp extract_guides(_), do: []
 

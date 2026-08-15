@@ -340,7 +340,7 @@ defmodule Opus.MCP do
   # Run stream action - start execution in background and return execution_id + stream URL
   # The caller can connect to the SSE endpoint to receive intermediate events.
   def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
-    with :ok <- require_permission(ctx, :execute) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
       reference = args["reference"] || ""
       input = args["input"] || %{}
 
@@ -387,7 +387,7 @@ defmodule Opus.MCP do
   # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
   # Accepts optional parent_execution_id for formula lineage tracking
   def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
-    with :ok <- require_permission(ctx, :execute) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
       reference = args["reference"] || ""
       input = args["input"] || %{}
 
@@ -421,7 +421,7 @@ defmodule Opus.MCP do
 
   # List action - list execution instances
   def handle("execution", %Context{} = ctx, %{"action" => "list"} = args) do
-    with :ok <- require_permission(ctx, :execute) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
       limit = min(args["limit"] || 20, 1000)
       status_filter = parse_status_filter(args["status"])
 
@@ -461,7 +461,7 @@ defmodule Opus.MCP do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    with :ok <- require_permission(ctx, :execute) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
       case Opus.ExecutionRecord.get(ctx, execution_id) do
         {:ok, record} ->
           if not in_caller_chain?(record, args) do
@@ -507,7 +507,7 @@ defmodule Opus.MCP do
           "execution_id" => execution_id
         } = args
       ) do
-    with :ok <- require_permission(ctx, :execute),
+    with :ok <- Context.require_permission_for_plane(ctx, :execute),
          :ok <- check_chain_scope(ctx, execution_id, args) do
       case Opus.Executor.cancel(ctx, execution_id) do
         {:ok, result} ->
@@ -532,7 +532,7 @@ defmodule Opus.MCP do
 
   # Status action - execution semaphore diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
-    with :ok <- require_permission(ctx, :execute) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
       {:ok, scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())}
     end
   end
@@ -541,7 +541,7 @@ defmodule Opus.MCP do
   # tenant's slots is a platform-wide side effect, so a tenant-scoped :admin
   # is not enough — only the operator (platform scope) may pull this lever.
   def handle("execution", %Context{scope: :platform} = ctx, %{"action" => "force_release"}) do
-    with :ok <- require_permission(ctx, :admin) do
+    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
       Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
 
       :telemetry.execute(
@@ -635,11 +635,6 @@ defmodule Opus.MCP do
   end
 
   defp format_root_result(other), do: other
-
-  # The plane-aware gate lives in Sanctum.Context (guest → identity conjunct,
-  # external → fail-closed), so every provider shares one rule.
-  defp require_permission(ctx, permission),
-    do: Context.require_permission_for_plane(ctx, permission)
 
   # The semaphore map is global: every {org, project} currently executing,
   # with live counts and holder pids. Platform scope keeps the full

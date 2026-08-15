@@ -9,7 +9,7 @@ defmodule Sanctum.ToolServerDigestTest do
   @base %{
     url: "https://mcp.example/sse",
     enabled: true,
-    headers: %{"authorization" => "secret:GH_TOKEN", "user-agent" => "cyfr"},
+    headers: %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
     tool_patterns: ["*"]
   }
 
@@ -20,7 +20,7 @@ defmodule Sanctum.ToolServerDigestTest do
       {:ok, b} =
         ToolServerDigest.compute(%{
           @base
-          | headers: %{"user-agent" => "cyfr", "authorization" => "secret:GH_TOKEN"}
+          | headers: %{"user-agent" => "cyfr", "authorization" => "vault:GH_TOKEN"}
         })
 
       assert a == b
@@ -56,7 +56,7 @@ defmodule Sanctum.ToolServerDigestTest do
         enabled: true,
         config_json:
           Jason.encode!(%{
-            "headers" => %{"authorization" => "secret:GH_TOKEN", "user-agent" => "cyfr"},
+            "headers" => %{"authorization" => "vault:GH_TOKEN", "user-agent" => "cyfr"},
             "timeout_ms" => 30_000,
             "tool_patterns" => ["*"]
           })
