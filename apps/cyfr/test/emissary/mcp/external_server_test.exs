@@ -56,6 +56,94 @@ defmodule Emissary.MCP.ExternalServerTest do
     end
   end
 
+  describe "in-flight cap" do
+    defp start_server(name, org_id, project_id, extra \\ []) do
+      config =
+        Keyword.merge(
+          [name: name, url: "https://localhost:99999/mcp", org_id: org_id, project_id: project_id],
+          extra
+        )
+
+      {:ok, pid} =
+        DynamicSupervisor.start_child(
+          Emissary.MCP.ExternalServerSupervisor,
+          {ExternalServer, config}
+        )
+
+      pid
+    end
+
+    test "refuses a call past the cap instead of queueing a task", %{
+      name: name,
+      org_id: org_id,
+      project_id: project_id
+    } do
+      pid = start_server(name, org_id, project_id)
+
+      cap = Application.get_env(:cyfr, :external_server_max_in_flight, 8)
+
+      fakes = for _ <- 1..cap, do: spawn(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(pid, fn state ->
+        in_flight = Map.new(fakes, fn fake -> {fake, Process.monitor(fake)} end)
+        %{state | status: :ready, in_flight: in_flight}
+      end)
+
+      assert {:error, message} = GenServer.call(pid, {:call_tool, "anything", %{}}, 1_000)
+      assert message =~ "busy"
+      assert message =~ "retry"
+
+      Enum.each(fakes, &Process.exit(&1, :kill))
+    end
+
+    test "a finished (dead) task frees its in-flight slot", %{
+      name: name,
+      org_id: org_id,
+      project_id: project_id
+    } do
+      pid = start_server(name, org_id, project_id)
+
+      fake = spawn(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(pid, fn state ->
+        # This closure runs in the server process, so the monitor's :DOWN
+        # lands in the server's mailbox — same as a real dispatched task.
+        ref = Process.monitor(fake)
+        %{state | in_flight: Map.put(state.in_flight, fake, ref)}
+      end)
+
+      Process.exit(fake, :kill)
+
+      # The monitor above was created by the replace_state closure, which runs
+      # in the server process — its :DOWN goes to the server.
+      wait_until(fn -> map_size(:sys.get_state(pid).in_flight) == 0 end)
+    end
+
+    test "the configured upstream timeout is clamped below the caller deadline", %{
+      name: name,
+      org_id: org_id,
+      project_id: project_id
+    } do
+      pid = start_server(name, org_id, project_id, timeout_ms: 999_999)
+
+      state = :sys.get_state(pid)
+      assert state.timeout_ms == 110_000
+    end
+  end
+
+  defp wait_until(fun, deadline_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+
+    unless fun.() do
+      if System.monotonic_time(:millisecond) > deadline do
+        flunk("condition not met within #{deadline_ms}ms")
+      end
+
+      Process.sleep(10)
+      wait_until(fun, deadline_ms)
+    end
+  end
+
   describe "handle_info/2" do
     test "handles unexpected messages without crashing", %{
       name: name,

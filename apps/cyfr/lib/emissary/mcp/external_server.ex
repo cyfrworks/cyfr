@@ -24,6 +24,17 @@ defmodule Emissary.MCP.ExternalServer do
 
   @default_timeout_ms 30_000
   @initialize_timeout_ms 15_000
+  # Client-side deadline for a call_tool round-trip. The upstream timeout is
+  # operator-settable per server (config timeout_ms), so the caller's wait
+  # must cover the largest upstream budget we allow — otherwise a slow-but-
+  # legitimate call outlives its caller and replies to nobody. init/1 clamps
+  # the configured timeout below this with slack for dispatch overhead.
+  @call_timeout_ms 120_000
+  @max_upstream_timeout_ms @call_timeout_ms - 10_000
+  # Upstream calls run in detached tasks so one slow server never blocks the
+  # GenServer; the cap keeps a stalled upstream from accumulating an unbounded
+  # task pile (each carrying resolved credentials in its heap).
+  @default_max_in_flight 8
   @registry Emissary.MCP.ExternalServerRegistry
 
   # The revision to offer a peer that turns out not to speak the current one.
@@ -76,7 +87,7 @@ defmodule Emissary.MCP.ExternalServer do
   """
   def call_tool(name, org_id, project_id, tool_name, arguments) do
     case lookup(name, org_id, project_id) do
-      {:ok, pid} -> GenServer.call(pid, {:call_tool, tool_name, arguments}, @default_timeout_ms)
+      {:ok, pid} -> GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
       {:error, _} = err -> err
     end
   end
@@ -141,7 +152,9 @@ defmodule Emissary.MCP.ExternalServer do
       headers: %{},
       status: :disconnected,
       tools: [],
-      request_id: 0
+      request_id: 0,
+      # Detached upstream calls currently running: %{task_pid => monitor_ref}.
+      in_flight: %{}
     ]
   end
 
@@ -151,7 +164,7 @@ defmodule Emissary.MCP.ExternalServer do
       name: config[:name],
       url: config[:url],
       raw_headers: config[:headers] || %{},
-      timeout_ms: config[:timeout_ms] || @default_timeout_ms,
+      timeout_ms: min(config[:timeout_ms] || @default_timeout_ms, @max_upstream_timeout_ms),
       org_id: Arca.QueryHelpers.normalize_org_id(config[:org_id]),
       project_id: Arca.QueryHelpers.normalize_project_id(config[:project_id])
     }
@@ -186,40 +199,55 @@ defmodule Emissary.MCP.ExternalServer do
   def handle_call({:call_tool, tool_name, arguments}, from, state) do
     state = ensure_ready(state)
 
-    if state.status != :ready do
-      {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
-    else
-      {request_id, state} = next_request_id(state)
+    cond do
+      state.status != :ready ->
+        {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
 
-      body = %{
-        "jsonrpc" => "2.0",
-        "id" => request_id,
-        "method" => "tools/call",
-        "params" => %{
-          "name" => tool_name,
-          "arguments" => arguments || %{}
+      map_size(state.in_flight) >= max_in_flight() ->
+        {:reply,
+         {:error,
+          "Server #{state.name} is busy (#{max_in_flight()} calls in flight) — retry shortly"},
+         state}
+
+      true ->
+        {request_id, state} = next_request_id(state)
+
+        body = %{
+          "jsonrpc" => "2.0",
+          "id" => request_id,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => tool_name,
+            "arguments" => arguments || %{}
+          }
         }
-      }
 
-      # The upstream HTTP round-trip runs OUTSIDE this process so one slow
-      # server never head-of-line-blocks every other caller of the same
-      # server for up to their full call timeout. The task gets a snapshot
-      # of state (resolved headers, masking material) and replies directly;
-      # config (re)resolution stays serialized in the GenServer above.
-      snapshot = state
+        # The upstream HTTP round-trip runs OUTSIDE this process so one slow
+        # server never head-of-line-blocks every other caller of the same
+        # server for up to their full call timeout. The task gets a snapshot
+        # of state (resolved headers, masking material) and replies directly;
+        # config (re)resolution stays serialized in the GenServer above. The
+        # tool catalogue is dropped from the snapshot — the call doesn't read
+        # it, and it would otherwise be copied into every task heap.
+        snapshot = %{state | tools: [], in_flight: %{}}
 
-      Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-        reply =
-          try do
-            dispatch_upstream_call(snapshot, body, tool_name)
-          rescue
-            e -> {:error, "External call failed: #{Exception.message(e)}"}
-          end
+        case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+               reply =
+                 try do
+                   dispatch_upstream_call(snapshot, body, tool_name)
+                 rescue
+                   e -> {:error, "External call failed: #{Exception.message(e)}"}
+                 end
 
-        GenServer.reply(from, reply)
-      end)
+               GenServer.reply(from, reply)
+             end) do
+          {:ok, task_pid} ->
+            ref = Process.monitor(task_pid)
+            {:noreply, %{state | in_flight: Map.put(state.in_flight, task_pid, ref)}}
 
-      {:noreply, state}
+          {:error, reason} ->
+            {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
+        end
     end
   end
 
@@ -255,10 +283,19 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   @impl true
+  def handle_info({:DOWN, _ref, :process, task_pid, _reason}, state) do
+    # An upstream-call task finished (reply sent) or crashed (caller times
+    # out); either way its in-flight slot frees here.
+    {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
+  end
+
   def handle_info(msg, state) do
     Logger.warning("[ExternalServer] unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
+
+  defp max_in_flight,
+    do: Application.get_env(:cyfr, :external_server_max_in_flight, @default_max_in_flight)
 
   # Bring a not-yet-ready server up before dispatching, mirroring the
   # get_tools arms: disconnected always retries, error retries when the
