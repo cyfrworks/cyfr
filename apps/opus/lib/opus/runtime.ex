@@ -76,8 +76,7 @@ defmodule Opus.Runtime do
   def execute_component(wasm_bytes, input, opts \\ [])
       when is_binary(wasm_bytes) and is_map(input) do
     component_type = Keyword.get(opts, :component_type, :reagent)
-    wasi_env = Keyword.get(opts, :wasi_env, %{})
-    wasi_opts = Opus.ComponentType.wasi_options(component_type, wasi_env)
+    wasi_opts = Opus.ComponentType.wasi_options(component_type)
 
     preloaded_fields = Keyword.get(opts, :preloaded_fields, %{})
     component_ref = Keyword.get(opts, :component_ref)
@@ -195,7 +194,7 @@ defmodule Opus.Runtime do
                   try do
                     result = execute_with_convention(pid, input, component_type: component_type)
                     GenServer.stop(pid, :normal)
-                    add_execution_metadata(result, %{memory_bytes: 0})
+                    add_execution_metadata(result, %{})
                   rescue
                     e ->
                       GenServer.stop(pid, :normal)
@@ -446,8 +445,10 @@ defmodule Opus.Runtime do
   # Execution Metadata Helpers
   # ===========================================================================
 
-  # Add execution metadata to a successful result
-  # Returns {:ok, output, metadata} format for callers that want metrics
+  # Wrap a successful result in the {:ok, output, metadata} shape the
+  # executor consumes. The metadata map is currently empty — it is the seam
+  # where real per-execution metrics ride when the engine can report them;
+  # nothing is fabricated here.
   defp add_execution_metadata({:ok, output}, metadata) when is_map(metadata) do
     {:ok, output, metadata}
   end

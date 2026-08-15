@@ -240,10 +240,6 @@ defmodule Opus.SecurityTest do
       assert Code.ensure_loaded?(Opus.Runtime)
     end
 
-    test "default fuel limit is 100M instructions" do
-      # The Runtime module defines @default_fuel_limit as 100_000_000
-      assert Code.ensure_loaded?(Opus.Runtime)
-    end
   end
 
   # ============================================================================

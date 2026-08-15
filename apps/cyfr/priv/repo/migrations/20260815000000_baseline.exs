@@ -236,7 +236,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :request_id, :string
       add :input, :text
       add :output, :text
-      add :wasi_trace, :text
       add :host_policy, :text
       add :parent_execution_id, :string
       add :resolver_digest, :string

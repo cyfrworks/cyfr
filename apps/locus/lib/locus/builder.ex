@@ -172,7 +172,7 @@ defmodule Locus.Builder do
              {:ok, wasm_path} <- run_compiler(tmp_dir, :rust, timeout_ms, on_progress),
              :ok <- on_progress.(:validating, "Validating WASM binary..."),
              {:ok, wasm_bytes} <- File.read(wasm_path),
-             {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
+             {:ok, validation} <- Compendium.WasmValidator.validate(wasm_bytes) do
           on_progress.(
             :complete,
             "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)"

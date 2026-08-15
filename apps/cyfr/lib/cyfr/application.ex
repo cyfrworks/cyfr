@@ -91,10 +91,11 @@ defmodule Cyfr.Application do
       # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock)
       {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
       {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor},
-      # Single-use consent authorizations. Node-local, like the refresh
-      # lock above: a proof outlives one operator interaction, not a
-      # deployment.
-      Sanctum.Consent.Proof.Memory,
+      # Single-use consent authorizations. The shipped store is the DB
+      # (config.exs pins Proof.DB); the in-memory GenServer starts only
+      # when a deployment explicitly configures it, so production does not
+      # carry a live, never-called singleton.
+      maybe_proof_memory(),
       # Vault mutations must bite immediately for external MCP servers
       # holding resolved header credentials (§4.6).
       Emissary.MCP.ExternalServerReconciler,
@@ -104,6 +105,8 @@ defmodule Cyfr.Application do
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Prism.TaskSupervisor}
     ]
+
+    infra_children = List.flatten(infra_children)
 
     web_children = [
       EmissaryWeb.Endpoint,
@@ -123,6 +126,13 @@ defmodule Cyfr.Application do
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
+  end
+
+  defp maybe_proof_memory do
+    case Application.get_env(:cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB) do
+      Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
+      _ -> []
+    end
   end
 
   defp tier(name, children) do

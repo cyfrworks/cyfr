@@ -26,10 +26,9 @@ defmodule Sanctum.Consent.Proof do
   unusable for probing which binding was wrong, and the caller's remedy —
   re-preview to see the current digest — is the right one anyway.
 
-  The default store is node-local (`Sanctum.Consent.Proof.Memory`), which
-  matches the rest of the deployment: clustering is not currently possible,
-  and enabling it means revisiting this alongside the other node-local
-  singletons.
+  The shipped store is `Sanctum.Consent.Proof.DB` (single-use rows keyed
+  by token hash); `Sanctum.Consent.Proof.Memory` is the node-local
+  alternative tests pin explicitly.
   """
 
   @type token :: String.t()

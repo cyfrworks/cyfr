@@ -30,7 +30,7 @@ defmodule Opus.Telemetry do
   | Event | Measurements |
   |-------|-------------|
   | `:start` | `%{system_time: integer}` |
-  | `:stop` | `%{duration: integer, memory_bytes: integer}` |
+  | `:stop` | `%{duration: integer, memory_bytes: integer (when reported)}` |
   | `:exception` | `%{duration: integer}` |
 
   ## Metadata
@@ -120,7 +120,7 @@ defmodule Opus.Telemetry do
   ## Measurements
 
   - `duration` - Execution duration in native time units
-  - `memory_bytes` - Peak memory usage during execution (0 if unknown)
+  - `memory_bytes` - Peak memory usage, included only when the runtime reports it
 
   ## Metadata
 
@@ -135,11 +135,12 @@ defmodule Opus.Telemetry do
     # Convert duration_ms to native time units for consistency with :telemetry conventions
     # ms to native (nanoseconds)
     duration_native = (record.duration_ms || 0) * 1_000_000
-    memory_bytes = Map.get(measurements, :memory_bytes, 0)
 
     :telemetry.execute(
       [:cyfr, :opus, :execute, :stop],
-      %{duration: duration_native, memory_bytes: memory_bytes},
+      # Only real measurements ride: memory is included when the runtime
+      # reports one, never fabricated as zero.
+      Map.merge(%{duration: duration_native}, Map.take(measurements, [:memory_bytes])),
       %{
         execution_id: record.id,
         request_id: record.request_id,

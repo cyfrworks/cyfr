@@ -63,7 +63,6 @@ defmodule Opus.ExecutionRecord do
           duration_ms: non_neg_integer() | nil,
           error: String.t() | nil,
           host_policy: map() | nil,
-          wasi_trace: list() | nil,
           parent_execution_id: String.t() | nil,
           root_execution_id: String.t() | nil,
           resolver_digest: String.t() | nil,
@@ -89,7 +88,6 @@ defmodule Opus.ExecutionRecord do
     :duration_ms,
     :error,
     :host_policy,
-    :wasi_trace,
     :parent_execution_id,
     :root_execution_id,
     :resolver_digest,
@@ -136,53 +134,38 @@ defmodule Opus.ExecutionRecord do
       duration_ms: nil,
       error: nil,
       host_policy: host_policy,
-      wasi_trace: nil,
       parent_execution_id: parent_execution_id,
       root_execution_id: root_execution_id
     }
   end
 
-  @doc """
-  Mark execution as completed with output.
-
-  Options:
-  - `:wasi_trace` - Optional WASI call trace for forensic replay.
-  """
-  @spec complete(t(), map(), keyword()) :: t()
-  def complete(%__MODULE__{} = record, output, opts \\ []) do
+  @doc "Mark execution as completed with output."
+  @spec complete(t(), map()) :: t()
+  def complete(%__MODULE__{} = record, output) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
-    wasi_trace = Keyword.get(opts, :wasi_trace)
 
     %{
       record
       | output: output,
         status: :completed,
         completed_at: now,
-        duration_ms: duration_ms,
-        wasi_trace: wasi_trace
+        duration_ms: duration_ms
     }
   end
 
-  @doc """
-  Mark execution as failed with error message.
-
-  Options:
-  - `:wasi_trace` - Optional WASI call trace for forensic replay.
-  """
-  @spec fail(t(), String.t(), keyword()) :: t()
-  def fail(%__MODULE__{} = record, error, opts \\ []) do
+  @doc "Mark execution as failed with error message."
+  @spec fail(t(), String.t()) :: t()
+  def fail(%__MODULE__{} = record, error) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
-    wasi_trace = Keyword.get(opts, :wasi_trace)
 
     %{
       record
       | status: :failed,
         error: error,
         completed_at: now,
-        duration_ms: duration_ms,
-        wasi_trace: wasi_trace
+        duration_ms: duration_ms
     }
   end
 
@@ -279,8 +262,7 @@ defmodule Opus.ExecutionRecord do
            completed_at: record.completed_at,
            duration_ms: record.duration_ms,
            status: "completed",
-           output: encode_json(record.output),
-           wasi_trace: encode_json(record.wasi_trace)
+           output: encode_json(record.output)
          }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
@@ -302,8 +284,7 @@ defmodule Opus.ExecutionRecord do
            completed_at: record.completed_at,
            duration_ms: record.duration_ms,
            status: Atom.to_string(status),
-           error_message: record.error,
-           wasi_trace: encode_json(record.wasi_trace)
+           error_message: record.error
          }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
@@ -385,7 +366,6 @@ defmodule Opus.ExecutionRecord do
       duration_ms: result.duration_ms,
       error: result.error_message,
       host_policy: parse_json_or_nil(result.host_policy),
-      wasi_trace: parse_json_or_nil(result.wasi_trace),
       parent_execution_id: result[:parent_execution_id],
       root_execution_id: result[:root_execution_id],
       resolver_digest: result[:resolver_digest],
@@ -485,7 +465,6 @@ defmodule Opus.ExecutionRecord do
       input: Map.get(record, :input),
       output: Map.get(record, :output),
       host_policy: Map.get(record, :host_policy),
-      wasi_trace: Map.get(record, :wasi_trace),
       parent_execution_id: Map.get(record, :parent_execution_id),
       root_execution_id: Map.get(record, :root_execution_id),
       resolver_digest: Map.get(record, :resolver_digest),

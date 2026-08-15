@@ -24,7 +24,6 @@ defmodule Arca.Execution do
   - `error_message` - Error message if failed
   - `input` - JSON-encoded execution input
   - `output` - JSON-encoded execution output
-  - `wasi_trace` - JSON-encoded WASI call trace
   - `host_policy` - JSON-encoded host policy snapshot
   """
 
@@ -53,7 +52,6 @@ defmodule Arca.Execution do
     field :error_message, :string
     field :input, :string
     field :output, :string
-    field :wasi_trace, :string
     field :host_policy, :string
     field :parent_execution_id, :string
     field :root_execution_id, :string
@@ -112,7 +110,7 @@ defmodule Arca.Execution do
   """
   def complete_changeset(execution, attrs) do
     execution
-    |> cast(attrs, [:completed_at, :duration_ms, :status, :error_message, :output, :wasi_trace])
+    |> cast(attrs, [:completed_at, :duration_ms, :status, :error_message, :output])
     |> validate_required([:completed_at, :duration_ms, :status])
     |> validate_inclusion(:status, ["completed", "failed", "cancelled"])
   end

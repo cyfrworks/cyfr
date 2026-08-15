@@ -107,7 +107,6 @@ defmodule Opus.TelemetryTest do
 
       assert is_integer(measurements.duration)
       assert measurements.duration >= 0
-      assert is_integer(measurements.memory_bytes)
       assert metadata.outcome == :success
     end
 
@@ -134,14 +133,15 @@ defmodule Opus.TelemetryTest do
       assert measurements.memory_bytes == 1024 * 1024
     end
 
-    test "defaults memory_bytes to 0", %{ctx: ctx} do
+    test "omits memory_bytes when the runtime reports none", %{ctx: ctx} do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       completed = ExecutionRecord.complete(record, %{})
 
       Telemetry.execute_stop(completed)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :stop], measurements, _metadata}
-      assert measurements.memory_bytes == 0
+      # Never fabricated: a zero would read as a real measurement.
+      refute Map.has_key?(measurements, :memory_bytes)
     end
 
     test "includes all required metadata", %{ctx: ctx} do

@@ -176,13 +176,6 @@ defmodule Opus.ExecutionRecordTest do
       assert completed.duration_ms >= 10
     end
 
-    test "accepts wasi_trace option", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      trace = [%{call: "fd_write", args: [1, 1024]}]
-      completed = ExecutionRecord.complete(record, %{}, wasi_trace: trace)
-
-      assert completed.wasi_trace == trace
-    end
   end
 
   describe "fail/3" do
