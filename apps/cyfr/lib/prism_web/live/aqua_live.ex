@@ -409,15 +409,17 @@ defmodule PrismWeb.AquaLive do
     {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, mode))}
   end
 
-  # Flip an agent between native-tool-only (just `native_search`) and the
-  # custom-tool capability list. Native model-side tools can't coexist with
-  # custom MCP tools, so this replaces the whole allowlist.
+  # Toggle the provider-native search grant. It is an ordinary policy key
+  # that coexists with the rest of the allowlist; the formula appends the
+  # native tool when the key is "auto".
   def handle_event("editor_toggle_native", %{"name" => agent_name}, socket) do
     agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
     current = (agent && agent["tool_policy"]) || %{}
 
     new_policy =
-      if Map.has_key?(current, "native_search"), do: %{}, else: %{"native_search" => "auto"}
+      if Map.has_key?(current, "native_search"),
+        do: Map.delete(current, "native_search"),
+        else: Map.put(current, "native_search", "auto")
 
     {:noreply, update_agent_tool_policy(socket, agent_name, new_policy)}
   end
@@ -1810,11 +1812,11 @@ defmodule PrismWeb.AquaLive do
               No orchestrator configured
             </span>
             <span
-              :if={@orchestrator && native_mode?(@orchestrator["tool_policy"])}
-              class="shrink-0 inline-flex items-center rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] text-amber-200"
-              title="Native model-side tools only"
+              :if={@orchestrator && native_search?(@orchestrator["tool_policy"])}
+              class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+              title="Native model-side web search granted"
             >
-              native
+              native search
             </span>
             <span
               :if={MapSet.size(@conversation_grants) > 0}
@@ -2443,22 +2445,6 @@ defmodule PrismWeb.AquaLive do
           <span :if={auto_count > 0} class="text-[10px] text-gray-600">{auto_count} won't ask</span>
         </div>
 
-        <%= if native_mode?(@tool_policy) do %>
-          <div class="border border-amber-800/60 bg-amber-900/10 rounded p-3 text-xs space-y-2">
-            <label class="flex items-center gap-2 text-amber-200 cursor-pointer">
-              <input
-                type="checkbox"
-                checked
-                phx-click="editor_toggle_native"
-                phx-value-name={@agent["name"]}
-                class="rounded bg-gray-900 border-gray-600"
-              /> Native search (model-side web grounding)
-            </label>
-            <p class="text-[11px] text-amber-300/70">
-              Native tools can't be combined with custom MCP tools — this agent gets only native search. Uncheck to switch to the custom-tool capability list.
-            </p>
-          </div>
-        <% else %>
           <div class="border border-gray-800 rounded divide-y divide-gray-800/60 max-h-[28rem] overflow-y-auto">
             <%= for {kind, kind_label, kind_chip, kind_strip} <- kind_sections() do %>
               <% rows = rows_for_kind(@tool_actions, kind) %>
@@ -2503,7 +2489,7 @@ defmodule PrismWeb.AquaLive do
                           <span></span>
                         <% kind == :read -> %>
                           <span class="text-[10px] text-emerald-400/70">runs without asking</span>
-                        <% kind in [:destructive, :external] -> %>
+                        <% kind == :destructive -> %>
                           <span class="text-[10px] text-gray-500">always asks</span>
                         <% true -> %>
                           <.auto_ask_toggle agent={@agent["name"]} key={key} value={val} />
@@ -2514,15 +2500,15 @@ defmodule PrismWeb.AquaLive do
               <% end %>
             <% end %>
           </div>
-          <label class="flex items-center gap-2 mt-2 text-[11px] text-amber-300/80 cursor-pointer">
+          <label class="flex items-center gap-2 mt-2 text-[11px] text-gray-400 cursor-pointer">
             <input
               type="checkbox"
+              checked={Map.has_key?(@tool_policy, "native_search")}
               phx-click="editor_toggle_native"
               phx-value-name={@agent["name"]}
               class="rounded bg-gray-900 border-gray-600"
-            /> Use native search instead (replaces every capability above)
+            /> Native search (model-side web grounding) — runs inside the provider without asking
           </label>
-        <% end %>
       </div>
     </div>
     """
@@ -2558,7 +2544,7 @@ defmodule PrismWeb.AquaLive do
     """
   end
 
-  defp native_mode?(tool_policy),
+  defp native_search?(tool_policy),
     do: is_map(tool_policy) and Map.has_key?(tool_policy, "native_search")
 
   # Count of capabilities the agent runs without asking that *aren't* reads —
@@ -2590,7 +2576,6 @@ defmodule PrismWeb.AquaLive do
   defp kind_hint(:write), do: "asks unless marked auto"
   defp kind_hint(:execute), do: "asks unless marked auto"
   defp kind_hint(:destructive), do: "always asks — can't be automated"
-  defp kind_hint(:external), do: "always asks — can't be automated"
   defp kind_hint(_), do: ""
 
   # Kind sections in fixed display order, with their visual treatment (matches
@@ -2602,9 +2587,7 @@ defmodule PrismWeb.AquaLive do
       {:read, "Read", "bg-emerald-900/60 text-emerald-200", "bg-emerald-900/10"},
       {:write, "Write", "bg-slate-700/70 text-slate-200", "bg-slate-800/20"},
       {:execute, "Execute", "bg-amber-900/60 text-amber-200", "bg-amber-900/10"},
-      {:destructive, "Destructive", "bg-red-900/60 text-red-200", "bg-red-900/10"},
-      {:external, "External", "bg-amber-900/60 text-amber-200 ring-1 ring-amber-500/40",
-       "bg-amber-900/10"}
+      {:destructive, "Destructive", "bg-red-900/60 text-red-200", "bg-red-900/10"}
     ]
   end
 

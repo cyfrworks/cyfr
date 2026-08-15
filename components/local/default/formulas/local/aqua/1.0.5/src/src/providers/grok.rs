@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use super::{native_tool_allowed, ToolCall};
+use super::ToolCall;
 
 // ---------------------------------------------------------------------------
 // Tool formatting — Responses API
@@ -22,9 +22,9 @@ fn format_tools_base(tools: &[Value]) -> Vec<Value> {
 }
 
 /// Grok: web_search + x_search native tools
-pub fn format_tools(tools: &[Value], visible_tools: Option<&[String]>) -> Value {
+pub fn format_tools(tools: &[Value], native_search: bool) -> Value {
     let mut all_tools = format_tools_base(tools);
-    if native_tool_allowed(visible_tools, "native_search") {
+    if native_search {
         all_tools.push(json!({"type": "web_search"}));
         all_tools.push(json!({"type": "x_search"}));
     }
@@ -32,9 +32,9 @@ pub fn format_tools(tools: &[Value], visible_tools: Option<&[String]>) -> Value 
 }
 
 /// OpenAI: web_search only (no x_search)
-pub fn format_tools_openai(tools: &[Value], visible_tools: Option<&[String]>) -> Value {
+pub fn format_tools_openai(tools: &[Value], native_search: bool) -> Value {
     let mut all_tools = format_tools_base(tools);
-    if native_tool_allowed(visible_tools, "native_search") {
+    if native_search {
         all_tools.push(json!({"type": "web_search"}));
     }
     json!(all_tools)

@@ -57,9 +57,7 @@ export interface ExecutionEvent {
 }
 
 export type ExecutionEventData =
-  | EmitEventData
-  | CompleteEventData
-  | ErrorEventData;
+  EmitEventData | CompleteEventData | ErrorEventData;
 
 export interface EmitEventData {
   kind: string;
@@ -93,7 +91,6 @@ export interface AgentDetail {
   description: string;
   model: string | null;
   catalyst_ref: string | null;
-  visible_tools: string[] | null;
   content: string;
 }
 

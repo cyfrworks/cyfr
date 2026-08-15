@@ -327,9 +327,9 @@ defmodule Compendium.MCP do
             },
             "tool_policy" => %{
               "type" => "object",
-              "additionalProperties" => %{"type" => "string"},
+              "additionalProperties" => %{"type" => "string", "enum" => ["ask", "auto"]},
               "description" =>
-                "Per-(tool,action) policy for this agent. Keys are 'tool.action' strings; values are 'allow' (auto-execute), 'approval' (require user click), or 'block' (forbidden). Missing pairs are treated as 'block'. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode."
+                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. A separate per-user overlay ('auto'/'deny' grants persisted per caller) is merged server-side into the `effective_tool_policy` field returned by `get`."
             },
             "catalyst_ref" => %{
               "type" => "string",

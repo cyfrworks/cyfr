@@ -212,6 +212,7 @@ defmodule Emissary.MCP.ToolRegistry do
               args,
               opts |> Keyword.delete(:guest_fn) |> Keyword.put(:in_chain, true)
             )
+            |> prune_in_chain_discovery(name, args, ctx, authority)
           after
             if guest_fn == :spawn, do: Sanctum.Authority.release_invoke(authority)
           end
@@ -262,6 +263,57 @@ defmodule Emissary.MCP.ToolRegistry do
         :miss ->
           {:error, "Unknown tool: #{name}"}
       end
+    end
+  end
+
+  # Discovery pruning for in-chain callers: `tools.list` shows a chain only
+  # what it can reach — internal tools through the same :in_chain plane
+  # annotations `call_in_chain/5` enforces per call, and external
+  # `server:tool` entries only when the chain authority's tool_servers
+  # grants cover them. Per-call enforcement stays with the transition
+  # relation; this keeps the discovery view (and the untrusted upstream
+  # descriptions it carries) from reaching an agent that holds no grant.
+  defp prune_in_chain_discovery({:ok, %{tools: tools}}, "tools", args, ctx, authority)
+       when is_list(tools) do
+    if (args["action"] || args[:action]) == "list" do
+      {internal, external} =
+        Enum.split_with(tools, fn t -> not String.contains?(t["name"] || "", ":") end)
+
+      {:ok, %{tools: in_chain_view(internal) ++ granted_external_tools(ctx, authority, external)}}
+    else
+      {:ok, %{tools: tools}}
+    end
+  end
+
+  defp prune_in_chain_discovery(result, _name, _args, _ctx, _authority), do: result
+
+  defp granted_external_tools(_ctx, _authority, []), do: []
+
+  defp granted_external_tools(ctx, authority, external) do
+    case authority.resources do
+      %{tool_servers: servers} when is_list(servers) and servers != [] ->
+        external
+        |> Enum.group_by(fn t -> t["name"] |> String.split(":", parts: 2) |> hd() end)
+        |> Enum.flat_map(fn {server_name, tools} ->
+          digest = resolve_server_digest(ctx, server_name)
+
+          case Enum.find(servers, &(&1.server_digest == digest)) do
+            nil ->
+              []
+
+            %{tool_patterns: patterns} ->
+              Enum.filter(tools, fn t ->
+                case String.split(t["name"], ":", parts: 2) do
+                  [_, remote] -> Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, remote))
+                  _ -> false
+                end
+              end)
+          end
+        end)
+        |> Enum.sort_by(& &1["name"])
+
+      _ ->
+        []
     end
   end
 

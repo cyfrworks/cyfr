@@ -1,12 +1,12 @@
 use serde_json::{json, Value};
 
-use super::{native_tool_allowed, ToolCall};
+use super::ToolCall;
 
 // ---------------------------------------------------------------------------
 // Tool formatting — OpenRouter Chat Completions
 // ---------------------------------------------------------------------------
 
-pub fn format_tools(tools: &[Value], _visible_tools: Option<&[String]>) -> Value {
+pub fn format_tools(tools: &[Value], _native_search: bool) -> Value {
     // OpenRouter Chat Completions wraps each tool in {"type": "function", "function": {...}}
     // Native search is handled via plugins array in build_request, not in tools
     let or_tools: Vec<Value> = tools
@@ -97,7 +97,7 @@ pub fn build_request(
     messages: &[Value],
     system: &str,
     tools: &Value,
-    visible_tools: Option<&[String]>,
+    native_search: bool,
 ) -> Value {
     let mut all_messages = vec![json!({"role": "system", "content": system})];
 
@@ -168,7 +168,7 @@ pub fn build_request(
     }
 
     // OpenRouter web search via plugins array
-    if native_tool_allowed(visible_tools, "native_search") {
+    if native_search {
         params["plugins"] = json!([{"id": "web"}]);
     }
 

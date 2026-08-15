@@ -127,7 +127,8 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with :ok <- Shared.require_permission(ctx, :component_manage),
-         :ok <- require_definition_authority(ctx) do
+         :ok <- require_definition_authority(ctx),
+         :ok <- validate_tool_policy(args["tool_policy"]) do
       type = inferred_aqua_create_type(args)
 
       case type do
@@ -147,6 +148,7 @@ defmodule Compendium.MCP.AquaTool do
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
     with :ok <- Shared.require_permission(ctx, :component_manage),
          :ok <- require_definition_authority(ctx),
+         :ok <- validate_tool_policy(args["tool_policy"]),
          {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       # Update manifest fields if provided
@@ -383,7 +385,13 @@ defmodule Compendium.MCP.AquaTool do
                title: config["title"],
                catalyst_ref: config["catalyst_ref"],
                model: config["model"],
-               tool_policy: config["tool_policy"]
+               tool_policy: config["tool_policy"],
+               # Manifest policy merged with the caller's persisted per-user
+               # grants (auto/deny) — the one policy harnesses feed into the
+               # formula input. `tool_policy` above stays manifest-only for
+               # the editors.
+               effective_tool_policy:
+                 Prism.AgentConfig.effective_tool_policy(ctx, name, config["tool_policy"] || %{})
              }}
           else
             _ -> {:error, "Failed to read prompt for orchestrator: #{name}"}
@@ -413,6 +421,8 @@ defmodule Compendium.MCP.AquaTool do
                  title: sa["title"],
                  description: sa["description"],
                  tool_policy: sa["tool_policy"],
+                 effective_tool_policy:
+                   Prism.AgentConfig.effective_tool_policy(ctx, name, sa["tool_policy"] || %{}),
                  catalyst_ref: sa["catalyst_ref"],
                  model: sa["model"]
                }}
@@ -445,6 +455,43 @@ defmodule Compendium.MCP.AquaTool do
         result || {:error, "Agent '#{name}' not found"}
     end
   end
+
+  # The policy vocabulary is exactly "ask" | "auto" and keys are
+  # "tool.action", "tool.*", or a bare native-tool name ("native_search").
+  # Anything else is rejected here so a schema-following caller can never
+  # persist a value the formula would silently reinterpret (the runtime
+  # treats every non-"auto" value as "ask").
+  defp validate_tool_policy(nil), do: :ok
+
+  defp validate_tool_policy(policy) when is_map(policy) do
+    Enum.find_value(policy, :ok, fn {key, value} ->
+      cond do
+        value not in ["ask", "auto"] ->
+          {:error,
+           "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""}
+
+        not valid_policy_key?(key) ->
+          {:error,
+           "Invalid tool_policy key #{inspect(key)} — use \"tool.action\", \"tool.*\", or \"native_search\""}
+
+        true ->
+          nil
+      end
+    end)
+  end
+
+  defp validate_tool_policy(_), do: {:error, "tool_policy must be an object"}
+
+  defp valid_policy_key?("native_search"), do: true
+
+  defp valid_policy_key?(key) when is_binary(key) do
+    case String.split(key, ".") do
+      [tool, action] when tool != "" and action != "" -> true
+      _ -> false
+    end
+  end
+
+  defp valid_policy_key?(_), do: false
 
   defp update_agent_fields(manifest, path, args) do
     updatable = ["title", "description", "tool_policy", "catalyst_ref", "model"]

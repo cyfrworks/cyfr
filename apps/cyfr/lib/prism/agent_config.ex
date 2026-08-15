@@ -159,40 +159,20 @@ defmodule Prism.AgentConfig do
   end
 
   @doc """
-  Attach the formula's tool-surface field to an input/sub-agent map from a
-  `tool_policy` allowlist (`{"tool.action" | "tool.*" => "ask" | "auto"}`).
+  Attach the formula's `tool_policy` allowlist
+  (`{"tool.action" | "tool.*" => "ask" | "auto"}`) to an input/sub-agent map.
 
-  - Native-tool-only agents (those whose allowlist names a native tool such as
-    `native_search`) get `"visible_tools" => ["native_search"]` and no
-    `"tool_policy"` — model-side native tools can't coexist with custom MCP
-    tools, so the agent gets *only* the native tool, via the formula's
-    `visible_tools` field.
-  - Everyone else gets `"tool_policy" => allowlist`; the formula filters each
-    tool's `action` enum to its directly-callable verbs (read-kind or `"auto"`)
-    and the `"ask"` actions reach the agent via the system-prompt approval
-    prelude instead.
+  The policy is the ONLY tool surface: it is always attached (an empty map
+  when the agent carries none — the empty allowlist is the fail-closed
+  default, never omission). The formula filters each tool's `action` enum to
+  its directly-callable verbs (read-kind or `"auto"`), routes `"ask"` actions
+  through the system-prompt approval prelude, and derives the provider-native
+  search tool from a bare `"native_search"` policy key.
   """
-  @spec put_formula_tool_surface(map(), map()) :: map()
+  @spec put_formula_tool_surface(map(), map() | nil) :: map()
   def put_formula_tool_surface(input, tool_policy) when is_map(input) do
-    if native_only?(tool_policy) do
-      input |> Map.delete("tool_policy") |> Map.put("visible_tools", ["native_search"])
-    else
-      Map.put(input, "tool_policy", tool_policy || %{})
-    end
+    Map.put(input, "tool_policy", tool_policy || %{})
   end
-
-  @doc "Whether a `tool_policy` allowlist designates a native-tool-only agent."
-  @spec native_only?(map()) :: boolean()
-  def native_only?(tool_policy) when is_map(tool_policy) do
-    Enum.any?(tool_policy, fn {k, _v} -> native_tool_key?(k) end)
-  end
-
-  def native_only?(_), do: false
-
-  # Native (model-side) tool names — keys that appear bare in `tool_policy`
-  # (not `tool.action`). Currently just `native_search` (Gemini grounding).
-  defp native_tool_key?("native_search"), do: true
-  defp native_tool_key?(_), do: false
 
   defp resolve_role_model(ctx, catalyst_ref, model, fallback_catalyst, fallback_model) do
     if is_binary(catalyst_ref) and is_binary(model) do

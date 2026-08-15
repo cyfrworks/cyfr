@@ -1,13 +1,13 @@
 use serde_json::{json, Value};
 
-use super::{native_tool_allowed, ToolCall};
+use super::ToolCall;
 
 // ---------------------------------------------------------------------------
 // Tool formatting
 // ---------------------------------------------------------------------------
 
 /// Gemini uses a subset of JSON Schema — strip unsupported fields.
-pub fn format_tools(tools: &[Value], visible_tools: Option<&[String]>) -> Value {
+pub fn format_tools(tools: &[Value], native_search: bool) -> Value {
     let declarations: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -25,8 +25,13 @@ pub fn format_tools(tools: &[Value], visible_tools: Option<&[String]>) -> Value 
         })
         .collect();
 
-    let mut tool_entries = vec![json!({"functionDeclarations": declarations})];
-    if native_tool_allowed(visible_tools, "native_search") {
+    // A native-only agent has no declarations at all; Gemini rejects an
+    // empty functionDeclarations entry, so omit it entirely.
+    let mut tool_entries: Vec<Value> = Vec::new();
+    if !declarations.is_empty() {
+        tool_entries.push(json!({"functionDeclarations": declarations}));
+    }
+    if native_search {
         tool_entries.push(json!({"google_search": {}}));
         tool_entries.push(json!({"url_context": {}}));
     }

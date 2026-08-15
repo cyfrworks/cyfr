@@ -60,6 +60,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
           },
           "edges" => %{
             "@ingress" => %{
+              "tools" => ["tools.list"],
               "tool_servers" => [
                 %{
                   "server_digest" => digest,
@@ -92,6 +93,34 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   end
 
   defp guest(ctx), do: Sanctum.Context.enter_guest(ctx)
+
+  test "in-chain tools.list shows only granted external tools and in-chain internals",
+       %{ctx: ctx, digest: digest} do
+    auth = authority_with_server(digest)
+
+    # Seed the discovery cache with three external tools: one covered by the
+    # edge's grant (issues.*), one on the same server outside the patterns,
+    # and one on an ungranted server. Only the first may be discovered.
+    Arca.Cache.put({:external_tools, "local", "default"}, [
+      %{"name" => "ghserver:issues.list", "description" => "granted", "inputSchema" => %{}},
+      %{"name" => "ghserver:repo_get", "description" => "outside patterns", "inputSchema" => %{}},
+      %{"name" => "othersrv:anything", "description" => "no grant", "inputSchema" => %{}}
+    ])
+
+    on_exit(fn -> Arca.Cache.delete_match({:external_tools, :_, :_}) end)
+
+    {:ok, %{tools: tools}} =
+      ToolRegistry.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
+
+    names = Enum.map(tools, & &1["name"])
+
+    assert "ghserver:issues.list" in names
+    refute "ghserver:repo_get" in names
+    refute "othersrv:anything" in names
+
+    # Internal tools survive, pruned to their in-chain view.
+    assert Enum.any?(names, &(not String.contains?(&1, ":")))
+  end
 
   test "a granted server's matching tool passes the transition", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)

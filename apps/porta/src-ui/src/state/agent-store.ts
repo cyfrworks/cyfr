@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { McpClient } from "../api/mcp-client";
 import { connectSSE, type SSEConnection } from "../api/sse-client";
 import { compact } from "../lib/compactor";
+import { applyToolSurface } from "../lib/tool-surface";
 import type {
   ExecutionEvent,
   SerializedMessage,
@@ -13,7 +14,10 @@ import type {
 import { useConnectionStore } from "./connection-store";
 import { friendlyError } from "../api/errors";
 import * as cyfrMcp from "../api/cyfr-mcp";
-import { buildSystemPrelude, buildPortaContextBlock } from "../harness/system-prelude";
+import {
+  buildSystemPrelude,
+  buildPortaContextBlock,
+} from "../harness/system-prelude";
 import { parsePortaActions } from "../harness/aqua-actions-parser";
 import { dispatchIntents } from "../harness/intent-dispatcher";
 import { getPortaContext } from "./porta-context-store";
@@ -26,39 +30,9 @@ interface SubAgentDef {
   title: string;
   description: string;
   prompt: string;
-  visible_tools: string[] | null;
   tool_policy?: Record<string, unknown>;
   catalyst_ref: string | null;
   model: string | null;
-}
-
-/**
- * Attach the formula's tool-surface fields from a `tool_policy` allowlist
- * (`{"tool.action" | "tool.*" => "ask" | "auto"}`), mirroring Prism's
- * `Prism.AgentConfig.put_formula_tool_surface/2`:
- *
- * - Native-tool-only agents (allowlist names a native tool such as
- *   `native_search`) get `visible_tools: ["native_search"]` and no
- *   `tool_policy` — model-side native tools can't coexist with custom MCP
- *   tools.
- * - Everyone else gets `tool_policy` (empty object when the guide carries
- *   none — the formula treats an absent policy as everything-callable, so
- *   the empty allowlist is the fail-closed default, never omission).
- */
-function applyToolSurface<T extends object>(
-  target: T,
-  toolPolicy: Record<string, unknown> | null | undefined,
-): T {
-  const t = target as Record<string, unknown>;
-  const policy = toolPolicy && typeof toolPolicy === "object" ? toolPolicy : {};
-  if (Object.keys(policy).some((k) => k === "native_search")) {
-    delete t.tool_policy;
-    t.visible_tools = ["native_search"];
-  } else {
-    t.tool_policy = policy;
-    t.visible_tools = null;
-  }
-  return target;
 }
 
 export interface ToolEntry {
@@ -265,11 +239,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const { useOrchestratorStore } = await import("./orchestrator-store");
     const orchState = useOrchestratorStore.getState();
     const orchestratorNames = orchState.orchestrators.map((o) => o.name);
-    const { task: parsedTask, mentionName } = parseOrchestratorMention(message, orchestratorNames);
+    const { task: parsedTask, mentionName } = parseOrchestratorMention(
+      message,
+      orchestratorNames,
+    );
 
     const orchestrator = mentionName
       ? orchState.orchestrators.find((o) => o.name === mentionName)
-      : orchState.orchestrators.find((o) => o.name === orchState.activeOrchestrator) ?? orchState.orchestrators[0];
+      : (orchState.orchestrators.find(
+          (o) => o.name === orchState.activeOrchestrator,
+        ) ?? orchState.orchestrators[0]);
 
     if (!orchestrator) {
       const errorMsg: Message = {
@@ -351,12 +330,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         if (guideResult.content && typeof guideResult.content === "string") {
           systemPrompt = guideResult.content;
         }
+        // `effective_tool_policy` is the manifest policy merged with the
+        // caller's persisted per-user grants (auto/deny), computed
+        // server-side so both harnesses honor the same decisions. The raw
+        // `tool_policy` field stays manifest-only for editors.
         if (
-          guideResult.tool_policy &&
-          typeof guideResult.tool_policy === "object" &&
-          !Array.isArray(guideResult.tool_policy)
+          guideResult.effective_tool_policy &&
+          typeof guideResult.effective_tool_policy === "object" &&
+          !Array.isArray(guideResult.effective_tool_policy)
         ) {
-          orchestratorToolPolicy = guideResult.tool_policy as Record<string, unknown>;
+          orchestratorToolPolicy = guideResult.effective_tool_policy as Record<
+            string,
+            unknown
+          >;
         }
       } catch {
         // Use fallback
@@ -374,10 +360,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           action: "list",
           limit: 1000,
         });
-        const components =
-          (listResult as Record<string, unknown>)?.components as
-            | Record<string, unknown>[]
-            | undefined;
+        const components = (listResult as Record<string, unknown>)
+          ?.components as Record<string, unknown>[] | undefined;
         if (components && components.length > 0) {
           const grouped: Record<string, Record<string, unknown>[]> = {
             catalyst: [],
@@ -412,10 +396,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         const serversResult = await client.callTool("mcp_servers", {
           action: "list",
         });
-        const servers =
-          (serversResult as Record<string, unknown>)?.servers as
-            | Record<string, unknown>[]
-            | undefined;
+        const servers = (serversResult as Record<string, unknown>)?.servers as
+          Record<string, unknown>[] | undefined;
         if (servers && servers.length > 0) {
           systemPrompt += `\nConnected MCP servers:`;
           for (const s of servers) {
@@ -440,10 +422,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       const history = compact(state.conversationHistory);
 
       // Build sub-agent definitions filtered by orchestrator
-      const subAgents = await fetchSubAgents(client, orchestratorName, execCatalystRef, execModel);
+      const subAgents = await fetchSubAgents(
+        client,
+        orchestratorName,
+        execCatalystRef,
+        execModel,
+      );
 
       // Build execution input
-      const task = parsedTask || (hasAttachments ? "Describe the attached file(s)." : parsedTask);
+      const task =
+        parsedTask ||
+        (hasAttachments ? "Describe the attached file(s)." : parsedTask);
       const input: Record<string, unknown> = applyToolSurface(
         {
           catalyst_ref: execCatalystRef,
@@ -679,7 +668,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     let { client } = state;
     if (!client) {
       client = await useConnectionStore.getState().getMcpClient();
-      if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
+      if (
+        !client.sessionId &&
+        useConnectionStore.getState().mode !== "remote"
+      ) {
         await client.discover();
       }
       set({ client });
@@ -806,7 +798,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // user will finish or dismiss it first.
     if (retryInput && !next) {
       setTimeout(
-        () => get().submit("Setup saved. Please continue with my previous request."),
+        () =>
+          get().submit(
+            "Setup saved. Please continue with my previous request.",
+          ),
         500,
       );
     }
@@ -821,7 +816,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const nextDismissed: PendingSetup[] = currentRef
       ? [
           ...state.dismissedSetups,
-          { componentRef: currentRef, retryInput: currentRetry, queuedAt: Date.now() },
+          {
+            componentRef: currentRef,
+            retryInput: currentRetry,
+            queuedAt: Date.now(),
+          },
         ]
       : state.dismissedSetups;
 
@@ -837,9 +836,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   resumeDismissedSetup: (componentRef) => {
     const state = get();
-    const target = state.dismissedSetups.find((s) => s.componentRef === componentRef);
+    const target = state.dismissedSetups.find(
+      (s) => s.componentRef === componentRef,
+    );
     if (!target) return;
-    const remaining = state.dismissedSetups.filter((s) => s.componentRef !== componentRef);
+    const remaining = state.dismissedSetups.filter(
+      (s) => s.componentRef !== componentRef,
+    );
 
     if (state.pendingSetupRef === null) {
       set({
@@ -894,7 +897,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   removeAttachment: (index: number) => {
     const state = get();
     set({
-      pendingAttachments: state.pendingAttachments.filter((_, i) => i !== index),
+      pendingAttachments: state.pendingAttachments.filter(
+        (_, i) => i !== index,
+      ),
     });
   },
 
@@ -906,8 +911,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const state = get();
 
     // Check if this event belongs to a background execution
-    const eventExecId =
-      (event.data as Record<string, unknown>)?.execution_id as string | undefined;
+    const eventExecId = (event.data as Record<string, unknown>)
+      ?.execution_id as string | undefined;
     if (eventExecId && state.backgroundExecutions[eventExecId]) {
       if (event.type === "complete" || event.type === "error") {
         const convId = state.backgroundExecutions[eventExecId]!;
@@ -972,7 +977,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             text: current.text + content,
           };
         } else {
-          segments.push({ turn: state.currentTurn || 1, tools: [], text: content });
+          segments.push({
+            turn: state.currentTurn || 1,
+            tools: [],
+            text: content,
+          });
         }
         set({
           streamingText: state.streamingText + content,
@@ -1002,7 +1011,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             tools: [...current.tools, entry],
           };
         } else {
-          segments.push({ turn: state.currentTurn || 1, tools: [entry], text: "" });
+          segments.push({
+            turn: state.currentTurn || 1,
+            tools: [entry],
+            text: "",
+          });
         }
 
         let progress = `Using ${tool}...`;
@@ -1166,15 +1179,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     if (!conversationId) return;
 
     const firstUserMsg = messages.find((m) => m.role === "user");
-    const title = firstUserMsg
-      ? firstUserMsg.content.slice(0, 80)
-      : "Untitled";
+    const title = firstUserMsg ? firstUserMsg.content.slice(0, 80) : "Untitled";
 
     const convFile: ConversationFile = {
       id: conversationId,
       title,
-      created_at:
-        messages[0]?.timestamp ?? new Date().toISOString(),
+      created_at: messages[0]?.timestamp ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
       default_orchestrator: state.activeOrchestrator ?? undefined,
       messages: messages.map(serializeMessage),
@@ -1295,13 +1305,15 @@ function handleSubAgentEvent(
   const kind = data.kind as string;
   const segments = [...state.streamSegments];
 
-  let matchSi = -1, matchTi = -1;
+  let matchSi = -1,
+    matchTi = -1;
   outer: for (let si = segments.length - 1; si >= 0; si--) {
     const seg = segments[si]!;
     for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
       const t = seg.tools[ti]!;
       if (t.emitTag === emitTag) {
-        matchSi = si; matchTi = ti;
+        matchSi = si;
+        matchTi = ti;
         break outer;
       }
     }
@@ -1320,7 +1332,8 @@ function handleSubAgentEvent(
             const updatedTools = [...seg.tools];
             updatedTools[ti] = { ...t, emitTag };
             segments[si] = { ...seg, tools: updatedTools };
-            matchSi = si; matchTi = ti;
+            matchSi = si;
+            matchTi = ti;
             break outer2;
           }
         }
@@ -1347,7 +1360,11 @@ function handleSubAgentEvent(
       subEvent.preview = data.preview as string;
       for (let i = tool.subEvents.length - 1; i >= 0; i--) {
         const se = tool.subEvents[i]!;
-        if (se.kind === "tool_use" && se.tool === data.tool && se.status === "running") {
+        if (
+          se.kind === "tool_use" &&
+          se.tool === data.tool &&
+          se.status === "running"
+        ) {
           const updatedSubs = [...tool.subEvents];
           updatedSubs[i] = { ...se, status: "done" };
           const updatedTool = { ...tool, subEvents: updatedSubs };
@@ -1481,7 +1498,12 @@ function deserializeSegment(seg: SerializedSegment): Segment {
 // ---------------------------------------------------------------------------
 
 async function fetchSubAgents(
-  client: { callTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>> },
+  client: {
+    callTool: (
+      name: string,
+      args: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
+  },
   orchestratorName: string,
   fallbackCatalystRef: string,
   fallbackModel: string | undefined,
@@ -1505,11 +1527,12 @@ async function fetchSubAgents(
         const parent = detail.parent as string | null;
         if (parent && parent !== orchestratorName) continue;
 
+        // Server-merged policy (manifest + per-user grants); see above.
         const toolPolicy =
-          detail.tool_policy &&
-          typeof detail.tool_policy === "object" &&
-          !Array.isArray(detail.tool_policy)
-            ? (detail.tool_policy as Record<string, unknown>)
+          detail.effective_tool_policy &&
+          typeof detail.effective_tool_policy === "object" &&
+          !Array.isArray(detail.effective_tool_policy)
+            ? (detail.effective_tool_policy as Record<string, unknown>)
             : {};
 
         subAgents.push(
@@ -1519,8 +1542,8 @@ async function fetchSubAgents(
               title: (detail.title as string) ?? (g.name as string),
               description: (detail.description as string) ?? "",
               prompt: (detail.content as string) ?? "",
-              visible_tools: (detail.visible_tools as string[] | null) ?? null,
-              catalyst_ref: (detail.catalyst_ref as string | null) ?? fallbackCatalystRef,
+              catalyst_ref:
+                (detail.catalyst_ref as string | null) ?? fallbackCatalystRef,
               model: (detail.model as string | null) ?? fallbackModel ?? null,
             },
             toolPolicy,

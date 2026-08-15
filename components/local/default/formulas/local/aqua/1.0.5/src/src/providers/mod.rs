@@ -47,15 +47,18 @@ impl Provider {
         }
     }
 
-    /// Format canonical tool definitions for this provider's API
-    pub fn format_tools(&self, tools: &[Value], visible_tools: Option<&[String]>) -> Value {
+    /// Format canonical tool definitions for this provider's API.
+    /// `native_search` appends the provider's native search tool — granted
+    /// only when the agent's `tool_policy` names it (see
+    /// `native_search_allowed/1`).
+    pub fn format_tools(&self, tools: &[Value], native_search: bool) -> Value {
         match self {
-            Provider::Claude => claude::format_tools(tools, visible_tools),
-            Provider::OpenAI => openai::format_tools(tools, visible_tools),
-            Provider::OpenRouter => openrouter::format_tools(tools, visible_tools),
-            Provider::Gemini => gemini::format_tools(tools, visible_tools),
-            Provider::Grok => grok::format_tools(tools, visible_tools),
-            Provider::Generic => claude::format_tools(tools, visible_tools),
+            Provider::Claude => claude::format_tools(tools, native_search),
+            Provider::OpenAI => openai::format_tools(tools, native_search),
+            Provider::OpenRouter => openrouter::format_tools(tools, native_search),
+            Provider::Gemini => gemini::format_tools(tools, native_search),
+            Provider::Grok => grok::format_tools(tools, native_search),
+            Provider::Generic => claude::format_tools(tools, native_search),
         }
     }
 
@@ -68,12 +71,12 @@ impl Provider {
         system: &str,
         max_tokens: u64,
         tools: &Value,
-        visible_tools: Option<&[String]>,
+        native_search: bool,
     ) -> Value {
         match self {
             Provider::Claude => claude::build_request(model, messages, system, max_tokens, tools),
             Provider::OpenAI => openai::build_request(model, messages, system, tools),
-            Provider::OpenRouter => openrouter::build_request(model, messages, system, tools, visible_tools),
+            Provider::OpenRouter => openrouter::build_request(model, messages, system, tools, native_search),
             Provider::Gemini => gemini::build_request(model, messages, system, tools),
             Provider::Grok => grok::build_request(model, messages, system, tools),
             Provider::Generic => claude::build_request(model, messages, system, max_tokens, tools),
@@ -164,10 +167,14 @@ pub struct ToolCall {
     pub thought_signature: Option<Value>,
 }
 
-/// Check if a native tool name is allowed by visible_tools.
-pub fn native_tool_allowed(visible_tools: Option<&[String]>, name: &str) -> bool {
-    match visible_tools {
-        None => true,
-        Some(visible) => visible.iter().any(|v| v == name),
-    }
+/// Whether the agent's `tool_policy` grants the provider-native search tool.
+/// Only an explicit `"native_search": "auto"` counts — native search runs
+/// inside the provider with no approval round-trip, so "ask" cannot gate it
+/// and is treated as not granted.
+pub fn native_search_allowed(policy: &Value) -> bool {
+    policy
+        .as_object()
+        .and_then(|obj| obj.get("native_search"))
+        .and_then(|v| v.as_str())
+        == Some("auto")
 }

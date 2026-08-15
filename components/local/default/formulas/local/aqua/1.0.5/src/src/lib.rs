@@ -69,15 +69,6 @@ fn handle_request(input: &str) -> Result<String, String> {
         .and_then(|v| v.as_u64())
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
-    let visible_tools: Option<Vec<String>> = parsed
-        .get("visible_tools")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        });
-
     let role = parsed.get("role").and_then(|v| v.as_str()).unwrap_or("");
     let emit_tag = parsed.get("emit_tag").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -90,14 +81,18 @@ fn handle_request(input: &str) -> Result<String, String> {
 
     let sub_agent_names: HashSet<String> = sub_agents.iter().map(|a| a.name.clone()).collect();
 
-    // --- Per-agent tool allowlist (new model) ---
-    // `tool_policy`: {"tool.action" | "tool.*" => "ask" | "auto"}. When present
-    // it supersedes `visible_tools` (now used only by native-tool-only agents):
-    // each tool's `action` enum is filtered to its directly-callable verbs
-    // (read-kind or "auto"); "ask" actions reach the agent via the approval
-    // prelude in the system prompt instead.
-    let tool_policy: Option<Value> = parsed.get("tool_policy").filter(|p| p.is_object()).cloned();
-    let visible_tools = if tool_policy.is_some() { None } else { visible_tools };
+    // --- Per-agent tool allowlist ---
+    // `tool_policy`: {"tool.action" | "tool.*" => "ask" | "auto"} — the ONLY
+    // tool surface. Each tool's `action` enum is filtered to its directly-
+    // callable verbs (read-kind or "auto"); "ask" actions reach the agent via
+    // the approval prelude in the system prompt instead. An absent policy is
+    // an empty allowlist: the model sees no tools at all (fail-closed), and
+    // the native provider tool appears only when the policy names it.
+    let tool_policy: Value = parsed
+        .get("tool_policy")
+        .filter(|p| p.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     // --- Detect provider from catalyst_ref ---
     let provider = detect_provider(catalyst_ref);
@@ -116,15 +111,11 @@ fn handle_request(input: &str) -> Result<String, String> {
     let system_prompt = context::build_system_prompt(custom_system);
 
     // --- Build tool definitions, apply the allowlist, build the dispatch guard ---
-    let canonical_tools = tools::build_tool_definitions(visible_tools.as_deref(), &sub_agents);
-    let policy_guard = tool_policy
-        .as_ref()
-        .map(|p| tools::PolicyGuard::new(p, &canonical_tools));
-    let canonical_tools = match &tool_policy {
-        Some(p) => tools::apply_tool_policy(canonical_tools, p),
-        None => canonical_tools,
-    };
-    let tools_for_llm = provider.format_tools(&canonical_tools, visible_tools.as_deref());
+    let canonical_tools = tools::build_tool_definitions(&sub_agents);
+    let policy_guard = Some(tools::PolicyGuard::new(&tool_policy, &canonical_tools));
+    let canonical_tools = tools::apply_tool_policy(canonical_tools, &tool_policy);
+    let native_search = providers::native_search_allowed(&tool_policy);
+    let tools_for_llm = provider.format_tools(&canonical_tools, native_search);
 
     // --- Agentic loop ---
     let mut turns = 0;
@@ -155,7 +146,7 @@ fn handle_request(input: &str) -> Result<String, String> {
             &system_prompt,
             max_tokens,
             &tools_for_llm,
-            visible_tools.as_deref(),
+            native_search,
         );
 
         // Invoke the LLM catalyst via MCP execution.run

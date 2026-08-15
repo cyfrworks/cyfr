@@ -32,25 +32,25 @@ defmodule Compendium.MCPTest do
               "prompt" => "aqua_builder.md",
               "title" => "Builder",
               "description" => "WASM component builder sub-agent prompt",
-              "tool_policy" => %{"component.list" => "allow", "build.compile" => "allow"}
+              "tool_policy" => %{"component.list" => "auto", "build.compile" => "auto"}
             },
             "aqua_artisan" => %{
               "prompt" => "aqua_artisan.md",
               "title" => "Artisan",
               "description" => "Tincture app/dashboard sub-agent prompt",
-              "tool_policy" => %{"files.read" => "allow", "storage.get" => "allow"}
+              "tool_policy" => %{"files.read" => "auto", "storage.get" => "auto"}
             },
             "aqua_arcade" => %{
               "prompt" => "aqua_arcade.md",
               "title" => "Arcade",
               "description" => "Game tincture sub-agent prompt",
-              "tool_policy" => %{"files.read" => "allow", "storage.get" => "allow"}
+              "tool_policy" => %{"files.read" => "auto", "storage.get" => "auto"}
             },
             "aqua_explorer" => %{
               "prompt" => "aqua_explorer.md",
               "title" => "Explorer",
               "description" => "Research and web search sub-agent prompt",
-              "tool_policy" => %{"native_search" => "allow"}
+              "tool_policy" => %{"native_search" => "auto"}
             },
             "aqua_planner" => %{
               "prompt" => "aqua_planner.md",
@@ -61,7 +61,7 @@ defmodule Compendium.MCPTest do
               "prompt" => "aqua_web.md",
               "title" => "Web",
               "description" => "HTTP interaction sub-agent prompt",
-              "tool_policy" => %{"http.get" => "allow"}
+              "tool_policy" => %{"http.get" => "auto"}
             }
           }
         }
@@ -1349,6 +1349,59 @@ defmodule Compendium.MCPTest do
       assert result.format == "markdown"
       assert result.content =~ "Builder Agent"
       assert is_map(result.tool_policy)
+    end
+
+    test "get returns the caller's effective (overlay-merged) policy", %{ctx: ctx} do
+      # A persisted per-user "deny" removes the pair; a persisted "auto"
+      # adds one. The manifest field itself stays untouched for editors.
+      :ok = Prism.AgentConfig.put_user_tool_grant(ctx, "aqua_builder", "build.compile", "deny")
+      :ok = Prism.AgentConfig.put_user_tool_grant(ctx, "aqua_builder", "files.write", "auto")
+
+      {:ok, result} =
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+
+      assert result.tool_policy["build.compile"] == "auto"
+      refute Map.has_key?(result.effective_tool_policy, "build.compile")
+      assert result.effective_tool_policy["files.write"] == "auto"
+      assert result.effective_tool_policy["component.list"] == "auto"
+    end
+
+    test "update rejects the retired allow/approval/block vocabulary", %{ctx: ctx} do
+      assert {:error, msg} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua_builder",
+                 "tool_policy" => %{"files.delete" => "block"}
+               })
+
+      assert msg =~ ~s{use "ask" or "auto"}
+    end
+
+    test "update rejects malformed tool_policy keys", %{ctx: ctx} do
+      assert {:error, msg} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua_builder",
+                 "tool_policy" => %{"no-dot-here" => "auto"}
+               })
+
+      assert msg =~ "Invalid tool_policy key"
+    end
+
+    test "update accepts ask/auto and the bare native_search key", %{ctx: ctx} do
+      assert {:ok, _} =
+               MCP.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua_builder",
+                 "tool_policy" => %{
+                   "files.read" => "auto",
+                   "files.delete" => "ask",
+                   "native_search" => "auto"
+                 }
+               })
+
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      assert result.tool_policy["native_search"] == "auto"
     end
 
     test "get aqua_artisan returns sub-agent prompt", %{ctx: ctx} do

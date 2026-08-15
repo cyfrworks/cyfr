@@ -1,7 +1,7 @@
 {
   "name": "aqua",
   "type": "formula",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "publisher": "local",
   "description": "AQUA agentic loop. Per-agent tool allowlist (tool_policy: tool.action -> ask|auto, supports tool.* globs); read-kind actions and auto-flagged actions are directly callable, everything else is requested for human approval. Uniform for orchestrator and sub-agents.",
   "dependencies": {
@@ -205,7 +205,6 @@
       "schedule.resume",
       "schedule.delete",
       "component.setup_plan",
-      "external.call",
       "mcp_servers.list",
       "mcp_servers.get",
       "mcp_servers.test",

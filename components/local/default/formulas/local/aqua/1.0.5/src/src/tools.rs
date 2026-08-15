@@ -17,11 +17,11 @@ pub struct SubAgentDef {
     pub name: String,
     pub description: String,
     pub prompt: String,
-    pub visible_tools: Option<Vec<String>>,
     /// Per-sub-agent tool allowlist (same shape as the orchestrator's
     /// `tool_policy`): `{"tool.action" | "tool.*" => "ask" | "auto"}`. Passed
     /// straight through when the formula re-invokes itself for this sub-agent,
-    /// so the sub-agent's tool surface is filtered identically.
+    /// so the sub-agent's tool surface is filtered identically. Absent means
+    /// an empty allowlist — the sub-agent gets no tools.
     pub tool_policy: Option<Value>,
     pub catalyst_ref: Option<String>,
     pub model: Option<String>,
@@ -33,8 +33,6 @@ impl SubAgentDef {
             name: v.get("name")?.as_str()?.to_string(),
             description: v.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             prompt: v.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            visible_tools: v.get("visible_tools").and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect()),
             tool_policy: v.get("tool_policy").filter(|p| p.is_object()).cloned(),
             catalyst_ref: v.get("catalyst_ref").and_then(|v| v.as_str()).map(String::from),
             model: v.get("model").and_then(|v| v.as_str()).map(String::from),
@@ -58,8 +56,8 @@ impl SubAgentDef {
 //                              request it via `ui.request_approval`
 //
 // External tools (`server:tool`, kind "external") are never directly callable.
-// When `tool_policy` is absent the formula falls back to the legacy
-// `visible_tools` path unchanged (used for native-tool-only agents).
+// `tool_policy` is the only tool surface: an absent policy means an empty
+// allowlist, so the model sees no tools at all.
 
 /// Look up the policy value for `tool.action`, falling back to a `tool.*` glob.
 fn policy_value<'a>(policy: &'a Value, tool: &str, action: &str) -> Option<&'a str> {
@@ -70,21 +68,16 @@ fn policy_value<'a>(policy: &'a Value, tool: &str, action: &str) -> Option<&'a s
 }
 
 /// Whether `tool.action` (with the given `kind`) is directly callable by the
-/// model under `policy`. A `None` policy means the legacy path — always callable.
-fn directly_callable(policy: Option<&Value>, tool: &str, action: &str, kind: &str) -> bool {
-    match policy {
-        None => true,
-        Some(p) => {
-            if tool.contains(':') {
-                return false; // external tools always go through approval
-            }
-            match policy_value(p, tool, action) {
-                None => false,
-                Some(_) if kind == "read" => true,
-                Some("auto") => true,
-                Some(_) => false,
-            }
-        }
+/// model under `policy`.
+fn directly_callable(policy: &Value, tool: &str, action: &str, kind: &str) -> bool {
+    if tool.contains(':') {
+        return false; // external tools always go through approval
+    }
+    match policy_value(policy, tool, action) {
+        None => false,
+        Some(_) if kind == "read" => true,
+        Some("auto") => true,
+        Some(_) => false,
     }
 }
 
@@ -121,7 +114,7 @@ fn filter_schema_by_policy(
         .and_then(|e| e.as_array());
 
     let Some(verbs) = verbs else {
-        if directly_callable(Some(policy), tool, "", &action_kind(annotations, "")) {
+        if directly_callable(policy, tool, "", &action_kind(annotations, "")) {
             return Some(input_schema.clone());
         }
         return None;
@@ -131,7 +124,7 @@ fn filter_schema_by_policy(
         .iter()
         .filter(|v| {
             v.as_str()
-                .map(|verb| directly_callable(Some(policy), tool, verb, &action_kind(annotations, verb)))
+                .map(|verb| directly_callable(policy, tool, verb, &action_kind(annotations, verb)))
                 .unwrap_or(false)
         })
         .cloned()
@@ -230,24 +223,12 @@ fn discover_mcp_tools() -> Vec<Value> {
 
 /// Build canonical tool definitions (name, description, input_schema).
 /// Returns a Vec — provider-specific formatting is done by Provider::format_tools().
-pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[SubAgentDef]) -> Vec<Value> {
+/// No filtering happens here: `apply_tool_policy` is the single place the
+/// tool surface narrows, so nothing can bypass the allowlist.
+pub fn build_tool_definitions(sub_agents: &[SubAgentDef]) -> Vec<Value> {
     let mut tools: Vec<Value> = Vec::new();
 
-    // Discover MCP tools dynamically, optionally filtered by visible_tools
     let mcp_tools = discover_mcp_tools();
-    let mcp_tools: Vec<Value> = if let Some(visible) = visible_tools {
-        mcp_tools
-            .into_iter()
-            .filter(|t| {
-                let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                // External tools (server:tool format) always pass through —
-                // access control is server-side via enable/disable
-                name.contains(':') || visible.iter().any(|v| name == v)
-            })
-            .collect()
-    } else {
-        mcp_tools
-    };
 
     for t in &mcp_tools {
         let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -270,8 +251,8 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[Su
         }
     }
 
-    // Add virtual tools (only if not filtered out by visible_tools)
-    if virtual_tool_allowed(visible_tools, "storage") {
+    // Add virtual tools; apply_tool_policy is the only filter.
+    {
         tools.push(json!({
             "name": "storage",
             "description": "Persistent key-value storage. Keys are slash-separated paths. Values are JSON. Stored under data/storage/.",
@@ -299,7 +280,7 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[Su
 
     // Register sub-agents as virtual tools from harness-provided definitions
     for agent in sub_agents {
-        if virtual_tool_allowed(visible_tools, &agent.name) {
+        {
             tools.push(json!({
                 "name": agent.name,
                 "description": agent.description,
@@ -316,7 +297,7 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[Su
 
     // No backward compat: sub-agents are exclusively harness-driven
 
-    if virtual_tool_allowed(visible_tools, "request_setup") {
+    {
         tools.push(json!({
             "name": "request_setup",
             "description": "Open the setup form for a component that needs configuration (secrets, policy). The harness shows an inline form where the user fills in credentials securely. Use this after pulling a new component or when you get a setup_required error. Use the component_ref value from search/list results.",
@@ -344,7 +325,7 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[Su
     // Virtual `files` tool — multi-action wrapper around catalyst:local.files.
     // Action verbs are aligned with cyfr MCP convention; kinds are annotated
     // for AQUA's risk classification.
-    if virtual_tool_allowed(visible_tools, "files") {
+    {
         tools.push(json!({
             "name": "files",
             "description": "Workspace file operations. Use action=read to view files (returns line-numbered content), write to create/overwrite, edit for line-based patches, search for glob filename matching, grep for content regex search, tree for directory listing, list as alias for tree, delete to remove a file.",
@@ -401,7 +382,7 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[Su
     // Virtual `http` tool — multi-action wrapper around catalyst:local.http.
     // Action verbs follow HTTP method semantics. The `read` action is a
     // markdown-readability shortcut (formerly `http_read`).
-    if virtual_tool_allowed(visible_tools, "http") {
+    {
         tools.push(json!({
             "name": "http",
             "description": "Outbound HTTP. Use action=read to read a page as clean markdown (formerly http_read), or get/head/options/post/put/patch/delete for raw HTTP semantics. Works with localhost and external URLs.",
@@ -437,16 +418,6 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>, sub_agents: &[Su
     }
 
     tools
-}
-
-/// Check if a virtual tool should be included based on visible_tools.
-/// Virtual tools are always included when visible_tools is None (all tools allowed).
-/// When visible_tools is Some, the tool name must appear in the list.
-fn virtual_tool_allowed(visible_tools: Option<&[String]>, name: &str) -> bool {
-    match visible_tools {
-        None => true,
-        Some(visible) => visible.iter().any(|v| v == name),
-    }
 }
 
 /// Apply a `tool_policy` allowlist to a set of canonical tool definitions.
@@ -511,7 +482,7 @@ impl PolicyGuard {
             .get(real_tool)
             .map(|a| action_kind(a, action))
             .unwrap_or_else(|| "write".to_string());
-        if directly_callable(Some(&self.policy), real_tool, action, &kind) {
+        if directly_callable(&self.policy, real_tool, action, &kind) {
             Ok(())
         } else if policy_value(&self.policy, real_tool, action).is_some() || real_tool.contains(':') {
             Err(format!(
@@ -820,12 +791,9 @@ fn dispatch_specialist_from_def(
         "emit_tag": emit_tag
     });
 
-    if let Some(vt) = &def.visible_tools {
-        input["visible_tools"] = json!(vt);
-    }
-    if let Some(tp) = &def.tool_policy {
-        input["tool_policy"] = tp.clone();
-    }
+    // Always attach the policy: absent means an empty allowlist, and an
+    // explicit {} keeps the child fail-closed instead of falling back.
+    input["tool_policy"] = def.tool_policy.clone().unwrap_or_else(|| json!({}));
 
     // Sub-agents don't get sub_agents (no recursive nesting)
     let result = invoke::call(&json!({
@@ -866,12 +834,9 @@ fn build_sub_agent_spawn_request(
         "emit_tag": emit_tag
     });
 
-    if let Some(vt) = &def.visible_tools {
-        input["visible_tools"] = json!(vt);
-    }
-    if let Some(tp) = &def.tool_policy {
-        input["tool_policy"] = tp.clone();
-    }
+    // Always attach the policy: absent means an empty allowlist, and an
+    // explicit {} keeps the child fail-closed instead of falling back.
+    input["tool_policy"] = def.tool_policy.clone().unwrap_or_else(|| json!({}));
 
     json!({
         "tool": EXECUTION_TOOL,

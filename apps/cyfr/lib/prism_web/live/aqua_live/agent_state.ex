@@ -92,7 +92,7 @@ defmodule PrismWeb.AquaLive.AgentState do
 
   Returns `[{tool, [{action, kind}]}]` merged across MCP tools, AQUA
   virtual tools, and external server tools. Every entry has a kind atom
-  (`:read | :write | :execute | :destructive | :external`) sourced from
+  (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   Missing-annotation actions default to `:write` and are logged.
   """
@@ -116,20 +116,13 @@ defmodule PrismWeb.AquaLive.AgentState do
               end)
 
             _ when is_binary(name) ->
-              cond do
-                # External tools (`server:tool`) have no enumerable verbs and
-                # are always `:external`. Represent the whole tool with a `*`
-                # action so an allowlist entry (`"server:tool.*"`) matches any
-                # real remote action via the glob fallback in `policy_value`.
-                String.contains?(name, ":") ->
-                  [{"*", :external}]
-
-                # Other enum-less tools: fall back to the default-meta entry.
-                default_meta ->
-                  [{"_default", kind_from_meta(default_meta, name, "_default")}]
-
-                true ->
-                  []
+              # External `server:tool` names never enter the registry cache
+              # this enumerates, so enum-less tools can only be internal:
+              # fall back to the default-meta entry when one exists.
+              if default_meta do
+                [{"_default", kind_from_meta(default_meta, name, "_default")}]
+              else
+                []
               end
 
             _ ->

@@ -68,4 +68,24 @@ defmodule Prism.AgentConfigGrantsTest do
     assert AgentConfig.user_tool_grants(ctx, "other-agent") == %{}
     assert AgentConfig.effective_tool_policy(other_user, "aqua", %{}) == %{}
   end
+
+  test "put_formula_tool_surface always attaches the policy, never a tool list" do
+    # `tool_policy` is the only tool surface: a native-search grant rides in
+    # the same map as everything else, and an absent policy becomes the
+    # empty (fail-closed) allowlist.
+    native = AgentConfig.put_formula_tool_surface(%{"task" => "t"}, %{"native_search" => "auto"})
+    assert native["tool_policy"] == %{"native_search" => "auto"}
+    refute Map.has_key?(native, "visible_tools")
+
+    mixed =
+      AgentConfig.put_formula_tool_surface(%{"task" => "t"}, %{
+        "native_search" => "auto",
+        "files.read" => "auto"
+      })
+
+    assert map_size(mixed["tool_policy"]) == 2
+
+    empty = AgentConfig.put_formula_tool_surface(%{"task" => "t"}, nil)
+    assert empty["tool_policy"] == %{}
+  end
 end

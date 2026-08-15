@@ -1,14 +1,14 @@
 use serde_json::{json, Value};
 
-use super::{native_tool_allowed, ToolCall};
+use super::ToolCall;
 
 // ---------------------------------------------------------------------------
 // Tool formatting
 // ---------------------------------------------------------------------------
 
-pub fn format_tools(tools: &[Value], visible_tools: Option<&[String]>) -> Value {
+pub fn format_tools(tools: &[Value], native_search: bool) -> Value {
     let mut all_tools: Vec<Value> = tools.to_vec();
-    if native_tool_allowed(visible_tools, "native_search") {
+    if native_search {
         all_tools.push(json!({"type": "web_search_20250305", "name": "web_search"}));
     }
     json!(all_tools)
