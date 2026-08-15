@@ -131,24 +131,20 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      build_id = args["build_id"] || Emissary.UUID7.generate_id("build")
+    build_id = args["build_id"] || Emissary.UUID7.generate_id("build")
 
-      if args["async"] == true do
-        start_async_compile(ctx, reference, build_id)
-      else
-        run_compile(ctx, reference, build_id)
-      end
+    if args["async"] == true do
+      start_async_compile(ctx, reference, build_id)
+    else
+      run_compile(ctx, reference, build_id)
     end
   end
 
   def handle("build", %Context{} = ctx, %{"action" => "status", "build_id" => build_id})
       when is_binary(build_id) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Arca.get_json(ctx, build_record_path(build_id)) do
-        {:ok, record} -> {:ok, record}
-        _ -> {:error, "Unknown build: #{build_id}"}
-      end
+    case Arca.get_json(ctx, build_record_path(build_id)) do
+      {:ok, record} -> {:ok, record}
+      _ -> {:error, "Unknown build: #{build_id}"}
     end
   end
 

@@ -24,12 +24,14 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
   end
 
   describe "mcp_servers management requires :admin" do
+    # Denials are asserted through the dispatcher — the permission gate lives
+    # in the action annotations, enforced by ToolRegistry, not in the handler.
     test "mutating actions are denied for an execute-only context" do
       ctx = execute_only_ctx()
 
       for action <- ~w(create delete enable disable test refresh) do
         assert {:error, message} =
-                 Emissary.MCP.ExternalProvider.handle("mcp_servers", ctx, %{
+                 Emissary.MCP.ToolRegistry.call_external("mcp_servers", ctx, %{
                    "action" => action,
                    "name" => "some-server"
                  })
@@ -53,7 +55,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove) do
         assert {:error, message} =
-                 Compendium.MCP.RegistryTool.handle(ctx, %{
+                 Emissary.MCP.ToolRegistry.call_external("registry", ctx, %{
                    "action" => action,
                    "slug" => "someslug"
                  })
@@ -146,7 +148,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:error, message} =
-               Emissary.MCP.Tools.SystemProvider.handle("system", ctx, %{
+               Emissary.MCP.ToolRegistry.call_external("system", ctx, %{
                  "action" => "notify",
                  "event" => "test.event"
                })

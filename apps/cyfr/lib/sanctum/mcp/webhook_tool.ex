@@ -14,27 +14,23 @@ defmodule Sanctum.MCP.WebhookTool do
   alias Sanctum.Context
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :storage_read) do
-      case Sanctum.Webhook.list(ctx) do
-        {:ok, hooks} ->
-          {:ok, %{webhooks: hooks, count: length(hooks)}}
+    case Sanctum.Webhook.list(ctx) do
+      {:ok, hooks} ->
+        {:ok, %{webhooks: hooks, count: length(hooks)}}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to list webhooks: #{inspect(reason)}")
-          {:error, "Failed to list webhooks"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to list webhooks: #{inspect(reason)}")
+        {:error, "Failed to list webhooks"}
     end
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :storage_read) do
-      case Sanctum.Webhook.get(ctx, name) do
-        {:ok, hook} ->
-          {:ok, hook}
+    case Sanctum.Webhook.get(ctx, name) do
+      {:ok, hook} ->
+        {:ok, hook}
 
-        {:error, :not_found} ->
-          {:error, "Webhook not found: #{name}"}
-      end
+      {:error, :not_found} ->
+        {:error, "Webhook not found: #{name}"}
     end
   end
 
@@ -46,33 +42,31 @@ defmodule Sanctum.MCP.WebhookTool do
         %Context{} = ctx,
         %{"action" => "create", "name" => name, "target_ref" => target_ref} = args
       ) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      opts = build_webhook_opts(args, %{name: name, target_ref: target_ref})
+    opts = build_webhook_opts(args, %{name: name, target_ref: target_ref})
 
-      case Sanctum.Webhook.create(ctx, opts) do
-        {:ok, result} ->
-          broadcast_webhooks_changed(ctx)
-          {:ok, result}
+    case Sanctum.Webhook.create(ctx, opts) do
+      {:ok, result} ->
+        broadcast_webhooks_changed(ctx)
+        {:ok, result}
 
-        {:error, :already_exists} ->
-          {:error, "Webhook already exists: #{name}"}
+      {:error, :already_exists} ->
+        {:error, "Webhook already exists: #{name}"}
 
-        {:error, :reserved_key} ->
-          {:error, "input_template must not contain reserved key '_webhook'"}
+      {:error, :reserved_key} ->
+        {:error, "input_template must not contain reserved key '_webhook'"}
 
-        {:error, :input_template_too_large} ->
-          {:error, "input_template exceeds 16 KB limit"}
+      {:error, :input_template_too_large} ->
+        {:error, "input_template exceeds 16 KB limit"}
 
-        {:error, :invalid_input_template} ->
-          {:error, "input_template is invalid"}
+      {:error, :invalid_input_template} ->
+        {:error, "input_template is invalid"}
 
-        {:error, reason} when is_binary(reason) ->
-          {:error, reason}
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to create webhook: #{inspect(reason)}")
-          {:error, "Failed to create webhook"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to create webhook: #{inspect(reason)}")
+        {:error, "Failed to create webhook"}
     end
   end
 
@@ -81,34 +75,32 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      attrs = build_webhook_opts(args, %{})
+    attrs = build_webhook_opts(args, %{})
 
-      case Sanctum.Webhook.update(ctx, name, attrs) do
-        {:ok, result} ->
-          broadcast_webhooks_changed(ctx)
-          {:ok, result}
+    case Sanctum.Webhook.update(ctx, name, attrs) do
+      {:ok, result} ->
+        broadcast_webhooks_changed(ctx)
+        {:ok, result}
 
-        {:error, :not_found} ->
-          {:error, "Webhook not found: #{name}"}
+      {:error, :not_found} ->
+        {:error, "Webhook not found: #{name}"}
 
-        {:error, :no_fields} ->
-          {:error,
-           "No mutable fields supplied. Allowed: target_ref, signature_header, input_template, description, rate_limit"}
+      {:error, :no_fields} ->
+        {:error,
+         "No mutable fields supplied. Allowed: target_ref, signature_header, input_template, description, rate_limit"}
 
-        {:error, :reserved_key} ->
-          {:error, "input_template must not contain reserved key '_webhook'"}
+      {:error, :reserved_key} ->
+        {:error, "input_template must not contain reserved key '_webhook'"}
 
-        {:error, :input_template_too_large} ->
-          {:error, "input_template exceeds 16 KB limit"}
+      {:error, :input_template_too_large} ->
+        {:error, "input_template exceeds 16 KB limit"}
 
-        {:error, :invalid_input_template} ->
-          {:error, "input_template is invalid"}
+      {:error, :invalid_input_template} ->
+        {:error, "input_template is invalid"}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to update webhook: #{inspect(reason)}")
-          {:error, "Failed to update webhook"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to update webhook: #{inspect(reason)}")
+        {:error, "Failed to update webhook"}
     end
   end
 
@@ -117,19 +109,17 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "name" => name}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      case Sanctum.Webhook.revoke(ctx, name) do
-        :ok ->
-          broadcast_webhooks_changed(ctx)
-          {:ok, %{revoked: true, name: name}}
+    case Sanctum.Webhook.revoke(ctx, name) do
+      :ok ->
+        broadcast_webhooks_changed(ctx)
+        {:ok, %{revoked: true, name: name}}
 
-        {:error, :not_found} ->
-          {:error, "Webhook not found: #{name}"}
+      {:error, :not_found} ->
+        {:error, "Webhook not found: #{name}"}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to revoke webhook: #{inspect(reason)}")
-          {:error, "Failed to revoke webhook"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to revoke webhook: #{inspect(reason)}")
+        {:error, "Failed to revoke webhook"}
     end
   end
 
@@ -138,19 +128,17 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "rotate", "name" => name}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      case Sanctum.Webhook.rotate(ctx, name) do
-        {:ok, result} ->
-          broadcast_webhooks_changed(ctx)
-          {:ok, result}
+    case Sanctum.Webhook.rotate(ctx, name) do
+      {:ok, result} ->
+        broadcast_webhooks_changed(ctx)
+        {:ok, result}
 
-        {:error, :not_found} ->
-          {:error, "Webhook not found: #{name}"}
+      {:error, :not_found} ->
+        {:error, "Webhook not found: #{name}"}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to rotate webhook: #{inspect(reason)}")
-          {:error, "Failed to rotate webhook"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to rotate webhook: #{inspect(reason)}")
+        {:error, "Failed to rotate webhook"}
     end
   end
 

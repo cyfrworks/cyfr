@@ -100,16 +100,15 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   # Server management mutates an outbound HTTP endpoint that can reference
-  # stored secrets in its headers — an operator-level capability. Reads
-  # (list/get) stay open to any authenticated caller.
+  # stored secrets in its headers — the dispatcher enforces the :admin gate
+  # from these actions' annotations. Reads (list/get) stay open to any
+  # authenticated caller by annotation.
   @admin_actions ~w(create delete test refresh enable disable)
 
   @impl true
   def handle("mcp_servers", %Context{} = ctx, %{"action" => action} = args)
       when action in @admin_actions do
-    with :ok <- Context.require_permission(ctx, :admin) do
-      dispatch_admin(action, ctx, args)
-    end
+    dispatch_admin(action, ctx, args)
   end
 
   def handle("mcp_servers", %Context{} = ctx, %{"action" => "list"}) do

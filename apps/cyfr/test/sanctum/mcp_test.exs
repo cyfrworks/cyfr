@@ -328,7 +328,8 @@ defmodule Sanctum.MCPTest do
     setup do
       restricted_ctx = %Context{
         user_id: "restricted_user",
-        org_id: nil,
+        org_id: "local",
+        project_id: "default",
         permissions: MapSet.new([:execute]),
         scope: :project,
         auth_method: :api_key,
@@ -340,14 +341,14 @@ defmodule Sanctum.MCPTest do
     end
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
-      {:error, msg} = MCP.handle("key", ctx, %{"action" => "list"})
+      {:error, msg} = Emissary.MCP.ToolRegistry.call_external("key", ctx, %{"action" => "list"})
       assert msg =~ "Unauthorized"
       assert msg =~ "admin"
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
       {:error, msg} =
-        MCP.handle("key", ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("key", ctx, %{
           "action" => "get",
           "name" => "test-key"
         })

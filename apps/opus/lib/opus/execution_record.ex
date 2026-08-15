@@ -183,9 +183,9 @@ defmodule Opus.ExecutionRecord do
     case get(ctx, id) do
       {:ok, %{status: :running} = record} ->
         # `get/2` authorized the READ; cancelling is a mutation and takes the
-        # :cancel action (:execute permission) — every ingress funnels through
-        # here, so a viewer credential cannot kill executions.
-        case Context.authorize(ctx, :cancel, {:execution, Map.from_struct(record)}) do
+        # :execute permission — every ingress funnels through here, so a
+        # viewer credential cannot kill executions.
+        case Context.authorize(ctx, :execute, {:execution, Map.from_struct(record)}) do
           :ok -> do_cancel(record)
           {:error, _} = error -> error
         end
@@ -307,7 +307,7 @@ defmodule Opus.ExecutionRecord do
       record ->
         result = execution_to_map(record)
 
-        case Context.authorize(ctx, :read, {:execution, result}) do
+        case Context.authorize(ctx, :storage_read, {:execution, result}) do
           :ok -> {:ok, from_mcp_result(result)}
           {:error, _} -> {:error, :not_found}
         end

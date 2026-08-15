@@ -209,7 +209,7 @@ defmodule Sanctum.ContextTest do
       ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize(ctx, :execute)
       assert :ok == Context.authorize(ctx, :admin)
-      assert :ok == Context.authorize(ctx, :read, {:execution, %{user_id: "other"}})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, %{user_id: "other"}})
     end
 
     test "unauthenticated context always denied" do
@@ -254,7 +254,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "u1"}
-      assert :ok == Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "execution is accessible to any same-tenant member (interchangeable)" do
@@ -270,7 +270,7 @@ defmodule Sanctum.ContextTest do
       # u2's record, same (default) tenant — there is no owner gate, so u1 is
       # authorized. Cross-tenant access is still rejected (see tenant tests).
       record = %{user_id: "u2"}
-      assert :ok == Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "admin overrides ownership check" do
@@ -284,7 +284,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "other_user"}
-      assert :ok == Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "authorize/2 shorthand works" do
@@ -303,7 +303,7 @@ defmodule Sanctum.ContextTest do
         )
 
       resource = %{user_id: "u1"}
-      assert :ok == Context.authorize(ctx, :read, {:owned, resource})
+      assert :ok == Context.authorize(ctx, :storage_read, {:owned, resource})
     end
 
     test "owned resource is accessible to any same-tenant member" do
@@ -317,7 +317,7 @@ defmodule Sanctum.ContextTest do
         )
 
       resource = %{user_id: "u2"}
-      assert :ok == Context.authorize(ctx, :read, {:owned, resource})
+      assert :ok == Context.authorize(ctx, :storage_read, {:owned, resource})
     end
   end
 
@@ -335,7 +335,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "u1", org_id: "org_b", project_id: "proj_b"}
-      assert {:error, msg} = Context.authorize(ctx, :read, {:execution, record})
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, record})
       assert msg =~ "tenant mismatch"
     end
 
@@ -352,7 +352,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "other_user", org_id: "org_a", project_id: "proj_a"}
-      assert :ok == Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "platform scope bypasses tenant check" do
@@ -367,7 +367,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "other_user", org_id: "org_x", project_id: "proj_x"}
-      assert :ok == Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "a local-org context passes the tenant check against a local record" do
@@ -383,7 +383,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "u1", org_id: "local", project_id: "default"}
-      assert :ok == Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
   end
 
@@ -398,7 +398,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :read, {:owned, %{}})
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:owned, %{}})
       assert msg =~ "malformed owned resource"
     end
 
@@ -412,7 +412,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :read, {:execution, %{org_id: "org_a"}})
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, %{org_id: "org_a"}})
       assert msg =~ "malformed execution resource"
     end
 
@@ -426,7 +426,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :read, {:tenant, "not-a-map"})
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:tenant, "not-a-map"})
       assert msg =~ "malformed tenant resource"
     end
 
@@ -443,7 +443,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "other_user", org_id: "org_b", project_id: "proj_b"}
-      assert {:error, msg} = Context.authorize(ctx, :read, {:owned, record})
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:owned, record})
       assert msg =~ "tenant mismatch"
     end
 
@@ -457,7 +457,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert :ok == Context.authorize(ctx, :read, {:owned, %{user_id: "u1"}})
+      assert :ok == Context.authorize(ctx, :storage_read, {:owned, %{user_id: "u1"}})
     end
   end
 

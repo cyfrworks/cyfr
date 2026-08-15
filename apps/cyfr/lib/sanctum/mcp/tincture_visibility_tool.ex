@@ -16,23 +16,21 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
-  def handle(%Context{} = ctx, %{
+  def handle(%Context{} = _ctx, %{
         "action" => "set",
         "publisher" => publisher,
         "name" => name,
         "public" => is_public
       })
       when is_boolean(is_public) do
-    with :ok <- Context.authorize(ctx, :execute) do
-      if is_public do
-        {:error,
-         "publishing is a consent decision — run profile.publish on " <>
-           "tincture:#{publisher}.#{name}'s owner profile (plan → preview → commit)"}
-      else
-        {:error,
-         "unpublishing revokes the public profile — run profile.revoke on " <>
-           "tincture:#{publisher}.#{name}'s public profile"}
-      end
+    if is_public do
+      {:error,
+       "publishing is a consent decision — run profile.publish on " <>
+         "tincture:#{publisher}.#{name}'s owner profile (plan → preview → commit)"}
+    else
+      {:error,
+       "unpublishing revokes the public profile — run profile.revoke on " <>
+         "tincture:#{publisher}.#{name}'s public profile"}
     end
   end
 
@@ -45,7 +43,9 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
         "publisher" => publisher,
         "name" => name
       }) do
-    with :ok <- Context.authorize(ctx, :read) do
+    # Dispatch enforces auth + :storage_read; the tenant residual keeps an
+    # org-less context out of the profile store.
+    with :ok <- tenant_gate(ctx) do
       ref = "tincture:#{publisher}.#{name}"
 
       case Source.impl().profiles(ctx, ref) do
@@ -84,5 +84,12 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
 
   def handle(_ctx, _args) do
     {:error, "Invalid tincture_visibility action. Use: set, get"}
+  end
+
+  defp tenant_gate(ctx) do
+    case Context.tenant_ok(ctx) do
+      :ok -> :ok
+      {:error, :missing_tenant} -> {:error, "Unauthorized: no resolved tenant"}
+    end
   end
 end

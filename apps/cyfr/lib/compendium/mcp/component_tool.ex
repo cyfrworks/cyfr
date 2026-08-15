@@ -111,241 +111,233 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Pull action - pull component from registry (local or OCI)
   def handle(%Context{} = ctx, %{"action" => "pull"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      progress_id = args["progress_id"]
+    progress_id = args["progress_id"]
 
-      case args["reference"] do
-        nil ->
-          {:error, "Missing required argument: reference"}
+    case args["reference"] do
+      nil ->
+        {:error, "Missing required argument: reference"}
 
-        reference ->
-          with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-            oci_reference =
-              if Compendium.OCI.Reference.oci_ref?(reference) do
-                {:ok, reference}
-              else
-                convert_to_oci_ref(reference)
+      reference ->
+        with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
+          oci_reference =
+            if Compendium.OCI.Reference.oci_ref?(reference) do
+              {:ok, reference}
+            else
+              convert_to_oci_ref(reference)
+            end
+
+          case oci_reference do
+            {:ok, ref} ->
+              broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
+              result = do_oci_pull(ctx, ref)
+
+              case result do
+                {:ok, res} ->
+                  broadcast_progress(
+                    ctx,
+                    progress_id,
+                    :complete,
+                    "Pulled #{res[:component_ref] || ref}"
+                  )
+
+                  broadcast_components_changed(ctx)
+
+                {:error, reason} ->
+                  Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
+                  broadcast_progress(ctx, progress_id, :error, "Pull failed")
               end
 
-            case oci_reference do
-              {:ok, ref} ->
-                broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
-                result = do_oci_pull(ctx, ref)
+              result
 
-                case result do
-                  {:ok, res} ->
-                    broadcast_progress(
-                      ctx,
-                      progress_id,
-                      :complete,
-                      "Pulled #{res[:component_ref] || ref}"
-                    )
-
-                    broadcast_components_changed(ctx)
-
-                  {:error, reason} ->
-                    Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
-                    broadcast_progress(ctx, progress_id, :error, "Pull failed")
-                end
-
-                result
-
-              {:error, reason} ->
-                {:error, reason}
-            end
+            {:error, reason} ->
+              {:error, reason}
           end
-      end
+        end
     end
   end
 
   # Push action — upload an already-registered local component to an OCI registry.
   def handle(%Context{} = ctx, %{"action" => "push"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      reference = args["reference"]
-      registry = args["registry"] || default_registry()
-      progress_id = args["progress_id"]
+    reference = args["reference"]
+    registry = args["registry"] || default_registry()
+    progress_id = args["progress_id"]
 
-      cond do
-        is_nil(reference) ->
-          {:error, "Missing required argument: reference (format: name:version)"}
+    cond do
+      is_nil(reference) ->
+        {:error, "Missing required argument: reference (format: name:version)"}
 
-        true ->
-          case Sanctum.ComponentRef.parse(reference) do
-            {:ok, %{version: nil}} ->
-              {:error, "Version is required for pushing. Example: c:local.name:1.0.0"}
+      true ->
+        case Sanctum.ComponentRef.parse(reference) do
+          {:ok, %{version: nil}} ->
+            {:error, "Version is required for pushing. Example: c:local.name:1.0.0"}
 
-            {:ok, cref} when cref.namespace != "local" ->
-              {:error,
-               "Only components in the local namespace can be pushed to a registry. " <>
-                 "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
+          {:ok, cref} when cref.namespace != "local" ->
+            {:error,
+             "Only components in the local namespace can be pushed to a registry. " <>
+               "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
-            {:ok, _cref} ->
-              case Compendium.Registry.validate_host(registry) do
-                {:error, msg} ->
-                  {:error, msg}
+          {:ok, _cref} ->
+            case Compendium.Registry.validate_host(registry) do
+              {:error, msg} ->
+                {:error, msg}
 
-                :ok ->
-                  # `local` refs are remapped to the caller's claimed personal
-                  # namespace inside `OCI.Client.push` (via resolve_push_publisher),
-                  # which returns a precise error if no namespace is claimed. No
-                  # literal-"local" credential pre-check here — there is no push
-                  # token for "local"; the token belongs to the resolved namespace.
-                  broadcast_progress(
-                    ctx,
-                    progress_id,
-                    :pushing,
-                    "Pushing #{reference} to #{registry}..."
-                  )
+              :ok ->
+                # `local` refs are remapped to the caller's claimed personal
+                # namespace inside `OCI.Client.push` (via resolve_push_publisher),
+                # which returns a precise error if no namespace is claimed. No
+                # literal-"local" credential pre-check here — there is no push
+                # token for "local"; the token belongs to the resolved namespace.
+                broadcast_progress(
+                  ctx,
+                  progress_id,
+                  :pushing,
+                  "Pushing #{reference} to #{registry}..."
+                )
 
-                  case Compendium.OCI.Client.push(ctx, reference, registry) do
-                    {:ok, result} ->
-                      broadcast_progress(
-                        ctx,
-                        progress_id,
-                        :complete,
-                        "Pushed #{result[:oci_reference] || reference}"
-                      )
+                case Compendium.OCI.Client.push(ctx, reference, registry) do
+                  {:ok, result} ->
+                    broadcast_progress(
+                      ctx,
+                      progress_id,
+                      :complete,
+                      "Pushed #{result[:oci_reference] || reference}"
+                    )
 
-                      {:ok, result}
+                    {:ok, result}
 
-                    {:error, reason} ->
-                      Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
-                      broadcast_progress(ctx, progress_id, :error, "Push failed")
-                      {:error, reason}
-                  end
-              end
+                  {:error, reason} ->
+                    Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
+                    broadcast_progress(ctx, progress_id, :error, "Push failed")
+                    {:error, reason}
+                end
+            end
 
-            {:error, reason} ->
-              {:error, "Invalid reference: #{reason}"}
-          end
-      end
+          {:error, reason} ->
+            {:error, "Invalid reference: #{reason}"}
+        end
     end
   end
 
   # Create action - scaffold a new component project
   def handle(%Context{} = ctx, %{"action" => "create"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      name = args["name"]
-      type = args["type"]
-      version = args["version"] || "0.1.0"
-      template = args["template"]
+    name = args["name"]
+    type = args["type"]
+    version = args["version"] || "0.1.0"
+    template = args["template"]
 
-      result = Compendium.Scaffold.create(ctx, name, type, version, template: template)
+    result = Compendium.Scaffold.create(ctx, name, type, version, template: template)
 
-      case result do
-        {:ok, _} -> broadcast_components_changed(ctx)
-        _ -> :ok
-      end
-
-      result
+    case result do
+      {:ok, _} -> broadcast_components_changed(ctx)
+      _ -> :ok
     end
+
+    result
   end
 
   # Register action - scan and register all local components
   def handle(%Context{} = ctx, %{"action" => "register"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      register_id = args["register_id"]
+    register_id = args["register_id"]
 
+    broadcast_register_progress(
+      ctx,
+      register_id,
+      :scanning,
+      "Scanning component directories..."
+    )
+
+    result = Compendium.AutoIndexer.scan(ctx: ctx)
+
+    # Broadcast per-component status
+    Enum.each(result.components, fn comp ->
+      status = comp[:status] || comp["status"]
+      name = comp[:name] || comp["name"]
+      version = comp[:version] || comp["version"]
+
+      case status do
+        "registered" ->
+          broadcast_register_progress(
+            ctx,
+            register_id,
+            :registered,
+            "Registered #{name}:#{version}"
+          )
+
+        "unchanged" ->
+          broadcast_register_progress(
+            ctx,
+            register_id,
+            :unchanged,
+            "Unchanged #{name}:#{version}"
+          )
+
+        _ ->
+          :ok
+      end
+    end)
+
+    if result.pruned > 0 do
       broadcast_register_progress(
         ctx,
         register_id,
-        :scanning,
-        "Scanning component directories..."
+        :pruning,
+        "Pruned #{result.pruned} stale component(s)"
       )
+    end
 
-      result = Compendium.AutoIndexer.scan(ctx: ctx)
+    broadcast_register_progress(
+      ctx,
+      register_id,
+      :checking_deps,
+      "Checking dependencies..."
+    )
 
-      # Broadcast per-component status
-      Enum.each(result.components, fn comp ->
-        status = comp[:status] || comp["status"]
-        name = comp[:name] || comp["name"]
-        version = comp[:version] || comp["version"]
+    dep_info = check_register_deps(ctx, result.components, register_id)
 
-        case status do
-          "registered" ->
-            broadcast_register_progress(
-              ctx,
-              register_id,
-              :registered,
-              "Registered #{name}:#{version}"
-            )
+    broadcast_register_progress(
+      ctx,
+      register_id,
+      :complete,
+      "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
+    )
 
-          "unchanged" ->
-            broadcast_register_progress(
-              ctx,
-              register_id,
-              :unchanged,
-              "Unchanged #{name}:#{version}"
-            )
+    broadcast_components_changed(ctx)
 
-          _ ->
-            :ok
-        end
-      end)
+    dep_fields =
+      case dep_info do
+        {:error, {:dependency_check_failed, reason}} ->
+          %{
+            pulled_dependencies: [],
+            failed_pulls: [],
+            missing_local_deps: [],
+            optional_missing: [],
+            dependency_check_error: reason
+          }
 
-      if result.pruned > 0 do
-        broadcast_register_progress(
-          ctx,
-          register_id,
-          :pruning,
-          "Pruned #{result.pruned} stale component(s)"
-        )
+        %{} = info ->
+          Map.take(info, [
+            :pulled_dependencies,
+            :failed_pulls,
+            :missing_local_deps,
+            :optional_missing
+          ])
       end
 
-      broadcast_register_progress(
-        ctx,
-        register_id,
-        :checking_deps,
-        "Checking dependencies..."
-      )
-
-      dep_info = check_register_deps(ctx, result.components, register_id)
-
-      broadcast_register_progress(
-        ctx,
-        register_id,
-        :complete,
-        "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
-      )
-
-      broadcast_components_changed(ctx)
-
-      dep_fields =
-        case dep_info do
-          {:error, {:dependency_check_failed, reason}} ->
-            %{
-              pulled_dependencies: [],
-              failed_pulls: [],
-              missing_local_deps: [],
-              optional_missing: [],
-              dependency_check_error: reason
-            }
-
-          %{} = info ->
-            Map.take(info, [
-              :pulled_dependencies,
-              :failed_pulls,
-              :missing_local_deps,
-              :optional_missing
-            ])
-        end
-
-      {:ok,
-       Map.merge(
-         %{
-           status: "scanned",
-           components: result.components,
-           registered: result.registered,
-           unchanged: result.unchanged,
-           pruned: result.pruned,
-           errors: result.errors,
-           total: result.total,
-           elapsed_ms: result.elapsed_ms,
-           scanned_dirs: result.scanned_dirs
-         },
-         dep_fields
-       )}
-    end
+    {:ok,
+     Map.merge(
+       %{
+         status: "scanned",
+         components: result.components,
+         registered: result.registered,
+         unchanged: result.unchanged,
+         pruned: result.pruned,
+         errors: result.errors,
+         total: result.total,
+         elapsed_ms: result.elapsed_ms,
+         scanned_dirs: result.scanned_dirs
+       },
+       dep_fields
+     )}
   end
 
   # List action - list all installed components (local-only, no remote search)
@@ -361,28 +353,26 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Delete action - delete a component from the registry
   def handle(%Context{} = ctx, %{"action" => "delete", "reference" => reference}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      case Sanctum.ComponentRef.parse(reference) do
-        {:ok, %{version: nil} = cref} ->
-          # Check if name is even valid before giving version error
-          case Sanctum.ComponentRef.validate_name(cref.name) do
-            :ok -> {:error, "Version is required for deletion. Example: c:local.name:1.0.0"}
-            {:error, reason} -> {:error, "Invalid reference: #{reason}"}
-          end
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, %{version: nil} = cref} ->
+        # Check if name is even valid before giving version error
+        case Sanctum.ComponentRef.validate_name(cref.name) do
+          :ok -> {:error, "Version is required for deletion. Example: c:local.name:1.0.0"}
+          {:error, reason} -> {:error, "Invalid reference: #{reason}"}
+        end
 
-        {:ok, cref} ->
-          case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
-            :ok ->
-              broadcast_components_changed(ctx)
-              {:ok, %{status: "deleted", reference: reference}}
+      {:ok, cref} ->
+        case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
+          :ok ->
+            broadcast_components_changed(ctx)
+            {:ok, %{status: "deleted", reference: reference}}
 
-            {:error, :not_found} ->
-              {:error, "Component not found: #{reference}"}
-          end
+          {:error, :not_found} ->
+            {:error, "Component not found: #{reference}"}
+        end
 
-        {:error, reason} ->
-          {:error, "Invalid reference: #{reason}"}
-      end
+      {:error, reason} ->
+        {:error, "Invalid reference: #{reason}"}
     end
   end
 
@@ -406,18 +396,16 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Get blob action - get component WASM binary by digest
   def handle(%Context{} = ctx, %{"action" => "get_blob", "digest" => digest}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_read) do
-      case Registry.get_blob(ctx, digest) do
-        {:ok, bytes} ->
-          {:ok, %{bytes: Base.encode64(bytes), digest: digest}}
+    case Registry.get_blob(ctx, digest) do
+      {:ok, bytes} ->
+        {:ok, %{bytes: Base.encode64(bytes), digest: digest}}
 
-        {:error, :blob_not_found} ->
-          {:error, "Blob not found for digest: #{digest}"}
+      {:error, :blob_not_found} ->
+        {:error, "Blob not found for digest: #{digest}"}
 
-        {:error, reason} ->
-          Logger.error("[Compendium.MCP] Failed to get blob: #{inspect(reason)}")
-          {:error, "Failed to get blob"}
-      end
+      {:error, reason} ->
+        Logger.error("[Compendium.MCP] Failed to get blob: #{inspect(reason)}")
+        {:error, "Failed to get blob"}
     end
   end
 
@@ -428,26 +416,24 @@ defmodule Compendium.MCP.ComponentTool do
   # Discover action - list components on the configured registry (cyfr.run
   # REST API). The registry host is set via CYFR_REGISTRY_URL.
   def handle(%Context{} = ctx, %{"action" => "discover"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_read) do
-      registry = args["registry"] || default_registry()
+    registry = args["registry"] || default_registry()
 
-      case Compendium.Registry.validate_host(registry) do
-        {:error, msg} ->
-          {:error, msg}
+    case Compendium.Registry.validate_host(registry) do
+      {:error, msg} ->
+        {:error, msg}
 
-        :ok ->
-          params = %{namespace: args["namespace"], type: args["type"]}
+      :ok ->
+        params = %{namespace: args["namespace"], type: args["type"]}
 
-          case Compendium.Registry.Client.discover(ctx, params) do
-            {:ok, result} ->
-              {:ok, result}
+        case Compendium.Registry.Client.discover(ctx, params) do
+          {:ok, result} ->
+            {:ok, result}
 
-            {:error, %Errors{} = err} ->
-              Logger.error("[Compendium.MCP] DISCOVER FAILED — #{Errors.to_log_string(err)}")
+          {:error, %Errors{} = err} ->
+            Logger.error("[Compendium.MCP] DISCOVER FAILED — #{Errors.to_log_string(err)}")
 
-              {:error, format_error(err)}
-          end
-      end
+            {:error, format_error(err)}
+        end
     end
   end
 
@@ -468,32 +454,30 @@ defmodule Compendium.MCP.ComponentTool do
         %Context{} = ctx,
         %{"action" => "fork", "reference" => reference} = args
       ) do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      case Sanctum.ComponentRef.parse(reference) do
-        {:ok, %{version: nil}} ->
-          {:error, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, %{version: nil}} ->
+        {:error, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}
 
-        {:ok, %{namespace: "local"}} ->
-          {:error, "Cannot fork a local component. Use 'new' to create a fresh component."}
+      {:ok, %{namespace: "local"}} ->
+        {:error, "Cannot fork a local component. Use 'new' to create a fresh component."}
 
-        {:ok, cref} ->
-          opts = [
-            name: args["name"] || cref.name,
-            version: args["version"] || cref.version
-          ]
+      {:ok, cref} ->
+        opts = [
+          name: args["name"] || cref.name,
+          version: args["version"] || cref.version
+        ]
 
-          case Compendium.Fork.fork(ctx, cref, opts) do
-            {:ok, result} ->
-              broadcast_components_changed(ctx)
-              {:ok, result}
+        case Compendium.Fork.fork(ctx, cref, opts) do
+          {:ok, result} ->
+            broadcast_components_changed(ctx)
+            {:ok, result}
 
-            {:error, reason} ->
-              {:error, reason}
-          end
+          {:error, reason} ->
+            {:error, reason}
+        end
 
-        {:error, reason} ->
-          {:error, "Invalid reference: #{reason}"}
-      end
+      {:error, reason} ->
+        {:error, "Invalid reference: #{reason}"}
     end
   end
 

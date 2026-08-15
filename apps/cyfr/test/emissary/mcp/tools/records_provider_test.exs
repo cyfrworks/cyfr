@@ -342,19 +342,23 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "cannot set retention settings", %{app_ctx: app_ctx} do
+      # Through the dispatcher: the gate is the :storage_write annotation.
+      # (The old handler gate checked :storage_write too but answered with a
+      # message claiming admin was required — the denial now names the real
+      # permission.)
       {:error, msg} =
-        MCP.handle("retention", app_ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
 
       assert msg =~ "Unauthorized"
-      assert msg =~ "admin"
+      assert msg =~ "storage_write"
     end
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
       {:error, msg} =
-        MCP.handle("retention", app_ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions"
         })
@@ -708,16 +712,22 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       {:ok, no_read_ctx: no_read_ctx}
     end
 
-    test "mcp_log.correlate requires :read like its siblings", %{no_read_ctx: ctx} do
+    test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, msg} =
-               MCP.handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => "req_x"})
+               Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{
+                 "action" => "correlate",
+                 "request_id" => "req_x"
+               })
 
       assert msg =~ "Unauthorized"
     end
 
-    test "policy_log.correlate requires :read like its siblings", %{no_read_ctx: ctx} do
+    test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
       assert {:error, msg} =
-               MCP.handle("policy_log", ctx, %{"action" => "correlate", "request_id" => "req_x"})
+               Emissary.MCP.ToolRegistry.call_external("policy_log", ctx, %{
+                 "action" => "correlate",
+                 "request_id" => "req_x"
+               })
 
       assert msg =~ "Unauthorized"
     end
@@ -750,8 +760,10 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       {:ok, no_read_ctx: no_read_ctx}
     end
 
-    test "stats requires :read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, msg} = MCP.handle("mcp_log", ctx, %{"action" => "stats"})
+    test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
+      assert {:error, msg} =
+               Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{"action" => "stats"})
+
       assert msg =~ "Unauthorized"
     end
 
@@ -795,7 +807,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.(action), "action", action)
 
-        case MCP.handle(tool.name, no_perm_ctx, args) do
+        case Emissary.MCP.ToolRegistry.call_external(tool.name, no_perm_ctx, args) do
           {:error, msg} ->
             assert msg =~ "Unauthorized",
                    "#{tool.name}.#{action} error is not a permission denial: #{inspect(msg)}"

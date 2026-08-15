@@ -65,7 +65,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # controller's `:forbidden` so both not-found and not-authorized stay 404
   # (no execution-id existence disclosure).
   defp authorize_execution_read(%Sanctum.Context{} = ctx, %Arca.Execution{} = exec) do
-    case Sanctum.Context.authorize(ctx, :read, {:execution, exec}) do
+    case Sanctum.Context.authorize(ctx, :storage_read, {:execution, exec}) do
       :ok -> :ok
       {:error, _reason} -> {:error, :forbidden}
     end

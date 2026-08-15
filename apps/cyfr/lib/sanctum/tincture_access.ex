@@ -31,7 +31,7 @@ defmodule Sanctum.TinctureAccess do
   @spec get_private(Context.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found | :forbidden}
   def get_private(%Context{} = ctx, publisher, tincture_name) do
-    with :ok <- Context.authorize(ctx, :read),
+    with :ok <- Context.authorize(ctx, :storage_read),
          :ok <- validate_refs(publisher, tincture_name) do
       case lookup_tincture(ctx, publisher, tincture_name) do
         {:ok, tincture} -> {:ok, tincture}

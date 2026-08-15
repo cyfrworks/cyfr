@@ -498,14 +498,20 @@ defmodule Opus.MCPTest do
     end
 
     test "execution.status denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
-      {:error, msg} = MCP.handle("execution", no_execute_ctx, %{"action" => "status"})
+      # Through the dispatcher — the :execute gate lives in the action
+      # annotation, enforced by ToolRegistry, not in the handler.
+      {:error, msg} =
+        Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
+          "action" => "status"
+        })
+
       assert msg =~ "Unauthorized"
       assert msg =~ "execute"
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       {:error, msg} =
-        MCP.handle("execution", no_execute_ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
           "action" => "cancel",
           "execution_id" => "exec_nonexistent"
         })

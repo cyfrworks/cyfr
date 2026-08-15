@@ -14,27 +14,23 @@ defmodule Sanctum.MCP.KeyTool do
   alias Sanctum.Context
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      case Sanctum.ApiKey.list(ctx) do
-        {:ok, keys} ->
-          {:ok, %{keys: keys, count: length(keys)}}
+    case Sanctum.ApiKey.list(ctx) do
+      {:ok, keys} ->
+        {:ok, %{keys: keys, count: length(keys)}}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to list keys: #{inspect(reason)}")
-          {:error, "Failed to list keys"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to list keys: #{inspect(reason)}")
+        {:error, "Failed to list keys"}
     end
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      case Sanctum.ApiKey.get(ctx, name) do
-        {:ok, key_info} ->
-          {:ok, key_info}
+    case Sanctum.ApiKey.get(ctx, name) do
+      {:ok, key_info} ->
+        {:ok, key_info}
 
-        {:error, :not_found} ->
-          {:error, "Key not found: #{name}"}
-      end
+      {:error, :not_found} ->
+        {:error, "Key not found: #{name}"}
     end
   end
 
@@ -43,8 +39,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin),
-         {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "application")) do
+    with {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "application")) do
       scope = Map.get(args, "scope", [])
 
       scope =
@@ -89,8 +84,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "name" => name} = _args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin),
-         :ok <- Sanctum.ApiKey.revoke(ctx, name) do
+    with :ok <- Sanctum.ApiKey.revoke(ctx, name) do
       broadcast_api_keys_changed(ctx)
       {:ok, %{revoked: true, name: name}}
     else
@@ -111,19 +105,17 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "rotate", "name" => name} = _args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      case Sanctum.ApiKey.rotate(ctx, name) do
-        {:ok, result} ->
-          broadcast_api_keys_changed(ctx)
-          {:ok, result}
+    case Sanctum.ApiKey.rotate(ctx, name) do
+      {:ok, result} ->
+        broadcast_api_keys_changed(ctx)
+        {:ok, result}
 
-        {:error, :not_found} ->
-          {:error, "Key not found: #{name}"}
+      {:error, :not_found} ->
+        {:error, "Key not found: #{name}"}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to rotate key: #{inspect(reason)}")
-          {:error, "Failed to rotate key"}
-      end
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] Failed to rotate key: #{inspect(reason)}")
+        {:error, "Failed to rotate key"}
     end
   end
 

@@ -15,19 +15,14 @@ defmodule Compendium.MCP.RegistryTool do
 
   # Namespace, token and member mutations wield the operator's registry
   # identity (the CredentialStore bearer keyed by ctx.user_id) against
-  # cyfr.run. The remote enforces its own roles, but a local caller must
-  # also hold :component_manage — an execute-only context (webhook, cron,
-  # in-chain formula under a user context) must not issue tokens or edit
-  # namespace membership as the operator. Bootstrap actions (probe,
-  # claim_personal, get_namespace) stay ungated: they run before a session
-  # exists and authenticate via the IdP access token carried in args.
+  # cyfr.run. Bootstrap actions (probe, claim_personal, get_namespace)
+  # stay ungated: they run before a session exists and authenticate via
+  # the IdP access token carried in args.
   @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove)
 
   def handle(%Context{} = ctx, %{"action" => action} = args)
       when action in @identity_mutations do
-    with :ok <- Context.require_permission_for_plane(ctx, :component_manage) do
-      handle_gated(ctx, args)
-    end
+    handle_gated(ctx, args)
   end
 
   def handle(%Context{} = ctx, %{"action" => "whoami"}) do

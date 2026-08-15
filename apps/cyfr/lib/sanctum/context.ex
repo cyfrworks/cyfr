@@ -714,8 +714,11 @@ defmodule Sanctum.Context do
   ## Authorization Modes
 
   - **Permission-only**: `authorize(ctx, :execute, nil)` — checks permission
-  - **Ownership**: `authorize(ctx, :read, {:execution, record})` — checks ownership
+  - **Ownership**: `authorize(ctx, :storage_read, {:execution, record})` — checks ownership
   - **Admin override**: Admin contexts (wildcard permissions) bypass ownership checks
+
+  The permission argument is a `Sanctum.Atoms` permission atom, not an
+  action verb — there is no alias mapping.
 
   ## Examples
 
@@ -723,9 +726,9 @@ defmodule Sanctum.Context do
       iex> Sanctum.Context.authorize(ctx, :execute, nil)
       :ok
 
-      iex> ctx = Sanctum.Context.build(user_id: "u1", permissions: [:execute], authenticated: true)
+      iex> ctx = Sanctum.Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true)
       iex> record = %{user_id: "u1"}
-      iex> Sanctum.Context.authorize(ctx, :read, {:execution, record})
+      iex> Sanctum.Context.authorize(ctx, :storage_read, {:execution, record})
       :ok
 
   """
@@ -826,16 +829,10 @@ defmodule Sanctum.Context do
     end
   end
 
-  # Map actions to the permission atoms they require.
-  # Common actions map to existing permission names.
-  defp action_to_permission(:execute), do: :execute
-  defp action_to_permission(:run), do: :execute
-  defp action_to_permission(:cancel), do: :execute
-  defp action_to_permission(:read), do: :storage_read
-  defp action_to_permission(:list), do: :storage_read
-  defp action_to_permission(:write), do: :storage_write
-  defp action_to_permission(:delete), do: :admin
-  defp action_to_permission(:admin), do: :admin
+  # Callers pass real permission atoms (the Sanctum.Atoms vocabulary), not
+  # action verbs — the verb-alias mapping (:read → :storage_read, :cancel →
+  # :execute, …) is retired, so a permission spelled here is the permission
+  # checked, with no second vocabulary to drift.
   defp action_to_permission(action) when is_atom(action), do: action
 
   defp log_denial(%__MODULE__{} = ctx, action, resource) do

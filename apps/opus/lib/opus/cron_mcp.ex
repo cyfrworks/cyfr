@@ -100,8 +100,7 @@ defmodule Opus.CronMCP do
 
   # Create
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute),
-         :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
+    with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
          :ok <- validate_limit(ctx),
          {:ok, reference, resolved_reference} <-
@@ -144,25 +143,21 @@ defmodule Opus.CronMCP do
 
   # List
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      limit = min(args["limit"] || 25, 1000)
-      schedules = Arca.CronSchedule.list_by_user(ctx, limit: limit)
+    limit = min(args["limit"] || 25, 1000)
+    schedules = Arca.CronSchedule.list_by_user(ctx, limit: limit)
 
-      {:ok,
-       %{
-         schedules: Enum.map(schedules, &format_schedule/1),
-         count: length(schedules)
-       }}
-    end
+    {:ok,
+     %{
+       schedules: Enum.map(schedules, &format_schedule/1),
+       count: length(schedules)
+     }}
   end
 
   # Get
   def handle("schedule", %Context{} = ctx, %{"action" => "get", "schedule_id" => id}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Arca.CronSchedule.get_by_user(ctx, id) do
-        nil -> {:error, "Schedule not found: #{id}"}
-        schedule -> {:ok, format_schedule(schedule)}
-      end
+    case Arca.CronSchedule.get_by_user(ctx, id) do
+      nil -> {:error, "Schedule not found: #{id}"}
+      schedule -> {:ok, format_schedule(schedule)}
     end
   end
 
@@ -172,8 +167,7 @@ defmodule Opus.CronMCP do
 
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute),
-         {:schedule, schedule} when not is_nil(schedule) <-
+    with {:schedule, schedule} when not is_nil(schedule) <-
            {:schedule, Arca.CronSchedule.get_by_user(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]) do
       update_attrs = %{}
@@ -239,21 +233,19 @@ defmodule Opus.CronMCP do
 
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Arca.CronSchedule.get_by_user(ctx, id) do
-        nil ->
-          {:error, "Schedule not found: #{id}"}
+    case Arca.CronSchedule.get_by_user(ctx, id) do
+      nil ->
+        {:error, "Schedule not found: #{id}"}
 
-        schedule ->
-          case Arca.CronSchedule.update(ctx, schedule.id, %{status: "paused"}) do
-            {:ok, updated} ->
-              Opus.CronScheduler.pause(updated.id)
-              {:ok, format_schedule(updated)}
+      schedule ->
+        case Arca.CronSchedule.update(ctx, schedule.id, %{status: "paused"}) do
+          {:ok, updated} ->
+            Opus.CronScheduler.pause(updated.id)
+            {:ok, format_schedule(updated)}
 
-            {:error, changeset} ->
-              {:error, format_changeset_error(changeset)}
-          end
-      end
+          {:error, changeset} ->
+            {:error, format_changeset_error(changeset)}
+        end
     end
   end
 
@@ -263,30 +255,28 @@ defmodule Opus.CronMCP do
 
   # Resume
   def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Arca.CronSchedule.get_by_user(ctx, id) do
-        nil ->
-          {:error, "Schedule not found: #{id}"}
+    case Arca.CronSchedule.get_by_user(ctx, id) do
+      nil ->
+        {:error, "Schedule not found: #{id}"}
 
-        schedule ->
-          next_run =
-            case compute_next_run(schedule.cron_expression) do
-              {:ok, dt} -> dt
-              _ -> nil
-            end
-
-          case Arca.CronSchedule.update(ctx, schedule.id, %{
-                 status: "active",
-                 next_run_at: next_run
-               }) do
-            {:ok, updated} ->
-              Opus.CronScheduler.resume(updated.id)
-              {:ok, format_schedule(updated)}
-
-            {:error, changeset} ->
-              {:error, format_changeset_error(changeset)}
+      schedule ->
+        next_run =
+          case compute_next_run(schedule.cron_expression) do
+            {:ok, dt} -> dt
+            _ -> nil
           end
-      end
+
+        case Arca.CronSchedule.update(ctx, schedule.id, %{
+               status: "active",
+               next_run_at: next_run
+             }) do
+          {:ok, updated} ->
+            Opus.CronScheduler.resume(updated.id)
+            {:ok, format_schedule(updated)}
+
+          {:error, changeset} ->
+            {:error, format_changeset_error(changeset)}
+        end
     end
   end
 
@@ -296,21 +286,19 @@ defmodule Opus.CronMCP do
 
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Arca.CronSchedule.get_by_user(ctx, id) do
-        nil ->
-          {:error, "Schedule not found: #{id}"}
+    case Arca.CronSchedule.get_by_user(ctx, id) do
+      nil ->
+        {:error, "Schedule not found: #{id}"}
 
-        schedule ->
-          case Arca.CronSchedule.soft_delete(ctx, schedule.id) do
-            {:ok, _} ->
-              Opus.CronScheduler.remove(schedule.id)
-              {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
+      schedule ->
+        case Arca.CronSchedule.soft_delete(ctx, schedule.id) do
+          {:ok, _} ->
+            Opus.CronScheduler.remove(schedule.id)
+            {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
-            {:error, changeset} ->
-              {:error, format_changeset_error(changeset)}
-          end
-      end
+          {:error, changeset} ->
+            {:error, format_changeset_error(changeset)}
+        end
     end
   end
 
@@ -320,27 +308,25 @@ defmodule Opus.CronMCP do
 
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Arca.CronSchedule.get_by_user(ctx, id) do
-        nil ->
-          {:error, "Schedule not found: #{id}"}
+    case Arca.CronSchedule.get_by_user(ctx, id) do
+      nil ->
+        {:error, "Schedule not found: #{id}"}
 
-        schedule ->
-          case Compendium.Resolver.resolve(ctx, schedule.reference) do
-            {:ok, pinned, _metadata} ->
-              case Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
-                {:ok, updated} ->
-                  Opus.CronScheduler.update(updated.id)
-                  {:ok, format_schedule(updated)}
+      schedule ->
+        case Compendium.Resolver.resolve(ctx, schedule.reference) do
+          {:ok, pinned, _metadata} ->
+            case Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
+              {:ok, updated} ->
+                Opus.CronScheduler.update(updated.id)
+                {:ok, format_schedule(updated)}
 
-                {:error, changeset} ->
-                  {:error, format_changeset_error(changeset)}
-              end
+              {:error, changeset} ->
+                {:error, format_changeset_error(changeset)}
+            end
 
-            {:error, reason} ->
-              {:error, "Failed to re-resolve '#{schedule.reference}': #{reason}"}
-          end
-      end
+          {:error, reason} ->
+            {:error, "Failed to re-resolve '#{schedule.reference}': #{reason}"}
+        end
     end
   end
 

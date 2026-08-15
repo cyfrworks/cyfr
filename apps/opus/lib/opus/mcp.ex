@@ -343,46 +343,44 @@ defmodule Opus.MCP do
   # Run stream action - start execution in background and return execution_id + stream URL
   # The caller can connect to the SSE endpoint to receive intermediate events.
   def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      reference = args["reference"] || ""
-      input = args["input"] || %{}
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
 
-      execution_id = Opus.ExecutionRecord.generate_id()
+    execution_id = Opus.ExecutionRecord.generate_id()
 
-      opts = build_run_opts(args)
-      opts = [{:execution_id, execution_id} | opts]
-      # This execution IS the root — its emit target is itself
-      opts = [{:root_execution_id, execution_id} | opts]
+    opts = build_run_opts(args)
+    opts = [{:execution_id, execution_id} | opts]
+    # This execution IS the root — its emit target is itself
+    opts = [{:root_execution_id, execution_id} | opts]
 
-      opts =
-        case args["parent_execution_id"] do
-          pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-          _ -> opts
-        end
-
-      # Spawn execution in background, registering PID for cancellation
-      case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-             case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-               {:ok, _} ->
-                 run_root_formatted(ctx, reference, input, opts, args)
-
-               {:error, reason} ->
-                 Logger.error(
-                   "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
-                 )
-             end
-           end) do
-        {:ok, _pid} ->
-          {:ok,
-           %{
-             execution_id: execution_id,
-             stream_url: "/api/executions/#{execution_id}/events"
-           }}
-
-        {:error, reason} ->
-          Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
-          {:error, "execution_spawn_failed"}
+    opts =
+      case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
       end
+
+    # Spawn execution in background, registering PID for cancellation
+    case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+           case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+             {:ok, _} ->
+               run_root_formatted(ctx, reference, input, opts, args)
+
+             {:error, reason} ->
+               Logger.error(
+                 "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
+               )
+           end
+         end) do
+      {:ok, _pid} ->
+        {:ok,
+         %{
+           execution_id: execution_id,
+           stream_url: "/api/executions/#{execution_id}/events"
+         }}
+
+      {:error, reason} ->
+        Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
+        {:error, "execution_spawn_failed"}
     end
   end
 
@@ -390,68 +388,64 @@ defmodule Opus.MCP do
   # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
   # Accepts optional parent_execution_id for formula lineage tracking
   def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      reference = args["reference"] || ""
-      input = args["input"] || %{}
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
 
-      # Build options for Opus.run/4
-      opts = build_run_opts(args)
+    # Build options for Opus.run/4
+    opts = build_run_opts(args)
 
-      # Thread parent_execution_id for formula→component lineage
-      opts =
-        case args["parent_execution_id"] do
-          pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-          _ -> opts
-        end
-
-      # Thread root_execution_id so nested emits route to the root stream
-      opts =
-        case args["root_execution_id"] do
-          rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
-          _ -> opts
-        end
-
-      case run_root_formatted(ctx, reference, input, opts, args) do
-        {:ok, result} ->
-          # Format response for MCP (convert atoms to strings for JSON)
-          {:ok, format_run_result(result, reference)}
-
-        {:error, reason} ->
-          {:error, reason}
+    # Thread parent_execution_id for formula→component lineage
+    opts =
+      case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
       end
+
+    # Thread root_execution_id so nested emits route to the root stream
+    opts =
+      case args["root_execution_id"] do
+        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
+        _ -> opts
+      end
+
+    case run_root_formatted(ctx, reference, input, opts, args) do
+      {:ok, result} ->
+        # Format response for MCP (convert atoms to strings for JSON)
+        {:ok, format_run_result(result, reference)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   # List action - list execution instances
   def handle("execution", %Context{} = ctx, %{"action" => "list"} = args) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      limit = min(args["limit"] || 20, 1000)
-      status_filter = parse_status_filter(args["status"])
+    limit = min(args["limit"] || 20, 1000)
+    status_filter = parse_status_filter(args["status"])
 
-      {:ok, records} = Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter)
+    {:ok, records} = Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter)
 
-      # In-chain listings are subtree-scoped for the same reason cancel
-      # and logs are: the caller has no business enumerating the tenant.
-      records = Enum.filter(records, &in_caller_chain?(&1, args))
+    # In-chain listings are subtree-scoped for the same reason cancel
+    # and logs are: the caller has no business enumerating the tenant.
+    records = Enum.filter(records, &in_caller_chain?(&1, args))
 
-      executions =
-        Enum.map(records, fn record ->
-          %{
-            execution_id: record.id,
-            request_id: record.request_id,
-            parent_execution_id: Map.get(record, :parent_execution_id),
-            status: Atom.to_string(record.status),
-            reference: record.reference,
-            component_type: record.component_type && to_string(record.component_type),
-            started_at: DateTime.to_iso8601(record.started_at),
-            completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-            duration_ms: record.duration_ms,
-            error: record.error
-          }
-        end)
+    executions =
+      Enum.map(records, fn record ->
+        %{
+          execution_id: record.id,
+          request_id: record.request_id,
+          parent_execution_id: Map.get(record, :parent_execution_id),
+          status: Atom.to_string(record.status),
+          reference: record.reference,
+          component_type: record.component_type && to_string(record.component_type),
+          started_at: DateTime.to_iso8601(record.started_at),
+          completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+          duration_ms: record.duration_ms,
+          error: record.error
+        }
+      end)
 
-      {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
-    end
+    {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
   end
 
   # Logs action — retrieve execution record and a text rendering of it.
@@ -464,36 +458,34 @@ defmodule Opus.MCP do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      case Opus.ExecutionRecord.get(ctx, execution_id) do
-        {:ok, record} ->
-          if not in_caller_chain?(record, args) do
-            chain_scoped_refusal(execution_id)
-          else
-            logs = format_execution_logs(record)
+    case Opus.ExecutionRecord.get(ctx, execution_id) do
+      {:ok, record} ->
+        if not in_caller_chain?(record, args) do
+          chain_scoped_refusal(execution_id)
+        else
+          logs = format_execution_logs(record)
 
-            {:ok,
-             %{
-               execution_id: record.id,
-               request_id: record.request_id,
-               user_id: record.user_id,
-               status: Atom.to_string(record.status),
-               started_at: DateTime.to_iso8601(record.started_at),
-               completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-               duration_ms: record.duration_ms,
-               error: record.error,
-               component_type: Atom.to_string(record.component_type || :reagent),
-               component_digest: record.component_digest,
-               reference: record.reference,
-               input: record.input,
-               output: record.output,
-               logs: logs
-             }}
-          end
+          {:ok,
+           %{
+             execution_id: record.id,
+             request_id: record.request_id,
+             user_id: record.user_id,
+             status: Atom.to_string(record.status),
+             started_at: DateTime.to_iso8601(record.started_at),
+             completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+             duration_ms: record.duration_ms,
+             error: record.error,
+             component_type: Atom.to_string(record.component_type || :reagent),
+             component_digest: record.component_digest,
+             reference: record.reference,
+             input: record.input,
+             output: record.output,
+             logs: logs
+           }}
+        end
 
-        {:error, :not_found} ->
-          {:error, "Execution not found: #{execution_id}"}
-      end
+      {:error, :not_found} ->
+        {:error, "Execution not found: #{execution_id}"}
     end
   end
 
@@ -510,8 +502,7 @@ defmodule Opus.MCP do
           "execution_id" => execution_id
         } = args
       ) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute),
-         :ok <- check_chain_scope(ctx, execution_id, args) do
+    with :ok <- check_chain_scope(ctx, execution_id, args) do
       case Opus.Executor.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
@@ -535,32 +526,28 @@ defmodule Opus.MCP do
 
   # Status action - execution semaphore diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      {:ok, scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())}
-    end
+    {:ok, scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())}
   end
 
   # Force release action - emergency semaphore recovery. Releasing EVERY
   # tenant's slots is a platform-wide side effect, so a tenant-scoped :admin
   # is not enough — only the operator (platform scope) may pull this lever.
   def handle("execution", %Context{scope: :platform} = ctx, %{"action" => "force_release"}) do
-    with :ok <- Context.require_permission_for_plane(ctx, :admin) do
-      Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
+    Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
 
-      :telemetry.execute(
-        [:cyfr, :opus, :force_release],
-        %{system_time: System.system_time()},
-        %{user_id: ctx.user_id, auth_method: ctx.auth_method}
-      )
+    :telemetry.execute(
+      [:cyfr, :opus, :force_release],
+      %{system_time: System.system_time()},
+      %{user_id: ctx.user_id, auth_method: ctx.auth_method}
+    )
 
-      case Opus.ExecutionSemaphore.force_release_all() do
-        {:error, :semaphore_unavailable} ->
-          {:error, "Execution semaphore is not running — nothing was released"}
+    case Opus.ExecutionSemaphore.force_release_all() do
+      {:error, :semaphore_unavailable} ->
+        {:error, "Execution semaphore is not running — nothing was released"}
 
-        _released ->
-          status = scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())
-          {:ok, Map.put(status, :force_released, true)}
-      end
+      _released ->
+        status = scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())
+        {:ok, Map.put(status, :force_released, true)}
     end
   end
 

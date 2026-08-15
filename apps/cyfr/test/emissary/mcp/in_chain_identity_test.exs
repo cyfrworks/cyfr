@@ -106,6 +106,39 @@ defmodule Emissary.MCP.InChainIdentityTest do
              Enum.map_join(refusals, "\n", fn {t, a, m} -> "  #{t}.#{a}: #{m}" end)
   end
 
+  test "tincture_visibility.get reaches its handler from a chain" do
+    # Regression: the handler used to gate through Context.authorize, whose
+    # permission arm refuses the guest plane unconditionally — an in-chain
+    # annotation the gate contradicted. With the gate central (guest arm =
+    # identity conjunct) and the handler keeping only the tenant residual,
+    # a chain-granted read must get past the plane. Passing full args
+    # matters: the arg-matching clauses sit in front of the residual, so an
+    # action-only probe would prove nothing about it.
+    auth = granting_authority([{"tincture_visibility", "get"}])
+
+    ctx =
+      Context.enter_guest(%Context{
+        user_id: "identity_matrix_user",
+        org_id: "local",
+        project_id: "default",
+        scope: :project,
+        permissions: MapSet.new([:*]),
+        authenticated: true,
+        request_id: "req_identity_matrix"
+      })
+
+    args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
+
+    case ToolRegistry.call_in_chain("tincture_visibility", ctx, args, auth) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, msg} ->
+        refute msg =~ @plane_refusal,
+               "tincture_visibility.get still refuses the guest plane: #{msg}"
+    end
+  end
+
   test "call_external rejects a guest-plane context outright" do
     ctx =
       Context.enter_guest(%Context{

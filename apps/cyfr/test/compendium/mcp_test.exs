@@ -1670,7 +1670,8 @@ defmodule Compendium.MCPTest do
     setup do
       restricted_ctx = %Context{
         user_id: "restricted_user",
-        org_id: nil,
+        org_id: "local",
+        project_id: "default",
         permissions: MapSet.new([:component_read]),
         scope: :project,
         auth_method: :api_key,
@@ -1683,7 +1684,7 @@ defmodule Compendium.MCPTest do
 
     test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
-        MCP.handle("component", restricted_ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
           "action" => "create",
           "name" => "test-comp",
           "type" => "reagent"
@@ -1695,7 +1696,7 @@ defmodule Compendium.MCPTest do
 
     test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
-        MCP.handle("component", restricted_ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
           "action" => "push",
           "reference" => "reagent:local.test:0.1.0"
         })
@@ -1705,7 +1706,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} = MCP.handle("component", restricted_ctx, %{"action" => "register"})
+      {:error, msg} = Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{"action" => "register"})
 
       assert msg =~ "Unauthorized"
       assert msg =~ "component_manage"
@@ -1713,7 +1714,7 @@ defmodule Compendium.MCPTest do
 
     test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
-        MCP.handle("component", restricted_ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
           "action" => "delete",
           "reference" => "reagent:local.test:0.1.0"
         })

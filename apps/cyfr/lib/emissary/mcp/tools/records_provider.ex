@@ -82,7 +82,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def read(%Context{} = ctx, "arca://files/" <> path) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
       case Arca.get(ctx, segments) do
@@ -300,7 +300,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       case Arca.Execution.get_tenant(ctx, id) do
         nil ->
           {:error, "Execution not found: #{id}"}
@@ -318,7 +318,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", ctx, %{"action" => "list"} = args) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -362,7 +362,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
           {:error, "MCP log not found: #{id}"}
@@ -378,7 +378,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -403,7 +403,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       mcp_logs =
         [request_id: request_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id]
         |> Arca.McpLog.list()
@@ -462,7 +462,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # queries.
   def handle("mcp_log", %Context{} = ctx, %{"action" => "fan_outs", "request_ids" => ids})
       when is_list(ids) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       ids = Enum.filter(ids, &is_binary/1)
 
       counts =
@@ -500,7 +500,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       since_hours = args["since_hours"] || 1
 
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
@@ -536,7 +536,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       record =
         Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
 
@@ -555,7 +555,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -581,7 +581,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         "action" => "correlate",
         "request_id" => request_id
       }) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       opts =
         [
           request_id: request_id,
@@ -611,7 +611,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
-    with :ok <- authorize(ctx, :storage_read) do
+    with :ok <- tenant_gate(ctx) do
       settings = Arca.Retention.get_settings(ctx)
       {:ok, %{action: "get", settings: settings}}
     end
@@ -619,7 +619,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
-    with :ok <- authorize(ctx, :storage_write) do
+    with :ok <- tenant_gate(ctx) do
       case Arca.Retention.set_settings(ctx, settings) do
         :ok ->
           new_settings = Arca.Retention.get_settings(ctx)
@@ -629,14 +629,11 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           Logger.error("[Emissary.MCP.Tools.RecordsProvider] Failed to update retention settings: #{inspect(reason)}")
           {:error, "Failed to update retention settings"}
       end
-    else
-      {:error, _reason} ->
-        {:error, "Unauthorized: setting retention requires admin-level access"}
     end
   end
 
   def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
-    with :ok <- authorize(ctx, :admin) do
+    with :ok <- tenant_gate(ctx) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
@@ -784,16 +781,15 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     end
   end
 
-  # In-chain callers arrive guest-planed with the authority conjunct already
-  # applied at the dispatch chokepoint; the provider supplies the identity
-  # conjunct plus the tenant gate. External callers keep the fail-closed
-  # plane gate. Call sites pass PERMISSIONS (:storage_read/:storage_write/
-  # :admin), never bare action verbs, so both arms check the same thing.
-  defp authorize(%Context{plane: :guest} = ctx, permission) do
-    with :ok <- Context.require_identity_permission(ctx, permission) do
-      Context.tenant_ok(ctx)
+  # The dispatcher enforces auth + permission from the action annotations;
+  # what remains here is the residual it cannot express — these are
+  # tenant-scoped stores, so an org-less context must be refused before it
+  # can land in the shared sentinel bucket (the storage backstop would raise,
+  # this answers politely).
+  defp tenant_gate(ctx) do
+    case Context.tenant_ok(ctx) do
+      :ok -> :ok
+      {:error, :missing_tenant} -> {:error, "Unauthorized: no resolved tenant"}
     end
   end
-
-  defp authorize(ctx, permission), do: Context.authorize(ctx, permission)
 end
