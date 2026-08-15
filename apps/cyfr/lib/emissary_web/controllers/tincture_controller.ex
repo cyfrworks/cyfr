@@ -64,6 +64,15 @@ defmodule EmissaryWeb.TinctureController do
     result = Sanctum.TinctureAuth.authenticate(conn)
 
     case result do
+      {:ok, %{auth_method: :tincture}} ->
+        # A `?_t=` token must not mint its own successor — that would turn a
+        # leaked one-hour token into a permanent credential. Minting requires
+        # the primary credential; expiry means re-authenticating with it.
+        conn
+        |> put_resp_header("www-authenticate", "Bearer")
+        |> put_status(401)
+        |> json(%{error: "token_cannot_renew_itself"})
+
       {:ok, ctx} ->
         conn
         |> put_status(200)

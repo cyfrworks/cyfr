@@ -7,13 +7,17 @@ defmodule PrismWeb.ApiKeysLive do
   alias Phoenix.LiveView.JS
   require Logger
 
-  defp valid_scopes_for(type) do
-    Sanctum.ApiKey.valid_scopes(String.to_existing_atom(type))
-  end
+  # `type` arrives from form params — match it against the three key types
+  # instead of String.to_existing_atom, which crashes the LiveView on any
+  # other value.
+  defp key_type("application"), do: :application
+  defp key_type("service"), do: :service
+  defp key_type("admin"), do: :admin
+  defp key_type(_), do: :application
 
-  defp default_scopes_for(type) do
-    Sanctum.ApiKey.default_scopes(String.to_existing_atom(type))
-  end
+  defp valid_scopes_for(type), do: Sanctum.ApiKey.valid_scopes(key_type(type))
+
+  defp default_scopes_for(type), do: Sanctum.ApiKey.default_scopes(key_type(type))
 
   @impl true
   def mount(_params, _session, socket) do

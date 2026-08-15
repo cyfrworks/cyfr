@@ -34,4 +34,21 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
     assert {:ok, %Sanctum.Context{auth_method: :tincture}} =
              Sanctum.TinctureAuth.authenticate(token_conn)
   end
+
+  test "a ?_t= token cannot mint its own successor", %{conn: conn} do
+    # Self-renewal turns a leaked one-hour token into a permanent
+    # credential: mint must demand the primary credential, so token expiry
+    # actually means re-authentication.
+    {:ok, %{api_key: key}} =
+      Sanctum.ApiKey.create(Sanctum.TestContext.local(), %{name: "renew-key"})
+
+    minted =
+      conn
+      |> put_req_header("authorization", "Bearer #{key}")
+      |> get("/t/access-token")
+      |> json_response(200)
+
+    renew = get(build_conn(), "/t/access-token?_t=#{minted["token"]}")
+    assert json_response(renew, 401)["error"] == "token_cannot_renew_itself"
+  end
 end

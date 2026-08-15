@@ -542,6 +542,17 @@ defmodule PrismWeb.ShellLive do
 
   defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
 
+  # The HTTP invoke route carries TinctureRateLimit (120/min per IP and
+  # tincture); the shell's postMessage path is the same capability from a
+  # LiveView socket, so it gets the same budget keyed by user. Same config
+  # override, same bucket vocabulary, same limiter table.
+  defp invoke_throttled?(ctx, tincture) do
+    max = Application.get_env(:cyfr, :tincture_rate_limit_max) || 120
+    key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}
+
+    match?({:deny, _}, Cyfr.RateLimiter.check(key, max, 60_000))
+  end
+
   defp handle_invoke(socket, window_id, tincture, msg) do
     reference = get_in(msg, ["payload", "reference"])
     input = get_in(msg, ["payload", "input"]) || %{}
@@ -555,6 +566,15 @@ defmodule PrismWeb.ShellLive do
 
       !is_map(input) ->
         response = %{type: "cyfr:response", id: msg["id"], error: "input must be an object"}
+        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+
+      invoke_throttled?(socket.assigns.context, tincture) ->
+        response = %{
+          type: "cyfr:response",
+          id: msg["id"],
+          error: "rate limited — retry shortly"
+        }
+
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
       true ->
