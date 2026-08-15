@@ -25,7 +25,8 @@ defmodule Arca.WebhookStorageTest do
         input_template: "{}",
         scope_type: "project",
         org_id: org_id,
-        created_by: "test_user"
+        created_by: "test_user",
+        profile_id: "prof_test"
       },
       overrides
     )

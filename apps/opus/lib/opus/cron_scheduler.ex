@@ -465,19 +465,13 @@ defmodule Opus.CronScheduler do
                      }
                    )
 
-                   # A schedule fires under its bound profile's consent or
-                   # not at all — the binding is the point. Unbound rows are
-                   # disabled by migration; one that slips through records a
-                   # failure naming the fix instead of running with ambient
-                   # authority.
+                   # A schedule fires under its bound profile's consent —
+                   # the binding is enforced at create/update and by the
+                   # NOT NULL column.
                    run_result =
-                     if schedule.profile_id do
-                       Opus.run_root(ctx, schedule.profile_id, exec_reference, input,
-                         execution_id: execution_id
-                       )
-                     else
-                       {:error, :profile_required}
-                     end
+                     Opus.run_root(ctx, schedule.profile_id, exec_reference, input,
+                       execution_id: execution_id
+                     )
 
                    case run_result do
                      {:ok, result} ->

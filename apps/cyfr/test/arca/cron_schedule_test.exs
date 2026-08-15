@@ -30,7 +30,8 @@ defmodule Arca.CronScheduleTest do
         user_id: "test_user",
         name: "test-schedule-#{:rand.uniform(100_000)}",
         cron_expression: "*/5 * * * *",
-        reference: "reagent:local.test:1.0.0"
+        reference: "reagent:local.test:1.0.0",
+        profile_id: "prof_test"
       },
       overrides
     )

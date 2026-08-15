@@ -63,6 +63,7 @@ defmodule Sanctum.Cipher.RotationTest do
         signature_header: "x-cyfr-signature",
         input_template: "{}",
         enabled: true,
+        profile_id: "prof_test",
         scope_type: @scope,
         org_id: @org,
         project_id: @proj,

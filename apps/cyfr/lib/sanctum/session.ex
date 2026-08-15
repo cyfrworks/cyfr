@@ -457,12 +457,10 @@ defmodule Sanctum.Session do
   # Restore the persisted working scope + org as a STARTING POINT. The persisted
   # values are never trusted on their own: `Sanctum.Tenancy.revalidate/1` (called
   # by the caller) re-checks them against current memberships, so a stale scope
-  # cannot ride. Legacy rows written before the `scope` column existed fall back
-  # to `:project` (matching the prior always-`:project` behaviour). An empty/nil
-  # org means the session was never resolved to a tenant (no membership, or a
-  # legacy platform-admin row stored as ""): hand the builder a nil org so
-  # revalidation re-reads memberships (and the tenant gate still bounces a
-  # genuinely org-less user).
+  # cannot ride. An empty org means the session was never resolved to a tenant
+  # (no membership at create time): hand the builder a nil org so revalidation
+  # re-reads memberships (and the tenant gate still bounces a genuinely org-less
+  # user).
   defp restore_workspace(row) do
     case row.org_id do
       org when is_binary(org) and org != "" -> {parse_scope(row.scope), org}
@@ -473,7 +471,14 @@ defmodule Sanctum.Session do
   defp parse_scope("platform"), do: :platform
   defp parse_scope("org"), do: :org
   defp parse_scope("project"), do: :project
-  defp parse_scope(_), do: :project
+
+  # The column is NOT NULL and only ever written from a validated Context,
+  # so anything else is corruption — floor it to the narrowest scope, loudly.
+  defp parse_scope(other) do
+    Logger.warning("[Sanctum.Session] unknown persisted scope #{inspect(other)} — using :project")
+
+    :project
+  end
 
   defp row_to_external(row, token) do
     permissions =

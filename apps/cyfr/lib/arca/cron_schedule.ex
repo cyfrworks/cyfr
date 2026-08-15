@@ -73,6 +73,7 @@ defmodule Arca.CronSchedule do
       :name,
       :cron_expression,
       :reference,
+      :profile_id,
       :created_at,
       :updated_at
     ])

@@ -506,7 +506,12 @@ defmodule Opus.CronMCP do
   # Binding a schedule to a profile mints a standing, attacker-timed
   # invocation conduit for that profile's authority — the consent
   # authorization class gates it, not a permission a wildcard key holds.
-  defp authorize_profile_binding(_ctx, _target_ref, nil), do: :ok
+  # A schedule fires under its bound profile's consent or not at all, so
+  # an unbound registration is refused here rather than minted as a row
+  # that can never fire.
+  defp authorize_profile_binding(_ctx, _target_ref, nil) do
+    {:error, "profile_id is required — a schedule fires under its bound profile's consent"}
+  end
 
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
@@ -517,12 +522,16 @@ defmodule Opus.CronMCP do
 
   defp authorize_profile_binding(_ctx, _target_ref, _), do: {:error, "invalid profile_id"}
 
+  # Re-pointing is the same act as binding: the gate runs against the
+  # target the row will have after this update. An explicit nil is an
+  # unbind, and an unbound schedule can never fire — refuse it here the
+  # same way create does.
   defp maybe_authorize_profile_binding(ctx, schedule, args, update_attrs) do
-    case Map.get(args, "profile_id") do
-      nil ->
+    case Map.fetch(args, "profile_id") do
+      :error ->
         :ok
 
-      profile_id ->
+      {:ok, profile_id} ->
         target =
           Map.get(update_attrs, :resolved_reference) || schedule.resolved_reference ||
             schedule.reference

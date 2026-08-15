@@ -95,7 +95,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :expires_at, :utc_datetime_usec, null: false
       add :org_id, :string, null: false, default: ""
       add :project_id, :string, null: false, default: "default"
-      add :scope, :string
+      add :scope, :string, null: false
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
     end
@@ -469,8 +469,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:mcp_servers, [:name, :org_id, :project_id])
     create index(:mcp_servers, [:org_id, :project_id])
 
-    # `profile_id` is nullable in the column and required by the code: a
-    # webhook fires under its bound profile's consent or refuses.
     create table(:webhooks, primary_key: false) do
       add :id, :string, primary_key: true
       add :name, :string, null: false
@@ -491,7 +489,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :idempotency_key_header, :string
       add :previous_secret_encrypted, :binary
       add :previous_secret_expires_at, :utc_datetime_usec
-      add :profile_id, :string
+      add :profile_id, :string, null: false
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -530,7 +528,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :resolved_reference, :string
       add :org_id, :string, null: false, default: ""
       add :project_id, :string, null: false, default: "default"
-      add :profile_id, :string
+      add :profile_id, :string, null: false
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end

@@ -172,14 +172,16 @@ defmodule Sanctum.Webhook do
   end
 
   # Re-pointing is the same act as binding: the gate runs against the
-  # target the row will have after this update.
+  # target the row will have after this update. An explicit nil is an
+  # unbind, and an unbound webhook can never fire — refuse it here the
+  # same way create does.
   defp maybe_authorize_profile_binding(ctx, name, scope_t, oid, pid, normalized) do
     case Map.fetch(normalized, :profile_id) do
       :error ->
         :ok
 
       {:ok, nil} ->
-        :ok
+        {:error, "profile_id is required — a webhook fires under its bound profile's consent"}
 
       {:ok, profile_id} ->
         target_ref =

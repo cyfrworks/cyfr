@@ -24,7 +24,8 @@ defmodule Arca.SessionStorageTest do
         provider: "github",
         permissions: "[\"execute\",\"component:read\"]",
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-        token_prefix: "cyfr_"
+        token_prefix: "cyfr_",
+        scope: "project"
       },
       overrides
     )

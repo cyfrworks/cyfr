@@ -238,6 +238,13 @@ defmodule Sanctum.WebhookTest do
       assert {:ok, %{target_ref: "f:local.h"}} =
                Webhook.update(ctx, "repoint-ok", %{target_ref: "f:local.h"})
     end
+
+    test "refuses an explicit nil profile_id (unbind)", %{ctx: ctx} do
+      {:ok, _} = create(ctx, %{name: "no-unbind", target_ref: "f:local.handler"})
+
+      assert {:error, message} = Webhook.update(ctx, "no-unbind", %{profile_id: nil})
+      assert message =~ "profile_id is required"
+    end
   end
 
   describe "revoke/2" do

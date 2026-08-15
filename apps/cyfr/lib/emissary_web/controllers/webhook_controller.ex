@@ -244,15 +244,9 @@ defmodule EmissaryWeb.WebhookController do
   # otherwise, but the structured audit row would dangle in `pending`.
   defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time) do
     try do
-      # A webhook fires under its bound profile's consent or not at all —
-      # the binding is the point. An unbound row should already be
-      # disabled; this is the belt to that suspender.
-      run_result =
-        if webhook.profile_id do
-          Opus.run_root(ctx, webhook.profile_id, webhook.target_ref, input, [])
-        else
-          {:error, :profile_required}
-        end
+      # A webhook fires under its bound profile's consent — the binding is
+      # enforced at create/update and by the NOT NULL column.
+      run_result = Opus.run_root(ctx, webhook.profile_id, webhook.target_ref, input, [])
 
       case run_result do
         {:ok, result} ->

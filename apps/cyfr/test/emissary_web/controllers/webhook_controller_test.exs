@@ -231,29 +231,22 @@ defmodule EmissaryWeb.WebhookControllerTest do
                      2_000
     end
 
-    @tag :requires_opus
-    test "an unbound registration refuses rather than running with ambient authority", %{
-      conn: conn,
-      ctx: ctx
-    } do
+    test "an unbound registration is unrepresentable", %{ctx: ctx} do
       # A webhook fires under its bound profile's consent or not at all.
-      # `create/2` requires profile_id, so an unbound row can only be forced
-      # here — which is the point: if one ever exists, it must refuse rather
-      # than fall back to the caller's ambient authority.
-      %{slug: slug, secret: secret} = create_hook!(ctx, "unbound")
+      # `create/2` and `update/3` both refuse a nil profile_id, and the
+      # column is NOT NULL — even a raw write cannot mint an unbound row.
+      %{slug: slug} = create_hook!(ctx, "unbound")
 
-      {1, _} =
-        Arca.Repo.update_all(unbind_query(slug), set: [profile_id: nil])
+      # Adapter-portable NOT NULL assertion (Exqlite.Error vs Postgrex.Error).
+      message =
+        try do
+          Arca.Repo.update_all(unbind_query(slug), set: [profile_id: nil])
+          flunk("expected the unbind to violate the NOT NULL constraint")
+        rescue
+          e in [Exqlite.Error, Postgrex.Error] -> Exception.message(e)
+        end
 
-      body = ~s({"event":"x"})
-      conn = post_signed(conn, slug, secret, body)
-
-      assert conn.status == 200
-      request_id = json_response(conn, 200)["request_id"]
-
-      assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _measurements,
-                      %{request_id: ^request_id, status: :error}},
-                     2_000
+      assert message =~ ~r/not.?null/i
     end
 
     @tag :requires_opus

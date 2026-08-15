@@ -26,6 +26,7 @@ defmodule Arca.CronScheduleIndexTest do
         name: name,
         cron_expression: "0 * * * *",
         reference: "formula:local.index-test:1.0.0",
+        profile_id: "prof_test",
         org_id: "local",
         project_id: "default"
       },

@@ -38,6 +38,11 @@ defmodule Opus.CronMCPTest do
       description: "Test component for cron tests"
     })
 
+    # A schedule binds a consented profile at create; seed one owner
+    # profile for the target these tests point at.
+    Opus.Test.ConsentFixtures.start_source!()
+    Opus.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.test", profile_id: "prof-cron")
+
     on_exit(fn ->
       File.rm_rf!(test_dir)
     end)
@@ -57,6 +62,7 @@ defmodule Opus.CronMCPTest do
     test "creates a schedule", %{ctx: ctx} do
       args = %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "test-create",
         "cron_expression" => "*/5 * * * *",
         "reference" => "reagent:local.test:1.0.0"
@@ -72,6 +78,7 @@ defmodule Opus.CronMCPTest do
     test "creates with input and metadata", %{ctx: ctx} do
       args = %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "test-with-input",
         "cron_expression" => "0 * * * *",
         "reference" => "reagent:local.test:1.0.0",
@@ -87,6 +94,7 @@ defmodule Opus.CronMCPTest do
     test "rejects invalid cron expression", %{ctx: ctx} do
       args = %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "bad-cron",
         "cron_expression" => "bad",
         "reference" => "reagent:local.test:1.0.0"
@@ -106,6 +114,7 @@ defmodule Opus.CronMCPTest do
       for i <- 1..25 do
         args = %{
           "action" => "create",
+          "profile_id" => "prof-cron",
           "name" => "limit-test-#{i}",
           "cron_expression" => "0 * * * *",
           "reference" => "reagent:local.test:1.0.0"
@@ -116,6 +125,7 @@ defmodule Opus.CronMCPTest do
 
       args = %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "limit-test-26",
         "cron_expression" => "0 * * * *",
         "reference" => "reagent:local.test:1.0.0"
@@ -130,6 +140,7 @@ defmodule Opus.CronMCPTest do
     test "lists user schedules", %{ctx: ctx} do
       CronMCP.handle("schedule", ctx, %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "list-test",
         "cron_expression" => "0 * * * *",
         "reference" => "reagent:local.test:1.0.0"
@@ -146,6 +157,7 @@ defmodule Opus.CronMCPTest do
       {:ok, created} =
         CronMCP.handle("schedule", ctx, %{
           "action" => "create",
+          "profile_id" => "prof-cron",
           "name" => "get-test",
           "cron_expression" => "0 * * * *",
           "reference" => "reagent:local.test:1.0.0"
@@ -163,6 +175,7 @@ defmodule Opus.CronMCPTest do
     test "gets schedule by name", %{ctx: ctx} do
       CronMCP.handle("schedule", ctx, %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "get-by-name",
         "cron_expression" => "0 * * * *",
         "reference" => "reagent:local.test:1.0.0"
@@ -191,6 +204,7 @@ defmodule Opus.CronMCPTest do
       {:ok, created} =
         CronMCP.handle("schedule", ctx, %{
           "action" => "create",
+          "profile_id" => "prof-cron",
           "name" => "pause-test",
           "cron_expression" => "0 * * * *",
           "reference" => "reagent:local.test:1.0.0"
@@ -219,6 +233,7 @@ defmodule Opus.CronMCPTest do
       {:ok, created} =
         CronMCP.handle("schedule", ctx, %{
           "action" => "create",
+          "profile_id" => "prof-cron",
           "name" => "delete-test",
           "cron_expression" => "0 * * * *",
           "reference" => "reagent:local.test:1.0.0"
@@ -241,10 +256,45 @@ defmodule Opus.CronMCPTest do
     end
   end
 
+  describe "profile binding" do
+    test "create without a profile_id is refused", %{ctx: ctx} do
+      assert {:error, message} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "name" => "unbound",
+                 "cron_expression" => "0 * * * *",
+                 "reference" => "reagent:local.test:1.0.0"
+               })
+
+      assert message =~ "profile_id is required"
+    end
+
+    test "update with an explicit nil profile_id (unbind) is refused", %{ctx: ctx} do
+      {:ok, created} =
+        CronMCP.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "no-unbind",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      assert {:error, message} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => created.schedule_id,
+                 "profile_id" => nil
+               })
+
+      assert message =~ "profile_id is required"
+    end
+  end
+
   describe "create action - resolution failures" do
     test "rejects create with version-less ref to nonexistent component", %{ctx: ctx} do
       args = %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "bad-resolve",
         "cron_expression" => "0 * * * *",
         "reference" => "c:local.nonexistent-component"
@@ -258,6 +308,7 @@ defmodule Opus.CronMCPTest do
     test "create with already-pinned ref fails when component not in registry", %{ctx: ctx} do
       args = %{
         "action" => "create",
+        "profile_id" => "prof-cron",
         "name" => "pinned-ref-test",
         "cron_expression" => "0 * * * *",
         "reference" => "reagent:local.nonexistent:1.0.0"
@@ -273,6 +324,7 @@ defmodule Opus.CronMCPTest do
       {:ok, created} =
         CronMCP.handle("schedule", ctx, %{
           "action" => "create",
+          "profile_id" => "prof-cron",
           "name" => "update-resolve-test",
           "cron_expression" => "0 * * * *",
           "reference" => "reagent:local.test:1.0.0"
@@ -306,6 +358,7 @@ defmodule Opus.CronMCPTest do
       {:ok, created} =
         CronMCP.handle("schedule", ctx, %{
           "action" => "create",
+          "profile_id" => "prof-cron",
           "name" => "re-resolve-fail",
           "cron_expression" => "0 * * * *",
           "reference" => "reagent:local.test:1.0.0"

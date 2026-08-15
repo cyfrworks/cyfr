@@ -56,6 +56,7 @@ defmodule Opus.CronSchedulerTest do
       cron_expression: cron,
       reference: "reagent:local.test:1.0.0",
       resolved_reference: "reagent:local.test:1.0.0",
+      profile_id: "prof_test",
       next_run_at: next_run
     })
   end
@@ -104,6 +105,7 @@ defmodule Opus.CronSchedulerTest do
           cron_expression: "0 * * * *",
           reference: "reagent:local.test",
           resolved_reference: nil,
+          profile_id: "prof_test",
           project_id: "default",
           next_run_at: DateTime.utc_now()
         })

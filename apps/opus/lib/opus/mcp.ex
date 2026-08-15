@@ -361,7 +361,7 @@ defmodule Opus.MCP do
       case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
              case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
                {:ok, _} ->
-                 run_with_cutover(ctx, reference, input, opts, args)
+                 run_root_formatted(ctx, reference, input, opts, args)
 
                {:error, reason} ->
                  Logger.error(
@@ -408,7 +408,7 @@ defmodule Opus.MCP do
           _ -> opts
         end
 
-      case run_with_cutover(ctx, reference, input, opts, args) do
+      case run_root_formatted(ctx, reference, input, opts, args) do
         {:ok, result} ->
           # Format response for MCP (convert atoms to strings for JSON)
           {:ok, format_run_result(result, reference)}
@@ -586,7 +586,7 @@ defmodule Opus.MCP do
   # Every execution roots under a profile's consent — there is no other
   # path. No profile means nothing was granted: the §4.3 vocabulary names
   # the fix instead of running with the caller's ambient authority.
-  defp run_with_cutover(ctx, reference, input, opts, args) do
+  defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
     case Opus.run_root(ctx, selector, reference, input, opts) do

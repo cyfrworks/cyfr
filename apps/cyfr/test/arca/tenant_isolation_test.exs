@@ -303,6 +303,7 @@ defmodule Arca.TenantIsolationTest do
           name: "sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
+          profile_id: "prof_test",
           org_id: ctx_a.org_id,
           project_id: ctx_a.project_id
         })
@@ -313,6 +314,7 @@ defmodule Arca.TenantIsolationTest do
           name: "sched-b",
           cron_expression: "*/10 * * * *",
           reference: "reagent:local.test:0.1.0",
+          profile_id: "prof_test",
           org_id: ctx_b.org_id,
           project_id: ctx_b.project_id
         })
@@ -335,6 +337,7 @@ defmodule Arca.TenantIsolationTest do
           name: "count-sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
+          profile_id: "prof_test",
           org_id: ctx_a.org_id,
           project_id: ctx_a.project_id
         })
@@ -352,6 +355,7 @@ defmodule Arca.TenantIsolationTest do
           name: "get-sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
+          profile_id: "prof_test",
           org_id: ctx_a.org_id,
           project_id: ctx_a.project_id
         })
