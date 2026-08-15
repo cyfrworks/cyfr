@@ -81,6 +81,7 @@ defmodule Emissary.MCP.ToolVisibility do
     "schedule.delete" => :execute,
     "schedule.re_resolve" => :execute,
     "build.compile" => :execute,
+    "build.status" => :execute,
 
     # :admin
     "execution.force_release" => :admin,

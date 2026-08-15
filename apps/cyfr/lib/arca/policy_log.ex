@@ -209,15 +209,9 @@ defmodule Arca.PolicyLog do
   Platform scope bypasses tenant filtering.
   """
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
-  def get_tenant(%Sanctum.Context{scope: :platform}, id) do
-    Arca.Repo.get(__MODULE__, id)
-  end
-
   def get_tenant(%Sanctum.Context{} = ctx, id) do
-    import Arca.QueryHelpers, only: [where_tenant: 2]
-
     from(l in __MODULE__, where: l.id == ^id)
-    |> where_tenant(ctx)
+    |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
     |> Arca.Repo.one()
   end
 
@@ -227,16 +221,9 @@ defmodule Arca.PolicyLog do
   Platform scope bypasses tenant filtering.
   """
   @spec get_by_request_id_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
-  def get_by_request_id_tenant(%Sanctum.Context{scope: :platform}, request_id) do
-    from(l in __MODULE__, where: l.request_id == ^request_id, limit: 1)
-    |> Arca.Repo.one()
-  end
-
   def get_by_request_id_tenant(%Sanctum.Context{} = ctx, request_id) do
-    import Arca.QueryHelpers, only: [where_tenant: 2]
-
     from(l in __MODULE__, where: l.request_id == ^request_id, limit: 1)
-    |> where_tenant(ctx)
+    |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
     |> Arca.Repo.one()
   end
 end

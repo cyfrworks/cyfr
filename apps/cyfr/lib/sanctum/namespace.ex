@@ -42,13 +42,47 @@ defmodule Sanctum.Namespace do
   invariant is "namespace populated when known, nil when not", and a
   CredentialStore failure shouldn't crash an unrelated request.
   """
+  # The Authenticate plug calls this on EVERY bearer request, and the
+  # uncached path is a DB read plus an AES-GCM unseal per credential row.
+  # A claimed slug changes only through CredentialStore writes (which
+  # invalidate below), so a short TTL is safe and takes the decrypt off
+  # the hot path. Only positive results cache: an unclaimed user stays on
+  # the live path so a fresh claim is visible immediately.
+  @cache_ttl_ms 60_000
+
   @spec lookup(String.t() | nil) :: String.t() | nil
-  def lookup(user_id) do
-    case lookup_status(user_id) do
-      {:ok, slug} -> slug
-      _ -> nil
+  def lookup(user_id) when is_binary(user_id) and user_id != "" do
+    key = {:namespace_slug, user_id}
+
+    case Arca.Cache.get(key) do
+      {:ok, slug} ->
+        slug
+
+      :miss ->
+        case lookup_status(user_id) do
+          {:ok, slug} ->
+            Arca.Cache.put(key, slug, @cache_ttl_ms)
+            slug
+
+          _ ->
+            nil
+        end
     end
   end
+
+  def lookup(_), do: nil
+
+  @doc """
+  Drop the cached slug for `user_id` — called by CredentialStore writes so
+  a claim/unclaim is visible on the next request, not after the TTL.
+  """
+  @spec invalidate(String.t() | term()) :: :ok
+  def invalidate(user_id) when is_binary(user_id) do
+    Arca.Cache.invalidate({:namespace_slug, user_id})
+    :ok
+  end
+
+  def invalidate(_), do: :ok
 
   @typedoc "Distinguishes a transient store failure from an unclaimed namespace."
   @type status :: {:ok, String.t()} | :not_claimed | {:error, term()}

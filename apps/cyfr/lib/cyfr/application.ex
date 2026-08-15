@@ -4,6 +4,10 @@
 defmodule Cyfr.Application do
   @moduledoc false
 
+  # Locus depends on cyfr, never the reverse — the boot-time limiter init
+  # below is behind Code.ensure_loaded?.
+  @compile {:no_warn_undefined, [Locus.BuildLimiter]}
+
   require Logger
   require Arca.Repo.Errors
 
@@ -15,6 +19,12 @@ defmodule Cyfr.Application do
     ensure_db_directory!()
     maybe_migrate_before_pool()
     Arca.Cache.init()
+
+    # Locus is a library app with no process tree; its build-slot counter is
+    # minted here so callers never race a lazy init. Guarded because cyfr
+    # does not depend on locus at compile time (the umbrella dependency runs
+    # the other way).
+    if Code.ensure_loaded?(Locus.BuildLimiter), do: Locus.BuildLimiter.init()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do

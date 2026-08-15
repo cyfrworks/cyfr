@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.MCPTest do
+defmodule Emissary.MCP.Tools.RecordsProviderTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Arca.MCP
+  alias Emissary.MCP.Tools.RecordsProvider, as: MCP
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

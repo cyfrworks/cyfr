@@ -20,7 +20,7 @@ config :cyfr,
   tool_providers: [
     # Foundation services
     Sanctum.MCP,
-    Arca.MCP,
+    Emissary.MCP.Tools.RecordsProvider,
     # Domain services
     Opus.MCP,
     Opus.CronMCP,

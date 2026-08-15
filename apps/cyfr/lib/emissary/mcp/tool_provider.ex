@@ -14,7 +14,7 @@ defmodule Emissary.MCP.ToolProvider do
 
   ## Implementing a Provider
 
-      defmodule Arca.MCP do
+      defmodule Emissary.MCP.Tools.RecordsProvider do
         @behaviour Emissary.MCP.ToolProvider
 
         @impl true
@@ -40,7 +40,7 @@ defmodule Emissary.MCP.ToolProvider do
   Providers are configured in `config/config.exs`:
 
       config :cyfr, :tool_providers, [
-        Arca.MCP,
+        Emissary.MCP.Tools.RecordsProvider,
         Sanctum.MCP,
         Opus.MCP,
         Compendium.MCP

@@ -440,8 +440,12 @@ defmodule Locus.Builder do
 
         # Store OS PID so the parent can kill the process tree on timeout
         case Port.info(port, :os_pid) do
-          {:os_pid, os_pid} -> Process.put(:builder_os_pid, os_pid)
-          _ -> :ok
+          {:os_pid, os_pid} ->
+            Process.put(:builder_os_pid, os_pid)
+            watch_for_orphans(self(), os_pid)
+
+          _ ->
+            :ok
         end
 
         collect_port_output(port, [], on_progress)
@@ -471,6 +475,23 @@ defmodule Locus.Builder do
         kill_os_process(os_pid)
         {:error, :compilation_timeout}
     end
+  end
+
+  # The MCP tool layer brutal-kills its provider task on ITS OWN 5-minute
+  # deadline, which reaches this task through the link but never the cargo/
+  # npm process GROUP (closing the port only signals the direct child). An
+  # unlinked watcher survives the kill and reaps the group whenever the
+  # port owner dies abnormally — a double kill against the builder's own
+  # timeout path is a harmless ESRCH.
+  defp watch_for_orphans(owner, os_pid) do
+    spawn(fn ->
+      ref = Process.monitor(owner)
+
+      receive do
+        {:DOWN, ^ref, :process, _pid, reason} ->
+          unless reason == :normal, do: kill_os_process(os_pid)
+      end
+    end)
   end
 
   defp get_task_os_pid(task) do

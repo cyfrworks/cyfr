@@ -796,7 +796,7 @@ defmodule EmissaryWeb.MCPControllerTest do
   describe "tool routing" do
     @tool_routing_cases [
       {"component", "compendium"},
-      {"retention", "arca"},
+      {"retention", "emissary"},
       {"session", "sanctum"},
       {"key", "sanctum"},
       {"system", "emissary"}

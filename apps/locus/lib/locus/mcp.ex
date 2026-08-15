@@ -41,7 +41,8 @@ defmodule Locus.MCP do
           actions: %{
             "compile" => %{kind: :execute, planes: [:external, :in_chain]},
             "validate" => %{kind: :read, planes: [:external, :in_chain]},
-            "toolchains" => %{kind: :read, planes: [:external, :in_chain]}
+            "toolchains" => %{kind: :read, planes: [:external, :in_chain]},
+            "status" => %{kind: :read, planes: [:external, :in_chain]}
           }
         },
         input_schema: %{
@@ -49,8 +50,18 @@ defmodule Locus.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["compile", "validate", "toolchains"],
+              "enum" => ["compile", "validate", "toolchains", "status"],
               "description" => "Action to perform"
+            },
+            "async" => %{
+              "type" => "boolean",
+              "description" =>
+                "compile only: return a build_id immediately and run the build in the background; poll with action=status or subscribe to the build:<id> topic"
+            },
+            "build_id" => %{
+              "type" => "string",
+              "description" =>
+                "Build identifier — optional for compile (minted when absent), required for status"
             },
             "reference" => %{
               "type" => "string",
@@ -121,9 +132,105 @@ defmodule Locus.MCP do
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
     with :ok <- Context.require_permission_for_plane(ctx, :execute) do
-      build_id = args["build_id"]
+      build_id = args["build_id"] || Emissary.UUID7.generate_id("build")
 
-      build_meta = %{
+      if args["async"] == true do
+        start_async_compile(ctx, reference, build_id)
+      else
+        run_compile(ctx, reference, build_id)
+      end
+    end
+  end
+
+  def handle("build", %Context{} = ctx, %{"action" => "status", "build_id" => build_id})
+      when is_binary(build_id) do
+    with :ok <- Context.require_permission_for_plane(ctx, :execute) do
+      case Arca.get_json(ctx, build_record_path(build_id)) do
+        {:ok, record} -> {:ok, record}
+        _ -> {:error, "Unknown build: #{build_id}"}
+      end
+    end
+  end
+
+  def handle("build", _ctx, %{"action" => "status"}) do
+    {:error, "Missing required argument: build_id"}
+  end
+
+  def handle("build", _ctx, %{"action" => "compile"}) do
+    {:error, "Missing required argument: reference"}
+  end
+
+  def handle("build", _ctx, %{"action" => action}) do
+    {:error, "Invalid build action: #{action}. Use: compile, validate, toolchains, or status"}
+  end
+
+  def handle("build", _ctx, _args) do
+    {:error, "Missing required argument: action"}
+  end
+
+  def handle(tool, _ctx, _args) do
+    {:error, "Unknown tool: #{tool}"}
+  end
+
+  defp run_compile(ctx, reference, build_id) do
+    case Locus.BuildLimiter.acquire() do
+      :ok ->
+        try do
+          do_run_compile(ctx, reference, build_id)
+        after
+          Locus.BuildLimiter.release()
+        end
+
+      {:error, :busy} ->
+        {:error,
+         "Build capacity is full (#{Locus.BuildLimiter.max_builds()} concurrent) — retry shortly"}
+    end
+  end
+
+  # Async mode: record "started", run the same pipeline off the request
+  # process, record the outcome. Completion also rides the build:<id> topic
+  # the progress callback already broadcasts on.
+  defp start_async_compile(ctx, reference, build_id) do
+    started = %{
+      build_id: build_id,
+      reference: reference,
+      status: "started",
+      started_at: DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    with :ok <- Arca.put_json(ctx, build_record_path(build_id), started) do
+      Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+        record =
+          case run_compile(ctx, reference, build_id) do
+            {:ok, result} ->
+              Map.merge(started, %{
+                status: "compiled",
+                result: result,
+                finished_at: DateTime.utc_now() |> DateTime.to_iso8601()
+              })
+
+            {:error, reason} ->
+              Map.merge(started, %{
+                status: "failed",
+                error: format_async_error(reason),
+                finished_at: DateTime.utc_now() |> DateTime.to_iso8601()
+              })
+          end
+
+        Arca.put_json(ctx, build_record_path(build_id), record)
+      end)
+
+      {:ok, %{status: "started", build_id: build_id, reference: reference}}
+    end
+  end
+
+  defp build_record_path(build_id), do: ["builds", build_id <> ".json"]
+
+  defp format_async_error(reason),
+    do: if(is_binary(reason), do: reason, else: inspect(reason))
+
+  defp do_run_compile(ctx, reference, build_id) do
+    build_meta = %{
         build_id: build_id,
         reference: reference,
         org_id: ctx.org_id,
@@ -216,23 +323,6 @@ defmodule Locus.MCP do
       )
 
       outcome
-    end
-  end
-
-  def handle("build", _ctx, %{"action" => "compile"}) do
-    {:error, "Missing required argument: reference"}
-  end
-
-  def handle("build", _ctx, %{"action" => action}) do
-    {:error, "Invalid build action: #{action}. Use: compile, validate, or toolchains"}
-  end
-
-  def handle("build", _ctx, _args) do
-    {:error, "Missing required argument: action"}
-  end
-
-  def handle(tool, _ctx, _args) do
-    {:error, "Unknown tool: #{tool}"}
   end
 
   # ============================================================================

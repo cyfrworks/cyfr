@@ -57,13 +57,19 @@ defmodule Compendium.Registry.CredentialStore do
     aad = CipherAAD.registry_token(user_id, registry, namespace_slug)
     {:ok, ciphertext} = Sanctum.Cipher.encrypt(value, aad)
 
-    RegistryTokenStorage.put(%{
-      user_id: user_id,
-      registry: registry,
-      namespace_slug: namespace_slug,
-      credential_ciphertext: ciphertext,
-      issued_at: credential_issued_at(credential)
-    })
+    result =
+      RegistryTokenStorage.put(%{
+        user_id: user_id,
+        registry: registry,
+        namespace_slug: namespace_slug,
+        credential_ciphertext: ciphertext,
+        issued_at: credential_issued_at(credential)
+      })
+
+    # A credential write can change the user's resolved namespace slug —
+    # drop the auth-path cache so the change is visible immediately.
+    Sanctum.Namespace.invalidate(user_id)
+    result
   end
 
   @doc """
@@ -168,10 +174,14 @@ defmodule Compendium.Registry.CredentialStore do
   @spec delete(String.t(), String.t(), String.t()) :: :ok
   def delete(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    case RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
-      :ok -> :ok
-      {:error, _} -> :ok
-    end
+    result =
+      case RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
+        :ok -> :ok
+        {:error, _} -> :ok
+      end
+
+    Sanctum.Namespace.invalidate(user_id)
+    result
   end
 
   @doc """

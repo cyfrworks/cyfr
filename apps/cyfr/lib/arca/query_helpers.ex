@@ -36,6 +36,15 @@ defmodule Arca.QueryHelpers do
   import Ecto.Query
 
   @doc """
+  `where_tenant/2`, except a platform-scope context reads unfiltered —
+  the query-level mirror of `Sanctum.TenantPolicy.verify/2`'s platform
+  bypass. ONE definition so record readers (executions, MCP logs, policy
+  logs) cannot drift in how they spell the bypass.
+  """
+  def where_tenant_unless_platform(query, %Sanctum.Context{scope: :platform}), do: query
+  def where_tenant_unless_platform(query, ctx), do: where_tenant(query, ctx)
+
+  @doc """
   Normalize an org_id to its canonical sentinel.
 
   `nil` and `""` both map to `"local"` — the single-user tenant sentinel.

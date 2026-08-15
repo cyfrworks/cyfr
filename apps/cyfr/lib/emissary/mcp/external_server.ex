@@ -183,28 +183,8 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   @impl true
-  def handle_call({:call_tool, tool_name, arguments}, _from, state) do
-    state =
-      case state.status do
-        :ready ->
-          state
-
-        :disconnected ->
-          case do_initialize(state) do
-            {:ok, s} -> s
-            {:error, _, s} -> s
-          end
-
-        :error ->
-          if can_reinit?(state) do
-            case do_initialize(state) do
-              {:ok, s} -> s
-              {:error, _, s} -> s
-            end
-          else
-            state
-          end
-      end
+  def handle_call({:call_tool, tool_name, arguments}, from, state) do
+    state = ensure_ready(state)
 
     if state.status != :ready do
       {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
@@ -221,41 +201,25 @@ defmodule Emissary.MCP.ExternalServer do
         }
       }
 
-      case http_post(state, body) do
-        # An upstream server asking for more input is refused, deliberately.
-        #
-        # `input_required` is how a server requests sampling, elicitation or
-        # roots. Fulfilling one would mean an external server driving a model or
-        # a user prompt from inside a running chain — under whatever authority
-        # that chain holds. An upstream peer can already rewrite its tool
-        # descriptions at will; letting it also originate requests would hand it
-        # a channel into the caller rather than just influence over the text.
-        #
-        # Parsing it as a completed result would be worse than refusing: the
-        # guest would receive an interim answer as though it were final.
-        {:ok, %{"result" => %{"resultType" => @input_required}}} ->
-          Logger.warning(
-            "[ExternalServer] #{state.name} returned input_required for #{tool_name}; refused"
-          )
+      # The upstream HTTP round-trip runs OUTSIDE this process so one slow
+      # server never head-of-line-blocks every other caller of the same
+      # server for up to their full call timeout. The task gets a snapshot
+      # of state (resolved headers, masking material) and replies directly;
+      # config (re)resolution stays serialized in the GenServer above.
+      snapshot = state
 
-          {:reply,
-           {:error,
-            "#{state.name} asked for additional input, which external servers may not do."},
-           state}
+      Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+        reply =
+          try do
+            dispatch_upstream_call(snapshot, body, tool_name)
+          rescue
+            e -> {:error, "External call failed: #{Exception.message(e)}"}
+          end
 
-        {:ok, %{"result" => result}} ->
-          {:reply, {:ok, mask_credentials(result, state)}, state}
+        GenServer.reply(from, reply)
+      end)
 
-        {:ok, %{"error" => error}} ->
-          message = mask_credentials(error["message"] || inspect(error), state)
-          {:reply, {:error, message}, state}
-
-        {:legacy, state} ->
-          {:reply, {:error, "#{state.name} changed protocol era mid-connection"}, state}
-
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
+      {:noreply, state}
     end
   end
 
@@ -294,6 +258,68 @@ defmodule Emissary.MCP.ExternalServer do
   def handle_info(msg, state) do
     Logger.warning("[ExternalServer] unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  # Bring a not-yet-ready server up before dispatching, mirroring the
+  # get_tools arms: disconnected always retries, error retries when the
+  # backoff allows.
+  defp ensure_ready(state) do
+    case state.status do
+      :ready ->
+        state
+
+      :disconnected ->
+        case do_initialize(state) do
+          {:ok, s} -> s
+          {:error, _, s} -> s
+        end
+
+      :error ->
+        if can_reinit?(state) do
+          case do_initialize(state) do
+            {:ok, s} -> s
+            {:error, _, s} -> s
+          end
+        else
+          state
+        end
+    end
+  end
+
+  # Runs in a Task: performs the upstream round-trip against a state
+  # SNAPSHOT and never mutates server state.
+  defp dispatch_upstream_call(state, body, tool_name) do
+    case http_post(state, body) do
+      # An upstream server asking for more input is refused, deliberately.
+      #
+      # `input_required` is how a server requests sampling, elicitation or
+      # roots. Fulfilling one would mean an external server driving a model or
+      # a user prompt from inside a running chain — under whatever authority
+      # that chain holds. An upstream peer can already rewrite its tool
+      # descriptions at will; letting it also originate requests would hand it
+      # a channel into the caller rather than just influence over the text.
+      #
+      # Parsing it as a completed result would be worse than refusing: the
+      # guest would receive an interim answer as though it were final.
+      {:ok, %{"result" => %{"resultType" => @input_required}}} ->
+        Logger.warning(
+          "[ExternalServer] #{state.name} returned input_required for #{tool_name}; refused"
+        )
+
+        {:error, "#{state.name} asked for additional input, which external servers may not do."}
+
+      {:ok, %{"result" => result}} ->
+        {:ok, mask_credentials(result, state)}
+
+      {:ok, %{"error" => error}} ->
+        {:error, mask_credentials(error["message"] || inspect(error), state)}
+
+      {:legacy, _state} ->
+        {:error, "#{state.name} changed protocol era mid-connection"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @impl true

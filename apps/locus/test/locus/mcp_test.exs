@@ -26,7 +26,7 @@ defmodule Locus.MCPTest do
       assert is_binary(tool.description)
 
       schema = tool.input_schema
-      assert schema["properties"]["action"]["enum"] == ["compile", "validate", "toolchains"]
+      assert schema["properties"]["action"]["enum"] == ["compile", "validate", "toolchains", "status"]
       assert schema["properties"]["reference"]["type"] == "string"
       assert schema["properties"]["wasm_base64"]["type"] == "string"
       assert schema["required"] == ["action"]

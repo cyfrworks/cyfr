@@ -204,7 +204,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp check_service_by_scope(_ctx, "emissary"), do: "ok"
 
   defp check_service_by_scope(_ctx, "sanctum"), do: check_service(Sanctum.MCP)
-  defp check_service_by_scope(_ctx, "arca"), do: check_service(Arca.MCP)
+  defp check_service_by_scope(_ctx, "arca"), do: check_service(Emissary.MCP.Tools.RecordsProvider)
   defp check_service_by_scope(_ctx, "opus"), do: check_service(Opus.MCP)
   defp check_service_by_scope(_ctx, "compendium"), do: check_service(Compendium.MCP)
 
@@ -286,7 +286,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     %{
       emissary: "ok",
       sanctum: check_service(Sanctum.MCP),
-      arca: check_service(Arca.MCP),
+      arca: check_service(Emissary.MCP.Tools.RecordsProvider),
       opus: check_service(Opus.MCP),
       compendium: check_service(Compendium.MCP),
       registry: check_registry_health()

@@ -15,9 +15,9 @@ defmodule Emissary.MCP.ToolRegistry do
   ┌─────────────────────────────────────────────────────────────────┐
   │  Emissary.MCP.ToolRegistry (GenServer)                          │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                         │
-  │  │   └── {:mcp_tool, "retention"} => {Arca.MCP, %{desc, ...}}   │
+  │  │   └── {:mcp_tool, "retention"} => {Emissary.MCP.Tools.RecordsProvider, %{desc, ...}}   │
   │  │   └── {:mcp_tool, "execution"} => {Opus.MCP, %{...}}        │
-  │  └── Providers: [Arca.MCP, Opus.MCP, ...]                       │
+  │  └── Providers: [Emissary.MCP.Tools.RecordsProvider, Opus.MCP, ...]                       │
   └─────────────────────────────────────────────────────────────────┘
   ```
 

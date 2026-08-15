@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.MCP do
+defmodule Emissary.MCP.Tools.RecordsProvider do
   @moduledoc """
-  MCP tool provider for Arca services.
+  MCP tool provider for execution, MCP and policy records plus retention —
+  the observability surface over what Arca persists. Lives in Emissary
+  because a tool provider is product surface, not persistence mechanics.
 
   Exposes Arca operations as MCP tools with action-based dispatch.
 
@@ -91,7 +93,7 @@ defmodule Arca.MCP do
           {:error, "File not found: #{path}"}
 
         {:error, reason} ->
-          Logger.error("[Arca.MCP] Failed to read: #{inspect(reason)}")
+          Logger.error("[Emissary.MCP.Tools.RecordsProvider] Failed to read: #{inspect(reason)}")
           {:error, "Failed to read"}
       end
     end
@@ -624,7 +626,7 @@ defmodule Arca.MCP do
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, reason} ->
-          Logger.error("[Arca.MCP] Failed to update retention settings: #{inspect(reason)}")
+          Logger.error("[Emissary.MCP.Tools.RecordsProvider] Failed to update retention settings: #{inspect(reason)}")
           {:error, "Failed to update retention settings"}
       end
     else
@@ -661,7 +663,7 @@ defmodule Arca.MCP do
            }}
 
         {:error, reason} ->
-          Logger.error("[Arca.MCP] Cleanup failed: #{inspect(reason)}")
+          Logger.error("[Emissary.MCP.Tools.RecordsProvider] Cleanup failed: #{inspect(reason)}")
           {:error, "Cleanup failed"}
       end
     else
