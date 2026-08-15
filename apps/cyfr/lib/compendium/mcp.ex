@@ -65,7 +65,16 @@ defmodule Compendium.MCP do
 
   @doc """
   Read a resource by URI.
+
+  Anonymous reads are refused before any tenant resolution: an
+  unauthenticated context normalizes to the seeded local org, so letting it
+  through would serve that workspace's component metadata and asset bytes to
+  anyone who can reach `POST /mcp` with an exact reference.
   """
+  def read(%Context{authenticated: false}, "compendium://" <> _rest) do
+    {:error, "Authentication required to read components"}
+  end
+
   def read(%Context{} = ctx, "compendium://components/" <> reference) do
     case Shared.resolve_component(ctx, reference) do
       {:ok, component, _ref} ->

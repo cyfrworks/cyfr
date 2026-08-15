@@ -173,6 +173,37 @@ defmodule Compendium.MCPTest do
       assert msg =~ "not found"
     end
 
+    test "refuses anonymous reads before tenant resolution", %{ctx: ctx} do
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "anon-read",
+          version: "1.0.0",
+          type: "reagent",
+          description: "must not be readable anonymously"
+        })
+
+      # An unauthenticated context would otherwise normalize to the seeded
+      # local org and read this workspace's data by exact reference. Same
+      # shape the Authenticate plug mints for a no-credential request.
+      anon =
+        Sanctum.Context.build(
+          user_id: nil,
+          org_id: nil,
+          permissions: [],
+          scope: :project,
+          auth_method: nil,
+          authenticated: false
+        )
+
+      assert {:error, msg} =
+               MCP.read(anon, "compendium://components/r:local.anon-read:1.0.0")
+
+      assert msg =~ "Authentication required"
+
+      assert {:error, _} =
+               MCP.read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
+    end
+
     test "reads asset from component directory", %{ctx: ctx, test_dir: test_dir} do
       {:ok, _component} =
         Registry.publish_bytes(ctx, @valid_wasm, %{

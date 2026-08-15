@@ -55,6 +55,9 @@ defmodule EmissaryWeb.OAuthCallbackController do
   # Override the endpoint's `default-src 'none'` CSP to allow inline styles
   # for this HTML response. This is a one-off browser-facing page (post-OAuth
   # redirect), not an API endpoint, so relaxing CSP here is safe.
+  # sobelow_skip ["XSS.SendResp"]
+  # Every interpolation in the html builders goes through html_escape/1;
+  # Sobelow cannot trace the escaping across the private helpers.
   defp send_callback_html(conn, status, html) do
     conn
     |> put_resp_header(
