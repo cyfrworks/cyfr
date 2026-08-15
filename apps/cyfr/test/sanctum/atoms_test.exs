@@ -9,9 +9,17 @@ defmodule Sanctum.AtomsTest do
   describe "safe_to_atom/1" do
     test "converts known permission strings to atoms" do
       assert Atoms.safe_to_atom("execute") == :execute
-      assert Atoms.safe_to_atom("read") == :read
-      assert Atoms.safe_to_atom("write") == :write
+      assert Atoms.safe_to_atom("storage_read") == :storage_read
+      assert Atoms.safe_to_atom("storage_write") == :storage_write
       assert Atoms.safe_to_atom("admin") == :admin
+    end
+
+    test "retired vocabulary stays a string even though its atoms exist in the VM" do
+      # Membership-first conversion: :read/:write exist as atoms all over
+      # the VM, but they are not permissions — resolving them here is what
+      # let retired grant names keep round-tripping.
+      assert Atoms.safe_to_atom("read") == "read"
+      assert Atoms.safe_to_atom("write") == "write"
     end
 
     test "converts known provider strings to atoms" do
@@ -44,26 +52,27 @@ defmodule Sanctum.AtomsTest do
       assert Atoms.safe_to_atom(%{key: "value"}) == %{key: "value"}
     end
 
-    test "converts existing atoms from string form" do
-      # Create the atom first so it exists
+    test "an atom existing in the VM does not make its string convertible" do
       _ = :existing_test_atom
 
-      # Now safe_to_atom should find it via String.to_existing_atom
-      assert Atoms.safe_to_atom("existing_test_atom") == :existing_test_atom
+      # The allowlist is the list — not the VM's atom table.
+      assert Atoms.safe_to_atom("existing_test_atom") == "existing_test_atom"
     end
   end
 
   describe "safe_to_permission_atom/1" do
     test "converts known permission strings to atoms" do
-      assert Atoms.safe_to_permission_atom("execute") == :execute
-      assert Atoms.safe_to_permission_atom("read") == :read
-      assert Atoms.safe_to_permission_atom("write") == :write
-      assert Atoms.safe_to_permission_atom("admin") == :admin
-      assert Atoms.safe_to_permission_atom("publish") == :publish
-      assert Atoms.safe_to_permission_atom("build") == :build
-      assert Atoms.safe_to_permission_atom("search") == :search
-      assert Atoms.safe_to_permission_atom("audit") == :audit
-      assert Atoms.safe_to_permission_atom("secret_access") == :secret_access
+      for name <- Atoms.known_permissions() do
+        assert Atoms.safe_to_permission_atom(name) == String.to_existing_atom(name)
+      end
+    end
+
+    test "retired permission names come back as strings" do
+      # These atoms all exist in the VM (old vocabulary, action verbs), but
+      # none is a permission. A stored grant naming one silently drops.
+      for retired <- ~w(read write publish build search audit secret_access) do
+        assert Atoms.safe_to_permission_atom(retired) == retired
+      end
     end
 
     test "returns unknown permission strings as-is" do
@@ -79,14 +88,8 @@ defmodule Sanctum.AtomsTest do
       assert Atoms.safe_to_permission_atom(:custom) == :custom
     end
 
-    test "may return existing atoms even if not in permission allowlist" do
-      # Note: String.to_existing_atom finds atoms that already exist in the VM
-      # So "github" might return :github if the atom exists from other code
-      # This is expected behavior - the function is safe because it won't
-      # create NEW atoms for unknown strings
-      result = Atoms.safe_to_permission_atom("github")
-      # Either returns the existing atom or the string, both are safe
-      assert result == :github or result == "github"
+    test "a provider name is not a permission" do
+      assert Atoms.safe_to_permission_atom("github") == "github"
     end
   end
 
@@ -111,14 +114,8 @@ defmodule Sanctum.AtomsTest do
       assert Atoms.safe_to_provider_atom(:custom_provider) == :custom_provider
     end
 
-    test "may return existing atoms even if not in provider allowlist" do
-      # Note: String.to_existing_atom finds atoms that already exist in the VM
-      # So "execute" might return :execute if the atom exists from other code
-      # This is expected behavior - the function is safe because it won't
-      # create NEW atoms for unknown strings
-      result = Atoms.safe_to_provider_atom("execute")
-      # Either returns the existing atom or the string, both are safe
-      assert result == :execute or result == "execute"
+    test "a permission name is not a provider" do
+      assert Atoms.safe_to_provider_atom("execute") == "execute"
     end
   end
 
