@@ -43,7 +43,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      imports = StorageHandler.build_storage_imports(edge, ctx, ref)
+      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
 
       assert Map.has_key?(imports, "cyfr:storage/files@0.1.0")
       assert Map.has_key?(imports["cyfr:storage/files@0.1.0"], "call")
@@ -57,7 +57,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      imports = StorageHandler.build_storage_imports(edge, ctx, ref)
+      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
       {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
 
       # Write a file first
@@ -91,7 +91,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -109,7 +109,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/missing.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "not_found"
@@ -134,7 +134,7 @@ defmodule Opus.StorageHandlerTest do
       request =
         Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => content})
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -161,7 +161,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => "not-valid-base64!!!"
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_base64"
@@ -176,7 +176,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "write", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -201,7 +201,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "b.txt"], "bbb")
 
       request = Jason.encode!(%{"action" => "list", "path" => "data"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -220,7 +220,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "subdir", "nested.txt"], "nested")
 
       request = Jason.encode!(%{"action" => "list", "path" => "data"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -251,7 +251,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "to-delete.txt"], "content")
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/to-delete.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -277,7 +277,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "exists.txt"], "content")
 
       request = Jason.encode!(%{"action" => "exists", "path" => "data/exists.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -292,7 +292,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "exists", "path" => "data/nope.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -313,7 +313,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "truncate", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "unknown_action"
@@ -334,7 +334,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/../secrets/key.json"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
@@ -349,7 +349,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "read", "path" => "/etc/passwd"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
@@ -369,7 +369,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => Base.encode64("bad")
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
@@ -383,7 +383,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/../secrets/key.json"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
@@ -399,7 +399,7 @@ defmodule Opus.StorageHandlerTest do
       edge = EdgeFixtures.edge(paths: [], actions: ["read"])
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
@@ -413,7 +413,7 @@ defmodule Opus.StorageHandlerTest do
       edge = EdgeFixtures.edge(paths: ["data/reports/"], actions: ["read"])
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/secrets/key.json"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
@@ -430,7 +430,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -462,7 +462,7 @@ defmodule Opus.StorageHandlerTest do
           "path" => "components/catalysts/test/0.1.0/output.json"
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -481,7 +481,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      result = StorageHandler.execute("not json", edge, ctx, ref)
+      result = StorageHandler.execute("not json", edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_json"
@@ -494,7 +494,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      result = StorageHandler.execute(~s({"path": "data/test.txt"}), edge, ctx, ref)
+      result = StorageHandler.execute(~s({"path": "data/test.txt"}), edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -507,7 +507,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      result = StorageHandler.execute(~s({"action": "read"}), edge, ctx, ref)
+      result = StorageHandler.execute(~s({"action": "read"}), edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -542,7 +542,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "telemetry-test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/telemetry-test.txt"})
-      _result = StorageHandler.execute(request, edge, ctx, ref)
+      _result = StorageHandler.execute(request, edge, nil, ctx, ref)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :storage, :call], measurements, metadata}
       assert is_integer(measurements.duration_ms)
@@ -569,7 +569,7 @@ defmodule Opus.StorageHandlerTest do
       )
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      _result = StorageHandler.execute(request, edge, ctx, ref)
+      _result = StorageHandler.execute(request, edge, nil, ctx, ref)
 
       assert_receive {:telemetry_status, :error}
 
@@ -594,7 +594,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => Base.encode64("new")
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "action_denied"
@@ -607,7 +607,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -619,7 +619,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "action_denied"
@@ -636,7 +636,7 @@ defmodule Opus.StorageHandlerTest do
 
       # Read
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       assert Jason.decode!(result)["status"] == "ok"
 
       # Write
@@ -647,12 +647,12 @@ defmodule Opus.StorageHandlerTest do
           "content" => Base.encode64("new")
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       assert Jason.decode!(result)["status"] == "ok"
 
       # Delete
       request = Jason.encode!(%{"action" => "delete", "path" => "data/new.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       assert Jason.decode!(result)["status"] == "ok"
     end
 
@@ -662,7 +662,7 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/test.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "action_denied"
@@ -759,7 +759,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => Base.encode64("line2\n")
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -785,7 +785,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => Base.encode64("first line\n")
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "ok"
@@ -800,7 +800,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "append", "path" => "data/log.txt"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -820,7 +820,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => "not valid base64!!!"
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_base64"
@@ -840,7 +840,7 @@ defmodule Opus.StorageHandlerTest do
           "content" => Base.encode64("data")
         })
 
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "action_denied"
@@ -860,11 +860,107 @@ defmodule Opus.StorageHandlerTest do
         )
 
       request = Jason.encode!(%{"action" => "read", "path" => "secrets/key.json"})
-      result = StorageHandler.execute(request, edge, ctx, ref)
+      result = StorageHandler.execute(request, edge, nil, ctx, ref)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
       assert decoded["error"]["message"] =~ "must start with 'data/' or 'components/'"
+    end
+  end
+
+  # ============================================================================
+  # Size ceilings (node limits) and the public quota
+  # ============================================================================
+
+  describe "size ceilings from node limits" do
+    defp small_limits do
+      %Sanctum.Limits{max_request_size: 16, max_response_size: 16}
+    end
+
+    defp rw_edge do
+      EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write"])
+    end
+
+    test "a write past max_request_size is refused on the DECODED size", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      # 24 decoded bytes → 32 base64 chars. The ceiling reads the payload,
+      # not the framing.
+      content = Base.encode64(String.duplicate("x", 24))
+      request = ~s({"action": "write", "path": "data/big.txt", "content": "#{content}"})
+
+      decoded = Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+      assert decoded["error"]["type"] == "request_too_large"
+    end
+
+    test "a small write under the ceiling still lands", %{ctx: ctx, component_ref: ref} do
+      content = Base.encode64("tiny")
+      request = ~s({"action": "write", "path": "data/small.txt", "content": "#{content}"})
+
+      decoded = Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+      assert decoded["written"] == true
+    end
+
+    test "a read past max_response_size is refused before base64 framing", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      :ok = Arca.put(ctx, ["data", "big.txt"], String.duplicate("y", 64))
+
+      request = ~s({"action": "read", "path": "data/big.txt"})
+      decoded = Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+      assert decoded["error"]["type"] == "response_too_large"
+    end
+  end
+
+  describe "public quota counts what the guest actually stores" do
+    defp quota_write(ctx, ref, path, bytes, quota) do
+      content = Base.encode64(String.duplicate("z", bytes))
+      request = ~s({"action": "write", "path": "#{path}", "content": "#{content}"})
+
+      StorageHandler.execute(request, rw_edge(), nil, ctx, ref,
+        public?: true,
+        public_quota: quota
+      )
+      |> Jason.decode!()
+    end
+
+    test "usage is recursive — a nested write cannot evade the byte ceiling", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      quota = %{max_bytes: 100, max_files: 50}
+
+      # 60 bytes deep in a subdirectory — the old top-level listing counted
+      # this as zero.
+      assert %{"written" => true} = quota_write(ctx, ref, "data/nested/deep/a.txt", 60, quota)
+
+      # 60 more would cross 100; the recursive usage must see the first file.
+      decoded = quota_write(ctx, ref, "data/b.txt", 60, quota)
+      assert decoded["error"]["type"] == "storage_quota_exceeded"
+      assert decoded["error"]["message"] =~ "storage quota"
+    end
+
+    test "the file ceiling counts nested files too", %{ctx: ctx, component_ref: ref} do
+      quota = %{max_bytes: 1_000_000, max_files: 2}
+
+      assert %{"written" => true} = quota_write(ctx, ref, "data/one/a.txt", 4, quota)
+      assert %{"written" => true} = quota_write(ctx, ref, "data/two/b.txt", 4, quota)
+
+      decoded = quota_write(ctx, ref, "data/three/c.txt", 4, quota)
+      assert decoded["error"]["type"] == "storage_quota_exceeded"
+      assert decoded["error"]["message"] =~ "file quota"
+    end
+
+    test "the incoming size is the decoded payload, not the base64 framing", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      # 90 decoded bytes → 120 base64 chars. Under a 100-byte quota the
+      # write must pass: framing is transport, not stored bytes.
+      quota = %{max_bytes: 100, max_files: 50}
+      assert %{"written" => true} = quota_write(ctx, ref, "data/exact.txt", 90, quota)
     end
   end
 end

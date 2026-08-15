@@ -238,6 +238,16 @@ defmodule Arca.Storage do
   @callback list_recursive(Context.t(), path()) :: {:ok, [path()]} | error()
 
   @doc """
+  Recursive file count and byte total under a prefix.
+
+  Quota enforcement reads this — it must reflect every leaf in the subtree,
+  not just the top level, or a nested write evades the ceiling.
+  Implementations must call `validate_path!/1` on the input prefix.
+  """
+  @callback usage(Context.t(), path()) ::
+              {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | error()
+
+  @doc """
   Read a whole subtree as a list of `{relative_path, binary}` pairs.
 
   Convenience for callers (validators, scanners) that need every file in a

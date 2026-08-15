@@ -21,6 +21,11 @@ defmodule Opus.StorageHandler do
   - Path traversal (`..`) segments are rejected
   - Only paths matching the edge's `storage.paths` prefixes are permitted
 
+  Size is enforced at the same boundary, from the node's limits: writes are
+  bounded by `max_request_size` (measured on the decoded payload) and reads
+  by `max_response_size` — the one host import without a ceiling would
+  otherwise be the cheapest way to balloon host memory.
+
   ## Architecture
 
   StorageHandler follows the same pattern as `Opus.HttpHandler`:
@@ -59,12 +64,13 @@ defmodule Opus.StorageHandler do
 
   ## Usage
 
-      imports = Opus.StorageHandler.build_storage_imports(edge, ctx, "my-catalyst")
+      imports = Opus.StorageHandler.build_storage_imports(edge, limits, ctx, "my-catalyst")
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
+  alias Sanctum.Limits
   alias Opus.EdgeGuard
 
   # ============================================================================
@@ -90,14 +96,15 @@ defmodule Opus.StorageHandler do
 
   A map with the `"cyfr:storage/files@0.1.0"` namespace containing a `"call"` function.
   """
-  @spec build_storage_imports(Edge.t() | nil, Context.t(), String.t(), keyword()) :: map()
-  def build_storage_imports(edge, %Context{} = ctx, component_ref, opts \\ []) do
+  @spec build_storage_imports(Edge.t() | nil, Limits.t() | nil, Context.t(), String.t(), keyword()) ::
+          map()
+  def build_storage_imports(edge, limits, %Context{} = ctx, component_ref, opts \\ []) do
     %{
       "cyfr:storage/files@0.1.0" => %{
         "call" =>
           {:fn,
            fn json_request ->
-             execute(json_request, edge, ctx, component_ref, opts)
+             execute(json_request, edge, limits, ctx, component_ref, opts)
            end}
       }
     }
@@ -110,14 +117,15 @@ defmodule Opus.StorageHandler do
   dispatches to the appropriate Arca function, and returns a JSON response
   string. All errors are caught and returned as JSON (never raised into WASM).
   """
-  @spec execute(String.t(), Edge.t() | nil, Context.t(), String.t(), keyword()) :: String.t()
-  def execute(json_request, edge, %Context{} = ctx, component_ref, opts \\ []) do
+  @spec execute(String.t(), Edge.t() | nil, Limits.t() | nil, Context.t(), String.t(), keyword()) ::
+          String.t()
+  def execute(json_request, edge, limits, %Context{} = ctx, component_ref, opts \\ []) do
     start_time = System.monotonic_time(:millisecond)
 
     result =
       case parse_request(json_request) do
         {:ok, %{action: action} = request} ->
-          case validate_and_dispatch(request, edge, ctx, opts) do
+          case validate_and_dispatch(request, edge, limits, ctx, opts) do
             {:ok, response} ->
               emit_telemetry(component_ref, action, :ok, start_time)
               encode_success(response)
@@ -164,17 +172,38 @@ defmodule Opus.StorageHandler do
   # Private: Validation & Dispatch
   # ============================================================================
 
-  defp validate_and_dispatch(%{action: action, path: path} = request, edge, ctx, opts) do
+  defp validate_and_dispatch(%{action: action, path: path} = request, edge, limits, ctx, opts) do
     with :ok <- validate_action_allowed(edge, action),
          :ok <- validate_path_scope(path),
          :ok <- validate_path_safe(path),
          :ok <- validate_allowed_paths(edge, path),
+         :ok <- validate_write_size(action, request, limits),
          :ok <- validate_public_quota(action, request, ctx, opts) do
-      dispatch(action, request, ctx)
+      dispatch(action, request, limits, ctx)
     end
   end
 
   @writing_actions ~w(write append)
+
+  # Storage is a host import like HTTP: the node's limits bound what crosses
+  # the boundary. Writes are measured on the DECODED payload — the base64
+  # framing is transport, not stored bytes.
+  defp validate_write_size(action, %{content: content}, %Limits{} = limits)
+       when action in @writing_actions and is_binary(content) do
+    case Base.decode64(content) do
+      {:ok, decoded} ->
+        case EdgeGuard.check_request_size(limits, %{body: decoded}) do
+          :ok -> :ok
+          {:error, :request_too_large, message} -> {:error, :request_too_large, message}
+        end
+
+      :error ->
+        # dispatch/4 answers invalid base64 with its own typed error.
+        :ok
+    end
+  end
+
+  defp validate_write_size(_action, _request, _limits), do: :ok
 
   # Public profiles write under a byte and file ceiling. The flag rides explicit
   # opts rather than a callee-derived `is_public` semantic, which no longer
@@ -198,14 +227,18 @@ defmodule Opus.StorageHandler do
     })
   end
 
+  # Usage is the RECURSIVE count and byte total under the scope root, and the
+  # incoming size is the decoded payload — measuring top-level basenames (or
+  # base64 framing) would let nested writes walk straight past the ceiling.
   defp enforce_quota(%{path: path, content: content}, ctx, quota) do
-    incoming = byte_size(content || "")
+    incoming =
+      case Base.decode64(content || "") do
+        {:ok, decoded} -> byte_size(decoded)
+        :error -> byte_size(content || "")
+      end
 
-    case Arca.list(ctx, storage_root(path)) do
-      {:ok, entries} ->
-        files = Enum.count(entries)
-        used = Enum.reduce(entries, 0, fn entry, acc -> acc + entry_size(entry) end)
-
+    case Arca.usage(ctx, [storage_root(path)]) do
+      {:ok, %{files: files, bytes: used}} ->
         cond do
           files >= quota.max_files ->
             {:error, :storage_quota_exceeded,
@@ -232,10 +265,6 @@ defmodule Opus.StorageHandler do
       [scope] -> scope
     end
   end
-
-  defp entry_size(%{size: size}) when is_integer(size), do: size
-  defp entry_size(%{"size" => size}) when is_integer(size), do: size
-  defp entry_size(_), do: 0
 
   @known_actions ~w(read write append list delete exists)
 
@@ -308,18 +337,26 @@ defmodule Opus.StorageHandler do
   # Private: Action Dispatch
   # ============================================================================
 
-  defp dispatch("read", %{path: path}, ctx) do
+  defp dispatch("read", %{path: path}, limits, ctx) do
     segments = normalize_path(path, ctx)
 
     case Arca.get(ctx, segments) do
       {:ok, content} ->
-        {:ok,
-         %{
-           "path" => path,
-           "content" => Base.encode64(content),
-           "size" => byte_size(content),
-           "encoding" => "base64"
-         }}
+        # The response ceiling bites BEFORE base64 framing — encoding an
+        # unbounded file would build the +33% blowup in host memory first.
+        case check_read_size(limits, content) do
+          :ok ->
+            {:ok,
+             %{
+               "path" => path,
+               "content" => Base.encode64(content),
+               "size" => byte_size(content),
+               "encoding" => "base64"
+             }}
+
+          {:error, :response_too_large, message} ->
+            {:error, :response_too_large, message}
+        end
 
       {:error, :not_found} ->
         {:error, :not_found, "File not found: #{path}"}
@@ -329,12 +366,12 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp dispatch("write", %{path: path, content: nil}, _ctx) do
+  defp dispatch("write", %{path: path, content: nil}, _limits, _ctx) do
     {:error, :invalid_request,
      "Write action requires 'content' field with base64-encoded data. Path: #{path}"}
   end
 
-  defp dispatch("write", %{path: path, content: b64_content}, ctx) do
+  defp dispatch("write", %{path: path, content: b64_content}, _limits, ctx) do
     case Base.decode64(b64_content) do
       {:ok, content} ->
         segments = normalize_path(path, ctx)
@@ -358,7 +395,7 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp dispatch("list", %{path: path}, ctx) do
+  defp dispatch("list", %{path: path}, _limits, ctx) do
     segments = normalize_path(path, ctx)
 
     case Arca.list(ctx, segments) do
@@ -389,7 +426,7 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp dispatch("delete", %{path: path}, ctx) do
+  defp dispatch("delete", %{path: path}, _limits, ctx) do
     segments = normalize_path(path, ctx)
 
     case Arca.delete(ctx, segments) do
@@ -408,7 +445,7 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp dispatch("exists", %{path: path}, ctx) do
+  defp dispatch("exists", %{path: path}, _limits, ctx) do
     segments = normalize_path(path, ctx)
     exists = Arca.exists?(ctx, segments)
 
@@ -419,11 +456,11 @@ defmodule Opus.StorageHandler do
      }}
   end
 
-  defp dispatch("append", %{path: _path, content: nil}, _ctx) do
+  defp dispatch("append", %{path: _path, content: nil}, _limits, _ctx) do
     {:error, :invalid_request, "Append action requires 'content' field with base64-encoded data."}
   end
 
-  defp dispatch("append", %{path: path, content: b64_content}, ctx) do
+  defp dispatch("append", %{path: path, content: b64_content}, _limits, ctx) do
     case Base.decode64(b64_content) do
       {:ok, content} ->
         segments = normalize_path(path, ctx)
@@ -447,10 +484,15 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp dispatch(action, _request, _ctx) do
+  defp dispatch(action, _request, _limits, _ctx) do
     {:error, :unknown_action,
      "Unknown storage action: #{action}. Use: read, write, append, list, delete, or exists"}
   end
+
+  defp check_read_size(%Limits{} = limits, content),
+    do: EdgeGuard.check_response_size(limits, content)
+
+  defp check_read_size(nil, _content), do: :ok
 
   # ============================================================================
   # Private: Path Normalization

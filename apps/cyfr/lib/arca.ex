@@ -186,6 +186,13 @@ defmodule Arca do
   def list(%Context{} = ctx, path), do: adapter().list(ctx, path)
 
   @doc """
+  Recursive file count and byte total under a path prefix.
+
+  Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
+  """
+  def usage(%Context{} = ctx, path), do: adapter().usage(ctx, path)
+
+  @doc """
   Check if path exists.
 
   ## Examples

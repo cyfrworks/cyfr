@@ -265,6 +265,7 @@ defmodule Opus.Runtime do
       if component_type == :catalyst && limits && ctx do
         Opus.StorageHandler.build_storage_imports(
           edge,
+          limits,
           ctx,
           component_ref,
           public_storage_opts(authority_info.authority)

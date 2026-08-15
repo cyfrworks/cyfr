@@ -230,6 +230,22 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
+  def usage(%Context{} = ctx, segments) do
+    Arca.Storage.validate_path!(segments)
+    prefix_key = build_key(ctx, segments)
+    prefix_with_slash = prefix_key <> "/"
+
+    case list_entries(prefix_key) do
+      {:ok, entries} ->
+        sizes = for {key, size} <- entries, String.starts_with?(key, prefix_with_slash), do: size
+        {:ok, %{files: length(sizes), bytes: Enum.sum(sizes)}}
+
+      {:error, reason} ->
+        log_and_error("usage", reason)
+    end
+  end
+
+  @impl true
   def read_subtree(%Context{} = ctx, segments) do
     with {:ok, leaf_segments} <- list_recursive(ctx, segments) do
       max_concurrency = Application.get_env(:cyfr, :s3_read_subtree_concurrency, 10)
@@ -443,6 +459,37 @@ defmodule Arca.Adapters.S3 do
   defp parse_list_keys(body) do
     Regex.scan(~r{<Key>([^<]+)</Key>}, body)
     |> Enum.map(fn [_, key] -> xml_unescape(key) end)
+  end
+
+  # Same pagination as list_keys, keeping each object's size. Every
+  # <Contents> element carries Key then Size in document order.
+  defp list_entries(prefix), do: list_entries_pages(prefix, nil, [], MapSet.new())
+
+  defp list_entries_pages(prefix, token, acc, seen_tokens) do
+    case request_list_page(prefix, token) do
+      {:ok, body} ->
+        acc = acc ++ parse_list_entries(body)
+
+        case next_continuation_token(body) do
+          nil ->
+            {:ok, acc}
+
+          next ->
+            if MapSet.member?(seen_tokens, next) do
+              {:error, {:s3_list_repeated_token, next}}
+            else
+              list_entries_pages(prefix, next, acc, MapSet.put(seen_tokens, next))
+            end
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp parse_list_entries(body) do
+    Regex.scan(~r{<Contents>.*?<Key>([^<]+)</Key>.*?<Size>(\d+)</Size>.*?</Contents>}s, body)
+    |> Enum.map(fn [_, key, size] -> {xml_unescape(key), String.to_integer(size)} end)
   end
 
   defp next_continuation_token(body) do

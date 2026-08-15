@@ -185,6 +185,28 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
+  def usage(%Context{} = ctx, path) do
+    Arca.Storage.validate_path!(path)
+    full_path = build_path(ctx, path)
+
+    if File.dir?(full_path) do
+      leaves = walk_files(full_path)
+
+      bytes =
+        Enum.reduce(leaves, 0, fn leaf, acc ->
+          case File.stat(leaf) do
+            {:ok, %File.Stat{size: size}} -> acc + size
+            {:error, _} -> acc
+          end
+        end)
+
+      {:ok, %{files: length(leaves), bytes: bytes}}
+    else
+      {:ok, %{files: 0, bytes: 0}}
+    end
+  end
+
+  @impl true
   def read_subtree(%Context{} = ctx, path) do
     with {:ok, leaf_segments} <- list_recursive(ctx, path) do
       pairs =
