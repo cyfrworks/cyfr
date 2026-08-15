@@ -11,10 +11,12 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
   alias Sanctum.Limits
   alias Sanctum.Policy.Ceiling
 
-  # The Phase 1 schema freeze, as a machine gate. Every surface pinned here
-  # is frozen: changing any of them is a deliberate spec amendment that must
-  # edit this test AND docs/capability_schema_freeze.md in the same diff —
-  # never an incidental refactor.
+  # The authority schema freeze, as a machine gate. Every surface pinned
+  # here is frozen — the blob shape, the transition relation, the limit and
+  # ceiling field sets, and the golden resolved-policy fixture. This test IS
+  # the spec: changing any pinned surface is a deliberate amendment made by
+  # editing these assertions in the same diff as the change, never an
+  # incidental refactor.
 
   @golden_path Path.join([
                  __DIR__,
