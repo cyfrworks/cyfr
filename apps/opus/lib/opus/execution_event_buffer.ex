@@ -261,11 +261,19 @@ defmodule Opus.ExecutionEventBuffer do
   @impl true
   def terminate(_reason, state) do
     if state.events != [] do
-      Arca.Cache.put(
-        {:exec_events, state.execution_id, state.org_id},
-        state.events,
-        @buffer_ttl_ms
-      )
+      key = {:exec_events, state.execution_id, state.org_id}
+
+      # Merge with (never clobber) anything the direct-write fallback put in
+      # the cache while this process existed — a wholesale put would erase
+      # those events. Order can interleave; losing events cannot.
+      cached =
+        case Arca.Cache.get(key) do
+          {:ok, existing} when is_list(existing) -> existing
+          _ -> []
+        end
+
+      merged = Enum.uniq(cached ++ state.events) |> Enum.take(-@max_events)
+      Arca.Cache.put(key, merged, @buffer_ttl_ms)
     end
 
     :ok
@@ -299,9 +307,21 @@ defmodule Opus.ExecutionEventBuffer do
                Opus.ExecutionEventBuffer.Supervisor,
                {__MODULE__, {execution_id, org_id}}
              ) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          _ -> :error
+          {:ok, pid} ->
+            {:ok, pid}
+
+          {:error, {:already_started, pid}} ->
+            {:ok, pid}
+
+          {:error, reason} ->
+            # Not the "infrastructure absent" case — the supervisor is up
+            # and refused. Log it: the direct-write fallback masks the
+            # failure otherwise.
+            Logger.warning(
+              "#{__MODULE__}: start_child failed for #{execution_id}: #{inspect(reason)}"
+            )
+
+            :error
         end
     end
   rescue

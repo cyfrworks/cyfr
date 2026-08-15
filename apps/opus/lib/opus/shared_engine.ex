@@ -44,7 +44,11 @@ defmodule Opus.SharedEngine do
       fn ->
         case Wasmex.Engine.new(%Wasmex.EngineConfig{consume_fuel: false}) do
           {:ok, engine} ->
-            engine
+            # A fresh generation per engine: compiled components are NIF
+            # resources belonging to ONE engine, so a cache entry minted
+            # under a previous engine must never be handed to stores built
+            # from this one (Opus.ComponentCache keys on this value).
+            %{engine: engine, generation: :erlang.unique_integer([:positive, :monotonic])}
 
           {:error, reason} ->
             raise "Opus.SharedEngine: failed to create Wasmex engine: #{inspect(reason)}"
@@ -56,5 +60,9 @@ defmodule Opus.SharedEngine do
 
   @doc "Returns the shared engine."
   @spec get() :: Wasmex.Engine.t()
-  def get, do: Agent.get(__MODULE__, & &1)
+  def get, do: Agent.get(__MODULE__, & &1.engine)
+
+  @doc "Opaque identity of the CURRENT engine instance (changes on restart)."
+  @spec generation() :: pos_integer()
+  def generation, do: Agent.get(__MODULE__, & &1.generation)
 end

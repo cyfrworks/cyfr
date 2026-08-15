@@ -107,6 +107,10 @@ defmodule Opus.ExecutionSemaphore do
       GenServer.call(__MODULE__, {:acquire, priority, tenant}, timeout)
     catch
       :exit, {:timeout, _} ->
+        # The caller is giving up but its waiter entry (and monitor) live on
+        # in the server — without this, a later hand-off could grant a slot
+        # to a process that already returned and will never release it.
+        GenServer.cast(__MODULE__, {:abandon_wait, self()})
         {:error, :queue_full}
 
       :exit, _reason ->
@@ -274,6 +278,25 @@ defmodule Opus.ExecutionSemaphore do
     {:noreply, do_release(state, pid)}
   end
 
+  # A caller that timed out of `acquire/3` dequeues itself. If the hand-off
+  # already won the race and made it a holder, release that slot — the :ok
+  # reply went to a caller that is no longer waiting for it.
+  @impl true
+  def handle_cast({:abandon_wait, pid}, state) do
+    case Map.get(state.waiter_monitors, pid) do
+      nil ->
+        if Map.has_key?(state.monitors, pid) do
+          {:noreply, do_release(state, pid)}
+        else
+          {:noreply, state}
+        end
+
+      {_from, mon_ref, _priority, _tenant} ->
+        Process.demonitor(mon_ref, [:flush])
+        {:noreply, remove_waiter(state, pid)}
+    end
+  end
+
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     # Process could be a holder or a queued waiter
@@ -285,18 +308,7 @@ defmodule Opus.ExecutionSemaphore do
       {_from, mon_ref, _priority, _tenant} ->
         # It's a queued waiter — remove from queue without affecting slot count
         Process.demonitor(mon_ref, [:flush])
-        filter_fn = fn {f, _m, _p, _t} -> elem(f, 0) != pid end
-        new_high = :queue.filter(filter_fn, state.waiters_high)
-        new_normal = :queue.filter(filter_fn, state.waiters_normal)
-        new_waiter_monitors = Map.delete(state.waiter_monitors, pid)
-
-        {:noreply,
-         %{
-           state
-           | waiters_high: new_high,
-             waiters_normal: new_normal,
-             waiter_monitors: new_waiter_monitors
-         }}
+        {:noreply, remove_waiter(state, pid)}
     end
   end
 
@@ -312,6 +324,18 @@ defmodule Opus.ExecutionSemaphore do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
+
+  defp remove_waiter(state, pid) do
+    filter_fn = fn {f, _m, _p, _t} -> elem(f, 0) != pid end
+
+    %{
+      state
+      | waiters_high: :queue.filter(filter_fn, state.waiters_high),
+        waiters_normal: :queue.filter(filter_fn, state.waiters_normal),
+        waiter_monitors: Map.delete(state.waiter_monitors, pid)
+    }
+  end
+
 
   @impl true
   def terminate(_reason, state) do

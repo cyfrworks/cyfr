@@ -31,14 +31,19 @@ defmodule Opus.ComponentCache do
     project_id = Arca.QueryHelpers.normalize_project_id(Keyword.get(opts, :project_id))
     cache_key = {:compiled_component, org_id, project_id, reference}
 
+    # A compiled component is a NIF resource tied to the engine that built
+    # it — validate the engine generation alongside the digest so an engine
+    # restart can never serve stale resources to stores from the new one.
+    generation = Opus.SharedEngine.generation()
+
     case Arca.Cache.get(cache_key) do
-      {:ok, {^digest, component}} ->
+      {:ok, {^digest, ^generation, component}} ->
         {:ok, component}
 
       _ ->
         case Wasmex.Components.Component.new(store, wasm_bytes) do
           {:ok, component} ->
-            Arca.Cache.put(cache_key, {digest, component}, @ttl_ms)
+            Arca.Cache.put(cache_key, {digest, generation, component}, @ttl_ms)
             {:ok, component}
 
           error ->

@@ -96,7 +96,10 @@ defmodule Opus.OAuthTokenTracker do
     {:noreply, state}
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
 
   defp do_sweep do
     cutoff = now_ms() - ttl_ms()

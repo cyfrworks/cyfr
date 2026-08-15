@@ -59,7 +59,6 @@ defmodule Opus.Executor do
   - `:type` - Component type: `:catalyst`, `:reagent`, or `:formula`. Defaults to `:reagent`.
   - `:verify` - Optional verification requirements: `%{identity: string, issuer: string}`
   - `:max_memory_bytes` - Memory limit for execution. Defaults to 64MB.
-  - `:fuel_limit` - Fuel limit for CPU time. Defaults to 100M instructions.
 
   ## Returns
 
@@ -945,11 +944,23 @@ defmodule Opus.Executor do
 
     # Collect cleanup_refs sent by Runtime early in setup (before WASM execution starts).
     # Use the full timeout — if setup itself takes this long, we should timeout anyway.
-    cleanup_refs =
+    # A failure BEFORE Runtime sends the handshake (an authority guard, a bad
+    # option) arrives as the final result instead — match it here too, or the
+    # caller would sit out the full timeout holding its semaphore slot with
+    # the answer already in its mailbox.
+    handshake =
       receive do
-        {:cleanup_refs, ^ref, refs} -> refs
+        {:cleanup_refs, ^ref, refs} -> {:refs, refs}
+        {^ref, {:ok, output, metadata}} -> {:early, {:ok, {output, metadata}}}
+        {^ref, {:error, _} = error} -> {:early, error}
       after
         timeout_ms -> nil
+      end
+
+    cleanup_refs =
+      case handshake do
+        {:refs, refs} -> refs
+        _ -> nil
       end
 
     # Store tracker PID in ExecutionRegistry so cancel can clean up AsyncTracker.
@@ -966,14 +977,18 @@ defmodule Opus.Executor do
 
     remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
 
-    # If we consumed the full timeout waiting for cleanup_refs, kill immediately
-    if is_nil(cleanup_refs) do
-      # Unlink first so the :killed EXIT signal doesn't propagate back and
-      # terminate this process before handle_failure can write the DB record.
-      Process.unlink(pid)
-      Process.exit(pid, :kill)
-      {:error, "Execution timeout after #{timeout_ms}ms"}
+    with {:early, result} <- handshake do
+      result
     else
+      # If we consumed the full timeout waiting for cleanup_refs, kill immediately
+      nil ->
+        # Unlink first so the :killed EXIT signal doesn't propagate back and
+        # terminate this process before handle_failure can write the DB record.
+        Process.unlink(pid)
+        Process.exit(pid, :kill)
+        {:error, "Execution timeout after #{timeout_ms}ms"}
+
+      {:refs, _} ->
       receive do
         # Runtime.execute_component always returns 3-tuple {:ok, output, metadata}
         {^ref, {:ok, output, metadata}} ->
@@ -1085,8 +1100,6 @@ defmodule Opus.Executor do
     {:error, error_msg}
   end
 
-  # Build a snapshot of the host policy for forensic replay.
-  # This captures the policy that was enforced at execution time.
   @doc """
   Cancel a running execution by killing its process.
 
@@ -1188,6 +1201,8 @@ defmodule Opus.Executor do
 
   # Serialize the enforced edge + limits for forensic replay. The key names
   # are stable serialization labels — audit consumers and tests pin them.
+  # Snapshot of the host policy enforced at execution time, for forensic
+  # replay of what an execution was allowed to do.
   defp build_host_policy_snapshot(exec_opts) do
     case Keyword.get(exec_opts, :limits) do
       nil ->
