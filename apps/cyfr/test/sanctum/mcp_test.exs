@@ -362,8 +362,8 @@ defmodule Sanctum.MCPTest do
   # Tincture Visibility Tool
   # ============================================================================
 
-  describe "tincture_visibility set" do
-    test "publishing is a consent decision, not a toggle", %{ctx: ctx} do
+  describe "tincture_visibility set is gone" do
+    test "the retired verb is an unknown action, not a teaching shim", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("tincture_visibility", ctx, %{
           "action" => "set",
@@ -372,17 +372,7 @@ defmodule Sanctum.MCPTest do
           "public" => true
         })
 
-      assert msg =~ "profile.publish"
-
-      {:error, msg} =
-        MCP.handle("tincture_visibility", ctx, %{
-          "action" => "set",
-          "publisher" => "local",
-          "name" => "test-tincture",
-          "public" => false
-        })
-
-      assert msg =~ "profile.revoke"
+      assert msg =~ "Invalid tincture_visibility action"
     end
   end
 

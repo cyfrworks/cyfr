@@ -246,12 +246,13 @@ defmodule Sanctum.MCP do
         name: "tincture_visibility",
         title: "Tincture Visibility",
         description:
-          "Manage tincture public/private visibility. Visibility is an operator decision stored in Sanctum, not in manifests.",
+          "Report whether a tincture has an active public profile. Public-ness is a " <>
+            "published profile, not a policy bit — publish with profile.publish, " <>
+            "unpublish with profile.revoke.",
         annotations: %{
-          readOnlyHint: false,
+          readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "set" => %{kind: :write, planes: [:external], permission: :execute},
             "get" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read}
           }
         },
@@ -260,7 +261,7 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["set", "get"],
+              "enum" => ["get"],
               "description" => "Action to perform"
             },
             "publisher" => %{
@@ -270,11 +271,6 @@ defmodule Sanctum.MCP do
             "name" => %{
               "type" => "string",
               "description" => "Tincture name"
-            },
-            "public" => %{
-              "type" => "boolean",
-              "description" =>
-                "Set to true for public visibility, false for private (for set action)"
             }
           },
           "required" => ["action", "publisher", "name"]

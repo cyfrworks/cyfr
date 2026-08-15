@@ -91,11 +91,6 @@ interface TinctureState {
   openedTinctures: string[];
 
   loadTinctures: (client: McpClient) => Promise<void>;
-  toggleVisibility: (
-    client: McpClient,
-    publisher: string,
-    name: string,
-  ) => Promise<void>;
   selectTincture: (name: string) => void;
   closeTincture: (name: string) => void;
   closeViewer: () => void;
@@ -254,40 +249,6 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
       set({ tinctures, loading: false, focusedIndex: clampedFocused });
     } catch {
       set({ loading: false });
-    }
-  },
-
-  toggleVisibility: async (client, publisher, name) => {
-    const tincture = get().tinctures.find(
-      (t) => t.publisher === publisher && t.name === name,
-    );
-    if (!tincture) return;
-
-    const newPublic = !tincture.public;
-
-    set({
-      tinctures: get().tinctures.map((t) =>
-        t.publisher === publisher && t.name === name
-          ? { ...t, public: newPublic }
-          : t,
-      ),
-    });
-
-    try {
-      await client.callTool("tincture_visibility", {
-        action: "set",
-        publisher,
-        name,
-        public: newPublic,
-      });
-    } catch {
-      set({
-        tinctures: get().tinctures.map((t) =>
-          t.publisher === publisher && t.name === name
-            ? { ...t, public: !newPublic }
-            : t,
-        ),
-      });
     }
   },
 

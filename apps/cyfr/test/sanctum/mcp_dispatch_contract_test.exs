@@ -23,7 +23,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     "session" => ["login", "logout", "whoami", "device_init", "device_poll"],
     "oauth" => ["set_client"],
     "key" => ["create", "get", "list", "revoke", "rotate"],
-    "tincture_visibility" => ["set", "get"],
+    "tincture_visibility" => ["get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
     "vault" => ["list", "create", "rename", "rotate", "rebind", "authorize", "revoke", "delete"],
     "profile" => ["plan", "preview", "commit", "publish", "list", "revoke"]
@@ -34,7 +34,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       "Invalid session action. Use: login, logout, whoami, device_init, or device_poll",
     "oauth" => "Invalid oauth action. Use: set_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
-    "tincture_visibility" => "Invalid tincture_visibility action. Use: set, get",
+    "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
     "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
     "vault" =>
       "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, delete",

@@ -67,7 +67,6 @@ export default function TincturesPage() {
   const nextPreview = useTinctureStore((s) => s.nextPreview);
   const previousPreview = useTinctureStore((s) => s.previousPreview);
   const closeViewer = useTinctureStore((s) => s.closeViewer);
-  const toggleVisibility = useTinctureStore((s) => s.toggleVisibility);
   const loadTinctures = useTinctureStore((s) => s.loadTinctures);
   const refreshTinctures = useTinctureStore((s) => s.refreshTinctures);
   const client = useAgentStore((s) => s.client);
@@ -143,10 +142,6 @@ export default function TincturesPage() {
 
   const handleRefresh = () => {
     if (client) refreshTinctures(client);
-  };
-
-  const handleToggleVisibility = (publisher: string, name: string) => {
-    if (client) toggleVisibility(client, publisher, name);
   };
 
   const handleOpenInBrowser = (t: TinctureEntry) => {
@@ -271,9 +266,6 @@ export default function TincturesPage() {
               <InfoBar
                 tincture={focused}
                 onLaunch={() => selectTincture(focused.name)}
-                onToggleVisibility={() =>
-                  handleToggleVisibility(focused.publisher, focused.name)
-                }
                 onCopyUrl={() => handleCopyUrl(focused)}
                 onOpenInBrowser={() => handleOpenInBrowser(focused)}
               />
@@ -592,13 +584,11 @@ function PreviewFallback({ tincture }: { tincture: TinctureEntry }) {
 function InfoBar({
   tincture,
   onLaunch,
-  onToggleVisibility,
   onCopyUrl,
   onOpenInBrowser,
 }: {
   tincture: TinctureEntry;
   onLaunch: () => void;
-  onToggleVisibility: () => void;
   onCopyUrl: () => void;
   onOpenInBrowser: () => void;
 }) {
@@ -651,6 +641,7 @@ function InfoBar({
                   ? "bg-green-500/15 text-green-500"
                   : "bg-yellow-500/15 text-yellow-500"
               }`}
+              title="Publishing is a consent decision: grant or revoke the tincture's public profile from the Prism console (profile.publish / profile.revoke)."
             >
               {tincture.public ? "shared" : "private"}
             </span>
@@ -700,12 +691,6 @@ function InfoBar({
             className="rounded-lg bg-accent-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
           >
             Launch
-          </button>
-          <button
-            onClick={onToggleVisibility}
-            className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
-          >
-            {tincture.public ? "Stop sharing" : "Share"}
           </button>
           <button
             onClick={onCopyUrl}

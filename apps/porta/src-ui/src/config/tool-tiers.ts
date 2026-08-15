@@ -50,7 +50,6 @@ const RULES: ToolRule[] = [
   { name: "execution", action: "cancel", tier: "tier0" },
 
   // Irreversible / externally visible — high-risk approval card.
-  { name: "tincture_visibility", action: "set", tier: "tier3" },
   { name: "component", action: "delete", tier: "tier3" },
 ];
 

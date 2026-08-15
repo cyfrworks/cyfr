@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/ref"
@@ -56,36 +57,17 @@ without authentication. Tinctures default to private (accessible only via Prism 
 
 var tinctureVisibilitySetCmd = &cobra.Command{
 	Use:   "set <publisher> <name> <true|false>",
-	Short: "Set tincture visibility",
-	Example: `  cyfr tincture visibility set local my-dashboard true
-  cyfr tincture visibility set local my-dashboard false`,
-	Args: cobra.ExactArgs(3),
+	Short: "Retired — publishing is a consent decision",
+	Args:  cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		publisher := args[0]
-		name := args[1]
-		public := args[2] == "true"
-
-		validateTincturePublisher(publisher)
-
-		client := newClient()
-		result, err := client.CallTool("tincture_visibility", map[string]any{
-			"action":    "set",
-			"publisher": publisher,
-			"name":      name,
-			"public":    public,
-		})
-		if err != nil {
-			handleToolError(err, "Visibility update failed")
-		}
-		if flagJSON {
-			output.JSON(result)
-			return
-		}
-		if public {
-			fmt.Printf("%s/%s is now public at %s\n", publisher, name, tincturePublicPath(result, publisher, name))
-		} else {
-			fmt.Printf("%s/%s is now private (Prism shell only)\n", publisher, name)
-		}
+		// Visibility is not a policy bit anymore: public-ness IS an active
+		// public profile. Point old muscle memory at the consent walk
+		// instead of round-tripping to a server verb that no longer exists.
+		fmt.Fprintln(os.Stderr, "Publishing is a consent decision, not a toggle.")
+		fmt.Fprintln(os.Stderr, "  To publish:   run profile.publish on the tincture's owner profile (plan -> preview -> commit)")
+		fmt.Fprintln(os.Stderr, "  To unpublish: run profile.revoke on the tincture's public profile")
+		fmt.Fprintln(os.Stderr, "  To check:     cyfr tincture visibility get <publisher> <name>")
+		os.Exit(1)
 	},
 }
 
