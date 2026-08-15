@@ -65,7 +65,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   # ---------------------------------------------------------------------------
 
   defp load_plan(socket, ref) do
-    case call(socket, "profile.plan", %{"ref" => ref}) do
+    case call(socket, "profile/plan", %{"ref" => ref}) do
       {:ok, plan} -> socket |> assign(plan: plan, error: nil) |> preview()
       {:error, message} -> assign(socket, error: message)
     end
@@ -74,7 +74,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp preview(%{assigns: %{plan: nil}} = socket), do: socket
 
   defp preview(socket) do
-    case call(socket, "profile.preview", %{"decisions" => decisions_payload(socket)}) do
+    case call(socket, "profile/preview", %{"decisions" => decisions_payload(socket)}) do
       {:ok, preview} -> assign(socket, preview: preview, error: nil)
       {:error, message} -> assign(socket, preview: nil, error: message)
     end
@@ -90,7 +90,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       "expected_consent_revision" => plan.expected_consent_revision
     }
 
-    case call(socket, "profile.commit", args) do
+    case call(socket, "profile/commit", args) do
       {:ok, result} ->
         send(self(), {:consent_granted, socket.assigns.ref, result})
         assign(socket, busy: false, error: nil)
