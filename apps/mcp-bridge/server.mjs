@@ -64,6 +64,11 @@ const PROTOCOL_VERSION = "2026-07-28";
 // literal to Emissary.MCP.ExternalServer's.
 const CHILD_PROTOCOL_VERSION = "2025-03-26";
 
+// Ceiling on one child stdout frame (a single line). RPC_TIMEOUT_MS bounds
+// how long a pending call waits, but nothing bounded how much an unhinged
+// child could write into the framing buffer before the first newline.
+const MAX_FRAME_BYTES = 10 * 1024 * 1024;
+
 // Reverse-DNS `_meta` keys defined by the specification.
 const META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
 const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
@@ -135,8 +140,14 @@ const ADMIN_TOOLS = [
 // ============================================================================
 
 function spawnBackend(name, command, env) {
+  // Children never see the bridge's own admin bearer: any npx backend that
+  // inherited it could re-enter /mcp as an administrator. Everything else
+  // in the environment passes through (PATH, HOME, npm caches).
+  const childEnv = { ...process.env, ...(env || {}) };
+  delete childEnv.MCP_BRIDGE_TOKEN;
+
   const proc = spawn("sh", ["-c", command], {
-    env: { ...process.env, ...(env || {}) },
+    env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
   });
   const backend = {
@@ -155,6 +166,20 @@ function spawnBackend(name, command, env) {
   proc.stdout.setEncoding("utf8");
   proc.stdout.on("data", (chunk) => {
     backend.buffer += chunk;
+
+    // A child emitting an endless line with no newline would grow this
+    // string without bound; no legitimate MCP frame approaches 10MB.
+    if (backend.buffer.length > MAX_FRAME_BYTES) {
+      console.error(
+        `[${name}] stdout frame exceeded ${MAX_FRAME_BYTES} bytes without a newline; killing backend`
+      );
+      backend.buffer = "";
+      backend.status = "error";
+      backend.error = "stdout frame overflow";
+      proc.kill("SIGKILL");
+      return;
+    }
+
     let idx;
     while ((idx = backend.buffer.indexOf("\n")) >= 0) {
       const line = backend.buffer.slice(0, idx).trim();
@@ -330,8 +355,10 @@ async function persist() {
     }
     await fs.mkdir(path.dirname(PERSIST), { recursive: true });
     const tmp = PERSIST + ".tmp";
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2));
+    // Backend env blocks carry third-party API keys — owner-only on disk.
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
     await fs.rename(tmp, PERSIST);
+    await fs.chmod(PERSIST, 0o600);
   } catch (e) {
     console.error(`[persist] write error: ${e.message}`);
   } finally {

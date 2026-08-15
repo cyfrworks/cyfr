@@ -105,6 +105,20 @@ jobs:
             -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/list' \
             -d "$body")
           [ "$code" = "200" ] || { echo "expected 200 with bearer, got $code"; exit 1; }
+          # The bridge's own admin bearer must never reach a spawned child:
+          # add a backend that echoes its environment and assert the token
+          # is absent from what the child saw.
+          add_body='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"add_backend","arguments":{"name":"envprobe","command":"env > \"$RUNNER_TEMP/child-env.txt\"; sleep 2"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+          curl -s -o /dev/null -X POST http://127.0.0.1:8001/mcp \
+            -H 'content-type: application/json' -H 'authorization: Bearer ci-smoke-token' \
+            -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' \
+            -H 'Mcp-Name: add_backend' \
+            -d "$add_body" || true
+          sleep 1
+          if [ -f "$RUNNER_TEMP/child-env.txt" ] && grep -q "ci-smoke-token" "$RUNNER_TEMP/child-env.txt"; then
+            echo "MCP_BRIDGE_TOKEN leaked into a child environment"
+            exit 1
+          fi
           kill "$BRIDGE_PID"
           if MCP_BRIDGE_TOKEN= MCP_BRIDGE_DATA="$RUNNER_TEMP/backends2.json" node server.mjs; then
             echo "bridge booted without a token — fail-closed boot is broken"
