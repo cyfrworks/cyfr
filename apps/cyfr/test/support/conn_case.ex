@@ -96,17 +96,18 @@ defmodule EmissaryWeb.ConnCase do
 
     # Set test auth provider so sessions get authenticated: true.
     # Tests that need unauthenticated contexts can override per-test.
-    # Restore on exit so the setting never leaks into later test files (a
-    # lingering provider flips operator-only conveniences off and breaks
-    # unrelated suites — e.g. external server URL validation).
-    original_auth_provider = Application.get_env(:cyfr, :auth_provider)
-    Application.put_env(:cyfr, :auth_provider, Emissary.TestAuthProvider)
-
-    on_exit(fn ->
-      if original_auth_provider,
-        do: Application.put_env(:cyfr, :auth_provider, original_auth_provider),
-        else: Application.delete_env(:cyfr, :auth_provider)
-    end)
+    # Global app env is not concurrency-safe, so only sync tests get the
+    # provider (the async ConnCase users don't touch auth). On exit, restore
+    # the test-env BASELINE (unset — config/test.exs sets no :auth_provider)
+    # rather than a captured "original": a capture taken mid-run can be
+    # another module's temporary value, and restoring it leaks the provider
+    # into later suites (a lingering provider flips operator-only
+    # conveniences off and breaks unrelated ones — e.g. external server URL
+    # validation).
+    unless tags[:async] do
+      Application.put_env(:cyfr, :auth_provider, Emissary.TestAuthProvider)
+      on_exit(fn -> Application.delete_env(:cyfr, :auth_provider) end)
+    end
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
