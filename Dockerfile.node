@@ -2,8 +2,9 @@
 # Node-based services for the CYFR stack. Build context: repo root.
 #
 # Two targets:
-#   --target porta       → the A.Q.U.A. PWA, served by `vite preview`
-#                          (also proxies /mcp /api /auth /t to cyfr:4000).
+#   --target porta       → the A.Q.U.A. PWA, built with vite and served by
+#                          nginx (which also proxies /mcp /api /auth /t to
+#                          cyfr:4000 — see apps/porta/nginx.conf).
 #                          Published as ghcr.io/cyfrworks/cyfr-porta.
 #   --target mcp-bridge  → the HTTP MCP gateway that wraps stdio/npx MCP
 #                          servers; registered with cyfr like any other
@@ -15,12 +16,12 @@
 FROM node:24-alpine AS base
 
 # ===========================================================================
-# porta — build the React PWA and run it via `vite preview`. Same vite stack
-# as `npm run dev`; preview proxies /mcp /api /auth /t to cyfr on the compose
-# network (see apps/porta/src-ui/vite.config.ts → preview.proxy). When Caddy
-# is in front (the optional `tls` compose profile), Caddy fronts those paths
-# first and the preview proxy never sees them — it's just dev-and-direct
-# mode same-origin glue.
+# porta — build the React PWA with vite, serve the static bundle with nginx.
+# nginx proxies /mcp /api /auth /t to cyfr on the compose network (see
+# apps/porta/nginx.conf — same route shape as the vite dev proxy and the
+# Caddyfile). When Caddy is in front (the optional `tls` compose profile),
+# Caddy fronts those paths first and this proxy never sees them. The runtime
+# image carries only the built assets — no node_modules, no dev toolchain.
 # ===========================================================================
 FROM base AS porta-build
 WORKDIR /app
@@ -29,17 +30,15 @@ RUN npm ci
 COPY apps/porta/src-ui/ ./
 RUN npm run build
 
-FROM porta-build AS porta
+FROM nginx:1.27-alpine AS porta
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-ENV NODE_ENV=production
 EXPOSE 8080
+COPY apps/porta/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=porta-build /app/dist /usr/share/nginx/html
 # This image contains only the Apache-2.0 Porta UI. Bundle the repo-level
 # license docs so operators can see the full CYFR product license boundary.
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
-# `vite preview` reads `preview.host` / `preview.port` / `preview.proxy` from
-# the same vite.config.ts as the dev server.
-CMD ["npx", "vite", "preview", "--port", "8080", "--host", "0.0.0.0"]
 
 # ===========================================================================
 # mcp-bridge — HTTP MCP gateway. Single /mcp endpoint that surfaces:

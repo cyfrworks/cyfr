@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { useActivityStore, type ActivityEntry } from "../../state/activity-store";
+import {
+  useActivityStore,
+  type ActivityEntry,
+} from "../../state/activity-store";
 import type { Intent } from "../../harness/aqua-actions-parser";
 
 /**
@@ -19,7 +22,10 @@ export function ActivityLane() {
     if (!open) return;
     markSeen();
     const onClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
         setOpen(false);
       }
     };
@@ -52,7 +58,9 @@ export function ActivityLane() {
       {open && (
         <div className="absolute bottom-full left-0 z-50 mb-1 w-80 rounded-lg border border-border-default bg-surface-raised shadow-xl">
           <div className="flex items-center justify-between border-b border-border-default px-3 py-2">
-            <span className="text-xs font-medium text-text-primary">Recent activity</span>
+            <span className="text-xs font-medium text-text-primary">
+              Recent activity
+            </span>
             {entries.length > 0 && (
               <button
                 onClick={clear}
@@ -89,7 +97,9 @@ function EntryRow({ entry }: { entry: ActivityEntry }) {
   if (entry.kind === "dispatched") {
     return (
       <div className="flex items-start justify-between gap-2">
-        <span className="text-xs text-text-secondary">{describeIntent(entry.intent)}</span>
+        <span className="text-xs text-text-secondary">
+          {describeIntent(entry.intent)}
+        </span>
         <span className="shrink-0 text-[10px] text-text-muted">{ago}</span>
       </div>
     );
@@ -101,7 +111,9 @@ function EntryRow({ entry }: { entry: ActivityEntry }) {
           <div className="truncate text-xs text-status-error">
             Failed: {describeIntent(entry.intent)}
           </div>
-          <div className="truncate text-[10px] text-text-muted">{entry.error}</div>
+          <div className="truncate text-[10px] text-text-muted">
+            {entry.error}
+          </div>
         </div>
         <span className="shrink-0 text-[10px] text-text-muted">{ago}</span>
       </div>
@@ -111,7 +123,9 @@ function EntryRow({ entry }: { entry: ActivityEntry }) {
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
         <div className="text-xs text-status-warning">Dropped action</div>
-        <div className="truncate text-[10px] text-text-muted">{entry.reason}</div>
+        <div className="truncate text-[10px] text-text-muted">
+          {entry.reason}
+        </div>
       </div>
       <span className="shrink-0 text-[10px] text-text-muted">{ago}</span>
     </div>

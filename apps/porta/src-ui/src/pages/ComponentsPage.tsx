@@ -295,13 +295,10 @@ function ComponentCard({
   onRemoved: () => void;
 }) {
   // undefined = still loading, null = no setup required, SetupPlan = has plan
-  const ready = plan === undefined ? undefined : plan === null ? true : plan.ready;
+  const ready =
+    plan === undefined ? undefined : plan === null ? true : plan.ready;
   const statusLabel =
-    ready === undefined
-      ? ""
-      : ready
-        ? "Ready"
-        : "Setup needed";
+    ready === undefined ? "" : ready ? "Ready" : "Setup needed";
   const dotColor =
     ready === undefined
       ? "bg-text-muted"
@@ -340,9 +337,7 @@ function ComponentCard({
             </p>
           )}
         </div>
-        <span className={`shrink-0 text-xs ${textColor}`}>
-          {statusLabel}
-        </span>
+        <span className={`shrink-0 text-xs ${textColor}`}>{statusLabel}</span>
         <ChevronIcon expanded={expanded} />
       </button>
 
@@ -556,9 +551,24 @@ function ProvidersSection() {
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-medium text-text-primary">Providers</h2>
         {loading && (
-          <svg className="h-3 w-3 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          <svg
+            className="h-3 w-3 animate-spin text-text-muted"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
         )}
       </div>

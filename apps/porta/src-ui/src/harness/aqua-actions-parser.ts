@@ -70,8 +70,7 @@ export interface ParseResult {
 }
 
 type ValidateResult =
-  | { ok: true; intent: Intent }
-  | { ok: false; reason: string };
+  { ok: true; intent: Intent } | { ok: false; reason: string };
 
 export function parsePortaActions(content: string): ParseResult {
   const intents: Intent[] = [];
@@ -124,7 +123,10 @@ function validateIntent(raw: unknown): ValidateResult {
       const path = asString(obj.path);
       if (!path) return { ok: false, reason: "ui.navigate: missing 'path'" };
       if (!ALLOWED_PATHS.has(path)) {
-        return { ok: false, reason: `ui.navigate: path '${path}' not in allowlist` };
+        return {
+          ok: false,
+          reason: `ui.navigate: path '${path}' not in allowlist`,
+        };
       }
       return { ok: true, intent: { kind, path } };
     }
@@ -134,7 +136,10 @@ function validateIntent(raw: unknown): ValidateResult {
         return { ok: true, intent: { kind } };
       }
       if (typeof state !== "string" || !ALLOWED_OVERLAY_STATES.has(state)) {
-        return { ok: false, reason: `ui.overlay.open: invalid state '${String(state)}'` };
+        return {
+          ok: false,
+          reason: `ui.overlay.open: invalid state '${String(state)}'`,
+        };
       }
       return {
         ok: true,
@@ -149,38 +154,47 @@ function validateIntent(raw: unknown): ValidateResult {
       const publisher = asString(obj.publisher);
       const name = asString(obj.name);
       if (!publisher || !name) {
-        return { ok: false, reason: "ui.tincture.open: requires 'publisher' and 'name'" };
+        return {
+          ok: false,
+          reason: "ui.tincture.open: requires 'publisher' and 'name'",
+        };
       }
       return { ok: true, intent: { kind, publisher, name } };
     }
     case "ui.tincture.close": {
       const name = asString(obj.name);
-      if (!name) return { ok: false, reason: "ui.tincture.close: requires 'name'" };
+      if (!name)
+        return { ok: false, reason: "ui.tincture.close: requires 'name'" };
       return { ok: true, intent: { kind, name } };
     }
     case "ui.tincture.focus": {
       const name = asString(obj.name);
-      if (!name) return { ok: false, reason: "ui.tincture.focus: requires 'name'" };
+      if (!name)
+        return { ok: false, reason: "ui.tincture.focus: requires 'name'" };
       return { ok: true, intent: { kind, name } };
     }
     case "ui.schedules.focus": {
       const id = asString(obj.id);
-      if (!id) return { ok: false, reason: "ui.schedules.focus: requires 'id'" };
+      if (!id)
+        return { ok: false, reason: "ui.schedules.focus: requires 'id'" };
       return { ok: true, intent: { kind, id } };
     }
     case "ui.components.focus": {
       const ref = asString(obj.ref);
-      if (!ref) return { ok: false, reason: "ui.components.focus: requires 'ref'" };
+      if (!ref)
+        return { ok: false, reason: "ui.components.focus: requires 'ref'" };
       return { ok: true, intent: { kind, ref } };
     }
     case "ui.mcp.focus": {
       const server = asString(obj.server);
-      if (!server) return { ok: false, reason: "ui.mcp.focus: requires 'server'" };
+      if (!server)
+        return { ok: false, reason: "ui.mcp.focus: requires 'server'" };
       return { ok: true, intent: { kind, server } };
     }
     case "ui.copy_clipboard": {
       const text = asString(obj.text);
-      if (text === null) return { ok: false, reason: "ui.copy_clipboard: requires 'text'" };
+      if (text === null)
+        return { ok: false, reason: "ui.copy_clipboard: requires 'text'" };
       return { ok: true, intent: { kind, text } };
     }
     case "ui.request_approval": {
@@ -188,13 +202,21 @@ function validateIntent(raw: unknown): ValidateResult {
       const summary = asString(obj.summary);
       const risk = obj.risk;
       const actionDesc = asString(obj.action_description);
-      if (!title) return { ok: false, reason: "ui.request_approval: requires 'title'" };
-      if (!summary) return { ok: false, reason: "ui.request_approval: requires 'summary'" };
+      if (!title)
+        return { ok: false, reason: "ui.request_approval: requires 'title'" };
+      if (!summary)
+        return { ok: false, reason: "ui.request_approval: requires 'summary'" };
       if (typeof risk !== "string" || !ALLOWED_RISKS.has(risk)) {
-        return { ok: false, reason: `ui.request_approval: risk must be low|medium|high, got '${String(risk)}'` };
+        return {
+          ok: false,
+          reason: `ui.request_approval: risk must be low|medium|high, got '${String(risk)}'`,
+        };
       }
       if (!actionDesc) {
-        return { ok: false, reason: "ui.request_approval: requires 'action_description'" };
+        return {
+          ok: false,
+          reason: "ui.request_approval: requires 'action_description'",
+        };
       }
       return {
         ok: true,

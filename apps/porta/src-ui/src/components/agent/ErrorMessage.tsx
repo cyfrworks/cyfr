@@ -15,7 +15,9 @@ export function ErrorMessage({ raw }: { raw: string }) {
 
   return (
     <div className="rounded-xl border border-status-error/30 bg-status-error/10 px-4 py-3">
-      <div className="text-sm font-medium text-status-error">{translated.title}</div>
+      <div className="text-sm font-medium text-status-error">
+        {translated.title}
+      </div>
       <p className="mt-1 text-sm text-text-secondary">{translated.body}</p>
 
       {translated.actions.length > 0 && (
@@ -26,21 +28,23 @@ export function ErrorMessage({ raw }: { raw: string }) {
         </div>
       )}
 
-      {devMode && translated.rawMessage && translated.rawMessage !== translated.body && (
-        <div className="mt-3 border-t border-status-error/20 pt-2">
-          <button
-            onClick={() => setShowRaw((v) => !v)}
-            className="text-[10px] text-text-muted hover:text-text-secondary"
-          >
-            {showRaw ? "Hide raw error" : "Show raw error"}
-          </button>
-          {showRaw && (
-            <pre className="mt-1 overflow-x-auto rounded bg-surface-base p-2 font-mono text-[10px] text-text-muted">
-              {translated.rawMessage}
-            </pre>
-          )}
-        </div>
-      )}
+      {devMode &&
+        translated.rawMessage &&
+        translated.rawMessage !== translated.body && (
+          <div className="mt-3 border-t border-status-error/20 pt-2">
+            <button
+              onClick={() => setShowRaw((v) => !v)}
+              className="text-[10px] text-text-muted hover:text-text-secondary"
+            >
+              {showRaw ? "Hide raw error" : "Show raw error"}
+            </button>
+            {showRaw && (
+              <pre className="mt-1 overflow-x-auto rounded bg-surface-base p-2 font-mono text-[10px] text-text-muted">
+                {translated.rawMessage}
+              </pre>
+            )}
+          </div>
+        )}
     </div>
   );
 }
@@ -61,7 +65,9 @@ function dispatchAction(action: ErrorAction) {
     case "retry": {
       // Re-submit the last user message in the conversation, if any.
       const state = useAgentStore.getState();
-      const lastUser = [...state.messages].reverse().find((m) => m.role === "user");
+      const lastUser = [...state.messages]
+        .reverse()
+        .find((m) => m.role === "user");
       if (lastUser) void state.submit(lastUser.content);
       break;
     }

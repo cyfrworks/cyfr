@@ -144,8 +144,7 @@ function parseFrame(frame: string): ParsedFrame | null {
     if (!line || line.startsWith(":")) continue;
     const colon = line.indexOf(":");
     const field = colon === -1 ? line : line.slice(0, colon);
-    const value =
-      colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
+    const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
     if (field === "event") event = value;
     else if (field === "data") dataLines.push(value);
     else if (field === "id") id = value;

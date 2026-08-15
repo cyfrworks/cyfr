@@ -34,9 +34,7 @@ export function ProjectSwitcher() {
 
   // No project yet (pre-seed) — show a subtle placeholder.
   if (!active) {
-    return (
-      <div className="mb-2 px-3 text-xs text-text-muted">Loading…</div>
-    );
+    return <div className="mb-2 px-3 text-xs text-text-muted">Loading…</div>;
   }
 
   return (
@@ -48,7 +46,9 @@ export function ProjectSwitcher() {
         title={`${active.mode} · ${active.url}`}
       >
         <div className="min-w-0 flex-1">
-          <div className="truncate font-medium text-text-primary">{active.name}</div>
+          <div className="truncate font-medium text-text-primary">
+            {active.name}
+          </div>
           <div className="truncate text-[10px] text-text-muted">
             {modeSummary(active)}
           </div>
@@ -67,7 +67,9 @@ export function ProjectSwitcher() {
                     if (p.id !== active.id) void selectProject(p.id);
                   }}
                   className={`flex w-full items-start justify-between gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-surface-overlay ${
-                    p.id === active.id ? "text-accent-primary" : "text-text-secondary"
+                    p.id === active.id
+                      ? "text-accent-primary"
+                      : "text-text-secondary"
                   }`}
                 >
                   <div className="min-w-0 flex-1">
@@ -253,7 +255,11 @@ function CreateForm({
       <input
         value={url}
         onChange={(e) => setUrl(e.target.value)}
-        placeholder={mode === "remote" ? "https://cyfr.example.com" : "(blank = same origin)"}
+        placeholder={
+          mode === "remote"
+            ? "https://cyfr.example.com"
+            : "(blank = same origin)"
+        }
         className="rounded border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary focus:border-accent-primary focus:outline-none"
       />
       {mode === "remote" && (
@@ -287,16 +293,36 @@ function CreateForm({
 
 function Chevron() {
   return (
-    <svg className="h-3 w-3 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 15L12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9" />
+    <svg
+      className="h-3 w-3 text-text-muted"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 15L12 18.75 15.75 15m-7.5-6L12 5.25 15.75 9"
+      />
     </svg>
   );
 }
 
 function Check() {
   return (
-    <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+    <svg
+      className="h-3 w-3 shrink-0"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4.5 12.75l6 6 9-13.5"
+      />
     </svg>
   );
 }

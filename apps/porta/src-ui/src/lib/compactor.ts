@@ -5,12 +5,13 @@
  * 1. Estimate token count (chars / 4)
  * 2. If under threshold, pass through unchanged
  * 3. If over: truncate tool results in older messages, then drop oldest
- *    messages until under budget — always preserving the last 6 messages
+ *    messages until under budget — always preserving the last 20 messages
+ *    (same window as the Elixir original)
  */
 
 const TOKEN_BUDGET_CHARS = 320_000; // ~80k tokens
 const TRUNCATED_RESULT_CHARS = 500;
-const PRESERVE_RECENT = 6;
+const PRESERVE_RECENT = 20;
 
 type Message = Record<string, unknown>;
 

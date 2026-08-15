@@ -77,7 +77,12 @@ export interface AuthState {
   submitPersonalClaim: (
     username: string,
   ) => Promise<
-    "ok" | "slug_taken" | "invalid" | "reauth" | "error" | "policy_acceptance_required"
+    | "ok"
+    | "slug_taken"
+    | "invalid"
+    | "reauth"
+    | "error"
+    | "policy_acceptance_required"
   >;
   dismissClaimGate: () => void;
   /**
@@ -86,7 +91,9 @@ export interface AuthState {
    * claim-gate so the user can retry the claim under the now-satisfied
    * precondition.
    */
-  submitLegalAccept: () => Promise<"ok" | "version_mismatch" | "reauth" | "error">;
+  submitLegalAccept: () => Promise<
+    "ok" | "version_mismatch" | "reauth" | "error"
+  >;
   dismissLegalAcceptGate: () => void;
   logout: () => Promise<void>;
   cancelLogin: () => void;
@@ -160,7 +167,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       const sessionData = session.value;
-      const hasUser = typeof sessionData.user_id === "string" && sessionData.user_id !== "";
+      const hasUser =
+        typeof sessionData.user_id === "string" && sessionData.user_id !== "";
 
       if (!hasUser) {
         set({
@@ -263,7 +271,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (!get().loginPending) return; // cancelled
 
         try {
-          const pollResult = await cyfrMcp.devicePoll(client, deviceCode, provider);
+          const pollResult = await cyfrMcp.devicePoll(
+            client,
+            deviceCode,
+            provider,
+          );
 
           const status = pollResult.status as string;
 
@@ -322,10 +334,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             const needsClaim = pollResult.needs_personal_namespace === true;
             const accessToken =
               needsClaim || needsPolicyAccept
-                ? (pollResult.access_token as string | undefined) ?? null
+                ? ((pollResult.access_token as string | undefined) ?? null)
                 : null;
             const suggestedUsername = needsClaim
-              ? (pollResult.suggested_username as string | undefined) ?? null
+              ? ((pollResult.suggested_username as string | undefined) ?? null)
               : null;
 
             if ((needsClaim || needsPolicyAccept) && !accessToken) {
@@ -370,8 +382,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 accessToken,
                 provider,
                 suggestedUsername:
-                  (pollResult.suggested_username as string | undefined) ??
-                  null,
+                  (pollResult.suggested_username as string | undefined) ?? null,
               };
             }
 

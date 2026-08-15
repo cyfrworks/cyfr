@@ -150,16 +150,18 @@ func extract(version string, overwriteManaged bool) error {
 				return fmt.Errorf("create %s: %w", name, err)
 			}
 
-			if _, err := io.Copy(f, io.LimitReader(tr, maxFileSize)); err != nil {
+			written, err := io.Copy(f, io.LimitReader(tr, maxFileSize+1))
+			if err != nil {
 				f.Close()
 				return fmt.Errorf("write %s: %w", name, err)
+			}
+			if written > maxFileSize {
+				f.Close()
+				return fmt.Errorf("%s exceeds the %d-byte scaffold file limit", name, int64(maxFileSize))
 			}
 			f.Close()
 		}
 	}
-
-	// Ensure component subdirs exist even when tarball has no reagent examples yet.
-	_ = os.MkdirAll("components/reagents/local", 0755)
 
 	return nil
 }

@@ -84,90 +84,90 @@ export default function ClaimNamespacePage() {
     <div className="h-full overflow-y-auto bg-surface-base">
       <div className="flex min-h-full items-center justify-center p-8">
         <div className="w-full max-w-md space-y-6">
-        <div className="text-center">
-          <img
-            src="/logo.png"
-            alt="CYFR"
-            className="mx-auto h-16 w-16 object-contain"
-          />
-          <h1 className="mt-4 text-2xl font-semibold text-text-primary">
-            Claim your cyfr.run namespace
-          </h1>
-          <p className="mt-2 text-sm text-text-secondary">
-            To publish or pull private components, you need a personal
-            namespace on cyfr.run. This is a one-time choice per identity.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label
-              htmlFor="username"
-              className="block text-sm font-medium text-text-primary"
-            >
-              Namespace slug
-            </label>
-            <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(e) => {
-                setUsername(e.target.value);
-                if (error) setError(null);
-              }}
-              pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
-              minLength={1}
-              maxLength={39}
-              autoFocus
-              required
-              disabled={submitting}
-              className="mt-1 w-full rounded-md border border-surface-border bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary focus:outline-none focus:ring-1 focus:ring-accent-primary disabled:opacity-50"
-              placeholder="alice"
+          <div className="text-center">
+            <img
+              src="/logo.png"
+              alt="CYFR"
+              className="mx-auto h-16 w-16 object-contain"
             />
-            <p className="mt-1 text-xs text-text-muted">
-              Lowercase letters, digits, and single hyphens. 1–39 chars.
-              No "@". Examples: <code>alice</code>, <code>bob-123</code>.
+            <h1 className="mt-4 text-2xl font-semibold text-text-primary">
+              Claim your cyfr.run namespace
+            </h1>
+            <p className="mt-2 text-sm text-text-secondary">
+              To publish or pull private components, you need a personal
+              namespace on cyfr.run. This is a one-time choice per identity.
             </p>
           </div>
 
-          {error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-              {error}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label
+                htmlFor="username"
+                className="block text-sm font-medium text-text-primary"
+              >
+                Namespace slug
+              </label>
+              <input
+                id="username"
+                type="text"
+                value={username}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (error) setError(null);
+                }}
+                pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
+                minLength={1}
+                maxLength={39}
+                autoFocus
+                required
+                disabled={submitting}
+                className="mt-1 w-full rounded-md border border-surface-border bg-surface-raised px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary focus:outline-none focus:ring-1 focus:ring-accent-primary disabled:opacity-50"
+                placeholder="alice"
+              />
+              <p className="mt-1 text-xs text-text-muted">
+                Lowercase letters, digits, and single hyphens. 1–39 chars. No
+                "@". Examples: <code>alice</code>, <code>bob-123</code>.
+              </p>
             </div>
-          )}
 
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={submitting || !username.trim()}
-              className="flex-1 rounded-md bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-            >
-              {submitting ? "Claiming..." : "Claim namespace"}
-            </button>
+            {error && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+                {error}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={submitting || !username.trim()}
+                className="flex-1 rounded-md bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              >
+                {submitting ? "Claiming..." : "Claim namespace"}
+              </button>
+              <button
+                type="button"
+                onClick={dismiss}
+                disabled={submitting}
+                className="rounded-md border border-surface-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-raised disabled:opacity-50"
+                title="Skip for now — you won't be able to publish or manage registry namespaces until you claim one. The gate will re-appear on next login."
+              >
+                Skip
+              </button>
+            </div>
+          </form>
+
+          <div className="text-center text-xs text-text-muted">
+            Something wrong?{" "}
             <button
               type="button"
-              onClick={dismiss}
-              disabled={submitting}
-              className="rounded-md border border-surface-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-raised disabled:opacity-50"
-              title="Skip for now — you won't be able to publish or manage registry namespaces until you claim one. The gate will re-appear on next login."
+              onClick={() => {
+                void logout();
+              }}
+              className="underline hover:text-text-secondary"
             >
-              Skip
+              Sign out and try again
             </button>
           </div>
-        </form>
-
-        <div className="text-center text-xs text-text-muted">
-          Something wrong?{" "}
-          <button
-            type="button"
-            onClick={() => {
-              void logout();
-            }}
-            className="underline hover:text-text-secondary"
-          >
-            Sign out and try again
-          </button>
-        </div>
         </div>
       </div>
     </div>

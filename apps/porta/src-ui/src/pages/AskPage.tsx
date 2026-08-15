@@ -37,7 +37,8 @@ export default function AskPage() {
         client = useAgentStore.getState().client;
       }
       if (client) {
-        const { loaded, loading, loadOrchestrators } = useOrchestratorStore.getState();
+        const { loaded, loading, loadOrchestrators } =
+          useOrchestratorStore.getState();
         if (!loaded && !loading) {
           loadOrchestrators(client);
         }
@@ -109,8 +110,18 @@ export default function AskPage() {
             title="New chat"
             aria-label="New chat"
           >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 4.5v15m7.5-7.5h-15"
+              />
             </svg>
           </button>
         </>
@@ -119,7 +130,9 @@ export default function AskPage() {
     >
       <div className="flex h-full">
         <div className="flex min-w-0 flex-1 flex-col">
-          {editorOpen && <AgentEditorPanel onClose={() => setEditorOpen(false)} />}
+          {editorOpen && (
+            <AgentEditorPanel onClose={() => setEditorOpen(false)} />
+          )}
           <MessageList key={conversationId ?? "new"} />
           <ComposeBar />
         </div>
@@ -144,8 +157,18 @@ function ActiveOrchestratorBadge() {
   if (!activeOrchestrator) return null;
   return (
     <span className="inline-flex items-center gap-1 rounded-md bg-accent-primary/10 px-2 py-1 text-xs font-medium text-accent-primary">
-      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+      <svg
+        className="h-3 w-3"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"
+        />
       </svg>
       {activeOrchestrator}
     </span>

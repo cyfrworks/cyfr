@@ -35,42 +35,42 @@ hljs.registerLanguage("css", css);
 export function Markdown({ content }: { content: string }) {
   return (
     <div className="prose prose-invert max-w-none text-sm leading-relaxed">
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code: CodeBlock,
-        pre: ({ children }) => <>{children}</>,
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-accent-primary hover:text-accent-hover"
-          >
-            {children}
-          </a>
-        ),
-        table: ({ children }) => (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse border border-border-default text-xs">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: CodeBlock,
+          pre: ({ children }) => <>{children}</>,
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent-primary hover:text-accent-hover"
+            >
               {children}
-            </table>
-          </div>
-        ),
-        th: ({ children }) => (
-          <th className="border border-border-default bg-surface-overlay px-3 py-1.5 text-left text-text-secondary">
-            {children}
-          </th>
-        ),
-        td: ({ children }) => (
-          <td className="border border-border-default px-3 py-1.5">
-            {children}
-          </td>
-        ),
-      }}
-    >
-      {content}
-    </ReactMarkdown>
+            </a>
+          ),
+          table: ({ children }) => (
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-collapse border border-border-default text-xs">
+                {children}
+              </table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-border-default bg-surface-overlay px-3 py-1.5 text-left text-text-secondary">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-border-default px-3 py-1.5">
+              {children}
+            </td>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

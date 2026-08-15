@@ -50,7 +50,11 @@ interface SetupFormProps {
  * consent decision made in the Prism console (the consent sheet); Porta
  * shows what is bound, what is missing, and where to finish the walk.
  */
-export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProps) {
+export function SetupForm({
+  componentRef,
+  onComplete,
+  onDismiss,
+}: SetupFormProps) {
   const [plan, setPlan] = useState<SetupPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +63,10 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
     (async () => {
       try {
         const client = await getClient();
-        const p = (await cyfrMcp.setupPlan(client, componentRef)) as unknown as SetupPlan;
+        const p = (await cyfrMcp.setupPlan(
+          client,
+          componentRef,
+        )) as unknown as SetupPlan;
         setPlan(p ?? null);
         if (!p) setError("Setup plan unavailable");
       } catch (e) {
@@ -80,18 +87,28 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
   if (!plan) {
     return (
       <div className="my-3 rounded-lg border border-status-error/30 bg-status-error/5 p-4">
-        <p className="text-sm text-status-error">{error ?? "Failed to load setup state"}</p>
-        <button onClick={onDismiss} className="mt-2 text-xs text-text-muted hover:text-text-secondary">
+        <p className="text-sm text-status-error">
+          {error ?? "Failed to load setup state"}
+        </p>
+        <button
+          onClick={onDismiss}
+          className="mt-2 text-xs text-text-muted hover:text-text-secondary"
+        >
           Dismiss
         </button>
       </div>
     );
   }
 
-  const componentName = componentRef.split(".").pop()?.split(":")[0] ?? componentRef;
+  const componentName =
+    componentRef.split(".").pop()?.split(":")[0] ?? componentRef;
   const consentNeeds = plan.consent?.needs ?? [];
 
-  const needRow = (label: string, satisfied: boolean, detail?: string | null) => (
+  const needRow = (
+    label: string,
+    satisfied: boolean,
+    detail?: string | null,
+  ) => (
     <div key={label} className="flex items-start gap-2">
       <span
         className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${
@@ -121,14 +138,22 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
       {consentNeeds.length > 0 ? (
         <div className="space-y-2">
           {consentNeeds.map((n, i) =>
-            needRow(n.need ?? n.entry_id ?? `binding ${i + 1}`, n.satisfied, n.detail),
+            needRow(
+              n.need ?? n.entry_id ?? `binding ${i + 1}`,
+              n.satisfied,
+              n.detail,
+            ),
           )}
         </div>
       ) : (
         plan.needs.length > 0 && (
           <div className="space-y-2">
             {plan.needs.map((n) =>
-              needRow(n.name, plan.ready, n.reason ?? (n.required ? "required" : "optional")),
+              needRow(
+                n.name,
+                plan.ready,
+                n.reason ?? (n.required ? "required" : "optional"),
+              ),
             )}
           </div>
         )
@@ -136,7 +161,8 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
 
       {!plan.ready && (
         <p className="mt-3 text-xs text-text-muted">
-          Grant connections in the Prism console (Components page), then retry here.
+          Grant connections in the Prism console (Components page), then retry
+          here.
         </p>
       )}
 
@@ -144,7 +170,10 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
         <button onClick={onComplete} className="btn-primary text-xs">
           Done
         </button>
-        <button onClick={onDismiss} className="text-xs text-text-muted hover:text-text-secondary">
+        <button
+          onClick={onDismiss}
+          className="text-xs text-text-muted hover:text-text-secondary"
+        >
           Skip
         </button>
       </div>

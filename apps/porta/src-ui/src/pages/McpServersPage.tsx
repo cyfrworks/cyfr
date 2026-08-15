@@ -43,14 +43,26 @@ interface BridgeBackend {
 function statusColor(status: string | undefined): string {
   if (status === "ready" || status === "connected") return "bg-status-success";
   if (status === "error" || status === "crashed") return "bg-status-error";
-  if (status === "disabled" || status === "starting") return "bg-status-warning";
+  if (status === "disabled" || status === "starting")
+    return "bg-status-warning";
   return "bg-text-muted";
 }
 
 const Spinner = ({ className = "h-3 w-3" }: { className?: string }) => (
   <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
-    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    <circle
+      className="opacity-25"
+      cx="12"
+      cy="12"
+      r="10"
+      stroke="currentColor"
+      strokeWidth="4"
+    />
+    <path
+      className="opacity-75"
+      fill="currentColor"
+      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+    />
   </svg>
 );
 
@@ -120,7 +132,10 @@ export default function McpServersPage() {
   const [backends, setBackends] = useState<BridgeBackend[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -131,7 +146,9 @@ export default function McpServersPage() {
   const [addingBackend, setAddingBackend] = useState(false);
   const [backendName, setBackendName] = useState("");
   const [backendCommand, setBackendCommand] = useState("");
-  const [confirmRemoveBackend, setConfirmRemoveBackend] = useState<string | null>(null);
+  const [confirmRemoveBackend, setConfirmRemoveBackend] = useState<
+    string | null
+  >(null);
 
   const callMcpServers = useCallback(
     async (action: string, args: Record<string, unknown> = {}) => {
@@ -153,7 +170,8 @@ export default function McpServersPage() {
     () => servers.find((s) => s.name === BRIDGE_PRESET.name),
     [servers],
   );
-  const bridgeReady = !!bridgeEntry && bridgeEntry.enabled && bridgeEntry.status === "ready";
+  const bridgeReady =
+    !!bridgeEntry && bridgeEntry.enabled && bridgeEntry.status === "ready";
 
   const loadBackends = useCallback(async () => {
     try {
@@ -172,9 +190,14 @@ export default function McpServersPage() {
     setLoading(true);
     try {
       const result = await callMcpServers("list");
-      setServers(coerceServers((result as { servers?: unknown }).servers ?? result));
+      setServers(
+        coerceServers((result as { servers?: unknown }).servers ?? result),
+      );
     } catch (err) {
-      setMessage({ type: "error", text: `Failed to list servers: ${msg(err)}` });
+      setMessage({
+        type: "error",
+        text: `Failed to list servers: ${msg(err)}`,
+      });
     }
     setLoading(false);
   }, [callMcpServers]);
@@ -208,12 +231,18 @@ export default function McpServersPage() {
   // Bridge admin operations: call the gateway, then refresh the `bridge`
   // entry on cyfr so its external-tools cache picks up the new prefixed
   // tools right away (instead of waiting out the 30 s TTL).
-  async function runBridge(label: string, fn: () => Promise<unknown>, key: string) {
+  async function runBridge(
+    label: string,
+    fn: () => Promise<unknown>,
+    key: string,
+  ) {
     setBusy(key);
     setMessage(null);
     try {
       await fn();
-      await callMcpServers("refresh", { name: BRIDGE_PRESET.name }).catch(() => undefined);
+      await callMcpServers("refresh", { name: BRIDGE_PRESET.name }).catch(
+        () => undefined,
+      );
       await loadBackends();
       await loadData();
     } catch (err) {
@@ -235,13 +264,20 @@ export default function McpServersPage() {
       try {
         headers = JSON.parse(newHeaders) as Record<string, string>;
       } catch {
-        setMessage({ type: "error", text: "Headers must be valid JSON (or blank)" });
+        setMessage({
+          type: "error",
+          text: "Headers must be valid JSON (or blank)",
+        });
         return;
       }
     }
     await run(
       "Add",
-      () => callMcpServers("create", { name, config: { url, ...(headers ? { headers } : {}) } }),
+      () =>
+        callMcpServers("create", {
+          name,
+          config: { url, ...(headers ? { headers } : {}) },
+        }),
       "add",
     );
     setAdding(false);
@@ -254,11 +290,17 @@ export default function McpServersPage() {
     const name = backendName.trim();
     const command = backendCommand.trim();
     if (!name || !command) {
-      setMessage({ type: "error", text: "Backend name and command are required" });
+      setMessage({
+        type: "error",
+        text: "Backend name and command are required",
+      });
       return;
     }
     if (name.includes("__") || name.includes(":")) {
-      setMessage({ type: "error", text: "Backend name cannot contain `__` or `:`" });
+      setMessage({
+        type: "error",
+        text: "Backend name cannot contain `__` or `:`",
+      });
       return;
     }
     await runBridge(
@@ -275,7 +317,9 @@ export default function McpServersPage() {
     <PageLayout
       title="MCP Servers"
       subtitle="External tool providers registered with this CYFR instance."
-      actions={loading ? <Spinner className="h-4 w-4 text-text-muted" /> : undefined}
+      actions={
+        loading ? <Spinner className="h-4 w-4 text-text-muted" /> : undefined
+      }
     >
       {message && (
         <div
@@ -302,7 +346,9 @@ export default function McpServersPage() {
 
         <div className="mt-2 space-y-2">
           {!loading && servers.length === 0 && (
-            <p className="text-xs text-text-muted">No external MCP servers registered.</p>
+            <p className="text-xs text-text-muted">
+              No external MCP servers registered.
+            </p>
           )}
           {servers.map((s) => {
             const isBridge = s.name === BRIDGE_PRESET.name;
@@ -313,7 +359,9 @@ export default function McpServersPage() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${statusColor(s.enabled ? s.status : "disabled")}`} />
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${statusColor(s.enabled ? s.status : "disabled")}`}
+                    />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 text-sm text-text-primary">
                         {s.name}
@@ -325,7 +373,8 @@ export default function McpServersPage() {
                       </div>
                       <div className="truncate text-xs text-text-muted">
                         {s.url}
-                        {typeof s.tool_count === "number" && ` · ${s.tool_count} tool${s.tool_count === 1 ? "" : "s"}`}
+                        {typeof s.tool_count === "number" &&
+                          ` · ${s.tool_count} tool${s.tool_count === 1 ? "" : "s"}`}
                         {s.status && ` · ${s.status}`}
                         {!s.enabled && " · disabled"}
                         {s.error && ` · ${s.error}`}
@@ -334,17 +383,31 @@ export default function McpServersPage() {
                   </div>
                   <div className="flex shrink-0 items-center gap-3 text-xs">
                     {busy === `test:${s.name}` ? (
-                      <span className="flex items-center gap-1.5 text-text-muted"><Spinner /> Testing…</span>
+                      <span className="flex items-center gap-1.5 text-text-muted">
+                        <Spinner /> Testing…
+                      </span>
                     ) : (
                       <button
-                        onClick={() => void run("Test", () => callMcpServers("test", { name: s.name }), `test:${s.name}`)}
+                        onClick={() =>
+                          void run(
+                            "Test",
+                            () => callMcpServers("test", { name: s.name }),
+                            `test:${s.name}`,
+                          )
+                        }
                         className="text-accent-primary hover:text-accent-hover"
                       >
                         Test
                       </button>
                     )}
                     <button
-                      onClick={() => void run("Refresh", () => callMcpServers("refresh", { name: s.name }), `refresh:${s.name}`)}
+                      onClick={() =>
+                        void run(
+                          "Refresh",
+                          () => callMcpServers("refresh", { name: s.name }),
+                          `refresh:${s.name}`,
+                        )
+                      }
                       className="text-accent-primary hover:text-accent-hover"
                     >
                       Refresh
@@ -353,7 +416,10 @@ export default function McpServersPage() {
                       onClick={() =>
                         void run(
                           s.enabled ? "Disable" : "Enable",
-                          () => callMcpServers(s.enabled ? "disable" : "enable", { name: s.name }),
+                          () =>
+                            callMcpServers(s.enabled ? "disable" : "enable", {
+                              name: s.name,
+                            }),
                           `toggle:${s.name}`,
                         )
                       }
@@ -367,17 +433,29 @@ export default function McpServersPage() {
                       <span className="flex items-center gap-1.5">
                         <span className="text-text-muted">Remove?</span>
                         <button
-                          onClick={() => void run("Remove", () => callMcpServers("delete", { name: s.name }), `del:${s.name}`)}
+                          onClick={() =>
+                            void run(
+                              "Remove",
+                              () => callMcpServers("delete", { name: s.name }),
+                              `del:${s.name}`,
+                            )
+                          }
                           className="text-status-error hover:underline"
                         >
                           Yes
                         </button>
-                        <button onClick={() => setConfirmRemove(null)} className="text-text-muted hover:text-text-secondary">
+                        <button
+                          onClick={() => setConfirmRemove(null)}
+                          className="text-text-muted hover:text-text-secondary"
+                        >
                           No
                         </button>
                       </span>
                     ) : (
-                      <button onClick={() => setConfirmRemove(s.name)} className="text-text-muted hover:text-status-error">
+                      <button
+                        onClick={() => setConfirmRemove(s.name)}
+                        className="text-text-muted hover:text-status-error"
+                      >
                         Remove
                       </button>
                     )}
@@ -437,12 +515,18 @@ export default function McpServersPage() {
             <textarea
               value={newHeaders}
               onChange={(e) => setNewHeaders(e.target.value)}
-              placeholder={'Headers JSON (optional), e.g. {"Authorization":"Bearer …"}'}
+              placeholder={
+                'Headers JSON (optional), e.g. {"Authorization":"Bearer …"}'
+              }
               spellCheck={false}
               className="h-20 w-full rounded border border-border-default bg-surface-base p-2 font-mono text-xs text-text-primary focus:border-accent-primary focus:outline-none"
             />
             <div className="flex items-center gap-2">
-              <button onClick={() => void handleAdd()} disabled={busy === "add"} className="btn-primary text-xs">
+              <button
+                onClick={() => void handleAdd()}
+                disabled={busy === "add"}
+                className="btn-primary text-xs"
+              >
                 {busy === "add" ? "Adding…" : "Add"}
               </button>
               <button
@@ -465,10 +549,17 @@ export default function McpServersPage() {
         <section className="mt-10">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-medium text-text-primary">Bridge backends</h2>
+              <h2 className="text-sm font-medium text-text-primary">
+                Bridge backends
+              </h2>
               <p className="mt-1 text-xs text-text-muted">
-                stdio MCP servers running inside <code className="text-text-secondary">mcp-bridge</code>.
-                Their tools surface to AQUA as <code className="text-text-secondary">bridge:&lt;name&gt;__&lt;tool&gt;</code>.
+                stdio MCP servers running inside{" "}
+                <code className="text-text-secondary">mcp-bridge</code>. Their
+                tools surface to AQUA as{" "}
+                <code className="text-text-secondary">
+                  bridge:&lt;name&gt;__&lt;tool&gt;
+                </code>
+                .
               </p>
             </div>
             <button
@@ -481,7 +572,9 @@ export default function McpServersPage() {
 
           <div className="mt-2 space-y-2">
             {backends.length === 0 && (
-              <p className="text-xs text-text-muted">No stdio backends yet. Add one to wrap an npx MCP server.</p>
+              <p className="text-xs text-text-muted">
+                No stdio backends yet. Add one to wrap an npx MCP server.
+              </p>
             )}
             {backends.map((b) => (
               <div
@@ -490,7 +583,9 @@ export default function McpServersPage() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${statusColor(b.status)}`} />
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${statusColor(b.status)}`}
+                    />
                     <div className="min-w-0">
                       <div className="text-sm text-text-primary">{b.name}</div>
                       <div className="truncate text-xs text-text-muted">
@@ -522,7 +617,8 @@ export default function McpServersPage() {
                           onClick={() =>
                             void runBridge(
                               "Remove backend",
-                              () => callBridge("remove_backend", { name: b.name }),
+                              () =>
+                                callBridge("remove_backend", { name: b.name }),
                               `delb:${b.name}`,
                             )
                           }

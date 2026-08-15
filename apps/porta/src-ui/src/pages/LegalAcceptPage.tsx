@@ -105,106 +105,109 @@ export default function LegalAcceptPage() {
     <div className="h-full overflow-y-auto bg-surface-base">
       <div className="flex min-h-full items-center justify-center p-6">
         <div className="w-full max-w-3xl space-y-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-text-primary">
-            Accept policies
-          </h1>
-          <p className="mt-2 text-sm text-text-secondary">
-            Before publishing on cyfr.run, please review and accept the
-            policies below. You're accepting bundle version{" "}
-            <code>{gate.policyVersion}</code>.
-          </p>
-        </div>
+          <div>
+            <h1 className="text-2xl font-semibold text-text-primary">
+              Accept policies
+            </h1>
+            <p className="mt-2 text-sm text-text-secondary">
+              Before publishing on cyfr.run, please review and accept the
+              policies below. You're accepting bundle version{" "}
+              <code>{gate.policyVersion}</code>.
+            </p>
+          </div>
 
-        <div className="flex gap-1 flex-wrap border-b border-surface-border">
-          {gate.policies.map((p) => (
-            <button
-              key={p.name}
-              type="button"
-              onClick={() => setActiveTab(p.name)}
-              className={
-                "px-3 py-1.5 text-xs border-t border-l border-r " +
-                (p.name === activeTab
-                  ? "bg-surface-raised text-text-primary border-surface-border font-semibold"
-                  : "bg-surface-base text-text-secondary border-transparent hover:text-text-primary")
-              }
-            >
-              {p.title}
-            </button>
-          ))}
-        </div>
-
-        <div className="rounded-md border border-surface-border bg-surface-raised p-4 max-h-[28rem] overflow-auto">
-          {loading ? (
-            <p className="text-sm text-text-muted">Loading…</p>
-          ) : (
-            <pre className="whitespace-pre-wrap font-mono text-xs text-text-primary leading-relaxed">
-              {bodies[activeTab] || "(no content)"}
-            </pre>
-          )}
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <fieldset className="rounded-md border border-surface-border p-3">
-            <legend className="px-2 text-sm font-medium text-text-primary">
-              Acknowledgements
-            </legend>
+          <div className="flex gap-1 flex-wrap border-b border-surface-border">
             {gate.policies.map((p) => (
-              <label
+              <button
                 key={p.name}
-                className="flex items-start gap-2 py-1 text-sm text-text-secondary"
+                type="button"
+                onClick={() => setActiveTab(p.name)}
+                className={
+                  "px-3 py-1.5 text-xs border-t border-l border-r " +
+                  (p.name === activeTab
+                    ? "bg-surface-raised text-text-primary border-surface-border font-semibold"
+                    : "bg-surface-base text-text-secondary border-transparent hover:text-text-primary")
+                }
               >
-                <input
-                  type="checkbox"
-                  checked={!!acks[p.name]}
-                  onChange={(e) =>
-                    setAcks((prev) => ({ ...prev, [p.name]: e.target.checked }))
-                  }
-                  className="mt-1"
-                />
-                <span>I have read and agree to the {p.title}.</span>
-              </label>
+                {p.title}
+              </button>
             ))}
-          </fieldset>
+          </div>
 
-          {error && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
-              {error}
+          <div className="rounded-md border border-surface-border bg-surface-raised p-4 max-h-[28rem] overflow-auto">
+            {loading ? (
+              <p className="text-sm text-text-muted">Loading…</p>
+            ) : (
+              <pre className="whitespace-pre-wrap font-mono text-xs text-text-primary leading-relaxed">
+                {bodies[activeTab] || "(no content)"}
+              </pre>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <fieldset className="rounded-md border border-surface-border p-3">
+              <legend className="px-2 text-sm font-medium text-text-primary">
+                Acknowledgements
+              </legend>
+              {gate.policies.map((p) => (
+                <label
+                  key={p.name}
+                  className="flex items-start gap-2 py-1 text-sm text-text-secondary"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!acks[p.name]}
+                    onChange={(e) =>
+                      setAcks((prev) => ({
+                        ...prev,
+                        [p.name]: e.target.checked,
+                      }))
+                    }
+                    className="mt-1"
+                  />
+                  <span>I have read and agree to the {p.title}.</span>
+                </label>
+              ))}
+            </fieldset>
+
+            {error && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+                {error}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={submitting || !allAcked}
+                className="flex-1 rounded-md bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+              >
+                {submitting ? "Recording…" : "Accept and continue"}
+              </button>
+              <button
+                type="button"
+                onClick={dismiss}
+                disabled={submitting}
+                className="rounded-md border border-surface-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-raised disabled:opacity-50"
+                title="Skip for now — you won't be able to claim a namespace until you accept."
+              >
+                Skip
+              </button>
             </div>
-          )}
+          </form>
 
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={submitting || !allAcked}
-              className="flex-1 rounded-md bg-accent-primary px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-            >
-              {submitting ? "Recording…" : "Accept and continue"}
-            </button>
+          <div className="text-center text-xs text-text-muted">
+            Something wrong?{" "}
             <button
               type="button"
-              onClick={dismiss}
-              disabled={submitting}
-              className="rounded-md border border-surface-border px-4 py-2 text-sm text-text-secondary hover:bg-surface-raised disabled:opacity-50"
-              title="Skip for now — you won't be able to claim a namespace until you accept."
+              onClick={() => {
+                void logout();
+              }}
+              className="underline hover:text-text-secondary"
             >
-              Skip
+              Sign out and try again
             </button>
           </div>
-        </form>
-
-        <div className="text-center text-xs text-text-muted">
-          Something wrong?{" "}
-          <button
-            type="button"
-            onClick={() => {
-              void logout();
-            }}
-            className="underline hover:text-text-secondary"
-          >
-            Sign out and try again
-          </button>
-        </div>
         </div>
       </div>
     </div>

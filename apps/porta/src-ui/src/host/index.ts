@@ -98,16 +98,6 @@ export const host = {
     host.patchConfig({ prefs });
   },
 
-  /** Raw JSON of the stored config — backs the "edit config" UI. */
-  getConfigJson(): string {
-    return JSON.stringify(read(), null, 2);
-  },
-
-  saveConfigJson(json: string): void {
-    const parsed = JSON.parse(json) as Partial<AquaConfig>;
-    write({ ...DEFAULT_CONFIG, ...parsed });
-  },
-
   /** Open a URL in a new browser tab. */
   openUrl(url: string): void {
     window.open(url, "_blank", "noopener,noreferrer");

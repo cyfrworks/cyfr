@@ -1,5 +1,9 @@
 import { useEffect } from "react";
-import { useNavigate, useLocation, type NavigateFunction } from "react-router-dom";
+import {
+  useNavigate,
+  useLocation,
+  type NavigateFunction,
+} from "react-router-dom";
 
 let _nav: NavigateFunction | null = null;
 let _path = "/";

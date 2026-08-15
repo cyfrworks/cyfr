@@ -93,7 +93,8 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       // mode — registration scans the server's local components tree).
       try {
         const listResult = await cyfrMcp.listComponents(client, "catalyst");
-        const components = (listResult.components as Record<string, unknown>[]) ?? [];
+        const components =
+          (listResult.components as Record<string, unknown>[]) ?? [];
         const names = components.map((c) => c.name as string);
         const hasAll = PROVIDERS.every((p) => names.some((n) => n === p.key));
 
@@ -136,7 +137,10 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
         );
 
         // CLI wraps output in { result: { models: {...}, refs: {...}, errors: {...} } }
-        const result = (modelsResult.result ?? modelsResult) as Record<string, unknown>;
+        const result = (modelsResult.result ?? modelsResult) as Record<
+          string,
+          unknown
+        >;
         const rawModels = (result.models ?? {}) as Record<string, unknown>;
         const errorsMap = (result.errors ?? {}) as Record<string, string>;
         const refsMap = (result.refs ?? {}) as Record<string, string>;
@@ -165,7 +169,8 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
             const models = modelsMap[p.key] ?? [];
             const rawError = errorsMap[p.key] ?? null;
             // Errors for unconfigured providers are expected — not surfaced.
-            const error = rawError && p.configured ? friendlyError(rawError) : null;
+            const error =
+              rawError && p.configured ? friendlyError(rawError) : null;
             const ref = refsMap[p.key] ?? p.catalystRef;
             return {
               ...p,

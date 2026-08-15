@@ -6,9 +6,15 @@ import * as cyfrMcp from "../api/cyfr-mcp";
 const CONVERSATIONS_PATH = "data/agent_conversations";
 const INDEX_PATH = `${CONVERSATIONS_PATH}/index.json`;
 
-async function filesRun(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function filesRun(
+  input: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   const client = await useConnectionStore.getState().getMcpClient();
-  const parsed = await cyfrMcp.runComponent(client, "catalyst:local.files", input);
+  const parsed = await cyfrMcp.runComponent(
+    client,
+    "catalyst:local.files",
+    input,
+  );
   return (parsed.result ?? parsed) as Record<string, unknown>;
 }
 
@@ -19,7 +25,9 @@ async function filesRun(input: Record<string, unknown>): Promise<Record<string, 
 async function readIndex(): Promise<ConversationEntry[]> {
   try {
     const result = await filesRun({ action: "read_text", path: INDEX_PATH });
-    const index = JSON.parse(result.content as string) as { entries: ConversationEntry[] };
+    const index = JSON.parse(result.content as string) as {
+      entries: ConversationEntry[];
+    };
     return index.entries ?? [];
   } catch {
     return []; // No index yet
@@ -36,7 +44,10 @@ async function writeIndex(entries: ConversationEntry[]): Promise<void> {
 
 /** Full scan of conversation files — used as fallback when index is missing. */
 async function rebuildIndex(): Promise<ConversationEntry[]> {
-  const listResult = await filesRun({ action: "list", path: CONVERSATIONS_PATH });
+  const listResult = await filesRun({
+    action: "list",
+    path: CONVERSATIONS_PATH,
+  });
   const files = (listResult.files as string[]) ?? [];
   const entries: ConversationEntry[] = [];
 
@@ -47,7 +58,10 @@ async function rebuildIndex(): Promise<ConversationEntry[]> {
         action: "read_text",
         path: `${CONVERSATIONS_PATH}/${file}`,
       });
-      const conv = JSON.parse(readResult.content as string) as Record<string, unknown>;
+      const conv = JSON.parse(readResult.content as string) as Record<
+        string,
+        unknown
+      >;
       entries.push({
         id: conv.id as string,
         title: (conv.title as string) || "Untitled",
@@ -61,7 +75,8 @@ async function rebuildIndex(): Promise<ConversationEntry[]> {
 
   if (entries.length > 0) {
     entries.sort(
-      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      (a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     );
     await writeIndex(entries).catch(() => {});
   }
@@ -100,7 +115,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       // List actual files on disk to detect orphaned index entries
       let fileIds: Set<string> | null = null;
       try {
-        const listResult = await filesRun({ action: "list", path: CONVERSATIONS_PATH });
+        const listResult = await filesRun({
+          action: "list",
+          path: CONVERSATIONS_PATH,
+        });
         const files = (listResult.files as string[]) ?? [];
         fileIds = new Set(
           files
@@ -131,7 +149,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
             action: "read_text",
             path: `${CONVERSATIONS_PATH}/${entry.id}.json`,
           });
-          const conv = JSON.parse(result.content as string) as Record<string, unknown>;
+          const conv = JSON.parse(result.content as string) as Record<
+            string,
+            unknown
+          >;
           if (!conv.running && !conv.execution_id) {
             entry.status = "idle";
             indexDirty = true;
@@ -147,7 +168,8 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       }
 
       entries.sort(
-        (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+        (a, b) =>
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
       );
 
       set({ conversations: entries, loading: false });

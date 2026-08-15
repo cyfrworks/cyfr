@@ -15,10 +15,18 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { to: "/tinctures", label: label("tincture", { plural: true }), icon: TincturesIcon },
+  {
+    to: "/tinctures",
+    label: label("tincture", { plural: true }),
+    icon: TincturesIcon,
+  },
   { to: "/schedules", label: "Schedules", icon: SchedulesIcon },
   { to: "/components", label: "Components", icon: ComponentsIcon },
-  { to: "/mcp-servers", label: label("mcp_server", { plural: true }), icon: McpServersIcon },
+  {
+    to: "/mcp-servers",
+    label: label("mcp_server", { plural: true }),
+    icon: McpServersIcon,
+  },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 

@@ -136,7 +136,8 @@ export default function App() {
         }
 
         try {
-          const { useConversationStore } = await import("./state/conversation-store");
+          const { useConversationStore } =
+            await import("./state/conversation-store");
           await useConversationStore.getState().loadConversations();
         } catch {
           // Non-fatal
@@ -149,7 +150,11 @@ export default function App() {
   if (!authChecked) {
     return (
       <div className="flex h-full items-center justify-center bg-surface-base">
-        <img src="/logo.png" alt="CYFR" className="h-20 w-20 object-contain opacity-50" />
+        <img
+          src="/logo.png"
+          alt="CYFR"
+          className="h-20 w-20 object-contain opacity-50"
+        />
       </div>
     );
   }
@@ -181,11 +186,28 @@ export default function App() {
       <div className="flex h-full flex-col items-center justify-center bg-surface-base">
         <img src="/logo.png" alt="CYFR" className="h-20 w-20 object-contain" />
         <div className="mt-4 flex items-center gap-2">
-          <svg className="h-4 w-4 animate-spin text-accent-primary" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          <svg
+            className="h-4 w-4 animate-spin text-accent-primary"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
-          <span className="text-sm text-text-secondary">{setupStatus || "Preparing..."}</span>
+          <span className="text-sm text-text-secondary">
+            {setupStatus || "Preparing..."}
+          </span>
         </div>
         {showSkip && (
           <button

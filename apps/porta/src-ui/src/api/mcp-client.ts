@@ -200,7 +200,6 @@ export class McpClient {
       v.length > 0 &&
       v === v.trim() &&
       !v.startsWith("=?base64?") &&
-      // eslint-disable-next-line no-control-regex
       /^[\x20-\x7E]*$/.test(v);
 
     if (plain) return v;
@@ -262,10 +261,14 @@ export class McpClient {
       ...((req.params as Record<string, unknown>) ?? {}),
       _meta: this.meta(),
     };
-    const resp = await this.transport("POST", JSON.stringify({ ...req, params }), {
-      method: req.method,
-      params,
-    });
+    const resp = await this.transport(
+      "POST",
+      JSON.stringify({ ...req, params }),
+      {
+        method: req.method,
+        params,
+      },
+    );
 
     if (resp.status !== 200) {
       // A 404 is not an auth signal in this revision: the server has no
@@ -275,11 +278,12 @@ export class McpClient {
       try {
         parsed = JSON.parse(resp.body) as JSONRPCResponse;
       } catch {
-        parsed = null;
+        /* body was not JSON — parsed stays null */
       }
       const error = parsed?.error as JSONRPCError | undefined;
       if (error) {
-        if (error.code === MCP_ERROR_AUTH_REQUIRED) throw new AuthRequiredError();
+        if (error.code === MCP_ERROR_AUTH_REQUIRED)
+          throw new AuthRequiredError();
         throw new Error(error.message);
       }
       throw new Error(`HTTP ${resp.status}: ${resp.body}`);

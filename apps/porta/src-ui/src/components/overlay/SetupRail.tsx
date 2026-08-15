@@ -33,8 +33,8 @@ export function SetupRail() {
             {pendingSetupRef
               ? `Finish setting up ${truncate(pendingSetupRef, 32)}`
               : dismissedSetups.length > 0
-              ? `${dismissedSetups.length} waiting`
-              : "No setup needed"}
+                ? `${dismissedSetups.length} waiting`
+                : "No setup needed"}
           </div>
         </div>
         {setupQueue.length > 0 && (

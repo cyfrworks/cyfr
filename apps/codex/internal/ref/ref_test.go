@@ -185,28 +185,6 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
-func TestClassifyNamespace(t *testing.T) {
-	tests := []struct {
-		input string
-		want  NamespaceKind
-	}{
-		{"stripe.com", KindPublisher},
-		{"api.stripe.com", KindPublisher},
-		{"a.b", KindPublisher},
-		{"local", KindReserved},
-		{"alice", KindPersonal},
-		{"bob-123", KindPersonal},
-		// Publisher tier + brand-collision case: "stripe" (bare) is personal
-		// even though "stripe.com" (dotted) is a publisher. Both can coexist.
-		{"stripe", KindPersonal},
-	}
-	for _, tt := range tests {
-		if got := ClassifyNamespace(tt.input); got != tt.want {
-			t.Errorf("ClassifyNamespace(%q) = %v, want %v", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestValidate_Personal(t *testing.T) {
 	ok := []string{"alice", "alice-bob", "alice-123-bob", "a", "0"}
 	for _, s := range ok {
@@ -273,7 +251,7 @@ func TestValidate_RejectsAt(t *testing.T) {
 	}
 }
 
-func TestParseAndValidate(t *testing.T) {
+func TestValidateParsedRefs(t *testing.T) {
 	// Happy paths
 	happy := []string{
 		"c:alice.foo:0.1.0",
@@ -283,8 +261,8 @@ func TestParseAndValidate(t *testing.T) {
 		"c:stripe.com.api:0.1.0-beta.1",
 	}
 	for _, s := range happy {
-		if _, err := ParseAndValidate(s); err != nil {
-			t.Errorf("ParseAndValidate(%q) unexpected error: %v", s, err)
+		if err := Validate(ParseRef(s)); err != nil {
+			t.Errorf("Validate(ParseRef(%q)) unexpected error: %v", s, err)
 		}
 	}
 
@@ -296,8 +274,8 @@ func TestParseAndValidate(t *testing.T) {
 		"c:alice.foo:not-a-version", // bad semver
 	}
 	for _, s := range bad {
-		if _, err := ParseAndValidate(s); err == nil {
-			t.Errorf("ParseAndValidate(%q) expected error, got nil", s)
+		if err := Validate(ParseRef(s)); err == nil {
+			t.Errorf("Validate(ParseRef(%q)) expected error, got nil", s)
 		}
 	}
 }

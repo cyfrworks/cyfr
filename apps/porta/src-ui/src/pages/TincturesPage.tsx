@@ -43,7 +43,9 @@ function hashString(s: string): number {
 }
 
 function gradientFor(t: TinctureEntry): string {
-  return CARD_GRADIENTS[hashString(`${t.publisher}/${t.name}`) % CARD_GRADIENTS.length]!;
+  return CARD_GRADIENTS[
+    hashString(`${t.publisher}/${t.name}`) % CARD_GRADIENTS.length
+  ]!;
 }
 
 /** Detect whether a string looks like an emoji glyph (vs a Lucide icon name).
@@ -128,7 +130,16 @@ export default function TincturesPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [viewing, focusedIndex, tinctures, setFocusedIndex, selectTincture, closeViewer, nextPreview, previousPreview]);
+  }, [
+    viewing,
+    focusedIndex,
+    tinctures,
+    setFocusedIndex,
+    selectTincture,
+    closeViewer,
+    nextPreview,
+    previousPreview,
+  ]);
 
   const handleRefresh = () => {
     if (client) refreshTinctures(client);
@@ -168,11 +179,12 @@ export default function TincturesPage() {
 
   const focused = tinctures[focusedIndex];
   const previewCount = focused?.previews.length ?? 0;
-  const safePreviewIndex = previewCount > 0
-    ? Math.min(currentPreviewIndex, previewCount - 1)
-    : 0;
+  const safePreviewIndex =
+    previewCount > 0 ? Math.min(currentPreviewIndex, previewCount - 1) : 0;
   const currentPreviewUrl: string | null =
-    (previewCount > 0 && focused ? focused.previews[safePreviewIndex] ?? null : null);
+    previewCount > 0 && focused
+      ? (focused.previews[safePreviewIndex] ?? null)
+      : null;
 
   const showSkeletons = loading && tinctures.length === 0;
 
@@ -189,104 +201,148 @@ export default function TincturesPage() {
             className="rounded-lg p-2 text-text-muted hover:bg-surface-raised hover:text-text-secondary disabled:opacity-50"
             title="Refresh"
           >
-            <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182" />
+            <svg
+              className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182"
+              />
             </svg>
           </button>
         }
         bleed
       >
         <div className="relative h-full w-full overflow-hidden">
-        {/* Empty state */}
-        {!showSkeletons && tinctures.length === 0 && (
-          <div className="flex h-full items-center justify-center">
-            <div className="text-center">
-              <svg className="mx-auto h-12 w-12 text-text-muted/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42" />
-              </svg>
-              <p className="mt-3 text-sm text-text-muted">No apps installed yet</p>
-              <p className="mt-1 text-xs text-text-muted/70">
-                Ask AQUA to install one, or build your own with the CLI.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Loading skeleton */}
-        {showSkeletons && (
-          <div className="flex h-full items-center justify-center">
-            <div className="aspect-video w-full max-w-3xl animate-pulse rounded-2xl bg-surface-raised" />
-          </div>
-        )}
-
-        {/* Preview-first single-card layout */}
-        {focused && !showSkeletons && (
-          <div className="flex h-full flex-col items-center justify-center gap-6 px-12 pb-6">
-            {/* Big preview area */}
-            <PreviewStage
-              tincture={focused}
-              previewUrl={currentPreviewUrl}
-              previewIndex={safePreviewIndex}
-              previewCount={previewCount}
-              onClick={() => selectTincture(focused.name)}
-              onUp={previousPreview}
-              onDown={nextPreview}
-            />
-
-            {/* Compact info bar */}
-            <InfoBar
-              tincture={focused}
-              onLaunch={() => selectTincture(focused.name)}
-              onToggleVisibility={() => handleToggleVisibility(focused.publisher, focused.name)}
-              onCopyUrl={() => handleCopyUrl(focused)}
-              onOpenInBrowser={() => handleOpenInBrowser(focused)}
-            />
-
-            {/* Tincture pagination dots */}
-            {tinctures.length > 1 && (
-              <div className="flex items-center gap-1.5">
-                {tinctures.map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setFocusedIndex(i)}
-                    className={`rounded-full transition-all duration-300 ${
-                      i === focusedIndex
-                        ? "h-1.5 w-6 bg-accent-primary"
-                        : "h-1.5 w-1.5 bg-text-muted/30 hover:bg-text-muted/50"
-                    }`}
-                    aria-label={`Tincture ${i + 1} of ${tinctures.length}`}
+          {/* Empty state */}
+          {!showSkeletons && tinctures.length === 0 && (
+            <div className="flex h-full items-center justify-center">
+              <div className="text-center">
+                <svg
+                  className="mx-auto h-12 w-12 text-text-muted/30"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={1}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42"
                   />
-                ))}
+                </svg>
+                <p className="mt-3 text-sm text-text-muted">
+                  No apps installed yet
+                </p>
+                <p className="mt-1 text-xs text-text-muted/70">
+                  Ask AQUA to install one, or build your own with the CLI.
+                </p>
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
 
-        {/* Side arrow buttons (mouse users) */}
-        {tinctures.length > 1 && !showSkeletons && (
-          <>
-            <button
-              onClick={() => setFocusedIndex(focusedIndex - 1)}
-              disabled={focusedIndex === 0}
-              className="absolute left-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-              title="Previous tincture (←)"
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-              </svg>
-            </button>
-            <button
-              onClick={() => setFocusedIndex(focusedIndex + 1)}
-              disabled={focusedIndex >= tinctures.length - 1}
-              className="absolute right-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
-              title="Next tincture (→)"
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-              </svg>
-            </button>
-          </>
-        )}
+          {/* Loading skeleton */}
+          {showSkeletons && (
+            <div className="flex h-full items-center justify-center">
+              <div className="aspect-video w-full max-w-3xl animate-pulse rounded-2xl bg-surface-raised" />
+            </div>
+          )}
+
+          {/* Preview-first single-card layout */}
+          {focused && !showSkeletons && (
+            <div className="flex h-full flex-col items-center justify-center gap-6 px-12 pb-6">
+              {/* Big preview area */}
+              <PreviewStage
+                tincture={focused}
+                previewUrl={currentPreviewUrl}
+                previewIndex={safePreviewIndex}
+                previewCount={previewCount}
+                onClick={() => selectTincture(focused.name)}
+                onUp={previousPreview}
+                onDown={nextPreview}
+              />
+
+              {/* Compact info bar */}
+              <InfoBar
+                tincture={focused}
+                onLaunch={() => selectTincture(focused.name)}
+                onToggleVisibility={() =>
+                  handleToggleVisibility(focused.publisher, focused.name)
+                }
+                onCopyUrl={() => handleCopyUrl(focused)}
+                onOpenInBrowser={() => handleOpenInBrowser(focused)}
+              />
+
+              {/* Tincture pagination dots */}
+              {tinctures.length > 1 && (
+                <div className="flex items-center gap-1.5">
+                  {tinctures.map((_, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setFocusedIndex(i)}
+                      className={`rounded-full transition-all duration-300 ${
+                        i === focusedIndex
+                          ? "h-1.5 w-6 bg-accent-primary"
+                          : "h-1.5 w-1.5 bg-text-muted/30 hover:bg-text-muted/50"
+                      }`}
+                      aria-label={`Tincture ${i + 1} of ${tinctures.length}`}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Side arrow buttons (mouse users) */}
+          {tinctures.length > 1 && !showSkeletons && (
+            <>
+              <button
+                onClick={() => setFocusedIndex(focusedIndex - 1)}
+                disabled={focusedIndex === 0}
+                className="absolute left-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                title="Previous tincture (←)"
+              >
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15.75 19.5 8.25 12l7.5-7.5"
+                  />
+                </svg>
+              </button>
+              <button
+                onClick={() => setFocusedIndex(focusedIndex + 1)}
+                disabled={focusedIndex >= tinctures.length - 1}
+                className="absolute right-6 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-surface-overlay/70 text-text-secondary backdrop-blur-md transition-all hover:bg-surface-overlay hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                title="Next tincture (→)"
+              >
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="m8.25 4.5 7.5 7.5-7.5 7.5"
+                  />
+                </svg>
+              </button>
+            </>
+          )}
         </div>
       </PageLayout>
 
@@ -339,8 +395,18 @@ function TinctureCapsule({ onClose }: { onClose: () => void }) {
         title="Close (Esc)"
         aria-label="Close tincture"
       >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M6 18 18 6M6 6l12 12"
+          />
         </svg>
       </button>
     </div>
@@ -422,13 +488,26 @@ function PreviewStage({
           aria-label="Preview navigation"
         >
           <button
-            onClick={(e) => { e.stopPropagation(); onUp(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onUp();
+            }}
             className="flex h-9 w-9 items-center justify-center transition-colors hover:bg-white/10 hover:text-white"
             title="Previous preview (↑)"
             aria-label="Previous preview"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 15.75 7.5-7.5 7.5 7.5" />
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m4.5 15.75 7.5-7.5 7.5 7.5"
+              />
             </svg>
           </button>
           <span className="h-px w-full bg-white/15" aria-hidden="true" />
@@ -437,13 +516,26 @@ function PreviewStage({
           </span>
           <span className="h-px w-full bg-white/15" aria-hidden="true" />
           <button
-            onClick={(e) => { e.stopPropagation(); onDown(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDown();
+            }}
             className="flex h-9 w-9 items-center justify-center transition-colors hover:bg-white/10 hover:text-white"
             title="Next preview (↓)"
             aria-label="Next preview"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m19.5 8.25-7.5 7.5-7.5-7.5"
+              />
             </svg>
           </button>
         </div>
@@ -459,7 +551,10 @@ function PreviewStage({
  */
 function PreviewFallback({ tincture }: { tincture: TinctureEntry }) {
   const gradient = gradientFor(tincture);
-  const initial = (tincture.title || tincture.name).trim().charAt(0).toUpperCase();
+  const initial = (tincture.title || tincture.name)
+    .trim()
+    .charAt(0)
+    .toUpperCase();
   const [iconErrored, setIconErrored] = useState(false);
 
   const showImage = tincture.iconUrl !== null && !iconErrored;
@@ -507,7 +602,10 @@ function InfoBar({
   onCopyUrl: () => void;
   onOpenInBrowser: () => void;
 }) {
-  const initial = (tincture.title || tincture.name).trim().charAt(0).toUpperCase();
+  const initial = (tincture.title || tincture.name)
+    .trim()
+    .charAt(0)
+    .toUpperCase();
   const [iconErrored, setIconErrored] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -535,7 +633,9 @@ function InfoBar({
           ) : showEmoji ? (
             <span className="text-2xl leading-none">{tincture.iconHint}</span>
           ) : (
-            <span className="text-lg font-semibold text-text-secondary">{initial}</span>
+            <span className="text-lg font-semibold text-text-secondary">
+              {initial}
+            </span>
           )}
         </div>
 
@@ -567,7 +667,9 @@ function InfoBar({
                   onClick={() => setExpanded((v) => !v)}
                   className="shrink-0 rounded p-0.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-text-secondary"
                   aria-expanded={expanded}
-                  aria-label={expanded ? "Hide description" : "Show description"}
+                  aria-label={
+                    expanded ? "Hide description" : "Show description"
+                  }
                   title={expanded ? "Hide description" : "Show description"}
                 >
                   <svg
@@ -579,7 +681,11 @@ function InfoBar({
                     stroke="currentColor"
                     strokeWidth={2}
                   >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="m19.5 8.25-7.5 7.5-7.5-7.5"
+                    />
                   </svg>
                 </button>
               )}
@@ -647,99 +753,125 @@ function TinctureIframe({
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // PostMessage bridge for tincture SDK
-  const handleMessage = useCallback((event: MessageEvent) => {
-    if (!event.data || event.data.type !== "cyfr:request") return;
+  const handleMessage = useCallback(
+    (event: MessageEvent) => {
+      if (!event.data || event.data.type !== "cyfr:request") return;
 
-    const iframe = iframeRef.current;
-    if (!iframe?.contentWindow || event.source !== iframe.contentWindow) return;
+      const iframe = iframeRef.current;
+      if (!iframe?.contentWindow || event.source !== iframe.contentWindow)
+        return;
 
-    const { id, action } = event.data;
+      const { id, action } = event.data;
 
-    switch (action) {
-      case "ready":
-        iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, result: { ok: true } }, "*",
-        );
-        break;
+      switch (action) {
+        case "ready":
+          iframe.contentWindow.postMessage(
+            { type: "cyfr:response", id, result: { ok: true } },
+            "*",
+          );
+          break;
 
-      case "set_title":
-        iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, result: { ok: true } }, "*",
-        );
-        break;
+        case "set_title":
+          iframe.contentWindow.postMessage(
+            { type: "cyfr:response", id, result: { ok: true } },
+            "*",
+          );
+          break;
 
-      case "get_context":
-        iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, result: { tincture_id: name, window_id: name } }, "*",
-        );
-        break;
+        case "get_context":
+          iframe.contentWindow.postMessage(
+            {
+              type: "cyfr:response",
+              id,
+              result: { tincture_id: name, window_id: name },
+            },
+            "*",
+          );
+          break;
 
-      case "close":
-        useTinctureStore.getState().closeTincture(name);
-        iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, result: { ok: true } }, "*",
-        );
-        break;
+        case "close":
+          useTinctureStore.getState().closeTincture(name);
+          iframe.contentWindow.postMessage(
+            { type: "cyfr:response", id, result: { ok: true } },
+            "*",
+          );
+          break;
 
-      case "query":
-        iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, error: "queries_not_supported_here" }, "*",
-        );
-        break;
+        case "query":
+          iframe.contentWindow.postMessage(
+            { type: "cyfr:response", id, error: "queries_not_supported_here" },
+            "*",
+          );
+          break;
 
-      case "invoke": {
-        const payload = (event.data.payload || {}) as {
-          reference?: string;
-          input?: unknown;
-        };
+        case "invoke": {
+          const payload = (event.data.payload || {}) as {
+            reference?: string;
+            input?: unknown;
+          };
 
-        // Relay to the HTTP invoke endpoint, which enforces the manifest
-        // dependency allowlist, the scoped (:execute-only) tincture context,
-        // and the per-IP rate limit. The parent PWA (not the sandboxed iframe)
-        // sends the session as a header so no credential travels in a URL.
-        const url = `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}/invoke`;
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (sessionId) headers["Authorization"] = `Bearer ${sessionId}`;
+          // Relay to the HTTP invoke endpoint, which enforces the manifest
+          // dependency allowlist, the scoped (:execute-only) tincture context,
+          // and the per-IP rate limit. The parent PWA (not the sandboxed iframe)
+          // sends the session as a header so no credential travels in a URL.
+          const url = `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}/invoke`;
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+          };
+          if (sessionId) headers["Authorization"] = `Bearer ${sessionId}`;
 
-        fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ reference: payload.reference, input: payload.input ?? {} }),
-        })
-          .then(async (r) => {
-            const data = (await r.json().catch(() => ({}))) as { error?: string };
-            const win = iframeRef.current?.contentWindow;
-            if (!win) return;
-            if (r.ok) {
-              win.postMessage({ type: "cyfr:response", id, result: data }, "*");
-            } else {
-              win.postMessage(
-                { type: "cyfr:response", id, error: data.error || "Invoke failed" },
+          fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              reference: payload.reference,
+              input: payload.input ?? {},
+            }),
+          })
+            .then(async (r) => {
+              const data = (await r.json().catch(() => ({}))) as {
+                error?: string;
+              };
+              const win = iframeRef.current?.contentWindow;
+              if (!win) return;
+              if (r.ok) {
+                win.postMessage(
+                  { type: "cyfr:response", id, result: data },
+                  "*",
+                );
+              } else {
+                win.postMessage(
+                  {
+                    type: "cyfr:response",
+                    id,
+                    error: data.error || "Invoke failed",
+                  },
+                  "*",
+                );
+              }
+            })
+            .catch((err) => {
+              iframeRef.current?.contentWindow?.postMessage(
+                {
+                  type: "cyfr:response",
+                  id,
+                  error: err instanceof Error ? err.message : "Invoke failed",
+                },
                 "*",
               );
-            }
-          })
-          .catch((err) => {
-            iframeRef.current?.contentWindow?.postMessage(
-              {
-                type: "cyfr:response",
-                id,
-                error: err instanceof Error ? err.message : "Invoke failed",
-              },
-              "*",
-            );
-          });
-        break;
-      }
+            });
+          break;
+        }
 
-      default:
-        iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, error: "unknown_action" }, "*",
-        );
-    }
-  }, [name, org, project, publisher, sessionId]);
+        default:
+          iframe.contentWindow.postMessage(
+            { type: "cyfr:response", id, error: "unknown_action" },
+            "*",
+          );
+      }
+    },
+    [name, org, project, publisher, sessionId],
+  );
 
   useEffect(() => {
     window.addEventListener("message", handleMessage);

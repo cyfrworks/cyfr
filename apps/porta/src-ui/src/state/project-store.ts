@@ -117,7 +117,7 @@ export const useProjectStore = create<ProjectsState>((set, get) => ({
     set((s) => {
       const next = s.projects.filter((p) => p.id !== id);
       const nextActive =
-        s.activeProjectId === id ? next[0]?.id ?? null : s.activeProjectId;
+        s.activeProjectId === id ? (next[0]?.id ?? null) : s.activeProjectId;
       save(next, nextActive);
       return { projects: next, activeProjectId: nextActive };
     });

@@ -61,7 +61,9 @@ export interface RegistryWhoami {
  * for `session.whoami`.
  */
 export function sessionWhoami(client: McpClient): Promise<SessionWhoami> {
-  return client.callTool("session", { action: "whoami" }) as unknown as Promise<SessionWhoami>;
+  return client.callTool("session", {
+    action: "whoami",
+  }) as unknown as Promise<SessionWhoami>;
 }
 
 /**
@@ -70,7 +72,9 @@ export function sessionWhoami(client: McpClient): Promise<SessionWhoami> {
  * than throwing, so callers can surface a login hint.
  */
 export function registryWhoami(client: McpClient): Promise<RegistryWhoami> {
-  return client.callTool("registry", { action: "whoami" }) as unknown as Promise<RegistryWhoami>;
+  return client.callTool("registry", {
+    action: "whoami",
+  }) as unknown as Promise<RegistryWhoami>;
 }
 
 /** Claim the caller's one-time personal namespace on cyfr.run. */
@@ -144,7 +148,10 @@ export function registryGetLegalPage(
   client: McpClient,
   name: string,
 ): Promise<{ name: string; title: string; content_markdown: string }> {
-  return client.callTool("registry", { action: "legal_page", name }) as unknown as Promise<{
+  return client.callTool("registry", {
+    action: "legal_page",
+    name,
+  }) as unknown as Promise<{
     name: string;
     title: string;
     content_markdown: string;
@@ -181,7 +188,10 @@ export function logout(client: McpClient): Promise<Json> {
 }
 
 /** Start the OAuth 2.0 Device Authorization Flow. */
-export function deviceInit(client: McpClient, provider = "github"): Promise<Json> {
+export function deviceInit(
+  client: McpClient,
+  provider = "github",
+): Promise<Json> {
   return client.callTool("session", { action: "device_init", provider });
 }
 
@@ -222,7 +232,10 @@ export function devicePoll(
 // ===========================================================================
 
 /** `cyfr list [--type catalyst]` — installed components. */
-export function listComponents(client: McpClient, type?: string): Promise<Json> {
+export function listComponents(
+  client: McpClient,
+  type?: string,
+): Promise<Json> {
   const args: Json = { action: "list" };
   if (type) args.type = type;
   return client.callTool("component", args);
@@ -279,4 +292,3 @@ export function getExecutionLogs(
     execution_id: executionId,
   });
 }
-

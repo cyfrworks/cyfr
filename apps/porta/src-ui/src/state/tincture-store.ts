@@ -71,7 +71,9 @@ function buildAssetUrl(
     .map((seg) => encodeURIComponent(seg))
     .join("/");
   // A scoped, one-hour token — never the account credential. See tincture-token.ts.
-  const tokenQuery = accessToken ? `?_t=${encodeURIComponent(accessToken)}` : "";
+  const tokenQuery = accessToken
+    ? `?_t=${encodeURIComponent(accessToken)}`
+    : "";
 
   return `${tincturePath(org, project, publisher, name)}/${encodedPath}${tokenQuery}`;
 }
@@ -89,7 +91,11 @@ interface TinctureState {
   openedTinctures: string[];
 
   loadTinctures: (client: McpClient) => Promise<void>;
-  toggleVisibility: (client: McpClient, publisher: string, name: string) => Promise<void>;
+  toggleVisibility: (
+    client: McpClient,
+    publisher: string,
+    name: string,
+  ) => Promise<void>;
   selectTincture: (name: string) => void;
   closeTincture: (name: string) => void;
   closeViewer: () => void;
@@ -117,7 +123,8 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
         type: "tincture",
         limit: 1000,
       });
-      const components = (listResult.components as Record<string, unknown>[]) ?? [];
+      const components =
+        (listResult.components as Record<string, unknown>[]) ?? [];
 
       const tinctures: TinctureEntry[] = [];
       for (const c of components) {
@@ -138,7 +145,8 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
           });
           isPublic = (visResult.public as boolean) ?? false;
           if (typeof visResult.org === "string") org = visResult.org;
-          if (typeof visResult.project === "string") project = visResult.project;
+          if (typeof visResult.project === "string")
+            project = visResult.project;
         } catch {
           // Default to private, default workspace.
         }
@@ -165,7 +173,8 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
             if (typeof rawDesc === "string" && rawDesc.trim().length > 0) {
               description = rawDesc.trim();
             }
-            const tinctureMeta = manifest.tincture as Record<string, unknown> | undefined;
+            const tinctureMeta = manifest.tincture as
+              Record<string, unknown> | undefined;
 
             const icon = tinctureMeta?.icon;
             if (typeof icon === "string" && icon.length > 0) {
@@ -177,11 +186,19 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
               tagline = tag;
             }
 
-            const media = tinctureMeta?.media as Record<string, unknown> | undefined;
+            const media = tinctureMeta?.media as
+              Record<string, unknown> | undefined;
             if (media) {
               const mediaIcon = media.icon;
               if (typeof mediaIcon === "string") {
-                iconUrl = buildAssetUrl(org, project, publisher, name, mediaIcon, accessToken);
+                iconUrl = buildAssetUrl(
+                  org,
+                  project,
+                  publisher,
+                  name,
+                  mediaIcon,
+                  accessToken,
+                );
               }
 
               const mediaPreviews = media.previews;
@@ -190,7 +207,14 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
                   .slice(0, MAX_PREVIEWS)
                   .map((p) =>
                     typeof p === "string"
-                      ? buildAssetUrl(org, project, publisher, name, p, accessToken)
+                      ? buildAssetUrl(
+                          org,
+                          project,
+                          publisher,
+                          name,
+                          p,
+                          accessToken,
+                        )
                       : null,
                   )
                   .filter((u): u is string => u !== null);
@@ -216,15 +240,17 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
           tagline,
           description,
           public: isPublic,
-          component_ref: (c.component_ref as string) ?? `tincture:${publisher}.${name}`,
+          component_ref:
+            (c.component_ref as string) ?? `tincture:${publisher}.${name}`,
         });
       }
 
       // Clamp focusedIndex if the list shrank.
       const currentFocused = get().focusedIndex;
-      const clampedFocused = tinctures.length === 0
-        ? 0
-        : Math.min(currentFocused, tinctures.length - 1);
+      const clampedFocused =
+        tinctures.length === 0
+          ? 0
+          : Math.min(currentFocused, tinctures.length - 1);
       set({ tinctures, loading: false, focusedIndex: clampedFocused });
     } catch {
       set({ loading: false });
@@ -232,7 +258,9 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
   },
 
   toggleVisibility: async (client, publisher, name) => {
-    const tincture = get().tinctures.find((t) => t.publisher === publisher && t.name === name);
+    const tincture = get().tinctures.find(
+      (t) => t.publisher === publisher && t.name === name,
+    );
     if (!tincture) return;
 
     const newPublic = !tincture.public;
@@ -241,7 +269,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
       tinctures: get().tinctures.map((t) =>
         t.publisher === publisher && t.name === name
           ? { ...t, public: newPublic }
-          : t
+          : t,
       ),
     });
 
@@ -257,7 +285,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
         tinctures: get().tinctures.map((t) =>
           t.publisher === publisher && t.name === name
             ? { ...t, public: !newPublic }
-            : t
+            : t,
         ),
       });
     }
@@ -296,7 +324,9 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
     const { tinctures, focusedIndex, currentPreviewIndex } = get();
     const focused = tinctures[focusedIndex];
     if (!focused || focused.previews.length <= 1) return;
-    set({ currentPreviewIndex: (currentPreviewIndex + 1) % focused.previews.length });
+    set({
+      currentPreviewIndex: (currentPreviewIndex + 1) % focused.previews.length,
+    });
   },
 
   previousPreview: () => {

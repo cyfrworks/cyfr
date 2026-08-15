@@ -71,7 +71,9 @@ export function AquaOverlay() {
       {/* Sheet. Translated off-screen when closed. */}
       <aside
         className={`fixed bottom-0 right-0 left-56 z-50 flex flex-col overflow-hidden rounded-t-2xl border-t border-x border-border-default bg-surface-base shadow-2xl transition-all duration-200 ease-out ${
-          isOpen ? HEIGHT_CLASS[state as Exclude<OverlayState, "closed">] : "h-0 translate-y-full"
+          isOpen
+            ? HEIGHT_CLASS[state as Exclude<OverlayState, "closed">]
+            : "h-0 translate-y-full"
         }`}
         aria-label="AQUA assistant"
         aria-hidden={!isOpen}
@@ -105,8 +107,18 @@ export function AquaOverlay() {
               aria-label="Close overlay"
               className="ml-2 rounded p-1 text-text-muted transition-colors hover:bg-surface-raised hover:text-text-secondary"
             >
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              <svg
+                className="h-3.5 w-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </button>
           </div>

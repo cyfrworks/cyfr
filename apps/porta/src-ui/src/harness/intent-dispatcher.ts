@@ -99,7 +99,9 @@ async function dispatchIntent(intent: Intent): Promise<DispatchRecord> {
   }
 }
 
-export async function dispatchIntents(intents: Intent[]): Promise<DispatchRecord[]> {
+export async function dispatchIntents(
+  intents: Intent[],
+): Promise<DispatchRecord[]> {
   const records: DispatchRecord[] = [];
   for (const intent of intents) {
     records.push(await dispatchIntent(intent));

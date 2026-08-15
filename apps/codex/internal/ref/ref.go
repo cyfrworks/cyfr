@@ -53,13 +53,6 @@ var typeShorthands = map[string]string{
 	"t": "tincture",
 }
 
-// reservedSlugs mirrors the seeded reserved list on cyfr.run and the
-// @reserved_slugs attribute in Sanctum.ComponentRef. Additions here should
-// be kept in sync with both.
-var reservedSlugs = map[string]bool{
-	"local": true,
-}
-
 // personalSlugRegex matches GitHub-style bare slugs (personal + reserved).
 // 1–39 chars, lowercase alphanumerics with single-hyphen separators.
 // No leading/trailing/consecutive hyphens.
@@ -82,17 +75,6 @@ var singleCharNameRegex = regexp.MustCompile(`^[a-z0-9]$`)
 
 // versionRegex matches semver with optional pre-release and build metadata.
 var versionRegex = regexp.MustCompile(`^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$`)
-
-// NamespaceKind distinguishes the three syntactic shapes a namespace can take.
-// Classification order (matches cyfr.run gateway + Sanctum.ComponentRef):
-// publisher-if-dot → reserved-if-seeded → personal-else.
-type NamespaceKind int
-
-const (
-	KindPersonal NamespaceKind = iota
-	KindPublisher
-	KindReserved
-)
 
 // IsTypePrefix returns true if s is a known type name or shorthand.
 func IsTypePrefix(s string) bool {
@@ -128,7 +110,7 @@ type ParsedRef struct {
 //
 // ParseRef does NOT validate — it's a pure shape extractor. For strict
 // validation (reject '@', enforce three-shape namespace rules, check semver)
-// use [ParseAndValidate] or call [Validate] on the result.
+// call [Validate] on the result.
 func ParseRef(s string) ParsedRef {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -174,21 +156,6 @@ func ParseRef(s string) ParsedRef {
 	}
 
 	return p
-}
-
-// ParseAndValidate parses s and then validates the parts against the
-// three-shape namespace model, name rules, and version rules. Returns an
-// error describing the first validation failure.
-//
-// User-facing inputs (CLI positional args, flags that carry a ref) should
-// use ParseAndValidate so invalid input is rejected at the client before
-// round-tripping to the server.
-func ParseAndValidate(s string) (ParsedRef, error) {
-	p := ParseRef(s)
-	if err := Validate(p); err != nil {
-		return ParsedRef{}, err
-	}
-	return p, nil
 }
 
 // Validate enforces the same rules as Sanctum.ComponentRef on cyfr. It
@@ -238,19 +205,6 @@ func Validate(p ParsedRef) error {
 	}
 
 	return nil
-}
-
-// ClassifyNamespace returns the syntactic shape of ns (publisher, reserved,
-// or personal). Dispatch order: publisher-if-dot → reserved-if-seeded →
-// personal-else.
-func ClassifyNamespace(ns string) NamespaceKind {
-	if strings.Contains(ns, ".") {
-		return KindPublisher
-	}
-	if reservedSlugs[ns] {
-		return KindReserved
-	}
-	return KindPersonal
 }
 
 // ValidateNamespace checks that ns satisfies the three-shape model. Empty

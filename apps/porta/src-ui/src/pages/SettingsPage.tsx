@@ -71,13 +71,13 @@ function ConnectionSection() {
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-text-muted">Mode</span>
-            <span className="text-text-primary">
-              {modeLabel[mode] ?? mode}
-            </span>
+            <span className="text-text-primary">{modeLabel[mode] ?? mode}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-text-muted">URL</span>
-            <span className="font-mono text-xs text-text-primary">{cyfrUrl}</span>
+            <span className="font-mono text-xs text-text-primary">
+              {cyfrUrl}
+            </span>
           </div>
           {mode === "remote" && (
             <div className="flex justify-between">

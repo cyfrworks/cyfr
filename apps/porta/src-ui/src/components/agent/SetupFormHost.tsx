@@ -23,6 +23,6 @@ export function SetupFormHost() {
       onComplete={completeSetup}
       onDismiss={dismissSetup}
     />,
-    slot
+    slot,
   );
 }

@@ -71,8 +71,19 @@ function relativeTime(iso: string | null): string {
 
 const Spinner = ({ className = "h-3 w-3" }: { className?: string }) => (
   <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
-    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    <circle
+      className="opacity-25"
+      cx="12"
+      cy="12"
+      r="10"
+      stroke="currentColor"
+      strokeWidth="4"
+    />
+    <path
+      className="opacity-75"
+      fill="currentColor"
+      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+    />
   </svg>
 );
 
@@ -114,8 +125,13 @@ export default function SchedulesPage() {
   const loadComponents = useCallback(async () => {
     try {
       const client = await getMcpClient();
-      const result = await client.callTool("component", { action: "list", limit: 1000 });
-      const list = (result as { components?: { component_ref: string }[] }).components ?? [];
+      const result = await client.callTool("component", {
+        action: "list",
+        limit: 1000,
+      });
+      const list =
+        (result as { components?: { component_ref: string }[] }).components ??
+        [];
       setComponents(list.map((c) => c.component_ref).filter(Boolean));
     } catch {
       // Non-fatal — component dropdown will be empty
@@ -123,7 +139,9 @@ export default function SchedulesPage() {
   }, []);
 
   useEffect(() => {
-    Promise.all([loadSchedules(), loadComponents()]).finally(() => setLoading(false));
+    Promise.all([loadSchedules(), loadComponents()]).finally(() =>
+      setLoading(false),
+    );
   }, [loadSchedules, loadComponents]);
 
   const handleRefresh = useCallback(async () => {
@@ -137,7 +155,10 @@ export default function SchedulesPage() {
       setActionLoading(scheduleId);
       try {
         const client = await getMcpClient();
-        await client.callTool("schedule", { action: "pause", schedule_id: scheduleId });
+        await client.callTool("schedule", {
+          action: "pause",
+          schedule_id: scheduleId,
+        });
         await loadSchedules();
       } catch (err) {
         setError(friendlyError(err));
@@ -153,7 +174,10 @@ export default function SchedulesPage() {
       setActionLoading(scheduleId);
       try {
         const client = await getMcpClient();
-        await client.callTool("schedule", { action: "resume", schedule_id: scheduleId });
+        await client.callTool("schedule", {
+          action: "resume",
+          schedule_id: scheduleId,
+        });
         await loadSchedules();
       } catch (err) {
         setError(friendlyError(err));
@@ -169,7 +193,10 @@ export default function SchedulesPage() {
       setActionLoading(scheduleId);
       try {
         const client = await getMcpClient();
-        await client.callTool("schedule", { action: "delete", schedule_id: scheduleId });
+        await client.callTool("schedule", {
+          action: "delete",
+          schedule_id: scheduleId,
+        });
         await loadSchedules();
       } catch (err) {
         setError(friendlyError(err));
@@ -256,249 +283,317 @@ export default function SchedulesPage() {
       }
     >
       {/* Error banner */}
-        {error && (
-          <div className="mt-4 rounded-lg bg-status-error/10 border border-status-error/20 px-4 py-3 text-sm text-status-error flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="ml-2 text-status-error/60 hover:text-status-error">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        )}
+      {error && (
+        <div className="mt-4 rounded-lg bg-status-error/10 border border-status-error/20 px-4 py-3 text-sm text-status-error flex items-center justify-between">
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="ml-2 text-status-error/60 hover:text-status-error"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+      )}
 
-        {/* Create form */}
-        {showCreate && (
-          <form onSubmit={handleCreate} className="mt-4 rounded-lg border border-border-default bg-surface-raised p-4 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Create form */}
+      {showCreate && (
+        <form
+          onSubmit={handleCreate}
+          className="mt-4 rounded-lg border border-border-default bg-surface-raised p-4 space-y-4"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">
+                Name
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="my-schedule"
+                required
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">
+                Frequency
+              </label>
+              <select
+                value={cronPreset}
+                onChange={(e) => setCronPreset(e.target.value)}
+                required
+                className={selectClass}
+              >
+                <option value="" disabled>
+                  Select a schedule...
+                </option>
+                {CRON_PRESETS.map(([label, value]) => (
+                  <option key={value} value={value}>
+                    {label}
+                    {value !== "custom" ? ` \u2014 ${value}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {cronPreset === "custom" && (
               <div>
-                <label className="block text-xs font-medium text-text-muted mb-1">Name</label>
+                <label className="block text-xs font-medium text-text-muted mb-1">
+                  Custom Cron Expression
+                </label>
                 <input
                   type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="my-schedule"
+                  value={cronCustom}
+                  onChange={(e) => setCronCustom(e.target.value)}
+                  placeholder="*/5 * * * *"
                   required
-                  className={inputClass}
+                  className={`${inputClass} font-mono`}
                 />
+                <p className="mt-1 text-xs text-text-muted">
+                  Format: minute hour day-of-month month day-of-week
+                </p>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-text-muted mb-1">Frequency</label>
+            )}
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">
+                Component
+              </label>
+              {components.length > 0 ? (
                 <select
-                  value={cronPreset}
-                  onChange={(e) => setCronPreset(e.target.value)}
+                  value={reference}
+                  onChange={(e) => setReference(e.target.value)}
                   required
                   className={selectClass}
                 >
-                  <option value="" disabled>Select a schedule...</option>
-                  {CRON_PRESETS.map(([label, value]) => (
-                    <option key={value} value={value}>
-                      {label}{value !== "custom" ? ` \u2014 ${value}` : ""}
+                  <option value="" disabled>
+                    Select a component...
+                  </option>
+                  {components.map((ref) => (
+                    <option key={ref} value={ref}>
+                      {ref}
                     </option>
                   ))}
                 </select>
-              </div>
-              {cronPreset === "custom" && (
-                <div>
-                  <label className="block text-xs font-medium text-text-muted mb-1">Custom Cron Expression</label>
+              ) : (
+                <>
                   <input
                     type="text"
-                    value={cronCustom}
-                    onChange={(e) => setCronCustom(e.target.value)}
-                    placeholder="*/5 * * * *"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                    placeholder="catalyst:local.component:1.0.0"
                     required
                     className={`${inputClass} font-mono`}
                   />
                   <p className="mt-1 text-xs text-text-muted">
-                    Format: minute hour day-of-month month day-of-week
+                    No registered components found. Enter a reference manually.
                   </p>
-                </div>
+                </>
               )}
-              <div>
-                <label className="block text-xs font-medium text-text-muted mb-1">Component</label>
-                {components.length > 0 ? (
-                  <select
-                    value={reference}
-                    onChange={(e) => setReference(e.target.value)}
-                    required
-                    className={selectClass}
-                  >
-                    <option value="" disabled>Select a component...</option>
-                    {components.map((ref) => (
-                      <option key={ref} value={ref}>{ref}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <>
-                    <input
-                      type="text"
-                      value={reference}
-                      onChange={(e) => setReference(e.target.value)}
-                      placeholder="catalyst:local.component:1.0.0"
-                      required
-                      className={`${inputClass} font-mono`}
-                    />
-                    <p className="mt-1 text-xs text-text-muted">
-                      No registered components found. Enter a reference manually.
-                    </p>
-                  </>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-text-muted mb-1">Input (JSON, optional)</label>
-                <input
-                  type="text"
-                  value={inputJson}
-                  onChange={(e) => setInputJson(e.target.value)}
-                  placeholder='{"key":"value"}'
-                  className={`${inputClass} font-mono`}
-                />
-              </div>
             </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowCreate(false)}
-                className="rounded-lg px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-raised transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={creating}
-                className="rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {creating && <Spinner />}
-                Create Schedule
-              </button>
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">
+                Input (JSON, optional)
+              </label>
+              <input
+                type="text"
+                value={inputJson}
+                onChange={(e) => setInputJson(e.target.value)}
+                placeholder='{"key":"value"}'
+                className={`${inputClass} font-mono`}
+              />
             </div>
-          </form>
-        )}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreate(false)}
+              className="rounded-lg px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-raised transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={creating}
+              className="rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {creating && <Spinner />}
+              Create Schedule
+            </button>
+          </div>
+        </form>
+      )}
 
-        {/* Content */}
-        <div className="mt-6">
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Spinner className="h-5 w-5 text-text-muted" />
-            </div>
-          ) : schedules.length === 0 ? (
-            <div className="py-16 text-center">
-              <p className="text-sm text-text-muted">No schedules found</p>
-              <p className="mt-1 text-xs text-text-muted">
-                Create one above or ask AQUA to set up a schedule for you.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto rounded-lg border border-border-default">
-              <table className="min-w-full divide-y divide-border-default">
-                <thead className="bg-surface-raised">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Name</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Reference</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Schedule</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Status</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Next Run</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Last Run</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">Runs</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-text-muted" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border-default">
-                  {schedules.map((sched) => (
-                    <tr key={sched.schedule_id} className="hover:bg-surface-raised/50">
-                      <td className="px-4 py-3 text-sm text-text-primary font-medium whitespace-nowrap">
-                        {sched.name}
-                      </td>
-                      <td className="px-4 py-3 text-xs font-mono text-accent-primary max-w-[180px] truncate" title={sched.reference}>
-                        {sched.reference}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <span className="text-sm text-text-secondary" title={sched.cron_expression}>
-                          {cronLabel(sched.cron_expression)}
+      {/* Content */}
+      <div className="mt-6">
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <Spinner className="h-5 w-5 text-text-muted" />
+          </div>
+        ) : schedules.length === 0 ? (
+          <div className="py-16 text-center">
+            <p className="text-sm text-text-muted">No schedules found</p>
+            <p className="mt-1 text-xs text-text-muted">
+              Create one above or ask AQUA to set up a schedule for you.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border-default">
+            <table className="min-w-full divide-y divide-border-default">
+              <thead className="bg-surface-raised">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Name
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Reference
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Schedule
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Next Run
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Last Run
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                    Runs
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-text-muted" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-default">
+                {schedules.map((sched) => (
+                  <tr
+                    key={sched.schedule_id}
+                    className="hover:bg-surface-raised/50"
+                  >
+                    <td className="px-4 py-3 text-sm text-text-primary font-medium whitespace-nowrap">
+                      {sched.name}
+                    </td>
+                    <td
+                      className="px-4 py-3 text-xs font-mono text-accent-primary max-w-[180px] truncate"
+                      title={sched.reference}
+                    >
+                      {sched.reference}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span
+                        className="text-sm text-text-secondary"
+                        title={sched.cron_expression}
+                      >
+                        {cronLabel(sched.cron_expression)}
+                      </span>
+                      <span className="block text-xs text-text-muted font-mono">
+                        {sched.cron_expression}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                          sched.status === "active"
+                            ? "bg-status-success/15 text-status-success"
+                            : "bg-status-warning/15 text-status-warning"
+                        }`}
+                      >
+                        {sched.status}
+                      </span>
+                    </td>
+                    <td
+                      className="px-4 py-3 text-xs text-text-muted whitespace-nowrap"
+                      title={sched.next_run_at ?? ""}
+                    >
+                      {relativeTime(sched.next_run_at)}
+                    </td>
+                    <td
+                      className="px-4 py-3 text-xs text-text-muted whitespace-nowrap"
+                      title={sched.last_run_at ?? ""}
+                    >
+                      {relativeTime(sched.last_run_at)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
+                      {sched.run_count ?? 0}
+                      {(sched.error_count ?? 0) > 0 && (
+                        <span className="ml-1 text-status-error">
+                          ({sched.error_count} err)
                         </span>
-                        <span className="block text-xs text-text-muted font-mono">
-                          {sched.cron_expression}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                            sched.status === "active"
-                              ? "bg-status-success/15 text-status-success"
-                              : "bg-status-warning/15 text-status-warning"
-                          }`}
-                        >
-                          {sched.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-text-muted whitespace-nowrap" title={sched.next_run_at ?? ""}>
-                        {relativeTime(sched.next_run_at)}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-text-muted whitespace-nowrap" title={sched.last_run_at ?? ""}>
-                        {relativeTime(sched.last_run_at)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-text-secondary whitespace-nowrap">
-                        {sched.run_count ?? 0}
-                        {(sched.error_count ?? 0) > 0 && (
-                          <span className="ml-1 text-status-error">({sched.error_count} err)</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-2">
+                        {actionLoading === sched.schedule_id ? (
+                          <Spinner />
+                        ) : (
+                          <>
+                            {sched.status === "active" ? (
+                              <button
+                                onClick={() => handlePause(sched.schedule_id)}
+                                className="text-xs text-text-muted hover:text-text-secondary"
+                              >
+                                Pause
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleResume(sched.schedule_id)}
+                                className="text-xs text-text-muted hover:text-text-secondary"
+                              >
+                                Resume
+                              </button>
+                            )}
+                            {confirmDelete === sched.schedule_id ? (
+                              <span className="flex items-center gap-1.5 text-xs">
+                                <span className="text-text-muted">Delete?</span>
+                                <button
+                                  onClick={() =>
+                                    handleDelete(sched.schedule_id)
+                                  }
+                                  className="text-status-error hover:underline"
+                                >
+                                  Yes
+                                </button>
+                                <button
+                                  onClick={() => setConfirmDelete(null)}
+                                  className="text-text-muted hover:text-text-secondary"
+                                >
+                                  No
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() =>
+                                  setConfirmDelete(sched.schedule_id)
+                                }
+                                className="text-xs text-text-muted hover:text-status-error"
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </>
                         )}
-                      </td>
-                      <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-2">
-                          {actionLoading === sched.schedule_id ? (
-                            <Spinner />
-                          ) : (
-                            <>
-                              {sched.status === "active" ? (
-                                <button
-                                  onClick={() => handlePause(sched.schedule_id)}
-                                  className="text-xs text-text-muted hover:text-text-secondary"
-                                >
-                                  Pause
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleResume(sched.schedule_id)}
-                                  className="text-xs text-text-muted hover:text-text-secondary"
-                                >
-                                  Resume
-                                </button>
-                              )}
-                              {confirmDelete === sched.schedule_id ? (
-                                <span className="flex items-center gap-1.5 text-xs">
-                                  <span className="text-text-muted">Delete?</span>
-                                  <button
-                                    onClick={() => handleDelete(sched.schedule_id)}
-                                    className="text-status-error hover:underline"
-                                  >
-                                    Yes
-                                  </button>
-                                  <button
-                                    onClick={() => setConfirmDelete(null)}
-                                    className="text-text-muted hover:text-text-secondary"
-                                  >
-                                    No
-                                  </button>
-                                </span>
-                              ) : (
-                                <button
-                                  onClick={() => setConfirmDelete(sched.schedule_id)}
-                                  className="text-xs text-text-muted hover:text-status-error"
-                                >
-                                  Delete
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </PageLayout>
   );
 }

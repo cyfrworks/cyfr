@@ -66,4 +66,3 @@ export function label(term: PrismTerm, options: LabelOptions = {}): string {
   if (base.endsWith("y")) return base.slice(0, -1) + "ies";
   return base + "s";
 }
-
