@@ -82,9 +82,17 @@ config :cyfr, cron_scheduler_enabled: false
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
 
-# Set a default base_path for tests (individual tests may override)
+# Default storage roots for tests (individual tests may override). All three
+# live under one throwaway root: `base_path` (data), `components_path` and
+# `aqua_path` are routed separately by the local adapter, so leaving either at
+# its config.exs default would make tests write into the repo's real
+# `components/` and `aqua/` trees.
+test_root = Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
+
 config :cyfr,
-  base_path: Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
+  base_path: test_root,
+  components_path: Path.join(test_root, "components"),
+  aqua_path: Path.join(test_root, "aqua")
 
 # Sanctum test configuration
 config :cyfr,

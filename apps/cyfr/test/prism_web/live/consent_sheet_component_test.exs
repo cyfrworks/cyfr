@@ -11,19 +11,11 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   in the operator's browser.
   """
 
-  use PrismWeb.ConnCase
-
-  import Phoenix.LiveViewTest
+  # The plan walk hits the DB, including from tasks the dispatcher spawns —
+  # PrismWeb.ConnCase checks the sandbox out in shared mode.
+  use PrismWeb.ConnCase, async: false
 
   alias Sanctum.Context
-
-  setup do
-    # PrismWeb.ConnCase does no sandbox setup (its other users never touch
-    # the DB); the plan walk does, including from tasks the dispatcher spawns.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
-  end
 
   defp oidc_ctx do
     Context.build(
