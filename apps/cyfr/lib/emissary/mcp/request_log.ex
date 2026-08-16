@@ -14,8 +14,9 @@ defmodule Emissary.MCP.RequestLog do
   skipped logging whenever the context already carried one — which an in-chain
   call always does, having inherited it through the guest closure.
 
-  Routes all persistent storage through `Arca.McpLog`
-  which owns path construction, file writes, and SQLite indexing.
+  Routes all persistent storage through `Arca.McpLog`. The start of a call
+  is written synchronously (the row must exist); its completion or failure
+  goes through `Cyfr.RecordSink`, the write-behind.
 
   Every row is filed under the athanor the call ran in. A call with no
   athanor on its context — the anonymous surface (`initialize`,
@@ -91,44 +92,46 @@ defmodule Emissary.MCP.RequestLog do
   @doc """
   Log successful completion of an MCP request.
   """
-  @spec log_completed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  @spec log_completed(Context.t(), String.t(), map()) :: :ok
   def log_completed(%Context{athanor_id: athanor_id}, _call_id, _data)
       when athanor_id in [nil, ""],
       do: :ok
 
   def log_completed(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
-    case Arca.McpLog.record_update(ctx, call_id, %{
-           status: "success",
-           duration_ms: data[:duration_ms] || data["duration_ms"],
-           routed_to: data[:routed_to] || data["routed_to"],
-           output: encode_json(sanitize_output(data[:output] || data["output"]))
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    # The row was started synchronously; its completion is bookkeeping and
+    # rides the write-behind.
+    Cyfr.RecordSink.enqueue(
+      {:mcp_log_update, ctx, call_id,
+       %{
+         status: "success",
+         duration_ms: data[:duration_ms] || data["duration_ms"],
+         routed_to: data[:routed_to] || data["routed_to"],
+         output: encode_json(sanitize_output(data[:output] || data["output"]))
+       }}
+    )
   end
 
   @doc """
   Log failure of an MCP request.
   """
-  @spec log_failed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  @spec log_failed(Context.t(), String.t(), map()) :: :ok
   def log_failed(%Context{athanor_id: athanor_id}, _call_id, _data)
       when athanor_id in [nil, ""],
       do: :ok
 
   def log_failed(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
-    case Arca.McpLog.record_update(ctx, call_id, %{
-           status: "error",
-           error_code: data[:code] || data["code"],
-           duration_ms: data[:duration_ms] || data["duration_ms"],
-           error: sanitize_input(data[:error] || data["error"]),
-           routed_to: data[:routed_to] || data["routed_to"]
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    Cyfr.RecordSink.enqueue(
+      {:mcp_log_update, ctx, call_id,
+       %{
+         status: "error",
+         error_code: data[:code] || data["code"],
+         duration_ms: data[:duration_ms] || data["duration_ms"],
+         error: sanitize_input(data[:error] || data["error"]),
+         routed_to: data[:routed_to] || data["routed_to"]
+       }}
+    )
   end
 
   # ============================================================================
@@ -165,14 +168,7 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec safe_log_completed(Context.t(), String.t(), map()) :: :ok
   def safe_log_completed(%Context{} = ctx, call_id, data) do
-    case log_completed(ctx, call_id, data) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error("[RequestLog] log_completed failed for #{call_id}: #{inspect(reason)}")
-        :ok
-    end
+    log_completed(ctx, call_id, data)
   rescue
     e ->
       Logger.error("[RequestLog] log_completed raised for #{call_id}: #{inspect(e)}")
@@ -184,14 +180,7 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec safe_log_failed(Context.t(), String.t(), map()) :: :ok
   def safe_log_failed(%Context{} = ctx, call_id, data) do
-    case log_failed(ctx, call_id, data) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error("[RequestLog] log_failed failed for #{call_id}: #{inspect(reason)}")
-        :ok
-    end
+    log_failed(ctx, call_id, data)
   rescue
     e ->
       Logger.error("[RequestLog] log_failed raised for #{call_id}: #{inspect(e)}")

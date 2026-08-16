@@ -240,11 +240,41 @@ defmodule Opus.ExecutionRecord do
            root_execution_id: record.root_execution_id,
            resolver_digest: record.resolver_digest,
            activation_digest: record.activation_digest,
-           activation_graph: record.activation_graph
+           activation_graph: record.activation_graph,
+           runner_id: runner_id(),
+           lease_until: lease_until()
          }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # The lease a running row holds. Refreshed while the execution runs
+  # (`Opus.Executor`); a row whose lease lapsed belongs to a runner that
+  # stopped renewing — the sweeper fails it.
+  @lease_seconds 180
+
+  @doc "How long one lease renewal is good for."
+  def lease_seconds, do: @lease_seconds
+
+  @doc "This runner's name on an execution row."
+  def runner_id, do: Atom.to_string(node())
+
+  @doc "A fresh lease expiry from now."
+  def lease_until, do: DateTime.add(DateTime.utc_now(), @lease_seconds, :second)
+
+  @doc "Renew the lease of a running execution."
+  @spec renew_lease(String.t()) :: :ok
+  def renew_lease(execution_id) when is_binary(execution_id) do
+    Arca.Execution.renew_lease(execution_id, lease_until())
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "[ExecutionRecord] lease renewal failed for #{execution_id}: #{Exception.message(e)}"
+      )
+
+      :ok
   end
 
   @doc """

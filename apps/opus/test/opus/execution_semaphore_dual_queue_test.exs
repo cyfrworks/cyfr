@@ -4,45 +4,45 @@
 defmodule Opus.ExecutionSemaphoreDualQueueTest do
   use ExUnit.Case, async: false
 
-  test "high-priority waiters are served before normal-priority" do
+  test "a queued child is served before a queued root" do
     {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, {1, 16}, [])
 
-    # Acquire the single slot
-    :ok = GenServer.call(sem, {:acquire, :normal, nil})
+    # Acquire the single slot (max 1 → no child reserve)
+    :ok = GenServer.call(sem, {:acquire, :root, nil})
 
     results = :ets.new(:results, [:set, :public])
 
-    # Queue a normal priority waiter
-    normal_task =
+    # Queue a root waiter
+    root_task =
       Task.async(fn ->
-        :ok = GenServer.call(sem, {:acquire, :normal, nil}, 5000)
-        :ets.insert(results, {:normal, System.monotonic_time()})
+        :ok = GenServer.call(sem, {:acquire, :root, nil}, 5000)
+        :ets.insert(results, {:root, System.monotonic_time()})
         GenServer.cast(sem, {:release, self()})
       end)
 
-    # Small delay to ensure normal is queued first
+    # Small delay to ensure the root is queued first
     Process.sleep(50)
 
-    # Queue a high priority waiter
-    high_task =
+    # Queue a child waiter
+    child_task =
       Task.async(fn ->
-        :ok = GenServer.call(sem, {:acquire, :high, nil}, 5000)
-        :ets.insert(results, {:high, System.monotonic_time()})
+        :ok = GenServer.call(sem, {:acquire, :child, nil}, 5000)
+        :ets.insert(results, {:child, System.monotonic_time()})
         GenServer.cast(sem, {:release, self()})
       end)
 
     Process.sleep(50)
 
-    # Release the slot — high priority should get it first
+    # Release the slot — the child should get it first
     GenServer.cast(sem, {:release, self()})
 
-    Task.await(high_task, 5000)
-    Task.await(normal_task, 5000)
+    Task.await(child_task, 5000)
+    Task.await(root_task, 5000)
 
-    [{:high, high_time}] = :ets.lookup(results, :high)
-    [{:normal, normal_time}] = :ets.lookup(results, :normal)
+    [{:child, child_time}] = :ets.lookup(results, :child)
+    [{:root, root_time}] = :ets.lookup(results, :root)
 
-    assert high_time < normal_time, "High priority should be served before normal"
+    assert child_time < root_time, "a child should be served before a root"
 
     :ets.delete(results)
     GenServer.stop(sem)
@@ -50,7 +50,7 @@ defmodule Opus.ExecutionSemaphoreDualQueueTest do
 
   test "terminate/2 logs and demonitors cleanly" do
     {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, {2, 16}, [])
-    :ok = GenServer.call(sem, {:acquire, :normal, nil})
+    :ok = GenServer.call(sem, {:acquire, :root, nil})
 
     # Stopping should not raise
     GenServer.stop(sem)

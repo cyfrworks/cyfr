@@ -370,10 +370,9 @@ defmodule Arca.ExecutionTest do
     end
   end
 
-  describe "list_stale_running/2" do
-    test "returns running executions older than cutoff" do
-      id = "exec_stale_#{System.unique_integer([:positive])}"
-      old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
+  describe "list_stale_running/2 and renew_lease/2" do
+    defp running!(lease_until) do
+      id = "exec_lease_#{System.unique_integer([:positive])}"
 
       {:ok, _} =
         Execution.record_start(%{
@@ -381,58 +380,48 @@ defmodule Arca.ExecutionTest do
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_test",
           athanor_id: @athanor,
-          started_at: old_time,
+          started_at: DateTime.utc_now(),
           status: "running",
-          component_type: "catalyst"
+          component_type: "catalyst",
+          runner_id: "node@test",
+          lease_until: lease_until
         })
 
-      cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
-      stale = Execution.list_stale_running(cutoff)
-      stale_ids = Enum.map(stale, & &1.id)
+      id
+    end
+
+    test "returns running executions whose lease has lapsed" do
+      id = running!(DateTime.add(DateTime.utc_now(), -60, :second))
+      stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
       assert id in stale_ids
     end
 
-    test "does not return recent running executions" do
-      id = "exec_recent_#{System.unique_integer([:positive])}"
-      now = DateTime.utc_now()
-
-      {:ok, _} =
-        Execution.record_start(%{
-          id: id,
-          reference: "catalyst:local.test:1.0.0",
-          user_id: "user_test",
-          athanor_id: @athanor,
-          started_at: now,
-          status: "running",
-          component_type: "catalyst"
-        })
-
-      cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
-      stale = Execution.list_stale_running(cutoff)
-      stale_ids = Enum.map(stale, & &1.id)
+    test "leaves a running execution whose lease still holds" do
+      id = running!(DateTime.add(DateTime.utc_now(), 120, :second))
+      stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
       refute id in stale_ids
     end
 
+    test "a renewed lease takes an execution out of the sweep" do
+      id = running!(DateTime.add(DateTime.utc_now(), -60, :second))
+      assert 1 = Execution.renew_lease(id, DateTime.add(DateTime.utc_now(), 180, :second))
+      stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
+      refute id in stale_ids
+
+      # A finished execution is not renewed.
+      {:ok, _} =
+        Execution.record_complete(Sanctum.TestContext.local(), id, %{
+          completed_at: DateTime.utc_now(),
+          duration_ms: 1,
+          status: "completed"
+        })
+
+      assert 0 = Execution.renew_lease(id, DateTime.add(DateTime.utc_now(), 180, :second))
+    end
+
     test "respects limit parameter" do
-      # Create multiple stale records
-      old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
-
-      for i <- 1..3 do
-        {:ok, _} =
-          Execution.record_start(%{
-            id: "exec_limit_#{System.unique_integer([:positive])}_#{i}",
-            reference: "catalyst:local.test:1.0.0",
-            user_id: "user_test",
-            athanor_id: @athanor,
-            started_at: old_time,
-            status: "running",
-            component_type: "catalyst"
-          })
-      end
-
-      cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
-      stale = Execution.list_stale_running(cutoff, 1)
-      assert length(stale) == 1
+      for _ <- 1..3, do: running!(DateTime.add(DateTime.utc_now(), -60, :second))
+      assert length(Execution.list_stale_running(DateTime.utc_now(), 1)) == 1
     end
   end
 

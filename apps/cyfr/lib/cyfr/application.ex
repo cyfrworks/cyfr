@@ -62,6 +62,10 @@ defmodule Cyfr.Application do
     infra_children = [
       # Arca storage layer
       Arca.Repo,
+      # The write-behind for bookkeeping rows (allowed policy lines, MCP log
+      # completions, vault last-used); right after the repo so it drains
+      # before the repo goes down.
+      Cyfr.RecordSink,
       Arca.Cache.Sweeper,
       Arca.RetentionScheduler,
       Arca.AuditHandler,
@@ -197,7 +201,8 @@ defmodule Cyfr.Application do
 
   # Run migrations before the connection pool starts to avoid
   # "database is locked" errors from pool connections racing with
-  # migration DDL statements on first startup.
+  # migration DDL statements on first startup. `CYFR_AUTO_MIGRATE=false`
+  # leaves the step to the operator (`Cyfr.Release.migrate/0`).
   #
   # A database created before the baseline migration has the older versions
   # recorded in `schema_migrations`, so this runs nothing and the schema

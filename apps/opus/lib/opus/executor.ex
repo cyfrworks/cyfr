@@ -345,11 +345,12 @@ defmodule Opus.Executor do
 
   defp value_source(_resources), do: nil
 
-  # Stage 2: Fetch WASM bytes, compute digest, verify integrity + signature
+  # Stage 2: Fetch WASM bytes (verified against the registry digest on the
+  # way into the cache — a warm entry needs no second hash), then verify
+  # the signature.
   defp stage_fetch_and_verify(%ExecutionPipeline{} = p) do
-    with {:ok, wasm_bytes} <- fetch_component_bytes(p.ctx, p.component),
-         component_digest = compute_digest(wasm_bytes),
-         :ok <- verify_integrity(p.component, component_digest, p.reference),
+    with {:ok, wasm_bytes, component_digest} <-
+           fetch_component_bytes(p.ctx, p.component, p.reference),
          host_policy = build_host_policy_snapshot(p.exec_opts),
          record = %{p.record | component_digest: component_digest, host_policy: host_policy},
          :ok <- maybe_verify_signature(p.reference, p.opts[:verify], p.component) do
@@ -574,10 +575,11 @@ defmodule Opus.Executor do
     end
   end
 
-  # Fetch WASM bytes from Compendium blob store using the digest from inspect.
-  # Bytes are content-addressed by digest — immutable, no invalidation needed.
-  # Cached for 10 minutes to avoid repeated lookups.
-  defp fetch_component_bytes(ctx, component) do
+  # Fetch WASM bytes from the Compendium blob store by the registry digest.
+  # Bytes are content-addressed and immutable; an entry is cached (10 min)
+  # only after its sha256 matched the registry, so a hit is verified by
+  # construction and is not hashed again. Returns `{:ok, bytes, digest}`.
+  defp fetch_component_bytes(ctx, component, reference) do
     digest = component[:digest] || component["digest"]
 
     Logger.debug(
@@ -586,20 +588,37 @@ defmodule Opus.Executor do
 
     cache_key = {:wasm_bytes, digest}
 
-    case Arca.Cache.get(cache_key) do
+    case digest && Arca.Cache.get(cache_key) do
       {:ok, bytes} ->
-        {:ok, bytes}
+        emit_fetch(reference, false)
+        {:ok, bytes, digest}
 
-      :miss ->
+      _ ->
         case Compendium.Component.get_blob(ctx, digest) do
           {:ok, bytes} ->
-            Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
-            {:ok, bytes}
+            actual = compute_digest(bytes)
+            emit_fetch(reference, true)
+
+            case verify_integrity(component, actual, reference) do
+              :ok ->
+                Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
+                {:ok, bytes, actual}
+
+              {:error, _} = error ->
+                error
+            end
 
           {:error, reason} ->
             {:error, "Failed to fetch component bytes: #{reason}"}
         end
     end
+  end
+
+  defp emit_fetch(reference, hashed?) do
+    :telemetry.execute([:cyfr, :opus, :fetch], %{count: 1}, %{
+      reference: reference,
+      hashed: hashed?
+    })
   end
 
   # Verify that fetched bytes match the digest from the registry.
@@ -775,8 +794,16 @@ defmodule Opus.Executor do
   end
 
   defp execute_wasm(wasm_bytes, input, exec_opts, opts) do
-    component_type = Keyword.get(exec_opts, :component_type, :reagent)
-    priority = if component_type == :catalyst, do: :normal, else: :high
+    # What this execution is to the semaphore: a hop under a parent takes a
+    # child slot (never tenant-capped, a reserve of its own); a schedule or
+    # webhook waits in the background; everything else is a root someone
+    # is waiting on.
+    class =
+      cond do
+        opts[:class] == :background -> :background
+        opts[:parent_execution_id] || exec_opts[:parent_execution_id] -> :child
+        true -> :root
+      end
 
     # An execution that declared it must run under an authority may never fall
     # back to ambient permissions. Checked before the semaphore so nothing is
@@ -804,7 +831,7 @@ defmodule Opus.Executor do
         _ -> nil
       end
 
-    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, priority, tenant) do
+    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, class, tenant) do
       :ok ->
         registered? = register_execution(exec_opts)
 
@@ -984,15 +1011,39 @@ defmodule Opus.Executor do
         {:error, "Execution timeout after #{timeout_ms}ms"}
 
       {:refs, _} ->
-      receive do
-        # Runtime.execute_component always returns 3-tuple {:ok, output, metadata}
-        {^ref, {:ok, output, metadata}} ->
-          {:ok, {output, metadata}}
+        await_result(
+          ref,
+          pid,
+          cleanup_refs,
+          remaining_ms,
+          timeout_ms,
+          Keyword.get(runtime_opts, :execution_id)
+        )
+    end
+  end
 
-        {^ref, {:error, _} = error} ->
-          error
-      after
-        remaining_ms ->
+  # Lease renewals while a long execution runs: every minute the row's
+  # lease is pushed out, so the sweeper knows a slow execution from a dead
+  # runner. Renewal is a bounded update_all; a failure only shortens the
+  # lease.
+  @lease_tick_ms 60_000
+
+  defp await_result(ref, pid, cleanup_refs, remaining_ms, timeout_ms, execution_id) do
+    wait_ms = min(remaining_ms, @lease_tick_ms)
+
+    receive do
+      # Runtime.execute_component always returns 3-tuple {:ok, output, metadata}
+      {^ref, {:ok, output, metadata}} ->
+        {:ok, {output, metadata}}
+
+      {^ref, {:error, _} = error} ->
+        error
+    after
+      wait_ms ->
+        if remaining_ms > wait_ms do
+          if execution_id, do: Opus.ExecutionRecord.renew_lease(execution_id)
+          await_result(ref, pid, cleanup_refs, remaining_ms - wait_ms, timeout_ms, execution_id)
+        else
           Process.unlink(pid)
           Process.exit(pid, :kill)
           # Clean up resources the dead process can't clean up
@@ -1005,7 +1056,7 @@ defmodule Opus.Executor do
           Opus.OAuthHandler.collect_dispensed(cleanup_refs[:execution_id])
 
           {:error, "Execution timeout after #{timeout_ms}ms"}
-      end
+        end
     end
   end
 
@@ -1300,5 +1351,4 @@ defmodule Opus.Executor do
       end
     end
   end
-
 end

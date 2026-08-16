@@ -35,12 +35,33 @@ defmodule Sanctum.Consent.ShapeDerivation do
   shape inputs cannot be read — the caller treats that as no live shape,
   which fails closed to `needs_consent`.
   """
+  # The live shape is a function of the athanor's registered manifests: it
+  # is cached briefly and swept when the registry changes
+  # (`Compendium.Registry.invalidate_executor_caches/1`).
+  @live_cache_ttl_ms :timer.seconds(60)
+
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do
-    with {:ok, input} <- shape_input(ctx, source_ref) do
-      ShapeDigest.compute(input)
+    key = live_shape_key(ctx, source_ref)
+
+    case key && Arca.Cache.get(key) do
+      {:ok, digest} when is_binary(digest) ->
+        {:ok, digest}
+
+      _ ->
+        with {:ok, input} <- shape_input(ctx, source_ref),
+             {:ok, digest} <- ShapeDigest.compute(input) do
+          if key, do: Arca.Cache.put(key, digest, @live_cache_ttl_ms)
+          {:ok, digest}
+        end
     end
   end
+
+  defp live_shape_key(%Sanctum.Context{athanor_id: athanor_id}, source_ref)
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref),
+       do: Arca.Cache.Keys.live_shape(athanor_id, source_ref)
+
+  defp live_shape_key(_ctx, _source_ref), do: nil
 
   @doc "The `ShapeDigest.compute/1` input derived from live state."
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}

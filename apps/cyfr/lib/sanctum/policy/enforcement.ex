@@ -129,13 +129,21 @@ defmodule Sanctum.Policy.Enforcement do
       value_source: attrs[:value_source]
     }
 
-    case Arca.PolicyLog.record(record_attrs) do
-      {:ok, _} ->
-        emit_telemetry(record_attrs)
-        :ok
+    # A denial is on disk before the refusal returns; an allowed line is
+    # bookkeeping and rides the write-behind.
+    if decision == :allowed do
+      Cyfr.RecordSink.enqueue({:policy_log, record_attrs})
+      emit_telemetry(record_attrs)
+      :ok
+    else
+      case Arca.PolicyLog.record(record_attrs) do
+        {:ok, _} ->
+          emit_telemetry(record_attrs)
+          :ok
 
-      {:error, changeset} ->
-        {:error, changeset}
+        {:error, changeset} ->
+          {:error, changeset}
+      end
     end
   end
 

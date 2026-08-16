@@ -134,6 +134,34 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
+  describe "claim/3 and release_claim/2" do
+    test "one claimant wins; the claim lapses and comes back", %{ctx: _ctx} do
+      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "claimed"}))
+
+      assert :claimed = CronSchedule.claim(schedule.id, "node-a", 60)
+      assert :held = CronSchedule.claim(schedule.id, "node-b", 60)
+      assert :held = CronSchedule.claim(schedule.id, "node-a", 60)
+
+      # Only the claimant releases; a stranger's release is a no-op.
+      :ok = CronSchedule.release_claim(schedule.id, "node-b")
+      assert :held = CronSchedule.claim(schedule.id, "node-b", 60)
+      :ok = CronSchedule.release_claim(schedule.id, "node-a")
+      assert :claimed = CronSchedule.claim(schedule.id, "node-b", 60)
+    end
+
+    test "a lapsed claim is superseded" do
+      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "lapsed"}))
+      # A claim that has already run out.
+      assert :claimed = CronSchedule.claim(schedule.id, "node-a", -1)
+      assert :claimed = CronSchedule.claim(schedule.id, "node-b", 60)
+    end
+
+    test "an inactive schedule cannot be claimed" do
+      {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "paused", status: "paused"}))
+      assert :held = CronSchedule.claim(schedule.id, "node-a", 60)
+    end
+  end
+
   describe "record_run/3" do
     test "increments run_count and sets last_run_at", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs())

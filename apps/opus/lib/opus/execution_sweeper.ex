@@ -5,12 +5,19 @@ defmodule Opus.ExecutionSweeper do
   @moduledoc """
   Periodic sweep to mark stale "running" executions as failed.
 
-  Runs every 60 seconds, checking for execution records stuck in "running"
-  state longer than 10 minutes with no live BEAM process. This handles:
+  Runs every 60 seconds, checking for execution records still "running"
+  whose lease has lapsed. A running row is leased by the node executing it
+  (`executions.runner_id`, `lease_until`) and the executor renews the lease
+  while the work runs; a lapsed lease means the runner stopped renewing —
+  crashed, or a whole node gone. This handles:
 
   - Process crashes that bypass cleanup code
   - BEAM restarts (replaces the one-shot startup sweep)
+  - Another node's crash, when several nodes share the database
   - Edge cases where `handle_failure` couldn't complete
+
+  A lapsed lease held by *this* node is double-checked against the local
+  execution registry — a live process is left alone (it will renew).
   """
 
   use GenServer
@@ -19,7 +26,6 @@ defmodule Opus.ExecutionSweeper do
   alias Opus.ExecutionEventBuffer
 
   @sweep_interval_ms 60_000
-  @stale_threshold_seconds 600
 
   def start_link(opts \\ []) do
     # Timer-driven DB queries from a permanent process poison the test
@@ -55,12 +61,11 @@ defmodule Opus.ExecutionSweeper do
     Process.send_after(self(), :sweep, @sweep_interval_ms)
   end
 
-  defp sweep do
-    cutoff = DateTime.add(DateTime.utc_now(), -@stale_threshold_seconds, :second)
-
+  @doc false
+  def sweep do
     stale =
       try do
-        Arca.Execution.list_stale_running(cutoff)
+        Arca.Execution.list_stale_running(DateTime.utc_now())
       rescue
         e ->
           Logger.error(
@@ -70,12 +75,17 @@ defmodule Opus.ExecutionSweeper do
           []
       end
 
+    me = Opus.ExecutionRecord.runner_id()
+
     for record <- stale do
+      # Another node's lapsed lease is that node's crash; our own is
+      # checked against the live process — a running one just renews late.
       should_sweep =
-        case Registry.lookup(Opus.ExecutionRegistry, record.id) do
-          [{pid, _}] -> not Process.alive?(pid)
-          _ -> true
-        end
+        record.runner_id != me or
+          case Registry.lookup(Opus.ExecutionRegistry, record.id) do
+            [{pid, _}] -> not Process.alive?(pid)
+            _ -> true
+          end
 
       if should_sweep do
         try do
@@ -95,7 +105,7 @@ defmodule Opus.ExecutionSweeper do
   defp mark_failed(record) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
-    error_msg = "Execution terminated: process exited without cleanup"
+    error_msg = "Execution terminated: runner stopped without cleanup"
 
     {count, _} =
       Arca.Execution.mark_failed_if_running(record.id, %{

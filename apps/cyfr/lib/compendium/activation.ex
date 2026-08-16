@@ -39,18 +39,67 @@ defmodule Compendium.Activation do
           {:incomplete, :missing_release_digest | :unresolvable_dependency | :depth_exceeded}
           | {:invalid_graph, JCS.error()}
 
+  # A resolved graph is a function of the athanor's registered rows; it is
+  # cached briefly per root (node key + release digest) and swept when the
+  # athanor's registry changes (`Compendium.Registry.invalidate_executor_caches/1`).
+  @cache_ttl_ms :timer.seconds(60)
+
   @doc """
   Resolve the activation of a component row and its static closure.
 
   Returns `{:ok, %{digest: digest, graph: graph}}` or `{:error, reason}`.
+  A warm root answers from `Arca.Cache` without a walk; the telemetry
+  event `[:cyfr, :compendium, :activation, :resolve]` says which.
   """
   @spec resolve(Context.t(), map()) :: {:ok, t()} | {:error, error()}
   def resolve(%Context{} = ctx, component) when is_map(component) do
+    case cache_key(ctx, component) do
+      nil ->
+        resolve_uncached(ctx, component)
+
+      key ->
+        case Arca.Cache.get(key) do
+          {:ok, %{digest: _, graph: _} = activation} ->
+            emit_resolve(ctx, component, true)
+            {:ok, activation}
+
+          _ ->
+            with {:ok, activation} <- resolve_uncached(ctx, component) do
+              Arca.Cache.put(key, activation, @cache_ttl_ms)
+              {:ok, activation}
+            end
+        end
+    end
+  end
+
+  defp resolve_uncached(ctx, component) do
     with {:ok, rows} <- walk(ctx, component, %{}, 0),
          graph = graph_from_rows(rows),
          {:ok, digest} <- hash_graph(graph) do
+      emit_resolve(ctx, component, false)
       {:ok, %{digest: digest, graph: graph}}
     end
+  end
+
+  defp cache_key(%Context{athanor_id: athanor_id}, component)
+       when is_binary(athanor_id) and athanor_id != "" do
+    case release_digest(component) do
+      digest when is_binary(digest) ->
+        Arca.Cache.Keys.activation(athanor_id, node_key(component), digest)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp cache_key(_ctx, _component), do: nil
+
+  defp emit_resolve(ctx, component, cached?) do
+    :telemetry.execute(
+      [:cyfr, :compendium, :activation, :resolve],
+      %{count: 1},
+      %{athanor_id: ctx.athanor_id, node_key: node_key(component), cached: cached?}
+    )
   end
 
   @type verified_node :: %{release_digest: String.t(), integrity: :ok | :mismatch}

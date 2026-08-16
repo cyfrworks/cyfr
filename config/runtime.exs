@@ -42,12 +42,26 @@ if config_env() != :test do
     config :cyfr, :pbkdf2_iterations, parse_integer.("CYFR_PBKDF2_ITERATIONS", pbkdf2_iterations)
   end
 
+  # Whether the server migrates the database on boot (default: true). Several
+  # nodes on one Postgres, or an operator who runs the schema step by hand
+  # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
+  config :cyfr, :auto_migrate, env!("CYFR_AUTO_MIGRATE", :boolean, true)
+
   # Maximum concurrent WASM executions (default: 128)
-  # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions
+  # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions.
+  # A quarter of the slots is reserved for chain children (a formula's hops);
+  # that reserve must hold a chain of the full authority depth (8), so the
+  # floor is 32 — below it a deep chain could wait on itself.
   if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :string, nil) do
-    config :cyfr,
-           :max_concurrent_executions,
-           parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
+    max_exec = parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
+
+    if max_exec < 32 do
+      raise ArgumentError,
+            "CYFR_MAX_CONCURRENT_EXECUTIONS must be at least 32 (a quarter of the slots " <>
+              "is the child reserve, which must fit a chain of depth 8), got #{max_exec}"
+    end
+
+    config :cyfr, :max_concurrent_executions, max_exec
   end
 
   # Maximum concurrent WASM executions per tenant (default: 16)

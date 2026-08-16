@@ -5,20 +5,39 @@ defmodule Arca.Cache.Keys do
   @moduledoc """
   The tenant-keyed `Arca.Cache` key shapes, in one place.
 
-  Every key that carries an athanor is built here — writers, readers, the
-  invalidation in `Compendium.Registry`, and the caps in `Arca.Cache.Sweeper`
-  (which pattern-matches the compiled-component key) all agree on the shape
+  Every key that carries an athanor (and the content-addressed compiled
+  component) is built here — writers, readers, the invalidation in
+  `Compendium.Registry`, and the caps in `Arca.Cache.Sweeper` (which
+  pattern-matches the compiled-component key) all agree on the shape
   because none of them spell it themselves.
   """
 
-  @doc "Compiled (NIF) component for a reference within an athanor."
-  def compiled_component(athanor_id, reference), do: {:compiled_component, athanor_id, reference}
+  @doc """
+  Compiled (NIF) component for a WASM digest. Compilation is a pure function
+  of the bytes, so the key is content-addressed: fifty athanors running the
+  same bundle share one compiled resource, and a re-registered reference
+  simply has a new digest.
+  """
+  def compiled_component(digest), do: {:compiled_component, digest}
 
   @doc "Match spec shape for every compiled component (Sweeper cap)."
-  def match_compiled_component, do: {:compiled_component, :_, :_}
+  def match_compiled_component, do: {:compiled_component, :_}
 
-  @doc "Match spec shape for every compiled component of one athanor."
-  def match_compiled_component(athanor_id), do: {:compiled_component, athanor_id, :_}
+  @doc """
+  The resolved activation of a component's static closure within an
+  athanor, keyed by the root's node key and release digest.
+  """
+  def activation(athanor_id, node_key, release_digest),
+    do: {:activation, athanor_id, node_key, release_digest}
+
+  @doc "Match spec shape for every activation of one athanor."
+  def match_activation(athanor_id), do: {:activation, athanor_id, :_, :_}
+
+  @doc "The live shape digest of a versionless source ref within an athanor."
+  def live_shape(athanor_id, source_ref), do: {:live_shape, athanor_id, source_ref}
+
+  @doc "Match spec shape for every live shape digest of one athanor."
+  def match_live_shape(athanor_id), do: {:live_shape, athanor_id, :_}
 
   @doc "Component metadata row for a reference within an athanor."
   def component_meta(athanor_id, reference), do: {:component_meta, athanor_id, reference}

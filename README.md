@@ -452,6 +452,14 @@ CYFR_DATABASE_URL=postgres://user:pass@host:5432/cyfr
 `CYFR_DATABASE_URL` is required for a Postgres build (no localhost fallback).
 Both adapters run as blocking legs in CI.
 
+The server migrates the schema on boot. Several nodes sharing one Postgres,
+or an operator who wants that step in their own hands, set
+`CYFR_AUTO_MIGRATE=false` and run it from the release before starting:
+
+```bash
+bin/cyfr eval "Cyfr.Release.migrate()"
+```
+
 ### S3-compatible object storage
 
 File storage defaults to the local `./data` volume. For S3 (or MinIO and

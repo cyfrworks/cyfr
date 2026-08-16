@@ -33,7 +33,6 @@ defmodule Arca.VaultStorage do
 
   @spec get(String.t(), String.t()) :: {:ok, VaultEntry.t()} | {:error, :not_found}
   def get(athanor_id, id) do
-
     case Arca.Repo.get_by(VaultEntry, id: id, athanor_id: athanor_id) do
       nil -> {:error, :not_found}
       entry -> {:ok, entry}
@@ -47,7 +46,6 @@ defmodule Arca.VaultStorage do
   @doc "The living entry with this name in an athanor, if any."
   @spec get_by_name(String.t(), String.t()) :: {:ok, VaultEntry.t()} | {:error, :not_found}
   def get_by_name(athanor_id, name) do
-
     row =
       Arca.Repo.one(
         from v in VaultEntry,
@@ -67,7 +65,6 @@ defmodule Arca.VaultStorage do
   @doc "Living entries in an athanor. `include_tombstoned: true` widens to all."
   @spec list(String.t(), keyword()) :: {:ok, [VaultEntry.t()]} | {:error, term()}
   def list(athanor_id, opts \\ []) do
-
     query =
       from v in VaultEntry,
         where: v.athanor_id == ^athanor_id,
@@ -88,7 +85,6 @@ defmodule Arca.VaultStorage do
   @doc "Update the mutable label. Everything else has its own verb."
   @spec update_meta(String.t(), String.t(), %{name: String.t()}) :: :ok | {:error, term()}
   def update_meta(athanor_id, id, %{name: name}) when is_binary(name) and name != "" do
-
     case Arca.Repo.update_all(
            from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
            set: [name: name, updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)]
@@ -104,7 +100,6 @@ defmodule Arca.VaultStorage do
 
   @spec set_status(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def set_status(athanor_id, id, status) when is_binary(status) do
-
     case Arca.Repo.update_all(
            from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
            set: [
@@ -128,7 +123,6 @@ defmodule Arca.VaultStorage do
   """
   @spec tombstone(String.t(), String.t()) :: :ok | {:error, term()}
   def tombstone(athanor_id, id) do
-
     case Arca.Repo.update_all(
            from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
            set: [
@@ -153,7 +147,6 @@ defmodule Arca.VaultStorage do
   """
   @spec update_binding(String.t(), String.t(), map()) :: :ok | {:error, term()}
   def update_binding(athanor_id, id, changes) when is_map(changes) do
-
     set =
       changes
       |> Map.take([:field_names, :oauth_endpoints, :oauth_scopes, :binding_digest, :status])
@@ -182,7 +175,6 @@ defmodule Arca.VaultStorage do
           :ok | {:error, :payload_conflict}
   def rotate_payload(athanor_id, id, expected_rev, sealed)
       when is_integer(expected_rev) and is_binary(sealed) do
-
     result =
       Arca.Repo.update_all(
         from(v in VaultEntry,
@@ -205,18 +197,9 @@ defmodule Arca.VaultStorage do
       {:error, :database_error}
   end
 
+  @doc "Mark an entry read now — bookkeeping, written behind by `Cyfr.RecordSink`."
   @spec touch_last_used(String.t(), String.t()) :: :ok
   def touch_last_used(athanor_id, id) do
-
-    Arca.Repo.update_all(
-      from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
-      set: [last_used_at: DateTime.utc_now()]
-    )
-
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.VaultStorage] touch_last_used failed: #{Exception.message(e)}")
-      :ok
+    Cyfr.RecordSink.enqueue({:vault_touch, athanor_id, id})
   end
 end

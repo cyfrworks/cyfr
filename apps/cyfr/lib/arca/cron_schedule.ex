@@ -35,6 +35,8 @@ defmodule Arca.CronSchedule do
     field :last_execution_id, :string
     field :run_count, :integer, default: 0
     field :error_count, :integer, default: 0
+    field :claimed_by, :string
+    field :claim_expires_at, :utc_datetime_usec
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
@@ -164,6 +166,36 @@ defmodule Arca.CronSchedule do
       order_by: [asc: s.next_run_at]
     )
     |> Arca.Repo.all()
+  end
+
+  @doc """
+  Take the schedule for one firing: a compare-and-set that succeeds only when
+  no live claim is held. Several nodes sharing the database race here and
+  exactly one wins; a claimant that dies is superseded once its claim lapses.
+  Returns `:claimed` or `:held`.
+  """
+  @spec claim(String.t(), String.t(), pos_integer()) :: :claimed | :held
+  def claim(id, node_name, ttl_seconds) when is_binary(id) and is_binary(node_name) do
+    now = DateTime.utc_now()
+    expires = DateTime.add(now, ttl_seconds, :second)
+
+    {count, _} =
+      from(s in __MODULE__,
+        where: s.id == ^id and s.status == "active",
+        where: is_nil(s.claim_expires_at) or s.claim_expires_at < ^now
+      )
+      |> Arca.Repo.update_all(set: [claimed_by: node_name, claim_expires_at: expires])
+
+    if count == 1, do: :claimed, else: :held
+  end
+
+  @doc "Give a claim back once the firing is over (only the claimant's own)."
+  @spec release_claim(String.t(), String.t()) :: :ok
+  def release_claim(id, node_name) when is_binary(id) and is_binary(node_name) do
+    from(s in __MODULE__, where: s.id == ^id and s.claimed_by == ^node_name)
+    |> Arca.Repo.update_all(set: [claimed_by: nil, claim_expires_at: nil])
+
+    :ok
   end
 
   @doc "Records a successful run with tenant-scoped lookup."

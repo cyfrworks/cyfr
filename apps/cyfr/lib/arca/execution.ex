@@ -57,6 +57,8 @@ defmodule Arca.Execution do
     field :resolver_digest, :string
     field :activation_digest, :string
     field :activation_graph, :string
+    field :runner_id, :string
+    field :lease_until, :utc_datetime_usec
   end
 
   @doc """
@@ -81,7 +83,9 @@ defmodule Arca.Execution do
       :root_execution_id,
       :resolver_digest,
       :activation_digest,
-      :activation_graph
+      :activation_graph,
+      :runner_id,
+      :lease_until
     ])
     |> validate_required([
       :id,
@@ -322,17 +326,32 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Lists executions stuck in 'running' older than cutoff (for startup sweep).
+  Renew a running execution's lease: the runner is alive and the row is
+  still its. Returns the number of rows touched (0 once the execution has
+  finished or been failed by the sweeper).
+  """
+  @spec renew_lease(String.t(), DateTime.t()) :: non_neg_integer()
+  def renew_lease(id, %DateTime{} = until) do
+    {count, _} =
+      from(e in __MODULE__, where: e.id == ^id and e.status == "running")
+      |> Arca.Repo.update_all(set: [lease_until: until])
+
+    count
+  end
+
+  @doc """
+  Lists 'running' executions whose lease lapsed before `now` (the sweep).
 
   Intentionally spans all tenants: the `Opus.ExecutionSweeper` GC must reap
-  orphaned 'running' rows left by a crashed BEAM, when no tenant context can be
-  reconstructed. System-internal only — not reachable from a tenant request.
+  orphaned 'running' rows left by a crashed runner — this node's or another
+  node's — when no tenant context can be reconstructed. System-internal
+  only — not reachable from a tenant request.
   """
-  def list_stale_running(cutoff, limit \\ 50) do
+  def list_stale_running(now, limit \\ 50) do
     from(e in __MODULE__,
       where: e.status == "running",
-      where: e.started_at < ^cutoff,
-      order_by: [asc: e.started_at],
+      where: e.lease_until < ^now,
+      order_by: [asc: e.lease_until],
       limit: ^limit
     )
     |> Arca.Repo.all()

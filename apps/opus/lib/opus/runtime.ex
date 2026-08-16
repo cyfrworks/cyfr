@@ -53,8 +53,8 @@ defmodule Opus.Runtime do
   ## Options
 
   - `:component_type` - One of `:reagent`, `:catalyst`, `:formula`. Defaults to `:reagent`.
-  - `:reference` - Component reference string (for cache keying)
-  - `:digest` - Content digest (for cache validation)
+  - `:reference` - Component reference string (for telemetry and errors)
+  - `:digest` - Content digest (the compiled-component cache key)
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
   - `:authority` - The `Sanctum.Authority` this execution runs under
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
@@ -166,20 +166,8 @@ defmodule Opus.Runtime do
         {:ok, store} ->
           # Get or compile the component (cache hit skips JIT)
           component_result =
-            if reference && digest do
-              tenant_opts =
-                case ctx do
-                  %{athanor_id: athanor_id} -> [athanor_id: athanor_id]
-                  _ -> []
-                end
-
-              Opus.ComponentCache.get_or_compile(
-                reference,
-                digest,
-                wasm_bytes,
-                store,
-                tenant_opts
-              )
+            if is_binary(digest) and digest != "" do
+              Opus.ComponentCache.get_or_compile(digest, wasm_bytes, store)
             else
               Wasmex.Components.Component.new(store, wasm_bytes)
             end

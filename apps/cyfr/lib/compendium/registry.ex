@@ -1609,11 +1609,15 @@ defmodule Compendium.Registry do
 
   @doc false
   def invalidate_executor_caches(%Context{athanor_id: athanor_id}) do
-    # Both writers (Opus.Executor for :component_meta, Opus.ComponentCache
-    # for :compiled_component) key through Arca.Cache.Keys, so the sweep
-    # matches exactly what they wrote.
+    # Every writer keys through Arca.Cache.Keys, so the sweep matches exactly
+    # what was written: component metadata (Opus.Executor), resolved
+    # activations (Compendium.Activation) and live shape digests
+    # (Sanctum.Consent.ShapeDerivation) — all functions of this athanor's
+    # registry. Compiled components are keyed by digest and need no sweep: a
+    # changed component is a changed digest.
     Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(athanor_id))
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_compiled_component(athanor_id))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_activation(athanor_id))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_live_shape(athanor_id))
 
     Logger.debug(
       "[Compendium.Registry] Invalidated component execution caches for athanor #{athanor_id}"

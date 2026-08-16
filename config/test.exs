@@ -94,6 +94,10 @@ config :cyfr, provisioning_boot_enabled: false
 # sandbox exists; the runner suite drives recovery itself.
 config :cyfr, conversation_recovery: false
 
+# Bookkeeping rows are written in the caller: the sandbox connection is the
+# test's, and every assertion reads the row right after the call.
+config :cyfr, record_sink_inline: true
+
 # The stale-execution sweeper has the same shape (permanent named GenServer
 # querying on a 60s timer) and the same sandbox hazard; its own suite
 # exercises sweep logic directly.

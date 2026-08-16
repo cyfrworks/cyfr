@@ -301,6 +301,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       add :activation_digest, :string
       add :activation_graph, :text
+      # The node running it and how long its lease holds; a running row whose
+      # lease has lapsed is a crashed runner's, whichever node it was on.
+      add :runner_id, :string
+      add :lease_until, :utc_datetime_usec
       add :root_execution_id, :string
     end
 
@@ -313,6 +317,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:executions, [:athanor_id])
     create index(:executions, [:athanor_id, :user_id, :started_at])
     create index(:executions, [:athanor_id, :status, :started_at])
+    create index(:executions, [:status, :lease_until])
 
     create table(:mcp_logs, primary_key: false) do
       add :id, :string, primary_key: true
@@ -573,6 +578,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :resolved_reference, :string
       add :athanor_id, :string, null: false
       add :profile_id, :string, null: false
+      # One node fires a schedule at a time: the claim is taken by
+      # compare-and-set and lapses on its own if the claimant dies.
+      add :claimed_by, :string
+      add :claim_expires_at, :utc_datetime_usec
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end

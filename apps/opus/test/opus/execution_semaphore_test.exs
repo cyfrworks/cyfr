@@ -50,9 +50,9 @@ defmodule Opus.ExecutionSemaphoreTest do
   describe "queue-based waiting" do
     test "callers queue when at capacity and are served on release" do
       status = ExecutionSemaphore.status()
-      max = status.max
+      max = status.max - status.child_reserve
 
-      # Acquire all slots from separate processes
+      # Acquire every foreground slot from separate processes
       holders = acquire_from_processes(max)
 
       # Start a waiter that will queue
@@ -85,7 +85,7 @@ defmodule Opus.ExecutionSemaphoreTest do
 
     test "multiple queued callers are served in order" do
       status = ExecutionSemaphore.status()
-      max = status.max
+      max = status.max - status.child_reserve
 
       holders = acquire_from_processes(max)
 
@@ -122,63 +122,189 @@ defmodule Opus.ExecutionSemaphoreTest do
     end
   end
 
-  describe "priority queueing" do
-    test "high priority callers are served before normal priority" do
-      status = ExecutionSemaphore.status()
-      max = status.max
-
-      holders = acquire_from_processes(max)
+  describe "classes" do
+    test "a queued child is served before a queued root, and a root before background" do
+      # 8 slots, reserve 2: six roots and two children fill it.
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {8, 16}, name: :test_order_sem)
+      roots = Enum.map(1..6, fn _ -> spawn_acquire(:test_order_sem, nil, :root) end)
+      children = Enum.map(1..2, fn _ -> spawn_acquire(:test_order_sem, nil, :child) end)
 
       parent = self()
       order = :atomics.new(1, signed: false)
 
-      # Queue a normal priority waiter first
-      normal_waiter =
+      waiter = fn class ->
         spawn(fn ->
-          result = ExecutionSemaphore.acquire(5_000, :normal)
+          result = GenServer.call(:test_order_sem, {:acquire, class, nil}, 10_000)
           pos = :atomics.add_get(order, 1, 1)
-          send(parent, {:waiter_done, :normal, pos, result})
+          send(parent, {:waiter_done, class, pos, result})
 
           if result == :ok do
             receive do
-              :release -> ExecutionSemaphore.release()
+              :release -> GenServer.cast(:test_order_sem, {:release, self()})
+            end
+          end
+        end)
+      end
+
+      queued = fn -> GenServer.call(:test_order_sem, :status).queued end
+
+      background_waiter = waiter.(:background)
+      wait_until(fn -> queued.() == 1 end)
+      root_waiter = waiter.(:root)
+      wait_until(fn -> queued.() == 2 end)
+      child_waiter = waiter.(:child)
+      wait_until(fn -> queued.() == 3 end)
+
+      # Roots leave one at a time. The child takes the first freed slot at
+      # once (any slot is a child's); the root and then the background waiter
+      # follow only when the count is back under the foreground line — the
+      # children now sitting inside it hold the count up.
+      [r1, r2, r3, r4, r5, r6] = roots
+      send(r1, :release)
+      wait_until(fn -> queued.() == 2 end)
+      send(r2, :release)
+      send(r3, :release)
+      wait_until(fn -> GenServer.call(:test_order_sem, :status).active == 6 end)
+      assert queued.() == 2
+      send(r4, :release)
+      wait_until(fn -> queued.() == 1 end)
+      send(r5, :release)
+      wait_until(fn -> queued.() == 0 end)
+
+      assert_receive {:waiter_done, :child, child_pos, :ok}, 2_000
+      assert_receive {:waiter_done, :root, root_pos, :ok}, 2_000
+      assert_receive {:waiter_done, :background, bg_pos, :ok}, 2_000
+      assert child_pos < root_pos and root_pos < bg_pos
+
+      Enum.each(
+        [r6, child_waiter, root_waiter, background_waiter | children],
+        &send(&1, :release)
+      )
+
+      GenServer.stop(pid)
+    end
+
+    test "roots stop at the child reserve; children take the rest" do
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {8, 16}, name: :test_reserve_sem)
+
+      # 8 slots, reserve 2: six roots fit, the seventh queues.
+      roots = Enum.map(1..6, fn _ -> spawn_acquire(:test_reserve_sem, nil, :root) end)
+      status = GenServer.call(:test_reserve_sem, :status)
+      assert status.root_active == 6 and status.child_reserve == 2
+
+      parent = self()
+
+      queued_root =
+        spawn(fn ->
+          result = GenServer.call(:test_reserve_sem, {:acquire, :root, nil}, 5_000)
+          send(parent, {:queued_root, result})
+        end)
+
+      wait_until(fn -> GenServer.call(:test_reserve_sem, :status).queued_by_class.root == 1 end)
+
+      # Children still get in — the reserve is theirs.
+      c1 = spawn_acquire(:test_reserve_sem, "ath_a", :child)
+      c2 = spawn_acquire(:test_reserve_sem, "ath_a", :child)
+      status = GenServer.call(:test_reserve_sem, :status)
+      assert status.child_active == 2 and status.active == 8
+      # Children are not counted against the athanor.
+      assert status.tenants == %{}
+
+      # The foreground line is on the total count and the two children sit
+      # inside it, so the queued root gets in only once the count is back
+      # under the line: after the third root release.
+      [r1, r2, r3 | rest] = roots
+      send(r1, :release)
+      send(r2, :release)
+      refute_receive {:queued_root, _}, 200
+      send(r3, :release)
+      assert_receive {:queued_root, :ok}, 2_000
+
+      Enum.each(rest ++ [c1, c2, queued_root], &send(&1, :release))
+      GenServer.stop(pid)
+    end
+
+    test "a child is never refused for its athanor's cap" do
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {8, 1}, name: :test_child_cap_sem)
+
+      root = spawn_acquire(:test_child_cap_sem, "ath_a", :root)
+
+      assert {:error, :tenant_limit} =
+               GenServer.call(:test_child_cap_sem, {:acquire, :root, "ath_a"}, 1_000)
+
+      assert :ok = GenServer.call(:test_child_cap_sem, {:acquire, :child, "ath_a"}, 1_000)
+      GenServer.cast(:test_child_cap_sem, {:release, self()})
+
+      send(root, :release)
+      GenServer.stop(pid)
+    end
+
+    test "background work at the athanor's cap waits instead of being refused" do
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {8, 1}, name: :test_bg_sem)
+
+      root = spawn_acquire(:test_bg_sem, "ath_a", :root)
+      parent = self()
+
+      bg =
+        spawn(fn ->
+          result = GenServer.call(:test_bg_sem, {:acquire, :background, "ath_a"}, 5_000)
+          send(parent, {:bg, result})
+
+          if result == :ok do
+            receive do
+              :release -> GenServer.cast(:test_bg_sem, {:release, self()})
             end
           end
         end)
 
-      wait_until(fn -> ExecutionSemaphore.status().queued == 1 end)
+      wait_until(fn -> GenServer.call(:test_bg_sem, :status).queued_by_class.background == 1 end)
+      refute_receive {:bg, _}, 100
 
-      # Then queue a high priority waiter
-      high_waiter =
-        spawn(fn ->
-          result = ExecutionSemaphore.acquire(5_000, :high)
-          pos = :atomics.add_get(order, 1, 1)
-          send(parent, {:waiter_done, :high, pos, result})
+      # Another athanor is unaffected while ath_a's schedule waits.
+      assert :ok = GenServer.call(:test_bg_sem, {:acquire, :background, "ath_b"}, 1_000)
+      GenServer.cast(:test_bg_sem, {:release, self()})
 
-          if result == :ok do
-            receive do
-              :release -> ExecutionSemaphore.release()
-            end
+      send(root, :release)
+      assert_receive {:bg, :ok}, 2_000
+
+      send(bg, :release)
+      GenServer.stop(pid)
+    end
+
+    test "128 roots and 128 children all complete under {128, 16}" do
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {128, 16}, name: :test_load_sem)
+      parent = self()
+
+      workers =
+        for i <- 1..128, class <- [:root, :child] do
+          tenant = "ath_#{rem(i, 16)}"
+
+          spawn(fn ->
+            result = GenServer.call(:test_load_sem, {:acquire, class, tenant}, 30_000)
+            if result == :ok, do: GenServer.cast(:test_load_sem, {:release, self()})
+            send(parent, {:done, class, result})
+          end)
+        end
+
+      results =
+        for _ <- workers do
+          receive do
+            {:done, class, result} -> {class, result}
+          after
+            10_000 -> flunk("a worker did not finish")
           end
-        end)
+        end
 
-      wait_until(fn -> ExecutionSemaphore.status().queued == 2 end)
+      # Roots may hit their athanor's cap and queue-full when 128 arrive at
+      # once (16 tenants × 16 slots), but every child gets through, and
+      # nothing hangs.
+      assert Enum.all?(results, fn
+               {:child, r} -> r == :ok
+               {:root, r} -> r in [:ok, {:error, :tenant_limit}, {:error, :queue_full}]
+             end)
 
-      # Release 2 holders, one at a time so the first freed slot goes to the
-      # high-priority waiter before the second release happens.
-      [h1, h2 | rest] = holders
-      send(h1, :release)
-      wait_until(fn -> ExecutionSemaphore.status().queued == 1 end)
-      send(h2, :release)
-
-      # High priority should have been served first (lower position number)
-      assert_receive {:waiter_done, :high, high_pos, :ok}, 2_000
-      assert_receive {:waiter_done, :normal, normal_pos, :ok}, 2_000
-      assert high_pos < normal_pos
-
-      send(high_waiter, :release)
-      send(normal_waiter, :release)
-      release_holders(rest)
+      wait_until(fn -> GenServer.call(:test_load_sem, :status).active == 0 end)
+      GenServer.stop(pid)
     end
   end
 
@@ -195,7 +321,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       waiters =
         Enum.map(1..8, fn _ ->
           spawn(fn ->
-            GenServer.call(:test_queue_sem, {:acquire, :normal, nil}, 10_000)
+            GenServer.call(:test_queue_sem, {:acquire, :root, nil}, 10_000)
 
             receive do
               :release -> :ok
@@ -206,7 +332,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       wait_until(fn -> GenServer.call(:test_queue_sem, :status).queued == 8 end)
 
       # Next one should be rejected
-      result = GenServer.call(:test_queue_sem, {:acquire, :normal, nil}, 1_000)
+      result = GenServer.call(:test_queue_sem, {:acquire, :root, nil}, 1_000)
       assert result == {:error, :queue_full}
 
       # Clean up
@@ -230,21 +356,21 @@ defmodule Opus.ExecutionSemaphoreTest do
 
       # Tenant A at cap → rejected, and no global slot consumed by the attempt
       assert {:error, :tenant_limit} =
-               GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_a}, 1_000)
+               GenServer.call(:test_tenant_sem, {:acquire, :root, @tenant_a}, 1_000)
 
       status = GenServer.call(:test_tenant_sem, :status)
       assert status.active == 2
       assert status.tenants == %{@tenant_a => 2}
 
       # Tenant B unaffected
-      assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_b}, 1_000)
+      assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :root, @tenant_b}, 1_000)
       GenServer.cast(:test_tenant_sem, {:release, self()})
 
       # Releasing one A holder frees A capacity again. The holder exits on
       # :release, so the slot frees via the DOWN monitor — poll for it.
       send(h1, :release)
       wait_until(fn -> GenServer.call(:test_tenant_sem, :status).tenants[@tenant_a] == 1 end)
-      assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_a}, 1_000)
+      assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :root, @tenant_a}, 1_000)
       GenServer.cast(:test_tenant_sem, {:release, self()})
 
       send(h2, :release)
@@ -257,12 +383,12 @@ defmodule Opus.ExecutionSemaphoreTest do
       holder = spawn_acquire(:test_tenant_down_sem, @tenant_a)
 
       assert {:error, :tenant_limit} =
-               GenServer.call(:test_tenant_down_sem, {:acquire, :normal, @tenant_a}, 1_000)
+               GenServer.call(:test_tenant_down_sem, {:acquire, :root, @tenant_a}, 1_000)
 
       Process.exit(holder, :kill)
       wait_until(fn -> GenServer.call(:test_tenant_down_sem, :status).active == 0 end)
 
-      assert :ok = GenServer.call(:test_tenant_down_sem, {:acquire, :normal, @tenant_a}, 1_000)
+      assert :ok = GenServer.call(:test_tenant_down_sem, {:acquire, :root, @tenant_a}, 1_000)
       status = GenServer.call(:test_tenant_down_sem, :status)
       assert status.active == 1
       assert status.tenants == %{@tenant_a => 1}
@@ -287,7 +413,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       waiters =
         Enum.map(1..2, fn i ->
           spawn(fn ->
-            result = GenServer.call(:test_tenant_xfer_sem, {:acquire, :normal, @tenant_a}, 5_000)
+            result = GenServer.call(:test_tenant_xfer_sem, {:acquire, :root, @tenant_a}, 5_000)
             send(parent, {:tenant_waiter, i, result})
 
             if result == :ok do
@@ -356,7 +482,7 @@ defmodule Opus.ExecutionSemaphoreTest do
 
     test "queued waiter is removed when it crashes" do
       status = ExecutionSemaphore.status()
-      max = status.max
+      max = status.max - status.child_reserve
 
       holders = acquire_from_processes(max)
 
@@ -472,13 +598,16 @@ defmodule Opus.ExecutionSemaphoreTest do
   # Helpers
   # ============================================================================
 
-  defp acquire_from_processes(count) do
+  defp acquire_from_processes(count, class \\ :root)
+  defp acquire_from_processes(0, _class), do: []
+
+  defp acquire_from_processes(count, class) do
     parent = self()
 
     Enum.map(1..count, fn _ ->
       pid =
         spawn(fn ->
-          :ok = ExecutionSemaphore.acquire()
+          :ok = ExecutionSemaphore.acquire(30_000, class)
           send(parent, {:acquired, self()})
 
           receive do
@@ -500,12 +629,12 @@ defmodule Opus.ExecutionSemaphoreTest do
     Enum.each(holders, &send(&1, :release))
   end
 
-  defp spawn_acquire(server_name, tenant \\ nil) do
+  defp spawn_acquire(server_name, tenant \\ nil, class \\ :root) do
     parent = self()
 
     pid =
       spawn(fn ->
-        GenServer.call(server_name, {:acquire, :normal, tenant}, 5_000)
+        GenServer.call(server_name, {:acquire, class, tenant}, 5_000)
         send(parent, {:acquired, self()})
 
         receive do
