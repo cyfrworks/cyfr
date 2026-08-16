@@ -18,6 +18,9 @@ defmodule Cyfr.Application do
     # Arca storage setup
     ensure_db_directory!()
     maybe_migrate_before_pool()
+    # The invoke-budget counters, owned by the application master so they
+    # outlive every request that charges them.
+    Sanctum.Authority.Budget.ensure_table()
     Arca.Cache.init()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit

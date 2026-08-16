@@ -41,7 +41,6 @@ defmodule Opus.HttpHandler do
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
   alias Sanctum.Limits
-  alias Sanctum.Policy.Enforcement
   alias Opus.EdgeGuard
   alias Opus.HttpRequestValidation
 
@@ -171,7 +170,7 @@ defmodule Opus.HttpHandler do
       end
 
     if event_type do
-      Enforcement.record(%{
+      Opus.Host.enforce(%{
         ctx: ctx,
         component_ref: component_ref,
         component_type: :catalyst,

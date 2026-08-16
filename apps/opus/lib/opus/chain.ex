@@ -25,7 +25,6 @@ defmodule Opus.Chain do
   alias Sanctum.Authority
   alias Sanctum.Authority.RootSelect
   alias Sanctum.Authority.Transition
-  alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
@@ -318,7 +317,7 @@ defmodule Opus.Chain do
         end
       end)
 
-    Loader.load_root(
+    Opus.Host.load_root(
       ctx,
       profile,
       [live: live, source: source, shape_diff: shape_diff_fn(ctx, profile, source)] ++

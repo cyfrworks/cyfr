@@ -468,10 +468,7 @@ defmodule Opus.FormulaHandler do
       root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id]
     }
 
-    Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority,
-      guest_fn: guest_fn,
-      lineage: lineage
-    )
+    Opus.Host.tool_call(tool, ctx, args, authority, guest_fn: guest_fn, lineage: lineage)
   end
 
   defp spawn_via_registry(json_request, ctx, tracker, opts) do

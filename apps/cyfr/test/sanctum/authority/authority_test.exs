@@ -160,7 +160,7 @@ defmodule Sanctum.AuthorityTest do
       # The child runs under the CALLEE's own limits.
       assert Authority.limits(child).timeout == "30s"
       # Root-keyed budget: same atomics ref, not a copy.
-      assert child.root_budget == auth.root_budget
+      assert child.budget == auth.budget
       assert Authority.try_acquire_invoke(child) == :ok
       assert Authority.budget(auth).in_flight == 1
     end
@@ -181,7 +181,7 @@ defmodule Sanctum.AuthorityTest do
       assert child.depth == 1
       assert Authority.limits(child) == Authority.zero_limits()
       # Still spends the root's budget.
-      assert child.root_budget == auth.root_budget
+      assert child.budget == auth.budget
     end
 
     test "unbound is absorbing", %{auth: auth} do

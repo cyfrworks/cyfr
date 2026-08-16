@@ -39,7 +39,6 @@ defmodule Opus.Executor do
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Policy.Enforcement
   alias Opus.ExecutionRecord
   alias Opus.ExecutionEventBuffer
   alias Opus.ExecutionPipeline
@@ -290,7 +289,7 @@ defmodule Opus.Executor do
          {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
          :ok <- check_authority_rate_limit(p.ctx, p.component_ref, limits),
          :ok <- check_public_rate_buckets(p, authority, limits) do
-      Enforcement.record(
+      Opus.Host.enforce(
         Map.merge(
           %{
             ctx: p.ctx,
@@ -361,7 +360,7 @@ defmodule Opus.Executor do
 
   # Stage 3: Write execution record and emit telemetry
   defp stage_record_start(%ExecutionPipeline{} = p) do
-    with :ok <- ExecutionRecord.write_started(p.record) do
+    with :ok <- Opus.Host.record_start(p.record) do
       :atomics.put(p.started_written, 1, 1)
       Opus.Telemetry.execute_start(p.record)
       {:ok, p}
@@ -375,7 +374,7 @@ defmodule Opus.Executor do
   defp stage_resolve_vault_fields(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
       %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
-        case Sanctum.VaultReader.fetch(p.ctx, vault) do
+        case Opus.Host.unseal(p.ctx, vault) do
           {:ok, secrets} ->
             {:ok, %{p | preloaded_fields: secrets}}
 
@@ -439,7 +438,7 @@ defmodule Opus.Executor do
       completed_record = ExecutionRecord.complete(p.record, masked_output)
 
       audit_error =
-        case ExecutionRecord.write_completed(completed_record) do
+        case Opus.Host.record_complete(completed_record) do
           :ok ->
             nil
 
@@ -658,7 +657,7 @@ defmodule Opus.Executor do
         size = byte_size(input_json)
 
         if size > max_size do
-          Enforcement.record(%{
+          Opus.Host.enforce(%{
             ctx: ctx,
             component_ref: component_ref,
             event_type: :request_size,
@@ -755,7 +754,7 @@ defmodule Opus.Executor do
   end
 
   defp record_rate_limit_denial(ctx, component_ref, reason) do
-    Enforcement.record(%{
+    Opus.Host.enforce(%{
       ctx: ctx,
       component_ref: component_ref,
       event_type: :rate_limit,
@@ -1105,7 +1104,7 @@ defmodule Opus.Executor do
     failed_record = ExecutionRecord.fail(record, error_msg)
 
     if :atomics.get(started_written, 1) == 0 do
-      case ExecutionRecord.write_started(record) do
+      case Opus.Host.record_start(record) do
         :ok ->
           :ok
 
@@ -1119,7 +1118,7 @@ defmodule Opus.Executor do
       Opus.Telemetry.execute_start(record)
     end
 
-    case ExecutionRecord.write_failed(failed_record) do
+    case Opus.Host.record_failed(failed_record) do
       :ok ->
         :ok
 

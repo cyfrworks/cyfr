@@ -130,6 +130,80 @@ defmodule Sanctum.Authority.Blob do
 
   def parse(other), do: {:error, {:invalid_json, other}}
 
+  @doc """
+  Parse one edge from its map form (the shape `nodes[..].edges[..]` holds).
+  """
+  @spec parse_edge(map()) :: {:ok, Edge.t()} | {:error, error()}
+  def parse_edge(map) when is_map(map) and not is_struct(map) do
+    parse_edge("<wire>", "<wire>", map)
+  end
+
+  # ============================================================================
+  # Encode — the exact inverse of parse/1
+  # ============================================================================
+
+  @doc """
+  The blob as the JSON-ready map `parse/1` reads: `parse(to_map(blob)) ==
+  {:ok, blob}` for every blob. Absent resources are omitted, never written
+  as null.
+  """
+  @spec to_map(t()) :: map()
+  def to_map(%__MODULE__{canonical: canonical, nodes: nodes}) do
+    %{
+      "canonical" => canonical,
+      "nodes" =>
+        Map.new(nodes, fn {ref, %Node{limits: limits, edges: edges}} ->
+          {ref,
+           %{
+             "limits" => Limits.to_map(limits),
+             "edges" => Map.new(edges, fn {key, edge} -> {key, edge_to_map(edge)} end)
+           }}
+        end)
+    }
+  end
+
+  @doc "One edge as the JSON-ready map `parse_edge/1` reads."
+  @spec edge_to_map(Edge.t()) :: map()
+  def edge_to_map(%Edge{} = edge) do
+    %{}
+    |> put_resource("vault", edge.vault && vault_to_map(edge.vault))
+    |> put_resource("egress", edge.egress && string_lists_to_map(edge.egress))
+    |> put_resource("storage", edge.storage && string_lists_to_map(edge.storage))
+    |> put_resource("tools", if(edge.tools == [], do: nil, else: edge.tools))
+    |> put_resource(
+      "tool_servers",
+      if(edge.tool_servers == [],
+        do: nil,
+        else: Enum.map(edge.tool_servers, &tool_server_to_map/1)
+      )
+    )
+  end
+
+  defp put_resource(map, _key, nil), do: map
+  defp put_resource(map, key, value), do: Map.put(map, key, value)
+
+  defp vault_to_map(%{entry_id: id, binding_digest: digest, projection: projection}) do
+    %{"entry_id" => id, "binding_digest" => digest}
+    |> put_resource("projection", projection && string_lists_to_map(projection))
+  end
+
+  # `%{domains: [...], methods: [...]}` → `%{"domains" => [...], ...}`,
+  # dropping nil lists (an absent key on the way in).
+  defp string_lists_to_map(map) do
+    map
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+  end
+
+  defp tool_server_to_map(server) do
+    %{
+      "server_digest" => server.server_digest,
+      "server_name" => server.server_name,
+      "tool_patterns" => server.tool_patterns
+    }
+    |> put_resource("descriptions_digest", server.descriptions_digest)
+  end
+
   # ============================================================================
   # Clamp
   # ============================================================================

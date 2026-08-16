@@ -150,6 +150,26 @@ defmodule Sanctum.Limits do
   end
 
   @doc """
+  The limits as the string-keyed map `new/1` reads: `new(to_map(limits)) ==
+  {:ok, limits}`.
+  """
+  @spec to_map(t()) :: map()
+  def to_map(%__MODULE__{} = limits) do
+    %{
+      "timeout" => limits.timeout,
+      "batch_timeout" => limits.batch_timeout,
+      "max_memory_bytes" => limits.max_memory_bytes,
+      "max_request_size" => limits.max_request_size,
+      "max_response_size" => limits.max_response_size,
+      "max_concurrent_tasks" => limits.max_concurrent_tasks,
+      "rate_limit" => %{
+        "requests" => limits.rate_limit.requests,
+        "window" => limits.rate_limit.window
+      }
+    }
+  end
+
+  @doc """
   Parsed `timeout` in milliseconds.
   """
   @spec timeout_ms(t()) :: {:ok, non_neg_integer()} | {:error, String.t()}
