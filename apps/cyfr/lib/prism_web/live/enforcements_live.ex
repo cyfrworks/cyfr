@@ -172,8 +172,8 @@ defmodule PrismWeb.EnforcementsLive do
       |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
 
     case params do
-      [] -> ~p"/enforcements"
-      p -> ~p"/enforcements?#{p}"
+      [] -> PrismWeb.Focus.path(socket.assigns.athanor_route, "/enforcements")
+      p -> PrismWeb.Focus.path(socket.assigns.athanor_route, "/enforcements?#{p}")
     end
   end
 
@@ -301,7 +301,10 @@ defmodule PrismWeb.EnforcementsLive do
               <% req_id = f(log, :request_id) %>
               <tr
                 phx-click={
-                  req_id && Phoenix.LiveView.JS.navigate(~p"/activities?request_id=#{req_id}")
+                  req_id &&
+                    Phoenix.LiveView.JS.navigate(
+                      PrismWeb.Focus.path(@athanor_route, "/activities?request_id=#{req_id}")
+                    )
                 }
                 class={[
                   "border-t border-gray-800/60 transition-colors",

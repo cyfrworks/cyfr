@@ -61,7 +61,7 @@ defmodule EmissaryWeb.Plugs.MCPOriginTest do
 
   test "localhost matches with any port" do
     Application.put_env(:cyfr, :mcp_allowed_origins, ["http://localhost"])
-    refute call("http://localhost:4001").halted
+    refute call("http://localhost:4000").halted
     refute call("http://localhost:5173").halted
   end
 end

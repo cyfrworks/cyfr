@@ -33,6 +33,11 @@ defmodule Opus do
   (`cyfr pull`) before execution.
   """
 
+  # The engine is cyfr's execution port: cyfr calls it through
+  # `Cyfr.Execution`, never by name, so a headless build or a stubbed test
+  # needs no engine on the path.
+  @behaviour Cyfr.Execution
+
   alias Sanctum.Context
   alias Opus.ExecutionRecord
 
@@ -42,6 +47,7 @@ defmodule Opus do
   """
   @spec run_root(Context.t(), String.t() | nil, String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate run_root(ctx, profile_selector, reference, input, opts \\ []), to: Opus.Chain
 
   @doc """
@@ -52,6 +58,7 @@ defmodule Opus do
   """
   @spec run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate run_root_edge(ctx, source_ref, reference, input, opts \\ []), to: Opus.Chain
 
   @doc """
@@ -60,6 +67,7 @@ defmodule Opus do
   """
   @spec authority_for(Context.t(), String.t() | nil, String.t(), keyword()) ::
           {:ok, Sanctum.Authority.t()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate authority_for(ctx, profile_selector, reference, opts \\ []), to: Opus.Chain
 
   @doc """
@@ -68,16 +76,19 @@ defmodule Opus do
   and pass the same value to `unsubscribe_events/2`, or the unsubscribe
   targets a different topic and silently no-ops.
   """
+  @impl Cyfr.Execution
   defdelegate subscribe_events(execution_id, ctx),
     to: Opus.ExecutionEventBuffer,
     as: :subscribe
 
   @doc "Unsubscribe from an execution's event stream (same ctx as subscribe)."
+  @impl Cyfr.Execution
   defdelegate unsubscribe_events(execution_id, ctx),
     to: Opus.ExecutionEventBuffer,
     as: :unsubscribe
 
   @doc "Buffered events after `last_sequence` for an execution of `athanor_id`, for replay on (re)connect."
+  @impl Cyfr.Execution
   defdelegate events_since(execution_id, last_sequence, athanor_id),
     to: Opus.ExecutionEventBuffer,
     as: :since
@@ -105,6 +116,7 @@ defmodule Opus do
 
   """
   @spec list(Context.t(), keyword()) :: {:ok, [ExecutionRecord.t()]} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate list(ctx, opts \\ []), to: ExecutionRecord
 
   @doc """
@@ -117,6 +129,7 @@ defmodule Opus do
 
   """
   @spec get(Context.t(), String.t()) :: {:ok, ExecutionRecord.t()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate get(ctx, execution_id), to: ExecutionRecord
 
   @doc """
@@ -131,6 +144,7 @@ defmodule Opus do
 
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate cancel(ctx, execution_id), to: Opus.Executor
 
   @doc """
@@ -141,5 +155,11 @@ defmodule Opus do
   continue" (§4.4).
   """
   @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  @impl Cyfr.Execution
   defdelegate cancel_for_restart(ctx, execution_id, payload), to: Opus.Executor
+
+  @doc "Whether the engine can admit work: its semaphore is up."
+  @impl Cyfr.Execution
+  @spec ready?() :: boolean()
+  def ready?, do: is_pid(Process.whereis(Opus.ExecutionSemaphore))
 end

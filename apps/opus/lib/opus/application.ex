@@ -10,6 +10,9 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
+    # The engine is cyfr's execution implementation for as long as it runs.
+    Application.put_env(:cyfr, :execution_impl, Opus)
+
     children = [
       # NOTE: catalyst host-function HTTP (cyfr:http/fetch + /stream) no longer
       # uses a dedicated Finch pool. To pin the connection to the SSRF-validated

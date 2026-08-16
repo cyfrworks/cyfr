@@ -1,17 +1,14 @@
 # Reverse proxy for the CYFR self-hosted stack. See docker-compose.yml.
 #
-#   /mcp*, /api/*,    → cyfr (Emissary API, :4000)
-#   /auth/*, /t/*
-#   everything else    → porta (A.Q.U.A. PWA, vite preview on :8080)
+#   everything → cyfr:4000 (the one endpoint: Prism, /mcp, /api, /auth, /t)
 #
 # Set CYFR_HOST and CADDY_ACME_EMAIL in .env. With CYFR_HOST=localhost Caddy
 # serves plain HTTP on :80 (no ACME); with a real domain it auto-provisions TLS.
 #
 # This service only runs when the `tls` compose profile is active — `cyfr
 # init` sets CYFR_BEHIND_PROXY=true when you answer "yes" to the TLS prompt
-# and `cyfr up` adds `--profile tls` accordingly. In direct mode the porta
-# container handles everything on :8080 directly (vite preview proxies the
-# cyfr paths internally, no Caddy needed).
+# and `cyfr up` adds `--profile tls` accordingly. In direct mode cyfr answers
+# on http://localhost:4000 itself, no Caddy needed.
 #
 # Client-IP trust: Caddy's default reverse_proxy behavior APPENDS the peer IP
 # to X-Forwarded-For (no explicit directive needed), and cyfr resolves the
@@ -20,9 +17,8 @@
 # raise CYFR_TRUSTED_PROXY_HOPS (or set CYFR_TRUSTED_PROXY_CIDRS) to match,
 # or client IPs will resolve to that proxy and IP allowlists will fail closed.
 #
-# Security headers below apply only to the PWA handle; the proxied /mcp,
-# /api/*, /auth/*, /t/* routes get their headers from cyfr's own endpoints
-# (EmissaryWeb/PrismWeb set CSP/XFO/HSTS themselves).
+# Every route is proxied to cyfr's one endpoint, which sets its own security
+# headers (CSP/XFO/HSTS) per pipeline.
 
 {
 	email {$CADDY_ACME_EMAIL}
@@ -31,44 +27,10 @@
 {$CYFR_HOST:localhost} {
 	encode zstd gzip
 
-	# --- CYFR API (Emissary :4000): MCP, REST, auth, tinctures ---
-	# `handle /mcp` is the exact-path matcher — without the `*` it does NOT
-	# also catch `/mcp-servers` (the PWA route). cyfr's MCP transport is the
-	# single `/mcp` endpoint; the PWA's `mcp-servers` page lives under porta.
-	handle /mcp {
-		reverse_proxy cyfr:4000
-	}
-	handle /api/* {
-		reverse_proxy cyfr:4000
-	}
-	handle /auth/* {
-		reverse_proxy cyfr:4000
-	}
-	handle /t/* {
-		reverse_proxy cyfr:4000
-	}
-
-	# --- A.Q.U.A. PWA (everything else) ---
+	# --- Prism (everything else): the LiveView face on the same origin ---
+	# cyfr sets its own CSP/XFO/HSTS on every response it serves.
 	handle {
-		header {
-			# style-src 'unsafe-inline' and img-src data:/blob: are required by the
-			# bundled CSS framework / inline icons and the PWA runtime; they are
-			# not loosened beyond what the app actually uses.
-			Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'"
-			Referrer-Policy strict-origin-when-cross-origin
-			X-Content-Type-Options nosniff
-			X-Frame-Options SAMEORIGIN
-			# This route is served over TLS by the enclosing site block; enforce
-			# HSTS here (the Prism endpoint sets its own HSTS for the dashboard/API).
-			Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		}
-		reverse_proxy porta:8080
+		reverse_proxy cyfr:4000
 	}
-
-	# --- (optional) Prism LiveView dashboard ---
-	# Prism serves at `/`, so mounting it under a sub-path requires Prism to be
-	# path-prefix aware. Disabled by default.
-	# handle_path /prism/* {
-	#	reverse_proxy cyfr:4001
-	# }
+}
 }

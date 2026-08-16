@@ -14,13 +14,13 @@ defmodule PrismWeb.ConnCase do
 
   use ExUnit.CaseTemplate
 
-  # The Plug session key that carries the Sanctum session token. Held in one
-  # place so the harness follows the endpoint when the key changes.
-  @session_key "session_token"
+  # The Plug session key that carries the Sanctum session token — the one
+  # the auth callback writes on the one endpoint.
+  @session_key "sanctum_session_token"
 
   using do
     quote do
-      @endpoint PrismWeb.Endpoint
+      @endpoint EmissaryWeb.Endpoint
 
       use PrismWeb, :verified_routes
 
@@ -143,6 +143,25 @@ defmodule PrismWeb.ConnCase do
   defmacro live_authenticated(conn, path) do
     quote do
       {:ok, view, html} = live(unquote(conn), unquote(path))
+      {view, html}
+    end
+  end
+
+  @doc """
+  The page path for an athanor: `/a/<route>` + `suffix`. Defaults to Home,
+  where `log_in_user/3` seats the person.
+  """
+  def athanor_path(suffix, athanor \\ nil) do
+    athanor = athanor || Sanctum.Tenancy.Athanors.home!()
+    PrismWeb.Focus.path(athanor, suffix)
+  end
+
+  @doc "Mount `suffix` under the athanor in focus (Home by default); returns `{view, html}`."
+  defmacro mount_athanor(conn, suffix, athanor \\ nil) do
+    quote do
+      {:ok, view, html} =
+        live(unquote(conn), PrismWeb.ConnCase.athanor_path(unquote(suffix), unquote(athanor)))
+
       {view, html}
     end
   end

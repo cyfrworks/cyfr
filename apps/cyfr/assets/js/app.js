@@ -207,6 +207,14 @@ let liveSocket = new LiveSocket("/live", Socket, {
 
 liveSocket.connect()
 
+// The PWA's service worker, by its literal path: `/sw.js` is served
+// undigested so the registration is stable across releases.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {})
+  })
+}
+
 window.liveSocket = liveSocket
 
 window.addEventListener("phx:clipboard", (e) => {

@@ -55,8 +55,11 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     {:noreply, socket |> assign(:query, query) |> load_items()}
   end
 
+  # Every target is a page of the athanor in focus: the palette speaks in
+  # page paths and the focus prefix is added here, once.
   def handle_event("pick", %{"to" => path}, socket) when is_binary(path) and path != "" do
-    {:noreply, socket |> close() |> push_navigate(to: path)}
+    route = PrismWeb.Focus.route_of(socket.assigns.context)
+    {:noreply, socket |> close() |> push_navigate(to: PrismWeb.Focus.path(route, path))}
   end
 
   def handle_event("pick", _params, socket), do: {:noreply, close(socket)}

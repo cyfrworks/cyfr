@@ -5,7 +5,7 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
   # Session cookies must be http_only + SameSite=Lax unconditionally; the
   # `secure` flag must track the :cookie_secure application env (true in prod,
   # false in dev/test) — runtime.exs sets it to true under the prod block.
-  # Same invariants apply to PrismWeb.Endpoint — both are tested here.
+  # There is one endpoint and one cookie: `_cyfr_key`.
 
   use ExUnit.Case, async: false
 
@@ -21,7 +21,7 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     :ok
   end
 
-  for endpoint <- [EmissaryWeb.Endpoint, PrismWeb.Endpoint] do
+  for endpoint <- [EmissaryWeb.Endpoint] do
     describe "#{inspect(endpoint)}.session_options/0" do
       @endpoint endpoint
 
@@ -63,9 +63,9 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     test "emitted Set-Cookie includes HttpOnly, SameSite=Lax, Secure when :cookie_secure=true" do
       Application.put_env(:cyfr, :cookie_secure, true)
 
-      conn = run_through_session(EmissaryWeb.Endpoint.session_options(), "_emissary_key")
+      conn = run_through_session(EmissaryWeb.Endpoint.session_options(), "_cyfr_key")
 
-      attrs = conn_set_cookie(conn, "_emissary_key")
+      attrs = conn_set_cookie(conn, "_cyfr_key")
       assert attrs =~ ~r/HttpOnly/i
       assert attrs =~ ~r/SameSite=Lax/i
       assert attrs =~ ~r/; Secure(;|$)/i
@@ -74,9 +74,9 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     test "emitted Set-Cookie omits Secure when :cookie_secure=false" do
       Application.put_env(:cyfr, :cookie_secure, false)
 
-      conn = run_through_session(PrismWeb.Endpoint.session_options(), "_prism_key")
+      conn = run_through_session(EmissaryWeb.Endpoint.session_options(), "_cyfr_key")
 
-      attrs = conn_set_cookie(conn, "_prism_key")
+      attrs = conn_set_cookie(conn, "_cyfr_key")
       assert attrs =~ ~r/HttpOnly/i
       assert attrs =~ ~r/SameSite=Lax/i
       refute attrs =~ ~r/; Secure(;|$)/i

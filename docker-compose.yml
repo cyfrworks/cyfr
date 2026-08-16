@@ -1,5 +1,5 @@
 # CYFR self-hosted stack:
-#   cyfr        — control plane / API (Emissary :4000) + Prism dashboard (:4001)
+#   cyfr        — the one endpoint (:4000): API, MCP, tinctures, and Prism
 #   porta       — the A.Q.U.A. PWA, served by `vite preview` on :8080
 #                 (also proxies /mcp /api /auth /t to cyfr:4000 so direct-mode
 #                 access on :8080 is same-origin without Caddy)
@@ -24,14 +24,10 @@ services:
     image: ghcr.io/cyfrworks/cyfr:latest
     expose:
       - "4000"
-      - "4001"
     ports:
-      # Loopback-only: the Codex CLI talks to http://127.0.0.1:4000 and the
-      # Prism dashboard is at http://localhost:4001. The PWA reaches cyfr
-      # over the compose network (via Caddy in tls mode, via porta's vite
-      # preview proxy in direct mode).
+      # Loopback-only: the Codex CLI and the browser talk to
+      # http://127.0.0.1:4000; a hostname deploy fronts it with Caddy.
       - "127.0.0.1:4000:4000"
-      - "127.0.0.1:4001:4001"
     volumes:
       - ./data:/app/data
       - ./components:/app/components

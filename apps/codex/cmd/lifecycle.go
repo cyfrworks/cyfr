@@ -261,7 +261,7 @@ components/_bundle/**/node_modules/
 		if composeExists {
 			fmt.Println("Next: run 'cyfr up' to start the stack.")
 			fmt.Println("  A.Q.U.A. PWA:    https://<your CYFR_HOST>/  (TLS mode)  or  http://<your CYFR_HOST>:8080/  (direct)")
-			fmt.Println("  Prism dashboard: http://localhost:4001")
+			fmt.Println("  Prism:           http://localhost:4000")
 		} else {
 			fmt.Println("Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 		}
@@ -415,7 +415,7 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 			} else {
 				fmt.Println("  A.Q.U.A. PWA:    http://<your CYFR_HOST>:8080/   (direct mode)")
 			}
-			fmt.Println("  Prism dashboard: http://localhost:4001")
+			fmt.Println("  Prism:           http://localhost:4000")
 			fmt.Println("")
 			fmt.Println("Optional next steps:")
 			fmt.Println("  cyfr login      authenticate this CLI")

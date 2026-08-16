@@ -32,8 +32,10 @@ defmodule PrismWeb.TopbarLive do
 
   @impl true
   def mount(_params, session, socket) do
+    token = session["sanctum_session_token"]
+
     socket =
-      case PrismWeb.AuthHelpers.authenticate_session(session["session_token"]) do
+      case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
         {:ok, ctx} ->
           if connected?(socket) do
             for topic <- [
@@ -45,6 +47,9 @@ defmodule PrismWeb.TopbarLive do
                 ] do
               Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic(topic, ctx))
             end
+
+            # The person's own memberships change what the switcher lists.
+            Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Tenancy.Members.topic(ctx.user_id))
           end
 
           slug = PrismWeb.AuthHelpers.personal_namespace_slug(ctx.user_id)
@@ -54,7 +59,10 @@ defmodule PrismWeb.TopbarLive do
           |> assign(:current_user, ctx)
           |> assign(:personal_namespace_slug, slug)
           |> assign(:authenticated, true)
-          |> assign(:session_token, session["session_token"])
+          |> assign(:session_token, token)
+          |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
+          |> assign(:badges, %{})
+          |> load_athanors(ctx)
 
         _ ->
           socket
@@ -62,6 +70,9 @@ defmodule PrismWeb.TopbarLive do
           |> assign(:personal_namespace_slug, nil)
           |> assign(:authenticated, false)
           |> assign(:session_token, nil)
+          |> assign(:athanor_route, nil)
+          |> assign(:athanors, [])
+          |> assign(:badges, %{})
       end
 
     {:ok,
@@ -132,6 +143,21 @@ defmodule PrismWeb.TopbarLive do
 
   def handle_info({:build_stopped, metadata, _meas}, socket) do
     {:noreply, track_build_stopped(socket, metadata)}
+  end
+
+  # The tray: one fan-in topic per athanor the person belongs to. Something
+  # happening in an athanor that is not in focus becomes a badge on its row;
+  # the focused one shows its own live indicators.
+  def handle_info({:notify, athanor_id, _kind, _payload}, socket) do
+    if athanor_id == socket.assigns.context.athanor_id do
+      {:noreply, socket}
+    else
+      {:noreply, update(socket, :badges, &Map.update(&1, athanor_id, 1, fn n -> n + 1 end))}
+    end
+  end
+
+  def handle_info({:membership_changed, _change}, socket) do
+    {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
   def handle_info(msg, socket) do
@@ -363,11 +389,67 @@ defmodule PrismWeb.TopbarLive do
 
     ~H"""
     <div class="flex h-12 items-center justify-between gap-2 border-b border-gray-800 bg-gray-900 px-3 text-xs">
-      <!-- Brand -->
-      <.link navigate={~p"/"} class="flex items-center gap-2 lg:w-[15rem] lg:pl-1">
-        <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-7 w-7 rounded-md" />
-        <span class="text-lg font-bold text-white tracking-tight">CYFR</span>
-      </.link>
+      <!-- Brand + the athanor in focus (the switcher: You, then your groups) -->
+      <div class="flex items-center gap-2 lg:w-[15rem] lg:pl-1">
+        <.link navigate="/" class="flex items-center gap-2">
+          <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-7 w-7 rounded-md" />
+          <span class="text-lg font-bold text-white tracking-tight">CYFR</span>
+        </.link>
+        <div :if={@authenticated and length(@athanors) > 1} class="relative">
+          <button
+            type="button"
+            phx-click="toggle_popover"
+            phx-value-name="athanors"
+            class={[
+              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors max-w-[10rem]",
+              if(@open_popover == "athanors",
+                do: "bg-gray-800 text-gray-200",
+                else: "text-gray-300 hover:bg-gray-800/60"
+              )
+            ]}
+          >
+            <span class="truncate text-xs font-medium">{focused_name(@athanors, @context)}</span>
+            <span
+              :if={badge_total(@badges, @context) > 0}
+              class="h-2 w-2 rounded-full bg-blue-400 shrink-0"
+            />
+            <span class="text-gray-500">▾</span>
+          </button>
+          <div
+            :if={@open_popover == "athanors"}
+            phx-click-away="close_popover"
+            class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-gray-700 bg-gray-900 shadow-xl p-2 z-40"
+          >
+            <ul class="space-y-0.5 text-sm">
+              <li :for={a <- @athanors}>
+                <.link
+                  navigate={PrismWeb.Focus.path(a, "/activities")}
+                  class={[
+                    "flex items-center justify-between rounded-md px-2 py-1.5",
+                    if(a.id == @context.athanor_id,
+                      do: "bg-gray-800 text-white",
+                      else: "text-gray-300 hover:bg-gray-800/60"
+                    )
+                  ]}
+                >
+                  <span class="truncate">
+                    {if a.kind == "person", do: "You", else: a.name}
+                    <span class="text-xs text-gray-500 ml-1">
+                      {Sanctum.Tenancy.Athanors.route_slug(a)}
+                    </span>
+                  </span>
+                  <span
+                    :if={Map.get(@badges, a.id, 0) > 0}
+                    class="ml-2 rounded-full bg-blue-500/80 px-1.5 text-[10px] text-white"
+                  >
+                    {Map.get(@badges, a.id)}
+                  </span>
+                </.link>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
 
       <div class="flex items-center gap-2">
         <!-- Builds (only when active) -->
@@ -391,7 +473,10 @@ defmodule PrismWeb.TopbarLive do
                 </li>
               <% end %>
             </ul>
-            <.link navigate={~p"/builds"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
+            <.link
+              navigate={PrismWeb.Focus.path(@athanor_route, "/builds")}
+              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+            >
               View all builds →
             </.link>
           </:popover>
@@ -418,7 +503,7 @@ defmodule PrismWeb.TopbarLive do
               <% end %>
             </ul>
             <.link
-              navigate={~p"/tinctures"}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/tinctures")}
               class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
             >
               Open Tinctures →
@@ -447,7 +532,7 @@ defmodule PrismWeb.TopbarLive do
               <% end %>
             </ul>
             <.link
-              navigate={~p"/schedules"}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/schedules")}
               class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
             >
               All schedules →
@@ -483,7 +568,7 @@ defmodule PrismWeb.TopbarLive do
               </div>
             </dl>
             <.link
-              navigate={~p"/activities"}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/activities")}
               class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
             >
               View activity →
@@ -517,7 +602,7 @@ defmodule PrismWeb.TopbarLive do
               <% end %>
             </ul>
             <.link
-              navigate={~p"/executions?status=running"}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/executions?status=running")}
               class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
             >
               View all executions →
@@ -556,7 +641,7 @@ defmodule PrismWeb.TopbarLive do
               <% end %>
             </ul>
             <.link
-              navigate={~p"/activities?status=pending"}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/activities?status=pending")}
               class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
             >
               View activity →
@@ -632,6 +717,33 @@ defmodule PrismWeb.TopbarLive do
       </div>
     </div>
     """
+  end
+
+  # The athanors the person may work in — their own first, then their
+  # groups — each subscribed on its notify topic for the tray badges.
+  defp load_athanors(socket, ctx) do
+    athanors = Sanctum.Tenancy.list_athanors(ctx)
+
+    if connected?(socket) do
+      for a <- athanors do
+        Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.Notify.topic(a.id))
+        Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(a.id))
+      end
+    end
+
+    assign(socket, :athanors, athanors)
+  end
+
+  defp focused_name(athanors, ctx) do
+    case Enum.find(athanors, &(&1.id == ctx.athanor_id)) do
+      %{kind: "person"} -> "You"
+      %{name: name} -> name
+      nil -> "Athanor"
+    end
+  end
+
+  defp badge_total(badges, ctx) do
+    badges |> Map.delete(ctx.athanor_id) |> Map.values() |> Enum.sum()
   end
 
   # ----------------------------------------------------------------------------

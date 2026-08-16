@@ -42,14 +42,17 @@ config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
 config :cyfr, :consent_source, Sanctum.Consent.Source.DB
 
 # Configures the endpoint
+# The one endpoint: the API, the MCP transport, tinctures, and the Prism
+# LiveViews all answer on it — one origin, one cookie, one login.
 config :cyfr, EmissaryWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [json: EmissaryWeb.ErrorJSON],
+    formats: [html: PrismWeb.ErrorHTML, json: EmissaryWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Emissary.PubSub
+  pubsub_server: Emissary.PubSub,
+  live_view: [signing_salt: "Pr1smLV0"]
 
 # Configures Elixir's Logger
 config :logger, :default_formatter,
@@ -126,17 +129,6 @@ config :cyfr, pubsub_name: Emissary.PubSub
 # Audit sink configuration. Ships with the Console sink; a deployment can add
 # SIEM/object-store sinks via release runtime config.
 config :cyfr, :audit_sinks, [Arca.AuditSinks.Console]
-
-# Prism Dashboard Endpoint
-config :cyfr, PrismWeb.Endpoint,
-  url: [host: "localhost"],
-  adapter: Bandit.PhoenixAdapter,
-  render_errors: [
-    formats: [html: PrismWeb.ErrorHTML],
-    layout: false
-  ],
-  pubsub_server: Emissary.PubSub,
-  live_view: [signing_salt: "Pr1smLV0"]
 
 # Prism esbuild configuration
 config :esbuild,

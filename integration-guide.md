@@ -991,7 +991,7 @@ GET /t/home/local/stock-dashboard/app.js       → static asset
 
 Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
 
-`frame-ancestors *` is intentional: the platform's own shells that embed tinctures are cross-origin to this endpoint (Prism runs on `:4001` and the Porta PWA on `:8080` in direct mode, while tinctures are served on `:4000`), so a fixed allowlist would break embedding across deployment modes. Framing is not an escalation path — the iframe is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request nonce, and private tinctures require a credential a third-party framer cannot obtain.
+`frame-ancestors 'self'`: tinctures are framed by the Prism shell on the same origin (one endpoint serves both), so nothing else may frame them. The iframe is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request nonce, and private tinctures require a credential a third-party framer cannot obtain.
 
 Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles.
 
@@ -1030,9 +1030,6 @@ A typical live-data pipeline:
 | `CYFR_HOST` | `localhost` | Hostname for URL generation (not the bind address) |
 | `CYFR_PORT` | `4000` | Server port |
 | `CYFR_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the MCP endpoint |
-| `CYFR_PRISM_HOST` | same as `CYFR_HOST` | Prism dashboard hostname |
-| `CYFR_PRISM_PORT` | `4001` | Prism dashboard port |
-| `CYFR_PRISM_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the Prism endpoint |
 | `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
 | `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
 | `CYFR_COMPONENTS_PATH` | `components` | Directory for component sources |
@@ -1141,7 +1138,7 @@ cyfr key create --name "my-app" --type service
 #    Authorization: Bearer cyfr_sk_...
 ```
 
-The Prism dashboard is available at `http://localhost:4001` for visual monitoring of executions, builds, components, and real-time agent formula progress.
+The Prism dashboard is available at `http://localhost:4000` (the same endpoint as the API) for visual monitoring of executions, builds, components, and real-time agent formula progress.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 
@@ -1169,6 +1166,6 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
 - React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
-- View at `localhost:4001` (Prism → Tinctures tab) or `/t/:athanor/:publisher/:name` if public
+- View at `localhost:4000` (Prism → Tinctures tab) or `/t/:athanor/:publisher/:name` if public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

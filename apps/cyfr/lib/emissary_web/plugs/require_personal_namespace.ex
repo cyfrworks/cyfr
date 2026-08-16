@@ -18,9 +18,13 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
      has claimed their personal namespace. Populate the cache on success.
   5. On still-no-claim, halt the conn and redirect to `/claim-namespace`.
 
-  `/live/*` is NOT bypassed — LiveSocket WS upgrades carry the session
-  cookie through the `:browser` pipeline, so gating them at the plug level
-  prevents a dashboard LiveView from mounting for a not-yet-claimed user.
+  This plug answers HTTP GETs. The LiveView socket is handled by the
+  endpoint before the router and never passes through here, so the
+  connected mount is gated again in `PrismWeb.LiveAuth`.
+
+  `/legal` and `/login` are bypassed: a person ahead of the claim gate must
+  reach the policy-acceptance page (cyfr.run asks for it before the claim)
+  and the sign-in page.
   """
 
   import Plug.Conn
@@ -30,7 +34,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   alias Compendium.Registry.CredentialStore
   alias EmissaryWeb.Plugs.PersonalNamespaceCache
 
-  @bypass_prefixes ~w(/claim-namespace /auth /api/health /mcp /assets /t)
+  @bypass_prefixes ~w(/claim-namespace /legal /login /auth /api/health /mcp /assets /t)
 
   def init(opts), do: opts
 

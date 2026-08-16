@@ -5,9 +5,11 @@ defmodule PrismWeb.LiveAuth do
   @moduledoc """
   LiveView on_mount hook for authentication.
 
-  Loads the session token from the Phoenix session, authenticates it via
-  Sanctum, and assigns `:current_user` (a Context) to the socket.
-  Redirects to /login if unauthenticated.
+  Loads the session token from the cookie session (the one this origin
+  has, written by the auth callback), authenticates it via Sanctum, and
+  assigns `:current_user` (a Context) to the socket. Redirects to /login
+  if unauthenticated and to the claim gate if the person has no namespace
+  yet.
 
   A mounted socket also lets go when the person's standing changes: their
   sessions are revoked (server-denied, or a platform admin ejected them),
@@ -20,9 +22,16 @@ defmodule PrismWeb.LiveAuth do
   import Phoenix.Component
 
   def on_mount(:require_auth, _params, session, socket) do
-    token = session["session_token"]
+    token = session["sanctum_session_token"]
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
+      # A valid session whose person has not claimed a namespace yet loads
+      # unauthenticated: the claim gate comes first. The HTTP plug sends the
+      # first GET there; the LiveView socket never passes the router, so the
+      # connected mount is gated here.
+      {:ok, %{authenticated: false}} ->
+        {:halt, redirect(socket, to: "/claim-namespace")}
+
       {:ok, ctx} ->
         slug = PrismWeb.AuthHelpers.personal_namespace_slug(ctx.user_id)
 

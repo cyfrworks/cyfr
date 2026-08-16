@@ -16,13 +16,19 @@ defmodule PrismWeb.AuthHelpers do
   @doc """
   Authenticate a session token and load a Sanctum.Context.
 
-  Returns `{:ok, ctx}` on success, `{:error, reason}` on failure.
+  Returns `{:ok, ctx}` on success, `{:error, reason}` on failure. With an
+  `athanor_id`, the context is focused on that athanor
+  (`Sanctum.Context.focus/2`) — how a nested LiveView rendered by the layout
+  (topbar, AQUA overlay) follows the page's focus, since it mounts with the
+  session and no URL.
   """
-  @spec authenticate_session(String.t() | nil) ::
+  @spec authenticate_session(String.t() | nil, String.t() | nil) ::
           {:ok, Context.t()} | {:error, :unauthenticated | :no_athanor | :namespace_unavailable}
-  def authenticate_session(nil), do: {:error, :unauthenticated}
+  def authenticate_session(token, athanor_id \\ nil)
 
-  def authenticate_session(token) when is_binary(token) do
+  def authenticate_session(nil, _athanor_id), do: {:error, :unauthenticated}
+
+  def authenticate_session(token, athanor_id) when is_binary(token) do
     case Session.load(token, surface: :console) do
       {:ok, ctx} ->
         ctx =
@@ -30,14 +36,13 @@ defmodule PrismWeb.AuthHelpers do
           |> Sanctum.Tenancy.resolve_into()
           |> ensure_namespace()
 
-        case Sanctum.Context.tenant_ok(ctx) do
-          {:error, :missing_tenant} ->
-            {:error, :no_athanor}
-
-          :ok ->
-            Cyfr.LoggerContext.set_from_context(ctx)
-            slide_session(token)
-            {:ok, ctx}
+        with :ok <- Sanctum.Context.tenant_ok(ctx),
+             {:ok, ctx} <- focus(ctx, athanor_id) do
+          Cyfr.LoggerContext.set_from_context(ctx)
+          slide_session(token)
+          {:ok, ctx}
+        else
+          {:error, _} -> {:error, :no_athanor}
         end
 
       {:error, :namespace_unavailable} ->
@@ -50,6 +55,10 @@ defmodule PrismWeb.AuthHelpers do
         {:error, :unauthenticated}
     end
   end
+
+  defp focus(ctx, nil), do: {:ok, ctx}
+  defp focus(%{authenticated: false} = ctx, _athanor_id), do: {:ok, ctx}
+  defp focus(ctx, athanor_id), do: Sanctum.Context.focus(ctx, athanor_id)
 
   # Activity-based ("sliding window") session refresh. Fire-and-forget so the
   # hot path isn't blocked on a SQLite write; Session.refresh_if_stale/1 itself

@@ -5,25 +5,15 @@ defmodule PrismWeb do
   @moduledoc """
   The entrypoint for defining the Prism web interface.
 
-  This can be used in your application as:
+  Prism is the LiveView face served by the one endpoint
+  (`EmissaryWeb.Endpoint`, routes in `EmissaryWeb.Router`). This can be
+  used in your application as:
 
       use PrismWeb, :controller
       use PrismWeb, :live_view
       use PrismWeb, :html
 
   """
-
-  def static_paths, do: ~w(assets fonts images sdk favicon.ico robots.txt)
-
-  def router do
-    quote do
-      use Phoenix.Router, helpers: false
-
-      import Plug.Conn
-      import Phoenix.Controller
-      import Phoenix.LiveView.Router
-    end
-  end
 
   def controller do
     quote do
@@ -85,12 +75,13 @@ defmodule PrismWeb do
     end
   end
 
+  # Prism's LiveViews mount in the one endpoint; their routes are its routes.
   def verified_routes do
     quote do
       use Phoenix.VerifiedRoutes,
-        endpoint: PrismWeb.Endpoint,
-        router: PrismWeb.Router,
-        statics: PrismWeb.static_paths()
+        endpoint: EmissaryWeb.Endpoint,
+        router: EmissaryWeb.Router,
+        statics: EmissaryWeb.static_paths()
     end
   end
 

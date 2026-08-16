@@ -72,6 +72,19 @@ defmodule EmissaryWeb.Telemetry do
         reporter_options: [buckets: [10, 50, 100, 250, 500, 1000]],
         description: "Phoenix router dispatch duration"
       ),
+      # The Prism LiveViews mount on this endpoint.
+      distribution("phoenix.live_view.mount.stop.duration",
+        tags: [:view],
+        unit: {:native, :millisecond},
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000]],
+        description: "LiveView mount duration"
+      ),
+      distribution("phoenix.live_view.handle_event.stop.duration",
+        tags: [:view, :event],
+        unit: {:native, :millisecond},
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000]],
+        description: "LiveView event duration"
+      ),
       counter("phoenix.router_dispatch.exception.duration",
         tags: [:route],
         description: "Phoenix router dispatch exceptions"

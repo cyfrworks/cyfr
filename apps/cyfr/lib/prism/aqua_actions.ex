@@ -392,15 +392,22 @@ defmodule Prism.AquaActions do
     end
   end
 
-  # GET-mounted router paths minus the exclusions — memoized, since the
-  # router's route table is fixed for the VM lifetime.
+  # The Prism page paths — the router's routes under `/a/:athanor/…` with
+  # the focus prefix stripped (an intent addresses a page; the athanor in
+  # focus is added when it is pushed) — minus the exclusions. Memoized,
+  # since the router's route table is fixed for the VM lifetime.
+  @focus_prefix "/a/:athanor"
+
   defp allowed_routes do
     case :persistent_term.get({__MODULE__, :allowed_routes}, :miss) do
       :miss ->
         routes =
-          PrismWeb.Router.__routes__()
-          |> Enum.filter(&(&1.verb == :get and not String.contains?(&1.path, ":")))
-          |> Enum.map(& &1.path)
+          EmissaryWeb.Router.__routes__()
+          |> Enum.filter(
+            &(&1.verb == :get and String.starts_with?(&1.path, @focus_prefix <> "/"))
+          )
+          |> Enum.map(&String.replace_prefix(&1.path, @focus_prefix, ""))
+          |> Enum.reject(&String.contains?(&1, ":"))
           |> Enum.uniq()
           |> Kernel.--(@excluded_routes)
 

@@ -88,7 +88,7 @@ defmodule PrismWeb.ComponentDetailLive do
         {:noreply,
          socket
          |> put_flash(:info, "Execution started.")
-         |> push_navigate(to: ~p"/activities")}
+         |> push_navigate(to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/activities"))}
 
       {:ok, result} ->
         {:noreply, put_flash(socket, :info, "Execution started: #{inspect(result)}")}
@@ -185,7 +185,10 @@ defmodule PrismWeb.ComponentDetailLive do
     <div class="space-y-6">
       <div class="flex items-start justify-between gap-4">
         <div>
-          <a href={~p"/components"} class="text-sm text-gray-500 hover:text-gray-300">
+          <a
+            href={PrismWeb.Focus.path(@athanor_route, "/components")}
+            class="text-sm text-gray-500 hover:text-gray-300"
+          >
             &larr; Back to Components
           </a>
           <h2 class="text-lg font-semibold text-white mt-1">{@ref}</h2>

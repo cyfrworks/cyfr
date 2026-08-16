@@ -70,10 +70,12 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :opus, :execute, :stop], measurements, metadata, _config) do
     safe_broadcast("prism:executions", metadata, {:execution_completed, metadata, measurements})
+    safe_notify(metadata, :execution_finished)
   end
 
   def handle_event([:cyfr, :opus, :execute, :exception], measurements, metadata, _config) do
     safe_broadcast("prism:executions", metadata, {:execution_failed, metadata, measurements})
+    safe_notify(metadata, :execution_failed)
   end
 
   def handle_event([:cyfr, :emissary, :request], measurements, metadata, _config) do
@@ -159,6 +161,24 @@ defmodule Prism.TelemetryBridge do
   rescue
     e ->
       Logger.warning("[TelemetryBridge] PubSub broadcast error: #{Exception.message(e)}")
+      :ok
+  end
+
+  # The athanor's fan-in notify topic (the tray badges): only root executions
+  # count — a chain's children are the same piece of work.
+  defp safe_notify(metadata, kind) do
+    with athanor_id when is_binary(athanor_id) and athanor_id != "" <- metadata[:athanor_id],
+         nil <- metadata[:parent_execution_id] do
+      Sanctum.Notify.broadcast(athanor_id, kind, %{
+        execution_id: metadata[:execution_id],
+        reference: metadata[:reference]
+      })
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[TelemetryBridge] notify error: #{Exception.message(e)}")
       :ok
   end
 

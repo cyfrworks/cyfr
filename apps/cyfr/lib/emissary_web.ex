@@ -20,7 +20,10 @@ defmodule EmissaryWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images favicon.ico robots.txt)
+  # `manifest.webmanifest` and `sw.js` are the PWA's; the service worker is
+  # registered by its literal path and both are served undigested.
+  def static_paths,
+    do: ~w(assets fonts images sdk favicon.ico robots.txt manifest.webmanifest sw.js)
 
   def router do
     quote do
@@ -29,6 +32,7 @@ defmodule EmissaryWeb do
       # Import common connection and controller functions to use in pipelines
       import Plug.Conn
       import Phoenix.Controller
+      import Phoenix.LiveView.Router
     end
   end
 

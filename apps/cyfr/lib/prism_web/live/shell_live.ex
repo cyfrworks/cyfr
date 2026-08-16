@@ -6,8 +6,6 @@ defmodule PrismWeb.ShellLive do
 
   alias Phoenix.LiveView.JS
 
-  @compile {:no_warn_undefined, [Opus]}
-
   require Logger
 
   @moduledoc """
@@ -129,6 +127,7 @@ defmodule PrismWeb.ShellLive do
     tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
 
     if tincture do
+      # The public address: the one origin plus the tincture's path.
       url =
         EmissaryWeb.Endpoint.url() <>
           Cyfr.TinctureHelpers.tincture_path(
@@ -388,18 +387,17 @@ defmodule PrismWeb.ShellLive do
     |> assign(:current_preview_index, 0)
   end
 
+  # Same origin as the shell itself: a relative path, so the iframe is
+  # never cross-origin whatever hostname or proxy the browser came in through.
   defp build_tincture_url(socket, t) do
-    base =
-      EmissaryWeb.Endpoint.url() <>
-        Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name)
+    base = Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name)
 
     # Short-lived, single-purpose access token instead of the raw session
     # token — a credential must never travel in a URL/query string.
     "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
   end
 
-  # Build an absolute asset URL for icons/previews against EmissaryWeb (the
-  # tincture asset route lives there, not on PrismWeb). Returns nil for missing
+  # Build a same-origin asset URL for icons/previews. Returns nil for missing
   # paths or non-image extensions — server-side validators in
   # `Cyfr.TinctureHelpers.serve_asset/4` re-check everything; this is a fast
   # client-side reject so we don't emit obviously broken URLs.
@@ -413,8 +411,7 @@ defmodule PrismWeb.ShellLive do
       encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
 
       base =
-        EmissaryWeb.Endpoint.url() <>
-          Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name) <>
+        Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name) <>
           "/" <> encoded
 
       "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
@@ -583,7 +580,9 @@ defmodule PrismWeb.ShellLive do
         # roots the invocation, and a tincture without one does not run —
         # granting it is the fix, and the error says so.
         run_result =
-          Opus.run_root_edge(tincture_ctx, tincture_ref, reference, input, route: :protected)
+          Cyfr.Execution.run_root_edge(tincture_ctx, tincture_ref, reference, input,
+            route: :protected
+          )
 
         case run_result do
           {:ok, result} ->

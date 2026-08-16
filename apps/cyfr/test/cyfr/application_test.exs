@@ -57,14 +57,13 @@ defmodule Cyfr.ApplicationTest do
       refute EmissaryWeb.Endpoint in ids
     end
 
-    test "endpoints live under the web tier" do
+    test "the endpoint lives under the web tier" do
       ids =
         Cyfr.WebSupervisor
         |> Supervisor.which_children()
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
       assert EmissaryWeb.Endpoint in ids
-      assert PrismWeb.Endpoint in ids
       refute Arca.Repo in ids
     end
   end

@@ -38,12 +38,14 @@ defmodule PrismWeb.EmbeddedShell do
     if socket.assigns[:context] do
       socket
     else
-      case session["session_token"] && Session.load(session["session_token"], surface: :console) do
+      token = session["sanctum_session_token"]
+
+      case token && Session.load(token, surface: :console) do
         {:ok, ctx} ->
           socket
           |> assign(:context, ctx)
           |> assign(:current_user, ctx)
-          |> assign(:session_token, session["session_token"])
+          |> assign(:session_token, token)
 
         _ ->
           socket

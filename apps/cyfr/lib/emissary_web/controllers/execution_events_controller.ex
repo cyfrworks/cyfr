@@ -13,15 +13,13 @@ defmodule EmissaryWeb.ExecutionEventsController do
   the given sequence number).
   """
 
-  @compile {:no_warn_undefined, [Opus]}
-
   use EmissaryWeb, :controller
 
   @keep_alive_interval_ms 15_000
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
-      not Code.ensure_loaded?(Opus) ->
+      not Cyfr.Execution.available?() ->
         conn
         |> put_status(503)
         |> json(%{"error" => "Execution event streaming unavailable (Opus not loaded)"})
@@ -105,10 +103,10 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # a platform-scoped viewer may carry a different one than the record it
   # was authorized to read.
   defp stream_events(conn, execution_id, last_seq, exec) do
-    Opus.subscribe_events(execution_id, exec)
+    Cyfr.Execution.subscribe_events(execution_id, exec)
 
     # Replay buffered events since last_seq
-    buffered = Opus.events_since(execution_id, last_seq, exec.athanor_id)
+    buffered = Cyfr.Execution.events_since(execution_id, last_seq, exec.athanor_id)
 
     {conn, terminal?} =
       Enum.reduce_while(buffered, {conn, false}, fn event, {acc_conn, _} ->
@@ -124,7 +122,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
       end)
 
     if terminal? do
-      Opus.unsubscribe_events(execution_id, exec)
+      Cyfr.Execution.unsubscribe_events(execution_id, exec)
       conn
     else
       deadline = System.monotonic_time(:millisecond) + max_stream_ms()
@@ -139,7 +137,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # client reconnects with Last-Event-ID and misses nothing.
   defp event_loop(conn, execution_id, exec, deadline) do
     if System.monotonic_time(:millisecond) >= deadline do
-      Opus.unsubscribe_events(execution_id, exec)
+      Cyfr.Execution.unsubscribe_events(execution_id, exec)
       conn
     else
       receive do
@@ -147,14 +145,14 @@ defmodule EmissaryWeb.ExecutionEventsController do
           case send_sse_event(conn, event) do
             {:ok, conn} ->
               if terminal_event?(event) do
-                Opus.unsubscribe_events(execution_id, exec)
+                Cyfr.Execution.unsubscribe_events(execution_id, exec)
                 conn
               else
                 event_loop(conn, execution_id, exec, deadline)
               end
 
             {:error, _} ->
-              Opus.unsubscribe_events(execution_id, exec)
+              Cyfr.Execution.unsubscribe_events(execution_id, exec)
               conn
           end
       after
@@ -164,7 +162,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
               event_loop(conn, execution_id, exec, deadline)
 
             {:error, _} ->
-              Opus.unsubscribe_events(execution_id, exec)
+              Cyfr.Execution.unsubscribe_events(execution_id, exec)
               conn
           end
       end

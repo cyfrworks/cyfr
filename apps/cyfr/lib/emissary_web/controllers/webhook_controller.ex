@@ -28,8 +28,6 @@ defmodule EmissaryWeb.WebhookController do
 
   use EmissaryWeb, :controller
 
-  @compile {:no_warn_undefined, [Opus.Executor, Opus, Opus.Chain]}
-
   require Logger
 
   alias Emissary.MCP.RequestLog
@@ -207,7 +205,7 @@ defmodule EmissaryWeb.WebhookController do
     # up the execution machinery — refuse the request cleanly in that
     # window instead of accepting work that noproc-crashes in the task.
     spawn_result =
-      if is_pid(Process.whereis(Opus.ExecutionSemaphore)) do
+      if Cyfr.Execution.available?() do
         Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
           run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time)
@@ -251,7 +249,7 @@ defmodule EmissaryWeb.WebhookController do
     try do
       # A webhook fires under its bound profile's consent — the binding is
       # enforced at create/update and by the NOT NULL column.
-      run_result = Opus.run_root(ctx, webhook.profile_id, webhook.target_ref, input, [])
+      run_result = Cyfr.Execution.run_root(ctx, webhook.profile_id, webhook.target_ref, input, [])
 
       case run_result do
         {:ok, result} ->

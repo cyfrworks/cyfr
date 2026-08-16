@@ -2,6 +2,14 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule EmissaryWeb.Endpoint do
+  @moduledoc """
+  The one endpoint. The API, the MCP transport, tinctures and the Prism
+  LiveViews all answer here — one origin, one cookie, one login, one
+  `check_origin` — so a CM5 kiosk, a phone and a laptop each need exactly
+  one URL. Headless is a deployment that omits the HTML routes, not a
+  second endpoint.
+  """
+
   use Phoenix.Endpoint, otp_app: :cyfr
 
   # The session will be stored in the cookie and signed,
@@ -9,27 +17,29 @@ defmodule EmissaryWeb.Endpoint do
   # Set :encryption_salt if you would also like to encrypt it.
   @default_session_salt "CZdqUO1/"
 
-  # socket "/live", Phoenix.LiveView.Socket,
-  #   websocket: [connect_info: [session: @session_options]],
-  #   longpoll: [connect_info: [session: @session_options]]
-
   @doc """
   Session cookie options. Public so tests can assert the security flags.
   Must emit `http_only: true`, `same_site: "Lax"`, and `secure:` tied to
-  `:cookie_secure` (true in prod, false in dev/test).
+  `:cookie_secure` (true in prod, false in dev/test). Thirty days: the
+  browser session is the one credential a person's devices hold.
   """
   def session_options do
     salt = Application.get_env(:cyfr, :emissary_session_salt, @default_session_salt)
 
     [
       store: :cookie,
-      key: "_emissary_key",
+      key: "_cyfr_key",
       signing_salt: salt,
       same_site: "Lax",
       http_only: true,
-      secure: Cyfr.RuntimeConfig.cookie_secure?()
+      secure: Cyfr.RuntimeConfig.cookie_secure?(),
+      max_age: 30 * 24 * 60 * 60
     ]
   end
+
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: {__MODULE__, :session_options, []}]],
+    longpoll: [connect_info: [session: {__MODULE__, :session_options, []}]]
 
   # Serve at "/" the static files from "priv/static" directory.
   #
@@ -40,12 +50,15 @@ defmodule EmissaryWeb.Endpoint do
     at: "/",
     from: :cyfr,
     gzip: not code_reloading?,
-    only: EmissaryWeb.static_paths()
+    only: EmissaryWeb.static_paths(),
+    cache_static_manifest: "priv/static/cache_manifest.json"
   )
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
   if code_reloading? do
+    socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
+    plug(Phoenix.LiveReloader)
     plug(Phoenix.CodeReloader)
   end
 
@@ -69,32 +82,14 @@ defmodule EmissaryWeb.Endpoint do
   plug(Plug.MethodOverride)
   plug(Plug.Head)
   plug(:dynamic_session)
-  plug(:security_headers)
+  # Security headers are a pipeline concern now: the API/MCP/webhook
+  # pipelines carry the closed set (`EmissaryWeb.Plugs.ApiSecurityHeaders`),
+  # the browser pipeline the LiveView-compatible one
+  # (`EmissaryWeb.Plugs.BrowserCSP`), and tinctures their own.
   plug(EmissaryWeb.Router)
 
   defp dynamic_session(conn, _opts) do
     opts = Plug.Session.init(session_options())
     Plug.Session.call(conn, opts)
-  end
-
-  defp security_headers(conn, _opts) do
-    headers = [
-      {"x-content-type-options", "nosniff"},
-      {"x-frame-options", "DENY"},
-      {"referrer-policy", "strict-origin-when-cross-origin"},
-      {"content-security-policy", "default-src 'none'; frame-ancestors 'none'"}
-    ]
-
-    # Add HSTS only when serving over TLS (production)
-    headers =
-      if conn.scheme == :https do
-        [{"strict-transport-security", "max-age=63072000; includeSubDomains"} | headers]
-      else
-        headers
-      end
-
-    Enum.reduce(headers, conn, fn {key, value}, conn ->
-      Plug.Conn.put_resp_header(conn, key, value)
-    end)
   end
 end

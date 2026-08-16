@@ -33,8 +33,6 @@ defmodule PrismWeb.AquaLive do
   alias PrismWeb.AquaLive.AgentState
   alias PrismWeb.AquaLive.View
 
-  @compile {:no_warn_undefined, [Opus]}
-
   @agent_ref "formula:local.aqua"
   @list_models_ref "formula:local.list-models"
 
@@ -46,7 +44,10 @@ defmodule PrismWeb.AquaLive do
   @impl true
   def mount(_params, session, socket) do
     socket =
-      case PrismWeb.AuthHelpers.authenticate_session(session["session_token"]) do
+      case PrismWeb.AuthHelpers.authenticate_session(
+             session["sanctum_session_token"],
+             session["athanor_id"]
+           ) do
         {:ok, ctx} ->
           sid = PrismWeb.ActiveContext.session_id(session)
 
@@ -152,10 +153,10 @@ defmodule PrismWeb.AquaLive do
         ctx = socket.assigns[:context]
 
         if opus_available?() do
-          if ctx, do: Opus.unsubscribe_events(exec_id, ctx)
+          if ctx, do: Cyfr.Execution.unsubscribe_events(exec_id, ctx)
 
           case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-                 if ctx, do: Opus.cancel(ctx, exec_id)
+                 if ctx, do: Cyfr.Execution.cancel(ctx, exec_id)
                end) do
             {:ok, _pid} ->
               :ok
@@ -622,7 +623,7 @@ defmodule PrismWeb.AquaLive do
       end)
 
     if socket.assigns.current_execution_id do
-      Opus.unsubscribe_events(
+      Cyfr.Execution.unsubscribe_events(
         socket.assigns.current_execution_id,
         socket.assigns.context
       )
@@ -659,7 +660,7 @@ defmodule PrismWeb.AquaLive do
         [%{role: "error", content: err, timestamp: DateTime.utc_now()}]
 
     if socket.assigns.current_execution_id do
-      Opus.unsubscribe_events(
+      Cyfr.Execution.unsubscribe_events(
         socket.assigns.current_execution_id,
         socket.assigns.context
       )
@@ -717,7 +718,7 @@ defmodule PrismWeb.AquaLive do
 
         if opus_available?() and ctx do
           Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-            Opus.cancel(ctx, exec_id)
+            Cyfr.Execution.cancel(ctx, exec_id)
           end)
         end
 
@@ -737,7 +738,7 @@ defmodule PrismWeb.AquaLive do
 
       true ->
         if opus_available?() do
-          Opus.subscribe_events(exec_id, socket.assigns.context)
+          Cyfr.Execution.subscribe_events(exec_id, socket.assigns.context)
         end
 
         {:noreply, assign(socket, :current_execution_id, exec_id)}
@@ -862,7 +863,7 @@ defmodule PrismWeb.AquaLive do
   # profile, revoked, or re-consent required) we FAIL CLOSED — never fall back
   # to the operator's context.
   defp run_approved_call(proposal, ctx, args) do
-    case Opus.authority_for(ctx, nil, @agent_ref) do
+    case Cyfr.Execution.authority_for(ctx, nil, @agent_ref) do
       {:ok, authority} ->
         Emissary.MCP.ToolRegistry.call_in_chain(
           proposal.tool,
@@ -1148,10 +1149,10 @@ defmodule PrismWeb.AquaLive do
       }
 
       if ctx && opus_available?() do
-        Opus.unsubscribe_events(exec_id, ctx)
+        Cyfr.Execution.unsubscribe_events(exec_id, ctx)
 
         Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-          Opus.cancel_for_restart(ctx, exec_id, payload)
+          Cyfr.Execution.cancel_for_restart(ctx, exec_id, payload)
         end)
       end
 
@@ -1300,7 +1301,17 @@ defmodule PrismWeb.AquaLive do
 
   defp push_intents(socket, []), do: socket
 
+  # Navigate intents are page paths (`/activities`); the athanor in focus is
+  # added here, so the agent never addresses another athanor's pages.
   defp push_intents(socket, intents) do
+    route = PrismWeb.Focus.route_of(socket.assigns.context)
+
+    intents =
+      Enum.map(intents, fn
+        %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Focus.path(route, to)}
+        intent -> intent
+      end)
+
     push_event(socket, "aqua:intents", %{intents: intents})
   end
 
@@ -1351,7 +1362,7 @@ defmodule PrismWeb.AquaLive do
     existing ++ new_turns
   end
 
-  defp opus_available?, do: Code.ensure_loaded?(Opus.ExecutionEventBuffer)
+  defp opus_available?, do: Cyfr.Execution.available?()
 
   # Set sheet state and broadcast to other tabs on the same session.
   # Last-write-wins is fine — the browser-local localStorage cache via the

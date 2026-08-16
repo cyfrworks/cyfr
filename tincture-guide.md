@@ -72,7 +72,7 @@ components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
 1. Scaffold    cyfr new tincture stock-dashboard       (once — creates HTML/JS/CSS scaffold)
 2. Edit        Edit index.html, app.js, style.css      (any web editor or IDE)
 3. Register    cyfr register                           (index the tincture)
-4. View        Open Prism at localhost:4001 → Tinctures tab, or visit /t/home/local/stock-dashboard
+4. View        Open Prism at localhost:4000 → Tinctures tab, or visit /t/home/local/stock-dashboard
 5. Iterate     Edit HTML/JS/CSS → reload browser (no compile step)
 ```
 
@@ -85,7 +85,7 @@ Vanilla tinctures have no compile step — edit files directly and reload.
 2. Edit        Edit src/App.tsx, add components                     (standard React + TypeScript)
 3. Compile     cyfr build compile t:local.stock-dashboard:0.1.0     (npm install && vite build)
 4. Register    cyfr register                                        (index the built output)
-5. View        Open Prism at localhost:4001 → Tinctures tab
+5. View        Open Prism at localhost:4000 → Tinctures tab
 6. Iterate     Edit source → recompile → reload
 ```
 

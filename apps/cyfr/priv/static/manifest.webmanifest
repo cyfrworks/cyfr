@@ -1,0 +1,14 @@
+{
+  "name": "CYFR",
+  "short_name": "CYFR",
+  "description": "Your athanor: talk to AQUA, open your apps, see every move.",
+  "start_url": "/a",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#030712",
+  "icons": [
+    { "src": "/images/logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/images/logo.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

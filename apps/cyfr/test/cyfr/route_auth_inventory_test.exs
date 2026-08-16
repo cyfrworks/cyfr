@@ -59,35 +59,37 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/api/health"} => :public_health,
     {:get, "/api/health/ready"} => :public_health,
 
-    # PrismWeb — public
-    {:get, "/auth/session"} => :browser_public_auth,
+    # Prism on the one endpoint — public
     {:get, "/auth/logout"} => :browser_public_auth,
     {:get, "/login"} => :browser_public_login,
 
-    # PrismWeb — live_session :authenticated (LiveAuth on_mount)
+    # Prism — live_session :athanor (LiveAuth + Focus on_mount): every page
+    # is `/a/<athanor>/…`, the athanor in focus is the URL's.
     {:get, "/"} => :browser_authenticated,
-    {:get, "/activities"} => :browser_authenticated,
-    {:get, "/enforcements"} => :browser_authenticated,
-    {:get, "/executions"} => :browser_authenticated,
-    {:get, "/components"} => :browser_authenticated,
-    {:get, "/components/:ref"} => :browser_authenticated,
-    {:get, "/registry"} => :browser_authenticated,
-    {:get, "/reports"} => :browser_authenticated,
-    {:get, "/builds"} => :browser_authenticated,
-    {:get, "/connections"} => :browser_authenticated,
-    {:get, "/api-keys"} => :browser_authenticated,
-    {:get, "/members"} => :browser_authenticated,
-    {:get, "/webhooks"} => :browser_authenticated,
-    {:get, "/schedules"} => :browser_authenticated,
-    {:get, "/settings"} => :browser_authenticated,
-    {:get, "/mcp-servers"} => :browser_authenticated,
-    {:get, "/tinctures"} => :browser_authenticated,
-    {:get, "/legal"} => :browser_authenticated
+    {:get, "/a"} => :browser_authenticated,
+    {:get, "/a/:athanor"} => :browser_authenticated,
+    {:get, "/a/:athanor/activities"} => :browser_authenticated,
+    {:get, "/a/:athanor/enforcements"} => :browser_authenticated,
+    {:get, "/a/:athanor/executions"} => :browser_authenticated,
+    {:get, "/a/:athanor/components"} => :browser_authenticated,
+    {:get, "/a/:athanor/components/:ref"} => :browser_authenticated,
+    {:get, "/a/:athanor/registry"} => :browser_authenticated,
+    {:get, "/a/:athanor/reports"} => :browser_authenticated,
+    {:get, "/a/:athanor/builds"} => :browser_authenticated,
+    {:get, "/a/:athanor/connections"} => :browser_authenticated,
+    {:get, "/a/:athanor/api-keys"} => :browser_authenticated,
+    {:get, "/a/:athanor/members"} => :browser_authenticated,
+    {:get, "/a/:athanor/webhooks"} => :browser_authenticated,
+    {:get, "/a/:athanor/schedules"} => :browser_authenticated,
+    {:get, "/a/:athanor/settings"} => :browser_authenticated,
+    {:get, "/a/:athanor/mcp-servers"} => :browser_authenticated,
+    {:get, "/a/:athanor/tinctures"} => :browser_authenticated,
+    {:get, "/a/:athanor/legal"} => :browser_authenticated
   }
 
   test "every HTTP route has a classified auth posture" do
     found =
-      [EmissaryWeb.Router, PrismWeb.Router]
+      [EmissaryWeb.Router]
       |> Enum.flat_map(fn router -> router.__routes__() end)
       |> Enum.map(fn r -> {r.verb, r.path} end)
       |> MapSet.new()

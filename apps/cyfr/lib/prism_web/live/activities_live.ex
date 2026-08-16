@@ -244,8 +244,8 @@ defmodule PrismWeb.ActivitiesLive do
       |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
 
     case params do
-      [] -> ~p"/activities"
-      p -> ~p"/activities?#{p}"
+      [] -> PrismWeb.Focus.path(socket.assigns.athanor_route, "/activities")
+      p -> PrismWeb.Focus.path(socket.assigns.athanor_route, "/activities?#{p}")
     end
   end
 

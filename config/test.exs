@@ -8,11 +8,6 @@ config :cyfr, EmissaryWeb.Endpoint,
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
   server: false
 
-config :cyfr, PrismWeb.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4003],
-  secret_key_base: "prism-test-secret-key-base-minimum-64-characters-long-for-testing-only!",
-  server: false
-
 # Effectively disable the MCP transport rate limit in tests — controller
 # suites drive hundreds of /mcp requests from 127.0.0.1 within one window.
 # MCPRateLimitTest overrides this per-test to exercise the limiter itself.

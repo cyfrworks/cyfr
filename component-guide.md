@@ -1147,7 +1147,7 @@ For tincture development loop, see the [Tincture Reference](tincture-guide.md).
 
 > **`cyfr build compile` auto-registers** — if you build manually with `cargo component build`, run `cyfr register` afterwards. The registry stores a SHA-256 digest and you'll get a `DIGEST_MISMATCH` error if the binary on disk doesn't match.
 
-**Debugging**: `println!`/`eprintln!` writes to CYFR server stdout (run `cyfr up` in foreground). Prism dashboard at `http://localhost:4001` shows real-time execution details.
+**Debugging**: `println!`/`eprintln!` writes to CYFR server stdout (run `cyfr up` in foreground). Prism dashboard at `http://localhost:4000` shows real-time execution details.
 
 **`register` vs `push`**: `register` indexes local components (unsigned, overwritable). `push` signs a local component and uploads it to the registry as a signed, immutable entry.
 

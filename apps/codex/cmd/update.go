@@ -112,12 +112,11 @@ var requiredVolumes = []string{
 }
 
 // requiredPorts must appear in the cyfr service's ports list. Bound to the
-// loopback interface: the Codex CLI talks to http://127.0.0.1:4000 and Prism
-// is at http://localhost:4001, but the un-TLS'd API is never published to the
+// loopback interface: the Codex CLI and the browser talk to
+// http://127.0.0.1:4000, but the un-TLS'd endpoint is never published to the
 // internet (Caddy fronts :80/:443 and reaches cyfr over the compose network).
 var requiredPorts = []string{
 	"127.0.0.1:4000:4000",
-	"127.0.0.1:4001:4001",
 }
 
 // requiredEnvFiles must appear in the cyfr service's env_file list.
@@ -199,7 +198,7 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 		}
 	}
 
-	// ports — ensure :4000 and :4001 are published. We match by container port
+	// ports — ensure :4000 is published. We match by container port
 	// (any host-binding form counts), so an existing "4000:4000" isn't
 	// duplicated; only a project missing the mapping entirely gets the
 	// loopback-bound entry added (existing 0.0.0.0 publishes are left alone).
@@ -277,7 +276,7 @@ func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
 }
 
 // containerPort returns the container-side port of a compose `ports` entry:
-// "127.0.0.1:4001:4000" → "4000", "4000:4000" → "4000", "4000" → "4000",
+// "127.0.0.1:4000:4000" → "4000", "4000:4000" → "4000", "4000" → "4000",
 // "4000:4000/tcp" → "4000".
 func containerPort(mapping string) string {
 	if i := strings.IndexByte(mapping, '/'); i >= 0 {

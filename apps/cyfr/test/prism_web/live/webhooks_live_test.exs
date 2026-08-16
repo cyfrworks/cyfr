@@ -14,7 +14,7 @@ defmodule PrismWeb.WebhooksLiveTest do
 
   describe "GET /webhooks (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/webhooks")
+      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/webhooks"))
     end
   end
 end

@@ -77,7 +77,7 @@ defmodule PrismWeb.MembersLive do
   def handle_event("leave", _params, socket) do
     case call_tool(socket, "member/leave", %{}) do
       {:ok, _} ->
-        {:noreply, redirect(socket, to: ~p"/")}
+        {:noreply, redirect(socket, to: "/")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not leave: #{inspect(reason)}")}
@@ -98,10 +98,15 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
+  # Focus is in the URL: opening another athanor is a link to its pages.
+  # The session's default athanor follows so `/` lands there next time.
   def handle_event("switch", %{"athanor" => athanor_id}, socket) do
     case call_tool(socket, "session/use", %{"athanor" => athanor_id}) do
+      {:ok, %{athanor: %{route: route}}} ->
+        {:noreply, push_navigate(socket, to: PrismWeb.Focus.path(route, "/members"))}
+
       {:ok, _} ->
-        {:noreply, redirect(socket, to: ~p"/members")}
+        {:noreply, redirect(socket, to: "/")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not switch: #{inspect(reason)}")}

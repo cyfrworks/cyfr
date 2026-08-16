@@ -84,7 +84,7 @@ RUN mkdir -p /app/data /app/components \
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-EXPOSE 4000 4001
+EXPOSE 4000
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health || exit 1

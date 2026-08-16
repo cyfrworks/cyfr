@@ -148,6 +148,9 @@ defmodule Opus.Telemetry do
         component_type: record.component_type,
         user_id: record.user_id,
         athanor_id: record.athanor_id,
+        # nil for a root; a chain's children name their parent, so a tray
+        # counts a piece of work once.
+        parent_execution_id: record.parent_execution_id,
         outcome: :success,
         duration_ms: record.duration_ms
       }
@@ -188,6 +191,9 @@ defmodule Opus.Telemetry do
         component_type: record.component_type,
         user_id: record.user_id,
         athanor_id: record.athanor_id,
+        # nil for a root; a chain's children name their parent, so a tray
+        # counts a piece of work once.
+        parent_execution_id: record.parent_execution_id,
         outcome: :failure,
         error: format_error(reason),
         duration_ms: record.duration_ms

@@ -1,6 +1,9 @@
 <div class="flex h-screen flex-col overflow-hidden bg-gray-950">
   <!-- Full-width topbar (carries brand on the left, live indicators on the right) -->
-  {live_render(@socket, PrismWeb.TopbarLive, id: "topbar")}
+  {live_render(@socket, PrismWeb.TopbarLive,
+    id: "topbar",
+    session: %{"athanor_id" => assigns[:athanor] && @athanor.id}
+  )}
 
   <!-- Body row: sidebar + main content -->
   <div class="flex flex-1 overflow-hidden">
@@ -14,44 +17,44 @@
                 Observability
               </p>
             </div>
-            <.nav_link id="nav-activities" href={~p"/activities"} icon="play" label="Activities" active={assigns[:active_nav] == "activities"} />
-            <.nav_link id="nav-executions" href={~p"/executions"} icon="cube" label="Executions" active={assigns[:active_nav] == "executions"} />
-            <.nav_link id="nav-schedules" href={~p"/schedules"} icon="clock" label="Schedules" active={assigns[:active_nav] == "schedules"} />
+            <.nav_link id="nav-activities" href={PrismWeb.Focus.path(@athanor_route, "/activities")} icon="play" label="Activities" active={assigns[:active_nav] == "activities"} />
+            <.nav_link id="nav-executions" href={PrismWeb.Focus.path(@athanor_route, "/executions")} icon="cube" label="Executions" active={assigns[:active_nav] == "executions"} />
+            <.nav_link id="nav-schedules" href={PrismWeb.Focus.path(@athanor_route, "/schedules")} icon="clock" label="Schedules" active={assigns[:active_nav] == "schedules"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Components
               </p>
             </div>
-            <.nav_link id="nav-components" href={~p"/components"} icon="cube" label="Components" active={assigns[:active_nav] == "components"} />
-            <.nav_link id="nav-builds" href={~p"/builds"} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
-            <.nav_link id="nav-registry" href={~p"/registry"} icon="globe" label="Registry" active={assigns[:active_nav] == "registry"} />
+            <.nav_link id="nav-components" href={PrismWeb.Focus.path(@athanor_route, "/components")} icon="cube" label="Components" active={assigns[:active_nav] == "components"} />
+            <.nav_link id="nav-builds" href={PrismWeb.Focus.path(@athanor_route, "/builds")} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
+            <.nav_link id="nav-registry" href={PrismWeb.Focus.path(@athanor_route, "/registry")} icon="globe" label="Registry" active={assigns[:active_nav] == "registry"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Tinctures
               </p>
             </div>
-            <.nav_link id="nav-tinctures" href={~p"/tinctures"} icon="palette" label="Tinctures" active={assigns[:active_nav] == "tinctures"} />
+            <.nav_link id="nav-tinctures" href={PrismWeb.Focus.path(@athanor_route, "/tinctures")} icon="palette" label="Tinctures" active={assigns[:active_nav] == "tinctures"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Configuration
               </p>
             </div>
-            <.nav_link id="nav-connections" href={~p"/connections"} icon="key" label="Connections" active={assigns[:active_nav] == "connections"} />
-            <.nav_link id="nav-api-keys" href={~p"/api-keys"} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
-            <.nav_link id="nav-members" href={~p"/members"} icon="user" label="Members" active={assigns[:active_nav] == "members"} />
-            <.nav_link id="nav-mcp-servers" href={~p"/mcp-servers"} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
-            <.nav_link id="nav-settings" href={~p"/settings"} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
+            <.nav_link id="nav-connections" href={PrismWeb.Focus.path(@athanor_route, "/connections")} icon="key" label="Connections" active={assigns[:active_nav] == "connections"} />
+            <.nav_link id="nav-api-keys" href={PrismWeb.Focus.path(@athanor_route, "/api-keys")} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
+            <.nav_link id="nav-members" href={PrismWeb.Focus.path(@athanor_route, "/members")} icon="user" label="Members" active={assigns[:active_nav] == "members"} />
+            <.nav_link id="nav-mcp-servers" href={PrismWeb.Focus.path(@athanor_route, "/mcp-servers")} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
+            <.nav_link id="nav-settings" href={PrismWeb.Focus.path(@athanor_route, "/settings")} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Other
               </p>
             </div>
-            <.nav_link id="nav-reports" href={~p"/reports"} icon="flag" label="Reports" active={assigns[:active_nav] == "reports"} />
-            <.nav_link id="nav-legal" href={~p"/legal"} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
+            <.nav_link id="nav-reports" href={PrismWeb.Focus.path(@athanor_route, "/reports")} icon="flag" label="Reports" active={assigns[:active_nav] == "reports"} />
+            <.nav_link id="nav-legal" href={PrismWeb.Focus.path(@athanor_route, "/legal")} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
           </nav>
         </div>
       </div>
@@ -67,7 +70,10 @@
            blocks emitted by the agent for navigation / overlay control.
            Cmd+K toggles via the Aqua JS hook on the overlay's root. -->
       <div id="aqua-portal">
-        {live_render(@socket, PrismWeb.AquaLive, id: "aqua-overlay")}
+        {live_render(@socket, PrismWeb.AquaLive,
+          id: "aqua-overlay",
+          session: %{"athanor_id" => assigns[:athanor] && @athanor.id}
+        )}
       </div>
 
       <!-- Phase 2.3 — Cmd+K command palette. The companion JS hook listens for

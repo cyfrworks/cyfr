@@ -113,9 +113,6 @@ if config_env() != :test do
 
     emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
 
-    prism_bind =
-      parse_ip.("CYFR_PRISM_BIND_ADDRESS", env!("CYFR_PRISM_BIND_ADDRESS", :string, "0.0.0.0"))
-
     host = env!("CYFR_HOST", :string, "localhost")
     port = parse_integer.("CYFR_PORT", env!("CYFR_PORT", :string, "4000"))
 
@@ -164,30 +161,6 @@ if config_env() != :test do
 
     config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins ++ extra_mcp_origins
 
-    # Prism Dashboard Endpoint (production)
-    prism_port = parse_integer.("CYFR_PRISM_PORT", env!("CYFR_PRISM_PORT", :string, "4001"))
-    prism_host = env!("CYFR_PRISM_HOST", :string, host)
-
-    config :cyfr, PrismWeb.Endpoint,
-      url: [host: prism_host, port: prism_port],
-      http: [
-        ip: prism_bind,
-        port: prism_port,
-        thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
-      ],
-      check_origin: [
-        "https://#{prism_host}",
-        "http://#{prism_host}",
-        "https://#{prism_host}:#{prism_port}",
-        "http://#{prism_host}:#{prism_port}",
-        "http://localhost",
-        "https://localhost",
-        "http://localhost:#{prism_port}",
-        "https://localhost:#{prism_port}"
-      ],
-      secret_key_base: secret_key_base,
-      server: true
-
     # Derive signing salts from secret_key_base (or use explicit env overrides)
     emissary_salt =
       env!("CYFR_EMISSARY_SESSION_SALT", :string, nil) ||
@@ -195,21 +168,14 @@ if config_env() != :test do
         |> Base.url_encode64(padding: false)
         |> binary_part(0, 16)
 
-    prism_salt =
-      env!("CYFR_PRISM_SESSION_SALT", :string, nil) ||
-        :crypto.hash(:sha256, "prism_session" <> secret_key_base)
-        |> Base.url_encode64(padding: false)
-        |> binary_part(0, 16)
-
-    prism_lv_salt =
-      env!("CYFR_PRISM_LV_SALT", :string, nil) ||
-        :crypto.hash(:sha256, "prism_live_view" <> secret_key_base)
+    lv_salt =
+      env!("CYFR_LV_SALT", :string, nil) ||
+        :crypto.hash(:sha256, "live_view" <> secret_key_base)
         |> Base.url_encode64(padding: false)
         |> binary_part(0, 16)
 
     config :cyfr, :emissary_session_salt, emissary_salt
-    config :cyfr, :prism_session_salt, prism_salt
-    config :cyfr, PrismWeb.Endpoint, live_view: [signing_salt: prism_lv_salt]
+    config :cyfr, EmissaryWeb.Endpoint, live_view: [signing_salt: lv_salt]
 
     # Session cookies must be secure in production (HTTPS-only).
     # Dev/test leave this false so http://localhost works.

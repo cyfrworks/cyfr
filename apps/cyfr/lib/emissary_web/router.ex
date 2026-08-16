@@ -4,16 +4,24 @@
 defmodule EmissaryWeb.Router do
   use EmissaryWeb, :router
 
+  # The browser pipeline serves the Prism LiveViews and the auth pages. The
+  # claim gate plug answers HTTP GETs; LiveView mounts are gated again in
+  # `PrismWeb.LiveAuth`, because the LiveView socket is handled by the
+  # endpoint before the router and never passes through here.
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {PrismWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug EmissaryWeb.Plugs.BrowserCSP
     plug EmissaryWeb.Plugs.RequirePersonalNamespace
   end
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
   end
 
   # Client-driven auth-API endpoints (logout, whoami) self-gate in the
@@ -32,6 +40,7 @@ defmodule EmissaryWeb.Router do
   # the previous transport, and a preflight must not suggest otherwise.
   pipeline :mcp do
     plug :accepts, ["json", "event-stream"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.CORS, methods: ~w(POST)
     plug EmissaryWeb.Plugs.MCPOrigin
     # Before Authenticate so unauthenticated floods never touch DB state.
@@ -52,6 +61,7 @@ defmodule EmissaryWeb.Router do
   # that is the one plug here that it shares.
   pipeline :authenticated_api do
     plug :accepts, ["json", "event-stream"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.CORS, methods: ~w(GET), headers: ~w(last-event-id)
     plug EmissaryWeb.Plugs.MCPOrigin, errors: EmissaryWeb.ApiError
     plug EmissaryWeb.Plugs.MCPRateLimit, bucket: :api, errors: EmissaryWeb.ApiError
@@ -154,14 +164,19 @@ defmodule EmissaryWeb.Router do
 
   # Tincture serving — auth via signed `?_t=` token or Authorization bearer
   # No session cookie auth (EmissaryWeb and PrismWeb have separate session stores).
+  # Tinctures set their own CSP (the controller); the closed set here only
+  # supplies what it does not touch (nosniff, referrer policy, HSTS) — the
+  # controller replaces the CSP and framing headers on what it serves.
   pipeline :tincture do
     plug :accepts, ["html", "json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.ScrubTinctureCredentials
     plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :page, max_requests: 60, window_ms: 60_000
   end
 
   pipeline :tincture_invoke do
     plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
     # POST for invoke, GET for the cross-origin `/t/access-token` mint.
     plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
     # Before the rate limiter so a 429 is scrubbed too — it is logged like any
@@ -177,6 +192,7 @@ defmodule EmissaryWeb.Router do
 
   pipeline :tincture_asset do
     # No :accepts — assets serve arbitrary content types.
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.ScrubTinctureCredentials
     plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :asset, max_requests: 300, window_ms: 60_000
   end
@@ -236,6 +252,7 @@ defmodule EmissaryWeb.Router do
   # exact bytes the sender signed.
   pipeline :webhook do
     plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.WebhookRateLimit
     plug EmissaryWeb.Plugs.VerifyWebhookSignature
     plug EmissaryWeb.Plugs.WebhookIdempotency
@@ -244,5 +261,65 @@ defmodule EmissaryWeb.Router do
   scope "/hooks", EmissaryWeb do
     pipe_through :webhook
     post "/:slug", WebhookController, :invoke
+  end
+
+  # ==========================================================================
+  # Prism — the LiveView face, on this origin
+  # ==========================================================================
+
+  # Sign in and out from the browser. `/login` is the page with the provider
+  # buttons (they lead to `GET /auth/:provider` above); `/auth/logout` drops
+  # the cookie session and retires the Sanctum session behind it.
+  scope "/", PrismWeb do
+    pipe_through :browser
+
+    live "/login", LoginLive, :login
+    get "/auth/logout", SessionController, :logout
+  end
+
+  # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as
+  # `@<namespace>`, a group's by slug. Two tabs can be two athanors, and
+  # "open Home" is a link. `PrismWeb.Focus` resolves the segment and narrows
+  # the context (`Sanctum.Context.focus/2`) before the page mounts.
+  scope "/", PrismWeb do
+    pipe_through :browser
+
+    live_session :athanor,
+      on_mount: [
+        {PrismWeb.LiveAuth, :require_auth},
+        {PrismWeb.Focus, :assign},
+        {PrismWeb.ActiveContext, :assign}
+      ] do
+      live "/", RootRedirectLive, :index
+      live "/a", RootRedirectLive, :index
+
+      scope "/a/:athanor" do
+        live "/", RootRedirectLive, :athanor
+        # /activities: unified activities feed (mcp_log + execution fan-out).
+        live "/activities", ActivitiesLive, :index
+        # /enforcements: live policy-decision feed (Arca.PolicyLog rows from
+        # Opus.Executor + HTTP egress + tincture rate limiter). Click-through
+        # to /activities?request_id=… for the request-anchored causal chain.
+        live "/enforcements", EnforcementsLive, :index
+        # /executions: dedicated Opus execution monitor (parent_execution_id
+        # tree, component_digest, host_policy, WASI trace). Distinct from
+        # /activities which is request-anchored.
+        live "/executions", ExecutionsLive, :index
+        live "/components", ComponentsLive, :index
+        live "/components/:ref", ComponentDetailLive, :show
+        live "/registry", RegistryLive, :index
+        live "/reports", MyReportsLive, :index
+        live "/builds", BuildsLive, :index
+        live "/connections", ConnectionsLive, :index
+        live "/api-keys", ApiKeysLive, :index
+        live "/members", MembersLive, :index
+        live "/webhooks", WebhooksLive, :index
+        live "/schedules", SchedulesLive, :index
+        live "/settings", SettingsLive, :index
+        live "/mcp-servers", McpServersLive, :index
+        live "/tinctures", ShellLive, :index
+        live "/legal", LegalLive, :index
+      end
+    end
   end
 end

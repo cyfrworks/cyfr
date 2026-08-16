@@ -80,12 +80,12 @@ defmodule PrismWeb.ActiveContext do
   on_mount hook that attaches `active_context` to socket assigns and keeps
   it fresh on every `handle_params`.
 
-  Add to the `:authenticated` live_session:
+  Add to the `:athanor` live_session:
 
-      live_session :authenticated,
+      live_session :athanor,
         on_mount: [
           {PrismWeb.LiveAuth, :require_auth},
-          {PrismWeb.LiveClaimGate, :require_claim},
+          {PrismWeb.Focus, :assign},
           {PrismWeb.ActiveContext, :assign}
         ] do
         ...
@@ -111,7 +111,7 @@ defmodule PrismWeb.ActiveContext do
   # cleartext-token suffix). Falls back to the CSRF token for the rare
   # mounts that arrive without a session_token.
   defp session_id_from_session(session) when is_map(session) do
-    seed = session["session_token"] || session["_csrf_token"] || ""
+    seed = session["sanctum_session_token"] || session["_csrf_token"] || ""
 
     case seed do
       "" -> nil
@@ -212,12 +212,24 @@ defmodule PrismWeb.ActiveContext do
 
   defp route_from_uri(nil), do: nil
 
+  # The route is the page within the athanor: `/a/<athanor>` is focus, not
+  # place, and is stripped so the agent sees `/activities`, not
+  # `/a/home/activities`.
   defp route_from_uri(uri) when is_binary(uri) do
     case URI.parse(uri) do
-      %URI{path: path} when is_binary(path) -> path
+      %URI{path: path} when is_binary(path) -> strip_focus(path)
       _ -> nil
     end
   end
+
+  defp strip_focus("/a/" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [_athanor, page] -> "/" <> page
+      [_athanor] -> "/"
+    end
+  end
+
+  defp strip_focus(path), do: path
 
   # Identify the primary focused resource from URL params. Order matters —
   # most-specific match wins.

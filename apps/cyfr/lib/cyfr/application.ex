@@ -108,7 +108,6 @@ defmodule Cyfr.Application do
       # holding resolved header credentials (§4.6).
       Emissary.MCP.ExternalServerReconciler,
       # Prism dashboard
-      PrismWeb.Telemetry,
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Prism.TaskSupervisor},
@@ -119,10 +118,7 @@ defmodule Cyfr.Application do
 
     infra_children = List.flatten(infra_children)
 
-    web_children = [
-      EmissaryWeb.Endpoint,
-      PrismWeb.Endpoint
-    ]
+    web_children = [EmissaryWeb.Endpoint]
 
     # Two tiers under a :rest_for_one root so each has its own restart budget:
     # a crash-looping endpoint exhausts only the web tier (infra keeps running,
@@ -165,7 +161,6 @@ defmodule Cyfr.Application do
   @impl true
   def config_change(changed, _new, removed) do
     EmissaryWeb.Endpoint.config_change(changed, removed)
-    PrismWeb.Endpoint.config_change(changed, removed)
     :ok
   end
 

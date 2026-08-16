@@ -190,6 +190,11 @@ jobs:
             'cyfr\.consent\.bootstrap' \
             ':org([^a-z_]|$)' \
             ':project([^a-z_]|$)' \
+            'PrismWeb\.Endpoint\b' \
+            'Prism\.AuthExchange\b' \
+            'PrismWeb\.LiveClaimGate\b' \
+            'CYFR_PRISM_' \
+            ':4001\b|4001:4001' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then
@@ -198,7 +203,6 @@ jobs:
               fail=1
             fi
           done
-          # enabled in commit 4: 'PrismWeb\.Endpoint\b' 'Prism\.AuthExchange\b' 'CYFR_PRISM_' ':4001\b|4001:4001'
           # enabled in commit 6: 'CYFR_PORTA_'
           # Positive assertions on the shape the patterns protect.
           m=apps/cyfr/priv/repo/migrations/20260815000000_baseline.exs

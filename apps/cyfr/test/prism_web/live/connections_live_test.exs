@@ -15,7 +15,7 @@ defmodule PrismWeb.ConnectionsLiveTest do
 
   describe "GET /connections (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/connections")
+      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/connections"))
     end
   end
 end

@@ -19,8 +19,6 @@ defmodule EmissaryWeb.TinctureController do
 
   use EmissaryWeb, :controller
 
-  @compile {:no_warn_undefined, [Opus]}
-
   # A public URL is the public route regardless of authentication; the
   # private fallback is the protected route.
   defp route_for(:public), do: :public
@@ -38,16 +36,12 @@ defmodule EmissaryWeb.TinctureController do
   @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
                      "img-src 'self' data:; font-src 'self'; "
 
-  # `frame-ancestors *` is deliberate, not an oversight: the first-party shells
-  # that embed tinctures are themselves cross-origin to this endpoint — Prism runs
-  # on :4001 while tinctures are served from EmissaryWeb on :4000, and in direct
-  # mode the Porta PWA runs on :8080 (only same-origin once a reverse proxy fronts
-  # both in TLS mode). A fixed `'self'`/host allowlist would break those embeds
-  # across deployment modes. Framing is not an escalation vector here: the iframe
-  # is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request
-  # nonce, and private tinctures additionally require a credential a third-party
-  # framer cannot obtain, so a hostile embed cannot read state or act as the user.
-  @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors *"
+  # Tinctures are framed by the Prism shell on this same origin — the one
+  # endpoint serves both — so nothing else may frame them. The iframe is
+  # sandboxed (`allow-scripts` only, no `allow-same-origin`) with a
+  # per-request nonce, and a private tincture additionally requires a
+  # credential a third-party framer cannot obtain.
+  @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
   # -------------------------------------------------------------------
   # Access-token mint — a cross-origin client (Porta) exchanges its
@@ -109,7 +103,7 @@ defmodule EmissaryWeb.TinctureController do
             csp = build_csp(tincture.manifest)
 
             conn
-            |> delete_resp_header("x-frame-options")
+            |> put_resp_header("x-frame-options", "SAMEORIGIN")
             |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
 
           :error ->
@@ -133,7 +127,7 @@ defmodule EmissaryWeb.TinctureController do
             csp = build_csp(tincture.manifest)
 
             conn
-            |> delete_resp_header("x-frame-options")
+            |> put_resp_header("x-frame-options", "SAMEORIGIN")
             |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
 
           :error ->
@@ -213,8 +207,8 @@ defmodule EmissaryWeb.TinctureController do
         "tincture_name" => tincture_name,
         "path" => segments
       }) do
-    # Delete x-frame-options for assets loaded by tincture iframes
-    conn = delete_resp_header(conn, "x-frame-options")
+    # Assets are loaded by the same-origin tincture iframe.
+    conn = put_resp_header(conn, "x-frame-options", "SAMEORIGIN")
 
     case segments do
       ["_s", token | asset_segments] when asset_segments != [] ->
@@ -377,7 +371,7 @@ defmodule EmissaryWeb.TinctureController do
     # holds, and a tincture without the route's profile does not run.
     run_result =
       if engine_ready?() do
-        Opus.run_root_edge(ctx, tincture_ref, reference, input,
+        Cyfr.Execution.run_root_edge(ctx, tincture_ref, reference, input,
           route: opts[:route],
           client_ip: Sanctum.ClientIp.resolve(conn)
         )
@@ -471,7 +465,7 @@ defmodule EmissaryWeb.TinctureController do
   # the execution machinery; a request in that window would noproc-crash
   # mid-flight. Process liveness — not module presence — is the readiness
   # signal.
-  defp engine_ready?, do: is_pid(Process.whereis(Opus.ExecutionSemaphore))
+  defp engine_ready?, do: Cyfr.Execution.available?()
 
   defp duration_ms(start_time) do
     System.monotonic_time()
