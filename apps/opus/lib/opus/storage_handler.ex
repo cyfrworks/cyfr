@@ -506,19 +506,14 @@ defmodule Opus.StorageHandler do
   end
 
   # Component storage is tenant-scoped, but the `components/` root bypasses
-  # Arca's automatic `{org}/{project}` prefixing (that prefix is applied to the
+  # Arca's automatic `{athanor_id}` prefixing (that prefix is applied to the
   # `data/` root). A catalyst's component path is tenant-relative
-  # (`components/{type}s/...`); pin the caller's normalized tenant here so a
-  # catalyst can never read or write another org/project's component bytes,
-  # regardless of its declared `allowed_paths`. `data/` and other roots are
-  # tenant-scoped by Arca and pass through unchanged.
+  # (`components/{type}s/...`); pin the caller's athanor here so a catalyst
+  # can never read or write another athanor's component bytes, regardless of
+  # its declared `allowed_paths`. `data/` and other roots are tenant-scoped
+  # by Arca and pass through unchanged.
   defp pin_tenant(["components" | rest], ctx) do
-    [
-      "components",
-      Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-      Arca.QueryHelpers.normalize_project_id(ctx.project_id)
-      | rest
-    ]
+    ["components", ctx.athanor_id | rest]
   end
 
   defp pin_tenant(segments, _ctx), do: segments

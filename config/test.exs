@@ -34,6 +34,11 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must
 # match (SQLite-only keys break a Postgres connect, and Postgres needs a URL
 # or hostname/credentials to authenticate).
+#
+# The sandbox funnels every process a test spawns through the one connection
+# it owns, so a burst of concurrent tasks each writing an audit row queues on
+# it. The production queue drop target (50 ms) is tuned for a real pool and
+# would drop those requests under load; give the single shared connection room.
 case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
   "sqlite" ->
     config :cyfr, Arca.Repo,
@@ -41,6 +46,8 @@ case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
       pool: Ecto.Adapters.SQL.Sandbox,
       pool_size: 20,
       ownership_timeout: 60_000,
+      queue_target: 500,
+      queue_interval: 5_000,
       journal_mode: :wal,
       busy_timeout: 5_000
 
@@ -51,7 +58,9 @@ case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
           "postgres://cyfr:cyfr@localhost:5432/cyfr_test",
       pool: Ecto.Adapters.SQL.Sandbox,
       pool_size: 20,
-      ownership_timeout: 60_000
+      ownership_timeout: 60_000,
+      queue_target: 500,
+      queue_interval: 5_000
 end
 
 # Disable auto-migration in tests — mix aliases handle ecto.migrate
@@ -76,6 +85,10 @@ config :cyfr, external_server_reconciler_enabled: false
 # connection and then outlives it, so the connection dies mid-query and
 # the NEXT test fails. cron_scheduler_test.exs starts it itself.
 config :cyfr, cron_scheduler_enabled: false
+
+# Boot-time Home seeding writes rows and files before any test's sandbox
+# checkout — the seeder is exercised directly by its own tests.
+config :cyfr, provisioning_boot_enabled: false
 
 # The stale-execution sweeper has the same shape (permanent named GenServer
 # querying on a 60s timer) and the same sandbox hazard; its own suite

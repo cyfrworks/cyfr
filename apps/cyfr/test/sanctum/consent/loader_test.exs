@@ -15,9 +15,8 @@ defmodule Sanctum.Consent.LoaderTest do
 
     ctx = %Context{
       user_id: "loader_test_user",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: "ath_test",
+      scope: :athanor,
       permissions: MapSet.new([:execute])
     }
 

@@ -14,7 +14,7 @@ defmodule Arca.Schemas.ConsentVaultRef do
   @primary_key false
   schema "consent_vault_refs" do
     field :consent_id, :string
-    field :org_id, :string, default: ""
+    field :athanor_id, :string
     field :vault_entry_id, :string
     field :binding_digest, :string
   end

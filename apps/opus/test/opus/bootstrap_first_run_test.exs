@@ -20,7 +20,7 @@ defmodule Opus.BootstrapFirstRunTest do
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
 
-  @bundle_root Path.expand("../../../../components/local/default", __DIR__)
+  @bundle_root Path.expand("../../../../components/_bundle", __DIR__)
   @bundled ["catalysts/local/files/0.5.0", "catalysts/local/http/1.1.0"]
   @pull_gated ["formulas/local/list-models/0.6.0", "formulas/local/aqua/1.0.5"]
 

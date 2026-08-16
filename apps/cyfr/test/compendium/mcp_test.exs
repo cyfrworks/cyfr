@@ -182,15 +182,15 @@ defmodule Compendium.MCPTest do
           description: "must not be readable anonymously"
         })
 
-      # An unauthenticated context would otherwise normalize to the seeded
-      # local org and read this workspace's data by exact reference. Same
-      # shape the Authenticate plug mints for a no-credential request.
+      # An unauthenticated context carries no athanor and must not read this
+      # athanor's data by exact reference. Same shape the Authenticate plug
+      # mints for a no-credential request.
       anon =
         Sanctum.Context.build(
           user_id: nil,
-          org_id: nil,
+          athanor_id: nil,
           permissions: [],
-          scope: :project,
+          scope: :athanor,
           auth_method: nil,
           authenticated: false
         )
@@ -217,8 +217,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "asset-test",
@@ -638,7 +637,8 @@ defmodule Compendium.MCPTest do
           "component",
           %Sanctum.Context{
             user_id: "test",
-            org_id: "test",
+            athanor_id: "ath_test",
+            scope: :athanor,
             permissions: MapSet.new([:*]),
             authenticated: true
           },
@@ -677,8 +677,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "#{type}s",
           "local",
           name,
@@ -884,8 +883,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "#{type}s",
           "local",
           name,
@@ -1171,8 +1169,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "remove-fs-test",
@@ -1460,8 +1457,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "readme-test",
@@ -1493,8 +1489,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "no-readme-flag",
@@ -1524,8 +1519,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "no-readme-file",
@@ -1624,8 +1618,7 @@ defmodule Compendium.MCPTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "#{type}s",
           "local",
           name,
@@ -1670,10 +1663,9 @@ defmodule Compendium.MCPTest do
     setup do
       restricted_ctx = %Context{
         user_id: "restricted_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:component_read]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true

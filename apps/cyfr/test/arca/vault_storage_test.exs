@@ -11,15 +11,14 @@ defmodule Arca.VaultStorageTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    {:ok, org: ctx.org_id, proj: ctx.project_id}
+    {:ok, athanor: ctx.athanor_id}
   end
 
-  defp put!(org, proj, over \\ %{}) do
+  defp put!(athanor, over \\ %{}) do
     attrs =
       Map.merge(
         %{
-          org_id: org,
-          project_id: proj,
+          athanor_id: athanor,
           name: "entry-#{System.unique_integer([:positive])}",
           kind: "api_key",
           sealed_payload: "sealed-bytes"
@@ -31,73 +30,72 @@ defmodule Arca.VaultStorageTest do
     entry
   end
 
-  describe "list/3" do
-    test "excludes tombstoned rows unless widened", %{org: org, proj: proj} do
-      live = put!(org, proj)
-      dead = put!(org, proj)
-      :ok = VaultStorage.tombstone(org, proj, dead.id)
+  describe "list/2" do
+    test "excludes tombstoned rows unless widened", %{athanor: athanor} do
+      live = put!(athanor)
+      dead = put!(athanor)
+      :ok = VaultStorage.tombstone(athanor, dead.id)
 
-      {:ok, rows} = VaultStorage.list(org, proj)
+      {:ok, rows} = VaultStorage.list(athanor)
       ids = Enum.map(rows, & &1.id)
       assert live.id in ids
       refute dead.id in ids
 
-      {:ok, all} = VaultStorage.list(org, proj, include_tombstoned: true)
+      {:ok, all} = VaultStorage.list(athanor, include_tombstoned: true)
       assert dead.id in Enum.map(all, & &1.id)
     end
   end
 
   describe "update_meta/4" do
-    test "renames; unknown rows are not_found", %{org: org, proj: proj} do
-      entry = put!(org, proj)
+    test "renames; unknown rows are not_found", %{athanor: athanor} do
+      entry = put!(athanor)
 
-      assert :ok = VaultStorage.update_meta(org, proj, entry.id, %{name: "renamed"})
-      {:ok, row} = VaultStorage.get(org, proj, entry.id)
+      assert :ok = VaultStorage.update_meta(athanor, entry.id, %{name: "renamed"})
+      {:ok, row} = VaultStorage.get(athanor, entry.id)
       assert row.name == "renamed"
 
-      assert {:error, :not_found} = VaultStorage.update_meta(org, proj, "vlt_missing", %{name: "x"})
+      assert {:error, :not_found} = VaultStorage.update_meta(athanor, "vlt_missing", %{name: "x"})
     end
   end
 
   describe "tombstone/3" do
-    test "flips status and erases the sealed payload in one update", %{org: org, proj: proj} do
-      entry = put!(org, proj)
+    test "flips status and erases the sealed payload in one update", %{athanor: athanor} do
+      entry = put!(athanor)
 
-      assert :ok = VaultStorage.tombstone(org, proj, entry.id)
+      assert :ok = VaultStorage.tombstone(athanor, entry.id)
 
-      {:ok, row} = VaultStorage.get(org, proj, entry.id)
+      {:ok, row} = VaultStorage.get(athanor, entry.id)
       assert row.status == "tombstoned"
       assert row.sealed_payload == nil
     end
 
-    test "frees the living-name slot", %{org: org, proj: proj} do
-      entry = put!(org, proj, %{name: "unique-name"})
-      :ok = VaultStorage.tombstone(org, proj, entry.id)
+    test "frees the living-name slot", %{athanor: athanor} do
+      entry = put!(athanor, %{name: "unique-name"})
+      :ok = VaultStorage.tombstone(athanor, entry.id)
 
       assert {:ok, _} =
                VaultStorage.put(%{
-                 org_id: org,
-                 project_id: proj,
+                 athanor_id: athanor,
                  name: "unique-name",
                  kind: "api_key"
                })
 
-      assert {:error, :not_found} = VaultStorage.get_by_name(org, proj, "missing")
+      assert {:error, :not_found} = VaultStorage.get_by_name(athanor, "missing")
     end
   end
 
   describe "update_binding/4" do
-    test "updates binding columns and the cached digest", %{org: org, proj: proj} do
-      entry = put!(org, proj)
+    test "updates binding columns and the cached digest", %{athanor: athanor} do
+      entry = put!(athanor)
 
       assert :ok =
-               VaultStorage.update_binding(org, proj, entry.id, %{
+               VaultStorage.update_binding(athanor, entry.id, %{
                  oauth_endpoints: ~s({"token_url":"https://x/t"}),
                  oauth_scopes: ~s(["a"]),
                  binding_digest: "sha256:new"
                })
 
-      {:ok, row} = VaultStorage.get(org, proj, entry.id)
+      {:ok, row} = VaultStorage.get(athanor, entry.id)
       assert row.oauth_endpoints == ~s({"token_url":"https://x/t"})
       assert row.oauth_scopes == ~s(["a"])
       assert row.binding_digest == "sha256:new"
@@ -107,30 +105,21 @@ defmodule Arca.VaultStorageTest do
   end
 
   describe "tenant isolation" do
-    test "get and mutations are org-scoped", %{org: org, proj: proj} do
-      entry = put!(org, proj)
+    test "get and mutations are athanor-scoped", %{athanor: athanor} do
+      entry = put!(athanor)
 
-      assert {:error, :not_found} = VaultStorage.get("other_org", proj, entry.id)
+      assert {:error, :not_found} = VaultStorage.get("ath_other", entry.id)
 
       assert {:error, :not_found} =
-               VaultStorage.update_meta("other_org", proj, entry.id, %{name: "x"})
+               VaultStorage.update_meta("ath_other", entry.id, %{name: "x"})
 
-      assert {:error, :not_found} = VaultStorage.tombstone("other_org", proj, entry.id)
-    end
-
-    test "get and mutations are project-scoped — an id from another project does not resolve",
-         %{org: org, proj: proj} do
-      entry = put!(org, "project-b")
-
-      assert {:error, :not_found} = VaultStorage.get(org, proj, entry.id)
-      assert {:error, :not_found} = VaultStorage.update_meta(org, proj, entry.id, %{name: "x"})
-      assert {:error, :not_found} = VaultStorage.set_status(org, proj, entry.id, "revoked")
-      assert {:error, :not_found} = VaultStorage.tombstone(org, proj, entry.id)
+      assert {:error, :not_found} = VaultStorage.set_status("ath_other", entry.id, "revoked")
+      assert {:error, :not_found} = VaultStorage.tombstone("ath_other", entry.id)
 
       assert {:error, :payload_conflict} =
-               VaultStorage.rotate_payload(org, proj, entry.id, 0, "sealed-x")
+               VaultStorage.rotate_payload("ath_other", entry.id, 0, "sealed-x")
 
-      assert {:ok, _} = VaultStorage.get(org, "project-b", entry.id)
+      assert {:ok, _} = VaultStorage.get(athanor, entry.id)
     end
   end
 end

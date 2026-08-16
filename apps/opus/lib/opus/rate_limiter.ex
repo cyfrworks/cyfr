@@ -11,7 +11,7 @@ defmodule Opus.RateLimiter do
   ## Algorithm
 
   Sliding window over per-request timestamp entries:
-  - Table: `:ordered_set` keyed by `{{org_id, project_id, component_ref}, ts_ms, uniq}`
+  - Table: `:ordered_set` keyed by `{{athanor_id, component_ref}, ts_ms, uniq}`
   - Window: Configurable (default 1 minute)
   - `check/4` counts in-window entries with `:ets.select_count/2` and inserts
     one entry per allowed request — callers never serialize through a process.
@@ -29,8 +29,8 @@ defmodule Opus.RateLimiter do
 
   ## Usage
 
-      # Check if request is allowed (rate limits are scoped per org+project)
-      case Opus.RateLimiter.check("org_1", "project_1", "stripe-catalyst", %{
+      # Check if request is allowed (rate limits are scoped per athanor)
+      case Opus.RateLimiter.check("ath_1", "stripe-catalyst", %{
              rate_limit: %{requests: 50, window: "1m"}
            }) do
         {:ok, remaining} -> proceed_with_execution()
@@ -38,7 +38,7 @@ defmodule Opus.RateLimiter do
       end
 
       # Reset rate limit (for testing or administrative purposes)
-      :ok = Opus.RateLimiter.reset("org_1", "project_1", "stripe-catalyst")
+      :ok = Opus.RateLimiter.reset("ath_1", "stripe-catalyst")
 
   ## Limit Source
 
@@ -76,20 +76,20 @@ defmodule Opus.RateLimiter do
 
   ## Examples
 
-      iex> Opus.RateLimiter.check("org_1", "project_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Opus.RateLimiter.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:ok, 9}
 
       # After 10 requests...
-      iex> Opus.RateLimiter.check("org_1", "project_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Opus.RateLimiter.check("ath_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:error, :rate_limited, 45000}
 
   """
-  @spec check(String.t(), String.t(), String.t(), map() | nil) ::
+  @spec check(String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer() | :unlimited}
           | {:error, :rate_limited, non_neg_integer()}
           | {:error, :missing_tenant}
-  def check(org_id, project_id, component_ref, limit_source) do
-    with :ok <- reject_empty_org_id(org_id, "check") do
+  def check(athanor_id, component_ref, limit_source) do
+    with :ok <- reject_empty_athanor(athanor_id, "check") do
       case get_rate_limit_config(limit_source) do
         nil ->
           # No rate limit configured - allow unlimited
@@ -102,7 +102,7 @@ defmodule Opus.RateLimiter do
           {:error, :rate_limited, 0}
 
         {max_requests, window_ms} ->
-          key = make_key(org_id, project_id, component_ref)
+          key = make_key(athanor_id, component_ref)
           now = System.system_time(:millisecond)
           window_start = now - window_ms
 
@@ -128,14 +128,14 @@ defmodule Opus.RateLimiter do
   end
 
   @doc """
-  Reset rate limit counter for a project/component pair.
+  Reset rate limit counter for an athanor/component pair.
 
   Useful for testing or administrative overrides.
   """
-  @spec reset(String.t(), String.t(), String.t()) :: :ok | {:error, :missing_tenant}
-  def reset(org_id, project_id, component_ref) do
-    with :ok <- reject_empty_org_id(org_id, "reset") do
-      key = make_key(org_id, project_id, component_ref)
+  @spec reset(String.t(), String.t()) :: :ok | {:error, :missing_tenant}
+  def reset(athanor_id, component_ref) do
+    with :ok <- reject_empty_athanor(athanor_id, "reset") do
+      key = make_key(athanor_id, component_ref)
 
       with_table(:reset, fn ->
         :ets.select_delete(@table, [{{{key, :_, :_}, :_}, [], [true]}])
@@ -151,18 +151,18 @@ defmodule Opus.RateLimiter do
   - `{:ok, count, remaining, window_ms}` - Current status
   - `{:ok, :unlimited}` - No rate limit configured
   """
-  @spec status(String.t(), String.t(), String.t(), map() | nil) ::
+  @spec status(String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
           | {:ok, :unlimited}
           | {:error, :missing_tenant}
-  def status(org_id, project_id, component_ref, limit_source) do
-    with :ok <- reject_empty_org_id(org_id, "status") do
+  def status(athanor_id, component_ref, limit_source) do
+    with :ok <- reject_empty_athanor(athanor_id, "status") do
       case get_rate_limit_config(limit_source) do
         nil ->
           {:ok, :unlimited}
 
         {max_requests, window_ms} ->
-          key = make_key(org_id, project_id, component_ref)
+          key = make_key(athanor_id, component_ref)
           now = System.system_time(:millisecond)
           window_start = now - window_ms
 
@@ -249,19 +249,19 @@ defmodule Opus.RateLimiter do
     end
   end
 
-  defp reject_empty_org_id(org_id, operation) when org_id in [nil, ""] do
+  defp reject_empty_athanor(athanor_id, operation) when athanor_id in [nil, ""] do
     Logger.warning(
-      "[RateLimiter] Empty org_id during #{operation} — rejecting to prevent " <>
+      "[RateLimiter] Empty athanor_id during #{operation} — rejecting to prevent " <>
         "cross-tenant rate limit collision"
     )
 
     {:error, :missing_tenant}
   end
 
-  defp reject_empty_org_id(_org_id, _operation), do: :ok
+  defp reject_empty_athanor(_athanor_id, _operation), do: :ok
 
-  defp make_key(org_id, project_id, component_ref) do
-    {org_id, project_id, component_ref}
+  defp make_key(athanor_id, component_ref) do
+    {athanor_id, component_ref}
   end
 
   defp get_rate_limit_config(nil), do: nil

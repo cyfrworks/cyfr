@@ -49,8 +49,7 @@ defmodule Opus.ExecutionRecord do
           id: String.t(),
           request_id: String.t() | nil,
           user_id: String.t(),
-          org_id: String.t() | nil,
-          project_id: String.t() | nil,
+          athanor_id: String.t() | nil,
           reference: String.t(),
           resolved_from: String.t() | nil,
           component_type: Opus.ComponentType.t(),
@@ -74,8 +73,7 @@ defmodule Opus.ExecutionRecord do
     :id,
     :request_id,
     :user_id,
-    :org_id,
-    :project_id,
+    :athanor_id,
     :reference,
     :resolved_from,
     :component_type,
@@ -121,8 +119,7 @@ defmodule Opus.ExecutionRecord do
       id: id,
       request_id: ctx.request_id,
       user_id: ctx.user_id,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       reference: reference,
       component_type: component_type,
       component_digest: component_digest,
@@ -232,8 +229,7 @@ defmodule Opus.ExecutionRecord do
            reference: encode_reference(record.reference),
            input_hash: nil,
            user_id: record.user_id,
-           org_id: record.org_id,
-           project_id: record.project_id,
+           athanor_id: record.athanor_id,
            component_type: to_string(record.component_type),
            component_digest: record.component_digest,
            started_at: record.started_at,
@@ -315,10 +311,10 @@ defmodule Opus.ExecutionRecord do
   end
 
   @doc """
-  List execution records for the current project/tenant.
+  List execution records for the context's athanor.
 
-  Project members are interchangeable, so this returns the project's executions
-  (scoped by org_id/project_id), not just the caller's own.
+  Members of an athanor are interchangeable, so this returns the athanor's
+  executions, not just the caller's own.
 
   Options:
   - `:limit` - Maximum number of records (default: 20)
@@ -331,8 +327,7 @@ defmodule Opus.ExecutionRecord do
 
     opts = [
       limit: limit,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id
+      athanor_id: ctx.athanor_id
     ]
 
     opts =
@@ -353,8 +348,7 @@ defmodule Opus.ExecutionRecord do
       id: result.id,
       request_id: result.request_id,
       user_id: result.user_id,
-      org_id: result[:org_id],
-      project_id: result[:project_id],
+      athanor_id: result[:athanor_id],
       reference: parse_reference(result.reference),
       component_type: parse_component_type(result.component_type),
       component_digest: result.component_digest,
@@ -453,8 +447,7 @@ defmodule Opus.ExecutionRecord do
       reference: Map.get(record, :reference),
       input_hash: Map.get(record, :input_hash),
       user_id: Map.get(record, :user_id),
-      org_id: Map.get(record, :org_id),
-      project_id: Map.get(record, :project_id),
+      athanor_id: Map.get(record, :athanor_id),
       component_type: Map.get(record, :component_type),
       component_digest: Map.get(record, :component_digest),
       started_at: Map.get(record, :started_at),
@@ -497,19 +490,18 @@ defmodule Opus.ExecutionRecord do
   end
 
   # Rebuild a minimal context from execution record fields for tenant-scoped writes.
-  # namespace is identity-only and no longer path-bearing, so it is omitted — the
-  # row lands in the correct partition via org_id/project_id.
+  # namespace is identity-only and not path-bearing, so it is omitted — the
+  # row lands in the correct partition via athanor_id.
   defp record_to_ctx(%__MODULE__{} = record) do
-    # Server-built write-back, but tenant-scoped to the originating user
-    # (scope: :project + the user's own coords) so the row lands in the
+    # Server-built write-back, but tenant-scoped to the originating athanor
+    # (scope: :athanor + the record's athanor) so the row lands in the
     # correct partition. Routed through the single server-internal builder
     # (auth_method: :system).
     Sanctum.internal_context(
       user_id: record.user_id,
-      org_id: record.org_id,
-      project_id: record.project_id || "default",
+      athanor_id: record.athanor_id,
       permissions: [:execution_write],
-      scope: :project
+      scope: :athanor
     )
   end
 end

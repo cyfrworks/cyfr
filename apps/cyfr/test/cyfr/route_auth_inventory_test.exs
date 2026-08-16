@@ -40,10 +40,10 @@ defmodule Cyfr.RouteAuthInventoryTest do
     # EmissaryWeb — tincture surface: auth + tenancy in the controller helper
     {:get, "/t/access-token"} => :tincture_handler_auth,
     {:options, "/t/access-token"} => :tincture_handler_auth,
-    {:post, "/t/:org/:project/:publisher/:tincture_name/invoke"} => :tincture_handler_auth,
-    {:options, "/t/:org/:project/:publisher/:tincture_name/invoke"} => :tincture_handler_auth,
-    {:get, "/t/:org/:project/:publisher/:tincture_name"} => :tincture_handler_auth,
-    {:get, "/t/:org/:project/:publisher/:tincture_name/*path"} => :tincture_handler_auth,
+    {:post, "/t/:athanor/:publisher/:tincture_name/invoke"} => :tincture_handler_auth,
+    {:options, "/t/:athanor/:publisher/:tincture_name/invoke"} => :tincture_handler_auth,
+    {:get, "/t/:athanor/:publisher/:tincture_name"} => :tincture_handler_auth,
+    {:get, "/t/:athanor/:publisher/:tincture_name/*path"} => :tincture_handler_auth,
 
     # EmissaryWeb — browser OAuth / gates (state token, cookies, IdP callback)
     {:get, "/auth/oauth/callback"} => :public_oauth_state,

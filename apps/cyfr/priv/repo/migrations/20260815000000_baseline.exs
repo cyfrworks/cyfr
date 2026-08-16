@@ -5,12 +5,12 @@ defmodule Arca.Repo.Migrations.Baseline do
   @moduledoc """
   The schema, as one migration.
 
-  This replaces 81 migrations that recorded how the schema was arrived at:
-  nine tables created and later dropped, thirteen backfills that only ever
-  meant anything to an installation upgrading from a version that no longer
-  exists, and four adapter-conditional type corrections for columns that are
-  simply declared correctly here. None of that history is reachable from a
-  fresh install, and there is no upgrade path across this baseline.
+  Every tenant-owned row carries an `athanor_id` — the athanor (a person's or
+  a group's furnace) that owns it. The column is `NOT NULL` with no default:
+  a row that forgets its athanor must fail, never land in the seeded Home.
+  It carries no foreign key on purpose — an athanor is archived, never
+  deleted, so nothing needs the constraint and every fixture is spared a
+  parent row.
 
   There is deliberately no `down/0`. A baseline's inverse is an empty
   database, which `mix ecto.drop` already expresses.
@@ -25,7 +25,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     executions_and_logs()
     vault_and_consent()
     registrations()
-    seed_default_workspace()
+    seed_home()
   end
 
   # ==========================================================================
@@ -33,49 +33,54 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp tenancy do
-    create table(:orgs, primary_key: false) do
+    create table(:athanors, primary_key: false) do
       add :id, :string, primary_key: true
+      add :kind, :string, null: false
       add :name, :string, null: false
       add :slug, :string, null: false
-      add :created_at, :utc_datetime_usec, null: false
-      add :updated_at, :utc_datetime_usec, null: false
-    end
-
-    create unique_index(:orgs, [:slug])
-
-    create table(:projects, primary_key: false) do
-      add :id, :string, primary_key: true
-      add :org_id, references(:orgs, type: :string, on_delete: :delete_all), null: false
-      add :name, :string, null: false
-      add :slug, :string, null: false
+      add :home, :boolean, null: false, default: false
+      add :owner_user_id, :string
+      add :status, :string, null: false, default: "active"
+      add :archived_at, :utc_datetime_usec
+      add :created_by, :string, null: false
       add :settings, :text
+      add :provisioned_at, :utc_datetime_usec
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:projects, [:org_id, :slug])
+    create unique_index(:athanors, [:kind, :slug])
+    # Exactly one Home per server.
+    create unique_index(:athanors, [:home], where: "home", name: :athanors_home_index)
+    # One personal athanor per person. Default index name on purpose: SQLite
+    # reports a violation by column, and ecto_sqlite3 derives the constraint
+    # name from it, so only the derived name matches the changeset on both
+    # adapters.
+    create unique_index(:athanors, [:owner_user_id], where: "kind = 'person'")
 
-    # Presence-only assignments: a row means "user X is admin of scope S".
-    # No roles, no invite ceremony.
+    create index(:athanors, [:status])
+
+    # Presence-only assignments: a row means "user X is a member of athanor A"
+    # (or, with no athanor, a platform admin). No roles.
     create table(:memberships, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, :string, null: false
-      add :scope, :string, null: false, default: "project"
-      add :org_id, references(:orgs, type: :string, on_delete: :delete_all)
-      add :project_id, references(:projects, type: :string, on_delete: :delete_all)
+      add :scope, :string, null: false, default: "athanor"
+      add :athanor_id, references(:athanors, type: :string, on_delete: :delete_all)
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
     create index(:memberships, [:user_id])
+    create index(:memberships, [:athanor_id])
 
-    # Raw SQL because the uniqueness has to treat NULL org/project as a value
-    # — a platform-scope assignment carries neither, and two of those for one
-    # user are the same assignment. COALESCE in an index expression is not
-    # something `unique_index/3` can express.
+    # Raw SQL because the uniqueness has to treat a NULL athanor as a value —
+    # a platform assignment carries none, and two of those for one user are
+    # the same assignment. COALESCE in an index expression is not something
+    # `unique_index/3` can express.
     execute """
     CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (user_id, scope, COALESCE(org_id, ''), COALESCE(project_id, ''))
+    ON memberships (user_id, scope, COALESCE(athanor_id, ''))
     """
   end
 
@@ -93,8 +98,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :provider, :string, null: false
       add :permissions, :text, null: false, default: "[]"
       add :expires_at, :utc_datetime_usec, null: false
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      # The athanor the session works in. Nullable: a session exists from
+      # sign-in on, before the person's own athanor is resolved.
+      add :athanor_id, :string
       add :scope, :string, null: false
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
@@ -115,9 +121,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :revoked, :boolean, null: false, default: false
       add :created_by, :string
       add :rotated_at, :utc_datetime_usec
-      add :scope_type, :string, null: false, default: "personal"
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :capability, :text
 
       timestamps(type: :utc_datetime_usec)
@@ -126,7 +130,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:api_keys, [:key_hash])
 
     # Partial: a revoked key's name is immediately reusable.
-    create unique_index(:api_keys, [:name, :scope_type, :org_id, :project_id],
+    create unique_index(:api_keys, [:athanor_id, :name],
              where: "NOT revoked",
              name: :api_keys_active_name_index
            )
@@ -166,14 +170,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :size, :integer
       add :exports, :text
       add :publisher_id, :string
-      add :org_id, :string
       add :publisher, :string, null: false, default: "local"
       add :source, :string, null: false, default: "published"
       add :manifest, :text
       add :signature_verified, :boolean, default: false
       add :signer_identity, :string
       add :signer_issuer, :string
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :release_digest, :string
 
       timestamps(type: :utc_datetime_usec)
@@ -185,10 +188,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:components, [:source])
     create index(:components, [:digest])
 
-    create unique_index(
-             :components,
-             [:publisher, :name, :version, :component_type, :org_id, :project_id]
-           )
+    create unique_index(:components, [:athanor_id, :publisher, :name, :version, :component_type])
 
     create table(:component_dependencies, primary_key: false) do
       add :id, :string, primary_key: true
@@ -204,8 +204,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :dep_version, :string, null: false
       add :optional, :boolean, null: false, default: false
       add :reason, :string
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -213,7 +212,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:component_dependencies, [:component_id])
     create index(:component_dependencies, [:dep_name])
     create unique_index(:component_dependencies, [:component_id, :dependency_ref])
-    create index(:component_dependencies, [:org_id, :project_id])
+    create index(:component_dependencies, [:athanor_id])
   end
 
   # ==========================================================================
@@ -239,8 +238,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :host_policy, :text
       add :parent_execution_id, :string
       add :resolver_digest, :string
-      add :org_id, :string
-      add :project_id, :string
+      add :athanor_id, :string, null: false
       add :activation_digest, :string
       add :activation_graph, :text
       add :root_execution_id, :string
@@ -252,11 +250,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:executions, [:request_id])
     create index(:executions, [:parent_execution_id])
     create index(:executions, [:root_execution_id])
-    create index(:executions, [:org_id])
-    create index(:executions, [:project_id])
-    create index(:executions, [:org_id, :project_id])
-    create index(:executions, [:org_id, :project_id, :user_id, :started_at])
-    create index(:executions, [:org_id, :project_id, :status, :started_at])
+    create index(:executions, [:athanor_id])
+    create index(:executions, [:athanor_id, :user_id, :started_at])
+    create index(:executions, [:athanor_id, :status, :started_at])
 
     create table(:mcp_logs, primary_key: false) do
       add :id, :string, primary_key: true
@@ -272,8 +268,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :input, :text
       add :output, :text
       add :error, :text
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       # The ingress request a call belongs to; a chain shares one.
       add :request_id, :string
     end
@@ -282,8 +277,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:mcp_logs, [:timestamp])
     create index(:mcp_logs, [:status])
     create index(:mcp_logs, [:request_id])
-    create index(:mcp_logs, [:org_id, :project_id])
-    create index(:mcp_logs, [:org_id, :project_id, :timestamp])
+    create index(:mcp_logs, [:athanor_id])
+    create index(:mcp_logs, [:athanor_id, :timestamp])
 
     create table(:policy_logs, primary_key: false) do
       add :id, :string, primary_key: true
@@ -297,8 +292,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :decision, :string
       add :host_policy_snapshot, :text
       add :decision_reason, :text
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :consent_id, :string
       add :activation_digest, :string
       add :dep_ref, :string
@@ -312,7 +306,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:policy_logs, [:execution_id])
     create index(:policy_logs, [:user_id])
     create index(:policy_logs, [:timestamp])
-    create index(:policy_logs, [:org_id, :project_id])
+    create index(:policy_logs, [:athanor_id])
     create index(:policy_logs, [:consent_id])
   end
 
@@ -326,12 +320,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     # payload arrives encrypted — Arca stores bytes.
     create table(:vault_entries, primary_key: false) do
       add :id, :string, primary_key: true
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :name, :string, null: false
       add :provider_hint, :string, null: false, default: ""
       add :kind, :string, null: false
-      add :system, :boolean, null: false, default: false
       add :provenance, :string, null: false, default: "user"
       add :field_names, :text, null: false, default: "[]"
       add :binding_digest, :string
@@ -347,20 +339,17 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # The parent side of the two-column composite foreign keys below: a
     # 3+-column composite FK silently truncates on SQLite, so referencing
-    # tables carry (org_id, <fk>) pairs and this index must exist first.
-    create unique_index(:vault_entries, [:org_id, :id])
+    # tables carry (athanor_id, <fk>) pairs and this index must exist first.
+    create unique_index(:vault_entries, [:athanor_id, :id])
 
-    create unique_index(:vault_entries, [:name, :project_id, :org_id],
+    create unique_index(:vault_entries, [:athanor_id, :name],
              where: "status != 'tombstoned'",
              name: :vault_entries_active_name_index
            )
 
-    create index(:vault_entries, [:org_id, :project_id])
-
     create table(:profiles, primary_key: false) do
       add :id, :string, primary_key: true
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :source_ref, :string, null: false
       add :kind, :string, null: false, default: "owner"
       add :label, :string, null: false, default: "default"
@@ -370,21 +359,22 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:profiles, [:org_id, :id])
+    create unique_index(:profiles, [:athanor_id, :id])
 
-    create unique_index(:profiles, [:source_ref, :label, :kind, :project_id, :org_id],
+    create unique_index(:profiles, [:athanor_id, :source_ref, :label, :kind],
              where: "status != 'revoked'",
              name: :profiles_active_identity_index
            )
 
-    create index(:profiles, [:source_ref, :project_id, :org_id])
+    create index(:profiles, [:athanor_id, :source_ref])
 
     # Insert-only: a revision that exists but is not the head is history.
     create table(:consents, primary_key: false) do
       add :id, :string, primary_key: true
-      add :org_id, :string, null: false, default: ""
+      add :athanor_id, :string, null: false
+
       add :profile_id,
-          references(:profiles, column: :id, type: :string, with: [org_id: :org_id]),
+          references(:profiles, column: :id, type: :string, with: [athanor_id: :athanor_id]),
           null: false
 
       add :revision, :integer, null: false
@@ -401,22 +391,22 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :supersedes_id, :string
     end
 
-    create index(:consents, [:org_id, :profile_id])
+    create index(:consents, [:athanor_id, :profile_id])
     create unique_index(:consents, [:profile_id, :revision])
 
     create table(:consent_vault_refs, primary_key: false) do
       add :consent_id, references(:consents, column: :id, type: :string), null: false
-      add :org_id, :string, null: false, default: ""
+      add :athanor_id, :string, null: false
 
       add :vault_entry_id,
-          references(:vault_entries, column: :id, type: :string, with: [org_id: :org_id]),
+          references(:vault_entries, column: :id, type: :string, with: [athanor_id: :athanor_id]),
           null: false
 
       add :binding_digest, :string, null: false
     end
 
     create unique_index(:consent_vault_refs, [:consent_id, :vault_entry_id])
-    create index(:consent_vault_refs, [:vault_entry_id, :org_id])
+    create index(:consent_vault_refs, [:vault_entry_id, :athanor_id])
 
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives
     # the plan it came from and must not be cascaded away.
@@ -425,8 +415,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :kind, :string, null: false
       add :digest, :string, null: false
       add :bindings, :text, null: false, default: "{}"
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :expires_at, :utc_datetime_usec, null: false
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
@@ -436,8 +425,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create table(:oauth_provider_credentials, primary_key: false) do
       add :id, :string, primary_key: true
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :provider, :string, null: false
       add :payload_ciphertext, :binary, null: false
       add :created_by, :string
@@ -445,7 +433,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:oauth_provider_credentials, [:provider, :org_id, :project_id])
+    create unique_index(:oauth_provider_credentials, [:athanor_id, :provider])
   end
 
   # ==========================================================================
@@ -459,14 +447,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :url, :string, null: false
       add :config_json, :text, default: "{}"
       add :enabled, :boolean, default: true
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:mcp_servers, [:name, :org_id, :project_id])
-    create index(:mcp_servers, [:org_id, :project_id])
+    create unique_index(:mcp_servers, [:athanor_id, :name])
 
     create table(:webhooks, primary_key: false) do
       add :id, :string, primary_key: true
@@ -481,9 +467,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :rate_limit, :string
       add :created_by, :string
       add :rotated_at, :utc_datetime_usec
-      add :scope_type, :string, null: false, default: "project"
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :timestamp_header, :string
       add :idempotency_key_header, :string
       add :previous_secret_encrypted, :binary
@@ -493,8 +477,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
+    # The slug is a random address; its uniqueness is global by nature.
     create unique_index(:webhooks, [:slug])
-    create unique_index(:webhooks, [:name, :scope_type, :org_id, :project_id])
+    create unique_index(:webhooks, [:athanor_id, :name])
 
     create table(:webhook_deliveries, primary_key: false) do
       add :id, :string, primary_key: true
@@ -512,6 +497,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create table(:cron_schedules, primary_key: false) do
       add :id, :string, primary_key: true
+      # Attribution: who created the schedule. The athanor owns it.
       add :user_id, :string, null: false
       add :name, :string, null: false
       add :cron_expression, :string, null: false
@@ -525,57 +511,45 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :run_count, :integer, null: false, default: 0
       add :error_count, :integer, null: false, default: 0
       add :resolved_reference, :string
-      add :org_id, :string, null: false, default: ""
-      add :project_id, :string, null: false, default: "default"
+      add :athanor_id, :string, null: false
       add :profile_id, :string, null: false
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
-    create index(:cron_schedules, [:user_id])
     create index(:cron_schedules, [:status])
     create index(:cron_schedules, [:next_run_at])
-    create index(:cron_schedules, [:org_id, :project_id])
+    create index(:cron_schedules, [:athanor_id])
 
-    create unique_index(:cron_schedules, [:user_id, :name],
+    create unique_index(:cron_schedules, [:athanor_id, :name],
              where: "status != 'deleted'",
-             name: :cron_schedules_user_name_active
+             name: :cron_schedules_athanor_name_active
            )
   end
 
   # ==========================================================================
-  # The out-of-the-box workspace
+  # Home
   # ==========================================================================
 
-  # Every context resolves to a concrete (org, project), so the pair the
-  # seeded install runs as has to exist before the first request. `:nothing`
-  # on conflict because several nodes may boot at once.
-  defp seed_default_workspace do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  # Every server has one Home: the group athanor the operator and everyone
+  # they let in share. It is found by its flag, never by a fixed id.
+  # Raw SQL: a schemaless insert has no column types, and a boolean bound
+  # without one lands as text on SQLite — `TRUE` is a literal on both adapters.
+  # `DO NOTHING` because several nodes may boot at once.
+  defp seed_home do
+    id = "ath_" <> Ecto.UUID.generate()
+    # The naive ISO 8601 form both adapters store for `:utc_datetime_usec`.
+    now =
+      NaiveDateTime.utc_now()
+      |> NaiveDateTime.truncate(:microsecond)
+      |> NaiveDateTime.to_iso8601()
 
-    execute(fn ->
-      repo().insert_all(
-        "orgs",
-        [%{id: "local", name: "Local", slug: "local", created_at: now, updated_at: now}],
-        on_conflict: :nothing,
-        conflict_target: :id
-      )
-
-      repo().insert_all(
-        "projects",
-        [
-          %{
-            id: "default",
-            org_id: "local",
-            name: "Default",
-            slug: "default",
-            created_at: now,
-            updated_at: now
-          }
-        ],
-        on_conflict: :nothing,
-        conflict_target: :id
-      )
-    end)
+    execute """
+    INSERT INTO athanors
+      (id, kind, name, slug, home, status, created_by, created_at, updated_at)
+    VALUES
+      ('#{id}', 'group', 'Home', 'home', TRUE, 'active', 'system', '#{now}', '#{now}')
+    ON CONFLICT (kind, slug) DO NOTHING
+    """
   end
 end

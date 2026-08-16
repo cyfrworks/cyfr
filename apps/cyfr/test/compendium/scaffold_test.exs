@@ -123,8 +123,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "weather-api",
@@ -167,8 +166,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "formulas",
           "local",
           "my-workflow",
@@ -201,8 +199,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "my-transform",
@@ -241,8 +238,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "test-dash",
@@ -271,8 +267,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "build-dash",
@@ -295,8 +290,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "pkg-dash",
@@ -321,8 +315,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "vite-dash",
@@ -351,8 +344,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "vanilla",
@@ -375,23 +367,21 @@ defmodule Compendium.ScaffoldTest do
     end
   end
 
-  describe "org-scoped scaffold" do
-    test "creates scaffold under org-scoped path", %{ctx: ctx, test_dir: test_dir} do
-      ctx_org = %{ctx | org_id: "scaffold_org"}
+  describe "athanor-scoped scaffold" do
+    test "creates scaffold under the context's athanor", %{ctx: ctx, test_dir: test_dir} do
+      ctx_other = %{ctx | athanor_id: "ath_scaffold"}
 
-      assert {:ok, result} = Scaffold.create(ctx_org, "org-tool", "catalyst", "0.1.0")
+      assert {:ok, result} = Scaffold.create(ctx_other, "other-tool", "catalyst", "0.1.0")
       assert result.status == "created"
 
-      # Verify files are at org-scoped path
       base =
         Path.join([
           test_dir,
           "components",
-          "scaffold_org",
-          "default",
+          "ath_scaffold",
           "catalysts",
           "local",
-          "org-tool",
+          "other-tool",
           "0.1.0"
         ])
 
@@ -399,12 +389,8 @@ defmodule Compendium.ScaffoldTest do
       assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
     end
 
-    test "single-user context scaffolds under the seeded local org", %{
-      ctx: ctx,
-      test_dir: test_dir
-    } do
-      # The single-user test context resolves to the seeded "local" org.
-      assert ctx.org_id == "local"
+    test "the test context scaffolds under its own athanor", %{ctx: ctx, test_dir: test_dir} do
+      assert ctx.athanor_id == Sanctum.TestContext.athanor_id()
 
       assert {:ok, _} = Scaffold.create(ctx, "flat-tool", "reagent", "0.1.0")
 
@@ -412,8 +398,7 @@ defmodule Compendium.ScaffoldTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          ctx.athanor_id,
           "reagents",
           "local",
           "flat-tool",
@@ -423,11 +408,11 @@ defmodule Compendium.ScaffoldTest do
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
     end
 
-    test "detects duplicate under org-scoped path", %{ctx: ctx} do
-      ctx_org = %{ctx | org_id: "dup_org"}
+    test "detects duplicate within an athanor", %{ctx: ctx} do
+      ctx_other = %{ctx | athanor_id: "ath_dup"}
 
-      assert {:ok, _} = Scaffold.create(ctx_org, "dup-check", "catalyst", "0.1.0")
-      assert {:error, msg} = Scaffold.create(ctx_org, "dup-check", "catalyst", "0.1.0")
+      assert {:ok, _} = Scaffold.create(ctx_other, "dup-check", "catalyst", "0.1.0")
+      assert {:error, msg} = Scaffold.create(ctx_other, "dup-check", "catalyst", "0.1.0")
       assert msg =~ "already exists"
     end
   end

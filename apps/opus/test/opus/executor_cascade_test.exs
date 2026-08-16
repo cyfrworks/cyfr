@@ -16,6 +16,7 @@ defmodule Opus.ExecutorCascadeTest do
     defaults = %{
       reference: "catalyst:local.test:1.0.0",
       user_id: "user_cascade_test",
+      athanor_id: Sanctum.TestContext.athanor_id(),
       started_at: DateTime.utc_now(),
       status: "running",
       component_type: "catalyst"
@@ -128,8 +129,9 @@ defmodule Opus.ExecutorCascadeTest do
       ctx =
         Sanctum.Context.build(
           user_id: "user_cascade_test",
+          athanor_id: Sanctum.TestContext.athanor_id(),
           permissions: [:execution_write],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -192,7 +194,7 @@ defmodule Opus.ExecutorCascadeTest do
       foreign_child = "exec_foreign_child_#{System.unique_integer([:positive])}"
       started_at = DateTime.add(DateTime.utc_now(), -5, :second)
 
-      # Parent + a legitimate same-tenant child both land in local/default.
+      # Parent + a legitimate same-tenant child both land in the same athanor.
       create_execution(%{
         id: parent_id,
         reference: "formula:local.agent:0.9.0",
@@ -214,8 +216,7 @@ defmodule Opus.ExecutorCascadeTest do
         id: foreign_child,
         component_type: "catalyst",
         parent_execution_id: parent_id,
-        org_id: "org_other",
-        project_id: "proj_other",
+        athanor_id: "ath_other",
         started_at: started_at
       })
 
@@ -236,8 +237,7 @@ defmodule Opus.ExecutorCascadeTest do
           id: exec_id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_b",
-          org_id: "org_b",
-          project_id: "proj_b",
+          athanor_id: "ath_b",
           started_at: DateTime.utc_now(),
           status: "running",
           component_type: "catalyst"
@@ -250,9 +250,8 @@ defmodule Opus.ExecutorCascadeTest do
         Sanctum.Context.build(
           user_id: "user_a",
           permissions: [:storage_read, :execute],
-          org_id: "org_a",
-          project_id: "proj_a",
-          scope: :project,
+          athanor_id: "ath_a",
+          scope: :athanor,
           auth_method: :api_key,
           namespace: "ns_a",
           authenticated: true
@@ -287,8 +286,7 @@ defmodule Opus.ExecutorCascadeTest do
           id: exec_id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_b",
-          org_id: "org_b",
-          project_id: "proj_b",
+          athanor_id: "ath_b",
           started_at: DateTime.utc_now(),
           status: "running",
           component_type: "catalyst"
@@ -301,9 +299,8 @@ defmodule Opus.ExecutorCascadeTest do
         Sanctum.Context.build(
           user_id: "user_b",
           permissions: [:storage_read, :execute],
-          org_id: "org_b",
-          project_id: "proj_b",
-          scope: :project,
+          athanor_id: "ath_b",
+          scope: :athanor,
           auth_method: :api_key,
           namespace: "ns_b",
           authenticated: true

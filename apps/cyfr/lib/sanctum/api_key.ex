@@ -135,7 +135,7 @@ defmodule Sanctum.ApiKey do
   """
   def create(%Context{} = ctx, %{name: name} = opts) when is_binary(name) do
     case Context.tenant_ok(ctx) do
-      {:error, :missing_tenant} -> {:error, :org_id_required}
+      {:error, :missing_tenant} -> {:error, :athanor_required}
       :ok -> create_validated(ctx, name, opts)
     end
   end
@@ -232,7 +232,7 @@ defmodule Sanctum.ApiKey do
     key = generate_key(key_type)
     now = DateTime.utc_now() |> DateTime.to_iso8601()
     ip_allowlist = Map.get(opts, :ip_allowlist)
-    {scope_t, oid, pid} = extract_scope(ctx)
+    athanor_id = athanor!(ctx)
 
     attrs = %{
       name: name,
@@ -244,9 +244,7 @@ defmodule Sanctum.ApiKey do
       ip_allowlist: if(ip_allowlist, do: safe_encode(ip_allowlist)),
       capability: Map.get(opts, :capability_json),
       created_by: ctx.user_id,
-      scope_type: scope_t,
-      org_id: oid,
-      project_id: pid
+      athanor_id: athanor_id
     }
 
     case Arca.ApiKeyStorage.create_key(attrs) do
@@ -275,7 +273,7 @@ defmodule Sanctum.ApiKey do
   def consent_capability(_ctx, nil), do: {:ok, nil}
 
   def consent_capability(%Context{} = ctx, api_key_id) when is_binary(api_key_id) do
-    with {:ok, row} <- Arca.ApiKeyStorage.get_key_by_id(ctx.org_id, api_key_id),
+    with {:ok, row} <- Arca.ApiKeyStorage.get_key_by_id(athanor!(ctx), api_key_id),
          {:ok, %{"consent" => %{"commit_digest" => digest} = consent}} <-
            Jason.decode(row.capability || "null"),
          true <- is_binary(digest),
@@ -292,9 +290,7 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    {scope_t, oid, pid} = extract_scope(ctx)
-
-    case Arca.ApiKeyStorage.get_key(name, scope_t, oid, pid) do
+    case Arca.ApiKeyStorage.get_key(name, athanor!(ctx)) do
       {:ok, row} ->
         {:ok, redact_key(row)}
 
@@ -307,9 +303,7 @@ defmodule Sanctum.ApiKey do
   List all keys (key values are redacted).
   """
   def list(%Context{} = ctx) do
-    {scope_t, oid, pid} = extract_scope(ctx)
-
-    case Arca.ApiKeyStorage.list_keys(scope_t, oid, pid) do
+    case Arca.ApiKeyStorage.list_keys(athanor!(ctx)) do
       {:ok, rows} ->
         entries = Enum.map(rows, &redact_key/1)
         {:ok, entries}
@@ -323,17 +317,16 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    {scope_t, oid, pid} = extract_scope(ctx)
-    Arca.ApiKeyStorage.revoke_key(name, scope_t, oid, pid)
+    Arca.ApiKeyStorage.revoke_key(name, athanor!(ctx))
   end
 
   @doc """
   Rotate a key - creates a new key with the same name and settings.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    {scope_t, oid, pid} = extract_scope(ctx)
+    athanor_id = athanor!(ctx)
 
-    case Arca.ApiKeyStorage.get_key(name, scope_t, oid, pid) do
+    case Arca.ApiKeyStorage.get_key(name, athanor_id) do
       {:ok, row} ->
         case parse_key_type(row.type) do
           {:ok, key_type} ->
@@ -343,9 +336,7 @@ defmodule Sanctum.ApiKey do
 
             case Arca.ApiKeyStorage.rotate_key(
                    name,
-                   scope_t,
-                   oid,
-                   pid,
+                   athanor_id,
                    hash_key(new_key),
                    String.slice(new_key, 0, 12)
                  ) do
@@ -408,9 +399,9 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  # API keys are project credentials: the key hash (192-bit, globally unique)
-  # IS the credential, and org_id/project_id are read back FROM the stored key
-  # row — never from the request or the creating user's current membership. A
+  # API keys are athanor credentials: the key hash (192-bit, globally unique)
+  # IS the credential, and the athanor is read back FROM the stored key row —
+  # never from the request or the creating user's current membership. A
   # single untenanted hash lookup is therefore correct and authoritative; the
   # tenant binding is enforced on the resulting Context via require_tenant!
   # (see Sanctum.ApiKey.context_from_metadata/1), not at lookup time.
@@ -446,12 +437,12 @@ defmodule Sanctum.ApiKey do
   end
 
   @doc """
-  Build a project-scoped `Sanctum.Context` from validated API-key metadata.
+  Build an athanor-scoped `Sanctum.Context` from validated API-key metadata.
 
   Single source of truth for the API-key→Context mapping (used by the MCP
   session plug and the tincture auth resolver — previously two divergent
-  copies). API keys belong to a **project**: `org_id`/`project_id` come from
-  the stored key row (set at creation, gated by `require_org`), NEVER from the
+  copies). API keys belong to an **athanor**: `athanor_id` comes from the
+  stored key row (set at creation, gated by the tenant gate), NEVER from the
   request or the creating user's *current* membership. The namespace segment
   is the creator's personal slug (`Sanctum.Namespace.lookup/1`) with a
   `"_system"` orphan fallback when the creator's CredentialStore entry is gone
@@ -459,8 +450,8 @@ defmodule Sanctum.ApiKey do
   than crashing.
 
   The caller is responsible for the tenant gate
-  (`Sanctum.Context.require_tenant!/1`) after building — an org-less key is
-  rejected by `Sanctum.TenantPolicy`.
+  (`Sanctum.Context.require_tenant!/1`) after building — an athanor-less key
+  is rejected by `Sanctum.TenantPolicy`.
   """
   @spec context_from_metadata(map()) :: Sanctum.Context.t()
   def context_from_metadata(metadata) when is_map(metadata) do
@@ -487,10 +478,9 @@ defmodule Sanctum.ApiKey do
     Context.build(
       user_id: metadata[:user_id],
       namespace: namespace,
-      org_id: metadata[:org_id],
-      project_id: metadata[:project_id],
+      athanor_id: metadata[:athanor_id],
       permissions: permissions,
-      scope: :project,
+      scope: :athanor,
       auth_method: :api_key,
       api_key_type: metadata.type,
       api_key_id: metadata[:id],
@@ -507,9 +497,7 @@ defmodule Sanctum.ApiKey do
       rate_limit: row.rate_limit,
       ip_allowlist: decode_json(row.ip_allowlist, nil),
       user_id: row.created_by,
-      org_id: row.org_id,
-      project_id: row.project_id,
-      scope_type: row.scope_type
+      athanor_id: row.athanor_id
     }
   end
 
@@ -662,12 +650,9 @@ defmodule Sanctum.ApiKey do
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp format_datetime(other), do: other
 
-  # Single source of truth for the {scope, org_id, project_id} triple and the
-  # tenant chokepoint — Sanctum.TenantScope (shared with Secrets/OAuth/Webhook).
-  # Routing get/list/revoke/rotate through it also enforces require_tenant!,
-  # which these read/mutate paths previously skipped (an org-less context could
-  # otherwise touch the "" sentinel bucket).
-  defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
+  # The athanor every key path keys on, behind the tenant chokepoint: an
+  # athanor-less context raises before it can touch any row.
+  defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
 
   defp safe_encode(value) do
     case Jason.encode(value) do

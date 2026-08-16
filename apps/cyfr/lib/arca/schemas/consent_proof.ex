@@ -16,8 +16,7 @@ defmodule Arca.Schemas.ConsentProof do
     field :kind, :string
     field :digest, :string
     field :bindings, :string, default: "{}"
-    field :org_id, :string, default: ""
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :expires_at, :utc_datetime_usec
     field :inserted_at, :utc_datetime_usec
   end

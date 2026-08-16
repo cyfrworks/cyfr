@@ -5,8 +5,8 @@ defmodule Cyfr.OtelTenantHandler do
   @moduledoc """
   Telemetry handler that bridges tenant metadata to OpenTelemetry span attributes.
 
-  Attaches to Phoenix/Bandit telemetry events and adds `tenant.org_id`,
-  `tenant.project_id`, and `tenant.user_id` attributes to the current OTEL span.
+  Attaches to Phoenix/Bandit telemetry events and adds `tenant.athanor_id`
+  and `tenant.user_id` attributes to the current OTEL span.
 
   Only activates when OpenTelemetry is loaded. Safe to call when OTEL is absent.
   """
@@ -57,8 +57,7 @@ defmodule Cyfr.OtelTenantHandler do
   defp set_span_attributes(ctx) do
     attrs =
       [
-        {"tenant.org_id", ctx.org_id},
-        {"tenant.project_id", ctx.project_id},
+        {"tenant.athanor_id", ctx.athanor_id},
         {"tenant.user_id", ctx.user_id}
       ]
       |> Enum.reject(fn {_, v} -> is_nil(v) end)

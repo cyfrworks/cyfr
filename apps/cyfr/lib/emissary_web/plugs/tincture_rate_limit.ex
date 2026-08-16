@@ -52,9 +52,9 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
           {pub, name}
 
         _ ->
-          # Tincture paths are /t/:org/:project/:publisher/:tincture_name[/...].
+          # Tincture paths are /t/:athanor/:publisher/:tincture_name[/...].
           case conn.path_info do
-            ["t", _org, _project, pub, name | _] -> {pub, name}
+            ["t", _athanor, pub, name | _] -> {pub, name}
             _ -> {"unknown", "unknown"}
           end
       end

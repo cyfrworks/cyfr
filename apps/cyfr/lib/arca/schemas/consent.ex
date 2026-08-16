@@ -12,7 +12,7 @@ defmodule Arca.Schemas.Consent do
 
   @primary_key {:id, :string, autogenerate: false}
   schema "consents" do
-    field :org_id, :string, default: ""
+    field :athanor_id, :string
     field :profile_id, :string
     field :revision, :integer
     field :scope, :string

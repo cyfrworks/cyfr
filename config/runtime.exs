@@ -34,7 +34,7 @@ if config_env() != :test do
   if env!("CYFR_LOG_FORMAT", :string, nil) == "json" do
     config :logger, :default_formatter,
       format: {Cyfr.JsonFormatter, :format},
-      metadata: [:request_id, :user_id, :org_id, :project_id, :auth_method]
+      metadata: [:request_id, :user_id, :athanor_id, :auth_method]
   end
 
   # PBKDF2 iterations for key derivation (default 100,000)
@@ -51,7 +51,7 @@ if config_env() != :test do
   end
 
   # Maximum concurrent WASM executions per tenant (default: 16)
-  # Bounds the blast radius of one workspace queueing many long-running executions
+  # Bounds the blast radius of one athanor queueing many long-running executions
   if max_tenant_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", :string, nil) do
     config :cyfr,
            :max_concurrent_executions_per_tenant,
@@ -357,7 +357,7 @@ if config_env() != :test do
   # Platform admins (comma-separated emails). On first sign-in, a listed email
   # is granted a platform-scope membership (full access, bypasses the tenant
   # gate). This is the bootstrap mechanism for any deployment — a solo operator
-  # lists their own email; a multi-org deployment lists the platform staff.
+  # lists their own email; a shared server lists the platform staff.
   platform_admins =
     (env!("CYFR_PLATFORM_ADMIN_EMAILS", :string, nil) || "")
     |> String.split(",")

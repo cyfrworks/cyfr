@@ -1056,8 +1056,7 @@ defmodule PrismWeb.AquaLive do
       kind: intent[:action_kind],
       conversation_id: socket.assigns[:conversation_id],
       user_id: ctx && ctx.user_id,
-      org_id: ctx && ctx.org_id,
-      project_id: ctx && ctx.project_id,
+      athanor_id: ctx && ctx.athanor_id,
       orchestrator: socket.assigns[:orchestrator] && socket.assigns.orchestrator["name"],
       reason: payload[:reason]
     }

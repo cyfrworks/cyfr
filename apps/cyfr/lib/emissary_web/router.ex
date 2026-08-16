@@ -186,21 +186,21 @@ defmodule EmissaryWeb.Router do
     # Cross-origin token mint (Porta): session/Bearer header → short-lived ?_t=.
     get "/access-token", TinctureController, :access_token
     match :options, "/access-token", TinctureController, :access_token
-    post "/:org/:project/:publisher/:tincture_name/invoke", TinctureController, :invoke
+    post "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke
     # OPTIONS preflight — CORS plug intercepts and sends 204 before reaching controller.
     # Required because sandboxed iframes (opaque origin) + POST with JSON content-type
     # triggers CORS preflight from the browser.
-    match :options, "/:org/:project/:publisher/:tincture_name/invoke", TinctureController, :invoke
+    match :options, "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke
   end
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture
-    get "/:org/:project/:publisher/:tincture_name", TinctureController, :index
+    get "/:athanor/:publisher/:tincture_name", TinctureController, :index
   end
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture_asset
-    get "/:org/:project/:publisher/:tincture_name/*path", TinctureController, :asset
+    get "/:athanor/:publisher/:tincture_name/*path", TinctureController, :asset
   end
 
   # Anonymous and internet-reachable behind the tls proxy, and /ready does

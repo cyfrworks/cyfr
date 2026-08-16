@@ -29,15 +29,14 @@ defmodule Opus.CredentialedIngressGateTest do
 
   defp seeded_entry(ctx) do
     id = Emissary.UUID7.generate_id("vlt")
-    aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "")
+    aad = CipherAAD.vault_entry(ctx.athanor_id, id, "")
     {:ok, json} = Payload.encode_material(%{"api_key" => "sk-operator-only"}, nil)
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
     {:ok, entry} =
       Arca.VaultStorage.put(%{
         id: id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         name: "gate-entry",
         provider_hint: "",
         kind: "api_key",

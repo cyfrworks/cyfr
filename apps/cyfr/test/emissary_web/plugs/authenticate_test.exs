@@ -28,15 +28,15 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         email: "test@example.com",
         provider: "test",
         permissions: [:read, :write],
-        # Org-less on purpose: exercises the no-resolved-org rejection path.
-        org_id: nil,
+        # Athanor-less on purpose: exercises the no-resolved-athanor rejection path.
+        athanor_id: nil,
         namespace: "testns",
         authenticated: true
       )
     end
   end
 
-  # Test auth provider with org_id for tests where an auth provider is configured
+  # Test auth provider with an athanor for tests where an auth provider is configured
   defmodule StubAuthProvider do
     @behaviour Sanctum.Auth
 
@@ -50,8 +50,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         email: "test@example.com",
         provider: "test",
         permissions: [:read, :write],
-        org_id: "org_test",
-        project_id: "proj_test",
+        athanor_id: "ath_stub",
         namespace: "testns",
         authenticated: true
       )
@@ -85,8 +84,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
             email: "bearer@example.com",
             provider: "bearer",
             permissions: [:admin],
-            org_id: "local",
-            project_id: "default",
+            athanor_id: "ath_test",
             namespace: "testns",
             authenticated: true
           )
@@ -164,8 +162,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
           email: "hydrate@example.com",
           provider: "test",
           permissions: [:read],
-          org_id: "local",
-          project_id: "default",
+          athanor_id: "ath_test",
           namespace: "testns",
           authenticated: true
         )
@@ -276,7 +273,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       assert ctx.user_id == "test_user_123"
       assert MapSet.member?(ctx.permissions, :read)
       assert MapSet.member?(ctx.permissions, :write)
-      assert ctx.scope == :project
+      assert ctx.scope == :athanor
     end
   end
 
@@ -378,7 +375,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       original_auth = Application.get_env(:cyfr, :auth_provider)
 
       Application.put_env(:cyfr, :base_path, test_dir)
-      # Use an org-bearing provider so the session-fallback path resolves a tenant.
+      # Use an athanor-bearing provider so the session-fallback path resolves a tenant.
       Application.put_env(:cyfr, :auth_provider, __MODULE__.StubAuthProvider)
 
       # Create a test API key
@@ -602,7 +599,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       assert body["error"]["message"] =~ "Authentication service unavailable"
     end
 
-    test "allows an authenticated user with a resolved org_id through", %{conn: conn} do
+    test "allows an authenticated user with a resolved athanor through", %{conn: conn} do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.StubAuthProvider)
 
       conn = Authenticate.call(conn, [])
@@ -610,11 +607,11 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       refute conn.halted
       ctx = conn.assigns[:context]
       assert ctx.user_id == "test_user_123"
-      assert ctx.org_id == "org_test"
+      assert ctx.athanor_id == "ath_stub"
       assert ctx.authenticated == true
     end
 
-    test "rejects an authenticated user with no resolved org_id with 403", %{conn: conn} do
+    test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.TestAuthProvider)
 
       conn = Authenticate.call(conn, [])
@@ -622,12 +619,12 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       assert conn.halted
       assert conn.status == 403
       body = Jason.decode!(conn.resp_body)
-      assert body["error"]["message"] =~ "no organization membership"
+      assert body["error"]["message"] =~ "no athanor"
     end
   end
 
-  # Auth provider that returns a user with no org_id (triggers membership resolution)
-  defmodule NoOrgAuthProvider do
+  # Auth provider that returns a user with no athanor (triggers membership resolution)
+  defmodule NoAthanorAuthProvider do
     @behaviour Sanctum.Auth
 
     @impl true
@@ -636,12 +633,11 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     @impl true
     def current_user(_conn) do
       Sanctum.Context.build(
-        user_id: "noorg_user_1",
-        email: "noorg@example.com",
+        user_id: "noathanor_user_1",
+        email: "noathanor@example.com",
         provider: "test",
         permissions: [:read, :write],
-        org_id: nil,
-        project_id: nil,
+        athanor_id: nil,
         namespace: "testns",
         authenticated: true
       )
@@ -653,8 +649,8 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       original_auth = Application.get_env(:cyfr, :auth_provider)
       original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
 
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.NoOrgAuthProvider)
-      # Inject a resolver that errors so the plug's "no resolved org → 403"
+      Application.put_env(:cyfr, :auth_provider, __MODULE__.NoAthanorAuthProvider)
+      # Inject a resolver that errors so the plug's "no resolved athanor → 403"
       # branch is exercised.
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
 
@@ -682,12 +678,12 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         capture_log(fn ->
           conn = Authenticate.call(conn, [])
 
-          # User has no org_id and membership resolution failed → reject with
+          # User has no athanor and membership resolution failed → reject with
           # 403 (missing_tenant).
           assert conn.halted
           assert conn.status == 403
           body = Jason.decode!(conn.resp_body)
-          assert body["error"]["message"] =~ "no organization membership"
+          assert body["error"]["message"] =~ "no athanor"
         end)
 
       # Resolution + its error logging is centralized in Sanctum.Tenancy.

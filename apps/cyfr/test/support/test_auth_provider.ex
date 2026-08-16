@@ -10,15 +10,15 @@ defmodule Emissary.TestAuthProvider do
 
   @impl true
   def current_user(_conn) do
-    # Mirrors a single-operator deployment: the authenticated user is resolved
-    # to the seeded local/default workspace.
+    # The authenticated test user works in the same athanor as
+    # `Sanctum.TestContext.local/0`, so fixtures written through one are
+    # visible through the other.
     Sanctum.Context.build(
       user_id: "test_user",
       email: "test@example.com",
       provider: "test",
       permissions: [:*],
-      org_id: "local",
-      project_id: "default",
+      athanor_id: Sanctum.TestContext.athanor_id(),
       namespace: "testns",
       authenticated: true
     )

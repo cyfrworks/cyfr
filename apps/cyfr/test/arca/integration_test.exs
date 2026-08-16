@@ -28,16 +28,15 @@ defmodule Arca.IntegrationTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Use a unique tenant (org) per test: execution retention/listing is
-    # per-project, so a unique org isolates each test from shared-state pollution.
+    # Use a unique athanor per test: execution retention/listing is
+    # per-athanor, so a unique id isolates each test from shared-state pollution.
     ctx =
       Context.build(
         user_id: "integration_test_user_#{rand_id}",
         namespace: "integration_test_user_#{rand_id}",
-        org_id: "integration_test_org_#{rand_id}",
-        project_id: "default",
+        athanor_id: "ath_integration_#{rand_id}",
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
@@ -111,8 +110,7 @@ defmodule Arca.IntegrationTest do
           id: "exec_#{i}",
           request_id: "req_test",
           user_id: ctx.user_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -125,8 +123,7 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.list(
           user_id: ctx.user_id,
           limit: 100,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         )
 
       assert length(records) == 5
@@ -145,8 +142,7 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.list(
           user_id: ctx.user_id,
           limit: 100,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         )
 
       assert length(records) == 3
@@ -178,8 +174,7 @@ defmodule Arca.IntegrationTest do
           id: "mcp_exec_#{i}",
           request_id: "req_test",
           user_id: ctx.user_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -222,14 +217,14 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "user isolation" do
-    test "members of the same project share files; different tenants are isolated" do
-      # Same org+project, different users — interchangeable members share storage.
+    test "members of the same athanor share files; different athanors are isolated" do
+      # Same athanor, different users — interchangeable members share storage.
       member1 = %Context{
         user_id: "user_alpha",
         namespace: "user_alpha",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -237,27 +232,27 @@ defmodule Arca.IntegrationTest do
       member2 = %Context{
         user_id: "user_beta",
         namespace: "user_beta",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
 
-      # A different tenant (org) must remain isolated.
+      # A different athanor must remain isolated.
       other_tenant = %Context{
         user_id: "user_gamma",
         namespace: "user_gamma",
-        org_id: "other-org",
+        athanor_id: "ath_other",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
 
       :ok = Arca.put(member1, ["private", "secret.txt"], "shared secret")
 
-      # A fellow project member reads the same file (members are interchangeable).
+      # A fellow member reads the same file (members are interchangeable).
       {:ok, content} = Arca.get(member2, ["private", "secret.txt"])
       assert content == "shared secret"
 
@@ -265,17 +260,16 @@ defmodule Arca.IntegrationTest do
       {:error, :not_found} = Arca.get(other_tenant, ["private", "secret.txt"])
     end
 
-    test "execution cleanup is per-project (affects all members' executions)" do
+    test "execution cleanup is per-athanor (affects all members' executions)" do
       rand_id = :rand.uniform(100_000)
-      org = "cleanup_proj_#{rand_id}"
+      athanor = "ath_cleanup_#{rand_id}"
 
       user1_ctx = %Context{
         user_id: "cleanup_user_1",
         namespace: "cleanup_user_1",
-        org_id: org,
-        project_id: "default",
+        athanor_id: athanor,
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -283,15 +277,14 @@ defmodule Arca.IntegrationTest do
       user2_ctx = %Context{
         user_id: "cleanup_user_2",
         namespace: "cleanup_user_2",
-        org_id: org,
-        project_id: "default",
+        athanor_id: athanor,
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
 
-      # Each user creates 3 executions in the SAME project (6 total)
+      # Each user creates 3 executions in the SAME athanor (6 total)
       for i <- 1..3 do
         ts = "2025-01-0#{i}T10:00:00Z"
         {:ok, dt, _} = DateTime.from_iso8601(ts)
@@ -300,8 +293,7 @@ defmodule Arca.IntegrationTest do
           id: "u1_exec_#{rand_id}_#{i}",
           request_id: "req_test",
           user_id: user1_ctx.user_id,
-          org_id: org,
-          project_id: "default",
+          athanor_id: athanor,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -312,8 +304,7 @@ defmodule Arca.IntegrationTest do
           id: "u2_exec_#{rand_id}_#{i}",
           request_id: "req_test",
           user_id: user2_ctx.user_id,
-          org_id: org,
-          project_id: "default",
+          athanor_id: athanor,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -321,23 +312,23 @@ defmodule Arca.IntegrationTest do
         })
       end
 
-      # A member cleans up keeping 2 — retention is per-project, so it applies
-      # to the whole project's executions (6 → 2), regardless of creator.
+      # A member cleans up keeping 2 — retention is per-athanor, so it applies
+      # to the whole athanor's executions (6 → 2), regardless of creator.
       {:ok, count} = Retention.cleanup_executions(user1_ctx, keep: 2)
       assert count == 4
 
-      remaining = Arca.Execution.list(org_id: org, project_id: "default", limit: 100)
+      remaining = Arca.Execution.list(athanor_id: athanor, limit: 100)
 
       assert length(remaining) == 2
     end
 
-    test "retention settings are shared within a project; isolated across tenants" do
+    test "retention settings are shared within an athanor; isolated across athanors" do
       member1 = %Context{
         user_id: "settings_user_1",
         namespace: "settings_user_1",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -345,9 +336,9 @@ defmodule Arca.IntegrationTest do
       member2 = %Context{
         user_id: "settings_user_2",
         namespace: "settings_user_2",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -355,9 +346,9 @@ defmodule Arca.IntegrationTest do
       other_tenant = %Context{
         user_id: "settings_user_3",
         namespace: "settings_user_3",
-        org_id: "other-org",
+        athanor_id: "ath_other",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -380,9 +371,9 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "cache_user_1",
         namespace: "cache_user_1",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -390,9 +381,9 @@ defmodule Arca.IntegrationTest do
       user2_ctx = %Context{
         user_id: "cache_user_2",
         namespace: "cache_user_2",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -409,9 +400,9 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "exec_user_1",
         namespace: "exec_user_1",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -419,9 +410,9 @@ defmodule Arca.IntegrationTest do
       _user2_ctx = %Context{
         user_id: "exec_user_2",
         namespace: "exec_user_2",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil
       }
@@ -431,6 +422,7 @@ defmodule Arca.IntegrationTest do
         id: "my_exec",
         request_id: "req_test",
         user_id: user1_ctx.user_id,
+        athanor_id: user1_ctx.athanor_id,
         reference: Jason.encode!(%{"id" => "my_exec"}),
         component_type: "reagent",
         started_at: DateTime.utc_now(),
@@ -442,8 +434,7 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.list(
           user_id: "exec_user_1",
           limit: 100,
-          org_id: "local",
-          project_id: "default"
+          athanor_id: "ath_test"
         )
 
       assert length(u1_records) == 1
@@ -453,8 +444,7 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.list(
           user_id: "exec_user_2",
           limit: 100,
-          org_id: "local",
-          project_id: "default"
+          athanor_id: "ath_test"
         )
 
       assert u2_records == []

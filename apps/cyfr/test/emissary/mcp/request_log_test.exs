@@ -250,10 +250,10 @@ defmodule Emissary.MCP.RequestLogTest do
 
       # Test that list filtering returns correct results
       success_logs =
-        Arca.McpLog.list(status: "success", limit: 10, org_id: "local", project_id: "default")
+        Arca.McpLog.list(status: "success", limit: 10, athanor_id: "ath_test")
 
       error_logs =
-        Arca.McpLog.list(status: "error", limit: 10, org_id: "local", project_id: "default")
+        Arca.McpLog.list(status: "error", limit: 10, athanor_id: "ath_test")
 
       for log <- success_logs do
         assert log.status == "success"

@@ -726,7 +726,7 @@ defmodule Opus.FormulaHandler do
   defp check_emit_rate(execution_id, ctx) do
     limit = Application.get_env(:cyfr, :emit_rate_limit, %{requests: 3000, window: "1m"})
 
-    case Opus.RateLimiter.check(ctx.org_id, ctx.project_id, "emit:" <> execution_id, %{
+    case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> execution_id, %{
            rate_limit: limit
          }) do
       {:ok, _remaining} -> :ok

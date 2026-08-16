@@ -104,7 +104,7 @@ defmodule Arca.ComponentStorage do
            :signer_issuer,
            :updated_at
          ]},
-      conflict_target: [:publisher, :name, :version, :component_type, :org_id, :project_id]
+      conflict_target: [:athanor_id, :publisher, :name, :version, :component_type]
     )
     |> case do
       {1, _} -> {:ok, attrs}
@@ -122,7 +122,7 @@ defmodule Arca.ComponentStorage do
 
   Uses `ON CONFLICT DO NOTHING` to atomically detect duplicates.
   Returns `{:ok, attrs}` on success, `{:error, :already_exists}` if the
-  name/version/publisher/org_id/project_id combination already exists.
+  athanor/publisher/name/version/type combination already exists.
   """
   def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = ensure_tenant_fields(ctx, attrs)
@@ -291,9 +291,9 @@ defmodule Arca.ComponentStorage do
     end
   end
 
-  defp ensure_tenant_fields(%Context{} = ctx, attrs) do
-    attrs
-    |> Map.put_new(:project_id, Arca.QueryHelpers.normalize_project_id(ctx.project_id))
-    |> Map.put_new(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
+  # The row's athanor is the context's; a caller cannot write into another.
+  defp ensure_tenant_fields(%Context{athanor_id: athanor_id}, attrs)
+       when is_binary(athanor_id) and athanor_id != "" do
+    Map.put(attrs, :athanor_id, athanor_id)
   end
 end

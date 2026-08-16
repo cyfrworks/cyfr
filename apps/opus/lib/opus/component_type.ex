@@ -35,7 +35,7 @@ defmodule Opus.ComponentType do
   Only Catalysts can read secrets via the `cyfr:vault/read` WASI import. The
   value comes from a Vault entry that a consent edge binds to the running node —
   the operator maps the catalyst's named need to one of their Connections at
-  consent time; there is no per-secret grant API and no project-wide secret
+  consent time; there is no per-secret grant API and no athanor-wide secret
   namespace.
 
       # Catalysts call cyfr:vault/read.get("url") to read a projected field of

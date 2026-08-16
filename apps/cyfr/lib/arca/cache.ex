@@ -16,10 +16,11 @@ defmodule Arca.Cache do
 
   For persistent data, services call the appropriate `Arca.*Storage` module directly.
 
-  Keys are `{entity_type, id}` tuples, e.g.:
-  - `{:component_meta, "org", "project", "catalyst:local.demo:0.1.0"}`
-  - `{:permission, "user@example.com"}`
-  - `{:session, "user_1", "sess_abc"}`
+  Keys are `{entity_type, id}` tuples; the tenant-keyed shapes are built by
+  `Arca.Cache.Keys`, e.g.:
+  - `{:component_meta, "ath_…", "catalyst:local.demo:0.1.0"}`
+  - `{:wasm_bytes, "sha256:…"}`
+  - `{:mcp_tool, "execution"}`
   """
 
   require Logger

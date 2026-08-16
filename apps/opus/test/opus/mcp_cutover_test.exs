@@ -27,9 +27,8 @@ defmodule Opus.MCPCutoverTest do
 
     ctx = %Context{
       user_id: "cutover_user_#{:rand.uniform(100_000)}",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: Sanctum.TestContext.athanor_id(),
+      scope: :athanor,
       permissions: MapSet.new([:execute]),
       authenticated: true,
       request_id: "req_cutover"

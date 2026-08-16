@@ -80,7 +80,7 @@ defmodule Sanctum do
 
   Use this for any server-constructed context that needs non-default
   coordinates — a per-user namespace/tenant for an audit write-back, a
-  narrower permission set, or a project scope.
+  narrower permission set, or an athanor scope.
   """
   @spec internal_context(keyword()) :: Context.t()
   def internal_context(opts \\ []), do: Context.internal(opts)
@@ -108,10 +108,9 @@ defmodule Sanctum do
   For an authenticated request, the caller's real `user_id` and `namespace`
   are carried through for the audit trail (namespace is identity-only and may
   be nil); a public request falls back to the tincture identity and the
-  dedicated public-tincture namespace tag. The org/project tenant coordinates
-  are inherited from the caller and the context stays project-scoped (NOT
-  platform-scoped) so any configured tenant isolation still applies to the
-  invocation.
+  dedicated public-tincture namespace tag. The athanor is inherited from the
+  caller and the context stays athanor-scoped (NOT platform-scoped) so tenant
+  isolation still applies to the invocation.
   """
   @spec build_tincture_context(Context.t(), map()) :: Context.t()
   def build_tincture_context(%Context{} = caller_ctx, tincture) do
@@ -138,10 +137,10 @@ defmodule Sanctum do
       user_id: user_id,
       namespace: namespace,
       permissions: permissions,
-      # Carries the caller's resolved org; a nil here flows through and the
+      # Carries the caller's resolved athanor; a nil here flows through and the
       # tenant gate rejects downstream (a tincture cannot widen tenant scope).
-      org_id: caller_ctx.org_id,
-      project_id: caller_ctx.project_id,
+      athanor_id: caller_ctx.athanor_id,
+      scope: :athanor,
       auth_method: :tincture,
       authenticated: true,
       anonymous: anonymous

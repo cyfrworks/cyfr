@@ -132,8 +132,7 @@ defmodule PrismWeb.ShellLive do
       url =
         EmissaryWeb.Endpoint.url() <>
           Cyfr.TinctureHelpers.tincture_path(
-            tincture.org_id,
-            tincture.project_id,
+            tincture.athanor_segment,
             tincture.publisher,
             tincture.name
           )
@@ -362,8 +361,8 @@ defmodule PrismWeb.ShellLive do
           id: "iframe_#{t.name}",
           name: t.name,
           publisher: t.publisher,
-          org_id: t.org_id,
-          project_id: t.project_id,
+          athanor_id: t.athanor_id,
+          athanor_segment: t.athanor_segment,
           version: t.version,
           title: t.title,
           tagline: t.tagline,
@@ -392,7 +391,7 @@ defmodule PrismWeb.ShellLive do
   defp build_tincture_url(socket, t) do
     base =
       EmissaryWeb.Endpoint.url() <>
-        Cyfr.TinctureHelpers.tincture_path(t.org_id, t.project_id, t.publisher, t.name)
+        Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name)
 
     # Short-lived, single-purpose access token instead of the raw session
     # token — a credential must never travel in a URL/query string.
@@ -415,7 +414,7 @@ defmodule PrismWeb.ShellLive do
 
       base =
         EmissaryWeb.Endpoint.url() <>
-          Cyfr.TinctureHelpers.tincture_path(t.org_id, t.project_id, t.publisher, t.name) <>
+          Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name) <>
           "/" <> encoded
 
       "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"

@@ -133,10 +133,7 @@ defmodule Opus.CronScheduler do
 
         ctx =
           if schedule do
-            Sanctum.Context.for_scheduled(schedule.user_id,
-              org_id: schedule.org_id,
-              project_id: schedule.project_id
-            )
+            Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
           end
 
         if reason != :normal do
@@ -219,10 +216,7 @@ defmodule Opus.CronScheduler do
         case compute_next_run(schedule.cron_expression) do
           {:ok, next_run} ->
             ctx =
-              Sanctum.Context.for_scheduled(schedule.user_id,
-                org_id: schedule.org_id,
-                project_id: schedule.project_id
-              )
+              Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
 
             case Arca.CronSchedule.update(ctx, schedule.id, %{next_run_at: next_run}) do
               {:ok, _} ->
@@ -279,23 +273,21 @@ defmodule Opus.CronScheduler do
 
       %{status: "active"} = schedule ->
         ctx =
-          Sanctum.Context.for_scheduled(schedule.user_id,
-            org_id: schedule.org_id,
-            project_id: schedule.project_id
-          )
+          Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
 
-        if not Sanctum.Tenancy.user_active_in_org?(schedule.user_id, schedule.org_id) do
-          # The owner lost access to this org — skip the run and record why,
-          # but never auto-delete: the operator decides the schedule's fate.
+        if not Sanctum.Tenancy.user_active?(schedule.user_id) do
+          # The owner lost access to this server — skip the run and record
+          # why, but never auto-delete: the operator decides the schedule's
+          # fate.
           Logger.warning(
             "CronScheduler: schedule #{schedule_id} owner #{inspect(schedule.user_id)} " <>
-              "no longer active in org #{schedule.org_id} — skipping run"
+              "no longer active — skipping run"
           )
 
           case Arca.CronSchedule.record_error(
                  ctx,
                  schedule_id,
-                 "Owner no longer active in org — run skipped"
+                 "Owner no longer active — run skipped"
                ) do
             {:ok, _} ->
               :ok
@@ -459,8 +451,7 @@ defmodule Opus.CronScheduler do
                        schedule_id: schedule_id,
                        reference: exec_reference,
                        execution_id: execution_id,
-                       org_id: ctx.org_id,
-                       project_id: ctx.project_id,
+                       athanor_id: ctx.athanor_id,
                        user_id: ctx.user_id
                      }
                    )

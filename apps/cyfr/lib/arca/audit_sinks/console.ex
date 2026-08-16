@@ -22,7 +22,7 @@ defmodule Arca.AuditSinks.Console do
     Logger.info(
       "[Audit] #{event_str} " <>
         "execution_id=#{metadata[:execution_id]} user_id=#{metadata[:user_id]} " <>
-        "org_id=#{metadata[:org_id]} component=#{component} " <>
+        "athanor_id=#{metadata[:athanor_id]} component=#{component} " <>
         "measurements=#{inspect(measurements)}"
     )
 

@@ -18,8 +18,7 @@ defmodule Arca.PolicyLogTest do
       %{
         id: "pl_#{:rand.uniform(1_000_000)}",
         user_id: "user_1",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         timestamp: DateTime.utc_now(),
         event_type: "policy_consultation",
         component_ref: "math:1.0.0",
@@ -55,7 +54,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_1", timestamp: t1}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_2", timestamp: t2}))
 
-      logs = PolicyLog.list(org_id: "local", project_id: "default")
+      logs = PolicyLog.list(athanor_id: "ath_test")
       ids = Enum.map(logs, & &1.id)
       assert "pl_list_2" in ids
       assert "pl_list_1" in ids
@@ -69,7 +68,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u1", user_id: "alice"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u2", user_id: "bob"}))
 
-      logs = PolicyLog.list(org_id: "local", project_id: "default", user_id: "alice")
+      logs = PolicyLog.list(athanor_id: "ath_test", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -77,7 +76,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r1", request_id: "req_123"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r2", request_id: "req_456"}))
 
-      logs = PolicyLog.list(org_id: "local", project_id: "default", request_id: "req_123")
+      logs = PolicyLog.list(athanor_id: "ath_test", request_id: "req_123")
       assert logs != []
       assert Enum.all?(logs, &(&1.request_id == "req_123"))
     end
@@ -86,7 +85,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e1", execution_id: "exec_1"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e2", execution_id: "exec_2"}))
 
-      logs = PolicyLog.list(org_id: "local", project_id: "default", execution_id: "exec_1")
+      logs = PolicyLog.list(athanor_id: "ath_test", execution_id: "exec_1")
       assert logs != []
       assert Enum.all?(logs, &(&1.execution_id == "exec_1"))
     end
@@ -95,7 +94,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et1", event_type: "denied"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et2", event_type: "violation"}))
 
-      logs = PolicyLog.list(org_id: "local", project_id: "default", event_type: "denied")
+      logs = PolicyLog.list(athanor_id: "ath_test", event_type: "denied")
       assert logs != []
       assert Enum.all?(logs, &(&1.event_type == "denied"))
     end
@@ -105,7 +104,7 @@ defmodule Arca.PolicyLogTest do
         {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_lim_#{i}"}))
       end
 
-      logs = PolicyLog.list(org_id: "local", project_id: "default", limit: 2)
+      logs = PolicyLog.list(athanor_id: "ath_test", limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -113,7 +112,7 @@ defmodule Arca.PolicyLogTest do
   describe "get_tenant/2" do
     test "platform scope returns log without tenant filtering" do
       {:ok, log} =
-        PolicyLog.record(log_attrs(%{id: "pl_plat", org_id: "org_x", project_id: "proj_x"}))
+        PolicyLog.record(log_attrs(%{id: "pl_plat", athanor_id: "ath_x"}))
 
       platform_ctx =
         Context.build(
@@ -128,17 +127,16 @@ defmodule Arca.PolicyLogTest do
       assert %PolicyLog{id: "pl_plat"} = PolicyLog.get_tenant(platform_ctx, log.id)
     end
 
-    test "project scope filters by tenant" do
+    test "athanor scope filters by tenant" do
       {:ok, _} =
-        PolicyLog.record(log_attrs(%{id: "pl_t1", org_id: "org_a", project_id: "proj_1"}))
+        PolicyLog.record(log_attrs(%{id: "pl_t1", athanor_id: "ath_a"}))
 
       ctx_match =
         Context.build(
           user_id: "u",
-          org_id: "org_a",
-          project_id: "proj_1",
+          athanor_id: "ath_a",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -147,10 +145,9 @@ defmodule Arca.PolicyLogTest do
       ctx_miss =
         Context.build(
           user_id: "u",
-          org_id: "org_b",
-          project_id: "proj_2",
+          athanor_id: "ath_b",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -179,24 +176,22 @@ defmodule Arca.PolicyLogTest do
                PolicyLog.get_by_request_id_tenant(platform_ctx, "req_plat")
     end
 
-    test "project scope filters by tenant" do
+    test "athanor scope filters by tenant" do
       {:ok, _} =
         PolicyLog.record(
           log_attrs(%{
             id: "pl_br2",
             request_id: "req_scoped",
-            org_id: "org_a",
-            project_id: "proj_1"
+            athanor_id: "ath_a"
           })
         )
 
       ctx_match =
         Context.build(
           user_id: "u",
-          org_id: "org_a",
-          project_id: "proj_1",
+          athanor_id: "ath_a",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -205,10 +200,9 @@ defmodule Arca.PolicyLogTest do
       ctx_miss =
         Context.build(
           user_id: "u",
-          org_id: "org_b",
-          project_id: "proj_2",
+          athanor_id: "ath_b",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -225,16 +219,16 @@ defmodule Arca.PolicyLogTest do
 
       {:ok, _} =
         PolicyLog.record(
-          log_attrs(%{id: "pl_iso_a", org_id: ctx_a.org_id, project_id: ctx_a.project_id})
+          log_attrs(%{id: "pl_iso_a", athanor_id: ctx_a.athanor_id})
         )
 
       {:ok, _} =
         PolicyLog.record(
-          log_attrs(%{id: "pl_iso_b", org_id: ctx_b.org_id, project_id: ctx_b.project_id})
+          log_attrs(%{id: "pl_iso_b", athanor_id: ctx_b.athanor_id})
         )
 
-      logs_a = PolicyLog.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
-      logs_b = PolicyLog.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id)
+      logs_a = PolicyLog.list(athanor_id: ctx_a.athanor_id)
+      logs_b = PolicyLog.list(athanor_id: ctx_b.athanor_id)
 
       ids_a = Enum.map(logs_a, & &1.id)
       ids_b = Enum.map(logs_b, & &1.id)

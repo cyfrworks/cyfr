@@ -24,13 +24,20 @@ defmodule Opus.ComponentCache do
   @spec get_or_compile(String.t(), String.t(), binary(), Wasmex.Components.Store.t(), keyword()) ::
           {:ok, Wasmex.Components.Component.t()} | {:error, term()}
   def get_or_compile(reference, digest, wasm_bytes, store, opts \\ []) do
-    # Normalize so the cache key matches the registry's invalidation key
-    # (`{:compiled_component, org_id, project_id, :_}`) — nil/"" collapse to the
-    # seeded local/default sentinels.
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.get(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.get(opts, :project_id))
-    cache_key = {:compiled_component, org_id, project_id, reference}
+    case Keyword.get(opts, :athanor_id) do
+      athanor_id when is_binary(athanor_id) and athanor_id != "" ->
+        # The key shape is shared with the registry's invalidation and the
+        # sweeper's cap through Arca.Cache.Keys.
+        cached_compile(Arca.Cache.Keys.compiled_component(athanor_id, reference), digest, wasm_bytes, store)
 
+      _ ->
+        # No athanor, no cache: the compiled resource has no tenant to be
+        # keyed under, so it is compiled for this call alone.
+        Wasmex.Components.Component.new(store, wasm_bytes)
+    end
+  end
+
+  defp cached_compile(cache_key, digest, wasm_bytes, store) do
     # A compiled component is a NIF resource tied to the engine that built
     # it — validate the engine generation alongside the digest so an engine
     # restart can never serve stale resources to stores from the new one.

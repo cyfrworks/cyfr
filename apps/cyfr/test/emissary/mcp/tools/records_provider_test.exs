@@ -197,8 +197,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx.user_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id || "default",
+          athanor_id: ctx.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running",
@@ -246,8 +245,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx.user_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id || "default",
+          athanor_id: ctx.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running",
@@ -293,9 +291,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       app_ctx = %Context{
         user_id: "app_user",
         namespace: "app_user",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:execute, :storage_read]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -341,10 +339,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       oidc_ctx = %Context{
         user_id: "oidc_user",
         namespace: "oidc_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:execute, :read, :write, :storage_read, :storage_write, :admin]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil,
         authenticated: true
@@ -383,9 +380,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     setup do
       non_admin_ctx = %Context{
         user_id: "regular_user",
-        org_id: "local",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:execute, :storage_read]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -395,14 +392,13 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "cross-tenant record.get returns not-found", %{ctx: _ctx} do
-      # Create execution in org_alpha/proj_1
+      # Create execution in athanor alpha
       ctx_a =
         Sanctum.Context.build(
           user_id: "user_a",
-          org_id: "org_alpha",
-          project_id: "proj_1",
+          athanor_id: "ath_alpha",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -415,8 +411,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
+          athanor_id: ctx_a.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running",
@@ -427,10 +422,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       ctx_b =
         Sanctum.Context.build(
           user_id: "user_b",
-          org_id: "org_beta",
-          project_id: "proj_2",
+          athanor_id: "ath_beta",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -454,7 +448,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       assert result.id == exec_id
     end
 
-    test "any tenant member can see the project's records", %{
+    test "any member can see the athanor's records", %{
       ctx: ctx,
       non_admin_ctx: non_admin_ctx
     } do
@@ -466,8 +460,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx.user_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id || "default",
+          athanor_id: ctx.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running",
@@ -619,10 +612,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     setup do
       no_read_ctx = %Context{
         user_id: "regular_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:execute]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -667,10 +659,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     setup do
       no_read_ctx = %Context{
         user_id: "regular_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:execute]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -701,10 +692,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "every declared action denies a context without permissions" do
       no_perm_ctx = %Context{
         user_id: "no_perm_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new(),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true

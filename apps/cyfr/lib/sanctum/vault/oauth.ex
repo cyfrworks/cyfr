@@ -14,7 +14,7 @@ defmodule Sanctum.Vault.OAuth do
   permission set.
 
   Refresh is single-flighted per **vault entry** on
-  `{:vault_oauth_refresh, org, entry_id}` — the entry is the only route
+  `{:vault_oauth_refresh, athanor_id, entry_id}` — the entry is the only route
   to a material bundle, so entry grain is exactly one lock per stored
   refresh token.
 
@@ -42,13 +42,12 @@ defmodule Sanctum.Vault.OAuth do
     if token_valid?(oauth) do
       {:ok, oauth["access_token"]}
     else
-      lock_key =
-        {:vault_oauth_refresh, Arca.QueryHelpers.normalize_org_id(entry.org_id), entry.id}
+      lock_key = {:vault_oauth_refresh, entry.athanor_id, entry.id}
 
       RefreshLock.run(
         lock_key,
-        fn -> refresh_as_leader(entry.org_id, entry.project_id, entry.id, provider) end,
-        fn -> recheck(entry.org_id, entry.project_id, entry.id) end
+        fn -> refresh_as_leader(entry.athanor_id, entry.id, provider) end,
+        fn -> recheck(entry.athanor_id, entry.id) end
       )
     end
   end
@@ -77,8 +76,8 @@ defmodule Sanctum.Vault.OAuth do
   # The leader re-reads the row inside the lock: a refresh that completed
   # between the caller's unseal and lock acquisition must be returned, not
   # repeated (the provider may have rotated the refresh token).
-  defp refresh_as_leader(org_id, project_id, entry_id, provider) do
-    with {:ok, entry, payload} <- load_fresh(org_id, project_id, entry_id) do
+  defp refresh_as_leader(athanor_id, entry_id, provider) do
+    with {:ok, entry, payload} <- load_fresh(athanor_id, entry_id) do
       oauth = payload["oauth"]
 
       cond do
@@ -101,8 +100,8 @@ defmodule Sanctum.Vault.OAuth do
 
   # A follower re-reads after the leader finished; :stale hands leadership
   # to the next caller (bounded by RefreshLock's retry count).
-  defp recheck(org_id, project_id, entry_id) do
-    case load_fresh(org_id, project_id, entry_id) do
+  defp recheck(athanor_id, entry_id) do
+    case load_fresh(athanor_id, entry_id) do
       {:ok, _entry, %{"oauth" => oauth}} when is_map(oauth) ->
         if token_valid?(oauth), do: {:ok, oauth["access_token"]}, else: :stale
 
@@ -145,13 +144,12 @@ defmodule Sanctum.Vault.OAuth do
   # vault.rotate landed mid-refresh; the material writer wins and this
   # refresh re-reads rather than clobbering.
   defp write_back(entry, new_payload) do
-    aad = CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
+    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
     with {:ok, json} <- encode_payload(new_payload),
          {:ok, sealed} <- Sanctum.Cipher.encrypt(json, aad) do
       case Arca.VaultStorage.rotate_payload(
-             entry.org_id,
-             entry.project_id,
+             entry.athanor_id,
              entry.id,
              entry.payload_rev,
              sealed
@@ -161,7 +159,7 @@ defmodule Sanctum.Vault.OAuth do
           {:ok, get_in(new_payload, ["oauth", "access_token"])}
 
         {:error, :payload_conflict} ->
-          case recheck(entry.org_id, entry.project_id, entry.id) do
+          case recheck(entry.athanor_id, entry.id) do
             {:ok, token} -> {:ok, token}
             :stale -> {:error, :payload_conflict}
           end
@@ -182,10 +180,10 @@ defmodule Sanctum.Vault.OAuth do
   # Pieces
   # ---------------------------------------------------------------------------
 
-  defp load_fresh(org_id, project_id, entry_id) do
-    with {:ok, entry} <- Arca.VaultStorage.get(org_id, project_id, entry_id),
+  defp load_fresh(athanor_id, entry_id) do
+    with {:ok, entry} <- Arca.VaultStorage.get(athanor_id, entry_id),
          {:ok, sealed} <- fetch_sealed(entry) do
-      aad = CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
+      aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
       with {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad),
            {:ok, payload} <- Payload.decode(plaintext) do
@@ -219,7 +217,7 @@ defmodule Sanctum.Vault.OAuth do
   defp fetch_token_url(_), do: {:error, :no_token_url}
 
   defp fetch_provider_creds(entry, provider) do
-    Sanctum.ProviderCredentials.fetch_for_oauth(entry.org_id, entry.project_id, provider)
+    Sanctum.ProviderCredentials.fetch_for_oauth(entry.athanor_id, provider)
   end
 
   @doc false

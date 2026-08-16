@@ -116,7 +116,7 @@ defmodule Sanctum.MCP.ProfileTool do
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "profile_id" => profile_id}) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
-         :ok <- Arca.ProfileStorage.set_status(ctx.org_id, ctx.project_id, profile_id, "revoked") do
+         :ok <- Arca.ProfileStorage.set_status(ctx.athanor_id, profile_id, "revoked") do
       {:ok, %{status: "revoked", profile_id: profile_id}}
     else
       {:error, reason} -> {:error, fmt(reason)}

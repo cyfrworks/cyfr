@@ -5,9 +5,9 @@ defmodule Compendium.Registry do
   @moduledoc """
   Local component registry with database-backed metadata and canonical directory layout.
 
-  Components are stored at (project-scoped, matching the `data/` tenant layout):
-  - `components/{org}/{project}/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
-  - `components/{org}/{project}/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
+  Components are stored at (athanor-scoped, matching the `data/` tenant layout):
+  - `components/{athanor_id}/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
+  - `components/{athanor_id}/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
 
   The `publisher` is a flat namespace scoped to signing identity:
   - `local` — reserved for unsigned local components (default for local publish)
@@ -313,7 +313,7 @@ defmodule Compendium.Registry do
 
   - `ctx` - User context (used by Arca for tenant scoping)
   - `segments` - Path segments for the component version directory, e.g.
-    `["components", "<org_id>", "<project_id>", "catalysts", "local", "my-tool", "0.1.0"]`
+    `["components", "<athanor_id>", "catalysts", "local", "my-tool", "0.1.0"]`
   - `opts` - Same as `register_from_directory/3` (`:force`)
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
@@ -369,8 +369,7 @@ defmodule Compendium.Registry do
               publisher: publisher,
               component_type: Map.fetch!(metadata, :type),
               digest: validation.digest,
-              org_id: ctx.org_id,
-              project_id: ctx.project_id,
+              athanor_id: ctx.athanor_id,
               user_id: ctx.user_id
             }
           )
@@ -616,8 +615,7 @@ defmodule Compendium.Registry do
             version: version,
             publisher: Map.get(component, :publisher) || publisher_filter,
             component_type: Map.get(component, :component_type),
-            org_id: ctx.org_id,
-            project_id: ctx.project_id,
+            athanor_id: ctx.athanor_id,
             user_id: ctx.user_id
           }
         )
@@ -642,7 +640,7 @@ defmodule Compendium.Registry do
   end
 
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
-    # Compendium.ComponentPath raises on an unresolved org/project, the same
+    # Compendium.ComponentPath raises on an unresolved athanor, the same
     # fail-closed guard Arca.Storage applies to the data/ tree.
     path = component_storage_path(type, publisher, name, version, ctx)
 
@@ -945,7 +943,7 @@ defmodule Compendium.Registry do
          {:ok, tags_json} <- Jason.encode(Map.get(metadata, :tags, [])),
          {:ok, exports_json} <- Jason.encode(validation.exports) do
       component = %{
-        id: generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id),
+        id: generate_id(name, version, publisher, component_type, ctx.athanor_id),
         name: name,
         version: version,
         component_type: component_type,
@@ -960,8 +958,7 @@ defmodule Compendium.Registry do
         manifest: manifest,
         publisher: publisher,
         publisher_id: ctx.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-        project_id: Arca.QueryHelpers.normalize_project_id(ctx.project_id),
+        athanor_id: ctx.athanor_id,
         source: source,
         signature_verified: Map.get(metadata, :signature_verified, false),
         signer_identity: Map.get(metadata, :signer_identity),
@@ -985,8 +982,8 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp generate_id(name, version, publisher, component_type, org_id, project_id) do
-    Compendium.ComponentId.compute(name, version, publisher, component_type, org_id, project_id)
+  defp generate_id(name, version, publisher, component_type, athanor_id) do
+    Compendium.ComponentId.compute(name, version, publisher, component_type, athanor_id)
   end
 
   # ============================================================================
@@ -1105,7 +1102,7 @@ defmodule Compendium.Registry do
   defp validate_publish_namespace(_publisher, _ctx), do: :ok
 
   # The `local` namespace is the highest-trust one: the scanner indexes it and
-  # the seeder copies it into every new project. Remote (registry-sourced)
+  # the seeder copies it into every new athanor. Remote (registry-sourced)
   # content must never mint a component there, however the ref was spelled on
   # the way in. Direct local publishes (no `:remote` origin) are unaffected —
   # they are same-machine callers, equivalent in trust to the register path.
@@ -1239,7 +1236,8 @@ defmodule Compendium.Registry do
   end
 
   defp infer_path_metadata(directory_path) do
-    # Expected path: .../components/{org}/{project}/{type}s/{publisher}/{name}/{version}/
+    # Expected path: .../components/{athanor_id}/{type}s/{publisher}/{name}/{version}/
+    # (or the seed bundle's .../components/_bundle/{type}s/...)
     parts = Path.split(directory_path)
 
     # Find "components" in the path and extract relative segments
@@ -1251,16 +1249,17 @@ defmodule Compendium.Registry do
       :error ->
         {:error,
          {:invalid_path,
-          "expected components/{org}/{project}/{type}s/{publisher}/{name}/{version}/, " <>
+          "expected components/{athanor_id}/{type}s/{publisher}/{name}/{version}/, " <>
             "got #{directory_path}"}}
     end
   end
 
-  # The on-disk layout is a single fixed shape; org/project are not returned
-  # here because the canonical tenant flows through `ctx` into `do_register/8`.
+  # The on-disk layout is a single fixed shape; the athanor segment is not
+  # returned here because the canonical tenant flows through `ctx` into
+  # `do_register/8`.
   defp find_components_segments(parts) do
     case Enum.split_while(parts, &(&1 != "components")) do
-      {_before, ["components", _org, _project, type_plural, publisher, name, version | _]}
+      {_before, ["components", _athanor, type_plural, publisher, name, version | _]}
       when type_plural in @type_plurals ->
         {:ok, [type_plural, publisher, name, version]}
 
@@ -1347,14 +1346,13 @@ defmodule Compendium.Registry do
   # Infer metadata from Arca segments. Mirrors `infer_path_metadata/1` but
   # operates on segment lists (no Path.split, no filesystem lookup).
   #
-  # Layout: ["components", org_id, project_id, "{type}s", publisher, name, version]
-  # The org_id/project_id segments are informational here; the canonical tenant
-  # flows through `ctx` into `do_register/8`, and the scan (`AutoIndexer`) only
-  # ever passes segments whose tenant already matches `ctx`.
+  # Layout: ["components", athanor_id, "{type}s", publisher, name, version]
+  # The athanor segment is informational here; the canonical tenant flows
+  # through `ctx` into `do_register/8`, and the scan (`AutoIndexer`) only ever
+  # passes segments whose athanor already matches `ctx`.
   defp infer_segment_metadata([
          "components",
-         _org_id,
-         _project_id,
+         _athanor_id,
          type_plural,
          publisher,
          name,
@@ -1368,7 +1366,7 @@ defmodule Compendium.Registry do
   defp infer_segment_metadata(segments) do
     {:error,
      {:invalid_path,
-      "expected components/{org}/{project}/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+      "expected components/{athanor_id}/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
   end
 
   defp reject_tincture_publish_bytes("tincture") do
@@ -1480,8 +1478,7 @@ defmodule Compendium.Registry do
     name = comp.name
     version = comp.version
 
-    component_id =
-      generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id)
+    component_id = generate_id(name, version, publisher, component_type, ctx.athanor_id)
 
     # Delete dependencies
     Arca.DependencyStorage.delete_dependencies(ctx, component_id)
@@ -1513,10 +1510,10 @@ defmodule Compendium.Registry do
   # live gate. Vault entries stay too: they are the operator's, and they
   # outlive any component that borrowed them.
   defp revoke_profiles(ctx, name_ref) do
-    case Arca.ProfileStorage.list_for_source(ctx.org_id, ctx.project_id, name_ref) do
+    case Arca.ProfileStorage.list_for_source(ctx.athanor_id, name_ref) do
       {:ok, profiles} ->
         Enum.each(profiles, fn profile ->
-          Arca.ProfileStorage.set_status(ctx.org_id, ctx.project_id, profile.id, "revoked")
+          Arca.ProfileStorage.set_status(ctx.athanor_id, profile.id, "revoked")
         end)
 
       _ ->
@@ -1533,14 +1530,14 @@ defmodule Compendium.Registry do
   end
 
   defp disable_webhooks(ctx, name_ref) do
-    {scope_type, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
+    athanor_id = ctx.athanor_id
 
-    case Arca.WebhookStorage.list_webhooks(scope_type, org_id, project_id) do
+    case Arca.WebhookStorage.list_webhooks(athanor_id) do
       {:ok, webhooks} ->
         webhooks
         |> Enum.filter(&targets?(&1.target_ref, name_ref))
         |> Enum.each(fn webhook ->
-          Arca.WebhookStorage.set_disabled(webhook.name, scope_type, org_id, project_id)
+          Arca.WebhookStorage.set_disabled(webhook.name, athanor_id)
         end)
 
       _ ->
@@ -1610,23 +1607,15 @@ defmodule Compendium.Registry do
   end
 
   @doc false
-  def invalidate_executor_caches(%Context{} = ctx) do
-    org_id = ctx.org_id
-    project_id = ctx.project_id
-
-    # :component_meta keys are written from raw ctx coordinates
-    # (Opus.Executor), while :compiled_component keys are normalized by
-    # Opus.ComponentCache — sweep each with the coordinates its writer uses,
-    # or a nil/"" org leaves a stale compiled component serving for its TTL.
-    Arca.Cache.delete_match({:component_meta, org_id, project_id, :_})
-
-    Arca.Cache.delete_match(
-      {:compiled_component, Arca.QueryHelpers.normalize_org_id(org_id),
-       Arca.QueryHelpers.normalize_project_id(project_id), :_}
-    )
+  def invalidate_executor_caches(%Context{athanor_id: athanor_id}) do
+    # Both writers (Opus.Executor for :component_meta, Opus.ComponentCache
+    # for :compiled_component) key through Arca.Cache.Keys, so the sweep
+    # matches exactly what they wrote.
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(athanor_id))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_compiled_component(athanor_id))
 
     Logger.debug(
-      "[Compendium.Registry] Invalidated component execution caches for tenant #{org_id}/#{project_id}"
+      "[Compendium.Registry] Invalidated component execution caches for athanor #{athanor_id}"
     )
   end
 

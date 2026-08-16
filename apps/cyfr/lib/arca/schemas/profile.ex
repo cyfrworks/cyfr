@@ -13,8 +13,7 @@ defmodule Arca.Schemas.Profile do
 
   @primary_key {:id, :string, autogenerate: false}
   schema "profiles" do
-    field :org_id, :string, default: ""
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :source_ref, :string
     field :kind, :string, default: "owner"
     field :label, :string, default: "default"

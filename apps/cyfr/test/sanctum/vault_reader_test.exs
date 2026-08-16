@@ -18,15 +18,14 @@ defmodule Sanctum.VaultReaderTest do
   defp mint_material_entry(ctx, fields, over \\ %{}) do
     id = Emissary.UUID7.generate_id("vlt")
     hint = Map.get(over, :provider_hint, "")
-    aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, hint)
+    aad = CipherAAD.vault_entry(ctx.athanor_id, id, hint)
 
     {:ok, json} = Payload.encode_material(fields, Map.get(over, :oauth))
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
     attrs = %{
       id: id,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       name: Map.get(over, :name, "entry-#{id}"),
       provider_hint: hint,
       kind: Map.get(over, :kind, "api_key"),
@@ -88,14 +87,13 @@ defmodule Sanctum.VaultReaderTest do
 
     test "a payload with unknown keys is refused at decode", %{ctx: ctx} do
       id = Emissary.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "")
+      aad = CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":1}), aad)
 
       {:ok, entry} =
         Arca.VaultStorage.put(%{
           id: id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           name: "tampered",
           provider_hint: "",
           kind: "api_key",
@@ -167,7 +165,7 @@ defmodule Sanctum.VaultReaderTest do
   describe "v1 legacy pointers" do
     test "a pointer fails closed as retired — nothing dispenses", %{ctx: ctx} do
       id = Emissary.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "legacy")
+      aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
 
       pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
       {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
@@ -175,8 +173,7 @@ defmodule Sanctum.VaultReaderTest do
       {:ok, entry} =
         Arca.VaultStorage.put(%{
           id: id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           name: "legacy:ptr",
           provider_hint: "legacy",
           kind: "bundle",

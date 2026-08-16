@@ -6,7 +6,7 @@ defmodule Sanctum.Auth.OAuthTest do
 
   alias Sanctum.Auth.OAuth
 
-  # authenticate/1 resolves the caller's org from memberships, which reads the
+  # authenticate/1 resolves the caller's athanor from memberships, which reads the
   # DB — check out the sandbox for the whole module.
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

@@ -25,7 +25,8 @@ defmodule Sanctum.TinctureAccessTest do
     components_dir = Path.join(base, "components")
 
     # Public tincture
-    pub_dir = Path.join([components_dir, "tinctures", "local", "public-dash", "1.0.0"])
+    pub_dir =
+      Path.join([components_dir, "ath_test", "tinctures", "local", "public-dash", "1.0.0"])
     File.mkdir_p!(pub_dir)
 
     pub_manifest = %{
@@ -55,7 +56,8 @@ defmodule Sanctum.TinctureAccessTest do
     File.write!(Path.join(pub_dir, "index.html"), "<html></html>")
 
     # Private tincture
-    priv_dir = Path.join([components_dir, "tinctures", "local", "private-dash", "1.0.0"])
+    priv_dir =
+      Path.join([components_dir, "ath_test", "tinctures", "local", "private-dash", "1.0.0"])
     File.mkdir_p!(priv_dir)
 
     priv_manifest = %{
@@ -133,8 +135,7 @@ defmodule Sanctum.TinctureAccessTest do
     {:ok, _} =
       Arca.ProfileStorage.put(%{
         id: "prof_pub_#{:rand.uniform(1_000_000)}",
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         source_ref: pub_ref,
         kind: "public",
         label: "public",
@@ -185,37 +186,37 @@ defmodule Sanctum.TinctureAccessTest do
 
   describe "get_public/3" do
     test "returns public tincture" do
-      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
+      ctx = Context.build(athanor_id: "ath_test", authenticated: false)
       assert {:ok, tincture} = TinctureAccess.get_public(ctx, "local", "public-dash")
       assert tincture.name == "public-dash"
     end
 
     test "returns :not_found for private tincture (indistinguishable)" do
-      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
+      ctx = Context.build(athanor_id: "ath_test", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "private-dash")
     end
 
     test "returns :not_found for nonexistent tincture" do
-      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
+      ctx = Context.build(athanor_id: "ath_test", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "nonexistent")
     end
 
-    test "fails closed for an unresolved org when a stricter tenant policy is configured" do
-      # build/1 canonicalizes nil → the "local" sentinel; under a stricter
-      # tenant policy an unresolved org must fail closed even for a public tincture.
-      ctx = Context.build(org_id: nil, project_id: "default", authenticated: false)
+    test "fails closed when the athanor is unresolved" do
+      # The public route resolves the owning athanor before the lookup; a
+      # context that names none must not find even a public tincture.
+      ctx = Context.build(athanor_id: nil, authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "public-dash")
     end
 
     test "returns :not_found for invalid publisher" do
-      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
+      ctx = Context.build(athanor_id: "ath_test", authenticated: false)
 
       assert {:error, :not_found} =
                TinctureAccess.get_public(ctx, "bad publisher!", "public-dash")
     end
 
     test "returns :not_found for invalid name" do
-      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
+      ctx = Context.build(athanor_id: "ath_test", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "bad name!")
     end
   end

@@ -60,12 +60,12 @@ defmodule Arca.CacheEvictionTest do
         do: Application.put_env(:cyfr, :cache_max_compiled_components, original),
         else: Application.delete_env(:cyfr, :cache_max_compiled_components)
 
-      for i <- 1..4, do: Arca.Cache.invalidate({:compiled_component, "o", "p", "ref#{i}"})
+      for i <- 1..4, do: Arca.Cache.invalidate(Arca.Cache.Keys.compiled_component("ath_a", "ref#{i}"))
     end)
 
     for i <- 1..4 do
       Arca.Cache.put(
-        {:compiled_component, "o", "p", "ref#{i}"},
+        Arca.Cache.Keys.compiled_component("ath_a", "ref#{i}"),
         {:fake_resource, i},
         :timer.minutes(i)
       )
@@ -73,9 +73,9 @@ defmodule Arca.CacheEvictionTest do
 
     Arca.Cache.Sweeper.sweep()
 
-    assert Arca.Cache.get({:compiled_component, "o", "p", "ref1"}) == :miss
-    assert Arca.Cache.get({:compiled_component, "o", "p", "ref2"}) == :miss
-    assert {:ok, _} = Arca.Cache.get({:compiled_component, "o", "p", "ref3"})
-    assert {:ok, _} = Arca.Cache.get({:compiled_component, "o", "p", "ref4"})
+    assert Arca.Cache.get(Arca.Cache.Keys.compiled_component("ath_a", "ref1")) == :miss
+    assert Arca.Cache.get(Arca.Cache.Keys.compiled_component("ath_a", "ref2")) == :miss
+    assert {:ok, _} = Arca.Cache.get(Arca.Cache.Keys.compiled_component("ath_a", "ref3"))
+    assert {:ok, _} = Arca.Cache.get(Arca.Cache.Keys.compiled_component("ath_a", "ref4"))
   end
 end

@@ -18,19 +18,15 @@ defmodule Arca.Adapters.S3 do
 
   - **Component paths** (`["components" | rest]`) → `<prefix>/components/<rest>`
   - **AQUA paths** (`["aqua" | rest]`) → `<prefix>/aqua/<rest>`
-  - **Global paths** (`["cache" | rest]`) → `<prefix>/cache/<rest>` (not tenant-scoped)
-  - **Tenant-scoped paths** (everything else) →
-    `<prefix>/data/{org_id}/{project_id}/<rest>`
+  - **Global paths** (`["cache" | rest]`, `["system" | rest]`) → `<prefix>/cache/<rest>`,
+    `<prefix>/system/<rest>` (not tenant-scoped)
+  - **Tenant-scoped paths** (everything else) → `<prefix>/data/{athanor_id}/<rest>`
 
   The `data/` root keeps tenant storage in its own top-level namespace —
   mirroring the Local adapter's `data/` base directory and keeping it disjoint
-  from the `components/`/`aqua/`/`cache/` roots, so an `org_id` that happens to
-  equal a reserved root name can never collide with it inside the bucket.
-
-  Multi-tenant deployments mint real `org_id` and `project_id` via the
-  configured membership resolver; single-user deployments use the seeded
-  `"local"` org and `"default"` project. `namespace` is identity-only and is
-  not part of the path.
+  from the `components/`/`aqua/`/`cache/` roots, so an athanor id that happens
+  to equal a reserved root name can never collide with it inside the bucket.
+  `namespace` is identity-only and is not part of the path.
 
   ## Append semantics
 
@@ -38,7 +34,7 @@ defmodule Arca.Adapters.S3 do
   under the path as a prefix, with a monotonic timestamp-derived suffix:
 
       append(ctx, ["audit", "2026-05-05.jsonl"], event)
-        → PUT <prefix>/data/{org_id}/{project_id}/audit/2026-05-05.jsonl/00001736102400000123-a1b2c3
+        → PUT <prefix>/data/{athanor_id}/audit/2026-05-05.jsonl/00001736102400000123-a1b2c3
 
   `list/2` of the same path returns the appended objects in lexicographic
   order; readers concatenate. `get/2` of an append-path returns
@@ -319,7 +315,7 @@ defmodule Arca.Adapters.S3 do
             segments
           else
             # Tenant storage lives under its own `data/` root, disjoint from the
-            # components/aqua/cache roots (so an org named after a reserved root
+            # components/aqua/cache roots (so an athanor named after a reserved root
             # can't collide) and aligned with the Local adapter's data/ base dir.
             ["data" | Arca.Storage.tenant_segments(ctx) ++ segments]
           end

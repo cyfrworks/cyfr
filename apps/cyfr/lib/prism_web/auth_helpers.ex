@@ -19,7 +19,7 @@ defmodule PrismWeb.AuthHelpers do
   Returns `{:ok, ctx}` on success, `{:error, reason}` on failure.
   """
   @spec authenticate_session(String.t() | nil) ::
-          {:ok, Context.t()} | {:error, :unauthenticated | :no_org | :namespace_unavailable}
+          {:ok, Context.t()} | {:error, :unauthenticated | :no_athanor | :namespace_unavailable}
   def authenticate_session(nil), do: {:error, :unauthenticated}
 
   def authenticate_session(token) when is_binary(token) do
@@ -32,7 +32,7 @@ defmodule PrismWeb.AuthHelpers do
 
         case Sanctum.Context.tenant_ok(ctx) do
           {:error, :missing_tenant} ->
-            {:error, :no_org}
+            {:error, :no_athanor}
 
           :ok ->
             Cyfr.LoggerContext.set_from_context(ctx)
@@ -79,8 +79,7 @@ defmodule PrismWeb.AuthHelpers do
   defp ensure_namespace(%Context{} = ctx),
     do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
-  # If a context has no org_id, ask the configured tenancy resolver.
-  # Without an auth provider this returns the seeded local/default workspace;
+  # If a context has no athanor, ask the tenancy resolver.
   # with one configured it queries the memberships table.
 
   @doc """

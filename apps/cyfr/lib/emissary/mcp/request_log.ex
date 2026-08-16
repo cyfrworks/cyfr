@@ -17,6 +17,12 @@ defmodule Emissary.MCP.RequestLog do
   Routes all persistent storage through `Arca.McpLog`
   which owns path construction, file writes, and SQLite indexing.
 
+  Every row is filed under the athanor the call ran in. A call with no
+  athanor on its context — the anonymous surface (`initialize`,
+  `tools/list`, `system.status` before sign-in) — has no tenant to be filed
+  under and is not recorded here; it is still rate-limited and traced by the
+  request logger. A public tincture's calls carry the tincture's athanor.
+
   ## Sensitive Data
 
   Input parameters are automatically sanitized to redact passwords,
@@ -59,12 +65,17 @@ defmodule Emissary.MCP.RequestLog do
   the process dies. Input is automatically sanitized.
   """
   @spec log_started(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  def log_started(%Context{athanor_id: athanor_id}, _call_id, _data)
+      when athanor_id in [nil, ""],
+      do: :ok
+
   def log_started(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
     case Arca.McpLog.record(%{
            id: call_id,
            request_id: ctx.request_id,
            user_id: ctx.user_id || "system",
+           athanor_id: ctx.athanor_id,
            timestamp: DateTime.utc_now(),
            tool: data[:tool] || data["tool"],
            action: data[:action] || data["action"],
@@ -81,6 +92,10 @@ defmodule Emissary.MCP.RequestLog do
   Log successful completion of an MCP request.
   """
   @spec log_completed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  def log_completed(%Context{athanor_id: athanor_id}, _call_id, _data)
+      when athanor_id in [nil, ""],
+      do: :ok
+
   def log_completed(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
     case Arca.McpLog.record_update(ctx, call_id, %{
@@ -98,6 +113,10 @@ defmodule Emissary.MCP.RequestLog do
   Log failure of an MCP request.
   """
   @spec log_failed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  def log_failed(%Context{athanor_id: athanor_id}, _call_id, _data)
+      when athanor_id in [nil, ""],
+      do: :ok
+
   def log_failed(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
     case Arca.McpLog.record_update(ctx, call_id, %{

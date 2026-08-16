@@ -11,15 +11,15 @@ defmodule Sanctum.Test.FailingResolver do
   def resolve(_user_id), do: {:error, :resolve_failed}
 end
 
-defmodule Sanctum.Test.OtherOrgResolver do
+defmodule Sanctum.Test.OtherAthanorResolver do
   @moduledoc """
-  Test double that always resolves to a *different* org than any
+  Test double that always resolves to a *different* athanor than any
   key/context carries. Wired via `config :cyfr, :tenancy_resolver_override`.
   Used to prove the API-key path does NOT consult the configured resolver: if
-  it did, the resulting context would carry "other_org" instead of the key's
-  own org.
+  it did, the resulting context would carry "ath_other" instead of the key's
+  own athanor.
   """
-  def resolve(_user_id), do: %{org_id: "other_org", project_id: nil}
+  def resolve(_user_id), do: %{athanor_id: "ath_other"}
 end
 
 defmodule Sanctum.Test.AltAuthProvider do

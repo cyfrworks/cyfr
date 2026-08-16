@@ -26,7 +26,7 @@ defmodule Sanctum.Consent.Proof.DB do
   # The only binding keys a stored proof may round-trip. String→atom
   # conversion at read is restricted to this list, so a tampered bindings
   # column cannot mint atoms.
-  @optional_binding_keys ~w(actor org_id project_id profile_id expected_revision)
+  @optional_binding_keys ~w(actor athanor_id profile_id expected_revision)
 
   @impl Sanctum.Consent.Proof
   def mint(bindings, ttl_ms) do
@@ -40,8 +40,7 @@ defmodule Sanctum.Consent.Proof.DB do
       kind: Atom.to_string(bindings.kind),
       digest: bindings.commit_digest,
       bindings: encode_optional(bindings),
-      org_id: Map.get(bindings, :org_id, ""),
-      project_id: Map.get(bindings, :project_id, "default"),
+      athanor_id: bindings.athanor_id,
       expires_at: DateTime.add(now, ttl_ms, :millisecond),
       inserted_at: now
     }

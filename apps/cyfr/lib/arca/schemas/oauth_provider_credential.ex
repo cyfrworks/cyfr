@@ -4,7 +4,7 @@
 defmodule Arca.Schemas.OauthProviderCredential do
   @moduledoc """
   OAuth provider client credentials (the operator's OAuth app), one sealed
-  blob per `(org_id, project_id, provider)`.
+  blob per `(athanor_id, provider)`.
 
   `payload_ciphertext` MUST already be encrypted by the caller
   (`Sanctum.ProviderCredentials`) — Arca stores bytes, it never sees
@@ -17,8 +17,7 @@ defmodule Arca.Schemas.OauthProviderCredential do
   @primary_key {:id, :string, autogenerate: false}
 
   schema "oauth_provider_credentials" do
-    field :org_id, :string, default: ""
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :provider, :string
     field :payload_ciphertext, :binary
     field :created_by, :string

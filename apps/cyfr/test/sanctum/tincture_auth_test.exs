@@ -73,34 +73,46 @@ defmodule Sanctum.TinctureAuthTest do
       # `Session.load` resolves through the user's claimed namespace, and a user
       # with none loads as unauthenticated by design — the claim gate runs before
       # anything tenant-scoped.
-      Compendium.Registry.CredentialStore.put(
-        ctx.user_id,
-        Compendium.Registry.canonical_host(),
-        ctx.namespace,
-        %{type: :push_token, token: "test-token", role: "owner"}
-      )
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx.user_id,
+          Compendium.Registry.canonical_host(),
+          ctx.namespace,
+          "test-token",
+          "owner"
+        )
+
+      # A restored session is re-validated against current memberships; the
+      # test user must actually be a member of the athanor it works in.
+      Sanctum.TestContext.athanor!()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
       {:ok, session} = Sanctum.Session.create(ctx)
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
 
-      # Tincture access always runs project-scoped, whatever workspace the
-      # operator's console happened to be in.
+      # Tincture access always runs athanor-scoped, whatever the operator's
+      # console happened to be doing.
       assert out.auth_method == :session
-      assert out.scope == :project
+      assert out.scope == :athanor
       assert out.authenticated
     end
 
     # Deliberate, and documented in `try_sanctum_session/1`: a user who has not
     # yet claimed a namespace loads as unauthenticated for the console, because
     # the claim gate must run first — but tincture access is not tenant
-    # administration and is granted anyway, project-scoped. What the resulting
+    # administration and is granted anyway, athanor-scoped. What the resulting
     # context can then *do* is decided by its permissions, not by this branch.
-    test "an unclaimed user still authenticates, project-scoped", %{ctx: ctx} do
+    test "an unclaimed user still authenticates, athanor-scoped", %{ctx: ctx} do
       {:ok, session} = Sanctum.Session.create(ctx)
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
-      assert out.scope == :project
+      assert out.scope == :athanor
+      # The session's persisted athanor rides along — it is what lets the
+      # tenant gate pass for a user who has not claimed a namespace yet.
+      assert out.athanor_id == ctx.athanor_id
     end
   end
 
@@ -114,14 +126,27 @@ defmodule Sanctum.TinctureAuthTest do
     end
   end
 
-  describe "authenticate/1 — platform mode tenant gate" do
-    test "an org-less key context fails the tenant gate → :unauthenticated", %{ctx: ctx} do
-      # local/0 has the "" sentinel org; the key row inherits it. Under the
-      # strict policy `tenant_resolved?/1` flips an otherwise-valid auth to
+  describe "authenticate/1 — tenant gate" do
+    test "a session that resolves to no athanor fails the tenant gate → :unauthenticated" do
+      # A signed-in user with no membership carries no athanor. The tincture
+      # surface still stamps scope :athanor / authenticated, but
+      # `tenant_resolved?/1` flips the otherwise-valid auth to
       # :unauthenticated (the tincture HTTP isolation guarantee).
-      {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "orgless-key"})
+      unresolved =
+        Context.build(
+          user_id: "u-nowhere-#{System.unique_integer([:positive])}",
+          email: "nowhere@example.com",
+          provider: "github",
+          athanor_id: nil,
+          permissions: [:execute],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
-      fn -> assert TinctureAuth.authenticate(bearer_conn(key)) == :unauthenticated end
+      {:ok, session} = Sanctum.Session.create(unresolved)
+
+      assert TinctureAuth.authenticate(bearer_conn(session.token)) == :unauthenticated
     end
   end
 end

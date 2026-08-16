@@ -11,11 +11,11 @@ defmodule Arca.WebhookStorage do
 
   Webhooks have two unique indexes:
     * `slug` — globally unique URL routing key (`/hooks/:slug` → row).
-    * `(name, scope_type, org_id, project_id)` — stable handle for management
-      operations (mirrors the api_keys uniqueness model).
+    * `(athanor_id, name)` — stable handle for management operations
+      (mirrors the api_keys uniqueness model).
 
   `slug` lookups are tenant-agnostic by design: the public `/hooks/:slug`
-  endpoint cannot know an org/project from a path alone. Tenant scoping is
+  endpoint cannot know an athanor from a path alone. The owning athanor is
   carried on the row and surfaced into the execution context at invoke time.
 
   Soft-disable via `enabled: false` (revoke). Audit trail is preserved.
@@ -25,8 +25,7 @@ defmodule Arca.WebhookStorage do
   require Arca.Repo.Errors
   import Ecto.Query
 
-  import Arca.QueryHelpers,
-    only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 2, where_project_id: 2]
+  import Arca.QueryHelpers, only: [where_athanor: 2]
 
   alias Arca.Schemas.Webhook
 
@@ -34,8 +33,8 @@ defmodule Arca.WebhookStorage do
   Insert a new webhook row.
 
   Required attrs: `name`, `slug`, `target_ref`, `secret_encrypted`,
-  `signature_header`, `scope_type`. Optional: `input_template`,
-  `description`, `rate_limit`, `created_by`, `org_id`, `project_id`.
+  `signature_header`, `athanor_id`. Optional: `input_template`,
+  `description`, `rate_limit`, `created_by`.
   """
   @spec create_webhook(map()) :: :ok | {:error, term()}
   def create_webhook(attrs) do
@@ -57,9 +56,7 @@ defmodule Arca.WebhookStorage do
       profile_id: attrs[:profile_id],
       created_by: attrs[:created_by],
       rotated_at: nil,
-      scope_type: attrs[:scope_type] || "project",
-      org_id: normalize_org_id(attrs[:org_id]),
-      project_id: normalize_project_id(attrs[:project_id]),
+      athanor_id: attrs.athanor_id,
       inserted_at: now,
       updated_at: now
     }
@@ -102,20 +99,13 @@ defmodule Arca.WebhookStorage do
   end
 
   @doc """
-  Look up a webhook by name within tenant scope. Excludes disabled rows.
+  Look up a webhook by name within an athanor. Excludes disabled rows.
   """
-  @spec get_by_name(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, Webhook.t()} | {:error, :not_found}
-  def get_by_name(name, scope_type, org_id, project_id \\ nil) do
-    project = normalize_project_id(project_id)
-
+  @spec get_by_name(String.t(), String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
+  def get_by_name(name, athanor_id) do
     query =
-      from(w in Webhook,
-        where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true,
-        limit: 1
-      )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      from(w in Webhook, where: w.name == ^name and w.enabled == ^true, limit: 1)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -128,20 +118,17 @@ defmodule Arca.WebhookStorage do
   end
 
   @doc """
-  List enabled webhooks within tenant scope, ordered by inserted_at.
+  List an athanor's enabled webhooks, ordered by inserted_at.
 
   Returns the public-view columns only — the encrypted secret columns are
   deliberately not loaded here (the only caller redacts them anyway; the verify
   path uses `get_by_slug`/`get_by_name`, which do load the secret).
   """
-  @spec list_webhooks(String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, [Webhook.t()]} | {:error, term()}
-  def list_webhooks(scope_type, org_id, project_id \\ nil) do
-    project = normalize_project_id(project_id)
-
+  @spec list_webhooks(String.t()) :: {:ok, [Webhook.t()]} | {:error, term()}
+  def list_webhooks(athanor_id) do
     query =
       from(w in Webhook,
-        where: w.scope_type == ^scope_type and w.enabled == ^true,
+        where: w.enabled == ^true,
         order_by: [asc: w.inserted_at],
         select: [
           :id,
@@ -160,8 +147,7 @@ defmodule Arca.WebhookStorage do
           :updated_at
         ]
       )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      |> where_athanor(athanor_id)
 
     {:ok, Arca.Repo.all(query)}
   rescue
@@ -174,11 +160,9 @@ defmodule Arca.WebhookStorage do
   Update mutable fields on an existing webhook (target_ref, signature_header,
   input_template, description, rate_limit). Does NOT change the secret or slug.
   """
-  @spec update_webhook(String.t(), String.t(), String.t() | nil, String.t() | nil, map()) ::
-          :ok | {:error, :not_found}
-  def update_webhook(name, scope_type, org_id, project_id, fields) when is_map(fields) do
+  @spec update_webhook(String.t(), String.t(), map()) :: :ok | {:error, :not_found}
+  def update_webhook(name, athanor_id, fields) when is_map(fields) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    project = normalize_project_id(project_id)
 
     allowed =
       fields
@@ -198,11 +182,8 @@ defmodule Arca.WebhookStorage do
       {:error, :no_fields}
     else
       query =
-        from(w in Webhook,
-          where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
-        )
-
-      query = query |> where_org_id(org_id) |> where_project_id(project)
+        from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+        |> where_athanor(athanor_id)
 
       case Arca.Repo.update_all(query, set: allowed ++ [updated_at: now]) do
         {0, _} -> {:error, :not_found}
@@ -218,18 +199,13 @@ defmodule Arca.WebhookStorage do
   @doc """
   Soft-disable a webhook. Returns `{:error, :not_found}` if no enabled row matches.
   """
-  @spec set_disabled(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          :ok | {:error, :not_found}
-  def set_disabled(name, scope_type, org_id, project_id \\ nil) do
+  @spec set_disabled(String.t(), String.t()) :: :ok | {:error, :not_found}
+  def set_disabled(name, athanor_id) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    project = normalize_project_id(project_id)
 
     query =
-      from(w in Webhook,
-        where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
-      )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.update_all(query, set: [enabled: false, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -248,31 +224,14 @@ defmodule Arca.WebhookStorage do
   `previous_expires_at`, so in-flight requests signed with it keep verifying
   during the grace window (see `Sanctum.Webhook.verify_with_grace/4`).
   """
-  @spec rotate_secret(
-          String.t(),
-          String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          binary(),
-          DateTime.t()
-        ) :: :ok | {:error, :not_found | :database_error}
-  def rotate_secret(
-        name,
-        scope_type,
-        org_id,
-        project_id,
-        new_secret_encrypted,
-        previous_expires_at
-      ) do
+  @spec rotate_secret(String.t(), String.t(), binary(), DateTime.t()) ::
+          :ok | {:error, :not_found | :database_error}
+  def rotate_secret(name, athanor_id, new_secret_encrypted, previous_expires_at) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    project = normalize_project_id(project_id)
 
     query =
-      from(w in Webhook,
-        where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
-      )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+      |> where_athanor(athanor_id)
 
     # Capture the outgoing secret so it stays valid through the grace window.
     case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do

@@ -6,6 +6,8 @@ defmodule Arca.ExecutionTest do
 
   alias Arca.Execution
 
+  @athanor Sanctum.TestContext.athanor_id()
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -18,6 +20,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running",
         component_type: "reagent"
@@ -32,6 +35,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_type_check",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running"
       }
@@ -51,6 +55,7 @@ defmodule Arca.ExecutionTest do
       attrs = %{
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running"
       }
@@ -64,6 +69,7 @@ defmodule Arca.ExecutionTest do
       attrs = %{
         id: "exec_test123",
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running"
       }
@@ -78,6 +84,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "invalid_status"
       }
@@ -92,6 +99,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running",
         component_type: "invalid_type"
@@ -107,6 +115,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running",
         component_type: "catalyst",
@@ -127,6 +136,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running"
       }
@@ -146,6 +156,7 @@ defmodule Arca.ExecutionTest do
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
+        athanor_id: @athanor,
         started_at: DateTime.utc_now(),
         status: "running"
       }
@@ -189,6 +200,7 @@ defmodule Arca.ExecutionTest do
           id: parent_id,
           reference: "formula:local.test:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "formula"
@@ -199,6 +211,7 @@ defmodule Arca.ExecutionTest do
           id: child_id,
           reference: "catalyst:local.child:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "catalyst",
@@ -220,6 +233,7 @@ defmodule Arca.ExecutionTest do
           id: parent_id,
           reference: "formula:local.test:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "formula"
@@ -230,6 +244,7 @@ defmodule Arca.ExecutionTest do
           id: child_id,
           reference: "catalyst:local.child:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "catalyst",
@@ -240,8 +255,9 @@ defmodule Arca.ExecutionTest do
       ctx =
         Sanctum.Context.build(
           user_id: "user_test",
+          athanor_id: @athanor,
           permissions: [:execution_write],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -274,6 +290,7 @@ defmodule Arca.ExecutionTest do
           id: id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "catalyst"
@@ -291,6 +308,7 @@ defmodule Arca.ExecutionTest do
       ctx =
         Sanctum.Context.build(
           user_id: "user_test",
+          athanor_id: @athanor,
           permissions: [:execution_read],
           scope: :platform,
           auth_method: :oidc,
@@ -312,6 +330,7 @@ defmodule Arca.ExecutionTest do
           id: id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "catalyst"
@@ -321,8 +340,9 @@ defmodule Arca.ExecutionTest do
       ctx =
         Sanctum.Context.build(
           user_id: "user_test",
+          athanor_id: @athanor,
           permissions: [:execution_write],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -360,6 +380,7 @@ defmodule Arca.ExecutionTest do
           id: id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: old_time,
           status: "running",
           component_type: "catalyst"
@@ -380,6 +401,7 @@ defmodule Arca.ExecutionTest do
           id: id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_test",
+          athanor_id: @athanor,
           started_at: now,
           status: "running",
           component_type: "catalyst"
@@ -401,6 +423,7 @@ defmodule Arca.ExecutionTest do
             id: "exec_limit_#{System.unique_integer([:positive])}_#{i}",
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_test",
+            athanor_id: @athanor,
             started_at: old_time,
             status: "running",
             component_type: "catalyst"

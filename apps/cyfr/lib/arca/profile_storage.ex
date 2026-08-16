@@ -4,7 +4,8 @@
 defmodule Arca.ProfileStorage do
   @moduledoc """
   Persistence mechanics for profiles. Validation and consent semantics
-  live in the `Sanctum.*` layer, which is the only caller.
+  live in the `Sanctum.*` layer, which is the only caller. Every read and
+  write is keyed by the owning athanor.
   """
 
   import Ecto.Query
@@ -12,16 +13,14 @@ defmodule Arca.ProfileStorage do
   require Arca.Repo.Errors
   require Logger
 
-  alias Arca.QueryHelpers
   alias Arca.Schemas.Profile
 
   @spec put(map()) :: {:ok, Profile.t()} | {:error, term()}
   def put(attrs) when is_map(attrs) do
-    row =
-      attrs
-      |> Map.put_new(:id, Emissary.UUID7.generate_id("prof"))
-      |> Map.update(:org_id, "", &QueryHelpers.normalize_org_id/1)
-      |> Map.update(:project_id, "default", &QueryHelpers.normalize_project_id/1)
+    # A profile without an athanor is a construction bug — fail here, not
+    # at the NOT NULL constraint.
+    _ = Map.fetch!(attrs, :athanor_id)
+    row = Map.put_new(attrs, :id, Emissary.UUID7.generate_id("prof"))
 
     struct(Profile, row)
     |> Arca.Repo.insert()
@@ -31,12 +30,9 @@ defmodule Arca.ProfileStorage do
       {:error, :database_error}
   end
 
-  @spec get(String.t(), String.t(), String.t()) :: {:ok, Profile.t()} | {:error, :not_found}
-  def get(org_id, project_id, id) do
-    org_id = QueryHelpers.normalize_org_id(org_id)
-    project_id = QueryHelpers.normalize_project_id(project_id)
-
-    case Arca.Repo.get_by(Profile, id: id, org_id: org_id, project_id: project_id) do
+  @spec get(String.t(), String.t()) :: {:ok, Profile.t()} | {:error, :not_found}
+  def get(athanor_id, id) do
+    case Arca.Repo.get_by(Profile, id: id, athanor_id: athanor_id) do
       nil -> {:error, :not_found}
       profile -> {:ok, profile}
     end
@@ -46,19 +42,15 @@ defmodule Arca.ProfileStorage do
       {:error, :database_error}
   end
 
-  @doc "Non-revoked profiles for a name-level source ref within a tenant."
-  @spec list_for_source(String.t(), String.t(), String.t()) ::
-          {:ok, [Profile.t()]} | {:error, term()}
-  def list_for_source(org_id, project_id, source_ref) do
-    org_id = QueryHelpers.normalize_org_id(org_id)
-    project_id = QueryHelpers.normalize_project_id(project_id)
-
+  @doc "Non-revoked profiles for a name-level source ref within an athanor."
+  @spec list_for_source(String.t(), String.t()) :: {:ok, [Profile.t()]} | {:error, term()}
+  def list_for_source(athanor_id, source_ref) do
     rows =
       Arca.Repo.all(
         from p in Profile,
           where:
-            p.org_id == ^org_id and p.project_id == ^project_id and
-              p.source_ref == ^source_ref and p.status != "revoked",
+            p.athanor_id == ^athanor_id and p.source_ref == ^source_ref and
+              p.status != "revoked",
           order_by: p.id
       )
 
@@ -69,15 +61,10 @@ defmodule Arca.ProfileStorage do
       {:error, :database_error}
   end
 
-  @spec set_status(String.t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def set_status(org_id, project_id, id, status) when is_binary(status) do
-    org_id = QueryHelpers.normalize_org_id(org_id)
-    project_id = QueryHelpers.normalize_project_id(project_id)
-
+  @spec set_status(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def set_status(athanor_id, id, status) when is_binary(status) do
     case Arca.Repo.update_all(
-           from(p in Profile,
-             where: p.id == ^id and p.org_id == ^org_id and p.project_id == ^project_id
-           ),
+           from(p in Profile, where: p.id == ^id and p.athanor_id == ^athanor_id),
            set: [status: status, updated_at: DateTime.utc_now()]
          ) do
       {1, _} -> :ok
@@ -94,17 +81,11 @@ defmodule Arca.ProfileStorage do
   only when the stored head still equals `expected` (or is NULL for the
   bootstrap revision) — a concurrent advance makes this return
   `{:error, :head_moved}` and the caller re-plans.
-
-  Org-scoped only by design: the sole caller is the consent-commit
-  transaction, which fetched the profile project-scoped moments earlier in
-  the same flow — the id is already tenant-verified when it reaches here.
   """
   @spec advance_head(String.t(), String.t(), String.t() | nil, String.t()) ::
           :ok | {:error, :head_moved | term()}
-  def advance_head(org_id, id, expected, new_consent_id) do
-    org_id = QueryHelpers.normalize_org_id(org_id)
-
-    base = from(p in Profile, where: p.id == ^id and p.org_id == ^org_id)
+  def advance_head(athanor_id, id, expected, new_consent_id) do
+    base = from(p in Profile, where: p.id == ^id and p.athanor_id == ^athanor_id)
 
     query =
       case expected do

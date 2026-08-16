@@ -16,7 +16,7 @@ defmodule Sanctum.AnonymousIngressTest do
   defp anonymous_exec_ctx do
     # Exactly what a public tincture invocation mints
     Sanctum.build_tincture_context(
-      Context.build(authenticated: false, scope: :project),
+      Context.build(authenticated: false, scope: :athanor),
       %{publisher: "alice", name: "widget"}
     )
   end
@@ -53,10 +53,10 @@ defmodule Sanctum.AnonymousIngressTest do
     end
   end
 
-  describe "Tenancy.user_active_in_org?/2" do
+  describe "Tenancy.user_active?/1" do
     test "true for any owner when no auth provider is configured" do
-      assert Sanctum.Tenancy.user_active_in_org?("anyone", "any_org")
-      assert Sanctum.Tenancy.user_active_in_org?(nil, "any_org")
+      assert Sanctum.Tenancy.user_active?("anyone")
+      assert Sanctum.Tenancy.user_active?(nil)
     end
 
     test "membership-checked when an auth provider is configured" do
@@ -64,23 +64,31 @@ defmodule Sanctum.AnonymousIngressTest do
       on_exit(fn -> Application.delete_env(:cyfr, :auth_provider) end)
 
       # Orphaned or missing owners are inactive
-      refute Sanctum.Tenancy.user_active_in_org?(nil, "org_x")
-      refute Sanctum.Tenancy.user_active_in_org?("", "org_x")
-      refute Sanctum.Tenancy.user_active_in_org?("departed-user", "org_x")
+      refute Sanctum.Tenancy.user_active?(nil)
+      refute Sanctum.Tenancy.user_active?("")
+      refute Sanctum.Tenancy.user_active?("departed-user")
 
-      # An org membership grants its org, not others
-      {:ok, _} = Sanctum.Tenancy.Orgs.create(%{id: "org_x", name: "Org X", slug: "org-x"})
+      # Any surviving membership keeps the owner active: an athanor row...
+      {:ok, athanor} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Athanor X",
+          slug: "athanor-x-#{System.unique_integer([:positive])}",
+          created_by: "system"
+        })
 
-      {:ok, _} =
-        Sanctum.Tenancy.Memberships.ensure("member-user", scope: "org", org_id: "org_x")
+      {:ok, member} =
+        Sanctum.Tenancy.Members.ensure("member-user", scope: "athanor", athanor_id: athanor.id)
 
-      assert Sanctum.Tenancy.user_active_in_org?("member-user", "org_x")
-      refute Sanctum.Tenancy.user_active_in_org?("member-user", "org_other")
+      assert Sanctum.Tenancy.user_active?("member-user")
 
-      # A platform membership grants every org
-      {:ok, _} = Sanctum.Tenancy.Memberships.ensure("admin-user", scope: "platform")
-      assert Sanctum.Tenancy.user_active_in_org?("admin-user", "org_x")
-      assert Sanctum.Tenancy.user_active_in_org?("admin-user", "org_other")
+      # ...or a platform row.
+      {:ok, _} = Sanctum.Tenancy.Members.ensure("admin-user", scope: "platform")
+      assert Sanctum.Tenancy.user_active?("admin-user")
+
+      # Losing the last membership makes the owner inactive again.
+      {:ok, _} = Sanctum.Tenancy.Members.remove(member)
+      refute Sanctum.Tenancy.user_active?("member-user")
     end
   end
 end

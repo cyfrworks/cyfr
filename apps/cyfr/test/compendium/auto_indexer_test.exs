@@ -44,9 +44,8 @@ defmodule Compendium.AutoIndexerTest do
   end
 
   defp create_component(comp_dir, type, publisher, name, version, opts \\ []) do
-    org = Keyword.get(opts, :org, "local")
-    project = Keyword.get(opts, :project, "default")
-    dir = Path.join([comp_dir, org, project, "#{type}s", publisher, name, version])
+    athanor = Keyword.get(opts, :athanor, Sanctum.TestContext.athanor_id())
+    dir = Path.join([comp_dir, athanor, "#{type}s", publisher, name, version])
     File.mkdir_p!(dir)
 
     manifest = %{
@@ -145,8 +144,9 @@ defmodule Compendium.AutoIndexerTest do
 
       result = AutoIndexer.scan(ctx: ctx)
 
-      # scanned_dirs now records the Arca prefix used, not raw filesystem paths.
-      assert [%{path: "components/", via: "Arca.list_recursive"}] = result.scanned_dirs
+      # scanned_dirs records the athanor's Arca prefix, not raw filesystem paths.
+      expected_path = "components/#{ctx.athanor_id}/"
+      assert [%{path: ^expected_path, via: "Arca.list_recursive"}] = result.scanned_dirs
     end
 
     test "scans multiple component types", %{comp_dir: comp_dir, ctx: ctx} do
@@ -160,37 +160,30 @@ defmodule Compendium.AutoIndexerTest do
       assert result.total == 3
     end
 
-    test "discovers org-scoped components when org_id is set", %{comp_dir: comp_dir, ctx: ctx} do
-      ctx_org = %{ctx | org_id: "test_org"}
+    test "discovers the components of the context's own athanor", %{comp_dir: comp_dir, ctx: ctx} do
+      ctx_other = %{ctx | athanor_id: "ath_other"}
+      create_component(comp_dir, "catalyst", "local", "other-tool", "0.1.0", athanor: "ath_other")
 
-      # Create org-scoped component: components/test_org/default/catalysts/local/org-tool/0.1.0/
-      org_dir =
-        Path.join([comp_dir, "test_org", "default", "catalysts", "local", "org-tool", "0.1.0"])
-
-      File.mkdir_p!(org_dir)
-
-      manifest = %{"type" => "catalyst", "version" => "0.1.0", "description" => "Org tool"}
-      File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
-
-      result = AutoIndexer.scan(ctx: ctx_org)
+      result = AutoIndexer.scan(ctx: ctx_other)
 
       assert result.registered == 1
       assert result.total == 1
     end
 
-    test "does not scan org paths when org_id is nil", %{comp_dir: comp_dir, ctx: ctx} do
-      # Create an org-scoped directory but use nil org_id context
-      org_dir = Path.join([comp_dir, "some_org", "catalysts", "local", "org-only", "0.1.0"])
-      File.mkdir_p!(org_dir)
+    test "never sees another athanor's tree", %{comp_dir: comp_dir, ctx: ctx} do
+      create_component(comp_dir, "catalyst", "local", "other-only", "0.1.0", athanor: "ath_other")
 
-      manifest = %{"type" => "catalyst", "version" => "0.1.0"}
-      File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
-
-      # Single-user scan should not find org-scoped components
       result = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 0
+      assert result.total == 0
+    end
+
+    test "never indexes the seed bundle", %{comp_dir: comp_dir, ctx: ctx} do
+      create_component(comp_dir, "catalyst", "local", "bundled", "0.1.0", athanor: "_bundle")
+
+      result = AutoIndexer.scan(ctx: ctx)
+      assert result.registered == 0
+      assert result.total == 0
     end
   end
 end

@@ -29,9 +29,8 @@ defmodule Opus.AuthorityPlumbingTest do
 
     ctx = %Context{
       user_id: "auth_plumb_user_#{:rand.uniform(100_000)}",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: Sanctum.TestContext.athanor_id(),
+      scope: :athanor,
       permissions: MapSet.new([:execute])
     }
 

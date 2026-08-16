@@ -102,10 +102,15 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # A stale expectation cannot advance the head.
     assert {:error, :head_moved} =
-             Arca.ProfileStorage.advance_head(ctx.org_id, profile.id, "cons_stale", "cons_new")
+             Arca.ProfileStorage.advance_head(
+               ctx.athanor_id,
+               profile.id,
+               "cons_stale",
+               "cons_new"
+             )
 
     # The true expectation can.
     assert :ok =
-             Arca.ProfileStorage.advance_head(ctx.org_id, profile.id, consent.id, consent.id)
+             Arca.ProfileStorage.advance_head(ctx.athanor_id, profile.id, consent.id, consent.id)
   end
 end

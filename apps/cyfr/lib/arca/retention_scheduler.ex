@@ -75,9 +75,9 @@ defmodule Arca.RetentionScheduler do
                 "[RetentionScheduler] Cleaned #{deleted} executions across #{tenants} tenants"
               )
 
-          for {oid, pid, reason} <- errors do
+          for {athanor_id, reason} <- errors do
             Logger.error(
-              "[RetentionScheduler] Cleanup failed org=#{oid} project=#{pid}: #{inspect(reason)}"
+              "[RetentionScheduler] Cleanup failed athanor=#{athanor_id}: #{inspect(reason)}"
             )
           end
 
@@ -89,34 +89,20 @@ defmodule Arca.RetentionScheduler do
     end
 
     try do
-      case Arca.Retention.cleanup_mcp_logs(ctx) do
-        {:ok, count} when is_integer(count) and count > 0 ->
-          Logger.info("[RetentionScheduler] Cleaned #{count} MCP logs")
+      case Arca.Retention.cleanup_all_logs() do
+        {:ok, %{mcp_logs_deleted: mcp, policy_logs_deleted: policy, errors: errors}} ->
+          if mcp + policy > 0,
+            do: Logger.info("[RetentionScheduler] Cleaned #{mcp} MCP logs, #{policy} policy logs")
 
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[RetentionScheduler] MCP log cleanup failed: #{inspect(reason)}")
+          for {athanor_id, kind, reason} <- errors do
+            Logger.warning(
+              "[RetentionScheduler] #{kind} cleanup failed athanor=#{athanor_id}: " <>
+                inspect(reason)
+            )
+          end
       end
     rescue
-      e -> Logger.error("[RetentionScheduler] MCP log cleanup crashed: #{Exception.message(e)}")
-    end
-
-    try do
-      case Arca.Retention.cleanup_policy_logs(ctx) do
-        {:ok, count} when is_integer(count) and count > 0 ->
-          Logger.info("[RetentionScheduler] Cleaned #{count} policy logs")
-
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[RetentionScheduler] Policy log cleanup failed: #{inspect(reason)}")
-      end
-    rescue
-      e ->
-        Logger.error("[RetentionScheduler] Policy log cleanup crashed: #{Exception.message(e)}")
+      e -> Logger.error("[RetentionScheduler] Log cleanup crashed: #{Exception.message(e)}")
     end
 
     sweep_webhook_deliveries()

@@ -229,8 +229,7 @@ defmodule Locus.MCP do
     build_meta = %{
         build_id: build_id,
         reference: reference,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         user_id: ctx.user_id
       }
 

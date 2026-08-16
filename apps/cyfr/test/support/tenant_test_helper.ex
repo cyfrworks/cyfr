@@ -6,16 +6,15 @@ defmodule Arca.TenantTestHelper do
 
   alias Sanctum.Context
 
-  @doc "Returns two contexts with different org_id and project_id."
+  @doc "Returns two contexts working in different athanors."
   def two_contexts do
     ctx_a =
       Context.build(
         user_id: "user_a",
         namespace: "user_a",
-        org_id: "org_alpha",
-        project_id: "proj_1",
+        athanor_id: "ath_a",
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
@@ -24,39 +23,9 @@ defmodule Arca.TenantTestHelper do
       Context.build(
         user_id: "user_b",
         namespace: "user_b",
-        org_id: "org_beta",
-        project_id: "proj_2",
+        athanor_id: "ath_b",
         permissions: [:*],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    {ctx_a, ctx_b}
-  end
-
-  @doc "Returns two contexts sharing the same org but different projects."
-  def same_org_contexts do
-    ctx_a =
-      Context.build(
-        user_id: "user_a",
-        namespace: "user_a",
-        org_id: "org_shared",
-        project_id: "proj_1",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
-
-    ctx_b =
-      Context.build(
-        user_id: "user_b",
-        namespace: "user_b",
-        org_id: "org_shared",
-        project_id: "proj_2",
-        permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )

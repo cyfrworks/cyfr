@@ -6,13 +6,20 @@ defmodule Prism.TinctureRegistryTest do
 
   alias Prism.TinctureRegistry
 
+  # The registry resolves every tincture's athanor to a route segment, so the
+  # rows behind the athanor ids used here must exist: the test context's own
+  # (`ath_test`, slug "test") plus the ones each test creates.
   setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    athanor = Sanctum.TestContext.athanor!()
+
     # Create a temp tincture structure
     base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{:rand.uniform(1_000_000)}")
     components_dir = Path.join(base, "components")
 
     tincture_dir =
-      Path.join([components_dir, "local", "default", "tinctures", "local", "test-dash", "1.0.0"])
+      Path.join([components_dir, athanor.id, "tinctures", "local", "test-dash", "1.0.0"])
 
     File.mkdir_p!(tincture_dir)
 
@@ -51,7 +58,7 @@ defmodule Prism.TinctureRegistryTest do
       File.rm_rf!(base)
     end)
 
-    %{base: base, components_dir: components_dir, tincture_dir: tincture_dir}
+    %{base: base, components_dir: components_dir, tincture_dir: tincture_dir, athanor: athanor}
   end
 
   describe "GenServer lifecycle" do
@@ -59,7 +66,7 @@ defmodule Prism.TinctureRegistryTest do
       name = :test_tincture_reg
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       assert length(tinctures) == 1
       assert hd(tinctures).name == "test-dash"
 
@@ -72,7 +79,7 @@ defmodule Prism.TinctureRegistryTest do
       name = :test_list
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       assert length(tinctures) == 1
 
       t = hd(tinctures)
@@ -82,16 +89,18 @@ defmodule Prism.TinctureRegistryTest do
       assert t.entry == "index.html"
       assert t.title == "Test Dashboard"
       assert t.icon == "chart-line"
-      assert t.entry_url == "/t/local/default/local/test-dash"
+      assert t.entry_url == "/t/test/local/test-dash"
+      assert t.athanor_id == "ath_test"
+      assert t.athanor_segment == "test"
 
       GenServer.stop(pid)
     end
 
-    test "returns empty for non-matching org_id" do
-      name = :test_empty_org
+    test "returns empty for a non-matching athanor" do
+      name = :test_empty_athanor
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "nonexistent-org"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_nonexistent"})
       assert tinctures == []
 
       GenServer.stop(pid)
@@ -104,8 +113,7 @@ defmodule Prism.TinctureRegistryTest do
       v2_dir =
         Path.join([
           components_dir,
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "test-dash",
@@ -128,7 +136,7 @@ defmodule Prism.TinctureRegistryTest do
       name = :test_version
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       assert length(tinctures) == 1
       assert hd(tinctures).version == "2.0.0"
 
@@ -141,14 +149,13 @@ defmodule Prism.TinctureRegistryTest do
       name = :test_reload
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      assert length(TinctureRegistry.list_tinctures(name, %{org_id: "local"})) == 1
+      assert length(TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})) == 1
 
       # Add a new tincture
       new_dir =
         Path.join([
           components_dir,
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "new-tincture",
@@ -169,66 +176,121 @@ defmodule Prism.TinctureRegistryTest do
 
       :ok = TinctureRegistry.reload(name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       assert length(tinctures) == 2
 
       GenServer.stop(pid)
     end
   end
 
-  describe "multi-tenant org-scoped tincture loading" do
-    test "discovers org-scoped tinctures in multi-tenant", %{components_dir: components_dir} do
-      # Create org-scoped tincture: components/{org_id}/{project_id}/tinctures/{publisher}/{name}/{version}/
-      org_dir =
-        Path.join([
-          components_dir,
-          "org_abc123",
-          "default",
-          "tinctures",
-          "acme",
-          "org-dash",
-          "0.1.0"
-        ])
+  describe "athanor-scoped tincture loading" do
+    test "discovers another athanor's tinctures under its own id", %{
+      components_dir: components_dir
+    } do
+      {:ok, other} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Acme",
+          slug: "acme",
+          created_by: "test"
+        })
 
-      File.mkdir_p!(org_dir)
+      # Layout: components/{athanor_id}/tinctures/{publisher}/{name}/{version}/
+      other_dir = Path.join([components_dir, other.id, "tinctures", "acme", "acme-dash", "0.1.0"])
+      File.mkdir_p!(other_dir)
 
       manifest = %{
-        "name" => "org-dash",
+        "name" => "acme-dash",
         "type" => "tincture",
         "version" => "0.1.0",
         "publisher" => "acme",
         "tincture" => %{"entry" => "index.html"}
       }
 
-      File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(other_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      name = :test_ext_org
+      name = :test_ext_athanor
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      # Org-scoped tincture visible to matching org
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "org_abc123"})
-      org_names = Enum.map(tinctures, & &1.name)
-      assert "org-dash" in org_names
+      # Visible to the matching athanor, with its own route segment
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: other.id})
+      assert [%{name: "acme-dash", entry_url: "/t/acme/acme/acme-dash"}] = tinctures
 
-      # Not visible to different org
-      other_tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "org_other"})
-      other_names = Enum.map(other_tinctures, & &1.name)
-      refute "org-dash" in other_names
+      # Not visible to a different athanor
+      other_tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_other"})
+      refute "acme-dash" in Enum.map(other_tinctures, & &1.name)
 
-      # Not visible to the default-mode scope (local/default)
-      core_tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
-      core_names = Enum.map(core_tinctures, & &1.name)
-      refute "org-dash" in core_names
+      # Not visible to the test athanor
+      core_tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      refute "acme-dash" in Enum.map(core_tinctures, & &1.name)
 
       GenServer.stop(pid)
     end
 
-    test "multi-tenant still discovers default-mode tinctures", %{components_dir: _components_dir} do
+    test "a tincture whose athanor row is missing or archived has no route", %{
+      components_dir: components_dir
+    } do
+      {:ok, archived} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Gone",
+          slug: "gone",
+          created_by: "test"
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
+
+      for athanor_id <- [archived.id, "ath_ghost"] do
+        dir = Path.join([components_dir, athanor_id, "tinctures", "local", "orphan", "0.1.0"])
+        File.mkdir_p!(dir)
+
+        manifest = %{
+          "name" => "orphan",
+          "type" => "tincture",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "tincture" => %{"entry" => "index.html"}
+        }
+
+        File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      end
+
+      name = :test_orphans
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+
+      assert TinctureRegistry.list_tinctures(name, %{athanor_id: archived.id}) == []
+      assert TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_ghost"}) == []
+
+      GenServer.stop(pid)
+    end
+
+    test "the seed bundle is never a tincture source", %{components_dir: components_dir} do
+      dir = Path.join([components_dir, "_bundle", "tinctures", "local", "bundled", "0.1.0"])
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => "bundled",
+        "type" => "tincture",
+        "version" => "0.1.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      name = :test_bundle_skip
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+
+      assert TinctureRegistry.list_tinctures(name, %{athanor_id: "_bundle"}) == []
+
+      GenServer.stop(pid)
+    end
+
+    test "still discovers the test athanor's tinctures", %{components_dir: _components_dir} do
       name = :test_ext_core
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      # The setup's default-mode tincture (test-dash at local/default) should still be found
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       names = Enum.map(tinctures, & &1.name)
       assert "test-dash" in names
 
@@ -241,8 +303,7 @@ defmodule Prism.TinctureRegistryTest do
       app_dir =
         Path.join([
           components_dir,
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "legacy-app",
@@ -263,7 +324,7 @@ defmodule Prism.TinctureRegistryTest do
       name = :test_skip_app
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       names = Enum.map(tinctures, & &1.name)
       refute "legacy-app" in names
 
@@ -279,8 +340,7 @@ defmodule Prism.TinctureRegistryTest do
       dir =
         Path.join([
           components_dir,
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "has-png-icon",
@@ -306,7 +366,7 @@ defmodule Prism.TinctureRegistryTest do
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
         |> Enum.map(& &1.name)
 
       refute "has-png-icon" in names
@@ -317,8 +377,7 @@ defmodule Prism.TinctureRegistryTest do
       dir =
         Path.join([
           components_dir,
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "has-jpg-preview",
@@ -344,7 +403,7 @@ defmodule Prism.TinctureRegistryTest do
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
         |> Enum.map(& &1.name)
 
       refute "has-jpg-preview" in names
@@ -353,7 +412,7 @@ defmodule Prism.TinctureRegistryTest do
 
     test "rejects tincture with convention-discovered PNG icon", %{components_dir: components_dir} do
       dir =
-        Path.join([components_dir, "local", "default", "tinctures", "local", "conv-png", "1.0.0"])
+        Path.join([components_dir, "ath_test", "tinctures", "local", "conv-png", "1.0.0"])
 
       File.mkdir_p!(Path.join(dir, "public/media"))
 
@@ -374,7 +433,7 @@ defmodule Prism.TinctureRegistryTest do
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
         |> Enum.map(& &1.name)
 
       refute "conv-png" in names
@@ -383,7 +442,7 @@ defmodule Prism.TinctureRegistryTest do
 
     test "allows SVG icon", %{components_dir: components_dir} do
       dir =
-        Path.join([components_dir, "local", "default", "tinctures", "local", "svg-ok", "1.0.0"])
+        Path.join([components_dir, "ath_test", "tinctures", "local", "svg-ok", "1.0.0"])
 
       File.mkdir_p!(dir)
 
@@ -404,7 +463,7 @@ defmodule Prism.TinctureRegistryTest do
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
         |> Enum.map(& &1.name)
 
       assert "svg-ok" in names
@@ -415,8 +474,7 @@ defmodule Prism.TinctureRegistryTest do
       dir =
         Path.join([
           components_dir,
-          "local",
-          "default",
+          "ath_test",
           "tinctures",
           "local",
           "upper-png",
@@ -442,7 +500,7 @@ defmodule Prism.TinctureRegistryTest do
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
         |> Enum.map(& &1.name)
 
       refute "upper-png" in names
@@ -457,7 +515,7 @@ defmodule Prism.TinctureRegistryTest do
 
       :ok = :sys.suspend(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
       assert [%{name: "test-dash"}] = tinctures
 
       :ok = :sys.resume(pid)

@@ -6,12 +6,12 @@ defmodule Sanctum.PubSubTest do
 
   alias Sanctum.PubSub, as: PubSubHelper
 
-  defp ctx(org_id) do
+  defp ctx(athanor_id) do
     Sanctum.Context.build(
       user_id: "u1",
-      org_id: org_id,
+      athanor_id: athanor_id,
       permissions: [:*],
-      scope: :project,
+      scope: :athanor,
       auth_method: :oidc,
       namespace: "testns",
       authenticated: true
@@ -19,14 +19,14 @@ defmodule Sanctum.PubSubTest do
   end
 
   describe "topic/2 with a Context" do
-    test "prefixes with the resolved tenant (org + project)" do
-      assert "tenant:org_1:default:execution:events" ==
-               PubSubHelper.topic("execution:events", ctx("org_1"))
+    test "prefixes with the resolved athanor" do
+      assert "tenant:ath_1:execution:events" ==
+               PubSubHelper.topic("execution:events", ctx("ath_1"))
     end
 
-    test "prefixes with the seeded local org" do
-      assert "tenant:local:default:execution:events" ==
-               PubSubHelper.topic("execution:events", ctx("local"))
+    test "two athanors never share a topic" do
+      refute PubSubHelper.topic("execution:events", ctx("ath_1")) ==
+               PubSubHelper.topic("execution:events", ctx("ath_2"))
     end
 
     test "raises for a nil context" do
@@ -35,20 +35,20 @@ defmodule Sanctum.PubSubTest do
       end
     end
 
-    test "raises for a context with an unresolved (nil) org_id" do
-      # nil is the only org-less state a built Context can carry — the transient
-      # pre-resolution auth state. topic/2 fails closed on it.
-      assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
+    test "raises for a context with an unresolved (nil) athanor_id" do
+      # nil is the only athanor-less state a built Context can carry — the
+      # transient pre-resolution auth state. topic/2 fails closed on it.
+      assert_raise ArgumentError, ~r/non-empty athanor_id/, fn ->
         PubSubHelper.topic("execution:events", ctx(nil))
       end
     end
 
-    test "an empty-string org_id is coerced to the local sentinel at build time" do
-      # Context.build/1 never lets "" through (it normalizes to "local"), so a
-      # built context can't reach topic/2 carrying an empty org. (The raw-struct
-      # guard is covered in pubsub_empty_org_id_test.exs.)
-      assert "tenant:local:default:execution:events" ==
-               PubSubHelper.topic("execution:events", ctx(""))
+    test "an empty-string athanor_id never reaches topic/2 — build/1 rejects it" do
+      # There is no sentinel to coerce into: Context.build/1 raises on "".
+      # (The raw-struct guard is covered in pubsub_missing_athanor_test.exs.)
+      assert_raise ArgumentError, ~r/athanor_id must be a resolved id or nil/, fn ->
+        ctx("")
+      end
     end
   end
 end

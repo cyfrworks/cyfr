@@ -72,7 +72,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # would let one surface starve the other. Registry entries die with this
   # process, so a vanished client frees its slot without bookkeeping.
   defp claim_stream_slot(ctx) do
-    key = {:exec_events, ctx.org_id, ctx.user_id}
+    key = {:exec_events, ctx.athanor_id, ctx.user_id}
     limit = Application.get_env(:cyfr, :execution_events_max_concurrent, 8)
 
     if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do
@@ -100,15 +100,15 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  # Subscribe and replay with the RECORD's tenant coordinates, not the
-  # viewer's context: producers publish/buffer under the execution's own
-  # org/project, and an org- or platform-scoped viewer may carry different
-  # coordinates than the record it was authorized to read.
+  # Subscribe and replay with the RECORD's athanor, not the viewer's
+  # context: producers publish/buffer under the execution's own athanor, and
+  # a platform-scoped viewer may carry a different one than the record it
+  # was authorized to read.
   defp stream_events(conn, execution_id, last_seq, exec) do
     Opus.subscribe_events(execution_id, exec)
 
     # Replay buffered events since last_seq
-    buffered = Opus.events_since(execution_id, last_seq, exec.org_id)
+    buffered = Opus.events_since(execution_id, last_seq, exec.athanor_id)
 
     {conn, terminal?} =
       Enum.reduce_while(buffered, {conn, false}, fn event, {acc_conn, _} ->
@@ -133,8 +133,8 @@ defmodule EmissaryWeb.ExecutionEventsController do
   end
 
   # `exec` rides along so unsubscribe targets the SAME tenant-scoped topic
-  # subscribe used — dropping it resolves to the local/default sentinel and
-  # silently leaves the process subscribed for any other org. The deadline
+  # subscribe used — a topic built from anything else would silently leave
+  # the process subscribed to the athanor's stream. The deadline
   # bounds a stream whose execution never reaches a terminal event — the
   # client reconnects with Last-Event-ID and misses nothing.
   defp event_loop(conn, execution_id, exec, deadline) do

@@ -43,8 +43,7 @@ defmodule Arca.TenantIsolationTest do
         manifest: nil,
         publisher: "local",
         publisher_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
+        athanor_id: ctx_a.athanor_id,
         source: "published",
         signature_verified: false,
         signer_identity: nil,
@@ -71,39 +70,6 @@ defmodule Arca.TenantIsolationTest do
       refute Enum.any?(b_list, &(&1.name == "tenant-widget"))
     end
 
-    test "same org, different projects are isolated" do
-      {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
-
-      attrs = %{
-        id: "comp_sameorg_test",
-        name: "shared-org-widget",
-        version: "1.0.0",
-        component_type: "reagent",
-        description: "Org-shared widget in proj_1",
-        tags: "[]",
-        digest: "sha256:bbb",
-        size: 100,
-        exports: "[]",
-        manifest: nil,
-        publisher: "local",
-        publisher_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
-        source: "published",
-        signature_verified: false,
-        signer_identity: nil,
-        signer_issuer: nil,
-        inserted_at: DateTime.utc_now(),
-        updated_at: DateTime.utc_now()
-      }
-
-      {:ok, _} = Arca.ComponentStorage.put_component(ctx_a, attrs)
-
-      # Same org but different project cannot see it
-      {:error, :not_found} =
-        Arca.ComponentStorage.get_component(ctx_b, "shared-org-widget", "1.0.0")
-    end
-
     test "exists? respects tenant boundary" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
@@ -120,8 +86,7 @@ defmodule Arca.TenantIsolationTest do
         manifest: nil,
         publisher: "local",
         publisher_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
+        athanor_id: ctx_a.athanor_id,
         source: "published",
         signature_verified: false,
         signer_identity: nil,
@@ -152,8 +117,7 @@ defmodule Arca.TenantIsolationTest do
         manifest: nil,
         publisher: "local",
         publisher_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
+        athanor_id: ctx_a.athanor_id,
         source: "published",
         signature_verified: false,
         signer_identity: nil,
@@ -185,8 +149,7 @@ defmodule Arca.TenantIsolationTest do
           id: "exec_cross_a",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
+          athanor_id: ctx_a.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running"
@@ -200,25 +163,6 @@ defmodule Arca.TenantIsolationTest do
       assert nil == Arca.Execution.get_tenant(ctx_b, "exec_cross_a")
     end
 
-    test "same org, different project returns nil" do
-      {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
-
-      {:ok, _} =
-        Arca.Execution.record_start(%{
-          id: "exec_sameorg_a",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now(),
-          status: "running"
-        })
-
-      assert %Arca.Execution{} = Arca.Execution.get_tenant(ctx_a, "exec_sameorg_a")
-      assert nil == Arca.Execution.get_tenant(ctx_b, "exec_sameorg_a")
-    end
-
     test "platform scope bypasses tenant check" do
       {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
 
@@ -227,8 +171,7 @@ defmodule Arca.TenantIsolationTest do
           id: "exec_platform_test",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
+          athanor_id: ctx_a.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running"
@@ -250,7 +193,7 @@ defmodule Arca.TenantIsolationTest do
   end
 
   describe "Execution tenant filtering" do
-    test "list filters by org_id and project_id" do
+    test "list filters by athanor_id" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       {:ok, _} =
@@ -258,8 +201,7 @@ defmodule Arca.TenantIsolationTest do
           id: "exec_tenant_a",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
+          athanor_id: ctx_a.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running"
@@ -270,20 +212,19 @@ defmodule Arca.TenantIsolationTest do
           id: "exec_tenant_b",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_b.user_id,
-          org_id: ctx_b.org_id,
-          project_id: ctx_b.project_id,
+          athanor_id: ctx_b.athanor_id,
           component_type: "reagent",
           started_at: DateTime.utc_now(),
           status: "running"
         })
 
       # Query with A's tenant filters
-      a_results = Arca.Execution.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
+      a_results = Arca.Execution.list(athanor_id: ctx_a.athanor_id)
       assert length(a_results) == 1
       assert hd(a_results).id == "exec_tenant_a"
 
       # Query with B's tenant filters
-      b_results = Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id)
+      b_results = Arca.Execution.list(athanor_id: ctx_b.athanor_id)
       assert length(b_results) == 1
       assert hd(b_results).id == "exec_tenant_b"
     end
@@ -304,8 +245,7 @@ defmodule Arca.TenantIsolationTest do
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id
+          athanor_id: ctx_a.athanor_id
         })
 
       {:ok, _} =
@@ -315,8 +255,7 @@ defmodule Arca.TenantIsolationTest do
           cron_expression: "*/10 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          org_id: ctx_b.org_id,
-          project_id: ctx_b.project_id
+          athanor_id: ctx_b.athanor_id
         })
 
       a_schedules = Arca.CronSchedule.list_by_user(ctx_a)
@@ -328,7 +267,7 @@ defmodule Arca.TenantIsolationTest do
       assert hd(b_schedules).name == "sched-b"
     end
 
-    test "count_by_user scoped to tenant" do
+    test "count_active scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       {:ok, _} =
@@ -338,12 +277,11 @@ defmodule Arca.TenantIsolationTest do
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id
+          athanor_id: ctx_a.athanor_id
         })
 
-      assert Arca.CronSchedule.count_by_user(ctx_a) == 1
-      assert Arca.CronSchedule.count_by_user(ctx_b) == 0
+      assert Arca.CronSchedule.count_active(ctx_a) == 1
+      assert Arca.CronSchedule.count_active(ctx_b) == 0
     end
 
     test "get_by_user scoped to tenant" do
@@ -356,8 +294,7 @@ defmodule Arca.TenantIsolationTest do
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id
+          athanor_id: ctx_a.athanor_id
         })
 
       # A can find by name
@@ -390,8 +327,7 @@ defmodule Arca.TenantIsolationTest do
         manifest: nil,
         publisher: "local",
         publisher_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
+        athanor_id: ctx_a.athanor_id,
         source: "published",
         signature_verified: false,
         signer_identity: nil,
@@ -413,8 +349,7 @@ defmodule Arca.TenantIsolationTest do
         manifest: nil,
         publisher: "local",
         publisher_id: ctx_b.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-        project_id: ctx_b.project_id || "default",
+        athanor_id: ctx_b.athanor_id,
         source: "published",
         signature_verified: false,
         signer_identity: nil,
@@ -516,8 +451,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.McpLog.record(%{
           id: "log_tenant_a",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: old_time,
           status: "success",
           tool: "test",
@@ -529,8 +463,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.McpLog.record(%{
           id: "log_tenant_b",
           user_id: ctx_b.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-          project_id: ctx_b.project_id || "default",
+          athanor_id: ctx_b.athanor_id,
           timestamp: old_time,
           status: "success",
           tool: "test",
@@ -557,8 +490,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.McpLog.record(%{
           id: "log_dry_a",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: old_time,
           status: "success"
         })
@@ -567,8 +499,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.McpLog.record(%{
           id: "log_dry_b",
           user_id: ctx_b.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-          project_id: ctx_b.project_id || "default",
+          athanor_id: ctx_b.athanor_id,
           timestamp: old_time,
           status: "success"
         })
@@ -600,8 +531,7 @@ defmodule Arca.TenantIsolationTest do
             id: "ret_a_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_a.user_id,
-            org_id: ctx_a.org_id,
-            project_id: ctx_a.project_id,
+            athanor_id: ctx_a.athanor_id,
             component_type: "reagent",
             started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
             status: "completed"
@@ -612,8 +542,7 @@ defmodule Arca.TenantIsolationTest do
             id: "ret_b_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_b.user_id,
-            org_id: ctx_b.org_id,
-            project_id: ctx_b.project_id,
+            athanor_id: ctx_b.athanor_id,
             component_type: "reagent",
             started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
             status: "completed"
@@ -626,13 +555,13 @@ defmodule Arca.TenantIsolationTest do
 
       # Tenant A has 2
       a_results =
-        Arca.Execution.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id, limit: 100)
+        Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)
 
       assert length(a_results) == 2
 
       # Tenant B still has 5
       b_results =
-        Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+        Arca.Execution.list(athanor_id: ctx_b.athanor_id, limit: 100)
 
       assert length(b_results) == 5
     end
@@ -646,8 +575,7 @@ defmodule Arca.TenantIsolationTest do
             id: "all_a_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_a.user_id,
-            org_id: ctx_a.org_id,
-            project_id: ctx_a.project_id,
+            athanor_id: ctx_a.athanor_id,
             component_type: "reagent",
             started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
             status: "completed"
@@ -658,8 +586,7 @@ defmodule Arca.TenantIsolationTest do
             id: "all_b_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_b.user_id,
-            org_id: ctx_b.org_id,
-            project_id: ctx_b.project_id,
+            athanor_id: ctx_b.athanor_id,
             component_type: "reagent",
             started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
             status: "completed"
@@ -672,7 +599,7 @@ defmodule Arca.TenantIsolationTest do
 
       # Tenant B unaffected
       b_results =
-        Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+        Arca.Execution.list(athanor_id: ctx_b.athanor_id, limit: 100)
 
       assert length(b_results) == 4
     end
@@ -686,8 +613,7 @@ defmodule Arca.TenantIsolationTest do
             id: "dry_a_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_a.user_id,
-            org_id: ctx_a.org_id,
-            project_id: ctx_a.project_id,
+            athanor_id: ctx_a.athanor_id,
             component_type: "reagent",
             started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
             status: "completed"
@@ -698,8 +624,7 @@ defmodule Arca.TenantIsolationTest do
             id: "dry_b_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_b.user_id,
-            org_id: ctx_b.org_id,
-            project_id: ctx_b.project_id,
+            athanor_id: ctx_b.athanor_id,
             component_type: "reagent",
             started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
             status: "completed"
@@ -711,49 +636,10 @@ defmodule Arca.TenantIsolationTest do
       assert result.would_keep == 1
 
       # All records still exist
-      all_a = Arca.Execution.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id, limit: 100)
+      all_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)
       assert length(all_a) == 3
     end
 
-    test "same org different projects isolated" do
-      {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
-
-      for i <- 1..4 do
-        {:ok, _} =
-          Arca.Execution.record_start(%{
-            id: "proj_a_#{i}",
-            reference: "reagent:local.test:0.1.0",
-            user_id: ctx_a.user_id,
-            org_id: ctx_a.org_id,
-            project_id: ctx_a.project_id,
-            component_type: "reagent",
-            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-            status: "completed"
-          })
-
-        {:ok, _} =
-          Arca.Execution.record_start(%{
-            id: "proj_b_#{i}",
-            reference: "reagent:local.test:0.1.0",
-            user_id: ctx_b.user_id,
-            org_id: ctx_b.org_id,
-            project_id: ctx_b.project_id,
-            component_type: "reagent",
-            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-            status: "completed"
-          })
-      end
-
-      # Cleanup project A, keep 1
-      {:ok, count} = Arca.Retention.cleanup_executions(ctx_a, keep: 1)
-      assert count == 3
-
-      # Project B unaffected
-      b_results =
-        Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
-
-      assert length(b_results) == 4
-    end
   end
 
   # ============================================================================
@@ -768,8 +654,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.McpLog.record(%{
           id: "mlog_cross_a",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: DateTime.utc_now(),
           status: "success",
           tool: "test",
@@ -790,8 +675,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.McpLog.record(%{
           id: "mlog_platform_test",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: DateTime.utc_now(),
           status: "success"
         })
@@ -823,8 +707,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.PolicyLog.record(%{
           id: "plog_cross_a",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: DateTime.utc_now(),
           event_type: "policy_consultation",
           request_id: "req_plog_a"
@@ -845,8 +728,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.PolicyLog.record(%{
           id: "plog_platform_test",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: DateTime.utc_now(),
           event_type: "policy_consultation"
         })
@@ -874,8 +756,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.PolicyLog.record(%{
           id: "plog_reqid_a",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: DateTime.utc_now(),
           event_type: "policy_consultation",
           request_id: "req_cross_tenant_123"
@@ -896,8 +777,7 @@ defmodule Arca.TenantIsolationTest do
         Arca.PolicyLog.record(%{
           id: "plog_reqid_plat",
           user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
+          athanor_id: ctx_a.athanor_id,
           timestamp: DateTime.utc_now(),
           event_type: "policy_consultation",
           request_id: "req_platform_456"
@@ -934,8 +814,7 @@ defmodule Arca.TenantIsolationTest do
           Arca.McpLog.record(%{
             id: "stats_a_#{i}",
             user_id: ctx_a.user_id,
-            org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-            project_id: ctx_a.project_id || "default",
+            athanor_id: ctx_a.athanor_id,
             timestamp: now,
             status: "success",
             duration_ms: 100
@@ -948,8 +827,7 @@ defmodule Arca.TenantIsolationTest do
           Arca.McpLog.record(%{
             id: "stats_b_#{i}",
             user_id: ctx_b.user_id,
-            org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-            project_id: ctx_b.project_id || "default",
+            athanor_id: ctx_b.athanor_id,
             timestamp: now,
             status: "success",
             duration_ms: 200
@@ -959,8 +837,7 @@ defmodule Arca.TenantIsolationTest do
       # Stats for A should show 3
       stats_a =
         Arca.McpLog.stats(
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default"
+          athanor_id: ctx_a.athanor_id
         )
 
       assert stats_a.total == 3
@@ -968,8 +845,7 @@ defmodule Arca.TenantIsolationTest do
       # Stats for B should show 2
       stats_b =
         Arca.McpLog.stats(
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-          project_id: ctx_b.project_id || "default"
+          athanor_id: ctx_b.athanor_id
         )
 
       assert stats_b.total == 2
@@ -981,13 +857,13 @@ defmodule Arca.TenantIsolationTest do
   # ============================================================================
 
   describe "ApiKeyStorage tenant isolation" do
-    test "get_key_by_hash/1 returns the key's own org (tenant binding is Context-layer, R1)" do
-      key_hash = :crypto.hash(:sha256, "test_key_cross_org_#{:rand.uniform(100_000)}")
+    test "get_key_by_hash/1 returns the key's own athanor (tenant binding is Context-layer)" do
+      key_hash = :crypto.hash(:sha256, "test_key_cross_ath_#{:rand.uniform(100_000)}")
 
-      # Create key for org_alpha
+      # Create key for ath_alpha
       :ok =
         Arca.ApiKeyStorage.create_key(%{
-          name: "cross-org-key",
+          name: "cross-athanor-key",
           key_hash: key_hash,
           key_prefix: "cyfr_sk_",
           type: "secret",
@@ -995,21 +871,18 @@ defmodule Arca.TenantIsolationTest do
           rate_limit: nil,
           ip_allowlist: nil,
           created_by: "user_a",
-          scope_type: "project",
-          org_id: "org_alpha"
+          athanor_id: "ath_alpha"
         })
 
-      # API keys are project credentials: the (now sole) hash lookup returns
-      # the key's OWN org from the row. The former tenant-scoped
-      # get_key_by_hash/3 was removed in R1 — cross-tenant rejection now
-      # happens on the resulting Sanctum.Context (require_tenant!), covered by
-      # Arca.R6OrgLessFailClosedTest and Sanctum.ApiKeyTest "API-key project
-      # scoping".
+      # API keys are athanor credentials: the (sole) hash lookup returns the
+      # key's OWN athanor from the row. Cross-tenant rejection happens on the
+      # resulting Sanctum.Context (require_tenant!), covered by
+      # Arca.R6AthanorLessFailClosedTest and Sanctum.ApiKeyTest.
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
-      assert row.org_id == "org_alpha"
+      assert row.athanor_id == "ath_alpha"
     end
 
-    test "key's org_id flows through build_key_metadata" do
+    test "key's athanor_id flows through build_key_metadata" do
       key_hash = :crypto.hash(:sha256, "test_key_metadata_#{:rand.uniform(100_000)}")
 
       :ok =
@@ -1022,13 +895,12 @@ defmodule Arca.TenantIsolationTest do
           rate_limit: nil,
           ip_allowlist: nil,
           created_by: "user_a",
-          scope_type: "project",
-          org_id: "org_gamma"
+          athanor_id: "ath_gamma"
         })
 
-      # Verify the row returned by get_key_by_hash includes org_id
+      # Verify the row returned by get_key_by_hash includes athanor_id
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
-      assert row.org_id == "org_gamma"
+      assert row.athanor_id == "ath_gamma"
     end
   end
 
@@ -1041,11 +913,10 @@ defmodule Arca.TenantIsolationTest do
   # ============================================================================
 
   defp make_component_id(publisher, name, version, component_type, ctx) do
-    org = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
-    proj = ctx.project_id || "default"
+    athanor = ctx.athanor_id
 
     hash =
-      :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
+      :crypto.hash(:sha256, "#{athanor}:#{publisher}:#{name}:#{version}:#{component_type}")
       |> Base.encode16(case: :lower)
       |> binary_part(0, 16)
 
@@ -1068,8 +939,7 @@ defmodule Arca.TenantIsolationTest do
       manifest: nil,
       publisher: "local",
       publisher_id: ctx.user_id,
-      org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-      project_id: ctx.project_id || "default",
+      athanor_id: ctx.athanor_id,
       source: "published",
       signature_verified: false,
       signer_identity: nil,

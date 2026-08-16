@@ -32,13 +32,12 @@ defmodule Opus.SecurityTest do
     ctx =
       Context.build(
         user_id: "sec_test_user_#{rand_id}",
-        # Unique tenant per test: executions are project-scoped (shared within a
-        # tenant), so isolation between tests — and the cross-tenant checks
-        # below — are by org/project, not user.
-        org_id: "sec_test_org_#{rand_id}",
-        project_id: "default",
+        # Unique athanor per test: executions are athanor-scoped (shared within
+        # a tenant), so isolation between tests — and the cross-tenant checks
+        # below — are by athanor, not user.
+        athanor_id: "ath_sec_test_#{rand_id}",
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         namespace: "testns",
         authenticated: true
@@ -155,9 +154,9 @@ defmodule Opus.SecurityTest do
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",
-          project_id: "default",
+          athanor_id: "ath_other_#{:rand.uniform(10000)}",
           permissions: [:execute, :storage_read],
-          scope: :project,
+          scope: :athanor,
           auth_method: :api_key,
           namespace: "testns",
           authenticated: true
@@ -185,14 +184,13 @@ defmodule Opus.SecurityTest do
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
 
-      # A different tenant sees none of this project's executions.
+      # A different tenant sees none of this athanor's executions.
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",
-          org_id: "other-tenant-#{:rand.uniform(10000)}",
-          project_id: "default",
+          athanor_id: "ath_other_#{:rand.uniform(10000)}",
           permissions: [:execute, :storage_read],
-          scope: :project,
+          scope: :athanor,
           auth_method: :api_key,
           namespace: "testns",
           authenticated: true
@@ -211,9 +209,9 @@ defmodule Opus.SecurityTest do
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",
-          project_id: "default",
+          athanor_id: "ath_other_#{:rand.uniform(10000)}",
           permissions: [:execute, :storage_read],
-          scope: :project,
+          scope: :athanor,
           auth_method: :api_key,
           namespace: "testns",
           authenticated: true

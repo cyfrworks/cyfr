@@ -15,9 +15,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
   defp execute_only_ctx do
     Context.build(
       user_id: "exec-only",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: "ath_test",
+      scope: :athanor,
       permissions: [:execute, :storage_read, :storage_write],
       authenticated: true
     )

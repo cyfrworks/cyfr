@@ -871,7 +871,7 @@ defmodule Opus.FormulaHandlerTest do
         )
 
       # Subscribe to the execution events topic
-      Opus.ExecutionEventBuffer.subscribe(execution_id)
+      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -885,7 +885,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["kind"] == "turn_start"
       assert event.data["turn"] == 1
 
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -911,13 +911,13 @@ defmodule Opus.FormulaHandlerTest do
       Opus.ExecutionEventBuffer.flush(execution_id)
 
       # Replay all events (since sequence 0)
-      events = Opus.ExecutionEventBuffer.since(execution_id, 0)
+      events = Opus.ExecutionEventBuffer.since(execution_id, 0, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == [1, 2, 3]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
       # Replay only events after sequence 1
-      events_after_1 = Opus.ExecutionEventBuffer.since(execution_id, 1)
+      events_after_1 = Opus.ExecutionEventBuffer.since(execution_id, 1, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == [2, 3]
 
@@ -977,8 +977,8 @@ defmodule Opus.FormulaHandlerTest do
         )
 
       # Subscribe to both root and parent
-      Opus.ExecutionEventBuffer.subscribe(root_id)
-      Opus.ExecutionEventBuffer.subscribe(parent_id)
+      Opus.ExecutionEventBuffer.subscribe(root_id, ctx)
+      Opus.ExecutionEventBuffer.subscribe(parent_id, ctx)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -993,8 +993,8 @@ defmodule Opus.FormulaHandlerTest do
       # Should NOT arrive on parent's buffer
       refute_receive {:execution_event, _}, 100
 
-      Opus.ExecutionEventBuffer.unsubscribe(root_id)
-      Opus.ExecutionEventBuffer.unsubscribe(parent_id)
+      Opus.ExecutionEventBuffer.unsubscribe(root_id, ctx)
+      Opus.ExecutionEventBuffer.unsubscribe(parent_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
@@ -1004,16 +1004,17 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "ExecutionEventBuffer terminal events" do
-    test "push_terminal delivers complete event via PubSub" do
+    test "push_terminal delivers complete event via PubSub", %{ctx: ctx} do
       execution_id = "exec_terminal_#{:rand.uniform(100_000)}"
 
-      Opus.ExecutionEventBuffer.subscribe(execution_id)
+      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
 
       Opus.ExecutionEventBuffer.push_terminal(
         execution_id,
         "complete",
         %{status: "completed", duration_ms: 1234},
-        999_999_999
+        999_999_999,
+        ctx
       )
 
       assert_receive {:execution_event, event}, 2000
@@ -1023,41 +1024,43 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data.status == "completed"
       assert event.data.duration_ms == 1234
 
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
     end
 
-    test "push_terminal delivers error event via PubSub" do
+    test "push_terminal delivers error event via PubSub", %{ctx: ctx} do
       execution_id = "exec_terminal_err_#{:rand.uniform(100_000)}"
 
-      Opus.ExecutionEventBuffer.subscribe(execution_id)
+      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
 
       Opus.ExecutionEventBuffer.push_terminal(
         execution_id,
         "error",
         %{error: "Execution timeout after 5000ms"},
-        999_999_999
+        999_999_999,
+        ctx
       )
 
       assert_receive {:execution_event, event}, 2000
       assert event.type == "error"
       assert event.data.error == "Execution timeout after 5000ms"
 
-      Opus.ExecutionEventBuffer.unsubscribe(execution_id)
+      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
     end
 
-    test "terminal events are buffered for replay" do
+    test "terminal events are buffered for replay", %{ctx: ctx} do
       execution_id = "exec_terminal_buf_#{:rand.uniform(100_000)}"
 
       Opus.ExecutionEventBuffer.push_terminal(
         execution_id,
         "complete",
         %{status: "completed"},
-        999_999_999
+        999_999_999,
+        ctx
       )
 
       Opus.ExecutionEventBuffer.flush(execution_id)
 
-      events = Opus.ExecutionEventBuffer.since(execution_id, 0)
+      events = Opus.ExecutionEventBuffer.since(execution_id, 0, ctx.athanor_id)
       assert length(events) == 1
       assert hd(events).type == "complete"
     end

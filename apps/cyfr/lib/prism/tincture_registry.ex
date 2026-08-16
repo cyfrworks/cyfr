@@ -5,9 +5,11 @@ defmodule Prism.TinctureRegistry do
   @moduledoc """
   Registry for tincture components.
 
-  Scans `components/tinctures/` for cyfr-manifest.json files with
-  `"type": "tincture"` and provides lookup APIs for the shell and
-  public tincture controllers.
+  Scans every athanor's `components/{athanor_id}/tinctures/` tree for
+  cyfr-manifest.json files with `"type": "tincture"` and provides lookup APIs
+  for the shell and public tincture controllers. Each row carries the
+  athanor's route segment (`athanor_segment`) so callers can build public
+  URLs without a lookup per render.
 
   Reads go straight to a protected ETS table owned by the GenServer, so
   lookups never queue behind a `reload/1` scan (which walks Arca and can be
@@ -20,8 +22,6 @@ defmodule Prism.TinctureRegistry do
 
   require Logger
 
-  alias Arca.QueryHelpers
-
   # -- Public API --
 
   def start_link(opts \\ []) do
@@ -29,14 +29,13 @@ defmodule Prism.TinctureRegistry do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @doc "List all tinctures visible in the given scope."
+  @doc "List all tinctures of the athanor the given scope (a Context or map) names."
   @spec list_tinctures(atom(), map()) :: [map()]
   def list_tinctures(server \\ __MODULE__, scope) do
-    org_id = extract_org_id(scope)
-    project_id = extract_project_id(scope)
+    athanor_id = extract_athanor_id(scope)
 
     server
-    |> :ets.match_object({{org_id, project_id, :_, :_}, :_})
+    |> :ets.match_object({{athanor_id, :_, :_}, :_})
     |> Enum.map(fn {_key, tincture} -> tincture end)
   end
 
@@ -79,7 +78,7 @@ defmodule Prism.TinctureRegistry do
   # then prune keys that vanished — readers never observe an empty table
   # mid-reload. Returns the fresh tincture count.
   defp store_tinctures(table, tinctures) do
-    rows = Enum.map(tinctures, &{{&1.org_id, &1.project_id, &1.publisher, &1.name}, &1})
+    rows = Enum.map(tinctures, &{{&1.athanor_id, &1.publisher, &1.name}, &1})
     fresh_keys = MapSet.new(rows, fn {key, _} -> key end)
     old_keys = :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])
 
@@ -97,17 +96,25 @@ defmodule Prism.TinctureRegistry do
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
-  # object-store adapter. The scanner uses
-  # a synthetic system context with `:storage_read` permission only — it's a
-  # read-only walk of the global `components/` prefix.
+  # object-store adapter. The scanner uses a synthetic platform context with
+  # `:storage_read` permission only — a read-only walk of the whole
+  # `components/` prefix, which only a platform context may list. Athanor
+  # route segments are resolved once per scan.
   defp scan_tinctures do
     ctx = scan_context()
 
     case Arca.list_recursive(ctx, ["components"]) do
       {:ok, leaves} ->
-        leaves
-        |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
-        |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs) end)
+        segments_by_athanor = %{}
+
+        {tinctures, _} =
+          leaves
+          |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
+          |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs) end)
+          |> Enum.map_reduce(segments_by_athanor, &attach_athanor_segment/2)
+
+        tinctures
+        |> Enum.reject(&is_nil/1)
         |> pick_latest_versions()
 
       {:error, reason} ->
@@ -126,16 +133,41 @@ defmodule Prism.TinctureRegistry do
     )
   end
 
-  defp read_and_parse(ctx, manifest_segs) do
-    org_id = extract_org_id(manifest_segs)
-    project_id = extract_project_id(manifest_segs)
+  # Look each tincture's athanor up once per scan; a tincture whose athanor
+  # is missing or archived has no public URL and is dropped.
+  defp attach_athanor_segment(tincture, cache) do
+    case Map.fetch(cache, tincture.athanor_id) do
+      {:ok, segment} ->
+        {put_segment(tincture, segment), cache}
 
+      :error ->
+        segment =
+          case Sanctum.Tenancy.Athanors.get(tincture.athanor_id) do
+            {:ok, %{status: "active"} = athanor} -> Cyfr.TinctureHelpers.athanor_segment(athanor)
+            _ -> nil
+          end
+
+        {put_segment(tincture, segment), Map.put(cache, tincture.athanor_id, segment)}
+    end
+  end
+
+  defp put_segment(_tincture, nil), do: nil
+
+  defp put_segment(tincture, segment) do
+    entry_url = Cyfr.TinctureHelpers.tincture_path(segment, tincture.publisher, tincture.name)
+    %{tincture | athanor_segment: segment, entry_url: entry_url}
+  end
+
+  defp read_and_parse(ctx, manifest_segs) do
     # Only consider manifests under tinctures/ — components/ also contains
-    # catalysts/reagents/formulas which we ignore here.
+    # catalysts/reagents/formulas which we ignore here. The seed bundle is
+    # not an athanor and carries no route.
     if tincture_path?(manifest_segs) do
+      athanor_id = extract_athanor_id(manifest_segs)
+
       case Arca.get(ctx, manifest_segs) do
         {:ok, raw} ->
-          parse_manifest(ctx, manifest_segs, raw, org_id, project_id)
+          parse_manifest(ctx, manifest_segs, raw, athanor_id)
 
         {:error, reason} ->
           Logger.warning(
@@ -149,37 +181,25 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # Layout: ["components", org_id, project_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  defp tincture_path?(["components", _org, _project, @tincture_type_plural | _]), do: true
+  # Layout: ["components", athanor_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  # `_bundle` is the seed source, never an athanor.
+  defp tincture_path?(["components", "_bundle" | _]), do: false
+  defp tincture_path?(["components", _athanor, @tincture_type_plural | _]), do: true
   defp tincture_path?(_), do: false
 
-  # Manifest-segments OR a scope (Context/map) → normalized org_id/project_id.
-  # Path segments carry the tenant between "components" and "tinctures"; scopes
-  # carry it as fields. Both sides normalize so `nil`/`""` collapse to the
-  # seeded `local`/`default` sentinels and the list/get filters always agree.
-  defp extract_org_id(["components", org, _project, @tincture_type_plural | _]),
-    do: QueryHelpers.normalize_org_id(org)
-
-  defp extract_org_id(%{org_id: org_id}), do: QueryHelpers.normalize_org_id(org_id)
-  defp extract_org_id(%{"org_id" => org_id}), do: QueryHelpers.normalize_org_id(org_id)
-  defp extract_org_id(_), do: QueryHelpers.normalize_org_id(nil)
-
-  defp extract_project_id(["components", _org, project, @tincture_type_plural | _]),
-    do: QueryHelpers.normalize_project_id(project)
-
-  defp extract_project_id(%{project_id: project_id}),
-    do: QueryHelpers.normalize_project_id(project_id)
-
-  defp extract_project_id(%{"project_id" => project_id}),
-    do: QueryHelpers.normalize_project_id(project_id)
-
-  defp extract_project_id(_), do: QueryHelpers.normalize_project_id(nil)
+  # Manifest-segments OR a scope (Context/map) → athanor_id. Path segments
+  # carry the athanor between "components" and "tinctures"; scopes carry it as
+  # a field. Nothing is normalized: an absent athanor lists nothing.
+  defp extract_athanor_id(["components", athanor_id, @tincture_type_plural | _]), do: athanor_id
+  defp extract_athanor_id(%{athanor_id: athanor_id}), do: athanor_id
+  defp extract_athanor_id(%{"athanor_id" => athanor_id}), do: athanor_id
+  defp extract_athanor_id(_), do: nil
 
   # Launch constraint: tinctures can't carry raster image assets until
   # CSAM hash matching (PhotoDNA) is live. Vector (.svg) is allowed.
   @blocked_image_extensions ~w(.png .jpg .jpeg .gif .webp)
 
-  defp parse_manifest(ctx, manifest_segs, raw, org_id, project_id) do
+  defp parse_manifest(ctx, manifest_segs, raw, athanor_id) do
     with {:ok, manifest} <- Jason.decode(raw),
          true <- manifest["type"] == "tincture",
          true <- is_binary(manifest["name"]) do
@@ -190,7 +210,6 @@ defmodule Prism.TinctureRegistry do
       version = manifest["version"] || "0.1.0"
 
       entry = tincture_block["entry"] || "index.html"
-      entry_url = Cyfr.TinctureHelpers.tincture_path(org_id, project_id, publisher, name)
       icon = tincture_block["icon"] || "palette"
       window = tincture_block["window"] || %{}
       tagline = tincture_block["tagline"]
@@ -215,15 +234,16 @@ defmodule Prism.TinctureRegistry do
               name: name,
               publisher: publisher,
               version: version,
-              org_id: org_id,
-              project_id: project_id,
+              athanor_id: athanor_id,
+              # Filled once the athanor is resolved (attach_athanor_segment/2).
+              athanor_segment: nil,
+              entry_url: nil,
               title: manifest["description"] || name,
               tagline: tagline,
               icon: icon,
               media_icon: media_icon,
               media_previews: media_previews,
               entry: entry,
-              entry_url: entry_url,
               window: window,
               segments: version_segs,
               manifest: manifest
@@ -283,7 +303,7 @@ defmodule Prism.TinctureRegistry do
   # When multiple versions of the same tincture exist, keep only the latest.
   defp pick_latest_versions(tinctures) do
     tinctures
-    |> Enum.group_by(fn t -> {t.org_id, t.project_id, t.publisher, t.name} end)
+    |> Enum.group_by(fn t -> {t.athanor_id, t.publisher, t.name} end)
     |> Enum.map(fn {_key, versions} ->
       Enum.max_by(versions, fn t -> version_sort_key(t.version) end)
     end)

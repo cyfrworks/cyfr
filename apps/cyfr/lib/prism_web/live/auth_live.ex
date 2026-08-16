@@ -146,13 +146,13 @@ defmodule PrismWeb.AuthLive do
   defp format_error(reason), do: "Authentication error: #{inspect(reason)}"
 
   # Map an auth redirect (`/login?error=<code>`) to a user-facing banner. The
-  # tenant gate sends `no_org` when a signed-in account has neither platform-admin
-  # status nor a membership — authenticated, but not authorized for this instance.
-  # Absent/unknown codes show nothing (plain login page).
-  defp error_from_params(%{"error" => "no_org"}),
+  # tenant gate sends `no_athanor` when a signed-in account has neither
+  # platform-admin status nor a membership — authenticated, but not authorized
+  # on this server. Absent/unknown codes show nothing (plain login page).
+  defp error_from_params(%{"error" => "no_athanor"}),
     do:
-      "You're signed in, but your account isn't authorized for this workspace yet. " <>
-        "Please contact the administrator to request access."
+      "You're signed in, but your account isn't allowed on this server yet. " <>
+        "Please contact the operator to request access."
 
   defp error_from_params(%{"error" => code}) when is_binary(code) and code != "",
     do: "Sign-in couldn't be completed. Please try again or contact the administrator."

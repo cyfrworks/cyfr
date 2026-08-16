@@ -160,7 +160,7 @@ defmodule Compendium.OCI.Client do
 
   # Pulled code holds zero authority, and `local` is the highest-trust
   # namespace: it is the tree the scanner indexes and the seeder copies into
-  # every new project. So no remote pull may mint a component there,
+  # every new athanor. So no remote pull may mint a component there,
   # whatever the ref looks like on the way in — `local/formulas/foo:1.0` and
   # `registry.example/local/formulas/foo:1.0` both resolve to the `local`
   # namespace and both are refused here, at the one point every pull passes

@@ -23,8 +23,13 @@ defmodule Cyfr.TinctureHelpers do
   @sdk_source File.read!(Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js"))
 
   @doc """
-  Build a public (unauthenticated) context for tincture lookups in the given
-  workspace.
+  Resolve the athanor segment of a public tincture URL and build a public
+  (unauthenticated) context for lookups in that athanor.
+
+  The route segment is the athanor's slug: `@<namespace>` names a person's
+  athanor, a bare slug a group's. Only an active athanor resolves; anything
+  else is `{:error, :not_found}` — the URL never falls back to another
+  athanor.
 
   This is the *serving / lookup* path (no execution). For building the scoped
   context that actually runs a tincture's catalyst, use
@@ -32,34 +37,60 @@ defmodule Cyfr.TinctureHelpers do
 
   Returns a `%Sanctum.Context{}` with `authenticated: false` so downstream
   APIs (`Arca.ComponentStorage`, `QueryHelpers.where_tenant`) work with a
-  consistent type instead of ad-hoc maps. The workspace `(org_id, project_id)`
-  comes from the request URL — a public tincture is served from the workspace
-  that owns it. Visibility is still gated by whether an active public profile
-  exists in that workspace (checked by `Sanctum.TinctureAccess.get_public/3`).
+  consistent type instead of ad-hoc maps. Visibility is still gated by
+  whether an active public profile exists in that athanor (checked by
+  `Sanctum.TinctureAccess.get_public/3`).
   """
-  @spec build_public_context(String.t(), String.t()) :: Sanctum.Context.t()
-  def build_public_context(org_id, project_id)
-      when is_binary(org_id) and is_binary(project_id) do
-    Sanctum.Context.build(
-      org_id: Arca.QueryHelpers.normalize_org_id(org_id),
-      project_id: Arca.QueryHelpers.normalize_project_id(project_id),
-      authenticated: false
-    )
+  @spec build_public_context(String.t()) ::
+          {:ok, Sanctum.Context.t()} | {:error, :not_found}
+  def build_public_context(athanor_segment) when is_binary(athanor_segment) do
+    case resolve_athanor(athanor_segment) do
+      {:ok, athanor} ->
+        {:ok, Sanctum.Context.build(athanor_id: athanor.id, scope: :athanor, authenticated: false)}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
   end
 
   @doc """
-  Canonical tincture path: `/t/:org/:project/:publisher/:name`.
+  The active athanor a public route segment names: `@<namespace>` → a
+  person's athanor, `<slug>` → a group's. Archived or unknown → `:not_found`.
+  """
+  @spec resolve_athanor(String.t()) :: {:ok, Arca.Schemas.Athanor.t()} | {:error, :not_found}
+  def resolve_athanor("@" <> namespace) when namespace != "" do
+    active_only(Sanctum.Tenancy.Athanors.get_by_slug("person", namespace))
+  end
+
+  def resolve_athanor(slug) when is_binary(slug) and slug != "" do
+    active_only(Sanctum.Tenancy.Athanors.get_by_slug("group", slug))
+  end
+
+  def resolve_athanor(_), do: {:error, :not_found}
+
+  defp active_only({:ok, %{status: "active"} = athanor}), do: {:ok, athanor}
+  defp active_only(_), do: {:error, :not_found}
+
+  @doc """
+  The route segment for an athanor: `@<slug>` for a person (their namespace),
+  the slug itself for a group. Inverse of `resolve_athanor/1`.
+  """
+  @spec athanor_segment(Arca.Schemas.Athanor.t()) :: String.t()
+  def athanor_segment(%{kind: "person", slug: slug}), do: "@" <> slug
+  def athanor_segment(%{slug: slug}), do: slug
+
+  @doc """
+  Canonical tincture path: `/t/:athanor/:publisher/:name`, where `:athanor`
+  is the athanor's route segment (`athanor_segment/1`).
 
   Single source of truth for the tincture URL shape — every server-side caller
   (controller base href, Prism shell iframe `src`, registry entry URL, the
-  `tincture_visibility` public URL) composes this. Workspace segments are
-  normalized so they match the stored `where_tenant` values.
+  `tincture_visibility` public URL) composes this.
   """
-  @spec tincture_path(String.t(), String.t(), String.t(), String.t()) :: String.t()
-  def tincture_path(org_id, project_id, publisher, name) do
-    org = Arca.QueryHelpers.normalize_org_id(org_id)
-    project = Arca.QueryHelpers.normalize_project_id(project_id)
-    "/t/#{org}/#{project}/#{publisher}/#{name}"
+  @spec tincture_path(String.t(), String.t(), String.t()) :: String.t()
+  def tincture_path(athanor_segment, publisher, name)
+      when is_binary(athanor_segment) and athanor_segment != "" do
+    "/t/#{athanor_segment}/#{publisher}/#{name}"
   end
 
   @denylist ~w(data.db cyfr-manifest.json schema.sql)

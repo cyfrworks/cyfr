@@ -312,9 +312,9 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # Create a minimal context with nil user_id
       ctx = %Context{
         user_id: nil,
-        org_id: nil,
+        athanor_id: nil,
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: nil,
         api_key_type: nil,
         request_id: nil
@@ -494,7 +494,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # Context with potentially problematic nil fields
       ctx = %Context{
         user_id: nil,
-        org_id: nil,
+        athanor_id: nil,
         permissions: MapSet.new(),
         scope: nil,
         auth_method: nil,

@@ -40,8 +40,7 @@ defmodule Arca.McpLog do
   schema "mcp_logs" do
     field :request_id, :string
     field :user_id, :string
-    field :org_id, :string, default: ""
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :timestamp, :utc_datetime_usec
     field :tool, :string
     field :action, :string
@@ -55,11 +54,9 @@ defmodule Arca.McpLog do
     field :error, :string
   end
 
-  @required_fields [:id, :user_id, :timestamp, :status]
+  @required_fields [:id, :user_id, :athanor_id, :timestamp, :status]
   @optional_fields [
     :request_id,
-    :org_id,
-    :project_id,
     :tool,
     :action,
     :method,
@@ -79,18 +76,6 @@ defmodule Arca.McpLog do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, ["pending", "success", "error"])
-    |> normalize_tenant_fields()
-  end
-
-  # Canonicalize to the seeded sentinels so the tenant-scoped record_update
-  # (via where_tenant/2) matches: nil/"" org → "local".
-  defp normalize_tenant_fields(changeset) do
-    changeset
-    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
-    |> force_change(
-      :project_id,
-      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
-    )
   end
 
   @doc """
@@ -141,11 +126,11 @@ defmodule Arca.McpLog do
     request_id = Keyword.get(opts, :request_id)
     tool = Keyword.get(opts, :tool)
     since = Keyword.get(opts, :since)
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from l in __MODULE__,
+        where: l.athanor_id == ^athanor_id,
         order_by: [desc: l.timestamp],
         limit: ^limit
 
@@ -154,8 +139,6 @@ defmodule Arca.McpLog do
     query = if request_id, do: where(query, [l], l.request_id == ^request_id), else: query
     query = if tool, do: where(query, [l], l.tool == ^tool), else: query
     query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
-    query = where(query, [l], l.org_id == ^org_id)
-    query = where(query, [l], l.project_id == ^project_id)
 
     Arca.Repo.all(query)
   end
@@ -173,23 +156,29 @@ defmodule Arca.McpLog do
   end
 
   @doc """
+  The distinct athanor ids that have log rows. Unscoped by design: the
+  retention scheduler iterates every athanor and cleans each inside its own
+  context.
+  """
+  @spec distinct_athanors() :: [String.t()]
+  def distinct_athanors do
+    Arca.Repo.all(from(l in __MODULE__, select: l.athanor_id, distinct: true))
+  end
+
+  @doc """
   Deletes all MCP logs with timestamps before the given datetime.
 
-  Accepts optional tenant filters:
-  - `:org_id` - Scope deletion to a specific org
-  - `:project_id` - Scope deletion to a specific project
+  Requires `:athanor_id` — deletion is always scoped to one athanor.
 
   Returns `{count, nil}` where count is the number of deleted records.
   """
   def delete_before(%DateTime{} = datetime, opts) do
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from(l in __MODULE__,
         where: l.timestamp < ^datetime,
-        where: l.org_id == ^org_id,
-        where: l.project_id == ^project_id
+        where: l.athanor_id == ^athanor_id
       )
 
     Arca.Repo.delete_all(query)
@@ -211,14 +200,9 @@ defmodule Arca.McpLog do
   def stats(opts) do
     since = Keyword.get(opts, :since)
     user_id = Keyword.get(opts, :user_id)
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-    query =
-      from(l in __MODULE__,
-        where: l.org_id == ^org_id,
-        where: l.project_id == ^project_id
-      )
+    query = from(l in __MODULE__, where: l.athanor_id == ^athanor_id)
 
     query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query

@@ -5,7 +5,8 @@ defmodule Arca.CronSchedule do
   @moduledoc """
   Ecto schema for cron schedule records.
 
-  Stores user-scoped recurring schedules for WASM component execution.
+  Stores an athanor's recurring schedules for WASM component execution;
+  `user_id` records who created a schedule (attribution), the athanor owns it.
   """
 
   use Ecto.Schema
@@ -28,8 +29,7 @@ defmodule Arca.CronSchedule do
     field :metadata, :string
     field :status, :string, default: "active"
     field :profile_id, :string
-    field :org_id, :string, default: ""
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :last_run_at, :utc_datetime_usec
     field :next_run_at, :utc_datetime_usec
     field :last_execution_id, :string
@@ -61,8 +61,7 @@ defmodule Arca.CronSchedule do
       :metadata,
       :profile_id,
       :status,
-      :org_id,
-      :project_id,
+      :athanor_id,
       :next_run_at,
       :created_at,
       :updated_at
@@ -74,23 +73,12 @@ defmodule Arca.CronSchedule do
       :cron_expression,
       :reference,
       :profile_id,
+      :athanor_id,
       :created_at,
       :updated_at
     ])
     |> validate_inclusion(:status, ["active", "paused", "deleted", "needs_consent"])
-    |> normalize_tenant_fields()
     |> Arca.Repo.insert()
-  end
-
-  # Canonicalize to the seeded sentinels (nil/"" org → "local"), matching how
-  # queries (`where_tenant/2`) and the storage layer partition rows.
-  defp normalize_tenant_fields(changeset) do
-    changeset
-    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
-    |> force_change(
-      :project_id,
-      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
-    )
   end
 
   @doc "Updates an existing cron schedule with tenant-scoped lookup."
@@ -133,7 +121,7 @@ defmodule Arca.CronSchedule do
 
   Reserved for the CronScheduler daemon which needs to load schedules
   before a tenant context can be constructed (chicken-and-egg: we need
-  the schedule's user_id/org_id to build a context).
+  the schedule's user_id/athanor_id to build a context).
   """
   def get_for_daemon(id) do
     Arca.Repo.get(__MODULE__, id)
@@ -167,7 +155,7 @@ defmodule Arca.CronSchedule do
 
   Intentionally unscoped — called by the CronScheduler daemon which iterates
   all tenants' schedules to determine what needs firing. The daemon constructs
-  a per-schedule `Context` from `user_id`/`org_id` before executing, same
+  a per-schedule `Context` from `user_id`/`athanor_id` before executing, same
   rationale as `get_for_daemon/1`.
   """
   def active_schedules do
@@ -234,8 +222,8 @@ defmodule Arca.CronSchedule do
     |> Arca.Repo.update()
   end
 
-  @doc "Counts active schedules for a context."
-  def count_by_user(%Context{} = ctx) do
+  @doc "Counts the athanor's active schedules."
+  def count_active(%Context{} = ctx) do
     from(s in __MODULE__,
       where: s.status != "deleted",
       select: count(s.id)

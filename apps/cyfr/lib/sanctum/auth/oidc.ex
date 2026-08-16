@@ -53,7 +53,7 @@ defmodule Sanctum.Auth.OIDC do
 
   Called after successful OAuth callback with the auth struct from Ueberauth.
   Builds a `Sanctum.Context` from the OAuth provider's response and resolves
-  org membership.
+  athanor membership.
 
   ## Examples
 
@@ -88,12 +88,12 @@ defmodule Sanctum.Auth.OIDC do
             email: email,
             provider: to_string(provider),
             namespace: Sanctum.Namespace.lookup(user_id),
-            # Start org-less; resolve_into/2 fills the org from memberships.
-            org_id: nil,
+            # Start athanor-less; resolve_into/2 fills the athanor from memberships.
+            athanor_id: nil,
             permissions: default_permissions()
           )
 
-        # Resolve the caller's scope/org/project from their memberships.
+        # Resolve the caller's scope/athanor from their memberships.
         ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
 
         Sanctum.Telemetry.auth_event(provider, :success)

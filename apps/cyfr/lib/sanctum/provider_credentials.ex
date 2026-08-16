@@ -5,7 +5,7 @@ defmodule Sanctum.ProviderCredentials do
   @moduledoc """
   OAuth provider client credentials — the operator's OAuth app
   (client id/secret at Google, GitHub, ...), one sealed blob per
-  `(tenant, provider)`.
+  `(athanor, provider)`.
 
   These are deployment-level credentials, not component-delegable secrets.
   They used to live in the `secrets` table and were read under the
@@ -15,7 +15,7 @@ defmodule Sanctum.ProviderCredentials do
 
   - **Management** (`put/4`, `delete/2`, `configured?/2`) is caller-gated:
     tenant scope plus `:vault_write` / `:vault_read`.
-  - **Use** (`fetch_for_oauth/3`) takes explicit tenant coordinates and no
+  - **Use** (`fetch_for_oauth/2`) takes an explicit athanor id and no
     caller context at all — it is reachable only from the host's OAuth
     exchange/refresh plane, never through a caller's permission set, and
     every read emits telemetry. A provider with no stored credentials is
@@ -27,7 +27,7 @@ defmodule Sanctum.ProviderCredentials do
   alias Sanctum.Context
 
   @doc """
-  Store (or replace) a provider's client credentials for the caller's tenant.
+  Store (or replace) a provider's client credentials for the caller's athanor.
 
   `client_secret` may be nil — public OAuth clients have no secret.
   """
@@ -36,18 +36,14 @@ defmodule Sanctum.ProviderCredentials do
     with :ok <- Context.require_permission(ctx, :vault_write),
          :ok <- validate_provider(provider),
          :ok <- validate_client_id(client_id) do
-      {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
+      athanor_id = athanor!(ctx)
       payload = Jason.encode!(%{"client_id" => client_id, "client_secret" => client_secret})
 
       {:ok, ciphertext} =
-        Sanctum.Cipher.encrypt(
-          payload,
-          CipherAAD.provider_credential(org_id, project_id, provider)
-        )
+        Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(athanor_id, provider))
 
       Arca.ProviderCredentialStorage.put(%{
-        org_id: org_id,
-        project_id: project_id,
+        athanor_id: athanor_id,
         provider: provider,
         payload_ciphertext: ciphertext,
         created_by: ctx.user_id
@@ -55,13 +51,12 @@ defmodule Sanctum.ProviderCredentials do
     end
   end
 
-  @doc "Delete a provider's client credentials for the caller's tenant."
+  @doc "Delete a provider's client credentials for the caller's athanor."
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, provider) do
     with :ok <- Context.require_permission(ctx, :vault_write),
          :ok <- validate_provider(provider) do
-      {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
-      Arca.ProviderCredentialStorage.delete(org_id, project_id, provider)
+      Arca.ProviderCredentialStorage.delete(athanor!(ctx), provider)
     end
   end
 
@@ -70,25 +65,23 @@ defmodule Sanctum.ProviderCredentials do
   def configured?(%Context{} = ctx, provider) do
     with :ok <- Context.require_permission(ctx, :vault_read),
          :ok <- validate_provider(provider) do
-      {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
-      Arca.ProviderCredentialStorage.exists?(org_id, project_id, provider)
+      Arca.ProviderCredentialStorage.exists?(athanor!(ctx), provider)
     end
   end
 
   @doc """
   System-plane read for token exchange and refresh.
 
-  Deliberately takes tenant coordinates instead of a `Context` — no caller
+  Deliberately takes an athanor id instead of a `Context` — no caller
   permission set can reach the client secret through this function, and the
   executing component's context never touches it.
 
   Returns `{:ok, %{"client_id" => ..., "client_secret" => ... | nil}}`.
   """
-  @spec fetch_for_oauth(String.t() | nil, String.t() | nil, String.t()) ::
-          {:ok, map()} | {:error, String.t()}
-  def fetch_for_oauth(org_id, project_id, provider) do
+  @spec fetch_for_oauth(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
+  def fetch_for_oauth(athanor_id, provider) do
     with :ok <- validate_provider(provider) do
-      case Arca.ProviderCredentialStorage.get(org_id, project_id, provider) do
+      case Arca.ProviderCredentialStorage.get(athanor_id, provider) do
         {:ok, row} ->
           emit_fetch(provider, :store)
           unseal(row)
@@ -106,8 +99,11 @@ defmodule Sanctum.ProviderCredentials do
   # Internal
   # ============================================================================
 
+  # The athanor every management path keys on, behind the tenant chokepoint.
+  defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
+
   defp unseal(row) do
-    aad = CipherAAD.provider_credential(row.org_id, row.project_id, row.provider)
+    aad = CipherAAD.provider_credential(row.athanor_id, row.provider)
 
     with {:ok, payload} <- Sanctum.Cipher.decrypt(row.payload_ciphertext, aad),
          {:ok, %{"client_id" => _} = creds} <- Jason.decode(payload) do

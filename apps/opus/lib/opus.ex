@@ -64,21 +64,21 @@ defmodule Opus do
 
   @doc """
   Subscribe the calling process to an execution's event stream. Pass the
-  execution's own record/context so the topic resolves to the OWNING tenant —
+  execution's own record/context so the topic resolves to the OWNING athanor —
   and pass the same value to `unsubscribe_events/2`, or the unsubscribe
   targets a different topic and silently no-ops.
   """
-  defdelegate subscribe_events(execution_id, ctx \\ nil),
+  defdelegate subscribe_events(execution_id, ctx),
     to: Opus.ExecutionEventBuffer,
     as: :subscribe
 
   @doc "Unsubscribe from an execution's event stream (same ctx as subscribe)."
-  defdelegate unsubscribe_events(execution_id, ctx \\ nil),
+  defdelegate unsubscribe_events(execution_id, ctx),
     to: Opus.ExecutionEventBuffer,
     as: :unsubscribe
 
-  @doc "Buffered events after `last_sequence`, for replay on (re)connect."
-  defdelegate events_since(execution_id, last_sequence, org_id \\ nil),
+  @doc "Buffered events after `last_sequence` for an execution of `athanor_id`, for replay on (re)connect."
+  defdelegate events_since(execution_id, last_sequence, athanor_id),
     to: Opus.ExecutionEventBuffer,
     as: :since
 

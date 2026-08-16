@@ -15,8 +15,7 @@ defmodule Arca.Schemas.McpServer do
     field :url, :string
     field :config_json, :string
     field :enabled, :boolean
-    field :org_id, :string
-    field :project_id, :string
+    field :athanor_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

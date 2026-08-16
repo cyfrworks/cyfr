@@ -36,7 +36,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
   defp create_hook!(ctx, name, opts \\ %{}) do
     # ConnCase configures an auth provider, so the webhook's owner must hold
     # a live membership or the owner re-check refuses the invoke.
-    {:ok, _} = Sanctum.Tenancy.Memberships.ensure(ctx.user_id, scope: "platform")
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "platform")
 
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
@@ -94,7 +94,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       assert conn.status == 404
     end
 
-    test "404 when the owner is no longer active in the org (no enumeration leak)",
+    test "404 when the owner is no longer active on the server (no enumeration leak)",
          %{conn: conn, ctx: ctx} do
       # ConnCase configures an auth provider, so membership is checked; this
       # owner has none — the webhook is a departed principal's standing

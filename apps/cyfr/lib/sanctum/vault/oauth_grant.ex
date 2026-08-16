@@ -74,7 +74,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, target} <- resolve_target(ctx, params),
          {:ok, endpoints} <- validate_endpoints(target.endpoints),
-         {:ok, creds} <- provider_creds(ctx.org_id, ctx.project_id, target.provider) do
+         {:ok, creds} <- provider_creds(ctx.athanor_id, target.provider) do
       state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       code_verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -87,8 +87,7 @@ defmodule Sanctum.Vault.OAuthGrant do
         target: target,
         redirect_uri: redirect_uri,
         code_verifier: code_verifier,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         user_id: ctx.user_id
       }
 
@@ -124,8 +123,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   def complete(state, code, redirect_uri) do
     with {:ok, pending} <- fetch_pending(state),
          :ok <- validate_redirect_uri(pending, redirect_uri),
-         {:ok, creds} <-
-           provider_creds(pending.org_id, pending.project_id, pending.target.provider),
+         {:ok, creds} <- provider_creds(pending.athanor_id, pending.target.provider),
          {:ok, response} <- exchange(pending, creds, code, redirect_uri) do
       bundle = %{
         "access_token" => response["access_token"],
@@ -144,7 +142,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp resolve_target(ctx, %{entry_id: id}) when is_binary(id) do
-    with {:ok, entry} <- Arca.VaultStorage.get(ctx.org_id, ctx.project_id, id) do
+    with {:ok, entry} <- Arca.VaultStorage.get(ctx.athanor_id, id) do
       cond do
         entry.status == "tombstoned" ->
           {:error, :not_found}
@@ -213,8 +211,8 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   # `fetch_for_oauth` speaks operator-facing string errors, including the
   # not-configured message that names oauth.set_client.
-  defp provider_creds(org_id, project_id, provider) do
-    Sanctum.ProviderCredentials.fetch_for_oauth(org_id, project_id, provider)
+  defp provider_creds(athanor_id, provider) do
+    Sanctum.ProviderCredentials.fetch_for_oauth(athanor_id, provider)
   end
 
   # ---------------------------------------------------------------------------
@@ -275,13 +273,12 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp apply_grant(%{target: %{kind: :new} = target} = pending, bundle) do
     with {:ok, json} <- Payload.encode_material(%{}, bundle) do
       id = Emissary.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(pending.org_id, pending.project_id, id, target.provider)
+      aad = CipherAAD.vault_entry(pending.athanor_id, id, target.provider)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
       attrs = %{
         id: id,
-        org_id: pending.org_id,
-        project_id: pending.project_id,
+        athanor_id: pending.athanor_id,
         name: target.name,
         kind: "oauth",
         provider_hint: target.provider,
@@ -296,7 +293,7 @@ defmodule Sanctum.Vault.OAuthGrant do
       with {:ok, entry} <- Arca.VaultStorage.put(attrs),
            {:ok, digest} <- VaultReader.binding_digest(entry),
            :ok <-
-             Arca.VaultStorage.update_binding(pending.org_id, pending.project_id, id, %{
+             Arca.VaultStorage.update_binding(pending.athanor_id, id, %{
                binding_digest: digest
              }) do
         broadcast(pending, id, :create)
@@ -306,28 +303,27 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   defp apply_grant(%{target: %{kind: :existing} = target} = pending, bundle) do
-    with {:ok, entry} <- Arca.VaultStorage.get(pending.org_id, pending.project_id, target.entry_id),
+    with {:ok, entry} <- Arca.VaultStorage.get(pending.athanor_id, target.entry_id),
          :ok <- still_living(entry) do
       fields = current_fields(entry)
 
       with {:ok, json} <- Payload.encode_material(fields, bundle) do
         aad =
-          CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
+          CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
         {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
         case Arca.VaultStorage.rotate_payload(
-                 entry.org_id,
-                 entry.project_id,
-                 entry.id,
-                 entry.payload_rev,
-                 sealed
-               ) do
+               entry.athanor_id,
+               entry.id,
+               entry.payload_rev,
+               sealed
+             ) do
           :ok ->
             rebound = maybe_rebind(entry, target)
 
             if entry.status == "needs_reauth" do
-              Arca.VaultStorage.set_status(entry.org_id, entry.project_id, entry.id, "active")
+              Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
             end
 
             broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
@@ -349,17 +345,16 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   defp retry_grant(%{target: target} = pending, bundle) do
-    case Arca.VaultStorage.get(pending.org_id, pending.project_id, target.entry_id) do
+    case Arca.VaultStorage.get(pending.athanor_id, target.entry_id) do
       {:ok, entry} ->
         with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle) do
           aad =
-            CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
+            CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
           {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
           case Arca.VaultStorage.rotate_payload(
-                 entry.org_id,
-                 entry.project_id,
+                 entry.athanor_id,
                  entry.id,
                  entry.payload_rev,
                  sealed
@@ -394,7 +389,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # unreadable payload) converts to empty-fields material — the pointer's
   # legacy rows are not this entry's material and never migrate silently.
   defp current_fields(entry) do
-    aad = CipherAAD.vault_entry(entry.org_id, entry.project_id, entry.id, entry.provider_hint)
+    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
     with sealed when is_binary(sealed) <- entry.sealed_payload,
          {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad),
@@ -428,15 +423,14 @@ defmodule Sanctum.Vault.OAuthGrant do
       with {:ok, digest} <- VaultReader.binding_digest(rebound),
            :ok <-
              Arca.VaultStorage.update_binding(
-               entry.org_id,
-               entry.project_id,
+               entry.athanor_id,
                entry.id,
                Map.put(changes, :binding_digest, digest)
              ),
            {:ok, affected} <-
-             Arca.ConsentStorage.head_profiles_referencing(entry.org_id, entry.id) do
+             Arca.ConsentStorage.head_profiles_referencing(entry.athanor_id, entry.id) do
         Enum.each(affected, fn profile_id ->
-          Arca.ProfileStorage.set_status(entry.org_id, entry.project_id, profile_id, "needs_consent")
+          Arca.ProfileStorage.set_status(entry.athanor_id, profile_id, "needs_consent")
         end)
 
         true
@@ -453,7 +447,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp broadcast(pending, entry_id, verb) do
-    ctx = struct(Context, org_id: pending.org_id, project_id: pending.project_id)
+    ctx = struct(Context, athanor_id: pending.athanor_id)
 
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
@@ -464,7 +458,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       "sanctum:vault_changed",
-      {:vault_entry_changed_global, pending.org_id, pending.project_id, entry_id, verb}
+      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb}
     )
   end
 

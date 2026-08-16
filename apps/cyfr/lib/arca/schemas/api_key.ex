@@ -22,9 +22,7 @@ defmodule Arca.Schemas.ApiKey do
     field :revoked, :boolean
     field :created_by, :string
     field :rotated_at, :utc_datetime_usec
-    field :scope_type, :string
-    field :org_id, :string
-    field :project_id, :string
+    field :athanor_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

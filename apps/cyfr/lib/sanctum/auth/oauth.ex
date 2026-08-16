@@ -20,7 +20,7 @@ defmodule Sanctum.Auth.OAuth do
 
   Authentication is open to any account from a configured provider; authorization
   is gated downstream by platform-admin status (`CYFR_PLATFORM_ADMIN_EMAILS`) or an
-  org/project membership.
+  athanor membership.
 
   ## Supported Providers
 
@@ -48,12 +48,12 @@ defmodule Sanctum.Auth.OAuth do
           user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
           email: user_info.email,
           provider: to_string(provider),
-          # Start org-less; resolve_into/2 fills the org from memberships.
-          org_id: nil,
+          # Start athanor-less; resolve_into/2 fills the athanor from memberships.
+          athanor_id: nil,
           permissions: [:*]
         )
 
-      # Resolve the caller's scope/org/project from their memberships.
+      # Resolve the caller's scope/athanor from their memberships.
       ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
 
       Telemetry.auth_event(provider, :success, %{email: user_info.email})

@@ -254,7 +254,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
               "properties" => %{
                 "executions" => %{
                   "type" => "integer",
-                  "description" => "Number of executions to keep per project"
+                  "description" => "Number of executions to keep per athanor"
                 },
                 "builds" => %{
                   "type" => "integer",
@@ -294,8 +294,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:error, "Execution not found: #{id}"}
 
         record ->
-          # Project members are interchangeable: get_tenant already scoped to
-          # org/project, so any member of the tenant may read the record.
+          # Members are interchangeable: get_tenant already scoped to the
+          # athanor, so any member of the athanor may read the record.
           {:ok, execution_to_map(record)}
       end
     end
@@ -310,11 +310,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         ]
         # user_id is an optional attribution filter any member may pass; default
-        # is project-wide (org/project is the access boundary).
+        # is athanor-wide (the athanor is the access boundary).
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
         |> maybe_put(:parent_execution_id, args["parent_execution_id"])
@@ -353,8 +352,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         ]
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
@@ -371,7 +369,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
     with :ok <- tenant_gate(ctx) do
       mcp_logs =
-        [request_id: request_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id]
+        [request_id: request_id, limit: 100, athanor_id: ctx.athanor_id]
         |> Arca.McpLog.list()
         |> Enum.map(&mcp_log_to_map/1)
 
@@ -386,7 +384,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         )
 
       # Platform admins correlate across tenants; everyone else is scoped to their
-      # org/project — no per-user narrowing (members are interchangeable).
+      # athanor — no per-user narrowing (members are interchangeable).
       exec_query =
         if admin?(ctx) and ctx.scope == :platform do
           exec_query
@@ -400,8 +398,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         [
           request_id: request_id,
           limit: 100,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         ]
 
       policy_logs =
@@ -471,7 +468,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
-      opts = [since: since, org_id: ctx.org_id, project_id: ctx.project_id]
+      opts = [since: since, athanor_id: ctx.athanor_id]
       stats = Arca.McpLog.stats(opts)
 
       {:ok,
@@ -518,8 +515,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         ]
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:request_id, args["request_id"])
@@ -540,8 +536,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         [
           request_id: request_id,
           limit: 100,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id
+          athanor_id: ctx.athanor_id
         ]
 
       policy_logs =
@@ -737,8 +732,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   # The dispatcher enforces auth + permission from the action annotations;
   # what remains here is the residual it cannot express — these are
-  # tenant-scoped stores, so an org-less context must be refused before it
-  # can land in the shared sentinel bucket (the storage backstop would raise,
+  # tenant-scoped stores, so an athanor-less context must be refused before it
+  # can reach any athanor's rows (the storage backstop would raise,
   # this answers politely).
   defp tenant_gate(ctx) do
     case Context.tenant_ok(ctx) do

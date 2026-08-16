@@ -540,81 +540,83 @@ defmodule Sanctum.ApiKeyTest do
     end
   end
 
-  # ACCEPTED-RISK DESIGN (do not "fix" this into the inverse): an API key is a
-  # project credential. The 192-bit hash IS the credential; org_id/project_id
-  # are read back from the stored key row, never from the request, and the
-  # tenant is enforced on the resulting Context via
-  # Sanctum.TenantPolicy.require_org/1 (see Sanctum.ApiKey.context_from_metadata/1
-  # and EmissaryWeb.Plugs.MCPRequestMetadata). Key validity is intentionally DECOUPLED from
-  # the creator's *current* org membership — revocation is the control. The
-  # consequence (an offboarded OIDC user's key keeps project access until the
-  # key is revoked) is the deliberate model, not an oversight. Cross-tenant
-  # isolation for keys is proved separately in the cross-tenant proof suite.
-  describe "multi-tenant validate without pre-supplied org_id" do
-    test "validate succeeds in multi-tenant without org_id (derives from DB record)", %{ctx: ctx} do
-      # Create key in single-user
+  # ACCEPTED-RISK DESIGN (do not "fix" this into the inverse): an API key is an
+  # athanor credential. The 192-bit hash IS the credential; athanor_id is read
+  # back from the stored key row, never from the request, and the tenant is
+  # enforced on the resulting Context via Sanctum.TenantPolicy.require_athanor/1
+  # (see Sanctum.ApiKey.context_from_metadata/1 and
+  # EmissaryWeb.Plugs.MCPRequestMetadata). Key validity is intentionally
+  # DECOUPLED from the creator's *current* athanor membership — revocation is
+  # the control. The consequence (an offboarded OIDC user's key keeps athanor
+  # access until the key is revoked) is the deliberate model, not an oversight.
+  # Cross-tenant isolation for keys is proved separately in the cross-tenant
+  # proof suite.
+  describe "validate without a pre-supplied athanor" do
+    test "validate derives the athanor from the DB record", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "ext-validate-key", scope: []})
 
-      # Switch to multi-tenant and validate without org_id
       {:ok, validated} = ApiKey.validate(created.api_key)
       assert validated.name == "ext-validate-key"
+      assert validated.athanor_id == ctx.athanor_id
     end
   end
 
-  describe "API-key project scoping" do
-    # API keys are PROJECT credentials. `validate/2` resolves a key by its
-    # globally-unique hash and returns the key's OWN (org_id, project_id) from
-    # the stored row — it takes no caller org/project and cannot be steered by
-    # one. A key minted in project A therefore always resolves to a context
-    # bound to project A and can never be "used as" project B. Two keys with
-    # same (name, scope_type, org_id) but different project_id coexist (no
-    # unique-constraint collision). Core unaffected.
+  describe "API-key athanor scoping" do
+    # API keys are ATHANOR credentials. `validate/2` resolves a key by its
+    # globally-unique hash and returns the key's OWN athanor_id from the stored
+    # row — it takes no caller athanor and cannot be steered by one. A key
+    # minted in athanor A therefore always resolves to a context bound to
+    # athanor A and can never be "used as" athanor B. Two keys with the same
+    # name in different athanors coexist (no unique-constraint collision).
 
     setup do
       ctx_a = %Context{
         user_id: "user_x",
-        org_id: "acme",
-        project_id: "proj_a",
+        athanor_id: "ath_a",
         permissions: MapSet.new([:*]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         api_key_type: nil,
         request_id: nil
       }
 
-      ctx_b = %{ctx_a | project_id: "proj_b"}
+      ctx_b = %{ctx_a | athanor_id: "ath_b"}
 
       {:ok, ctx_a: ctx_a, ctx_b: ctx_b}
     end
 
-    test "key resolves to its own creation project, never the caller's (cannot be used as project B)",
+    test "key resolves to its own creation athanor, never the caller's (cannot be used as athanor B)",
          %{ctx_a: ctx_a, ctx_b: _ctx_b} do
       {:ok, created} =
         ApiKey.create(ctx_a, %{name: "scoped-key", scope: []})
 
-      # validate/2 takes no caller org/project: it returns the key's OWN
-      # (org_id, project_id) straight from the stored row — authoritative.
+      # validate/2 takes no caller athanor: it returns the key's OWN athanor
+      # straight from the stored row — authoritative.
       assert {:ok, meta} = ApiKey.validate(created.api_key)
-      assert meta.org_id == "acme"
-      assert meta.project_id == "proj_a"
+      assert meta.athanor_id == "ath_a"
 
-      # The shared builder binds the context to the KEY's project (proj_a),
-      # not to any caller/request context — so the key cannot operate as
-      # project B even though an attacker controls the request.
+      # The shared builder binds the context to the KEY's athanor (ath_a), not
+      # to any caller/request context — so the key cannot operate as athanor
+      # B even though an attacker controls the request.
       ctx = ApiKey.context_from_metadata(meta)
-      assert ctx.org_id == "acme"
-      assert ctx.project_id == "proj_a"
+      assert ctx.athanor_id == "ath_a"
+      assert ctx.scope == :athanor
       assert ctx.auth_method == :api_key
     end
 
     test "context_from_metadata binds to the key row, ignoring the tenancy resolver",
          %{ctx_a: ctx_a} do
-      # Regression guard for R1: the removed enforce_api_key_tenant/2 used to
-      # OVERRIDE the key's org with the creating user's *current* membership.
-      # Point the tenancy resolver at a different org and assert the
-      # key-derived context is unaffected (org/project come from the row).
+      # A key-derived context must never be re-resolved from the creating
+      # user's *current* membership. Point the tenancy resolver at a different
+      # athanor and assert the key-derived context is unaffected (the athanor
+      # comes from the row).
       original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherOrgResolver)
+
+      Application.put_env(
+        :cyfr,
+        :tenancy_resolver_override,
+        Sanctum.Test.OtherAthanorResolver
+      )
 
       on_exit(fn ->
         if original_resolver,
@@ -626,15 +628,14 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, meta} = ApiKey.validate(created.api_key)
 
       ctx = ApiKey.context_from_metadata(meta)
-      assert ctx.org_id == "acme"
-      assert ctx.project_id == "proj_a"
+      assert ctx.athanor_id == "ath_a"
     end
 
-    test "two keys with same (name, scope_type, org_id) but different project_id coexist",
+    test "two keys with the same name in different athanors coexist",
          %{ctx_a: ctx_a, ctx_b: ctx_b} do
       assert {:ok, _} = ApiKey.create(ctx_a, %{name: "dup-name", scope: []})
 
-      # Same name in a different project is NOT a unique-constraint violation.
+      # Same name in a different athanor is NOT a unique-constraint violation.
       assert {:ok, _} = ApiKey.create(ctx_b, %{name: "dup-name", scope: []})
     end
   end

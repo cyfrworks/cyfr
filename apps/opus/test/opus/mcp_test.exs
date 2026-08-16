@@ -30,12 +30,11 @@ defmodule Opus.MCPTest do
     ctx =
       Context.build(
         user_id: "mcp_test_user_#{rand_id}",
-        # Unique tenant per test: executions/logs are project-scoped (shared
-        # within a tenant), so isolation between tests is by org/project.
-        org_id: "mcp_test_org_#{rand_id}",
-        project_id: "default",
+        # Unique athanor per test: executions/logs are athanor-scoped (shared
+        # within a tenant), so isolation between tests is by athanor.
+        athanor_id: "ath_mcp_test_#{rand_id}",
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         namespace: "testns",
         authenticated: true
@@ -415,8 +414,8 @@ defmodule Opus.MCPTest do
 
     test "a tenant admin is denied force_release", %{ctx: ctx} do
       # TestContext.local() carries :admin via the wildcard — but it is
-      # project-scoped, and a per-tenant admin must not release other
-      # tenants' slots.
+      # athanor-scoped, and a per-athanor admin must not release other
+      # athanors' slots.
       {:error, msg} = MCP.handle("execution", ctx, %{"action" => "force_release"})
       assert msg =~ "platform-operator action"
     end
@@ -424,9 +423,9 @@ defmodule Opus.MCPTest do
     test "non-admin user is denied force_release" do
       non_admin_ctx = %Context{
         user_id: "regular_user",
-        org_id: nil,
+        athanor_id: nil,
         permissions: MapSet.new([:execute]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application
       }
@@ -447,10 +446,9 @@ defmodule Opus.MCPTest do
     setup do
       restricted_ctx = %Context{
         user_id: "restricted_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: Sanctum.TestContext.athanor_id(),
         permissions: MapSet.new([:execute]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -458,10 +456,9 @@ defmodule Opus.MCPTest do
 
       no_execute_ctx = %Context{
         user_id: "no_exec_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: Sanctum.TestContext.athanor_id(),
         permissions: MapSet.new([:component_read]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -748,8 +745,7 @@ defmodule Opus.MCPTest do
         Arca.Execution.list(
           user_id: ctx.user_id,
           limit: 10,
-          org_id: ctx.org_id || "",
-          project_id: ctx.project_id || "default"
+          athanor_id: ctx.athanor_id
         )
 
       failed_records = Enum.filter(records, &(&1.status == "failed"))

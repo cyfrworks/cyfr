@@ -439,15 +439,14 @@ defmodule Opus.StorageHandlerTest do
     test "supports multiple allowed path prefixes", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/", "components/catalysts/"], actions: ["read"])
 
-      # The handler pins component paths to the caller's tenant, so write where
-      # it will read: components/{org}/{project}/catalysts/...
+      # The handler pins component paths to the caller's athanor, so write where
+      # it will read: components/{athanor_id}/catalysts/...
       :ok =
         Arca.put(
           ctx,
           [
             "components",
-            Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-            Arca.QueryHelpers.normalize_project_id(ctx.project_id),
+            ctx.athanor_id,
             "catalysts",
             "test",
             "0.1.0",

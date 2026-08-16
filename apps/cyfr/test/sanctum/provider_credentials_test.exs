@@ -17,9 +17,8 @@ defmodule Sanctum.ProviderCredentialsTest do
   defp narrow_ctx(permissions) do
     Context.build(
       user_id: "narrow",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: "ath_test",
+      scope: :athanor,
       permissions: permissions,
       authenticated: true
     )
@@ -30,14 +29,14 @@ defmodule Sanctum.ProviderCredentialsTest do
       assert :ok = ProviderCredentials.put(ctx, "google", "client-abc", "secret-xyz")
 
       assert {:ok, %{"client_id" => "client-abc", "client_secret" => "secret-xyz"}} =
-               ProviderCredentials.fetch_for_oauth(ctx.org_id, ctx.project_id, "google")
+               ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
     test "public clients store a nil client_secret", %{ctx: ctx} do
       assert :ok = ProviderCredentials.put(ctx, "github", "public-client")
 
       assert {:ok, %{"client_id" => "public-client", "client_secret" => nil}} =
-               ProviderCredentials.fetch_for_oauth(ctx.org_id, ctx.project_id, "github")
+               ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "github")
     end
 
     test "put replaces existing credentials", %{ctx: ctx} do
@@ -45,7 +44,7 @@ defmodule Sanctum.ProviderCredentialsTest do
       assert :ok = ProviderCredentials.put(ctx, "google", "new-id", "new-secret")
 
       assert {:ok, %{"client_id" => "new-id", "client_secret" => "new-secret"}} =
-               ProviderCredentials.fetch_for_oauth(ctx.org_id, ctx.project_id, "google")
+               ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
     test "fetch takes tenant coordinates, never the caller's permissions", %{ctx: ctx} do
@@ -54,13 +53,13 @@ defmodule Sanctum.ProviderCredentialsTest do
       # No Context argument exists on this path — the read is keyed by tenant
       # alone, which is exactly why an executing component's context can no
       # longer reach the client secret through a permission set.
-      assert {:ok, _} = ProviderCredentials.fetch_for_oauth("local", "default", "google")
-      assert {:error, _} = ProviderCredentials.fetch_for_oauth("other_org", "default", "google")
+      assert {:ok, _} = ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
+      assert {:error, _} = ProviderCredentials.fetch_for_oauth("ath_other", "google")
     end
 
     test "missing credentials produce an actionable error", %{ctx: _ctx} do
       assert {:error, message} =
-               ProviderCredentials.fetch_for_oauth("local", "default", "unconfigured")
+               ProviderCredentials.fetch_for_oauth("ath_test", "unconfigured")
 
       assert message =~ "oauth.set_client"
     end
@@ -96,7 +95,7 @@ defmodule Sanctum.ProviderCredentialsTest do
       refute ProviderCredentials.configured?(ctx, "google")
 
       assert {:error, :not_found} =
-               Arca.ProviderCredentialStorage.get("local", "default", "google")
+               Arca.ProviderCredentialStorage.get(ctx.athanor_id, "google")
     end
   end
 
@@ -111,7 +110,7 @@ defmodule Sanctum.ProviderCredentialsTest do
                })
 
       assert {:ok, %{"client_id" => "tool-id"}} =
-               ProviderCredentials.fetch_for_oauth("local", "default", "google")
+               ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
     test "requires provider and client_id" do

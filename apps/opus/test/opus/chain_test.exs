@@ -30,9 +30,8 @@ defmodule Opus.ChainTest do
 
     ctx = %Context{
       user_id: "chain_test_user_#{:rand.uniform(100_000)}",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: Sanctum.TestContext.athanor_id(),
+      scope: :athanor,
       permissions: MapSet.new([:execute]),
       authenticated: true
     }
@@ -402,15 +401,14 @@ defmodule Opus.ChainTest do
 
     defp revoked_vault_entry(ctx) do
       id = Emissary.UUID7.generate_id("vlt")
-      aad = Sanctum.CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "")
+      aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, json} = Sanctum.Vault.Payload.encode_material(%{"api_key" => "sk-gone"}, nil)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
       {:ok, entry} =
         Arca.VaultStorage.put(%{
           id: id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           name: "chain-revoked-entry",
           provider_hint: "",
           kind: "api_key",
@@ -419,7 +417,7 @@ defmodule Opus.ChainTest do
         })
 
       {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-      :ok = Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, entry.id, "revoked")
+      :ok = Arca.VaultStorage.set_status(ctx.athanor_id, entry.id, "revoked")
       {entry, digest}
     end
 

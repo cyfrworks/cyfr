@@ -140,12 +140,11 @@ defmodule Sanctum.Session do
       email: attrs["email"],
       provider: attrs["provider"],
       permissions: attrs["permissions"],
-      # A resolved context carries a concrete org; an org-less ("") value marks a
-      # not-yet-resolved session (user with no membership) and is re-resolved on
-      # load. Persisting `scope` lets a resolved session skip per-request
-      # membership re-resolution on reload.
-      org_id: ctx.org_id || "",
-      project_id: ctx.project_id,
+      # A resolved context carries its athanor; a nil marks a not-yet-resolved
+      # session (user with no membership) and is re-resolved on load.
+      # Persisting `scope` lets a resolved session skip per-request membership
+      # re-resolution on reload.
+      athanor_id: ctx.athanor_id,
       scope: to_string(ctx.scope),
       expires_at: expires_at,
       inserted_at: now
@@ -333,35 +332,6 @@ defmodule Sanctum.Session do
     Arca.SessionStorage.cleanup_expired_sessions()
   end
 
-  @doc """
-  Switch the session's active workspace to `(org_id, project_id)`.
-
-  Validates the target is within the caller's authorization ceiling
-  (`Sanctum.Tenancy.list_workspaces/1`) before persisting — a platform admin may
-  switch into any org; a member only into their granted orgs/projects. Returns
-  `{:error, :forbidden}` for an inaccessible workspace. The scope (the ceiling)
-  is unchanged; only the active org/project move.
-  """
-  @spec set_workspace(String.t(), String.t(), String.t()) ::
-          :ok
-          | {:error, :forbidden | :invalid_session | :database_error | :namespace_unavailable}
-  def set_workspace(token, org_id, project_id)
-      when is_binary(token) and is_binary(org_id) and is_binary(project_id) do
-    with {:ok, ctx} <- load(token, surface: :console) do
-      if workspace_allowed?(ctx, org_id, project_id) do
-        Arca.SessionStorage.update_workspace(hash_token(token), org_id, project_id)
-      else
-        {:error, :forbidden}
-      end
-    end
-  end
-
-  defp workspace_allowed?(ctx, org_id, project_id) do
-    Enum.any?(Sanctum.Tenancy.list_workspaces(ctx), fn w ->
-      w.org_id == org_id and w.project_id == project_id
-    end)
-  end
-
   # ============================================================================
   # Internal
   # ============================================================================
@@ -414,32 +384,38 @@ defmodule Sanctum.Session do
         # Session valid, but the user has no claimed namespace yet — keep the
         # context unauthenticated so RequirePersonalNamespace plug forwards
         # them to /claim-namespace before any tenant-scoped operation runs.
+        # The session's athanor rides along: it is a fact of the sign-in, not
+        # of the claim, and tincture access (which is not tenant
+        # administration) is granted on it.
         Context.build(
           user_id: row.user_id,
           email: row.email,
           provider: row.provider,
+          athanor_id: row.athanor_id,
           authenticated: false
         )
 
       {:ok, ns} ->
-        {scope, org_id} = restore_workspace(row)
-
         Context.build(
           user_id: row.user_id,
           email: row.email,
           provider: row.provider,
           namespace: ns,
           permissions: permissions,
-          org_id: org_id,
-          project_id: row.project_id,
-          scope: scope,
+          # The persisted athanor is a STARTING POINT, never trusted on its
+          # own: revalidate/1 re-checks it against current memberships. A nil
+          # means the session was never resolved (no membership at create
+          # time); revalidation re-reads memberships and the tenant gate still
+          # bounces a genuinely athanor-less user.
+          athanor_id: row.athanor_id,
+          scope: parse_scope(row.scope),
           auth_method: surface_auth_method(surface),
           authenticated: true
         )
-        # Re-validate the persisted (scope, workspace) against CURRENT
+        # Re-validate the persisted (scope, athanor) against CURRENT
         # memberships so a membership revoked/downgraded after session create
         # takes effect immediately (no waiting for TTL). Keeps the selected
-        # workspace when still authorized; drops a stale elevated scope.
+        # athanor when still authorized; drops a stale elevated scope.
         |> Sanctum.Tenancy.revalidate()
 
       {:error, _reason} ->
@@ -454,31 +430,22 @@ defmodule Sanctum.Session do
   defp surface_auth_method(:console), do: :oidc
   defp surface_auth_method(:tincture), do: :session
 
-  # Restore the persisted working scope + org as a STARTING POINT. The persisted
-  # values are never trusted on their own: `Sanctum.Tenancy.revalidate/1` (called
-  # by the caller) re-checks them against current memberships, so a stale scope
-  # cannot ride. An empty org means the session was never resolved to a tenant
-  # (no membership at create time): hand the builder a nil org so revalidation
-  # re-reads memberships (and the tenant gate still bounces a genuinely org-less
-  # user).
-  defp restore_workspace(row) do
-    case row.org_id do
-      org when is_binary(org) and org != "" -> {parse_scope(row.scope), org}
-      _ -> {:project, nil}
+  # The column is NOT NULL and only ever written from a validated Context,
+  # so anything outside the vocabulary is corruption — floor it to the
+  # narrowest scope, loudly.
+  defp parse_scope(scope) when is_binary(scope) do
+    if scope in Sanctum.Atoms.scopes() do
+      String.to_existing_atom(scope)
+    else
+      Logger.warning(
+        "[Sanctum.Session] unknown persisted scope #{inspect(scope)} — using :athanor"
+      )
+
+      :athanor
     end
   end
 
-  defp parse_scope("platform"), do: :platform
-  defp parse_scope("org"), do: :org
-  defp parse_scope("project"), do: :project
-
-  # The column is NOT NULL and only ever written from a validated Context,
-  # so anything else is corruption — floor it to the narrowest scope, loudly.
-  defp parse_scope(other) do
-    Logger.warning("[Sanctum.Session] unknown persisted scope #{inspect(other)} — using :project")
-
-    :project
-  end
+  defp parse_scope(_), do: :athanor
 
   defp row_to_external(row, token) do
     permissions =

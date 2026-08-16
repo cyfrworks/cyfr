@@ -20,8 +20,7 @@ defmodule Arca.Schemas.ComponentDependency do
     field :dep_version, :string
     field :optional, :boolean
     field :reason, :string
-    field :org_id, :string
-    field :project_id, :string
+    field :athanor_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

@@ -18,9 +18,9 @@ defmodule Sanctum.ContextTest do
       ctx = Sanctum.TestContext.local()
       assert ctx.user_id == "local|local|testns"
       assert ctx.namespace == "testns"
-      # The single-user test context resolves to the seeded "local" org.
-      assert ctx.org_id == "local"
-      assert ctx.scope == :project
+      # The single-user test context works in the "ath_test" athanor.
+      assert ctx.athanor_id == Sanctum.TestContext.athanor_id()
+      assert ctx.scope == :athanor
     end
 
     test "grants wildcard permissions" do
@@ -33,11 +33,6 @@ defmodule Sanctum.ContextTest do
       assert ctx.authenticated == true
     end
 
-    test "includes project_id default" do
-      ctx = Sanctum.TestContext.local()
-      assert ctx.project_id == "default"
-    end
-
     test "includes new fields" do
       ctx = Sanctum.TestContext.local()
       assert ctx.api_key_id == nil
@@ -45,17 +40,16 @@ defmodule Sanctum.ContextTest do
   end
 
   describe "for_scheduled/1" do
-    test "creates context with default project_id" do
-      ctx = Context.for_scheduled("user_1")
+    test "creates a scheduled context in the given athanor" do
+      ctx = Context.for_scheduled("user_1", athanor_id: "ath_1")
       assert ctx.user_id == "user_1"
-      assert ctx.project_id == "default"
+      assert ctx.athanor_id == "ath_1"
+      assert ctx.scope == :athanor
       assert ctx.auth_method == :scheduled
     end
 
-    test "accepts project_id option" do
-      ctx = Context.for_scheduled("user_1", project_id: "proj_1", org_id: "org_1")
-      assert ctx.project_id == "proj_1"
-      assert ctx.org_id == "org_1"
+    test "requires :athanor_id — a schedule has no default home" do
+      assert_raise KeyError, fn -> Context.for_scheduled("user_1") end
     end
 
     test "builds context from map" do
@@ -76,9 +70,9 @@ defmodule Sanctum.ContextTest do
       assert ctx.authenticated == false
     end
 
-    test "defaults scope to :project" do
+    test "defaults scope to :athanor" do
       ctx = Context.build(user_id: "user_1")
-      assert ctx.scope == :project
+      assert ctx.scope == :athanor
     end
 
     test "converts list permissions to MapSet" do
@@ -104,19 +98,9 @@ defmodule Sanctum.ContextTest do
       assert ctx.api_key_id == "key_123"
     end
 
-    test "returns :org when only org_id is set" do
-      ctx = Context.build(user_id: "u1", org_id: "org_1", scope: :org)
-      assert Context.active_scope(ctx) == :org
-    end
-
-    test "returns :project when no org or project" do
-      ctx = Context.build(user_id: "u1")
-      assert Context.active_scope(ctx) == :project
-    end
-
-    test "returns :platform when scope is :platform" do
-      ctx = Context.build(user_id: "u1", scope: :platform)
-      assert Context.active_scope(ctx) == :platform
+    test "keeps the scope it is given" do
+      assert Context.build(user_id: "u1", scope: :platform).scope == :platform
+      assert Context.build(user_id: "u1", athanor_id: "ath_1").scope == :athanor
     end
   end
 
@@ -124,9 +108,9 @@ defmodule Sanctum.ContextTest do
     test "unauthenticated context has authenticated: false" do
       ctx = %Context{
         user_id: nil,
-        org_id: nil,
+        athanor_id: nil,
         permissions: MapSet.new(),
-        scope: :project,
+        scope: :athanor,
         authenticated: false
       }
 
@@ -136,9 +120,9 @@ defmodule Sanctum.ContextTest do
     test "default value is false" do
       ctx = %Context{
         user_id: "test",
-        org_id: nil,
+        athanor_id: nil,
         permissions: MapSet.new(),
-        scope: :project
+        scope: :athanor
       }
 
       assert ctx.authenticated == false
@@ -156,9 +140,9 @@ defmodule Sanctum.ContextTest do
     test "returns true for specific permission when granted" do
       ctx = %Context{
         user_id: "test",
-        org_id: nil,
+        athanor_id: nil,
         permissions: MapSet.new([:execute, :publish]),
-        scope: :project
+        scope: :athanor
       }
 
       assert Context.has_permission?(ctx, :execute)
@@ -177,6 +161,7 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
@@ -192,6 +177,7 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
@@ -209,7 +195,8 @@ defmodule Sanctum.ContextTest do
       ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize(ctx, :execute)
       assert :ok == Context.authorize(ctx, :admin)
-      assert :ok == Context.authorize(ctx, :storage_read, {:execution, %{user_id: "other"}})
+      record = %{user_id: "other", athanor_id: "ath_test"}
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "unauthenticated context always denied" do
@@ -221,6 +208,7 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:execute],
           namespace: "testns",
           authenticated: true,
@@ -234,6 +222,7 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
@@ -247,13 +236,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      record = %{user_id: "u1"}
+      record = %{user_id: "u1", athanor_id: "ath_test"}
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
@@ -261,15 +251,16 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      # u2's record, same (default) tenant — there is no owner gate, so u1 is
+      # u2's record, same athanor — there is no owner gate, so u1 is
       # authorized. Cross-tenant access is still rejected (see tenant tests).
-      record = %{user_id: "u2"}
+      record = %{user_id: "u2", athanor_id: "ath_test"}
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
@@ -277,13 +268,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "admin",
+          athanor_id: "ath_test",
           permissions: [:storage_read, :admin],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      record = %{user_id: "other_user"}
+      record = %{user_id: "other_user", athanor_id: "ath_test"}
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
@@ -296,13 +288,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      resource = %{user_id: "u1"}
+      resource = %{user_id: "u1", athanor_id: "ath_test"}
       assert :ok == Context.authorize(ctx, :storage_read, {:owned, resource})
     end
 
@@ -310,13 +303,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      resource = %{user_id: "u2"}
+      resource = %{user_id: "u2", athanor_id: "ath_test"}
       assert :ok == Context.authorize(ctx, :storage_read, {:owned, resource})
     end
   end
@@ -326,15 +320,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
-          org_id: "org_a",
-          project_id: "proj_a",
+          athanor_id: "ath_a",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      record = %{user_id: "u1", org_id: "org_b", project_id: "proj_b"}
+      record = %{user_id: "u1", athanor_id: "ath_b"}
       assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, record})
       assert msg =~ "tenant mismatch"
     end
@@ -343,15 +336,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "admin_user",
-          org_id: "org_a",
-          project_id: "proj_a",
+          athanor_id: "ath_a",
           permissions: [:storage_read, :admin],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      record = %{user_id: "other_user", org_id: "org_a", project_id: "proj_a"}
+      record = %{user_id: "other_user", athanor_id: "ath_a"}
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
@@ -366,23 +358,22 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      record = %{user_id: "other_user", org_id: "org_x", project_id: "proj_x"}
+      record = %{user_id: "other_user", athanor_id: "ath_x"}
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
-    test "a local-org context passes the tenant check against a local record" do
+    test "a Home context passes the tenant check against a Home record" do
       ctx =
         Context.build(
           user_id: "u1",
-          org_id: "local",
-          project_id: "default",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      record = %{user_id: "u1", org_id: "local", project_id: "default"}
+      record = %{user_id: "u1", athanor_id: "ath_test"}
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
   end
@@ -392,6 +383,7 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
@@ -406,13 +398,15 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, %{org_id: "org_a"}})
+      assert {:error, msg} =
+               Context.authorize(ctx, :storage_read, {:execution, %{athanor_id: "ath_a"}})
       assert msg =~ "malformed execution resource"
     end
 
@@ -420,6 +414,7 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
@@ -434,15 +429,14 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "admin_user",
-          org_id: "org_a",
-          project_id: "proj_a",
+          athanor_id: "ath_a",
           permissions: [:storage_read, :*, :admin],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      record = %{user_id: "other_user", org_id: "org_b", project_id: "proj_b"}
+      record = %{user_id: "other_user", athanor_id: "ath_b"}
       assert {:error, msg} = Context.authorize(ctx, :storage_read, {:owned, record})
       assert msg =~ "tenant mismatch"
     end
@@ -451,13 +445,15 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: "u1",
+          athanor_id: "ath_test",
           permissions: [:storage_read],
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      assert :ok == Context.authorize(ctx, :storage_read, {:owned, %{user_id: "u1"}})
+      record = %{user_id: "u1", athanor_id: "ath_test"}
+      assert :ok == Context.authorize(ctx, :storage_read, {:owned, record})
     end
   end
 
@@ -474,15 +470,15 @@ defmodule Sanctum.ContextTest do
       end
     end
 
-    test "rejects non-string org_id" do
-      assert_raise ArgumentError, ~r/org_id must be a string or nil/, fn ->
-        Context.build(org_id: 42)
+    test "rejects non-string athanor_id" do
+      assert_raise ArgumentError, ~r/athanor_id must be a string or nil/, fn ->
+        Context.build(athanor_id: 42)
       end
     end
 
-    test "rejects non-string project_id" do
-      assert_raise ArgumentError, ~r/project_id must be a string or nil/, fn ->
-        Context.build(project_id: [:list])
+    test "rejects an empty-string athanor_id — there is no sentinel to coerce into" do
+      assert_raise ArgumentError, ~r/athanor_id must be a resolved id or nil/, fn ->
+        Context.build(athanor_id: "")
       end
     end
 
@@ -499,7 +495,7 @@ defmodule Sanctum.ContextTest do
     end
 
     test "accepts all valid scopes" do
-      for scope <- [:org, :project, :platform] do
+      for scope <- [:athanor, :platform] do
         ctx = Context.build(user_id: "u1", scope: scope)
         assert ctx.scope == scope
       end
@@ -509,33 +505,31 @@ defmodule Sanctum.ContextTest do
       ctx =
         Context.build(
           user_id: nil,
-          org_id: nil,
-          project_id: nil,
+          athanor_id: nil,
           request_id: nil,
           api_key_id: nil
         )
 
       assert ctx.user_id == nil
-      # An explicit `org_id: nil` is preserved (org-less); only an *absent*
-      # org_id key defaults to the "local" sentinel off-platform.
-      assert ctx.org_id == nil
+      # nil is the unresolved state; there is no sentinel to default into.
+      assert ctx.athanor_id == nil
     end
 
     test "allows authenticated non-platform context with nil namespace (identity-only)" do
       # namespace is no longer required — it is a pure identity field, not a
       # storage primitive. A user who hasn't claimed a cyfr.run slug is valid.
-      ctx = Context.build(user_id: "u1", scope: :project, authenticated: true)
+      ctx = Context.build(user_id: "u1", scope: :athanor, authenticated: true)
       assert ctx.namespace == nil
       assert ctx.authenticated
     end
 
     test "allows authenticated non-platform context with empty-string namespace" do
-      ctx = Context.build(user_id: "u1", namespace: "", scope: :project, authenticated: true)
+      ctx = Context.build(user_id: "u1", namespace: "", scope: :athanor, authenticated: true)
       assert ctx.authenticated
     end
 
     test "allows nil namespace when authenticated: false (pre-claim transient state)" do
-      ctx = Context.build(user_id: "u1", scope: :project, authenticated: false)
+      ctx = Context.build(user_id: "u1", scope: :athanor, authenticated: false)
       assert ctx.namespace == nil
       refute ctx.authenticated
     end
@@ -551,7 +545,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           namespace: "alice",
-          scope: :project,
+          scope: :athanor,
           authenticated: true
         )
 
@@ -569,44 +563,38 @@ defmodule Sanctum.ContextTest do
           user_id: "local|local|testns",
           provider: "local",
           namespace: "testns",
-          project_id: "default",
+          athanor_id: Sanctum.TestContext.athanor_id(),
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           authenticated: true
         )
 
       assert local.user_id == built.user_id
-      assert local.project_id == built.project_id
+      assert local.athanor_id == built.athanor_id
       assert local.permissions == built.permissions
       assert local.scope == built.scope
       assert local.auth_method == built.auth_method
       assert local.authenticated == built.authenticated
-      assert local.org_id == built.org_id
     end
 
     test "for_scheduled/2 produces same result as equivalent build/1" do
       scheduled =
-        Context.for_scheduled("user_1",
-          org_id: "org_1",
-          project_id: "proj_1"
-        )
+        Context.for_scheduled("user_1", athanor_id: "ath_1")
 
       built =
         Context.build(
           user_id: "user_1",
-          org_id: "org_1",
-          project_id: "proj_1",
+          athanor_id: "ath_1",
           permissions: [:execute, :storage_read, :execution_write, :storage_write],
-          scope: :project,
+          scope: :athanor,
           auth_method: :scheduled,
           namespace: "testns",
           authenticated: true
         )
 
       assert scheduled.user_id == built.user_id
-      assert scheduled.org_id == built.org_id
-      assert scheduled.project_id == built.project_id
+      assert scheduled.athanor_id == built.athanor_id
       assert scheduled.permissions == built.permissions
       assert scheduled.scope == built.scope
       assert scheduled.auth_method == built.auth_method
@@ -629,23 +617,21 @@ defmodule Sanctum.ContextTest do
         Context.internal(
           user_id: "u|i|s",
           namespace: "alice",
-          scope: :project,
-          org_id: "o1",
-          project_id: "p1",
+          scope: :athanor,
+          athanor_id: "ath_o1",
           permissions: [:execution_write]
         )
 
       assert ctx.auth_method == :system
-      assert ctx.scope == :project
+      assert ctx.scope == :athanor
       assert ctx.namespace == "alice"
-      assert ctx.org_id == "o1"
-      assert ctx.project_id == "p1"
+      assert ctx.athanor_id == "ath_o1"
       assert ctx.permissions == MapSet.new([:execution_write])
       assert ctx.authenticated
     end
 
     test "for_scheduled/2 keeps :scheduled provenance and delegates to internal/1" do
-      scheduled = Context.for_scheduled("user_1", org_id: "o", project_id: "p")
+      scheduled = Context.for_scheduled("user_1", athanor_id: "ath_o")
 
       assert scheduled.auth_method == :scheduled
 
@@ -653,9 +639,8 @@ defmodule Sanctum.ContextTest do
         Context.internal(
           user_id: "user_1",
           namespace: scheduled.namespace,
-          org_id: "o",
-          project_id: "p",
-          scope: :project,
+          athanor_id: "ath_o",
+          scope: :athanor,
           auth_method: :scheduled
         )
 

@@ -25,7 +25,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
   defp mint_oauth_entry(ctx, oauth, over \\ %{}) do
     id = Emissary.UUID7.generate_id("vlt")
-    aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "google")
+    aad = CipherAAD.vault_entry(ctx.athanor_id, id, "google")
 
     {:ok, json} = Payload.encode_material(%{}, oauth)
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
@@ -33,8 +33,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     {:ok, entry} =
       Arca.VaultStorage.put(%{
         id: id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         name: "oauth-#{id}",
         provider_hint: "google",
         kind: "oauth",
@@ -47,14 +46,14 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   end
 
   defp reseal_valid(ctx, entry, token) do
-    aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, entry.id, "google")
+    aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, "google")
 
     {:ok, json} =
       Payload.encode_material(%{}, %{"access_token" => token, "token_type" => "bearer"})
 
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-    {:ok, fresh} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
-    :ok = Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, entry.id, fresh.payload_rev, sealed)
+    {:ok, fresh} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
+    :ok = Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, fresh.payload_rev, sealed)
   end
 
   defp attach_attempt_counter do
@@ -79,7 +78,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
          %{ctx: ctx} do
       {entry, resource} = mint_oauth_entry(ctx, @expired)
       counter = attach_attempt_counter()
-      lock_key = {:vault_oauth_refresh, ctx.org_id, entry.id}
+      lock_key = {:vault_oauth_refresh, ctx.athanor_id, entry.id}
 
       # A "leader" already refreshing this entry: holds the entry lock,
       # writes the refreshed bundle back, returns its token.
@@ -159,12 +158,12 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     test "the loser of a revision race gets payload_conflict", %{ctx: ctx} do
       {entry, _resource} = mint_oauth_entry(ctx, @expired)
 
-      assert :ok = Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, entry.id, 0, "sealed-a")
+      assert :ok = Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, 0, "sealed-a")
 
       assert {:error, :payload_conflict} =
-               Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, entry.id, 0, "sealed-b")
+               Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, 0, "sealed-b")
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
+      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
       assert row.payload_rev == 1
       assert row.sealed_payload == "sealed-a"
     end

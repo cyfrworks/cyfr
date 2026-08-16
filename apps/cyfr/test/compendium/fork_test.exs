@@ -34,8 +34,7 @@ defmodule Compendium.ForkTest do
       Path.join([
         test_dir,
         "components",
-        "local",
-        "default",
+        Sanctum.TestContext.athanor_id(),
         "#{type}s",
         publisher,
         name,
@@ -76,8 +75,7 @@ defmodule Compendium.ForkTest do
       Path.join([
         test_dir,
         "components",
-        "local",
-        "default",
+        Sanctum.TestContext.athanor_id(),
         "tinctures",
         publisher,
         name,
@@ -142,8 +140,7 @@ defmodule Compendium.ForkTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          Sanctum.TestContext.athanor_id(),
           "catalysts",
           "local",
           "my-tool",
@@ -180,8 +177,7 @@ defmodule Compendium.ForkTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          Sanctum.TestContext.athanor_id(),
           "tinctures",
           "local",
           "my-dash",
@@ -249,8 +245,7 @@ defmodule Compendium.ForkTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          Sanctum.TestContext.athanor_id(),
           "reagents",
           "local",
           "my-fork",
@@ -277,8 +272,7 @@ defmodule Compendium.ForkTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          Sanctum.TestContext.athanor_id(),
           "formulas",
           "local",
           "my-flow",
@@ -304,8 +298,7 @@ defmodule Compendium.ForkTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          Sanctum.TestContext.athanor_id(),
           "tinctures",
           "acme",
           "db-dash",
@@ -321,8 +314,7 @@ defmodule Compendium.ForkTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          Sanctum.TestContext.athanor_id(),
           "tinctures",
           "local",
           "db-dash",

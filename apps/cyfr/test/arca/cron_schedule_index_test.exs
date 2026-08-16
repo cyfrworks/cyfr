@@ -6,10 +6,11 @@ defmodule Arca.CronScheduleIndexTest do
 
   alias Arca.CronSchedule
 
-  # The repo's original partial unique index:
-  #   (user_id, name) WHERE status != 'deleted'  — :cron_schedules_user_name_active
+  # The partial unique index:
+  #   (athanor_id, name) WHERE status != 'deleted'  — :cron_schedules_athanor_name_active
   # These tests pin its semantics on both adapters: soft-deleted rows release
-  # the name, everything else (active AND paused) holds it.
+  # the name, everything else (active AND paused) holds it, and the name is
+  # scoped to the athanor — a schedule is the athanor's, whoever created it.
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -27,14 +28,13 @@ defmodule Arca.CronScheduleIndexTest do
         cron_expression: "0 * * * *",
         reference: "formula:local.index-test:1.0.0",
         profile_id: "prof_test",
-        org_id: "local",
-        project_id: "default"
+        athanor_id: Sanctum.TestContext.athanor_id()
       },
       overrides
     )
   end
 
-  test "an active schedule blocks a duplicate name for the same user" do
+  test "an active schedule blocks a duplicate name in the same athanor" do
     assert {:ok, _} = CronSchedule.create(schedule_attrs("dup-active"))
 
     assert_raise Ecto.ConstraintError, fn ->
@@ -66,10 +66,18 @@ defmodule Arca.CronScheduleIndexTest do
     assert {:ok, _third} = CronSchedule.create(schedule_attrs("dup-many"))
   end
 
-  test "the same name under a different user is unaffected" do
+  test "the same name from another member of the athanor is a duplicate" do
+    assert {:ok, _} = CronSchedule.create(schedule_attrs("shared-name"))
+
+    assert_raise Ecto.ConstraintError, fn ->
+      CronSchedule.create(schedule_attrs("shared-name", %{user_id: "other-user"}))
+    end
+  end
+
+  test "the same name in a different athanor is unaffected" do
     assert {:ok, _} = CronSchedule.create(schedule_attrs("shared-name"))
 
     assert {:ok, _} =
-             CronSchedule.create(schedule_attrs("shared-name", %{user_id: "other-user"}))
+             CronSchedule.create(schedule_attrs("shared-name", %{athanor_id: "ath_other"}))
   end
 end

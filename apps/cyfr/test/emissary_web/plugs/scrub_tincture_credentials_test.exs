@@ -17,7 +17,7 @@ defmodule EmissaryWeb.Plugs.ScrubTinctureCredentialsTest do
   defp run(query_string) do
     conn =
       :get
-      |> conn("/t/local/default/local/demo?" <> query_string)
+      |> conn("/t/home/local/demo?" <> query_string)
       |> ScrubTinctureCredentials.call([])
 
     # The action still sees the raw credential — auth happens before the
@@ -58,7 +58,7 @@ defmodule EmissaryWeb.Plugs.ScrubTinctureCredentialsTest do
     # the action reads the credential.
     conn =
       :get
-      |> conn("/t/local/default/local/demo?_session=cyfr_live_secret_value")
+      |> conn("/t/home/local/demo?_session=cyfr_live_secret_value")
       |> ScrubTinctureCredentials.call([])
       |> send_resp(429, "rate limited")
 
@@ -69,7 +69,7 @@ defmodule EmissaryWeb.Plugs.ScrubTinctureCredentialsTest do
   test "is a no-op for a request with no query string" do
     sent =
       :get
-      |> conn("/t/local/default/local/demo")
+      |> conn("/t/home/local/demo")
       |> ScrubTinctureCredentials.call([])
       |> send_resp(200, "ok")
 

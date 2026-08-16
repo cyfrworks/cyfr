@@ -2,15 +2,15 @@
   <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
-# CYFR — Prompts aren't permissions
+# Prompts aren't permissions
 
-Prompts can tell a model what not to do. CYFR controls what it can actually reach.
+Users can send prompts can tell a model what not to do, but can only HOPE the model is following the prompts. CYFR controls what models can actually reach.
 
-CYFR is a self-hosted runtime for agents that call APIs, use data, and run workflows. If AI models are the new electricity, CYFR is the electrical system that routes that power through controlled circuits before it reaches your systems. The model proposes an action; CYFR checks it against the authority you consented to; a sandboxed component performs it.
+# What is CYFR
 
-**The brain is rented; the keys stay with you.**
+CYFR is a self-hosted runtime and control plane for agents that call APIs, use data, and run workflows. If AI models are the new electricity (model proposes an action), CYFR is your electrical system that routes that power through controlled circuits (CYFR checks it against policies and permission granted by you) and run the appliances (sandboxed component performs the action if allowed). **The brain is rented; the keys stay with you.**
 
-When a task becomes routine, run it as a reusable component instead of asking a model to figure it out again. **Pay for intelligence, not repetition.**
+When a task comes, search the registry or create your own reusable component for super fast execution instead of asking and waiting for a model to figure it out, especially when tasks become routine. **Pay for intelligence, not repetition.**
 
 > **License:** CYFR is **Fair Source** (source available) — the Sanctum subsystem is FSL-1.1-Apache-2.0, everything else is Apache-2.0. See [License](#license).
 
@@ -78,9 +78,6 @@ cyfr login
 # Scan bundled components and auto-pull their dependencies
 cyfr register
 
-# Mint baseline consents for the registered components (one-time)
-mix cyfr.consent.bootstrap
-
 # Grant a component the Connections it needs
 # (or use the console's Connections page at :4001)
 cyfr profile grant c:moonmoon69.claude
@@ -92,7 +89,7 @@ cyfr -h
 open http://localhost:4001
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, an allowed sign-in email (single-user; recommended), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `porta` (the A.Q.U.A. PWA on `:8080`), and `mcp-bridge`; `cyfr up` brings all three up, and the PWA is served at `http://localhost:8080/`. A fourth service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `porta` (the A.Q.U.A. PWA on `:8080`), and `mcp-bridge`; `cyfr up` brings all three up, and the PWA is served at `http://localhost:8080/`. A fourth service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Dashboard (Prism)
 
@@ -112,7 +109,7 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Tinctures** — open and manage frontend experiences inside Prism's shell
 - **Settings** — server configuration
 
-Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<org>/<project>/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
+Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<athanor>/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
 
 ## Project Layout
 
@@ -133,8 +130,9 @@ your-project/
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/             # {org}/{project}/{type}s/{publisher}/{name}/{version}/
-│   └── local/default/      # The out-of-the-box workspace
+├── components/             # {athanor}/{type}s/{publisher}/{name}/{version}/
+│   ├── _bundle/            # The seed bundle every athanor starts from (never a tenant)
+│   └── <athanor id>/       # One tree per athanor — Home, then each person's and group's
 │       ├── catalysts/
 │       │   ├── local/      # Generic catalysts: files, http
 │       │   └── moonmoon69/ # Pulled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase
@@ -206,7 +204,7 @@ CYFR supports both WASM components and tinctures. The fastest path is to scaffol
 ```bash
 # Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
 cyfr new catalyst my-api
-# Creates scaffold in components/{org}/{project}/<type>s/local/my-api/<version>
+# Creates scaffold in components/<athanor>/<type>s/local/my-api/<version>
 # Also: cyfr new reagent my-transform, cyfr new formula my-workflow
 
 # Compile (auto-registers the component and auto-pulls any dependencies)
@@ -225,7 +223,7 @@ The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr 
 
 ### Tinctures
 
-Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<org>/<project>/<publisher>/<name>` (when explicitly made public).
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<athanor>/<publisher>/<name>` (when explicitly made public).
 
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
@@ -240,7 +238,7 @@ cyfr build compile t:local.stock-dashboard:0.1.0
 # Open it in Prism
 open http://localhost:4001/tinctures
 
-# Make it publicly reachable at /t/local/default/local/stock-dashboard
+# Make it publicly reachable at /t/home/local/stock-dashboard
 cyfr tincture visibility set local stock-dashboard true
 ```
 
@@ -321,7 +319,7 @@ Two modes:
 
 `cyfr init` prompts which mode you want and writes the right values into `.env` (`CYFR_BEHIND_PROXY` and `CYFR_PORTA_BIND`). `cyfr up` reads `.env` and toggles the `tls` profile automatically.
 
-Single-user by design. There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
+There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
 
 ### Prerequisites
 
@@ -484,7 +482,7 @@ All four required vars must be set or the server refuses to start.
   120/60s) — per-client-IP transport throttle on the `/mcp` endpoint.
 - `CYFR_MAX_CONCURRENT_EXECUTIONS` (default 128) and
   `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` (default 16) — global and
-  per-workspace WASM concurrency caps. The container CPU quota
+  per-athanor WASM concurrency caps. The container CPU quota
   (`CYFR_CPU_LIMIT`, default 4) bounds aggregate CPU use.
 
 ### Backup and restore
@@ -559,7 +557,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr tincture visibility get <publisher> <name>` | Check whether a tincture is private to Prism or publicly reachable |
-| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<org>/<project>/<publisher>/<name>` |
+| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<athanor>/<publisher>/<name>` |
 
 ### MCP Servers
 

@@ -5,10 +5,8 @@ defmodule Sanctum.PubSub do
   @moduledoc """
   Tenant-aware PubSub topic helper.
 
-  Prefixes every topic with `"tenant:<org_id>:<project_id>:"` so broadcasts
-  are isolated per tenant. Single-user installs carry the sentinel
-  `org_id: "local"` and `project_id: "default"`, so topics there look like
-  `"tenant:local:default:<base>"` — uniform across deployments.
+  Prefixes every topic with `"tenant:<athanor_id>:"` so broadcasts are
+  isolated per athanor.
 
   Most PubSub topics in the system are routed through `topic/2`. This
   ensures tenant isolation is enforced consistently:
@@ -31,34 +29,29 @@ defmodule Sanctum.PubSub do
   @doc """
   Build a tenant-scoped topic string.
 
-  Every context carries a resolved `org_id` (defaulting to `"local"` in
-  single-user installs). Calls without a context or with `nil`/empty
-  `org_id` indicate a bug and raise.
+  Every context carries a resolved `athanor_id`. Calls without a context or
+  with a `nil`/empty athanor indicate a bug and raise.
 
   ## Examples
 
-      iex> ctx = %Sanctum.Context{org_id: "local", project_id: "default"}
+      iex> ctx = %Sanctum.Context{athanor_id: "ath_1"}
       iex> Sanctum.PubSub.topic("execution:events", ctx)
-      "tenant:local:default:execution:events"
-
-      iex> ctx = %Sanctum.Context{org_id: "acme", project_id: "main"}
-      iex> Sanctum.PubSub.topic("execution:events", ctx)
-      "tenant:acme:main:execution:events"
+      "tenant:ath_1:execution:events"
   """
   @spec topic(String.t(), Context.t() | nil) :: String.t()
   def topic(base, nil) do
     raise ArgumentError,
-          "PubSub.topic/2 requires a non-nil context with org_id, " <>
+          "PubSub.topic/2 requires a non-nil context with athanor_id, " <>
             "got nil for topic #{inspect(base)}"
   end
 
-  def topic(base, %Context{org_id: org_id}) when org_id in [nil, ""] do
+  def topic(base, %Context{athanor_id: athanor_id}) when athanor_id in [nil, ""] do
     raise ArgumentError,
-          "PubSub.topic/2 requires a Context with non-empty org_id, " <>
-            "got #{inspect(org_id)} for topic #{inspect(base)}"
+          "PubSub.topic/2 requires a Context with non-empty athanor_id, " <>
+            "got #{inspect(athanor_id)} for topic #{inspect(base)}"
   end
 
-  def topic(base, %Context{org_id: org_id, project_id: project_id}) do
-    "tenant:#{org_id}:#{project_id || "default"}:#{base}"
+  def topic(base, %Context{athanor_id: athanor_id}) do
+    "tenant:#{athanor_id}:#{base}"
   end
 end

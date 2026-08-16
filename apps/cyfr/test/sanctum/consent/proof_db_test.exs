@@ -20,8 +20,7 @@ defmodule Sanctum.Consent.ProofDBTest do
         kind: :consent_commit,
         commit_digest: @digest,
         actor: "user_1",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         profile_id: "prof_1",
         expected_revision: 3
       },

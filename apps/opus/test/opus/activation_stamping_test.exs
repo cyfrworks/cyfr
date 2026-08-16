@@ -95,7 +95,7 @@ defmodule Opus.ActivationStampingTest do
         []
       )
 
-    Arca.Cache.delete_match({:component_meta, :_, :_, :_})
+    Arca.Cache.delete_match({:component_meta, :_, :_})
 
     # The consent loader would refuse this as drift, so best-effort
     # stamping is exercised where it still runs: a direct execution under

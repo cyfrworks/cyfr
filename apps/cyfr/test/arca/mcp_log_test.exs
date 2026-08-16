@@ -18,8 +18,7 @@ defmodule Arca.McpLogTest do
       %{
         id: "req_#{:rand.uniform(1_000_000)}",
         user_id: "user_1",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         timestamp: DateTime.utc_now(),
         status: "pending",
         tool: "execution",
@@ -90,15 +89,14 @@ defmodule Arca.McpLogTest do
 
     test "cross-tenant update returns not_found" do
       {:ok, _} =
-        McpLog.record(log_attrs(%{id: "req_cross", org_id: "org_a", project_id: "proj_1"}))
+        McpLog.record(log_attrs(%{id: "req_cross", athanor_id: "ath_a"}))
 
       ctx_other =
         Context.build(
           user_id: "u",
-          org_id: "org_b",
-          project_id: "proj_2",
+          athanor_id: "ath_b",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -117,7 +115,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_l1", timestamp: t1}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_l2", timestamp: t2}))
 
-      logs = McpLog.list(org_id: "local", project_id: "default")
+      logs = McpLog.list(athanor_id: "ath_test")
       ids = Enum.map(logs, & &1.id)
       assert "req_l2" in ids
       assert "req_l1" in ids
@@ -130,7 +128,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu1", user_id: "alice"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu2", user_id: "bob"}))
 
-      logs = McpLog.list(org_id: "local", project_id: "default", user_id: "alice")
+      logs = McpLog.list(athanor_id: "ath_test", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -138,7 +136,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs1", status: "success"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs2", status: "error"}))
 
-      logs = McpLog.list(org_id: "local", project_id: "default", status: "error")
+      logs = McpLog.list(athanor_id: "ath_test", status: "error")
       assert logs != []
       assert Enum.all?(logs, &(&1.status == "error"))
     end
@@ -150,7 +148,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "call_a1", request_id: "req_root_a"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_root_b", request_id: "req_root_b"}))
 
-      logs = McpLog.list(org_id: "local", project_id: "default", request_id: "req_root_a")
+      logs = McpLog.list(athanor_id: "ath_test", request_id: "req_root_a")
       assert logs != []
       assert length(logs) == 2
       assert Enum.all?(logs, &(&1.request_id == "req_root_a"))
@@ -161,7 +159,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft1", tool: "storage"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft2", tool: "execution"}))
 
-      logs = McpLog.list(org_id: "local", project_id: "default", tool: "storage")
+      logs = McpLog.list(athanor_id: "ath_test", tool: "storage")
       assert logs != []
       assert Enum.all?(logs, &(&1.tool == "storage"))
     end
@@ -172,7 +170,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_since2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      logs = McpLog.list(org_id: "local", project_id: "default", since: cutoff)
+      logs = McpLog.list(athanor_id: "ath_test", since: cutoff)
       ids = Enum.map(logs, & &1.id)
       assert "req_since2" in ids
       refute "req_since1" in ids
@@ -183,7 +181,7 @@ defmodule Arca.McpLogTest do
         {:ok, _} = McpLog.record(log_attrs(%{id: "req_lim_#{i}"}))
       end
 
-      logs = McpLog.list(org_id: "local", project_id: "default", limit: 2)
+      logs = McpLog.list(athanor_id: "ath_test", limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -191,7 +189,7 @@ defmodule Arca.McpLogTest do
   describe "get_tenant/2" do
     test "platform scope returns log without tenant filtering" do
       {:ok, log} =
-        McpLog.record(log_attrs(%{id: "req_plat", org_id: "org_x", project_id: "proj_x"}))
+        McpLog.record(log_attrs(%{id: "req_plat", athanor_id: "ath_x"}))
 
       platform_ctx =
         Context.build(
@@ -206,16 +204,15 @@ defmodule Arca.McpLogTest do
       assert %McpLog{id: "req_plat"} = McpLog.get_tenant(platform_ctx, log.id)
     end
 
-    test "project scope filters by tenant" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_t1", org_id: "org_a", project_id: "proj_1"}))
+    test "athanor scope filters by tenant" do
+      {:ok, _} = McpLog.record(log_attrs(%{id: "req_t1", athanor_id: "ath_a"}))
 
       ctx_match =
         Context.build(
           user_id: "u",
-          org_id: "org_a",
-          project_id: "proj_1",
+          athanor_id: "ath_a",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -224,10 +221,9 @@ defmodule Arca.McpLogTest do
       ctx_miss =
         Context.build(
           user_id: "u",
-          org_id: "org_b",
-          project_id: "proj_2",
+          athanor_id: "ath_b",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -245,7 +241,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_del2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {count, _} = McpLog.delete_before(cutoff, org_id: "local", project_id: "default")
+      {count, _} = McpLog.delete_before(cutoff, athanor_id: "ath_test")
       assert count >= 1
 
       platform_ctx =
@@ -270,8 +266,7 @@ defmodule Arca.McpLogTest do
           log_attrs(%{
             id: "req_delt1",
             timestamp: old_time,
-            org_id: "org_a",
-            project_id: "proj_1"
+            athanor_id: "ath_a"
           })
         )
 
@@ -280,13 +275,12 @@ defmodule Arca.McpLogTest do
           log_attrs(%{
             id: "req_delt2",
             timestamp: old_time,
-            org_id: "org_b",
-            project_id: "proj_2"
+            athanor_id: "ath_b"
           })
         )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {count, _} = McpLog.delete_before(cutoff, org_id: "org_a", project_id: "proj_1")
+      {count, _} = McpLog.delete_before(cutoff, athanor_id: "ath_a")
       assert count >= 1
 
       platform_ctx =
@@ -299,9 +293,9 @@ defmodule Arca.McpLogTest do
           authenticated: true
         )
 
-      # org_a record deleted
+      # ath_a record deleted
       assert is_nil(McpLog.get_tenant(platform_ctx, "req_delt1"))
-      # org_b record untouched
+      # ath_b record untouched
       assert %McpLog{} = McpLog.get_tenant(platform_ctx, "req_delt2")
     end
   end
@@ -312,7 +306,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_st2", status: "success", duration_ms: 200}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_st3", status: "error", duration_ms: 50}))
 
-      stats = McpLog.stats(org_id: "local", project_id: "default")
+      stats = McpLog.stats(athanor_id: "ath_test")
       assert stats.total >= 3
       assert stats.errors >= 1
       assert is_integer(stats.avg_duration_ms)
@@ -330,7 +324,7 @@ defmodule Arca.McpLogTest do
         )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      stats = McpLog.stats(org_id: "local", project_id: "default", since: cutoff)
+      stats = McpLog.stats(athanor_id: "ath_test", since: cutoff)
       # Only recent log should be counted
       assert stats.total >= 1
     end
@@ -342,16 +336,16 @@ defmodule Arca.McpLogTest do
 
       {:ok, _} =
         McpLog.record(
-          log_attrs(%{id: "req_iso_a", org_id: ctx_a.org_id, project_id: ctx_a.project_id})
+          log_attrs(%{id: "req_iso_a", athanor_id: ctx_a.athanor_id})
         )
 
       {:ok, _} =
         McpLog.record(
-          log_attrs(%{id: "req_iso_b", org_id: ctx_b.org_id, project_id: ctx_b.project_id})
+          log_attrs(%{id: "req_iso_b", athanor_id: ctx_b.athanor_id})
         )
 
-      logs_a = McpLog.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
-      logs_b = McpLog.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id)
+      logs_a = McpLog.list(athanor_id: ctx_a.athanor_id)
+      logs_b = McpLog.list(athanor_id: ctx_b.athanor_id)
 
       ids_a = Enum.map(logs_a, & &1.id)
       ids_b = Enum.map(logs_b, & &1.id)
@@ -369,8 +363,7 @@ defmodule Arca.McpLogTest do
         McpLog.record(
           log_attrs(%{
             id: "req_iso_s1",
-            org_id: ctx_a.org_id,
-            project_id: ctx_a.project_id,
+            athanor_id: ctx_a.athanor_id,
             status: "error"
           })
         )
@@ -379,14 +372,13 @@ defmodule Arca.McpLogTest do
         McpLog.record(
           log_attrs(%{
             id: "req_iso_s2",
-            org_id: ctx_b.org_id,
-            project_id: ctx_b.project_id,
+            athanor_id: ctx_b.athanor_id,
             status: "success"
           })
         )
 
-      stats_a = McpLog.stats(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
-      stats_b = McpLog.stats(org_id: ctx_b.org_id, project_id: ctx_b.project_id)
+      stats_a = McpLog.stats(athanor_id: ctx_a.athanor_id)
+      stats_b = McpLog.stats(athanor_id: ctx_b.athanor_id)
 
       assert stats_a.errors >= 1
       assert stats_b.errors == 0

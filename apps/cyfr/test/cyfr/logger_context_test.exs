@@ -11,8 +11,7 @@ defmodule Cyfr.LoggerContextTest do
       ctx =
         Sanctum.Context.build(
           user_id: "user_123",
-          org_id: "org_abc",
-          project_id: "proj_xyz",
+          athanor_id: "ath_abc",
           permissions: [:execute],
           auth_method: :oidc,
           namespace: "testns",
@@ -23,8 +22,7 @@ defmodule Cyfr.LoggerContextTest do
 
       metadata = Logger.metadata()
       assert metadata[:user_id] == "user_123"
-      assert metadata[:org_id] == "org_abc"
-      assert metadata[:project_id] == "proj_xyz"
+      assert metadata[:athanor_id] == "ath_abc"
       assert metadata[:auth_method] == :oidc
     end
   end

@@ -34,13 +34,13 @@ defmodule Sanctum.TinctureAuth do
 
   # Distinct from the 24h `/_s/` asset token (tincture_controller.ex,
   # @token_salt "tincture_access"): a single-purpose, minimal-payload,
-  # project-scoped :execute token. The Prism picker bakes the URL at
+  # athanor-scoped :execute token. The Prism picker bakes the URL at
   # render time and the user may click a tincture minutes later, so the
   # lifetime must comfortably outlast an open picker session. 1h is still a
   # dramatic improvement over the prior raw session token in the URL (which
   # carried the full-TTL session credential); this token grants only
-  # tincture :execute for one tenant and expires regardless.
-  @access_token_salt "tincture_access_v2"
+  # tincture :execute for one athanor and expires regardless.
+  @access_token_salt "tincture_access_v3"
   @access_token_max_age 3600
 
   @doc "Access-token lifetime in seconds — the value verify enforces and the API reports."
@@ -50,7 +50,7 @@ defmodule Sanctum.TinctureAuth do
   @doc """
   Mint a short-lived tincture access token from an authenticated context.
 
-  The payload is the minimum needed to rebuild a project-scoped, `:execute`
+  The payload is the minimum needed to rebuild an athanor-scoped, `:execute`
   tincture context — never the API key, never the raw session id. Useless for
   the MCP API and expires in #{@access_token_max_age}s, so even if logged it
   is low-value and short-lived.
@@ -59,8 +59,7 @@ defmodule Sanctum.TinctureAuth do
   def issue_access_token(%Context{} = ctx) do
     Phoenix.Token.sign(EmissaryWeb.Endpoint, @access_token_salt, %{
       u: ctx.user_id,
-      o: ctx.org_id,
-      p: ctx.project_id,
+      a: ctx.athanor_id,
       n: ctx.namespace
     })
   end
@@ -71,10 +70,9 @@ defmodule Sanctum.TinctureAuth do
          :skip <- try_access_token(conn) do
       :unauthenticated
     else
-      # Single tenant chokepoint. Every path builds a `scope: :project`
-      # context without a tenant check; when an auth provider is configured, an
-      # org-less context must not authenticate for tincture access. No-op for
-      # single-user installs.
+      # Single tenant chokepoint. Every path builds a `scope: :athanor`
+      # context without a tenant check; a context that names no athanor
+      # must not authenticate for tincture access.
       {:ok, %Context{} = ctx} ->
         if tenant_resolved?(ctx), do: {:ok, ctx}, else: :unauthenticated
 
@@ -121,7 +119,7 @@ defmodule Sanctum.TinctureAuth do
     # namespace is identity-only (may be nil); the tenant gate in authenticate/1
     # (tenant_resolved?) is the real control, so no namespace guard here.
     with token when is_binary(token) and token != "" <- query_param(conn, "_t"),
-         {:ok, %{u: user_id, o: org_id, p: project_id, n: namespace}} <-
+         {:ok, %{u: user_id, a: athanor_id, n: namespace}} <-
            Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
              max_age: @access_token_max_age
            ) do
@@ -129,10 +127,9 @@ defmodule Sanctum.TinctureAuth do
        Context.build(
          user_id: user_id,
          namespace: namespace,
-         org_id: org_id,
-         project_id: project_id,
+         athanor_id: athanor_id,
          permissions: [:execute],
-         scope: :project,
+         scope: :athanor,
          auth_method: :tincture,
          authenticated: true
        )}
@@ -145,10 +142,10 @@ defmodule Sanctum.TinctureAuth do
     case Sanctum.Session.load(token, surface: :tincture) do
       {:ok, ctx} ->
         # The :tincture surface stamps auth_method :session in the loader.
-        # Tincture access always runs project-scoped and authenticated,
-        # regardless of the operator's restored console workspace (and for
+        # Tincture access always runs athanor-scoped and authenticated,
+        # regardless of the operator's restored console session (and for
         # a not-yet-claimed user, whose load yields authenticated: false).
-        {:ok, %{ctx | auth_method: :session, scope: :project, authenticated: true}}
+        {:ok, %{ctx | auth_method: :session, scope: :athanor, authenticated: true}}
 
       _ ->
         :skip

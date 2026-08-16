@@ -7,7 +7,7 @@ defmodule Compendium.Scaffold do
   manifest, and starter Rust source.
 
   Creates the standard layout under
-  `components/{org}/{project}/{type}s/local/{name}/{version}/`.
+  `components/{athanor_id}/{type}s/local/{name}/{version}/`.
   """
 
   alias Sanctum.Context

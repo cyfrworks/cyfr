@@ -34,7 +34,7 @@ defmodule Sanctum.Policy.Enforcement do
   Emits `[:cyfr, :sanctum, :policy, :decision]` with measurements
   `%{system_time: ..., duration_ms: 0}` and metadata
   `%{event_type, decision, component_ref, component_type, request_id,
-    execution_id, user_id, org_id, project_id, decision_reason}`.
+    execution_id, user_id, athanor_id, decision_reason}`.
 
   Subscribers should treat any of these as terminal — no follow-up event.
   """
@@ -58,7 +58,7 @@ defmodule Sanctum.Policy.Enforcement do
 
   ## Required attrs
 
-    * `:ctx` — `Sanctum.Context.t()`. Source of `user_id`, `org_id`, `project_id`,
+    * `:ctx` — `Sanctum.Context.t()`. Source of `user_id`, `athanor_id`,
       `request_id`, `execution_id`.
     * `:component_ref` — string reference of the component being evaluated.
     * `:event_type` — typed rule name (atom, see module doc).
@@ -109,8 +109,7 @@ defmodule Sanctum.Policy.Enforcement do
       request_id: ctx.request_id,
       execution_id: attrs[:execution_id],
       user_id: ctx.user_id || "system",
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       timestamp: now,
       event_type: to_string(event_type),
       component_ref: attrs[:component_ref],
@@ -154,8 +153,7 @@ defmodule Sanctum.Policy.Enforcement do
         :request_id,
         :execution_id,
         :user_id,
-        :org_id,
-        :project_id,
+        :athanor_id,
         :decision_reason,
         :consent_id,
         :activation_digest,

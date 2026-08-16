@@ -10,7 +10,7 @@ defmodule Sanctum.Auth do
   - a configured auth provider - full OIDC
 
   Both callbacks return a `Sanctum.Context` carrying the persistent identity
-  fields (`user_id`, `email`, `provider`, `permissions`, `org_id`, `project_id`).
+  fields (`user_id`, `email`, `provider`, `permissions`, `athanor_id`).
   Per-request fields (`request_id`, etc.) are populated
   later in the request pipeline.
   """

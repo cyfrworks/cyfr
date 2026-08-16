@@ -95,18 +95,17 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   Sign `user` in: claim their namespace (unless `claim: false`), give them a
-  membership in the seeded workspace, create a `Sanctum.Session`, and put the
-  token in the Plug session. Returns the conn.
+  membership in Home (or `opts[:athanor_id]`), create a `Sanctum.Session`,
+  and put the token in the Plug session. Returns the conn.
   """
   def log_in_user(conn, user, opts \\ []) do
     if Keyword.get(opts, :claim, true), do: claim_namespace!(user)
 
+    athanor_id =
+      Keyword.get_lazy(opts, :athanor_id, fn -> Sanctum.Tenancy.Athanors.home!().id end)
+
     {:ok, _membership} =
-      Sanctum.Tenancy.Memberships.ensure(user.user_id,
-        scope: "project",
-        org_id: Arca.Tenant.local_org(),
-        project_id: Arca.Tenant.default_project()
-      )
+      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor_id)
 
     ctx =
       Sanctum.Context.build(
@@ -114,10 +113,9 @@ defmodule PrismWeb.ConnCase do
         email: user.email,
         provider: "github",
         namespace: user.namespace,
-        org_id: Arca.Tenant.local_org(),
-        project_id: Arca.Tenant.default_project(),
+        athanor_id: athanor_id,
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )

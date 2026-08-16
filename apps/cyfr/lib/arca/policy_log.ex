@@ -37,8 +37,7 @@ defmodule Arca.PolicyLog do
     field :request_id, :string
     field :execution_id, :string
     field :user_id, :string
-    field :org_id, :string, default: "local"
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :timestamp, :utc_datetime_usec
     field :event_type, :string
     field :component_ref, :string
@@ -55,12 +54,10 @@ defmodule Arca.PolicyLog do
     field :value_source, :string
   end
 
-  @required_fields [:id, :user_id, :timestamp, :event_type]
+  @required_fields [:id, :user_id, :athanor_id, :timestamp, :event_type]
   @optional_fields [
     :request_id,
     :execution_id,
-    :org_id,
-    :project_id,
     :component_ref,
     :component_type,
     :decision,
@@ -79,17 +76,9 @@ defmodule Arca.PolicyLog do
   Creates a changeset for inserting a new policy log entry.
   """
   def create_changeset(attrs) do
-    changeset =
-      %__MODULE__{}
-      |> cast(attrs, @required_fields ++ @optional_fields)
-      |> validate_required(@required_fields)
-
-    changeset
-    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
-    |> force_change(
-      :project_id,
-      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
-    )
+    %__MODULE__{}
+    |> cast(attrs, @required_fields ++ @optional_fields)
+    |> validate_required(@required_fields)
   end
 
   @doc """
@@ -117,13 +106,11 @@ defmodule Arca.PolicyLog do
     request_id = Keyword.get(opts, :request_id)
     execution_id = Keyword.get(opts, :execution_id)
     event_type = Keyword.get(opts, :event_type)
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from l in __MODULE__,
-        where: l.org_id == ^org_id,
-        where: l.project_id == ^project_id,
+        where: l.athanor_id == ^athanor_id,
         order_by: [desc: l.timestamp],
         limit: ^limit
 
@@ -134,14 +121,14 @@ defmodule Arca.PolicyLog do
 
     rows = Arca.Repo.all(query)
 
-    if Keyword.get(opts, :with_consent, false), do: join_consents(rows, org_id), else: rows
+    if Keyword.get(opts, :with_consent, false), do: join_consents(rows, athanor_id), else: rows
   end
 
   # §4.5 stored-vs-derived: attribution is JOINED from the consent, never
   # copied onto the row. Consents are immutable, so the join is stable —
   # and a hot-path write stays small. Rows with no consent_id come back
   # untouched.
-  defp join_consents(rows, org_id) do
+  defp join_consents(rows, athanor_id) do
     consent_ids = rows |> Enum.map(& &1.consent_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     if consent_ids == [] do
@@ -150,8 +137,8 @@ defmodule Arca.PolicyLog do
       attribution =
         from(c in Arca.Schemas.Consent,
           join: p in Arca.Schemas.Profile,
-          on: p.id == c.profile_id and p.org_id == c.org_id,
-          where: c.id in ^consent_ids and c.org_id == ^org_id,
+          on: p.id == c.profile_id and p.athanor_id == c.athanor_id,
+          where: c.id in ^consent_ids and c.athanor_id == ^athanor_id,
           select:
             {c.id,
              %{
@@ -177,23 +164,29 @@ defmodule Arca.PolicyLog do
   end
 
   @doc """
+  The distinct athanor ids that have log rows. Unscoped by design: the
+  retention scheduler iterates every athanor and cleans each inside its own
+  context.
+  """
+  @spec distinct_athanors() :: [String.t()]
+  def distinct_athanors do
+    Arca.Repo.all(from(l in __MODULE__, select: l.athanor_id, distinct: true))
+  end
+
+  @doc """
   Deletes all policy logs with timestamps before the given datetime.
 
-  Requires tenant scoping:
-  - `:org_id` - Scope deletion to a specific org
-  - `:project_id` - Scope deletion to a specific project
+  Requires `:athanor_id` — deletion is always scoped to one athanor.
 
   Returns `{count, nil}` where count is the number of deleted records.
   """
   def delete_before(%DateTime{} = datetime, opts) do
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from(l in __MODULE__,
         where: l.timestamp < ^datetime,
-        where: l.org_id == ^org_id,
-        where: l.project_id == ^project_id
+        where: l.athanor_id == ^athanor_id
       )
 
     Arca.Repo.delete_all(query)

@@ -23,9 +23,40 @@ if Mix.env() in [:test, :dev] do
 
     alias Sanctum.Context
 
+    # The athanor every permissive test context works in. No row is needed
+    # for tenant-scoped storage or queries (there is no foreign key on tenant
+    # rows); `athanor!/0` inserts one for tests that read the athanor itself.
+    @athanor_id "ath_test"
+
+    @doc "The athanor id `local/0` contexts carry."
+    def athanor_id, do: @athanor_id
+
+    @doc """
+    Ensure the athanor row behind `local/0` exists and return it.
+    """
+    def athanor! do
+      case Sanctum.Tenancy.Athanors.get(@athanor_id) do
+        {:ok, athanor} ->
+          athanor
+
+        {:error, :not_found} ->
+          {:ok, athanor} =
+            Sanctum.Tenancy.Athanors.create(%{
+              id: @athanor_id,
+              kind: "group",
+              name: "Test",
+              slug: "test",
+              created_by: "system"
+            })
+
+          athanor
+      end
+    end
+
     @doc """
     Build a permissive single-user test Context with namespace `"testns"`
-    (override via `:cyfr, :default_test_namespace`).
+    (override via `:cyfr, :default_test_namespace`), working in the
+    `"ath_test"` athanor.
 
     Impersonates a logged-in user (`auth_method: :oidc`) so tests exercise
     the same authorization path production does.
@@ -38,10 +69,9 @@ if Mix.env() in [:test, :dev] do
         user_id: "local|local|#{ns}",
         provider: "local",
         namespace: ns,
-        org_id: Arca.Tenant.local_org(),
-        project_id: Arca.Tenant.default_project(),
+        athanor_id: @athanor_id,
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )

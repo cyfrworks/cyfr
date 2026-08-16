@@ -337,7 +337,7 @@ defmodule EmissaryWeb.MCPController do
   # briefly overshoot under a burst — acceptable slack for a bound whose job
   # is stopping unbounded socket pinning.
   defp claim_stream_slot(context) do
-    key = {context.org_id, context.user_id}
+    key = {context.athanor_id, context.user_id}
     limit = Application.get_env(:cyfr, :mcp_subscription_max_concurrent, 8)
 
     if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do
@@ -676,10 +676,9 @@ defmodule EmissaryWeb.MCPController do
     duration = System.monotonic_time() - start_time
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
 
-    # Carry the tenant so Prism.TelemetryBridge routes the broadcast to this
-    # tenant's dashboard subscribers (and not, e.g., the local sentinel).
-    metadata =
-      Map.merge(metadata, %{org_id: context.org_id, project_id: context.project_id})
+    # Carry the athanor so Prism.TelemetryBridge routes the broadcast to this
+    # athanor's dashboard subscribers.
+    metadata = Map.put(metadata, :athanor_id, context.athanor_id)
 
     :telemetry.execute(
       [:cyfr, :emissary, :request],

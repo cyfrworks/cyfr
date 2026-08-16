@@ -16,7 +16,7 @@ defmodule Sanctum.Test.ComponentHelpers do
 
     attrs = %{
       id:
-        "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}#{ctx.org_id}#{ctx.project_id}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
+        "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}#{ctx.athanor_id}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
       name: name,
       version: version,
       component_type: type,

@@ -62,10 +62,10 @@ defmodule Arca.Adapters.S3Test do
 
   defp route(conn) do
     case {conn.method, conn.request_path} do
-      {"GET", "/test-bucket/data/local/default/exists.txt"} -> {:ok, 200, "hi"}
+      {"GET", "/test-bucket/data/ath_test/exists.txt"} -> {:ok, 200, "hi"}
       {"PUT", _} -> {:ok, 200, ""}
       {"DELETE", _} -> {:ok, 204, ""}
-      {"HEAD", "/test-bucket/data/local/default/exists.txt"} -> {:ok, 200, ""}
+      {"HEAD", "/test-bucket/data/ath_test/exists.txt"} -> {:ok, 200, ""}
       {"GET", _} -> :not_found
       _ -> :not_found
     end
@@ -76,7 +76,7 @@ defmodule Arca.Adapters.S3Test do
       assert :ok = S3.put(ctx, ["builds", "build_1.json"], "{}")
 
       assert_received {:req, "PUT", path, headers, body}
-      assert path == "/test-bucket/data/local/default/builds/build_1.json"
+      assert path == "/test-bucket/data/ath_test/builds/build_1.json"
       assert body == "{}"
       assert {"authorization", auth} = Enum.find(headers, fn {k, _} -> k == "authorization" end)
       assert auth =~ "AWS4-HMAC-SHA256"
@@ -90,14 +90,14 @@ defmodule Arca.Adapters.S3Test do
       assert path == "/test-bucket/components/catalysts/x.wasm"
     end
 
-    test "an org named after a reserved root keys under data/, not the root", %{ctx: ctx} do
-      # An org literally named "components" must not collide with the component
-      # store: its tenant data lives under the disjoint data/ root.
-      org_ctx = %{ctx | org_id: "components"}
-      assert :ok = S3.put(org_ctx, ["builds", "b.json"], "{}")
+    test "an athanor named after a reserved root keys under data/, not the root", %{ctx: ctx} do
+      # An athanor id literally "components" must not collide with the
+      # component store: its tenant data lives under the disjoint data/ root.
+      odd_ctx = %{ctx | athanor_id: "components"}
+      assert :ok = S3.put(odd_ctx, ["builds", "b.json"], "{}")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/data/components/default/builds/b.json"
+      assert path == "/test-bucket/data/components/builds/b.json"
     end
 
     test "cache paths bypass user scoping", %{ctx: ctx} do
@@ -117,7 +117,7 @@ defmodule Arca.Adapters.S3Test do
       assert :ok = S3.put(ctx, ["reports", "x.txt"], "content")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/tenants/prod/data/local/default/reports/x.txt"
+      assert path == "/test-bucket/tenants/prod/data/ath_test/reports/x.txt"
     end
   end
 
@@ -156,8 +156,8 @@ defmodule Arca.Adapters.S3Test do
       assert_received {:req, "PUT", path2, _, "event-2\n"}
 
       # Both writes go under the same prefix with monotonic suffixes.
-      assert String.starts_with?(path1, "/test-bucket/data/local/default/audit/2026-05-05.jsonl/")
-      assert String.starts_with?(path2, "/test-bucket/data/local/default/audit/2026-05-05.jsonl/")
+      assert String.starts_with?(path1, "/test-bucket/data/ath_test/audit/2026-05-05.jsonl/")
+      assert String.starts_with?(path2, "/test-bucket/data/ath_test/audit/2026-05-05.jsonl/")
       assert path1 != path2
     end
   end
@@ -171,8 +171,8 @@ defmodule Arca.Adapters.S3Test do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>true</IsTruncated>
-        <Contents><Key>data/local/default/tree/a.txt</Key></Contents>
-        <Contents><Key>data/local/default/tree/b.txt</Key></Contents>
+        <Contents><Key>data/ath_test/tree/a.txt</Key></Contents>
+        <Contents><Key>data/ath_test/tree/b.txt</Key></Contents>
         <NextContinuationToken>tok+page/2==</NextContinuationToken>
       </ListBucketResult>
       """
@@ -181,7 +181,7 @@ defmodule Arca.Adapters.S3Test do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>false</IsTruncated>
-        <Contents><Key>data/local/default/tree/sub/c.txt</Key></Contents>
+        <Contents><Key>data/ath_test/tree/sub/c.txt</Key></Contents>
       </ListBucketResult>
       """
 
@@ -230,9 +230,9 @@ defmodule Arca.Adapters.S3Test do
       # Drain the two GET pages, then expect one DELETE per key on both pages.
       assert_received {:req, "GET", _, _}
       assert_received {:req, "GET", _, _}
-      assert_received {:req, "DELETE", "/test-bucket/data/local/default/tree/a.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/data/local/default/tree/b.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/data/local/default/tree/sub/c.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/data/ath_test/tree/a.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/data/ath_test/tree/b.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/data/ath_test/tree/sub/c.txt", _}
     end
 
     test "a repeated continuation token errors instead of looping", %{ctx: ctx} do
@@ -241,7 +241,7 @@ defmodule Arca.Adapters.S3Test do
       looping_page = """
       <ListBucketResult>
         <IsTruncated>true</IsTruncated>
-        <Contents><Key>data/local/default/tree/a.txt</Key></Contents>
+        <Contents><Key>data/ath_test/tree/a.txt</Key></Contents>
         <NextContinuationToken>same-token</NextContinuationToken>
       </ListBucketResult>
       """

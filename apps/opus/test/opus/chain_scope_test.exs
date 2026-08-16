@@ -5,7 +5,7 @@ defmodule Opus.ChainScopeTest do
   # Cancel, logs and list are chain-scoped for in-chain callers: a running
   # component reaches its own subtree, never a sibling's execution or the
   # operator's. External-plane callers keep the tenant-wide view — members
-  # of a project are interchangeable there by design.
+  # of an athanor are interchangeable there by design.
   use ExUnit.Case, async: false
 
   alias Opus.ExecutionRecord

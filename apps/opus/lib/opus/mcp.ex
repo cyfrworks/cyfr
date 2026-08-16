@@ -626,17 +626,17 @@ defmodule Opus.MCP do
 
   defp format_root_result(other), do: other
 
-  # The semaphore map is global: every {org, project} currently executing,
+  # The semaphore map is global: every athanor currently executing,
   # with live counts and holder pids. Platform scope keeps the full
   # diagnostic; a tenant member gets the shared totals plus their own
-  # tenant's count — other orgs' identifiers and activity levels are not
+  # tenant's count — other athanors' identifiers and activity levels are not
   # theirs to enumerate.
   defp scoped_semaphore_status(%Context{scope: :platform}, status), do: status
 
   defp scoped_semaphore_status(%Context{} = ctx, status) do
     status
     |> Map.drop([:holders, :tenants])
-    |> Map.put(:tenant_active, Map.get(status.tenants, {ctx.org_id, ctx.project_id}, 0))
+    |> Map.put(:tenant_active, Map.get(status.tenants, ctx.athanor_id, 0))
   end
 
   # Build options for Opus.run/4 from MCP args

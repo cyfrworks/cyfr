@@ -11,11 +11,10 @@ defmodule Emissary.MCP.ExternalServerTest do
   setup do
     # Clean up any leftover test servers
     name = "test-srv-#{System.unique_integer([:positive])}"
-    org_id = ""
-    project_id = "default"
+    athanor_id = "ath_test"
 
     on_exit(fn ->
-      case Registry.lookup(@registry, {name, org_id, project_id}) do
+      case Registry.lookup(@registry, {name, athanor_id}) do
         [{pid, _}] ->
           DynamicSupervisor.terminate_child(Emissary.MCP.ExternalServerSupervisor, pid)
 
@@ -24,14 +23,13 @@ defmodule Emissary.MCP.ExternalServerTest do
       end
     end)
 
-    {:ok, name: name, org_id: org_id, project_id: project_id}
+    {:ok, name: name, athanor_id: athanor_id}
   end
 
   describe "init/1" do
     test "preserves raw_headers separately from resolved headers", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
       raw = %{"Authorization" => "vault:MY_KEY", "X-Custom" => "plain-value"}
 
@@ -39,8 +37,7 @@ defmodule Emissary.MCP.ExternalServerTest do
         name: name,
         url: "https://localhost:99999/mcp",
         headers: raw,
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       ]
 
       {:ok, pid} =
@@ -57,10 +54,10 @@ defmodule Emissary.MCP.ExternalServerTest do
   end
 
   describe "in-flight cap" do
-    defp start_server(name, org_id, project_id, extra \\ []) do
+    defp start_server(name, athanor_id, extra \\ []) do
       config =
         Keyword.merge(
-          [name: name, url: "https://localhost:99999/mcp", org_id: org_id, project_id: project_id],
+          [name: name, url: "https://localhost:99999/mcp", athanor_id: athanor_id],
           extra
         )
 
@@ -75,10 +72,9 @@ defmodule Emissary.MCP.ExternalServerTest do
 
     test "refuses a call past the cap instead of queueing a task", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
-      pid = start_server(name, org_id, project_id)
+      pid = start_server(name, athanor_id)
 
       cap = Application.get_env(:cyfr, :external_server_max_in_flight, 8)
 
@@ -98,10 +94,9 @@ defmodule Emissary.MCP.ExternalServerTest do
 
     test "a finished (dead) task frees its in-flight slot", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
-      pid = start_server(name, org_id, project_id)
+      pid = start_server(name, athanor_id)
 
       fake = spawn(fn -> Process.sleep(:infinity) end)
 
@@ -121,10 +116,9 @@ defmodule Emissary.MCP.ExternalServerTest do
 
     test "the configured upstream timeout is clamped below the caller deadline", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
-      pid = start_server(name, org_id, project_id, timeout_ms: 999_999)
+      pid = start_server(name, athanor_id, timeout_ms: 999_999)
 
       state = :sys.get_state(pid)
       assert state.timeout_ms == 110_000
@@ -147,14 +141,12 @@ defmodule Emissary.MCP.ExternalServerTest do
   describe "handle_info/2" do
     test "handles unexpected messages without crashing", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       ]
 
       {:ok, pid} =
@@ -175,14 +167,12 @@ defmodule Emissary.MCP.ExternalServerTest do
   describe "version attribute" do
     test "uses compile-time version in initialize params", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       ]
 
       {:ok, _pid} =
@@ -194,39 +184,37 @@ defmodule Emissary.MCP.ExternalServerTest do
       # The module should compile with @version — no Mix.Project runtime dependency.
       # If Mix.Project.config() were called at runtime, this would crash in releases.
       # We verify the module attribute exists by checking the process starts cleanly.
-      status = ExternalServer.status(name, org_id, project_id)
+      status = ExternalServer.status(name, athanor_id)
       assert %{status: :disconnected} = status
     end
   end
 
   describe "ensure_started/1 config reconciliation" do
-    test "same config returns the same process", %{org_id: org_id, project_id: project_id} do
+    test "same config returns the same process", %{athanor_id: athanor_id} do
       name = "reconcile-same-#{System.unique_integer([:positive])}"
 
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
         headers: %{"authorization" => "vault:RECON_TOKEN"},
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       ]
 
       {:ok, pid1} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
       {:ok, pid2} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
 
       assert pid1 == pid2
-      Emissary.MCP.ExternalServerSupervisor.stop(name, org_id, project_id)
+      Emissary.MCP.ExternalServerSupervisor.stop(name, athanor_id)
     end
 
-    test "changed config replaces the process", %{org_id: org_id, project_id: project_id} do
+    test "changed config replaces the process", %{athanor_id: athanor_id} do
       name = "reconcile-change-#{System.unique_integer([:positive])}"
 
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
         headers: %{"authorization" => "vault:OLD_TOKEN"},
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       ]
 
       {:ok, pid1} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
@@ -242,7 +230,7 @@ defmodule Emissary.MCP.ExternalServerTest do
       {:ok, pid3} = Emissary.MCP.ExternalServerSupervisor.ensure_started(changed)
       assert pid2 == pid3
 
-      Emissary.MCP.ExternalServerSupervisor.stop(name, org_id, project_id)
+      Emissary.MCP.ExternalServerSupervisor.stop(name, athanor_id)
     end
   end
 
@@ -257,8 +245,7 @@ defmodule Emissary.MCP.ExternalServerTest do
       assert {:error, message} =
                ExternalServer.resolve_headers(
                  %{"authorization" => "secret:EXT_PROJ_TOKEN"},
-                 "local",
-                 "default"
+                 "ath_test"
                )
 
       assert message =~ "authorization"
@@ -269,8 +256,7 @@ defmodule Emissary.MCP.ExternalServerTest do
       assert {:error, message} =
                ExternalServer.resolve_headers(
                  %{"authorization" => "secret:EXT_MISSING"},
-                 "local",
-                 "default"
+                 "ath_test"
                )
 
       assert message =~ "authorization"
@@ -333,14 +319,12 @@ defmodule Emissary.MCP.ExternalServerTest do
   describe "reinit backoff" do
     test "respects cooldown on error status retries", %{
       name: name,
-      org_id: org_id,
-      project_id: project_id
+      athanor_id: athanor_id
     } do
       config = [
         name: name,
         url: "https://localhost:99999/mcp",
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       ]
 
       {:ok, _pid} =
@@ -350,10 +334,10 @@ defmodule Emissary.MCP.ExternalServerTest do
         )
 
       # First call triggers initialization (will fail due to unreachable URL)
-      {:error, _} = ExternalServer.get_tools(name, org_id, project_id)
+      {:error, _} = ExternalServer.get_tools(name, athanor_id)
 
       # Immediate second call should hit cooldown and return cached error
-      {:error, reason} = ExternalServer.get_tools(name, org_id, project_id)
+      {:error, reason} = ExternalServer.get_tools(name, athanor_id)
       assert is_binary(reason)
     end
   end

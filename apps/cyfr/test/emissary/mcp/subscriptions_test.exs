@@ -91,7 +91,7 @@ defmodule Emissary.MCP.SubscriptionsTest do
     test "a listener does not receive another tenant's events", %{ctx: ctx} do
       {:ok, _} = Subscriptions.listen(ctx, %{"toolsListChanged" => true})
 
-      other = %Context{ctx | org_id: "other-org"}
+      other = %Context{ctx | athanor_id: "ath_other"}
 
       Phoenix.PubSub.broadcast(
         Emissary.PubSub,

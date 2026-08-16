@@ -5,10 +5,10 @@ defmodule Sanctum.Context do
   @moduledoc """
   Execution context that flows through all CYFR service calls.
 
-  Context represents whoever is using the instance — a user, an API key,
+  Context represents whoever is using the server — a user, an API key,
   a webhook receiver, a scheduled job, or the system itself. It carries
-  the persistent identity (user_id, email, provider, permissions, org_id,
-  project_id) plus per-request decoration (request_id, api_key_id, scope,
+  the persistent identity (user_id, email, provider, permissions,
+  athanor_id) plus per-request decoration (request_id, api_key_id, scope,
   auth_method, authenticated).
 
   `request_id` is the ingress request and the only correlation key. It
@@ -27,14 +27,16 @@ defmodule Sanctum.Context do
       Locus.build(ctx, source, target)
       Arca.get(ctx, path)
 
-  Context carries optional tenant coordinates (`org_id`, `project_id`,
-  `scope`). Only *how* a context is constructed varies by deployment
-  configuration — never the functions that consume it.
+  Context carries the tenant coordinate `athanor_id` and its `scope`
+  (`:athanor` — working inside that athanor — or `:platform`, the server's
+  operator, who carries no athanor unless focused on one). Only *how* a
+  context is constructed varies by deployment configuration — never the
+  functions that consume it.
   """
 
   require Logger
 
-  @type scope :: :org | :project | :platform
+  @type scope :: :platform | :athanor
   @type auth_method ::
           :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
   @type api_key_type :: :application | :service | :admin | nil
@@ -45,8 +47,7 @@ defmodule Sanctum.Context do
           email: String.t() | nil,
           provider: String.t() | nil,
           namespace: String.t() | nil,
-          org_id: String.t() | nil,
-          project_id: String.t() | nil,
+          athanor_id: String.t() | nil,
           permissions: MapSet.t(atom()),
           scope: scope(),
           auth_method: auth_method(),
@@ -64,8 +65,7 @@ defmodule Sanctum.Context do
     :email,
     :provider,
     :namespace,
-    :org_id,
-    :project_id,
+    :athanor_id,
     :permissions,
     :scope,
     :auth_method,
@@ -97,13 +97,14 @@ defmodule Sanctum.Context do
   @doc """
   Context for scheduled (cron) executions.
 
-  Grants execute and storage permissions scoped to the originating user.
+  Grants execute and storage permissions inside the schedule's athanor,
+  attributed to the originating user. `:athanor_id` is required.
   """
   def for_scheduled(user_id, opts \\ []) do
     # Delegates to the single builder; cron's only divergence from the
     # `:system` default is the `:scheduled` provenance tag. namespace is pure
     # identity (not path-bearing), so an absent one is fine — the schedule's
-    # org_id/project_id determine where its files land.
+    # athanor determines where its files land.
     #
     # Permissions are stated explicitly rather than inherited from
     # internal/1's defaults, so what a schedule runs with is visible here
@@ -111,9 +112,8 @@ defmodule Sanctum.Context do
     internal(
       user_id: user_id,
       namespace: Keyword.get(opts, :namespace),
-      org_id: Keyword.get(opts, :org_id),
-      project_id: Keyword.get(opts, :project_id, Arca.Tenant.default_project()),
-      scope: :project,
+      athanor_id: Keyword.fetch!(opts, :athanor_id),
+      scope: :athanor,
       auth_method: :scheduled,
       permissions: [:execute, :storage_read, :storage_write, :execution_write]
     )
@@ -129,11 +129,12 @@ defmodule Sanctum.Context do
   ## Options
 
   - `:user_id` - User ID (required for authenticated contexts)
-  - `:org_id` - Organization ID (defaults to the seeded `"local"` org for
-    non-platform scopes; `nil` only for `:platform`)
-  - `:project_id` - Project ID (defaults to "default" for local auth)
+  - `:athanor_id` - The athanor the context works in. Taken as given, never
+    coerced: `""` is rejected; `nil` is the transient state before the
+    caller's athanor is resolved (or a platform context working in none) and
+    is refused downstream by the tenant gate
   - `:permissions` - List or MapSet of permission atoms
-  - `:scope` - Scope atom (:org, :project, :platform)
+  - `:scope` - Scope atom (`:athanor` default, or `:platform`)
   - `:auth_method` - Authentication method atom
   - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
@@ -152,7 +153,7 @@ defmodule Sanctum.Context do
     attrs |> Map.new() |> build()
   end
 
-  @valid_scopes [:org, :project, :platform]
+  @valid_scopes Sanctum.Atoms.scope_atoms()
 
   # Mirrors the `auth_method()` type. Guarded at the construction site so a
   # typo or a removed value (e.g. the old `:local`) can't enter a Context and
@@ -163,7 +164,7 @@ defmodule Sanctum.Context do
   @valid_planes [:external, :guest]
 
   def build(attrs) when is_map(attrs) do
-    scope = Map.get(attrs, :scope, :project)
+    scope = Map.get(attrs, :scope, :athanor)
 
     unless scope in @valid_scopes do
       raise ArgumentError,
@@ -190,8 +191,7 @@ defmodule Sanctum.Context do
           :email,
           :provider,
           :namespace,
-          :org_id,
-          :project_id,
+          :athanor_id,
           :request_id,
           :api_key_id
         ] do
@@ -223,36 +223,20 @@ defmodule Sanctum.Context do
         _ -> MapSet.new()
       end
 
-    # Default project_id to the seeded sentinel for non-platform contexts. This
-    # guarantee lets the rest of the codebase rely on ctx.project_id
-    # being non-nil whenever scope is not :platform. An empty string is never a
-    # valid project id — coerce it to the sentinel (only "" is invalid; an
-    # explicit nil is the transient pre-resolution state and is preserved).
-    project_id =
-      case Map.get(attrs, :project_id) do
-        nil when scope != :platform -> Arca.Tenant.default_project()
-        "" -> Arca.Tenant.default_project()
-        other -> other
-      end
+    # The athanor is taken as given. There is no sentinel to coerce into:
+    # `""` is an invalid value, not a tenant, and is rejected here; `nil` is
+    # the transient state before the caller's athanor is resolved (auth paths
+    # start there and `Sanctum.Tenancy.resolve_into/2` fills it) or a
+    # platform context working in no athanor — the tenant gate refuses it
+    # wherever an athanor is required.
+    athanor_id =
+      case Map.get(attrs, :athanor_id) do
+        "" ->
+          raise ArgumentError,
+                "Sanctum.Context.build/1: athanor_id must be a resolved id or nil, got \"\""
 
-    # org_id resolution. The invariant: a service-bound context always carries
-    # a concrete org; `""` is never valid, and `nil` survives only as the
-    # transient pre-resolution auth state.
-    #   * empty string → the seeded sentinel ("" is an invalid value, not a
-    #     tenant; never let it propagate).
-    #   * key present (incl. an explicit `org_id: nil`) → used as-is. Auth
-    #     paths pass `org_id: nil` to start org-less, then resolve the real org
-    #     from memberships via `Sanctum.Tenancy.resolve_into/2`; an unresolved
-    #     non-platform context is rejected by the tenant gate.
-    #   * key absent, `:platform` → nil (direct platform builds; the sanctioned
-    #     system path `internal/1` supplies the sentinel explicitly).
-    #   * key absent, non-platform → the seeded sentinel workspace.
-    org_id =
-      cond do
-        Map.get(attrs, :org_id) == "" -> Arca.Tenant.local_org()
-        Map.has_key?(attrs, :org_id) -> Map.get(attrs, :org_id)
-        scope == :platform -> nil
-        true -> Arca.Tenant.local_org()
+        other ->
+          other
       end
 
     ctx = %__MODULE__{
@@ -260,8 +244,7 @@ defmodule Sanctum.Context do
       email: Map.get(attrs, :email),
       provider: Map.get(attrs, :provider),
       namespace: Map.get(attrs, :namespace),
-      org_id: org_id,
-      project_id: project_id,
+      athanor_id: athanor_id,
       permissions: permissions,
       scope: scope,
       auth_method: Map.get(attrs, :auth_method),
@@ -295,9 +278,9 @@ defmodule Sanctum.Context do
   Options (all optional):
 
     * `:user_id`        — default `"system"`
-    * `:namespace`      — default `"_system"`
-    * `:org_id`         — default the seeded sentinel (`Arca.Tenant.local_org/0`)
-    * `:project_id`     — default the seeded sentinel (`Arca.Tenant.default_project/0`)
+    * `:namespace`      — default `nil`
+    * `:athanor_id`     — default `nil`; a task that touches one athanor's
+      rows or files passes it, together with `scope: :athanor`
     * `:permissions`    — default `[:execute, :storage_read, :execution_write, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
@@ -307,7 +290,7 @@ defmodule Sanctum.Context do
   ## Examples
 
       iex> ctx = Sanctum.Context.internal()
-      iex> {ctx.auth_method, ctx.scope, ctx.user_id, ctx.namespace}
+      iex> {ctx.auth_method, ctx.scope, ctx.user_id, ctx.athanor_id}
       {:system, :platform, "system", nil}
 
   """
@@ -316,8 +299,7 @@ defmodule Sanctum.Context do
     build(
       user_id: Keyword.get(opts, :user_id, "system"),
       namespace: Keyword.get(opts, :namespace),
-      org_id: Keyword.get(opts, :org_id, Arca.Tenant.local_org()),
-      project_id: Keyword.get(opts, :project_id, Arca.Tenant.default_project()),
+      athanor_id: Keyword.get(opts, :athanor_id),
       permissions:
         Keyword.get(opts, :permissions, [
           :execute,
@@ -508,34 +490,6 @@ defmodule Sanctum.Context do
   def suggest_slug(_), do: nil
 
   @doc """
-  Derives the active scope for authorization decisions.
-
-  Returns the most specific scope that applies given the context's fields.
-  This is a derived value — NOT stored — to avoid staleness.
-
-  ## Examples
-
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Sanctum.Context.active_scope(ctx)
-      :project
-
-      iex> ctx = %Sanctum.Context{scope: :org, org_id: "org_1"}
-      iex> Sanctum.Context.active_scope(ctx)
-      :org
-
-  """
-  @spec active_scope(t()) :: scope()
-  def active_scope(%__MODULE__{} = ctx) do
-    cond do
-      ctx.scope == :platform -> :platform
-      ctx.scope == :org and is_binary(ctx.org_id) and ctx.org_id != "" -> :org
-      ctx.project_id != nil -> :project
-      ctx.org_id != nil -> :org
-      true -> :project
-    end
-  end
-
-  @doc """
   Check if context has a specific permission.
 
   The wildcard permission `:*` grants all permissions.
@@ -649,11 +603,10 @@ defmodule Sanctum.Context do
   @doc """
   Enforce that a tenant-scoped operation has a resolved tenant.
 
-  Delegates to `Sanctum.TenantPolicy.require_org/1` and raises
-  `Sanctum.UnauthorizedError` when it reports no resolved org — so an org-less
-  context can never reach a tenant-scoped store and silently land in the
-  shared sentinel bucket. `:platform` scope is exempt; otherwise a non-empty
-  resolved org_id is required.
+  Delegates to `Sanctum.TenantPolicy.require_athanor/1` and raises
+  `Sanctum.UnauthorizedError` when it reports no resolved athanor — so an
+  athanor-less context can never reach a tenant-scoped store. `:platform`
+  scope is exempt; otherwise a non-empty resolved athanor_id is required.
 
   Returns the context unchanged on success (chainable).
   """
@@ -664,6 +617,21 @@ defmodule Sanctum.Context do
       {:error, _} -> raise Sanctum.UnauthorizedError, action: :tenant_required
     end
   end
+
+  @doc """
+  The athanor this context works in.
+
+  Raises `Sanctum.UnauthorizedError` when unresolved — platform scope
+  included. `require_tenant!/1` exempts platform contexts because a system
+  task may legitimately cross athanors; a tenant-bearing *store* never runs
+  without one, so its verbs read the athanor through here.
+  """
+  @spec athanor!(t()) :: String.t()
+  def athanor!(%__MODULE__{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "",
+      do: athanor_id
+
+  def athanor!(%__MODULE__{}), do: raise(Sanctum.UnauthorizedError, action: :athanor_required)
 
   @doc """
   Tuple form of the tenant presence-gate: `:ok | {:error, :missing_tenant}`.
@@ -680,13 +648,12 @@ defmodule Sanctum.Context do
     end
   end
 
-  # The single tenant presence-gate. `:platform` scope is exempt — system /
-  # scheduled tasks legitimately cross tenant boundaries (retention, audit
-  # fan-out, the registry CredentialStore that backs
-  # `Sanctum.Namespace.lookup/1`), symmetric with `verify_tenant/2` and
-  # `Arca.Storage.tenant_segments/1`. Otherwise requires a resolved org_id.
+  # The single tenant presence-gate. `:platform` scope is exempt — system
+  # tasks legitimately cross tenant boundaries (retention, audit fan-out, the
+  # registry CredentialStore that backs `Sanctum.Namespace.lookup/1`),
+  # symmetric with `verify_tenant/2`. Otherwise requires a resolved athanor_id.
   defp tenant_gate(%__MODULE__{scope: :platform}), do: :ok
-  defp tenant_gate(%__MODULE__{} = ctx), do: Sanctum.TenantPolicy.require_org(ctx)
+  defp tenant_gate(%__MODULE__{} = ctx), do: Sanctum.TenantPolicy.require_athanor(ctx)
 
   # ============================================================================
   # Unified Authorization API
@@ -702,11 +669,12 @@ defmodule Sanctum.Context do
   its tenant is verified here, via `Sanctum.TenantPolicy`:
 
   - `{:execution, record}` / `{:owned, record}` — permission + per-record
-    `verify_tenant` + ownership (`ctx.user_id == record.user_id`, or an
-    admin/`:*` wildcard).
-  - `{:tenant, record}` — permission + per-record `verify_tenant` (no owner).
+    `verify_tenant`; the record must carry `:user_id` (attribution) and
+    `:athanor_id`. There is no owner gate: members of an athanor are
+    interchangeable.
+  - `{:tenant, record}` — permission + per-record `verify_tenant`.
   - `nil` / a shape with no tenant identity — permission + tenant *presence*
-    only. The storage primitive (`Arca.QueryHelpers.where_tenant/3`,
+    only. The storage primitive (`Arca.QueryHelpers.where_tenant/2`,
     `Arca.Storage.tenant_segments/1`) is a fail-closed **backstop** for these,
     not the primary control — so a tenant-bearing record must use a tuple
     above rather than rely on storage scoping.
@@ -714,8 +682,8 @@ defmodule Sanctum.Context do
   ## Authorization Modes
 
   - **Permission-only**: `authorize(ctx, :execute, nil)` — checks permission
-  - **Ownership**: `authorize(ctx, :storage_read, {:execution, record})` — checks ownership
-  - **Admin override**: Admin contexts (wildcard permissions) bypass ownership checks
+  - **Tenant-bearing record**: `authorize(ctx, :storage_read, {:execution, record})` —
+    checks permission and that the record's athanor is the context's
 
   The permission argument is a `Sanctum.Atoms` permission atom, not an
   action verb — there is no alias mapping.
@@ -726,8 +694,8 @@ defmodule Sanctum.Context do
       iex> Sanctum.Context.authorize(ctx, :execute, nil)
       :ok
 
-      iex> ctx = Sanctum.Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true)
-      iex> record = %{user_id: "u1"}
+      iex> ctx = Sanctum.Context.build(user_id: "u1", athanor_id: "ath_1", permissions: [:storage_read], authenticated: true)
+      iex> record = %{user_id: "u1", athanor_id: "ath_1"}
       iex> Sanctum.Context.authorize(ctx, :storage_read, {:execution, record})
       :ok
 
@@ -746,7 +714,7 @@ defmodule Sanctum.Context do
   end
 
   # Permission-only check (no resource to verify ownership of). Also
-  # enforce the tenant scope (via `Sanctum.TenantPolicy`) so an org-less
+  # enforce the tenant scope (via `Sanctum.TenantPolicy`) so an athanor-less
   # context is rejected centrally rather than relying on storage-layer scoping.
   defp do_authorize(%__MODULE__{} = ctx, action, nil) do
     permission = action_to_permission(action)
@@ -762,7 +730,7 @@ defmodule Sanctum.Context do
   end
 
   # Tenant-bearing resources authorize identically: permission + per-record
-  # (org,project) equality via verify_tenant. Members of a project are
+  # athanor equality via verify_tenant. Members of an athanor are
   # interchangeable — there is NO owner gate; user_id stays on records for
   # attribution only. :execution/:owned still require a :user_id key so a tag
   # that promises an owner but carries none fails closed in the malformed
@@ -793,16 +761,16 @@ defmodule Sanctum.Context do
   # that DOES carry a tenant must be passed as `{:execution|:owned|:tenant,
   # record}` so it is tenant-checked authoritatively above (a malformed such
   # tuple now fails closed in the clause directly above, not here). The storage
-  # primitive (`Arca.QueryHelpers.where_tenant/3` / `Arca.Storage.tenant_segments/1`)
-  # remains a fail-closed *backstop* — it scopes every query by org/project
-  # and rejects an org-less tenant context — but it is no longer the control
+  # primitive (`Arca.QueryHelpers.where_tenant/2` / `Arca.Storage.tenant_segments/1`)
+  # remains a fail-closed *backstop* — it scopes every query by athanor and
+  # rejects an athanor-less tenant context — but it is no longer the control
   # for any caller that passes a tenant-bearing record.
   defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
     do_authorize(ctx, action, nil)
   end
 
   # Shared body for tenant-bearing resources: permission + per-record
-  # (org,project) equality. The single authorization path for
+  # athanor equality. The single authorization path for
   # {:execution|:owned|:tenant}. verify_tenant (Sanctum.TenantPolicy) logs any
   # tenant mismatch, so this does not re-log.
   defp verify_tenant_resource(%__MODULE__{} = ctx, action, record) do
@@ -813,8 +781,8 @@ defmodule Sanctum.Context do
   end
 
   # Tenant boundary check for resource access. Platform scope bypasses;
-  # otherwise `Sanctum.TenantPolicy` rejects nil/"" org and, when both context
-  # and record carry an org/project, requires equality.
+  # otherwise `Sanctum.TenantPolicy` rejects a nil/"" athanor and requires
+  # the record's athanor to equal the context's.
   defp verify_tenant(%__MODULE__{} = ctx, record) do
     Sanctum.TenantPolicy.verify(ctx, record)
   end
@@ -825,7 +793,7 @@ defmodule Sanctum.Context do
   defp require_tenant_scope(%__MODULE__{} = ctx) do
     case tenant_gate(ctx) do
       :ok -> :ok
-      {:error, _} -> {:error, "Unauthorized: organization membership required"}
+      {:error, _} -> {:error, "Unauthorized: athanor membership required"}
     end
   end
 

@@ -11,20 +11,18 @@ defmodule Arca.Adapters.Local do
 
   - **Component paths**: `["components" | rest]` → `components_path/{rest}`
   - **AQUA paths**: `["aqua" | rest]` → `aqua_path/{rest}`
-  - **Global paths**: `cache` → `data/cache/{path}`
-  - **Tenant-scoped paths**: everything else →
-    `data/{org}/{project_id}/{path}`
+  - **Global paths**: `cache`, `system` → `data/cache/{path}`, `data/system/{path}`
+  - **Tenant-scoped paths**: everything else → `data/{athanor_id}/{path}`
 
-  Tenant segments are produced by `Arca.Storage.tenant_segments/1`. A
-  single-user instance uses the seeded `"local"` org and `"default"` project,
-  yielding `data/local/default/...`. A tenant-scoped deployment fills the
-  slots with the real `org_id` and `project_id` validated by the tenant
-  policy. `namespace` is identity-only and is not part of the path.
+  Tenant segments are produced by `Arca.Storage.tenant_segments/1`; the
+  athanor id validated by the tenant policy names the directory.
+  `namespace` is identity-only and is not part of the path.
 
   ## Directory Structure
 
       components/                        # Component artifacts (separate root)
-      └── {type}s/{publisher}/{name}/{version}/
+      ├── _bundle/{type}s/local/{name}/{version}/   # seed source, never a tenant
+      └── {athanor_id}/{type}s/{publisher}/{name}/{version}/
           ├── {type}.wasm
           ├── cyfr-manifest.json
           └── src/
@@ -35,14 +33,14 @@ defmodule Arca.Adapters.Local do
       ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
-      └── {org}/                         # Tenant-scoped (single-user: "local")
-          └── {project_id}/              #   "default" single-user; real id when tenant-scoped
+      ├── system/                        # Global: server-internal scratch
+      └── {athanor_id}/                  # Tenant-scoped
               ├── builds/                # Locus build lifecycle
               │   └── {build_id}/
               │       ├── started.json
               │       ├── completed.json
               │       └── build.log
-              ├── data/                  # Project data (agent conversations, etc.)
+              ├── data/                  # Athanor data (agent conversations, etc.)
               ├── config/                # Project config (retention settings, etc.)
               └── audit/                 # Audit events (append-only JSONL, opt-in)
                   └── {date}.jsonl
@@ -265,11 +263,11 @@ defmodule Arca.Adapters.Local do
   - `["components" | rest]` → `components_path/{rest}`
   - `["aqua" | rest]` → `aqua_path/{rest}`
   - `["cache" | rest]` → `base_path/cache/{rest}` (global, root-level)
-  - everything else → `base_path/{org}/{project}/{rest}` (tenant-scoped)
+  - everything else → `base_path/{athanor_id}/{rest}` (tenant-scoped)
 
   Tenant-scoped paths are derived from `Arca.Storage.tenant_segments/1`:
-  `{org}/{project_id}/...`. A single-user instance uses the seeded `"local"`
-  org and `"default"` project, giving `local/default/...`.
+  `{athanor_id}/...`. Component access is pinned per athanor by
+  `Arca.Storage.authorize_path/2` before any adapter call.
   """
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
@@ -277,9 +275,9 @@ defmodule Arca.Adapters.Local do
 
     case segments do
       ["components" | rest] ->
-        # Component path - routed to components_path.
-        # Org-scoped paths: ["components", org_id, "catalysts", ...]
-        # Flat (single-tenant) paths: ["components", "catalysts", ...]
+        # Component path - routed to components_path:
+        # ["components", athanor_id, "catalysts", ...] or the seed bundle
+        # ["components", "_bundle", "catalysts", ...].
         Path.join([components_path() | rest])
 
       ["aqua" | rest] ->
@@ -291,7 +289,7 @@ defmodule Arca.Adapters.Local do
           # Global path - no tenant prefix (e.g. cache/)
           Path.join([base | segments])
         else
-          # Tenant-scoped path: {org}/{project}/...
+          # Tenant-scoped path: {athanor_id}/...
           Path.join([base | Arca.Storage.tenant_segments(ctx) ++ segments])
         end
 

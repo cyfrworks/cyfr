@@ -95,7 +95,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
       conn,
       403,
       :insufficient_permissions,
-      "User has no organization membership. Contact your administrator."
+      "User has no athanor. Contact your administrator."
     )
   end
 
@@ -109,7 +109,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     if is_nil(auth_provider) do
       # No auth configured — the operator runs without sign-in. Requests reach
       # the public surface as an unauthenticated context (no permissions, no
-      # resolved org); tenant-scoped routes are rejected downstream.
+      # resolved athanor); tenant-scoped routes are rejected downstream.
       Logger.debug("[Authenticate] No auth_provider configured")
       unauthenticated_context()
     else
@@ -117,7 +117,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         case auth_provider.current_user(conn) do
           nil ->
             # No credentials presented — fall through to the public surface.
-            # Tenant-scoped routes are rejected downstream (no resolved org).
+            # Tenant-scoped routes are rejected downstream (no resolved athanor).
             Logger.debug("[Authenticate] No credentials from provider #{inspect(auth_provider)}")
             unauthenticated_context()
 
@@ -151,16 +151,16 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   defp unauthenticated_context do
     Context.build(
       user_id: nil,
-      org_id: nil,
+      athanor_id: nil,
       permissions: [],
-      scope: :project,
+      scope: :athanor,
       auth_method: nil,
       authenticated: false
     )
   end
 
   # A pre-claim / unauthenticated context (valid session, namespace not yet
-  # claimed) legitimately carries no resolved org — it is forwarded to the
+  # claimed) legitimately carries no resolved athanor — it is forwarded to the
   # namespace-claim flow downstream, not tenant-gated here.
   defp context_from_session(%Context{authenticated: false} = ctx), do: ensure_namespace(ctx)
 
@@ -173,7 +173,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     case Context.tenant_ok(ctx) do
       {:error, :missing_tenant} ->
         Logger.warning(
-          "[Authenticate] Authenticated user #{ctx.user_id} has no resolved org_id — rejecting"
+          "[Authenticate] Authenticated user #{ctx.user_id} has no resolved athanor — rejecting"
         )
 
         {:error, :missing_tenant}
@@ -249,15 +249,14 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     end
   end
 
-  # Validate an API key and build a project-scoped context from the key row.
+  # Validate an API key and build an athanor-scoped context from the key row.
   #
-  # API keys are PROJECT credentials: org_id/project_id come from the stored
-  # key (Sanctum.ApiKey.context_from_metadata/1) — never from the request or
-  # the creating user's *current* membership. Key validity is independent of
-  # the creator's membership; revocation is the control. When an auth provider
-  # is configured, an org-less key is rejected via the configured tenant
-  # policy's require_org/1 (the same gate context_from_session/1 applies);
-  # no-op for single-user installs.
+  # API keys are ATHANOR credentials: the athanor comes from the stored key
+  # (Sanctum.ApiKey.context_from_metadata/1) — never from the request or the
+  # creating user's *current* membership. Key validity is independent of the
+  # creator's membership; revocation is the control. An athanor-less key is
+  # rejected by the tenant gate (the same gate context_from_session/1
+  # applies).
   defp validate_api_key(conn, key) do
     client_ip = Sanctum.ClientIp.resolve(conn)
 

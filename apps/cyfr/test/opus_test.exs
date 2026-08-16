@@ -28,9 +28,9 @@ defmodule OpusTest do
     ctx =
       Context.build(
         user_id: "opus_test_user_#{rand_id}",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         namespace: "testns",
         authenticated: true

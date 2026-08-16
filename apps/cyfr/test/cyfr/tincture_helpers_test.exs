@@ -7,12 +7,17 @@ defmodule Cyfr.TinctureHelpersTest do
   alias Cyfr.TinctureHelpers
 
   setup do
-    base = Path.join(System.tmp_dir!(), "tincture_helpers_test_#{:rand.uniform(1_000_000)}")
-    File.mkdir_p!(base)
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    root = Path.join(System.tmp_dir!(), "tincture_helpers_test_#{:rand.uniform(1_000_000)}")
 
     # Tinctures are routed via the `components/` Arca prefix, which the Local
     # adapter resolves against `:components_path`. Pointing it at a tmp dir
-    # gives us an isolated sandbox.
+    # gives us an isolated sandbox. Component reads are pinned per athanor, so
+    # the fixture files live under the test context's athanor.
+    base = Path.join(root, Sanctum.TestContext.athanor_id())
+    File.mkdir_p!(base)
     File.write!(Path.join(base, "index.html"), "<html></html>")
     File.write!(Path.join(base, "app.js"), "console.log('hi')")
     File.write!(Path.join(base, "style.css"), "body{}")
@@ -28,45 +33,86 @@ defmodule Cyfr.TinctureHelpersTest do
     File.write!(Path.join(sub, ".hidden"), "hidden")
 
     prev = Application.get_env(:cyfr, :components_path)
-    Application.put_env(:cyfr, :components_path, base)
+    Application.put_env(:cyfr, :components_path, root)
 
     on_exit(fn ->
-      File.rm_rf!(base)
+      File.rm_rf!(root)
       if prev, do: Application.put_env(:cyfr, :components_path, prev), else: :ok
     end)
 
-    # Asset routing: `["components" | rest]` resolves to `components_path ++ rest`.
-    # We use an empty rest so files written directly at `base/foo.js` are reachable
-    # via `serve_asset(conn, ctx, ["components"], ["foo.js"])`.
-    %{base: base, ctx: Sanctum.TestContext.local(), version_segs: ["components"]}
+    # Asset routing: `["components", athanor_id | rest]` resolves to
+    # `components_path/athanor_id ++ rest`. We use an empty rest so files
+    # written directly at `base/foo.js` are reachable via
+    # `serve_asset(conn, ctx, ["components", athanor_id], ["foo.js"])`.
+    ctx = Sanctum.TestContext.local()
+    %{base: base, ctx: ctx, version_segs: ["components", ctx.athanor_id]}
   end
 
-  describe "tincture_path/4" do
-    test "builds the canonical workspace-scoped shell URL" do
-      assert TinctureHelpers.tincture_path("acme", "prod", "moonmoon", "app") ==
-               "/t/acme/prod/moonmoon/app"
+  defp create_athanor!(kind, slug) do
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: kind,
+        name: slug,
+        slug: slug,
+        created_by: "test",
+        owner_user_id: if(kind == "person", do: "github|https://github.com|#{slug}")
+      })
+
+    athanor
+  end
+
+  describe "tincture_path/3" do
+    test "builds the canonical athanor-scoped shell URL" do
+      assert TinctureHelpers.tincture_path("home", "moonmoon", "app") == "/t/home/moonmoon/app"
     end
 
-    test "uses the seeded sentinels for the default install" do
-      assert TinctureHelpers.tincture_path("local", "default", "local", "dash") ==
-               "/t/local/default/local/dash"
+    test "a person athanor's segment is its @namespace" do
+      athanor = create_athanor!("person", "alice")
+      segment = TinctureHelpers.athanor_segment(athanor)
+      assert segment == "@alice"
+      assert TinctureHelpers.tincture_path(segment, "local", "dash") == "/t/@alice/local/dash"
+    end
+
+    test "refuses an empty athanor segment" do
+      assert_raise FunctionClauseError, fn -> TinctureHelpers.tincture_path("", "local", "x") end
     end
   end
 
-  describe "build_public_context/2" do
-    test "returns an unauthenticated context anchored to the URL's workspace" do
-      ctx = TinctureHelpers.build_public_context("acme", "prod")
+  describe "resolve_athanor/1 and build_public_context/1" do
+    test "resolves a group by slug into an unauthenticated context anchored to it" do
+      athanor = create_athanor!("group", "acme")
+
+      assert {:ok, %{id: id}} = TinctureHelpers.resolve_athanor("acme")
+      assert id == athanor.id
+      assert {:ok, ctx} = TinctureHelpers.build_public_context("acme")
       assert %Sanctum.Context{} = ctx
-      assert ctx.org_id == "acme"
-      assert ctx.project_id == "prod"
+      assert ctx.athanor_id == athanor.id
+      assert ctx.scope == :athanor
       assert ctx.authenticated == false
     end
 
-    test "anchors to local/default for the default install" do
-      ctx = TinctureHelpers.build_public_context("local", "default")
-      assert ctx.org_id == "local"
-      assert ctx.project_id == "default"
-      assert ctx.authenticated == false
+    test "resolves a person by @namespace" do
+      athanor = create_athanor!("person", "bob")
+
+      assert {:ok, %{id: id}} = TinctureHelpers.resolve_athanor("@bob")
+      assert id == athanor.id
+      assert {:ok, ctx} = TinctureHelpers.build_public_context("@bob")
+      assert ctx.athanor_id == athanor.id
+      # A bare "bob" is a group slug, which nobody created.
+      assert {:error, :not_found} = TinctureHelpers.build_public_context("bob")
+    end
+
+    test "an unknown segment is not found — never a default athanor" do
+      assert {:error, :not_found} = TinctureHelpers.build_public_context("nobody")
+      assert {:error, :not_found} = TinctureHelpers.build_public_context("@nobody")
+      assert {:error, :not_found} = TinctureHelpers.build_public_context("")
+    end
+
+    test "an archived athanor is not found" do
+      athanor = create_athanor!("group", "gone")
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
+
+      assert {:error, :not_found} = TinctureHelpers.build_public_context("gone")
     end
   end
 

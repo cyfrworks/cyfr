@@ -965,12 +965,12 @@ Tinctures are frontend components served by CYFR at dedicated routes. Unlike WAS
 
 ### Private (Authenticated)
 
-Served inside the Prism shell at `/t/:org/:project/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
+Served inside the Prism shell at `/t/:athanor/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
 
 ```
-GET /t/local/default/local/stock-dashboard           → index.html
-GET /t/local/default/local/stock-dashboard/app.js    → static asset
-GET /t/local/default/local/stock-dashboard/style.css → static asset
+GET /t/home/local/stock-dashboard           → index.html
+GET /t/home/local/stock-dashboard/app.js    → static asset
+GET /t/home/local/stock-dashboard/style.css → static asset
 ```
 
 ### Public (Unauthenticated)
@@ -978,16 +978,16 @@ GET /t/local/default/local/stock-dashboard/style.css → static asset
 Public tinctures use the same `/t/` path — no authentication needed. Set `tincture_visibility.set` to make a tincture public.
 
 ```
-GET /t/local/default/local/stock-dashboard              → index.html (no auth needed if public)
-GET /t/local/default/local/stock-dashboard/app.js       → static asset
+GET /t/home/local/stock-dashboard              → index.html (no auth needed if public)
+GET /t/home/local/stock-dashboard/app.js       → static asset
 ```
 
 ### Security Headers
 
 | Route | CSP Notable Differences |
 |-------|------------------------|
-| `/t/:org/:project/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors *` |
-| `/t/:org/:project/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
+| `/t/:athanor/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors *` |
+| `/t/:athanor/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
 
 Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
 
@@ -1048,20 +1048,20 @@ A typical live-data pipeline:
 | `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
-| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails granted platform admin (cross-tenant, full access) on first sign-in. Authentication is open; this list (and per-org memberships) is the authorization gate — unlisted, unmembered users are locked out (`no_org`). |
+| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails granted platform admin (cross-tenant, full access) on first sign-in. Authentication is open; this list (and athanor memberships) is the authorization gate — unlisted, unmembered users are locked out (`no_athanor`). |
 
 ### Platform admins
 
-CYFR is one product: deploy it as-is (sqlite, local FS, the seeded `local/default`
-workspace) or configure OIDC / Postgres / a custom registry. There is no separate
+CYFR is one product: deploy it as-is (sqlite, local FS, the seeded Home
+athanor) or configure OIDC / Postgres / a custom registry. There is no separate
 "edition" or "mode".
 
 Once authentication is configured, access is governed by membership rows. The
 operator declares the bootstrap admins via `CYFR_PLATFORM_ADMIN_EMAILS` — each
 listed email is granted a platform-scope membership (full access, bypasses the
 tenant gate) the first time they sign in. A solo operator lists their own email;
-a multi-org deployment lists the platform staff. Other users are admitted by a
-platform admin creating a membership row for them (org- or project-scoped).
+a company lists the platform staff. Other users are admitted by a membership row
+in an athanor.
 
 With no auth configured, the deployment runs without sign-in: requests reach the
 public read-only surface as an unauthenticated context, and tenant-scoped
@@ -1124,7 +1124,7 @@ cyfr profile grant c:moonmoon69.claude
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
-#     Edit components/local/default/catalysts/local/my-api/0.1.0/src/src/lib.rs
+#     Edit components/{athanor_id}/catalysts/local/my-api/0.1.0/src/src/lib.rs
 cyfr build compile catalyst:local.my-api:0.1.0
 cyfr profile grant catalyst:local.my-api
 
@@ -1163,6 +1163,6 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
 - React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
-- View at `localhost:4001` (Prism → Tinctures tab) or `/t/:org/:project/:publisher/:name` if public
+- View at `localhost:4001` (Prism → Tinctures tab) or `/t/:athanor/:publisher/:name` if public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

@@ -36,12 +36,10 @@ defmodule Sanctum.Cipher.RotationTest do
 
   # Insert rows whose ciphertext is produced with the SAME AAD the rotation
   # tool will rebuild from the row's columns (the contract under test).
-  @org "org_a"
-  @proj "default"
-  @scope "project"
+  @athanor "ath_a"
 
   defp put_webhook_row(name, secret, prev, over \\ %{}) do
-    aad = %{purpose: :webhook_secret, scope: @scope, org: @org, project: @proj, name: name}
+    aad = Sanctum.CipherAAD.webhook_secret(@athanor, name)
 
     sec =
       case Map.get(over, :secret_encrypted, :seal) do
@@ -64,9 +62,7 @@ defmodule Sanctum.Cipher.RotationTest do
         input_template: "{}",
         enabled: true,
         profile_id: "prof_test",
-        scope_type: @scope,
-        org_id: @org,
-        project_id: @proj,
+        athanor_id: @athanor,
         inserted_at: now(),
         updated_at: now()
       }
@@ -78,7 +74,7 @@ defmodule Sanctum.Cipher.RotationTest do
   defp put_vault_row(name, plaintext, over \\ %{}) do
     id = "vlt_" <> uuid()
     hint = Map.get(over, :provider_hint, "legacy")
-    aad = Sanctum.CipherAAD.vault_entry(@org, @proj, id, hint)
+    aad = Sanctum.CipherAAD.vault_entry(@athanor, id, hint)
 
     sealed =
       case Map.get(over, :sealed_payload, :seal) do
@@ -89,8 +85,7 @@ defmodule Sanctum.Cipher.RotationTest do
     Arca.Repo.insert_all(Arca.Schemas.VaultEntry, [
       %{
         id: id,
-        org_id: @org,
-        project_id: @proj,
+        athanor_id: @athanor,
         name: name,
         provider_hint: hint,
         kind: "bundle",
@@ -105,31 +100,30 @@ defmodule Sanctum.Cipher.RotationTest do
     id
   end
 
-  # Seals a v2 envelope as the pre-v3 writer did (production has no v2
-  # writer left; legacy rows are fabricated here).
-  defp seal_v2(plaintext, %{purpose: purpose} = ctx, label, master) do
+  # Seals a v3 envelope as the pre-athanor writer did (production has no v3
+  # writer and no v3 read path left; legacy rows are fabricated here).
+  defp seal_v3(plaintext, %{purpose: purpose, name: name}, label, master) do
     info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
     iters = max(Application.get_env(:cyfr, :pbkdf2_iterations, 100_000), 100_000)
     key = :crypto.pbkdf2_hmac(:sha256, master, info, iters, 32)
     iv = :crypto.strong_rand_bytes(12)
 
     fields =
-      for k <- [:scope, :org, :project, :name, :sub] do
-        v = Map.get(ctx, k) || ""
+      for v <- ["project", "org_a", "default", name, "", ""] do
         <<byte_size(v)::32, v::binary>>
       end
 
     aad =
       IO.iodata_to_binary([
-        "cyfrv2",
-        <<0x02>>,
+        "cyfrv3",
+        <<0x03>>,
         <<byte_size(label)::32, label::binary>>,
         <<byte_size(Atom.to_string(purpose))::32, Atom.to_string(purpose)::binary>>
         | fields
       ])
 
     {ct, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, 16, true)
-    <<0x02, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
+    <<0x03, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
   end
 
   defp col(table, id, field) do
@@ -166,13 +160,7 @@ defmodule Sanctum.Cipher.RotationTest do
       assert {:ok, "k2"} = Cipher.label(col("webhooks", w, :secret_encrypted))
       assert {:ok, "k2"} = Cipher.label(col("webhooks", w, :previous_secret_encrypted))
 
-      wh_aad = %{
-        purpose: :webhook_secret,
-        scope: "project",
-        org: "org_a",
-        project: "default",
-        name: "hook1"
-      }
+      wh_aad = Sanctum.CipherAAD.webhook_secret(@athanor, "hook1")
 
       assert {:ok, "whsec_aaa"} = Cipher.decrypt(col("webhooks", w, :secret_encrypted), wh_aad)
 
@@ -181,7 +169,7 @@ defmodule Sanctum.Cipher.RotationTest do
 
       assert {:ok, "k2"} = Cipher.label(col("vault_entries", v, :sealed_payload))
 
-      vault_aad = Sanctum.CipherAAD.vault_entry(@org, @proj, v, "legacy")
+      vault_aad = Sanctum.CipherAAD.vault_entry(@athanor, v, "legacy")
 
       assert {:ok, ~s({"v":2,"fields":{}})} =
                Cipher.decrypt(col("vault_entries", v, :sealed_payload), vault_aad)
@@ -267,13 +255,13 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT-V3: retired envelope versions" do
-    test "a pre-v3 row aborts the run fail-closed instead of being skipped" do
-      aad = %{purpose: :webhook_secret, scope: @scope, org: @org, project: @proj, name: "V2ROW"}
-      v2_ct = seal_v2("legacy-plain", aad, "k1", @k1)
-      _id = put_webhook_row("V2ROW", "ignored", nil, %{secret_encrypted: v2_ct})
+  describe "T-REENCRYPT-V4: retired envelope versions" do
+    test "a pre-v4 row aborts the run fail-closed instead of being skipped" do
+      aad = %{purpose: :webhook_secret, name: "V3ROW"}
+      v3_ct = seal_v3("legacy-plain", aad, "k1", @k1)
+      _id = put_webhook_row("V3ROW", "ignored", nil, %{secret_encrypted: v3_ct})
 
-      # The v2 read path is retired: an unreadable envelope must surface,
+      # The v3 read path is retired: an unreadable envelope must surface,
       # never be silently skipped past.
       assert {:error, {:webhooks, {:not_a_cipher_envelope, _col}, _sample}} =
                Rotation.reencrypt_all()
@@ -289,9 +277,9 @@ defmodule Sanctum.Cipher.RotationTest do
                Rotation.reencrypt_all()
 
       new_ct = col("vault_entries", id, :sealed_payload)
-      assert {:ok, {3, "k2"}} = Cipher.envelope(new_ct)
+      assert {:ok, {4, "k2"}} = Cipher.envelope(new_ct)
 
-      aad = Sanctum.CipherAAD.vault_entry(@org, @proj, id, "legacy")
+      aad = Sanctum.CipherAAD.vault_entry(@athanor, id, "legacy")
       assert {:ok, ~s({"v":1,"legacy":{"secrets":[]}})} = Cipher.decrypt(new_ct, aad)
 
       assert col("vault_entries", id, :payload_rev) == 0
@@ -317,7 +305,7 @@ defmodule Sanctum.Cipher.RotationTest do
                Rotation.reencrypt_all()
 
       new_ct = col("registry_tokens", row.id, :credential_ciphertext)
-      assert {:ok, {3, "k2"}} = Cipher.envelope(new_ct)
+      assert {:ok, {4, "k2"}} = Cipher.envelope(new_ct)
       assert {:ok, ~s({"token":"cyfr_pt_x"})} = Cipher.decrypt(new_ct, aad)
     end
   end

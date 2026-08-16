@@ -8,9 +8,8 @@ defmodule Prism.TelemetryBridge do
   Attaches to existing telemetry events and broadcasts to PubSub topics
   that LiveViews can subscribe to for real-time updates.
 
-  Topics are scoped per-tenant via `Sanctum.PubSub.topic/2` so that a
-  tenant-scoped deployment isolates broadcasts per org. In single-tenant
-  mode topics pass through unchanged.
+  Topics are scoped per athanor via `Sanctum.PubSub.topic/2`, so a server
+  with many athanors isolates broadcasts to each athanor's subscribers.
 
   ## Topics
 
@@ -143,14 +142,18 @@ defmodule Prism.TelemetryBridge do
   # raises, the telemetry library permanently detaches it and all Prism
   # dashboard live updates silently stop.
   defp safe_broadcast(base_topic, metadata, message) do
-    topic = scoped_topic(base_topic, metadata)
+    case scoped_topic(base_topic, metadata) do
+      {:ok, topic} ->
+        case Phoenix.PubSub.broadcast(@pubsub, topic, message) do
+          :ok ->
+            :ok
 
-    case Phoenix.PubSub.broadcast(@pubsub, topic, message) do
-      :ok ->
-        :ok
+          {:error, reason} ->
+            Logger.warning("[TelemetryBridge] PubSub broadcast failed: #{inspect(reason)}")
+            :ok
+        end
 
-      {:error, reason} ->
-        Logger.warning("[TelemetryBridge] PubSub broadcast failed: #{inspect(reason)}")
+      :skip ->
         :ok
     end
   rescue
@@ -161,25 +164,19 @@ defmodule Prism.TelemetryBridge do
 
   # Build a tenant-scoped topic from telemetry metadata.
   #
-  # Always produces a `tenant:<org>:<project>:<base>` topic so it matches the
-  # subscribers (every authenticated LiveView context now carries a concrete
-  # org — the single-operator default being the seeded `local`/`default`). An
-  # event whose metadata omits the tenant is treated as that single-operator
-  # default; multi-tenant events carry their org/project and route to that
-  # tenant's subscribers. Earlier this fell back to the bare base topic, which
-  # no subscriber listened on — so live request/rate updates never fired.
+  # Produces a `tenant:<athanor_id>:<base>` topic so it matches the topics
+  # dashboard LiveViews subscribe to. An event whose metadata carries no
+  # athanor has no subscribers to reach and is dropped — there is no
+  # default athanor to route it to.
   defp scoped_topic(base, metadata) do
-    # Topic-only, unauthenticated context — never reaches authz/storage. `:org`
-    # (not `:platform`) avoids the platform-scope audit and models a single
-    # resolved org for the prefix.
-    ctx =
-      Sanctum.Context.build(
-        scope: :org,
-        org_id: metadata[:org_id] || Arca.Tenant.local_org(),
-        project_id: metadata[:project_id] || Arca.Tenant.default_project(),
-        authenticated: false
-      )
+    case metadata[:athanor_id] do
+      athanor_id when is_binary(athanor_id) and athanor_id != "" ->
+        # Topic-only, unauthenticated context — never reaches authz/storage.
+        ctx = Sanctum.Context.build(scope: :athanor, athanor_id: athanor_id, authenticated: false)
+        {:ok, Sanctum.PubSub.topic(base, ctx)}
 
-    Sanctum.PubSub.topic(base, ctx)
+      _ ->
+        :skip
+    end
   end
 end

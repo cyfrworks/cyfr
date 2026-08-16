@@ -349,11 +349,7 @@ defmodule Emissary.MCP.ToolRegistry do
          %{descriptions_digest: baseline} = grant when is_binary(baseline) <-
            Enum.find(servers, &(&1.server_digest == digest)),
          {:ok, tools} <-
-           Emissary.MCP.ExternalServer.get_tools(
-             grant.server_name,
-             Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-             ctx.project_id
-           ),
+           Emissary.MCP.ExternalServer.get_tools(grant.server_name, ctx.athanor_id),
          {:ok, live} <-
            Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
       unless Plug.Crypto.secure_compare(live, baseline) do
@@ -384,9 +380,7 @@ defmodule Emissary.MCP.ToolRegistry do
   # recompute). A missing or unreadable server resolves to a sentinel no
   # edge can name — fail closed, not fail absent.
   defp resolve_server_digest(ctx, server_name) do
-    org = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
-    proj = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
-    cache_key = {:tool_server_digest, org, proj, server_name}
+    cache_key = Arca.Cache.Keys.tool_server_digest(ctx.athanor_id, server_name)
 
     case Arca.Cache.get(cache_key) do
       {:ok, digest} ->

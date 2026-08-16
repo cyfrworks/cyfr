@@ -39,8 +39,7 @@ defmodule Compendium.MCP.AquaToolAuthorityTest do
     Context.build(
       user_id: "local|idp|user1",
       provider: "oidc",
-      org_id: Arca.Tenant.local_org(),
-      project_id: Arca.Tenant.default_project(),
+      athanor_id: Sanctum.TestContext.athanor_id(),
       permissions: [:*],
       scope: scope,
       auth_method: :oidc,
@@ -53,7 +52,7 @@ defmodule Compendium.MCP.AquaToolAuthorityTest do
 
     for action <- ["create", "update", "delete"] do
       assert {:error, message} =
-               AquaTool.handle(ctx(:project), %{"action" => action, "name" => "aqua"})
+               AquaTool.handle(ctx(:athanor), %{"action" => action, "name" => "aqua"})
 
       assert message =~ "platform scope"
     end
@@ -73,7 +72,7 @@ defmodule Compendium.MCP.AquaToolAuthorityTest do
   test "single-user deployments keep the permission check as the only gate" do
     Application.delete_env(:cyfr, :auth_provider)
 
-    result = AquaTool.handle(ctx(:project), %{"action" => "update", "name" => "aqua"})
+    result = AquaTool.handle(ctx(:athanor), %{"action" => "update", "name" => "aqua"})
 
     refute platform_refusal?(result)
   end

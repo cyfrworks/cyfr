@@ -31,8 +31,7 @@ defmodule Cyfr.JsonFormatter do
       |> Keyword.take([
         :request_id,
         :user_id,
-        :org_id,
-        :project_id,
+        :athanor_id,
         :auth_method,
         :module,
         :function,

@@ -183,8 +183,7 @@ defmodule Sanctum.Consent.Plan do
         kind: :plan,
         commit_digest: shape_digest,
         actor: ctx.user_id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         expected_revision: expected_revision
       }
       |> put_present(:profile_id, profile_id)

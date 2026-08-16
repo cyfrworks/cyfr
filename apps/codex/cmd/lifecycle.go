@@ -169,20 +169,13 @@ database_path: ./data/cyfr.db
 .env.local
 .env.*.local
 
-# Component build artifacts
-components/**/target/
-
-# Pulled/published components (OCI, named publishers)
-# local/ and agent/ are preserved for development
-components/catalysts/*/
-!components/catalysts/local/
-!components/catalysts/agent/
-components/reagents/*/
-!components/reagents/local/
-!components/reagents/agent/
-components/formulas/*/
-!components/formulas/local/
-!components/formulas/agent/
+# Component storage is athanor-scoped: components/{athanor_id}/{type}s/{publisher}/.
+# Every athanor's tree is runtime state; only the seed bundle every athanor is
+# provisioned from (components/_bundle/) is tracked, minus its build output.
+components/*
+!components/_bundle/
+components/_bundle/**/target/
+components/_bundle/**/node_modules/
 `
 		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
 			if err := os.WriteFile(".gitignore", []byte(gitignoreContent), 0644); err != nil {

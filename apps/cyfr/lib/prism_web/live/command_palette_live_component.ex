@@ -11,7 +11,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   shortcut and pushes `toggle` / `close` events here.
 
   All backing queries pass through tenant-scoped APIs — `Arca.McpLog.list`
-  requires `org_id` + `project_id`, and Compendium / TinctureRegistry
+  requires an `athanor_id`, and Compendium / TinctureRegistry
   lookups use the user's `Sanctum.Context`. The palette never calls
   platform-scope variants. Action invocation goes through
   `Emissary.MCP.ToolRegistry.call/3` with the user's context — same authz

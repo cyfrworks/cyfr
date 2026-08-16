@@ -37,12 +37,10 @@ defmodule Arca.SessionStorage do
       email: attrs[:email],
       provider: attrs.provider,
       permissions: attrs.permissions,
-      # NOTE: org_id "" is intentional here — an org-less session is the signal
-      # that membership re-resolution must run on the next load
-      # (`Sanctum.Session.restore_workspace/1`). Do not normalize it to "local",
-      # which would pin an unresolved user to the local workspace.
-      org_id: attrs[:org_id] || "",
-      project_id: attrs[:project_id] || "default",
+      # A nil athanor is a real state: the session exists from sign-in on,
+      # before the caller's athanor is resolved. Membership re-resolution
+      # runs on the next load; nothing is coerced.
+      athanor_id: attrs[:athanor_id],
       scope: attrs[:scope],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
@@ -76,8 +74,7 @@ defmodule Arca.SessionStorage do
           :email,
           :provider,
           :permissions,
-          :org_id,
-          :project_id,
+          :athanor_id,
           :scope,
           :expires_at,
           :inserted_at
@@ -115,24 +112,6 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
-  Update a session's active workspace (org_id / project_id).
-  """
-  @spec update_workspace(binary(), String.t(), String.t()) ::
-          :ok | {:error, :not_found | :database_error}
-  def update_workspace(token_hash, org_id, project_id) do
-    query = from(s in Session, where: s.token_hash == ^token_hash)
-
-    case Arca.Repo.update_all(query, set: [org_id: org_id, project_id: project_id]) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in update_workspace: #{Exception.message(e)}")
-      {:error, :database_error}
-  end
-
-  @doc """
   Delete a session by token_hash.
   """
   @spec delete_session(binary()) :: :ok | {:error, :database_error}
@@ -155,33 +134,6 @@ defmodule Arca.SessionStorage do
   def cleanup_expired_sessions do
     now = DateTime.utc_now()
     query = from(s in Session, where: s.expires_at <= ^now)
-
-    {count, _} = Arca.Repo.delete_all(query)
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
-  end
-
-  @doc """
-  Delete expired sessions scoped to a tenant. Returns `{:ok, count}`.
-
-  Requires `:org_id` and `:project_id` in opts.
-  """
-  @spec cleanup_expired_sessions(keyword()) ::
-          {:ok, non_neg_integer()} | {:error, :database_error}
-  def cleanup_expired_sessions(opts) when is_list(opts) do
-    now = DateTime.utc_now()
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
-
-    query = from(s in Session, where: s.expires_at <= ^now)
-    query = Arca.QueryHelpers.where_org_id(query, org_id)
-    query = Arca.QueryHelpers.where_project_id(query, project_id)
 
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}

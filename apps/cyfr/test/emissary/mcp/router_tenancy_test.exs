@@ -28,8 +28,9 @@ defmodule Emissary.MCP.RouterTenancyTest do
   defp make_context(authenticated) do
     Sanctum.Context.build(
       user_id: if(authenticated, do: "test_user", else: nil),
+      athanor_id: if(authenticated, do: "ath_test", else: nil),
       permissions: if(authenticated, do: [:*], else: []),
-      scope: :project,
+      scope: :athanor,
       auth_method: if(authenticated, do: :oidc, else: nil),
       authenticated: authenticated
     )

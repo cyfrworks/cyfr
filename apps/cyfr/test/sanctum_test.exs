@@ -17,21 +17,21 @@ defmodule SanctumTest do
 
   # A1 regression: build_tincture_context/2 must supply a non-blank namespace.
   # Before the fix it called Context.build/1 with authenticated: true and no
-  # :namespace at default (project) scope, which Context.build/1 rejects with
+  # :namespace at default (athanor) scope, which Context.build/1 rejects with
   # ArgumentError — breaking EVERY tincture invocation (both the /t controller
   # and the Prism shell). It must NOT be "fixed" by switching to scope:
   # :platform, since platform scope bypasses tenant isolation.
   describe "build_tincture_context/2" do
     @tincture %{publisher: "alice", name: "widget"}
 
-    test "authenticated caller: inherits namespace and own permissions, project-scoped" do
+    test "authenticated caller: inherits namespace and own permissions, athanor-scoped" do
       caller = Sanctum.TestContext.local()
 
       ctx = Sanctum.build_tincture_context(caller, @tincture)
 
       assert ctx.namespace == "testns"
       assert ctx.user_id == "local|local|testns"
-      assert ctx.scope == :project
+      assert ctx.scope == :athanor
       refute ctx.scope == :platform
       assert ctx.auth_method == :tincture
       assert ctx.authenticated == true
@@ -47,7 +47,7 @@ defmodule SanctumTest do
           user_id: "narrow-user",
           namespace: "testns",
           permissions: [:execute],
-          scope: :project,
+          scope: :athanor,
           authenticated: true
         )
 
@@ -58,13 +58,13 @@ defmodule SanctumTest do
     end
 
     test "public/unauthenticated caller: dedicated namespace, execute-only, anonymous" do
-      caller = Context.build(authenticated: false, scope: :project)
+      caller = Context.build(authenticated: false, scope: :athanor)
 
       ctx = Sanctum.build_tincture_context(caller, @tincture)
 
       assert ctx.namespace == "_tincture"
       assert ctx.user_id == "tincture:alice.widget"
-      assert ctx.scope == :project
+      assert ctx.scope == :athanor
       assert ctx.authenticated == true
       assert ctx.anonymous
       assert MapSet.equal?(ctx.permissions, MapSet.new([:execute]))
@@ -73,7 +73,7 @@ defmodule SanctumTest do
     test "namespace is never nil or empty for either caller shape" do
       for caller <- [
             Sanctum.TestContext.local(),
-            Context.build(authenticated: false, scope: :project)
+            Context.build(authenticated: false, scope: :athanor)
           ] do
         ctx = Sanctum.build_tincture_context(caller, @tincture)
         refute is_nil(ctx.namespace)

@@ -10,7 +10,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
     private_dir =
-      Path.join([components_dir, "local", "default", "tinctures", "local", "auth-dash", "1.0.0"])
+      Path.join([components_dir, "ath_test", "tinctures", "local", "auth-dash", "1.0.0"])
 
     File.mkdir_p!(private_dir)
 
@@ -38,7 +38,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     # ── Public tincture (pub-dash) ───────────────────────────────────
     public_dir =
-      Path.join([components_dir, "local", "default", "tinctures", "local", "pub-dash", "1.0.0"])
+      Path.join([components_dir, "ath_test", "tinctures", "local", "pub-dash", "1.0.0"])
 
     File.mkdir_p!(public_dir)
 
@@ -71,7 +71,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
     original = Application.get_env(:cyfr, :components_path)
     Application.put_env(:cyfr, :components_path, components_dir)
 
+    # The athanor behind the test context must exist as an active row: the
+    # `/t/<athanor>/…` route resolves it by slug ("test") before any lookup.
     ctx = Sanctum.TestContext.local()
+    _athanor = Sanctum.TestContext.athanor!()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     rl_manifest = %{public_manifest | "name" => "rl-dash"}
@@ -107,7 +110,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     # limit from the start, so no mid-test policy swap / cache invalidation
     # is needed (which proved environment-sensitive in CI).
     rl_dir =
-      Path.join([components_dir, "local", "default", "tinctures", "local", "rl-dash", "1.0.0"])
+      Path.join([components_dir, "ath_test", "tinctures", "local", "rl-dash", "1.0.0"])
 
     File.mkdir_p!(rl_dir)
     File.write!(Path.join(rl_dir, "cyfr-manifest.json"), Jason.encode!(rl_manifest))
@@ -123,8 +126,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       {:ok, _} =
         Arca.ProfileStorage.put(%{
           id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           source_ref: "tincture:local.#{name}",
           kind: "public",
           label: "public",
@@ -153,7 +155,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "private tincture — unauthenticated" do
     test "returns 404 (indistinguishable from missing)", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/auth-dash")
+      conn = get(conn, "/t/test/local/auth-dash")
       assert conn.status == 404
     end
   end
@@ -187,8 +189,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
-          "org" => "local",
-          "project" => "default",
+          "athanor" => "test",
           "publisher" => "local",
           "tincture_name" => "auth-dash"
         })
@@ -209,14 +210,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
-          "org" => "local",
-          "project" => "default",
+          "athanor" => "test",
           "publisher" => "local",
           "tincture_name" => "auth-dash"
         })
 
       assert conn.resp_body =~
-               ~r/<base href="\/t\/local\/default\/local\/auth-dash\/_s\/[^"]+\/">/
+               ~r/<base href="\/t\/test\/local\/auth-dash\/_s\/[^"]+\/">/
     end
 
     test "returns 404 for nonexistent tincture", %{conn: conn, session_token: token} do
@@ -227,8 +227,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn =
         EmissaryWeb.TinctureController.index(conn, %{
-          "org" => "local",
-          "project" => "default",
+          "athanor" => "test",
           "publisher" => "local",
           "tincture_name" => "no-such-tincture"
         })
@@ -267,7 +266,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{key}")
-        |> get("/t/local/default/local/auth-dash")
+        |> get("/t/test/local/auth-dash")
 
       assert conn.status == 200
       assert conn.resp_body =~ "Auth"
@@ -276,7 +275,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     test "an API key in the query string does not authenticate", %{conn: conn, api_key: key} do
       # A credential in a URL lands in history, Referer and every proxy log, so
       # the query path is no longer accepted at all — even for a valid key.
-      conn = get(conn, "/t/local/default/local/auth-dash?_key=#{key}")
+      conn = get(conn, "/t/test/local/auth-dash?_key=#{key}")
       assert conn.status == 404
     end
 
@@ -284,7 +283,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer cyfr_sk_invalidgarbage")
-        |> get("/t/local/default/local/auth-dash")
+        |> get("/t/test/local/auth-dash")
 
       assert conn.status == 404
     end
@@ -294,33 +293,41 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "public tincture — unauthenticated" do
     test "serves index.html without authentication", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/pub-dash")
+      conn = get(conn, "/t/test/local/pub-dash")
       assert conn.status == 200
       assert conn.resp_body =~ "Public"
     end
 
     test "sets CSP header with connect-src including declared domains", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/pub-dash")
+      conn = get(conn, "/t/test/local/pub-dash")
       [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "connect-src 'self' https://*.supabase.co"
     end
 
     test "injects plain base tag (no token) for public tincture", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/pub-dash")
-      assert conn.resp_body =~ ~s(<base href="/t/local/default/local/pub-dash/">)
+      conn = get(conn, "/t/test/local/pub-dash")
+      assert conn.resp_body =~ ~s(<base href="/t/test/local/pub-dash/">)
       refute conn.resp_body =~ "_s/"
     end
 
     test "returns 404 for nonexistent tincture (indistinguishable from private)", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/nonexistent")
+      conn = get(conn, "/t/test/local/nonexistent")
       assert conn.status == 404
     end
 
-    test "does not serve a public tincture from a different workspace", %{conn: conn} do
-      # pub-dash is public in local/default; a different workspace must not
-      # resolve it (workspace isolation).
-      conn = get(conn, "/t/other-org/other-proj/local/pub-dash")
-      assert conn.status == 404
+    test "does not serve a public tincture from a different athanor", %{conn: conn} do
+      # pub-dash is public in the test athanor; another athanor must not
+      # resolve it (athanor isolation), and an unknown athanor is a 404 too.
+      {:ok, _} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Other",
+          slug: "other",
+          created_by: "test"
+        })
+
+      assert get(conn, "/t/other/local/pub-dash").status == 404
+      assert get(conn, "/t/nobody/local/pub-dash").status == 404
     end
   end
 
@@ -328,31 +335,31 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "assets — public tinctures" do
     test "serves public tincture assets with CORS header", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/pub-dash/style.css")
+      conn = get(conn, "/t/test/local/pub-dash/style.css")
       assert conn.status == 200
       assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
       assert get_resp_header(conn, "cache-control") == ["public, max-age=3600"]
     end
 
     test "returns 404 for asset requests for unknown tincture", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/no-such-tincture/app.js")
+      conn = get(conn, "/t/test/local/no-such-tincture/app.js")
       assert conn.status == 404
     end
 
     test "blocks data.db for public tincture", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/pub-dash/data.db")
+      conn = get(conn, "/t/test/local/pub-dash/data.db")
       assert conn.status == 404
     end
   end
 
   describe "assets — private tinctures (no token)" do
     test "returns 404 for private tincture assets without token", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/auth-dash/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/app.js")
       assert conn.status == 404
     end
 
     test "returns 404 for private tincture data.db", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/auth-dash/data.db")
+      conn = get(conn, "/t/test/local/auth-dash/data.db")
       assert conn.status == 404
     end
   end
@@ -363,10 +370,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
           "tincture_access",
-          {"local", "default", "local", "auth-dash"}
+          {"test", "local", "auth-dash"}
         )
 
-      conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 200
       assert conn.resp_body =~ "auth app"
       # CORS required for sandboxed iframes (opaque origin)
@@ -376,7 +383,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     test "returns 404 for invalid token", %{conn: conn} do
-      conn = get(conn, "/t/local/default/local/auth-dash/_s/garbage_token/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/_s/garbage_token/app.js")
       assert conn.status == 404
     end
 
@@ -385,10 +392,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
           "tincture_access",
-          {"local", "default", "local", "pub-dash"}
+          {"test", "local", "pub-dash"}
         )
 
-      conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 404
     end
 
@@ -397,22 +404,22 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
           "tincture_access",
-          {"local", "default", "evil", "auth-dash"}
+          {"test", "evil", "auth-dash"}
         )
 
-      conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 404
     end
 
-    test "returns 404 for token whose workspace differs from the URL", %{conn: conn} do
+    test "returns 404 for token whose athanor differs from the URL", %{conn: conn} do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
           "tincture_access",
-          {"local", "default", "local", "auth-dash"}
+          {"test", "local", "auth-dash"}
         )
 
-      conn = get(conn, "/t/other-org/other-proj/local/auth-dash/_s/#{token}/app.js")
+      conn = get(conn, "/t/other/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 404
     end
 
@@ -421,10 +428,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
           "tincture_access",
-          {"local", "default", "local", "auth-dash"}
+          {"test", "local", "auth-dash"}
         )
 
-      conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/data.db")
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/data.db")
       assert conn.status == 404
     end
   end
@@ -441,10 +448,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
           "wrong_salt",
-          {"local", "default", "local", "auth-dash"}
+          {"test", "local", "auth-dash"}
         )
 
-      conn = get(conn, "/t/local/default/local/auth-dash/_s/#{expired_token}/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{expired_token}/app.js")
       assert conn.status == 404
     end
   end
@@ -457,7 +464,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> post(
-          "/t/local/default/local/no-such/invoke",
+          "/t/test/local/no-such/invoke",
           Jason.encode!(%{reference: "r:local.echo", input: %{}})
         )
 
@@ -469,7 +476,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/t/local/default/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
+        |> post("/t/test/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
 
       body = json_response(conn, 400)
       assert body["error"] == "missing reference"
@@ -480,7 +487,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> post(
-          "/t/local/default/local/auth-dash/invoke",
+          "/t/test/local/auth-dash/invoke",
           Jason.encode!(%{reference: "r:local.echo", input: %{}})
         )
 
@@ -494,7 +501,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> put_req_header("origin", "null")
         |> put_req_header("access-control-request-method", "POST")
         |> put_req_header("access-control-request-headers", "content-type")
-        |> options("/t/local/default/local/pub-dash/invoke")
+        |> options("/t/test/local/pub-dash/invoke")
 
       assert conn.status == 204
       assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
@@ -519,24 +526,24 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     test "page requests over the limit get 429 with retry-after", %{conn: conn} do
       for _ <- 1..2 do
-        assert get(build_conn(), "/t/local/default/local/pub-dash").status != 429
+        assert get(build_conn(), "/t/test/local/pub-dash").status != 429
       end
 
-      blocked = get(build_conn(), "/t/local/default/local/pub-dash")
+      blocked = get(build_conn(), "/t/test/local/pub-dash")
       assert blocked.status == 429
       assert get_resp_header(blocked, "retry-after") != []
 
       # Other tinctures are unaffected (separate bucket key).
-      assert get(build_conn(), "/t/local/default/local/auth-dash").status != 429
+      assert get(build_conn(), "/t/test/local/auth-dash").status != 429
       _ = conn
     end
 
     test "asset requests over the limit get 429", %{conn: _conn} do
       for _ <- 1..2 do
-        assert get(build_conn(), "/t/local/default/local/pub-dash/app.js").status != 429
+        assert get(build_conn(), "/t/test/local/pub-dash/app.js").status != 429
       end
 
-      assert get(build_conn(), "/t/local/default/local/pub-dash/app.js").status == 429
+      assert get(build_conn(), "/t/test/local/pub-dash/app.js").status == 429
     end
 
     test "invoke requests over the limit get 429 before reaching the controller",
@@ -547,7 +554,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       post_invoke = fn ->
         build_conn()
         |> put_req_header("content-type", "application/json")
-        |> post("/t/local/default/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
+        |> post("/t/test/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
       end
 
       for _ <- 1..2 do
@@ -562,7 +569,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         build_conn()
         |> put_req_header("origin", "null")
         |> put_req_header("access-control-request-method", "POST")
-        |> options("/t/local/default/local/pub-dash/invoke")
+        |> options("/t/test/local/pub-dash/invoke")
       end
 
       for _ <- 1..5 do

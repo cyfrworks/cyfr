@@ -6,7 +6,7 @@ Build, test, and deploy tinctures for CYFR. Tinctures are full-stack frontend ex
 
 ## Architecture
 
-Tinctures are served at `/t/:publisher/:name`. They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving Connections, enforcing the consented authority), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
+Tinctures are served at `/t/:athanor/:publisher/:name` (the athanor segment is `@<namespace>` for a person's athanor, the group slug for a group's). They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving Connections, enforcing the consented authority), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
 
 ### Private vs Public
 
@@ -28,7 +28,7 @@ The `tincture.public` field in the manifest is a **metadata hint only** — actu
 **Vanilla tincture** (no build step):
 
 ```
-components/local/default/tinctures/local/stock-dashboard/1.0.0/
+components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
 ├── cyfr-manifest.json    ← type: "tincture"
 ├── index.html            ← entry point
 ├── app.js                ← application JavaScript
@@ -43,7 +43,7 @@ components/local/default/tinctures/local/stock-dashboard/1.0.0/
 **React tincture** (after `cyfr build compile`):
 
 ```
-components/local/default/tinctures/local/stock-dashboard/1.0.0/
+components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
 ├── cyfr-manifest.json    ← type: "tincture", tincture.build.tool: "vite"
 ├── package.json          ← React + Vite + TypeScript dependencies
 ├── tsconfig.json         ← TypeScript config (strict mode)
@@ -72,7 +72,7 @@ components/local/default/tinctures/local/stock-dashboard/1.0.0/
 1. Scaffold    cyfr new tincture stock-dashboard       (once — creates HTML/JS/CSS scaffold)
 2. Edit        Edit index.html, app.js, style.css      (any web editor or IDE)
 3. Register    cyfr register                           (index the tincture)
-4. View        Open Prism at localhost:4001 → Tinctures tab, or visit /t/local/stock-dashboard
+4. View        Open Prism at localhost:4001 → Tinctures tab, or visit /t/home/local/stock-dashboard
 5. Iterate     Edit HTML/JS/CSS → reload browser (no compile step)
 ```
 
@@ -143,7 +143,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 CYFR auto-discovers tincture media from a fixed `public/media/` layout. **No manifest fields needed** — drop the files in the right slots and the picker (Prism sidebar + Porta carousel) finds them.
 
 ```
-components/local/default/tinctures/local/{name}/{version}/
+components/{athanor_id}/tinctures/local/{name}/{version}/
 └── public/
     └── media/
         ├── icon.svg          ← OR icon.png  (svg preferred)
@@ -416,8 +416,8 @@ All tinctures are served from a unified `/t/` path. Public tinctures are accessi
 
 | Route | Auth | Description |
 |-------|------|-------------|
-| `/t/:publisher/:name` | Optional | Serve tincture (see Private vs Public above) |
-| `/t/:publisher/:name/*path` | None | Serve tincture static assets (JS, CSS, images) |
+| `/t/:athanor/:publisher/:name` | Optional | Serve tincture (see Private vs Public above) |
+| `/t/:athanor/:publisher/:name/*path` | None | Serve tincture static assets (JS, CSS, images) |
 
 - Canonical routes are **versionless** — the server resolves the latest registered version
 - Iframes get `sandbox="allow-scripts"` only (no `allow-same-origin`) — assets are served without cookie auth since sandboxed iframes cannot send cookies
@@ -486,6 +486,6 @@ Why formulas are safer:
 - [ ] `cyfr.ready()` called in the external JS (SDK is auto-injected — no `<script>` tag needed for SDK)
 - [ ] All queries use named params (`:param`), never string concatenation
 - [ ] `tincture.public` matches intended visibility (actual access controlled via the `tincture_visibility.set` MCP tool)
-- [ ] If public: tested both authenticated and unauthenticated access at `/t/:publisher/:name`
+- [ ] If public: tested both authenticated and unauthenticated access at `/t/:athanor/:publisher/:name`
 - [ ] For React tinctures: `vite.config.ts` uses `base: "./"` (required for subpath serving)
 - [ ] For React tinctures: `cyfr build compile t:local.<name>:<version>` succeeds before registering

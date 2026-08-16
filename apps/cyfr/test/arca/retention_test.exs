@@ -18,16 +18,15 @@ defmodule Arca.RetentionTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Use a unique tenant (org) per test: execution retention is per-project, so
-    # a unique org isolates each test's executions from cross-test pollution.
+    # Use a unique athanor per test: execution retention is per-athanor, so
+    # a unique id isolates each test's executions from cross-test pollution.
     ctx =
       Context.build(
         user_id: "retention_test_user_#{rand_id}",
         namespace: "retention_test_user_#{rand_id}",
-        org_id: "retention_test_org_#{rand_id}",
-        project_id: "default",
+        athanor_id: "ath_retention_#{rand_id}",
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
@@ -85,7 +84,7 @@ defmodule Arca.RetentionTest do
 
       # Verify all still exist
       records =
-        Arca.Execution.list(limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
+        Arca.Execution.list(limit: 100, athanor_id: ctx.athanor_id)
 
       assert length(records) == 3
     end
@@ -101,7 +100,7 @@ defmodule Arca.RetentionTest do
 
       # Verify the 3 newest remain
       records =
-        Arca.Execution.list(limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
+        Arca.Execution.list(limit: 100, athanor_id: ctx.athanor_id)
 
       assert length(records) == 3
       ids = Enum.map(records, & &1.id)
@@ -127,7 +126,7 @@ defmodule Arca.RetentionTest do
 
       # Verify nothing was actually deleted
       records =
-        Arca.Execution.list(limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
+        Arca.Execution.list(limit: 100, athanor_id: ctx.athanor_id)
 
       assert length(records) == 5
     end
@@ -169,30 +168,30 @@ defmodule Arca.RetentionTest do
       assert is_list(result.errors)
     end
 
-    test "keeps N per project across all users in the tenant", %{ctx: ctx} do
+    test "keeps N per athanor across all its members", %{ctx: ctx} do
       rand_id = :rand.uniform(100_000)
 
-      # Two different users in the SAME tenant (ctx's unique org/default).
+      # Two different users in the SAME athanor.
       u1 = %{ctx | user_id: "cleanup_all_u1_#{rand_id}"}
       u2 = %{ctx | user_id: "cleanup_all_u2_#{rand_id}"}
 
-      # Create 5 executions for each user — 10 total in the one project.
+      # Create 5 executions for each user — 10 total in the one athanor.
       for i <- 1..5 do
         ts = "2025-01-0#{i}T10:00:00Z"
         create_execution_with_timestamp(u1, "u1_#{rand_id}_exec_#{i}", ts)
         create_execution_with_timestamp(u2, "u2_#{rand_id}_exec_#{i}", ts)
       end
 
-      all = Arca.Execution.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 100)
+      all = Arca.Execution.list(athanor_id: ctx.athanor_id, limit: 100)
       assert length(all) == 10
 
-      # Sweep the tenant, keeping 2 per project (not per user).
+      # Sweep, keeping 2 per athanor (not per user).
       {:ok, result} = Retention.cleanup_all_executions(ctx, keep: 2)
 
       assert result.tenants == 1
       assert result.deleted == 8
 
-      remaining = Arca.Execution.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 100)
+      remaining = Arca.Execution.list(athanor_id: ctx.athanor_id, limit: 100)
       assert length(remaining) == 2
     end
   end
@@ -235,7 +234,7 @@ defmodule Arca.RetentionTest do
     test "handles corrupt settings file gracefully", %{ctx: ctx, test_path: test_path} do
       # Write corrupt JSON directly
       user_config_path =
-        Path.join([test_path, ctx.org_id, ctx.project_id, "config", "retention.json"])
+        Path.join([test_path, ctx.athanor_id, "config", "retention.json"])
 
       File.mkdir_p!(Path.dirname(user_config_path))
       File.write!(user_config_path, "not valid json {{{")
@@ -246,34 +245,34 @@ defmodule Arca.RetentionTest do
       assert settings["builds"] == 100
     end
 
-    test "settings are isolated across tenants (org)", %{ctx: _ctx, test_path: _test_path} do
-      # Within a tenant, members share settings (one project, one config); the
-      # isolation boundary is the tenant (org/project), not the user.
-      org_a_ctx =
+    test "settings are isolated across athanors", %{ctx: _ctx, test_path: _test_path} do
+      # Within an athanor, members share settings (one config); the isolation
+      # boundary is the athanor, not the user.
+      ath_a_ctx =
         Context.build(
           user_id: "user_1",
           namespace: "user_1",
-          org_id: "org_a",
+          athanor_id: "ath_a",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc
         )
 
-      org_b_ctx =
+      ath_b_ctx =
         Context.build(
           user_id: "user_2",
           namespace: "user_2",
-          org_id: "org_b",
+          athanor_id: "ath_b",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc
         )
 
-      :ok = Retention.set_settings(org_a_ctx, %{"executions" => 5})
-      :ok = Retention.set_settings(org_b_ctx, %{"executions" => 15})
+      :ok = Retention.set_settings(ath_a_ctx, %{"executions" => 5})
+      :ok = Retention.set_settings(ath_b_ctx, %{"executions" => 15})
 
-      assert Retention.get_settings(org_a_ctx)["executions"] == 5
-      assert Retention.get_settings(org_b_ctx)["executions"] == 15
+      assert Retention.get_settings(ath_a_ctx)["executions"] == 5
+      assert Retention.get_settings(ath_b_ctx)["executions"] == 15
     end
 
     test "rejects invalid values", %{ctx: ctx} do
@@ -377,8 +376,7 @@ defmodule Arca.RetentionTest do
       id: id,
       request_id: "req_test",
       user_id: ctx.user_id,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       reference: "reagent:local.test:0.1.0",
       component_type: "reagent",
       started_at: dt,
@@ -400,8 +398,7 @@ defmodule Arca.RetentionTest do
     Arca.McpLog.record(%{
       id: id,
       user_id: ctx.user_id,
-      org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-      project_id: ctx.project_id || "default",
+      athanor_id: ctx.athanor_id,
       timestamp: timestamp,
       status: "success",
       tool: "test",

@@ -13,24 +13,17 @@ defmodule Arca.ApiKeyStorage do
   Keys are stored as SHA-256 hashes for indexed lookups.
   Key metadata (name, type, scope, rate_limit, ip_allowlist) is stored as plaintext.
 
-  API keys are org-scoped by design. All queries filter by `org_id` via
-  `where_org_id/2` to enforce tenant isolation in tenant-scoped
-  deployments. The key hash
-  serves as the authentication credential; `org_id` is derived from the
-  stored key record, not from the request.
+  API keys belong to an athanor. All queries filter by `athanor_id` via
+  `where_athanor/2` to enforce tenant isolation. The key hash serves as the
+  authentication credential; `athanor_id` is derived from the stored key
+  record, not from the request.
   """
 
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
 
-  import Arca.QueryHelpers,
-    only: [
-      normalize_org_id: 1,
-      normalize_project_id: 1,
-      where_org_id: 2,
-      where_project_id: 2
-    ]
+  import Arca.QueryHelpers, only: [where_athanor: 2]
 
   alias Arca.Schemas.ApiKey
 
@@ -47,25 +40,18 @@ defmodule Arca.ApiKeyStorage do
     :revoked,
     :created_by,
     :rotated_at,
-    :scope_type,
-    :org_id,
-    :project_id,
+    :athanor_id,
     :inserted_at,
     :updated_at
   ]
 
   @doc """
-  Insert a new API key.
-
-  `attrs.project_id` is normalized to `"default"` when nil/empty — SQLite's
-  unique index treats NULL as distinct, so we use a fixed sentinel to ensure
-  `(name, scope_type, org_id, project_id)` uniqueness detects collisions.
+  Insert a new API key. `attrs.athanor_id` names the owning athanor;
+  `(athanor_id, name)` is unique among unrevoked keys.
   """
   @spec create_key(map()) :: :ok | {:error, term()}
   def create_key(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    org = normalize_org_id(attrs[:org_id])
-    project = normalize_project_id(attrs[:project_id])
 
     row = %{
       id: Ecto.UUID.generate(),
@@ -80,9 +66,7 @@ defmodule Arca.ApiKeyStorage do
       revoked: false,
       created_by: attrs[:created_by],
       rotated_at: nil,
-      scope_type: attrs.scope_type,
-      org_id: org,
-      project_id: project,
+      athanor_id: attrs.athanor_id,
       inserted_at: now,
       updated_at: now
     }
@@ -100,23 +84,19 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Get a key by name, scope_type, org_id, and project_id. Excludes revoked keys.
+  Get a key by name within an athanor. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, ApiKey.t()} | {:error, :not_found}
-  def get_key(name, scope_type, org_id, project_id \\ nil) do
-    project = normalize_project_id(project_id)
-
+  @spec get_key(String.t(), String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
+  def get_key(name, athanor_id) do
     query =
       from(k in ApiKey,
-        where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false,
+        where: k.name == ^name and k.revoked == ^false,
         limit: 1,
         select: ^@returned_fields
       )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -129,16 +109,16 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Get an unrevoked key row by its id within an org — the lookup a
+  Get an unrevoked key row by its id within an athanor — the lookup a
   key-authenticated context uses to read its own key's attributes.
   """
-  @spec get_key_by_id(String.t() | nil, String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
-  def get_key_by_id(org_id, id) when is_binary(id) do
-    org = normalize_org_id(org_id)
+  @spec get_key_by_id(String.t(), String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
+  def get_key_by_id(athanor_id, id) when is_binary(id) do
+    query =
+      from(k in ApiKey, where: k.id == ^id and k.revoked == false)
+      |> where_athanor(athanor_id)
 
-    case Arca.Repo.one(
-           from(k in ApiKey, where: k.id == ^id and k.org_id == ^org and k.revoked == false)
-         ) do
+    case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
       row -> {:ok, row}
     end
@@ -153,8 +133,8 @@ defmodule Arca.ApiKeyStorage do
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
 
-  API keys are project credentials: `org_id`/`project_id` are read back from
-  the returned row and the tenant binding is enforced on the resulting
+  API keys are athanor credentials: `athanor_id` is read back from the
+  returned row and the tenant binding is enforced on the resulting
   `Sanctum.Context` (`require_tenant!`), NOT at lookup time. The key hash is a
   192-bit globally-unique credential, so this single untenanted lookup is the
   correct and authoritative path regardless of how the deployment is configured.
@@ -179,21 +159,17 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  List all non-revoked keys for a given scope_type, org_id, and project_id,
-  sorted by inserted_at.
+  List all non-revoked keys of an athanor, sorted by inserted_at.
   """
-  @spec list_keys(String.t(), String.t() | nil, String.t() | nil) :: {:ok, [ApiKey.t()]}
-  def list_keys(scope_type, org_id, project_id \\ nil) do
-    project = normalize_project_id(project_id)
-
+  @spec list_keys(String.t()) :: {:ok, [ApiKey.t()]}
+  def list_keys(athanor_id) do
     query =
       from(k in ApiKey,
-        where: k.scope_type == ^scope_type and k.revoked == ^false,
+        where: k.revoked == ^false,
         order_by: [asc: k.inserted_at],
         select: ^@returned_fields
       )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      |> where_athanor(athanor_id)
 
     {:ok, Arca.Repo.all(query)}
   rescue
@@ -203,20 +179,15 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Revoke a key by name, scope_type, org_id, and project_id.
+  Revoke a key by name within an athanor.
   """
-  @spec revoke_key(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          :ok | {:error, :not_found}
-  def revoke_key(name, scope_type, org_id, project_id \\ nil) do
+  @spec revoke_key(String.t(), String.t()) :: :ok | {:error, :not_found}
+  def revoke_key(name, athanor_id) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    project = normalize_project_id(project_id)
 
     query =
-      from(k in ApiKey,
-        where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
-      )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.update_all(query, set: [revoked: true, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -230,28 +201,14 @@ defmodule Arca.ApiKeyStorage do
 
   @doc """
   Rotate a key: update key_hash, key_prefix, and rotated_at.
-
-  Pass `project_id` explicitly in multi-project contexts; `nil` normalizes to
-  the `"default"` project.
   """
-  @spec rotate_key(
-          String.t(),
-          String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          binary(),
-          String.t()
-        ) :: :ok | {:error, :not_found}
-  def rotate_key(name, scope_type, org_id, project_id, new_key_hash, new_key_prefix) do
+  @spec rotate_key(String.t(), String.t(), binary(), String.t()) :: :ok | {:error, :not_found}
+  def rotate_key(name, athanor_id, new_key_hash, new_key_prefix) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    project = normalize_project_id(project_id)
 
     query =
-      from(k in ApiKey,
-        where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
-      )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+      from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.update_all(query,
            set: [

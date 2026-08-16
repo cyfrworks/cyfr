@@ -97,14 +97,13 @@ defmodule Sanctum.VaultReader do
   anonymous caller to reject. Fails closed on a missing, non-`active`, or v1
   entry, exactly as the consent path does.
   """
-  @spec unseal_by_name(String.t(), String.t(), String.t()) ::
+  @spec unseal_by_name(String.t(), String.t()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}
-  def unseal_by_name(org_id, project_id, name)
-      when is_binary(org_id) and is_binary(project_id) and is_binary(name) do
-    with {:ok, entry} <- Arca.VaultStorage.get_by_name(org_id, project_id, name),
+  def unseal_by_name(athanor_id, name) when is_binary(athanor_id) and is_binary(name) do
+    with {:ok, entry} <- Arca.VaultStorage.get_by_name(athanor_id, name),
          :ok <- check_status(entry),
-         {:ok, %{"v" => 2, "fields" => fields}} <- unseal_material(org_id, entry) do
-      Arca.VaultStorage.touch_last_used(org_id, project_id, entry.id)
+         {:ok, %{"v" => 2, "fields" => fields}} <- unseal_material(entry) do
+      Arca.VaultStorage.touch_last_used(athanor_id, entry.id)
       {:ok, fields}
     else
       {:error, reason} -> {:error, reason}
@@ -135,11 +134,11 @@ defmodule Sanctum.VaultReader do
   defp load_and_unseal(%Context{anonymous: true}, _resource), do: {:error, :anonymous_denied}
 
   defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource) do
-    with {:ok, entry} <- Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry_id),
+    with {:ok, entry} <- Arca.VaultStorage.get(ctx.athanor_id, entry_id),
          :ok <- check_status(entry),
          :ok <- check_binding(entry, resource),
-         {:ok, payload} <- unseal(ctx, entry) do
-      Arca.VaultStorage.touch_last_used(ctx.org_id, ctx.project_id, entry.id)
+         {:ok, payload} <- unseal_material(entry) do
+      Arca.VaultStorage.touch_last_used(ctx.athanor_id, entry.id)
       {:ok, entry, payload}
     end
   end
@@ -168,10 +167,10 @@ defmodule Sanctum.VaultReader do
 
   defp check_binding(_entry, _resource), do: {:error, :binding_mismatch}
 
-  defp unseal(ctx, entry), do: unseal_material(ctx.org_id, entry)
-
-  defp unseal_material(org_id, %{sealed_payload: sealed} = entry) when is_binary(sealed) do
-    aad = CipherAAD.vault_entry(org_id, entry.project_id, entry.id, entry.provider_hint)
+  # The AAD is rebuilt from the row itself: the entry's own athanor is bound,
+  # so a row that reached a foreign context by any path still fails to unseal.
+  defp unseal_material(%{sealed_payload: sealed} = entry) when is_binary(sealed) do
+    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
     case Sanctum.Cipher.decrypt(sealed, aad) do
       {:ok, plaintext} -> decode_payload(plaintext)
@@ -179,7 +178,7 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp unseal_material(_org_id, _entry), do: {:error, :unseal_failed}
+  defp unseal_material(_entry), do: {:error, :unseal_failed}
 
   defp decode_payload(plaintext), do: Sanctum.Vault.Payload.decode(plaintext)
 

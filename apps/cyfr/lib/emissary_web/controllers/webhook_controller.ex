@@ -59,13 +59,13 @@ defmodule EmissaryWeb.WebhookController do
         # Defensive — verify plug should have halted before us.
         conn |> put_status(500) |> json(%{error: "internal_error"})
 
-      not Sanctum.Tenancy.user_active_in_org?(webhook.created_by, webhook.org_id) ->
-        # The owner lost (or never had) access to this org — the stored row
-        # must not remain their standing execution channel. Same response
+      not Sanctum.Tenancy.user_active?(webhook.created_by) ->
+        # The owner lost (or never had) access to this server — the stored
+        # row must not remain their standing execution channel. Same response
         # shape as a disabled webhook so existence is not leaked.
         Logger.warning(
-          "[WebhookInvoke] owner #{inspect(webhook.created_by)} no longer active in " <>
-            "org #{webhook.org_id} — refusing slug=#{webhook.slug}"
+          "[WebhookInvoke] owner #{inspect(webhook.created_by)} no longer active — " <>
+            "refusing slug=#{webhook.slug}"
         )
 
         conn |> put_status(404) |> json(%{error: "not_found"})
@@ -85,10 +85,10 @@ defmodule EmissaryWeb.WebhookController do
       run_logged_invoke(conn, ctx, request_id, webhook, input)
     else
       {:error, :missing_tenant} ->
-        # Webhook row with no resolved org_id — should never happen for a
-        # well-formed tenant, but fail closed to preserve isolation.
+        # Webhook row with no resolved athanor — should never happen for a
+        # well-formed row, but fail closed to preserve isolation.
         Logger.error(
-          "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved org_id — rejecting"
+          "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
         )
 
         conn |> put_status(500) |> json(%{error: "internal_error"})
@@ -109,7 +109,7 @@ defmodule EmissaryWeb.WebhookController do
   defp build_webhook_context(webhook, request_id) do
     # namespace is identity-only (not path-bearing); resolve the owner's handle
     # for attribution, nil if the webhook is orphaned. Storage is scoped by the
-    # webhook's org_id/project_id.
+    # webhook's athanor.
     namespace =
       case webhook.created_by do
         user_id when is_binary(user_id) and user_id != "" -> Sanctum.Namespace.lookup(user_id)
@@ -120,8 +120,7 @@ defmodule EmissaryWeb.WebhookController do
       user_id: "webhook:#{webhook.slug}",
       namespace: namespace,
       permissions: [:execute],
-      org_id: webhook.org_id,
-      project_id: webhook.project_id || "default",
+      athanor_id: webhook.athanor_id,
       auth_method: :webhook,
       # authenticated gates tool dispatch; anonymous gates credentials.
       # A webhook context is not anonymous: the hook is operator-created
@@ -181,8 +180,7 @@ defmodule EmissaryWeb.WebhookController do
       webhook_slug: webhook.slug,
       webhook_name: webhook.name,
       reference: webhook.target_ref,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       user_id: ctx.user_id
     }
 

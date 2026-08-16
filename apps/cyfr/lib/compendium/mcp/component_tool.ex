@@ -1262,17 +1262,10 @@ defmodule Compendium.MCP.ComponentTool do
     publisher = component[:publisher] || component["publisher"]
     name = component[:name] || component["name"]
     version = component[:version] || component["version"]
-    org_id = component[:org_id] || component["org_id"]
-    project_id = component[:project_id] || component["project_id"]
+    athanor_id = component[:athanor_id] || component["athanor_id"]
 
     if publisher && name && version do
-      Compendium.ComponentPath.version_dir(
-        "tincture",
-        publisher,
-        name,
-        version,
-        {org_id, project_id}
-      )
+      Compendium.ComponentPath.version_dir("tincture", publisher, name, version, athanor_id)
     end
   end
 end

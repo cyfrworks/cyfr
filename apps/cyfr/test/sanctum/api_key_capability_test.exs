@@ -77,7 +77,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
 
     test "an ordinary key stores no capability and reads back nil", %{ctx: ctx} do
       {:ok, _} = ApiKey.create(ctx, %{name: "plain-key"})
-      {:ok, row} = Arca.ApiKeyStorage.get_key("plain-key", "project", ctx.org_id, ctx.project_id)
+      {:ok, row} = Arca.ApiKeyStorage.get_key("plain-key", ctx.athanor_id)
 
       assert row.capability == nil
       assert {:ok, nil} = ApiKey.consent_capability(ctx, row.id)
@@ -93,7 +93,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         })
 
       {:ok, row} =
-        Arca.ApiKeyStorage.get_key("cap-roundtrip", "project", ctx.org_id, ctx.project_id)
+        Arca.ApiKeyStorage.get_key("cap-roundtrip", ctx.athanor_id)
 
       {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
       assert capability.commit_digest == @digest
@@ -130,7 +130,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         })
 
       {:ok, row} =
-        Arca.ApiKeyStorage.get_key("cap-walk-key", "project", ctx.org_id, ctx.project_id)
+        Arca.ApiKeyStorage.get_key("cap-walk-key", ctx.athanor_id)
 
       {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
 
@@ -147,7 +147,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
                  key_capability: capability
                )
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, ctx.project_id, committed.profile_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, committed.profile_id)
       assert head.granted_via == "scoped_key"
     end
 

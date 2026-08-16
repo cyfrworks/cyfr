@@ -17,7 +17,7 @@ defmodule Sanctum.ContextPlaneTest do
       assert Context.build(%{user_id: "u"}).plane == :external
       assert Context.build(user_id: "u").plane == :external
       assert Context.internal(user_id: "system").plane == :external
-      assert Context.for_scheduled("u").plane == :external
+      assert Context.for_scheduled("u", athanor_id: "ath_test").plane == :external
       assert %Context{}.plane == :external
     end
 

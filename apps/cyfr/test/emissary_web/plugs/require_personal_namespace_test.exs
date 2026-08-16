@@ -73,8 +73,8 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       refute result.halted
     end
 
-    test "/t/local/default/alice/demo is bypassed" do
-      conn = build_conn(:get, "/t/local/default/alice/demo")
+    test "/t/home/alice/demo is bypassed" do
+      conn = build_conn(:get, "/t/home/alice/demo")
       result = RequirePersonalNamespace.call(conn, [])
       refute result.halted
     end
@@ -191,8 +191,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       user_id: "github|https://github.com|#{System.unique_integer([:positive])}",
       email: "test-#{System.unique_integer([:positive])}@example.com",
       provider: "github",
-      org_id: "local",
-      project_id: "default",
+      athanor_id: "ath_test",
       permissions: [],
       namespace: "testns",
       authenticated: true

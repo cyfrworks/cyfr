@@ -184,7 +184,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
       assert Registry.lookup(
                Emissary.MCP.ExternalServerRegistry,
-               {"lazy-1", ctx.org_id, ctx.project_id}
+               {"lazy-1", ctx.athanor_id}
              ) == []
     end
 
@@ -353,14 +353,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
         url: "https://localhost:99999/mcp"
       })
 
-      org_id = ctx.org_id || ""
-      project_id = ctx.project_id || "default"
+      athanor_id = ctx.athanor_id
 
       # No process should be running yet
       assert [] =
                Registry.lookup(
                  Emissary.MCP.ExternalServerRegistry,
-                 {"autostart", org_id, project_id}
+                 {"autostart", athanor_id}
                )
 
       # try_handle should auto-start the server (connection will fail, but process starts)
@@ -370,7 +369,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert [{_pid, _}] =
                Registry.lookup(
                  Emissary.MCP.ExternalServerRegistry,
-                 {"autostart", org_id, project_id}
+                 {"autostart", athanor_id}
                )
 
       # Result will be an error since the server can't connect, but it shouldn't be :not_external
@@ -378,7 +377,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       refute msg == :not_external
 
       # Cleanup
-      Emissary.MCP.ExternalServerSupervisor.stop("autostart", org_id, project_id)
+      Emissary.MCP.ExternalServerSupervisor.stop("autostart", athanor_id)
     end
 
     test "dispatches to running server", %{ctx: ctx} do
@@ -387,15 +386,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
         url: "https://localhost:99999/mcp"
       })
 
-      org_id = ctx.org_id || ""
-      project_id = ctx.project_id || "default"
+      athanor_id = ctx.athanor_id
 
       # Pre-start the server
       Emissary.MCP.ExternalServerSupervisor.ensure_started(
         name: "dispatch-test",
         url: "https://localhost:99999/mcp",
-        org_id: org_id,
-        project_id: project_id
+        athanor_id: athanor_id
       )
 
       # try_handle should dispatch (will fail at HTTP level, but not :not_external)
@@ -403,7 +400,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       refute msg == :not_external
 
       # Cleanup
-      Emissary.MCP.ExternalServerSupervisor.stop("dispatch-test", org_id, project_id)
+      Emissary.MCP.ExternalServerSupervisor.stop("dispatch-test", athanor_id)
     end
   end
 

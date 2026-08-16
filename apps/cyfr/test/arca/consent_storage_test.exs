@@ -13,15 +13,14 @@ defmodule Arca.ConsentStorageTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    {:ok, org: ctx.org_id, proj: ctx.project_id}
+    {:ok, athanor: ctx.athanor_id}
   end
 
-  defp profile!(org, proj, id) do
+  defp profile!(athanor, id) do
     {:ok, profile} =
       ProfileStorage.put(%{
         id: id,
-        org_id: org,
-        project_id: proj,
+        athanor_id: athanor,
         source_ref: "reagent:local.storage-test",
         kind: "owner",
         label: "default",
@@ -31,11 +30,10 @@ defmodule Arca.ConsentStorageTest do
     profile
   end
 
-  defp entry!(org, proj) do
+  defp entry!(athanor) do
     {:ok, entry} =
       VaultStorage.put(%{
-        org_id: org,
-        project_id: proj,
+        athanor_id: athanor,
         name: "entry-#{System.unique_integer([:positive])}",
         kind: "api_key",
         sealed_payload: "sealed"
@@ -44,9 +42,9 @@ defmodule Arca.ConsentStorageTest do
     entry
   end
 
-  defp consent_attrs(org, profile_id, revision) do
+  defp consent_attrs(athanor, profile_id, revision) do
     %{
-      org_id: org,
+      athanor_id: athanor,
       profile_id: profile_id,
       revision: revision,
       scope: "versionless",
@@ -62,80 +60,80 @@ defmodule Arca.ConsentStorageTest do
   end
 
   describe "insert_revision/4" do
-    test "revision + refs + head advance commit together", %{org: org, proj: proj} do
-      profile = profile!(org, proj, "prof_multi_1")
-      entry = entry!(org, proj)
+    test "revision + refs + head advance commit together", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_multi_1")
+      entry = entry!(athanor)
 
       assert {:ok, consent} =
                ConsentStorage.insert_revision(
-                 consent_attrs(org, profile.id, 1),
+                 consent_attrs(athanor, profile.id, 1),
                  [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
                  nil
                )
 
-      {:ok, head, refs} = ConsentStorage.get_head(org, proj, profile.id)
+      {:ok, head, refs} = ConsentStorage.get_head(athanor, profile.id)
       assert head.id == consent.id
       assert [%{vault_entry_id: entry_id}] = refs
       assert entry_id == entry.id
     end
 
     test "a failing in-transaction verifier rolls back everything",
-         %{org: org, proj: proj} do
-      profile = profile!(org, proj, "prof_multi_2")
-      entry = entry!(org, proj)
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_multi_2")
+      entry = entry!(athanor)
 
       assert {:error, :binding_went_stale} =
                ConsentStorage.insert_revision(
-                 consent_attrs(org, profile.id, 1),
+                 consent_attrs(athanor, profile.id, 1),
                  [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
                  nil,
                  verify: fn -> {:error, :binding_went_stale} end
                )
 
-      assert {:error, :no_head} = ConsentStorage.get_head(org, proj, profile.id)
+      assert {:error, :no_head} = ConsentStorage.get_head(athanor, profile.id)
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
       assert Arca.Repo.aggregate(Arca.Schemas.ConsentVaultRef, :count) == 0
     end
 
     test "a stale head CAS refuses with head_moved and inserts nothing",
-         %{org: org, proj: proj} do
-      profile = profile!(org, proj, "prof_multi_3")
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_multi_3")
 
-      {:ok, first} = ConsentStorage.insert_revision(consent_attrs(org, profile.id, 1), [], nil)
+      {:ok, first} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
       # Racing writer with a stale expectation (nil = "no head yet").
       assert {:error, :head_moved} =
-               ConsentStorage.insert_revision(consent_attrs(org, profile.id, 2), [], nil)
+               ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 2), [], nil)
 
-      {:ok, head, _refs} = ConsentStorage.get_head(org, proj, profile.id)
+      {:ok, head, _refs} = ConsentStorage.get_head(athanor, profile.id)
       assert head.id == first.id
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
     end
 
     test "a refs row violating the vault FK rolls the revision back",
-         %{org: org, proj: proj} do
-      profile = profile!(org, proj, "prof_multi_4")
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_multi_4")
 
       assert {:error, _} =
                ConsentStorage.insert_revision(
-                 consent_attrs(org, profile.id, 1),
+                 consent_attrs(athanor, profile.id, 1),
                  [%{vault_entry_id: "vlt_never_existed", binding_digest: "sha256:b"}],
                  nil
                )
 
-      assert {:error, :no_head} = ConsentStorage.get_head(org, proj, profile.id)
+      assert {:error, :no_head} = ConsentStorage.get_head(athanor, profile.id)
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
   end
 
   describe "mint_profile_with_revision/4" do
-    test "profile and first revision are one atom", %{org: org, proj: proj} do
-      entry = entry!(org, proj)
+    test "profile and first revision are one atom", %{athanor: athanor} do
+      entry = entry!(athanor)
 
       attrs = %{
         id: "prof_mint_1",
-        org_id: org,
-        project_id: proj,
+        athanor_id: athanor,
         source_ref: "reagent:local.minted",
         kind: "owner",
         label: "default",
@@ -145,19 +143,18 @@ defmodule Arca.ConsentStorageTest do
       assert {:ok, consent} =
                ConsentStorage.mint_profile_with_revision(
                  attrs,
-                 consent_attrs(org, "prof_mint_1", 1),
+                 consent_attrs(athanor, "prof_mint_1", 1),
                  [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}]
                )
 
-      {:ok, profile} = ProfileStorage.get(org, proj, "prof_mint_1")
+      {:ok, profile} = ProfileStorage.get(athanor, "prof_mint_1")
       assert profile.head_consent_id == consent.id
     end
 
-    test "a failed consent leg leaves NO orphan profile", %{org: org, proj: proj} do
+    test "a failed consent leg leaves NO orphan profile", %{athanor: athanor} do
       attrs = %{
         id: "prof_mint_2",
-        org_id: org,
-        project_id: proj,
+        athanor_id: athanor,
         source_ref: "reagent:local.orphanless",
         kind: "owner",
         label: "default",
@@ -167,12 +164,12 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, :nope} =
                ConsentStorage.mint_profile_with_revision(
                  attrs,
-                 consent_attrs(org, "prof_mint_2", 1),
+                 consent_attrs(athanor, "prof_mint_2", 1),
                  [],
                  verify: fn -> {:error, :nope} end
                )
 
-      assert {:error, :not_found} = ProfileStorage.get(org, proj, "prof_mint_2")
+      assert {:error, :not_found} = ProfileStorage.get(athanor, "prof_mint_2")
     end
   end
 

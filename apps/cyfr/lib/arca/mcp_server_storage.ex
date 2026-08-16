@@ -16,14 +16,14 @@ defmodule Arca.McpServerStorage do
   - url: MCP server endpoint URL
   - config_json: JSON text with headers, timeout_ms, etc.
   - enabled: Whether the server is active
-  - org_id/project_id: Tenant scoping columns
+  - athanor_id: the owning athanor
   - inserted_at/updated_at: Timestamps
   """
 
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [where_tenant: 2, normalize_org_id: 1]
+  import Arca.QueryHelpers, only: [where_tenant: 2]
 
   alias Arca.Schemas.McpServer
   alias Sanctum.Context
@@ -79,8 +79,7 @@ defmodule Arca.McpServerStorage do
       |> Map.put_new(:id, Emissary.UUID7.generate())
       |> Map.put_new(:enabled, true)
       |> Map.put_new(:config_json, "{}")
-      |> Map.put(:org_id, normalize_org_id(ctx.org_id))
-      |> Map.put(:project_id, ctx.project_id)
+      |> Map.put(:athanor_id, ctx.athanor_id)
       |> Map.put_new(:inserted_at, now)
       |> Map.put(:updated_at, now)
 
@@ -88,7 +87,7 @@ defmodule Arca.McpServerStorage do
       McpServer,
       [attrs],
       on_conflict: {:replace, [:url, :config_json, :enabled, :updated_at]},
-      conflict_target: [:name, :org_id, :project_id]
+      conflict_target: [:athanor_id, :name]
     )
     |> case do
       {n, _} when n in [0, 1] ->

@@ -34,8 +34,7 @@ defmodule Arca.Schemas.Component do
     field :signature_verified, :boolean
     field :signer_identity, :string
     field :signer_issuer, :string
-    field :org_id, :string
-    field :project_id, :string
+    field :athanor_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

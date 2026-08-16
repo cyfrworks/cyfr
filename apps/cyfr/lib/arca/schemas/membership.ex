@@ -3,12 +3,11 @@
 
 defmodule Arca.Schemas.Membership do
   @moduledoc """
-  A presence-only assignment: "user X is admin of scope S".
+  A presence-only assignment: "user X is a member of athanor A".
 
-  `scope` is one of `"platform"`, `"org"`, or `"project"`. The row's existence
-  grants access to that scope — there is no role tier. `org_id` is required for
-  `"org"` and `"project"` scopes; `project_id` is required for `"project"`
-  scope. A `"platform"` row carries neither and bypasses the tenant gate.
+  `scope` is `"athanor"` (the row names an athanor) or `"platform"` (the row
+  names none — a platform admin, the server's operator). Membership carries
+  no role: every member of an athanor is its admin.
   """
 
   use Ecto.Schema
@@ -18,42 +17,28 @@ defmodule Arca.Schemas.Membership do
 
   schema "memberships" do
     field :user_id, :string
-    field :scope, :string, default: "project"
+    field :scope, :string, default: "athanor"
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
 
-    belongs_to :org, Arca.Schemas.Org, type: :string
-    belongs_to :project, Arca.Schemas.Project, type: :string
+    belongs_to :athanor, Arca.Schemas.Athanor, type: :string
   end
-
-  @valid_scopes ["platform", "org", "project"]
 
   def changeset(membership, attrs) do
     membership
-    |> cast(attrs, [
-      :id,
-      :user_id,
-      :scope,
-      :org_id,
-      :project_id,
-      :created_at,
-      :updated_at
-    ])
+    |> cast(attrs, [:id, :user_id, :scope, :athanor_id, :created_at, :updated_at])
     |> validate_required([:id, :user_id, :scope])
-    |> validate_inclusion(:scope, @valid_scopes)
-    |> validate_scope_targets()
-    |> foreign_key_constraint(:org_id)
-    |> foreign_key_constraint(:project_id)
-    |> unique_constraint([:user_id, :scope, :org_id, :project_id],
-      name: :memberships_assignment_index
-    )
+    |> validate_inclusion(:scope, Sanctum.Atoms.scopes())
+    |> validate_scope_target()
+    |> foreign_key_constraint(:athanor_id)
+    |> unique_constraint([:user_id, :scope, :athanor_id], name: :memberships_assignment_index)
   end
 
-  # "org" and "project" scopes name an org; "project" scope also names a project.
-  defp validate_scope_targets(changeset) do
+  # An athanor membership names its athanor; a platform one names none.
+  defp validate_scope_target(changeset) do
     case get_field(changeset, :scope) do
-      "org" -> validate_required(changeset, [:org_id])
-      "project" -> validate_required(changeset, [:org_id, :project_id])
+      "athanor" -> validate_required(changeset, [:athanor_id])
+      "platform" -> put_change(changeset, :athanor_id, nil)
       _ -> changeset
     end
   end

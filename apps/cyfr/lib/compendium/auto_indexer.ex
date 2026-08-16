@@ -26,15 +26,14 @@ defmodule Compendium.AutoIndexer do
 
   require Logger
 
-  alias Arca.QueryHelpers
   alias Compendium.Registry
 
   # Guards can't call functions; pinned at compile time from the SSOT.
   @type_plurals Compendium.ComponentPath.type_plurals()
   @allowed_publishers ["local"]
   @doc """
-  Scan `components/` via `Arca.list_recursive/2` and register all discovered
-  local components.
+  Scan the context's athanor tree (`components/{athanor_id}/`) via
+  `Arca.list_recursive/2` and register all discovered local components.
 
   Identical behaviour on the Local FS adapter and any configured object-store
   adapter — discovery and content reads both flow through Arca.
@@ -179,7 +178,7 @@ defmodule Compendium.AutoIndexer do
       errors: results.errors,
       total: total,
       elapsed_ms: elapsed,
-      scanned_dirs: [%{path: "components/", via: "Arca.list_recursive"}]
+      scanned_dirs: [%{path: "components/#{ctx.athanor_id}/", via: "Arca.list_recursive"}]
     }
   end
 
@@ -187,17 +186,18 @@ defmodule Compendium.AutoIndexer do
   # Discovery via Arca
   # ============================================================================
 
-  # Walk `components/` via the configured storage adapter, find every
-  # `cyfr-manifest.json`, and return the version-directory segment lists.
+  # Walk the athanor's own `components/{athanor_id}/` subtree via the
+  # configured storage adapter, find every `cyfr-manifest.json`, and return
+  # the version-directory segment lists.
   #
-  # The scan walks the global `components/` tree but only keeps the caller's own
-  # tenant: a discovered path is included only when its `{org_id, project_id}`
-  # segments match the scan context (normalized) and its publisher is allowed.
-  # Each tenant therefore indexes its own subtree, and `register_from_arca`/
-  # `prune_stale_entries` stay keyed on `ctx` — no agent writes another tenant's
-  # rows.
+  # Each athanor indexes its own subtree — the listing is rooted there, and
+  # `register_from_arca`/`prune_stale_entries` stay keyed on `ctx`, so no
+  # scan writes another athanor's rows. The seed bundle (`_bundle`) is never
+  # reached: it is not under any athanor's root.
   defp discover_component_segments(ctx) do
-    case Arca.list_recursive(ctx, ["components"]) do
+    root = Compendium.ComponentPath.base_prefix(ctx)
+
+    case Arca.list_recursive(ctx, root) do
       {:ok, leaves} ->
         leaves
         |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
@@ -207,28 +207,25 @@ defmodule Compendium.AutoIndexer do
         |> Enum.filter(&allowed_segments?(&1, ctx))
 
       {:error, reason} ->
-        Logger.warning("[AutoIndexer] Cannot list components/: #{inspect(reason)}")
+        Logger.warning("[AutoIndexer] Cannot list #{Enum.join(root, "/")}: #{inspect(reason)}")
         []
     end
   end
 
-  # Layout: ["components", org_id, project_id, type_plural, publisher, name, version]
+  # Layout: ["components", athanor_id, type_plural, publisher, name, version]
   defp allowed_segments?(
-         ["components", seg_org, seg_proj, type_plural, publisher, _name, _version],
-         %{org_id: org_id, project_id: project_id}
+         ["components", seg_athanor, type_plural, publisher, _name, _version],
+         %{athanor_id: athanor_id}
        )
        when type_plural in @type_plurals do
-    publisher in @allowed_publishers and
-      seg_org == QueryHelpers.normalize_org_id(org_id) and
-      seg_proj == QueryHelpers.normalize_project_id(project_id)
+    publisher in @allowed_publishers and seg_athanor == athanor_id
   end
 
   defp allowed_segments?(_, _), do: false
 
   defp extract_segment_metadata([
          "components",
-         _org_id,
-         _project_id,
+         _athanor_id,
          type_plural,
          publisher,
          name,

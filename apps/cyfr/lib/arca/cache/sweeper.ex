@@ -156,18 +156,13 @@ defmodule Arca.Cache.Sweeper do
   defp enforce_compiled_cap(table) do
     cap = Application.get_env(:cyfr, :cache_max_compiled_components, 32)
 
+    # The key shape comes from Arca.Cache.Keys so a change there cannot
+    # silently turn this cap into a no-op.
     compiled =
-      :ets.foldl(
-        fn
-          {{:compiled_component, _, _, _} = key, _value, expires_at}, acc ->
-            [{key, expires_at} | acc]
-
-          _entry, acc ->
-            acc
-        end,
-        [],
-        table
-      )
+      :ets.select(table, [
+        {{Arca.Cache.Keys.match_compiled_component(), :_, :"$1"}, [], [{{:"$_", :"$1"}}]}
+      ])
+      |> Enum.map(fn {{key, _value, _expires}, expires_at} -> {key, expires_at} end)
 
     excess = length(compiled) - cap
 

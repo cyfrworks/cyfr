@@ -75,11 +75,15 @@ defmodule Arca.AuditHandler do
       if metadata[:context] do
         metadata
       else
+        # An event that names its athanor is handled inside it; one that
+        # doesn't (a platform-level event) gets a platform context.
+        athanor_id = metadata[:athanor_id]
+
         ctx =
-          Sanctum.Context.for_scheduled(
-            metadata[:user_id] || "system",
-            org_id: metadata[:org_id],
-            project_id: metadata[:project_id]
+          Sanctum.internal_context(
+            user_id: metadata[:user_id] || "system",
+            athanor_id: athanor_id,
+            scope: if(is_binary(athanor_id), do: :athanor, else: :platform)
           )
 
         Map.put(metadata, :context, ctx)

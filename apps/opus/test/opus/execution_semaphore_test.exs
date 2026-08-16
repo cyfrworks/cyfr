@@ -219,8 +219,8 @@ defmodule Opus.ExecutionSemaphoreTest do
   end
 
   describe "per-tenant cap" do
-    @tenant_a {"org_a", "default"}
-    @tenant_b {"org_b", "default"}
+    @tenant_a "ath_a"
+    @tenant_b "ath_b"
 
     test "tenant at cap is rejected while another tenant still acquires" do
       {:ok, pid} = GenServer.start(ExecutionSemaphore, {10, 2}, name: :test_tenant_sem)

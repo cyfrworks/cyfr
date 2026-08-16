@@ -11,7 +11,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
   No user Context is required: proof-of-initiation is the single-use,
   unguessable `state` (256-bit, delete-on-read, 2-minute TTL) plus the
   server-held PKCE `code_verifier`. The pending record written when
-  `vault.authorize` ran carries the originating org/project and target
+  `vault.authorize` ran carries the originating athanor and target
   Connection that the resulting tokens are stored under.
   """
 

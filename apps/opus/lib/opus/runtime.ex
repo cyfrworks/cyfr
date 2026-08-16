@@ -168,9 +168,10 @@ defmodule Opus.Runtime do
           component_result =
             if reference && digest do
               tenant_opts =
-                if ctx,
-                  do: [org_id: ctx.org_id, project_id: ctx.project_id],
-                  else: []
+                case ctx do
+                  %{athanor_id: athanor_id} -> [athanor_id: athanor_id]
+                  _ -> []
+                end
 
               Opus.ComponentCache.get_or_compile(
                 reference,

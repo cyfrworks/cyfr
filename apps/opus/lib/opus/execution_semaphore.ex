@@ -19,7 +19,7 @@ defmodule Opus.ExecutionSemaphore do
 
   ## Per-tenant cap
 
-  In addition to the global cap, each tenant (keyed `{org_id, project_id}`)
+  In addition to the global cap, each tenant (keyed by athanor id)
   is limited to `:max_concurrent_executions_per_tenant` slots. A tenant at
   its cap is **rejected** with `{:error, :tenant_limit}` rather than queued —
   queuing per-tenant would let one tenant's backlog interleave with the
@@ -94,7 +94,7 @@ defmodule Opus.ExecutionSemaphore do
     times out before a slot is available, they exit with `{:timeout, _}`.
   - `priority` - `:high` (reagents, formulas) or `:normal` (catalysts, default).
     High-priority callers are served before normal-priority in the queue.
-  - `tenant` - The caller's tenant key (`{org_id, project_id}`). `nil`
+  - `tenant` - The caller's tenant key (the athanor id). `nil`
     skips per-tenant accounting (used by internal/test callers).
 
   Returns `{:error, :queue_full}` if the wait queue itself is at capacity,
@@ -132,7 +132,7 @@ defmodule Opus.ExecutionSemaphore do
   ## Example
 
       %{max: 128, active: 3, available: 125, queued: 0, holders: [...],
-        tenant_max: 16, tenants: %{{"local", "default"} => 3}}
+        tenant_max: 16, tenants: %{"ath_…" => 3}}
   """
   @spec status() :: map()
   def status do

@@ -43,32 +43,32 @@ defmodule Arca.Storage do
   Paths are automatically scoped based on the first segment:
 
   - **Component paths**: `["components" | rest]` → routed to `components_path`.
-    The tenant lives *inside* the segment list — `Compendium.ComponentPath`
-    builds `components/{org}/{project}/{type}s/...` — so component paths are
-    not run through `tenant_segments/1` (which is for the `data/` root).
+    The athanor lives *inside* the segment list — `Compendium.ComponentPath`
+    builds `components/{athanor_id}/{type}s/...` — so component paths are not
+    run through `tenant_segments/1` (which is for the `data/` root). Adapters
+    pin them: a context may only reach `components/{its own athanor}/...`
+    (a platform context reaches every athanor), and the seed bundle
+    `components/_bundle/...` is readable only by system contexts.
   - **AQUA paths**: `["aqua" | rest]` → routed to `aqua_path`
-  - **Global paths**: `cache` → stored at root level
+  - **Global paths**: `cache`, `system` → stored at root level
   - **Tenant-scoped paths**: everything else → stored under
-    `{org}/{project_id}/...` (see `tenant_segments/1`)
+    `{athanor_id}/...` (see `tenant_segments/1`)
 
-  A single-user instance uses the seeded `"local"` org and `"default"`
-  project, so it lives at `data/local/default/...`. A tenant-scoped
-  deployment fills the slots with the real `org_id`/`project_id` minted by
-  the configured tenant policy. `namespace` is a user-identity field and is
-  NOT part of the path.
+  `namespace` is a user-identity field and is NOT part of the path.
 
   This enables:
-  - Components to be isolated by org/project under the `components/` root,
-    matching the `data/` tenant layout (publishing in one project never
-    overwrites another's blobs); new projects are given a baseline via
-    `Compendium.ProjectSeeder`
-  - Services to store data isolated by org/project (the tenant boundary);
-    members of a project share its storage
+  - Components to be isolated per athanor under the `components/` root,
+    matching the `data/` tenant layout (publishing in one athanor never
+    overwrites another's blobs); a new athanor is given the bundled baseline
+    by `Compendium.AthanorSeeder`
+  - Services to store data isolated per athanor (the tenant boundary);
+    members of an athanor share its storage
 
   ## Storage Structure
 
       components/                        # Component artifacts (separate root)
-      └── {org}/{project}/{type}s/{publisher}/{name}/{version}/
+      ├── _bundle/{type}s/local/{name}/{version}/   # the seed source, never a tenant
+      └── {athanor_id}/{type}s/{publisher}/{name}/{version}/
 
       aqua/                              # AQUA agent prompts/manifest (separate root)
 
@@ -76,12 +76,12 @@ defmodule Arca.Storage do
       ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
-      └── {org}/                         # Tenant-scoped (single-user: "local")
-          └── {project_id}/              #   single-user: "default"; tenant-scoped: real project id
-              ├── builds/                # Locus build lifecycle
-              ├── data/                  # Project data (agent conversations, etc.)
-              ├── config/                # Project config (retention settings, etc.)
-              └── audit/                 # Audit events (append-only JSONL, opt-in)
+      ├── system/                        # Global: server-internal scratch (health probe)
+      └── {athanor_id}/                  # Tenant-scoped
+          ├── builds/                    # Locus build lifecycle
+          ├── data/                      # Athanor data (agent conversations, etc.)
+          ├── config/                    # Athanor config (retention settings, etc.)
+          └── audit/                     # Audit events (append-only JSONL, opt-in)
 
   ## Structured Logs (database only)
 
@@ -99,23 +99,19 @@ defmodule Arca.Storage do
   >
   > **Two deployments must not share a storage root.** Use separate
   > filesystem paths (`base_path` config) or separate object-store
-  > buckets/prefixes. A single-user deployment writes to
-  > `data/local/default/...`, so two such deployments pointed at the same
-  > root would collide. Single-deployment-per-root is the assumed topology.
+  > buckets/prefixes. Single-deployment-per-root is the assumed topology.
 
   ## Tenancy
 
-  Tenant-scoped paths use the 2-tuple `{org, project_id}` built by
-  `tenant_segments/1`. Deployments with multiple tenants share one storage
-  root (filesystem path or object-store bucket prefix); isolation comes from
-  the org/project tuple. Single-user deployments use the seeded `"local"` org
-  and `"default"` project.
+  Tenant-scoped paths use the athanor id built by `tenant_segments/1`.
+  Every athanor on a server shares one storage root (filesystem path or
+  object-store bucket prefix); isolation comes from the athanor segment.
 
   `Sanctum.Context.user_id` (e.g. `"github|https://github.com|123"`,
   `"oidcc|<iss>|<sub>"`, `"webhook:<slug>"`) and `namespace` are identity
   fields (attribution, display, tincture tokens) — they are *not* path
-  primitives. Only `org_id` and `project_id` shape the on-disk layout, so
-  members of a project share its storage.
+  primitives. Only `athanor_id` shapes the on-disk layout, so members of an
+  athanor share its storage.
 
   ## Usage
 
@@ -123,7 +119,7 @@ defmodule Arca.Storage do
 
       ctx = Sanctum.TestContext.local()
 
-      # Tenant-scoped (auto-prefixed with {org}/{project}/)
+      # Tenant-scoped (auto-prefixed with {athanor_id}/)
       Arca.put(ctx, ["builds", "build_1", "started.json"], json_content)
 
       # Global (no tenant prefix)
@@ -140,54 +136,71 @@ defmodule Arca.Storage do
   Global path prefixes that are NOT tenant-scoped.
 
   These paths are stored at the root level — they bypass the
-  `{org}/{project_id}/` tenant tuple that `tenant_segments/1` builds for
-  everything else.
+  `{athanor_id}/` prefix that `tenant_segments/1` builds for everything
+  else.
 
   - `cache` — global cache (OCI blobs, etc.) under `data/cache/`
+  - `system` — server-internal scratch (the storage health probe) under
+    `data/system/`
   - `aqua` — AQUA agent prompts and manifest, routed to `:cyfr, :aqua_path`
   """
-  @global_prefixes ["cache", "aqua"]
+  @global_prefixes ["cache", "system", "aqua"]
 
   def global_prefixes, do: @global_prefixes
 
   @doc """
-  Build the 2-segment tenant tuple `[org, project_id]` used by every storage
-  adapter for tenant-scoped paths.
+  Build the tenant segment list `[athanor_id]` used by every storage adapter
+  for tenant-scoped paths.
 
-  Layout: `{org}/{project_id}/...`. A single-user instance uses the seeded
-  `"local"` org and `"default"` project (`data/local/default/...`).
-
-  A resolved `org_id` is required; an org-less context raises (fail closed).
-  `namespace` is a pure identity field and is NOT part of the path.
+  Layout: `{athanor_id}/...`. A resolved `athanor_id` is required; a context
+  without one raises (fail closed) — naming a directory is a separate concern
+  from tenant-access control (where `:platform` legitimately bypasses): a
+  platform or system task must still carry the athanor whose files it
+  touches. `namespace` is a pure identity field and is NOT part of the path.
   """
   @spec tenant_segments(Context.t()) :: [String.t()]
-  def tenant_segments(%Context{} = ctx) do
-    segments = [path_org(ctx), Arca.QueryHelpers.normalize_project_id(ctx.project_id)]
+  def tenant_segments(%Context{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    segments = [athanor_id]
 
-    # Defense-in-depth: org/project are minted by trusted authorities (tenant
-    # policy validates the ids), but a corrupted entry or a future code path
-    # that bypasses those validations could inject `..` or null bytes. Run the
-    # same path-traversal check we apply to user-supplied segments.
+    # Defense-in-depth: athanor ids are minted by trusted code, but a
+    # corrupted row or a future code path that bypasses those validations
+    # could inject `..` or null bytes. Run the same path-traversal check we
+    # apply to user-supplied segments.
     validate_path!(segments)
 
     segments
   end
 
-  # The org names the tenant directory. The seeded single-user sentinel "local"
-  # is concrete (→ data/local/...); a real org is used as-is. nil/"" means a
-  # caller bypassed the Sanctum.Context.require_tenant! chokepoint — fail closed.
-  # Naming a directory is a separate concern from tenant-access control (where
-  # :platform legitimately bypasses): a platform/system task must still carry a
-  # concrete org to write files. `internal/1` supplies "local", so system tasks
-  # resolve to data/local/default and never raise here.
-  defp path_org(%Context{org_id: org}) when is_binary(org) and org != "", do: org
-
-  defp path_org(%Context{} = ctx) do
+  def tenant_segments(%Context{} = ctx) do
     raise ArgumentError,
-          "Arca.Storage.tenant_segments/1: a resolved org_id is required " <>
+          "Arca.Storage.tenant_segments/1: a resolved athanor_id is required " <>
             "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
             "auth_method=#{inspect(ctx.auth_method)})"
   end
+
+  @doc """
+  Whether `ctx` may touch `path` at all.
+
+  The `components/` root is shared by every athanor, so its second segment
+  is the tenant: a context reaches only `components/{its own athanor}/…`
+  (a platform context reaches every athanor), a bare `components` listing
+  is platform-only, and the seed bundle `components/_bundle/…` is readable
+  only by server-internal contexts (`auth_method: :system`). Every other
+  path is either global or tenant-prefixed by `tenant_segments/1` and needs
+  no check here. `Arca` runs this before dispatching to any adapter.
+  """
+  @spec authorize_path(Context.t(), [String.t()]) :: :ok | {:error, :forbidden}
+  def authorize_path(%Context{auth_method: :system}, ["components", "_bundle" | _]), do: :ok
+  def authorize_path(%Context{}, ["components", "_bundle" | _]), do: {:error, :forbidden}
+  def authorize_path(%Context{scope: :platform}, ["components" | _]), do: :ok
+
+  def authorize_path(%Context{athanor_id: athanor_id}, ["components", athanor_id | _])
+      when is_binary(athanor_id) and athanor_id != "",
+      do: :ok
+
+  def authorize_path(%Context{}, ["components" | _]), do: {:error, :forbidden}
+  def authorize_path(%Context{}, _path), do: :ok
 
   @doc """
   Validate that path segments contain no traversal attacks.

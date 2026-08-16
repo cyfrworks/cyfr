@@ -126,8 +126,7 @@ defmodule Opus.ExecutionSweeper do
           reference: record.reference,
           component_type: component_type,
           user_id: record.user_id,
-          org_id: record.org_id,
-          project_id: record.project_id,
+          athanor_id: record.athanor_id,
           outcome: :failure,
           error: error_msg,
           duration_ms: duration_ms

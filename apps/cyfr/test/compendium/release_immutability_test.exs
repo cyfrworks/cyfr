@@ -139,15 +139,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
         "description" => "local build"
       }
 
-      segments = [
-        "components",
-        Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-        Arca.QueryHelpers.normalize_project_id(ctx.project_id),
-        "reagents",
-        "local",
-        "rebuilt",
-        "1.0.0"
-      ]
+      segments = ["components", ctx.athanor_id, "reagents", "local", "rebuilt", "1.0.0"]
 
       write_component = fn bytes ->
         base = Path.join([test_path | segments])

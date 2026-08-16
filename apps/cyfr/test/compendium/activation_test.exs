@@ -53,15 +53,7 @@ defmodule Compendium.ActivationTest do
   # A local rebuild: new bytes at an unchanged version, registered from the
   # filesystem — the ingress the immutability rule deliberately exempts.
   defp rebuild_locally(ctx, name) do
-    segments = [
-      "components",
-      Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-      Arca.QueryHelpers.normalize_project_id(ctx.project_id),
-      "reagents",
-      "local",
-      name,
-      "1.0.0"
-    ]
+    segments = ["components", ctx.athanor_id, "reagents", "local", name, "1.0.0"]
 
     base = Path.join([Application.get_env(:cyfr, :base_path) | segments])
     File.mkdir_p!(base)

@@ -40,8 +40,7 @@ defmodule Arca.Execution do
     field :reference, :string
     field :input_hash, :string
     field :user_id, :string
-    field :org_id, :string
-    field :project_id, :string
+    field :athanor_id, :string
     field :request_id, :string
     field :component_type, :string
     field :component_digest, :string
@@ -70,8 +69,7 @@ defmodule Arca.Execution do
       :reference,
       :input_hash,
       :user_id,
-      :org_id,
-      :project_id,
+      :athanor_id,
       :request_id,
       :component_type,
       :component_digest,
@@ -85,24 +83,20 @@ defmodule Arca.Execution do
       :activation_digest,
       :activation_graph
     ])
-    |> validate_required([:id, :reference, :user_id, :started_at, :status, :component_type])
+    |> validate_required([
+      :id,
+      :reference,
+      :user_id,
+      :athanor_id,
+      :started_at,
+      :status,
+      :component_type
+    ])
     |> validate_inclusion(:status, ["running", "completed", "failed", "cancelled"])
     # Which component types exist is product vocabulary — sourced from the
     # canonical list rather than re-declared in the persistence layer.
     # Tinctures never execute server-side, hence executable_types.
     |> validate_inclusion(:component_type, Sanctum.ComponentRef.executable_types())
-    |> normalize_tenant_fields()
-  end
-
-  defp normalize_tenant_fields(changeset) do
-    # Canonicalize to the seeded sentinels (nil/"" org → "local"), matching
-    # how every query and the storage layer partition rows.
-    changeset
-    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
-    |> force_change(
-      :project_id,
-      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
-    )
   end
 
   @doc """
@@ -153,13 +147,11 @@ defmodule Arca.Execution do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     status = Keyword.get(opts, :status)
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from e in __MODULE__,
-        where: e.org_id == ^org_id,
-        where: e.project_id == ^project_id,
+        where: e.athanor_id == ^athanor_id,
         order_by: [desc: e.started_at],
         limit: ^limit,
         select:
@@ -168,8 +160,7 @@ defmodule Arca.Execution do
             :reference,
             :input_hash,
             :user_id,
-            :org_id,
-            :project_id,
+            :athanor_id,
             :request_id,
             :component_type,
             :component_digest,
@@ -200,10 +191,9 @@ defmodule Arca.Execution do
   @doc """
   Gets an execution by ID, scoped to the given tenant context.
 
-  Platform scope bypasses tenant filtering. A non-platform context is scoped
-  via `where_tenant/2`: an unauthenticated/system org-less context normalizes
-  to the seeded `"local"` sentinel — matching what `normalize_tenant_fields/1`
-  writes — while an authenticated org-less one raises (fail closed).
+  Platform scope bypasses tenant filtering. Any other context is scoped via
+  `where_tenant/2`, which raises for a context without an athanor (fail
+  closed).
   """
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{} = ctx, id) do
@@ -213,26 +203,23 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Deletes executions older than the newest `keep` records within a tenant
-  (org/project). Project members are interchangeable, so retention keeps the N
-  most recent executions per project, not per user.
+  Deletes executions older than the newest `keep` records within an athanor.
+  Members are interchangeable, so retention keeps the N most recent
+  executions per athanor, not per user.
   """
   def delete_older_than(keep, opts) when is_list(opts) do
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     keep_ids_query =
       from e in __MODULE__,
-        where: e.org_id == ^org_id,
-        where: e.project_id == ^project_id,
+        where: e.athanor_id == ^athanor_id,
         order_by: [desc: e.started_at],
         limit: ^keep,
         select: e.id
 
     delete_query =
       from e in __MODULE__,
-        where: e.org_id == ^org_id,
-        where: e.project_id == ^project_id,
+        where: e.athanor_id == ^athanor_id,
         where: e.id not in subquery(keep_ids_query)
 
     Arca.Repo.delete_all(delete_query)
@@ -246,23 +233,20 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Lists IDs that would be deleted within a tenant (for dry_run), per project.
+  Lists IDs that would be deleted within an athanor (for dry_run).
   """
   def ids_to_delete(keep, opts) when is_list(opts) do
-    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
-    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     keep_ids_query =
       from e in __MODULE__,
-        where: e.org_id == ^org_id,
-        where: e.project_id == ^project_id,
+        where: e.athanor_id == ^athanor_id,
         order_by: [desc: e.started_at],
         limit: ^keep,
         select: e.id
 
     from(e in __MODULE__,
-      where: e.org_id == ^org_id,
-      where: e.project_id == ^project_id,
+      where: e.athanor_id == ^athanor_id,
       where: e.id not in subquery(keep_ids_query),
       select: e.id
     )
@@ -270,15 +254,15 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Returns distinct {org_id, project_id} tenants that have execution records,
-  scoped to the given context's tenant (all tenants for :platform).
+  Returns the distinct athanor ids that have execution records, scoped to
+  the given context's athanor (every athanor for :platform).
   """
-  def distinct_tenants(%Sanctum.Context{} = ctx) do
+  def distinct_athanors(%Sanctum.Context{} = ctx) do
     import Arca.QueryHelpers, only: [where_tenant: 2]
 
     query =
       from(e in __MODULE__,
-        select: {e.org_id, e.project_id},
+        select: e.athanor_id,
         distinct: true
       )
 
@@ -294,18 +278,17 @@ defmodule Arca.Execution do
   @doc """
   Lists child executions still in 'running' state for a given parent.
 
-  Scoped to the parent's own tenant (org_id/project_id). Legitimate children
-  always inherit the parent's tenant when spawned, so this matches every real
-  child while preventing a cross-tenant `parent_execution_id` from grafting a
-  foreign execution into the parent's cancellation/failure cascade.
+  Scoped to the parent's own athanor. Legitimate children always inherit the
+  parent's athanor when spawned, so this matches every real child while
+  preventing a cross-athanor `parent_execution_id` from grafting a foreign
+  execution into the parent's cancellation/failure cascade.
   """
   def list_running_children(parent_execution_id) do
     case Arca.Repo.get(__MODULE__, parent_execution_id) do
-      %{org_id: org_id, project_id: project_id} ->
+      %{athanor_id: athanor_id} ->
         from(e in __MODULE__,
           where: e.parent_execution_id == ^parent_execution_id,
-          where: e.org_id == ^org_id,
-          where: e.project_id == ^project_id,
+          where: e.athanor_id == ^athanor_id,
           where: e.status == "running"
         )
         |> Arca.Repo.all()

@@ -25,11 +25,10 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   """
   def ensure_started(config) do
     name = config[:name]
-    org_id = Arca.QueryHelpers.normalize_org_id(config[:org_id])
-    project_id = Arca.QueryHelpers.normalize_project_id(config[:project_id])
+    athanor_id = Emissary.MCP.ExternalServer.athanor_id!(config)
     digest = config_digest(config)
 
-    case Registry.lookup(Emissary.MCP.ExternalServerRegistry, {name, org_id, project_id}) do
+    case Registry.lookup(Emissary.MCP.ExternalServerRegistry, {name, athanor_id}) do
       [{pid, ^digest}] ->
         {:ok, pid}
 
@@ -68,11 +67,8 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   @doc """
   Stop an external server process.
   """
-  def stop(name, org_id, project_id) do
-    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
-    project_id = Arca.QueryHelpers.normalize_project_id(project_id)
-
-    case Registry.lookup(Emissary.MCP.ExternalServerRegistry, {name, org_id, project_id}) do
+  def stop(name, athanor_id) do
+    case Registry.lookup(Emissary.MCP.ExternalServerRegistry, {name, athanor_id}) do
       [{pid, _}] ->
         DynamicSupervisor.terminate_child(__MODULE__, pid)
 

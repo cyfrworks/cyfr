@@ -12,7 +12,7 @@ defmodule EmissaryWeb.Plugs.ScrubTinctureCredentials do
   time anything logs the request.
 
   A plug rather than a call inside each action: the rate-limit 429, the
-  boot-window 503 and the workspace-mismatch 404 all return before the action
+  boot-window 503 and the athanor-mismatch 404 all return before the action
   ever touches authentication, and those responses are logged too.
 
   This is defense in depth for a credential that should not be in a URL at all.

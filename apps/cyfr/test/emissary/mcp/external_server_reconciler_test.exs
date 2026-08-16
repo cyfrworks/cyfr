@@ -124,7 +124,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
 
     # While active, the header resolves through the host-side unseal path.
     assert {:ok, %{"token" => "ghp_live"}} =
-             Sanctum.VaultReader.unseal_by_name(ctx.org_id, ctx.project_id, "revoke-me")
+             Sanctum.VaultReader.unseal_by_name(ctx.athanor_id, "revoke-me")
 
     {:ok, _} = Vault.revoke(ctx, entry.id)
     # Drain the reconcile the revoke broadcast triggers, so its DB reads aren't
@@ -133,7 +133,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
 
     # After revocation the same reference fails closed.
     assert {:error, _} =
-             Sanctum.VaultReader.unseal_by_name(ctx.org_id, ctx.project_id, "revoke-me")
+             Sanctum.VaultReader.unseal_by_name(ctx.athanor_id, "revoke-me")
   end
 
   test "the catch-all handle_info survives and logs an unexpected message" do

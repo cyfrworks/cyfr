@@ -86,5 +86,5 @@ defmodule Sanctum.Consent.Source.Memory do
     end
   end
 
-  defp tenant(%Context{org_id: org_id, project_id: project_id}), do: {org_id, project_id}
+  defp tenant(%Context{athanor_id: athanor_id}), do: athanor_id
 end

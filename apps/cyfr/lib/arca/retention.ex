@@ -29,12 +29,10 @@ defmodule Arca.Retention do
 
   ## Storage
 
-  Project settings are persisted to `config/retention.json` under the
+  An athanor's settings are persisted to `config/retention.json` under the
   tenant-scoped path that `Arca.Storage.tenant_segments/1` builds —
-  `data/{org}/{project_id}/config/retention.json` (single-user instances use
-  the seeded `"local"` org and `"default"` project, yielding
-  `data/local/default/config/retention.json`). Settings are shared by all
-  members of a project. If no settings exist, global defaults from
+  `data/{athanor_id}/config/retention.json`. Settings are shared by all
+  members of the athanor. If no settings exist, global defaults from
   application config are used.
 
   ## Global Defaults (config.exs)
@@ -95,11 +93,11 @@ defmodule Arca.Retention do
   end
 
   @doc """
-  Get retention settings for a user context.
+  Get retention settings for a context's athanor.
 
-  Reads project-specific settings from Arca, falling back to global defaults.
-  Settings are stored at `config/retention.json` in the project's tenant
-  directory and are shared by all members of the project.
+  Reads the athanor's settings from Arca, falling back to global defaults.
+  Settings are stored at `config/retention.json` in the athanor's tenant
+  directory and are shared by all its members.
   """
   @spec get_settings(Context.t()) :: map()
   def get_settings(%Context{} = ctx) do
@@ -125,9 +123,9 @@ defmodule Arca.Retention do
   end
 
   @doc """
-  Set retention settings for a project (tenant context).
+  Set retention settings for the context's athanor.
 
-  Stores project-specific settings in Arca at `config/retention.json`.
+  Stores the athanor's settings in Arca at `config/retention.json`.
   Only provided keys are updated; missing keys retain their current values.
   """
   @spec set_settings(Context.t(), map()) :: :ok | {:error, term()}
@@ -182,27 +180,16 @@ defmodule Arca.Retention do
   @spec cleanup_executions(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_executions(%Context{} = ctx, opts \\ []) do
-    import Arca.QueryHelpers, only: [normalize_org_id: 1, normalize_project_id: 1]
-
     user_settings = get_settings(ctx)
     keep = Keyword.get(opts, :keep, user_settings["executions"])
     dry_run = Keyword.get(opts, :dry_run, false)
 
-    org_id = normalize_org_id(ctx.org_id)
-    project_id = normalize_project_id(ctx.project_id)
-    tenant_opts = [org_id: org_id, project_id: project_id]
+    tenant_opts = [athanor_id: ctx.athanor_id]
 
     if dry_run do
       ids_to_delete = Arca.Execution.ids_to_delete(keep, tenant_opts)
 
-      total =
-        length(
-          Arca.Execution.list(
-            org_id: org_id,
-            project_id: project_id,
-            limit: 999_999
-          )
-        )
+      total = length(Arca.Execution.list(athanor_id: ctx.athanor_id, limit: 999_999))
 
       would_keep = min(total, keep)
       {:ok, %{would_delete: ids_to_delete, would_keep: would_keep}}
@@ -215,10 +202,10 @@ defmodule Arca.Retention do
   end
 
   @doc """
-  Clean up executions for all tenants.
+  Clean up executions for every athanor.
 
-  Iterates through all {org, project} tenants that have execution records and
-  applies the per-project retention policy.
+  Iterates through all athanors that have execution records and applies each
+  athanor's retention policy.
 
   ## Options
 
@@ -231,21 +218,29 @@ defmodule Arca.Retention do
   @spec cleanup_all_executions(Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def cleanup_all_executions(%Context{} = ctx, opts \\ []) do
     dry_run = Keyword.get(opts, :dry_run, false)
-    tenants = Arca.Execution.distinct_tenants(ctx)
+    tenants = Arca.Execution.distinct_athanors(ctx)
 
     {successes, failures} =
       tenants
-      |> Enum.map(fn {org_id, project_id} ->
-        tenant_ctx = %{ctx | org_id: org_id, project_id: project_id}
-        {org_id, project_id, cleanup_executions(tenant_ctx, opts)}
-      end)
-      |> Enum.split_with(fn {_, _, result} -> match?({:ok, _}, result) end)
+      |> Enum.map(fn athanor_id ->
+        # Each athanor's cleanup runs inside that athanor: its own settings
+        # file, its own rows.
+        tenant_ctx =
+          Sanctum.internal_context(
+            user_id: ctx.user_id,
+            athanor_id: athanor_id,
+            scope: :athanor
+          )
 
-    success_results = Enum.map(successes, fn {_, _, {:ok, r}} -> r end)
+        {athanor_id, cleanup_executions(tenant_ctx, opts)}
+      end)
+      |> Enum.split_with(fn {_, result} -> match?({:ok, _}, result) end)
+
+    success_results = Enum.map(successes, fn {_, {:ok, r}} -> r end)
 
     error_list =
-      Enum.map(failures, fn {oid, pid, {:error, reason}} ->
-        {oid, pid, reason}
+      Enum.map(failures, fn {athanor_id, {:error, reason}} ->
+        {athanor_id, reason}
       end)
 
     if dry_run do
@@ -255,6 +250,44 @@ defmodule Arca.Retention do
       {:ok, %{tenants: length(tenants), deleted: Enum.sum(success_results), errors: error_list}}
     end
   end
+
+  @doc """
+  Clean up MCP and policy logs for every athanor that has any, each inside
+  its own context (its own retention settings). Returns per-kind totals and
+  the athanors whose cleanup failed.
+  """
+  @spec cleanup_all_logs(keyword()) :: {:ok, map()}
+  def cleanup_all_logs(opts \\ []) do
+    athanors =
+      (Arca.McpLog.distinct_athanors() ++ Arca.PolicyLog.distinct_athanors())
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    results =
+      Enum.map(athanors, fn athanor_id ->
+        ctx = Sanctum.internal_context(user_id: "system", athanor_id: athanor_id, scope: :athanor)
+        {athanor_id, cleanup_mcp_logs(ctx, opts), cleanup_policy_logs(ctx, opts)}
+      end)
+
+    mcp_deleted = results |> Enum.map(fn {_, r, _} -> count_of(r) end) |> Enum.sum()
+    policy_deleted = results |> Enum.map(fn {_, _, r} -> count_of(r) end) |> Enum.sum()
+
+    errors =
+      for {athanor_id, mcp, policy} <- results,
+          {kind, {:error, reason}} <- [mcp_logs: mcp, policy_logs: policy],
+          do: {athanor_id, kind, reason}
+
+    {:ok,
+     %{
+       tenants: length(athanors),
+       mcp_logs_deleted: mcp_deleted,
+       policy_logs_deleted: policy_deleted,
+       errors: errors
+     }}
+  end
+
+  defp count_of({:ok, count}) when is_integer(count), do: count
+  defp count_of(_), do: 0
 
   # ============================================================================
   # Build Cleanup
@@ -318,7 +351,6 @@ defmodule Arca.Retention do
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
     import Ecto.Query
-    import Arca.QueryHelpers, only: [normalize_org_id: 1, normalize_project_id: 1]
 
     user_settings = get_settings(ctx)
     days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
@@ -326,16 +358,14 @@ defmodule Arca.Retention do
 
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
 
-    org_id = normalize_org_id(ctx.org_id)
-    project_id = normalize_project_id(ctx.project_id)
-    tenant_opts = [org_id: org_id, project_id: project_id]
+    athanor_id = ctx.athanor_id
+    tenant_opts = [athanor_id: athanor_id]
 
     if dry_run do
       query =
         from(l in Arca.McpLog,
           where: l.timestamp < ^cutoff,
-          where: l.org_id == ^org_id,
-          where: l.project_id == ^project_id
+          where: l.athanor_id == ^athanor_id
         )
 
       count = Arca.Repo.aggregate(query, :count)
@@ -367,7 +397,6 @@ defmodule Arca.Retention do
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_policy_logs(%Context{} = ctx, opts \\ []) do
     import Ecto.Query
-    import Arca.QueryHelpers, only: [normalize_org_id: 1, normalize_project_id: 1]
 
     user_settings = get_settings(ctx)
     days = Keyword.get(opts, :days, user_settings["policy_log_days"])
@@ -375,16 +404,14 @@ defmodule Arca.Retention do
 
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
 
-    org_id = normalize_org_id(ctx.org_id)
-    project_id = normalize_project_id(ctx.project_id)
-    tenant_opts = [org_id: org_id, project_id: project_id]
+    athanor_id = ctx.athanor_id
+    tenant_opts = [athanor_id: athanor_id]
 
     if dry_run do
       query =
         from(l in Arca.PolicyLog,
           where: l.timestamp < ^cutoff,
-          where: l.org_id == ^org_id,
-          where: l.project_id == ^project_id
+          where: l.athanor_id == ^athanor_id
         )
 
       count = Arca.Repo.aggregate(query, :count)

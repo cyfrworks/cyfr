@@ -6,27 +6,23 @@ defmodule Arca.ProviderCredentialStorage do
   Storage for OAuth provider client credentials.
 
   Persistence mechanics only — sealing and permission checks live in
-  `Sanctum.ProviderCredentials`. Tenant coordinates are normalized at every
-  boundary so nil/"" sentinel variance cannot split the partition.
+  `Sanctum.ProviderCredentials`. One row per `(athanor_id, provider)`.
   """
 
   import Ecto.Query
+  import Arca.QueryHelpers, only: [where_athanor: 2]
 
   require Logger
   require Arca.Repo.Errors
 
   alias Arca.Schemas.OauthProviderCredential
 
-  @spec get(String.t() | nil, String.t() | nil, String.t()) ::
+  @spec get(String.t(), String.t()) ::
           {:ok, OauthProviderCredential.t()} | {:error, :not_found | :database_error}
-  def get(org_id, project_id, provider) when is_binary(provider) do
-    {org, project} = normalize(org_id, project_id)
-
+  def get(athanor_id, provider) when is_binary(provider) do
     query =
-      from(c in OauthProviderCredential,
-        where: c.provider == ^provider and c.org_id == ^org and c.project_id == ^project,
-        limit: 1
-      )
+      from(c in OauthProviderCredential, where: c.provider == ^provider, limit: 1)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -40,13 +36,11 @@ defmodule Arca.ProviderCredentialStorage do
 
   @spec put(map()) :: :ok | {:error, :database_error}
   def put(attrs) do
-    {org, project} = normalize(attrs[:org_id], attrs[:project_id])
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
       id: Emissary.UUID7.generate_id("opc"),
-      org_id: org,
-      project_id: project,
+      athanor_id: Map.fetch!(attrs, :athanor_id),
       provider: Map.fetch!(attrs, :provider),
       payload_ciphertext: Map.fetch!(attrs, :payload_ciphertext),
       created_by: attrs[:created_by],
@@ -56,7 +50,7 @@ defmodule Arca.ProviderCredentialStorage do
 
     Arca.Repo.insert_all(OauthProviderCredential, [row],
       on_conflict: {:replace, [:payload_ciphertext, :created_by, :updated_at]},
-      conflict_target: [:provider, :org_id, :project_id]
+      conflict_target: [:athanor_id, :provider]
     )
 
     :ok
@@ -66,15 +60,11 @@ defmodule Arca.ProviderCredentialStorage do
       {:error, :database_error}
   end
 
-  @spec delete(String.t() | nil, String.t() | nil, String.t()) ::
-          :ok | {:error, :not_found | :database_error}
-  def delete(org_id, project_id, provider) when is_binary(provider) do
-    {org, project} = normalize(org_id, project_id)
-
+  @spec delete(String.t(), String.t()) :: :ok | {:error, :not_found | :database_error}
+  def delete(athanor_id, provider) when is_binary(provider) do
     query =
-      from(c in OauthProviderCredential,
-        where: c.provider == ^provider and c.org_id == ^org and c.project_id == ^project
-      )
+      from(c in OauthProviderCredential, where: c.provider == ^provider)
+      |> where_athanor(athanor_id)
 
     case Arca.Repo.delete_all(query) do
       {0, _} -> {:error, :not_found}
@@ -89,13 +79,8 @@ defmodule Arca.ProviderCredentialStorage do
       {:error, :database_error}
   end
 
-  @spec exists?(String.t() | nil, String.t() | nil, String.t()) :: boolean()
-  def exists?(org_id, project_id, provider) when is_binary(provider) do
-    match?({:ok, _}, get(org_id, project_id, provider))
-  end
-
-  defp normalize(org_id, project_id) do
-    {Arca.QueryHelpers.normalize_org_id(org_id),
-     Arca.QueryHelpers.normalize_project_id(project_id)}
+  @spec exists?(String.t(), String.t()) :: boolean()
+  def exists?(athanor_id, provider) when is_binary(provider) do
+    match?({:ok, _}, get(athanor_id, provider))
   end
 end

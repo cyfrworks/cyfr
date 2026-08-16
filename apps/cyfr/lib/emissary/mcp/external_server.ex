@@ -5,7 +5,7 @@ defmodule Emissary.MCP.ExternalServer do
   @moduledoc """
   GenServer managing a connection to a single external MCP server.
 
-  One process per active connection, keyed by `{name, org_id, project_id}`.
+  One process per active connection, keyed by `{name, athanor_id}`.
   Connects lazily on first access: a stateless `tools/list` probe under the
   current protocol revision, falling back to the legacy
   initialize → initialized handshake for third-party servers still on the
@@ -57,8 +57,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   def start_link(config) do
     name = config[:name]
-    org_id = Arca.QueryHelpers.normalize_org_id(config[:org_id])
-    project_id = Arca.QueryHelpers.normalize_project_id(config[:project_id])
+    athanor_id = athanor_id!(config)
 
     # The Registry value is the digest of the config this process serves;
     # ExternalServerSupervisor.ensure_started/1 compares it against the
@@ -66,17 +65,31 @@ defmodule Emissary.MCP.ExternalServer do
     GenServer.start_link(__MODULE__, config,
       name:
         {:via, Registry,
-         {@registry, {name, org_id, project_id},
+         {@registry, {name, athanor_id},
           Emissary.MCP.ExternalServerSupervisor.config_digest(config)}}
     )
+  end
+
+  @doc false
+  # The athanor a server config belongs to. Required: a server row without
+  # one has no vault to resolve headers from and no tenant to be listed in.
+  def athanor_id!(config) do
+    case config[:athanor_id] do
+      id when is_binary(id) and id != "" ->
+        id
+
+      other ->
+        raise ArgumentError,
+              "Emissary.MCP.ExternalServer: config requires :athanor_id, got #{inspect(other)}"
+    end
   end
 
   @doc """
   Get cached tool definitions from the external server.
   Triggers initialization if not yet connected.
   """
-  def get_tools(name, org_id, project_id) do
-    case lookup(name, org_id, project_id) do
+  def get_tools(name, athanor_id) do
+    case lookup(name, athanor_id) do
       {:ok, pid} -> GenServer.call(pid, :get_tools, @initialize_timeout_ms)
       {:error, _} = err -> err
     end
@@ -85,8 +98,8 @@ defmodule Emissary.MCP.ExternalServer do
   @doc """
   Call a tool on the external server.
   """
-  def call_tool(name, org_id, project_id, tool_name, arguments) do
-    case lookup(name, org_id, project_id) do
+  def call_tool(name, athanor_id, tool_name, arguments) do
+    case lookup(name, athanor_id) do
       {:ok, pid} -> GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
       {:error, _} = err -> err
     end
@@ -95,8 +108,8 @@ defmodule Emissary.MCP.ExternalServer do
   @doc """
   Get the connection status of the external server.
   """
-  def status(name, org_id, project_id) do
-    case lookup(name, org_id, project_id) do
+  def status(name, athanor_id) do
+    case lookup(name, athanor_id) do
       {:ok, pid} -> GenServer.call(pid, :status)
       {:error, :not_running} -> :disconnected
     end
@@ -105,18 +118,15 @@ defmodule Emissary.MCP.ExternalServer do
   @doc """
   Reinitialize the connection (e.g., after config change).
   """
-  def reinitialize(name, org_id, project_id) do
-    case lookup(name, org_id, project_id) do
+  def reinitialize(name, athanor_id) do
+    case lookup(name, athanor_id) do
       {:ok, pid} -> GenServer.call(pid, :reinitialize, @initialize_timeout_ms)
       {:error, _} = err -> err
     end
   end
 
-  defp lookup(name, org_id, project_id) do
-    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
-    project_id = Arca.QueryHelpers.normalize_project_id(project_id)
-
-    case Registry.lookup(@registry, {name, org_id, project_id}) do
+  defp lookup(name, athanor_id) do
+    case Registry.lookup(@registry, {name, athanor_id}) do
       [{pid, _}] -> {:ok, pid}
       [] -> {:error, :not_running}
     end
@@ -138,8 +148,7 @@ defmodule Emissary.MCP.ExternalServer do
       :name,
       :url,
       :timeout_ms,
-      :org_id,
-      :project_id,
+      :athanor_id,
       :server_info,
       :error,
       :last_init_attempt,
@@ -165,8 +174,7 @@ defmodule Emissary.MCP.ExternalServer do
       url: config[:url],
       raw_headers: config[:headers] || %{},
       timeout_ms: min(config[:timeout_ms] || @default_timeout_ms, @max_upstream_timeout_ms),
-      org_id: Arca.QueryHelpers.normalize_org_id(config[:org_id]),
-      project_id: Arca.QueryHelpers.normalize_project_id(config[:project_id])
+      athanor_id: athanor_id!(config)
     }
 
     {:ok, state}
@@ -374,7 +382,7 @@ defmodule Emissary.MCP.ExternalServer do
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond)}
 
     with {:ok, resolved_headers} <-
-           resolve_headers(state.raw_headers, state.org_id, state.project_id),
+           resolve_headers(state.raw_headers, state.athanor_id),
          state <- %{state | headers: resolved_headers},
          :ok <- validate_server_url(state.url),
          {:ok, tools, server_info, state} <- connect(state) do
@@ -701,10 +709,10 @@ defmodule Emissary.MCP.ExternalServer do
   # ============================================================================
 
   @doc false
-  def resolve_headers(headers, org_id, project_id) when is_map(headers) do
+  def resolve_headers(headers, athanor_id) when is_map(headers) do
     resolved =
       Enum.reduce_while(headers, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
-        case resolve_value(value, org_id, project_id) do
+        case resolve_value(value, athanor_id) do
           {:ok, resolved_value} ->
             {:cont, {:ok, Map.put(acc, key, resolved_value)}}
 
@@ -722,16 +730,16 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  def resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
+  def resolve_headers(_headers, _athanor_id), do: {:ok, %{}}
 
   # `vault:` is the only credential reference. `secret:` is refused rather
   # than falling through to the literal clause below, which would send the
   # operator's reference text to a third party as the header value — a
   # request that silently fails to authenticate while looking like it tried.
-  defp resolve_value("secret:" <> _name, org_id, _project_id) do
+  defp resolve_value("secret:" <> _name, athanor_id) do
     Logger.warning(
       "[ExternalServer] 'secret:' is not a credential reference — " <>
-        "use vault:<entry name> (org=#{org_id})"
+        "use vault:<entry name> (athanor=#{athanor_id})"
     )
 
     {:error, :unknown_credential_reference}
@@ -741,8 +749,8 @@ defmodule Emissary.MCP.ExternalServer do
   # material field. Deliberately single-field — a header carries one value,
   # and picking silently from a bundle would smuggle the wrong credential
   # into the wrong header. Errors stay opaque outward, like secrets.
-  defp resolve_value("vault:" <> entry_name, org_id, project_id) do
-    case Sanctum.VaultReader.unseal_by_name(org_id, project_id, entry_name) do
+  defp resolve_value("vault:" <> entry_name, athanor_id) do
+    case Sanctum.VaultReader.unseal_by_name(athanor_id, entry_name) do
       {:ok, fields} ->
         case Map.values(fields) do
           [value] ->
@@ -758,12 +766,12 @@ defmodule Emissary.MCP.ExternalServer do
         end
 
       {:error, _} ->
-        Logger.debug("[ExternalServer] vault header reference unresolved for org=#{org_id}")
+        Logger.debug("[ExternalServer] vault header reference unresolved for athanor=#{athanor_id}")
         {:error, :vault_ref_unavailable}
     end
   end
 
-  defp resolve_value(value, _org_id, _project_id) when is_binary(value), do: {:ok, value}
+  defp resolve_value(value, _athanor_id) when is_binary(value), do: {:ok, value}
 
   # ============================================================================
   # Credential masking

@@ -556,9 +556,7 @@ defmodule Opus.Executor do
   # Public (undocumented) so Opus.Chain shares the same cache entries.
   @doc false
   def inspect_component(ctx, reference) do
-    org_id = ctx.org_id
-    project_id = ctx.project_id
-    cache_key = {:component_meta, org_id, project_id, reference}
+    cache_key = Arca.Cache.Keys.component_meta(ctx.athanor_id, reference)
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} ->
@@ -679,8 +677,8 @@ defmodule Opus.Executor do
   end
 
   # The authority variant never re-resolves: the blob's node limits are the
-  # policy. The limiter keys on {org, project, ref} either way, so buckets
-  # are continuous across the cutover.
+  # policy. The limiter keys on {athanor, ref} either way, so buckets are
+  # continuous across the cutover.
   defp check_authority_rate_limit(ctx, component_ref, %Sanctum.Limits{} = limits) do
     case check_rate_limit(ctx, component_ref, limits) do
       {:ok, _remaining} ->
@@ -696,20 +694,17 @@ defmodule Opus.Executor do
 
   # The rate-limit chokepoint every authority execution goes through
   # (node bucket and both public-profile buckets). Buckets key on the
-  # tenant-normalized {org, project, ref} triple so a not-yet-resolved
-  # org/project never reaches the limiter as "" (rejected as
-  # :missing_tenant) and members of a project share the budget. A dead or
+  # {athanor, ref} pair — a not-yet-resolved athanor is rejected by the
+  # limiter as :missing_tenant, and members of an athanor share the budget.
+  # A dead or
   # unreachable limiter fails CLOSED — a configured limit must be
   # enforceable, so unavailability denies rather than silently allowing
   # unbounded requests. Every denial is audited here, after the try/catch,
   # keeping the audit write's own failures out of the fail-closed handling.
   defp check_rate_limit(ctx, component_ref, %Sanctum.Limits{} = limits) do
-    org_id = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
-    project_id = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
-
     result =
       try do
-        Opus.RateLimiter.check(org_id, project_id, component_ref, %{
+        Opus.RateLimiter.check(ctx.athanor_id, component_ref, %{
           rate_limit: limits.rate_limit
         })
       catch
@@ -805,7 +800,7 @@ defmodule Opus.Executor do
 
     tenant =
       case exec_opts[:ctx] do
-        %{org_id: org_id, project_id: project_id} -> {org_id, project_id}
+        %{athanor_id: athanor_id} when is_binary(athanor_id) -> athanor_id
         _ -> nil
       end
 
@@ -861,7 +856,7 @@ defmodule Opus.Executor do
         {:error, "Server at maximum concurrent executions. Retry later."}
 
       {:error, :tenant_limit} ->
-        {:error, "Workspace at maximum concurrent executions. Retry later."}
+        {:error, "Athanor at maximum concurrent executions. Retry later."}
     end
   end
 
@@ -1121,9 +1116,9 @@ defmodule Opus.Executor do
       {:ok, record} ->
         kill_running_process(execution_id)
 
-        # Route with the record's own tenant coordinates (like every other
-        # producer) — an org- or platform-scoped canceller may carry different
-        # coordinates than the execution it just cancelled.
+        # Route with the record's own athanor (like every other producer) —
+        # a platform-scoped canceller may carry a different athanor than the
+        # execution it just cancelled.
         {event_type, event_data} = cancel_event(opts)
 
         ExecutionEventBuffer.push_terminal(
@@ -1288,8 +1283,7 @@ defmodule Opus.Executor do
             reference: child.reference,
             component_type: component_type,
             user_id: child.user_id,
-            org_id: child.org_id,
-            project_id: child.project_id,
+            athanor_id: child.athanor_id,
             outcome: :failure,
             error: error_msg,
             duration_ms: duration_ms

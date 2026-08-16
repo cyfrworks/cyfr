@@ -18,21 +18,21 @@ defmodule Arca do
 
   - `["components" | rest]` → component artifacts root (`:components_path`);
     `Compendium.ComponentPath` puts the tenant inside the segments, so the
-    on-disk layout is `components/{org}/{project}/{type}s/...`
+    on-disk layout is `components/{athanor_id}/{type}s/...`
   - `["aqua" | rest]` → AQUA agent prompts root (`:aqua_path`)
-  - `["cache" | rest]` → global cache (no tenant prefix), under `:base_path`
-  - everything else → tenant-scoped under `{org}/{project_id}/...`
-    (single-user installs use the seeded `"local"` org and `"default"`
-    project; `namespace` is identity-only and not part of the path)
+  - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix), under `:base_path`
+  - everything else → tenant-scoped under `{athanor_id}/...`
+    (`namespace` is identity-only and not part of the path)
 
   See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
-  list, and `tenant_segments/1` (the canonical tenant-tuple builder).
+  list, `authorize_path/2` (the component-tree pin) and `tenant_segments/1`
+  (the canonical tenant-segment builder).
 
   ## Usage
 
       ctx = Sanctum.TestContext.local()
 
-      # Tenant-scoped storage (auto-prefixed with {org}/{project}/)
+      # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
       :ok = Arca.put(ctx, ["builds", "build_1", "started.json"], json)
       {:ok, content} = Arca.get(ctx, ["builds", "build_1", "started.json"])
 
@@ -78,7 +78,7 @@ defmodule Arca do
       {:ok, "hello"}
 
   """
-  def get(%Context{} = ctx, path), do: adapter().get(ctx, path)
+  def get(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().get(ctx, path) end)
 
   @doc """
   Read and decode JSON content from storage.
@@ -111,7 +111,7 @@ defmodule Arca do
       :ok
 
   """
-  def put(%Context{} = ctx, path, content), do: adapter().put(ctx, path, content)
+  def put(%Context{} = ctx, path, content), do: guarded(ctx, path, fn -> adapter().put(ctx, path, content) end)
 
   @doc """
   Encode and write JSON content to storage.
@@ -147,7 +147,8 @@ defmodule Arca do
       :ok
 
   """
-  def append(%Context{} = ctx, path, content), do: adapter().append(ctx, path, content)
+  def append(%Context{} = ctx, path, content),
+    do: guarded(ctx, path, fn -> adapter().append(ctx, path, content) end)
 
   @doc """
   Delete content from storage.
@@ -163,7 +164,7 @@ defmodule Arca do
       {:error, :not_found}
 
   """
-  def delete(%Context{} = ctx, path), do: adapter().delete(ctx, path)
+  def delete(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().delete(ctx, path) end)
 
   @doc """
   List contents at path.
@@ -183,14 +184,14 @@ defmodule Arca do
       ["a.txt", "b.txt"]
 
   """
-  def list(%Context{} = ctx, path), do: adapter().list(ctx, path)
+  def list(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().list(ctx, path) end)
 
   @doc """
   Recursive file count and byte total under a path prefix.
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
-  def usage(%Context{} = ctx, path), do: adapter().usage(ctx, path)
+  def usage(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().usage(ctx, path) end)
 
   @doc """
   Check if path exists.
@@ -202,7 +203,12 @@ defmodule Arca do
       false
 
   """
-  def exists?(%Context{} = ctx, path), do: adapter().exists?(ctx, path)
+  def exists?(%Context{} = ctx, path) do
+    case Arca.Storage.authorize_path(ctx, path) do
+      :ok -> adapter().exists?(ctx, path)
+      {:error, :forbidden} -> false
+    end
+  end
 
   @doc """
   Recursively delete a directory tree at path.
@@ -216,7 +222,7 @@ defmodule Arca do
       :ok
 
   """
-  def delete_tree(%Context{} = ctx, path), do: adapter().delete_tree(ctx, path)
+  def delete_tree(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().delete_tree(ctx, path) end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -224,14 +230,15 @@ defmodule Arca do
   Returns full segment lists so callers can pass them straight to `get/2`.
   Order is unspecified.
   """
-  def list_recursive(%Context{} = ctx, path), do: adapter().list_recursive(ctx, path)
+  def list_recursive(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter().list_recursive(ctx, path) end)
 
   @doc """
   Read a whole subtree as `{relative_path, binary}` pairs.
 
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
-  def read_subtree(%Context{} = ctx, path), do: adapter().read_subtree(ctx, path)
+  def read_subtree(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().read_subtree(ctx, path) end)
 
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
@@ -260,7 +267,17 @@ defmodule Arca do
   the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
   """
   def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []),
-    do: adapter().serve_to_conn(conn, ctx, path, opts)
+    do: guarded(ctx, path, fn -> adapter().serve_to_conn(conn, ctx, path, opts) end)
+
+  # Every entry point runs the component-path pin before touching the
+  # adapter, so no adapter — and no future one — can hand one athanor
+  # another athanor's bytes.
+  defp guarded(ctx, path, fun) do
+    case Arca.Storage.authorize_path(ctx, path) do
+      :ok -> fun.()
+      {:error, :forbidden} = err -> err
+    end
+  end
 
   @doc """
   Whether the configured storage adapter is the local filesystem.

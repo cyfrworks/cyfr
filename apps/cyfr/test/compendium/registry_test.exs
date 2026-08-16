@@ -86,11 +86,10 @@ defmodule Compendium.RegistryTest do
           type: "reagent"
         })
 
-      # Verify WASM exists in Arca storage at the canonical (project-scoped) path
+      # Verify WASM exists in Arca storage at the canonical (athanor-scoped) path
       storage_path = [
         "components",
-        "local",
-        "default",
+        "ath_test",
         "reagents",
         "local",
         "blob-test",
@@ -491,8 +490,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "test-tool",
@@ -567,8 +565,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "my-catalyst",
@@ -594,8 +591,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "stripe",
           "payment",
@@ -619,8 +615,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "no-manifest",
@@ -638,8 +633,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "bad-json",
@@ -658,8 +652,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "no-wasm",
@@ -683,8 +676,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "stale-tool",
@@ -728,8 +720,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "keep-tool",
@@ -764,8 +755,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "tree-test",
@@ -787,7 +777,7 @@ defmodule Compendium.RegistryTest do
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
       # Verify files were stored
-      base = ["components", "local", "default", "catalysts", "local", "tree-test", "1.0.0"]
+      base = ["components", "ath_test", "catalysts", "local", "tree-test", "1.0.0"]
       assert {:ok, _} = Arca.get(ctx, base ++ ["catalyst.wasm"])
       assert {:ok, _} = Arca.get(ctx, base ++ ["cyfr-manifest.json"])
       assert {:ok, _} = Arca.get(ctx, base ++ ["README.md"])
@@ -904,30 +894,29 @@ defmodule Compendium.RegistryTest do
     end
   end
 
-  describe "org-scoped storage" do
-    test "org_id is passed through to storage path for get_blob", %{ctx: ctx} do
-      # Publish under org_A context
-      ctx_a = %{ctx | org_id: "org_a"}
+  describe "athanor-scoped storage" do
+    test "the athanor is part of the storage path for get_blob", %{ctx: ctx} do
+      # Publish under athanor A
+      ctx_a = %{ctx | athanor_id: "ath_a"}
 
       {:ok, component} =
         Registry.publish_bytes(ctx_a, @valid_wasm, %{
-          name: "org-scoped",
+          name: "athanor-scoped",
           version: "1.0.0",
           type: "reagent"
         })
 
-      # Retrieve with same org — should work
+      # Retrieve with the same athanor — works
       {:ok, blob} = Registry.get_blob(ctx_a, component.digest)
       assert blob == @valid_wasm
 
-      # Retrieve with different org — should not find the blob (different storage path)
-      ctx_b = %{ctx | org_id: "org_b"}
+      # Retrieve with a different athanor — the blob is not found (different path)
+      ctx_b = %{ctx | athanor_id: "ath_b"}
       assert {:error, :blob_not_found} = Registry.get_blob(ctx_b, component.digest)
     end
 
-    test "single-user context stores under the seeded local org", %{ctx: ctx} do
-      # The single-user test context resolves to the seeded "local" org.
-      assert ctx.org_id == "local"
+    test "the test context stores under its own athanor", %{ctx: ctx} do
+      assert ctx.athanor_id == Sanctum.TestContext.athanor_id()
 
       {:ok, component} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
@@ -936,11 +925,10 @@ defmodule Compendium.RegistryTest do
           type: "reagent"
         })
 
-      # Verify stored at the canonical (project-scoped) path
+      # Verify stored at the canonical (athanor-scoped) path
       storage_path = [
         "components",
-        "local",
-        "default",
+        ctx.athanor_id,
         "reagents",
         "local",
         "core-mode",
@@ -956,21 +944,20 @@ defmodule Compendium.RegistryTest do
       assert blob == @valid_wasm
     end
 
-    test "multi-tenant: stores under org_id path (no orgs/ prefix)", %{ctx: ctx} do
-      ctx_org = %{ctx | org_id: "myorg"}
+    test "another athanor stores under its own id (no extra prefix)", %{ctx: ctx} do
+      ctx_other = %{ctx | athanor_id: "ath_myorg"}
 
       {:ok, component} =
-        Registry.publish_bytes(ctx_org, @valid_wasm, %{
+        Registry.publish_bytes(ctx_other, @valid_wasm, %{
           name: "ext-path-test",
           version: "1.0.0",
           type: "catalyst"
         })
 
-      # Verify stored at components/{org_id}/{project_id}/{type}s/... (no "orgs" segment)
+      # Verify stored at components/{athanor_id}/{type}s/...
       storage_path = [
         "components",
-        "myorg",
-        "default",
+        "ath_myorg",
         "catalysts",
         "local",
         "ext-path-test",
@@ -978,19 +965,19 @@ defmodule Compendium.RegistryTest do
         "catalyst.wasm"
       ]
 
-      {:ok, content} = Arca.get(ctx_org, storage_path)
+      {:ok, content} = Arca.get(ctx_other, storage_path)
       assert content == @valid_wasm
 
-      {:ok, blob} = Registry.get_blob(ctx_org, component.digest)
+      {:ok, blob} = Registry.get_blob(ctx_other, component.digest)
       assert blob == @valid_wasm
     end
 
-    test "org-scoped cleanup removes org-scoped directories", %{ctx: ctx} do
-      ctx_org = %{ctx | org_id: "cleanup_org"}
+    test "cleanup removes the athanor's directories", %{ctx: ctx} do
+      ctx_other = %{ctx | athanor_id: "ath_cleanup"}
 
       {:ok, _} =
-        Registry.publish_bytes(ctx_org, @valid_wasm, %{
-          name: "org-cleanup-test",
+        Registry.publish_bytes(ctx_other, @valid_wasm, %{
+          name: "other-cleanup-test",
           version: "1.0.0",
           type: "reagent"
         })
@@ -998,52 +985,50 @@ defmodule Compendium.RegistryTest do
       # Verify stored
       storage_path = [
         "components",
-        "cleanup_org",
-        "default",
+        "ath_cleanup",
         "reagents",
         "local",
-        "org-cleanup-test",
+        "other-cleanup-test",
         "1.0.0",
         "reagent.wasm"
       ]
 
-      assert {:ok, _} = Arca.get(ctx_org, storage_path)
+      assert {:ok, _} = Arca.get(ctx_other, storage_path)
 
       # Delete the component
-      assert :ok = Registry.delete(ctx_org, "org-cleanup-test", "1.0.0")
+      assert :ok = Registry.delete(ctx_other, "other-cleanup-test", "1.0.0")
 
       # Verify the version directory is cleaned up
-      assert {:error, _} = Arca.get(ctx_org, storage_path)
+      assert {:error, _} = Arca.get(ctx_other, storage_path)
     end
 
-    test "org-scoped register_from_directory infers path metadata", %{
+    test "register_from_directory infers path metadata under the athanor", %{
       ctx: ctx,
       test_dir: test_dir
     } do
-      ctx_org = %{ctx | org_id: "reg_org"}
+      ctx_other = %{ctx | athanor_id: "ath_reg"}
 
-      # Create a component directory under the project-scoped path
+      # Create a component directory under the athanor-scoped path
       comp_dir =
         Path.join([
           test_dir,
           "components",
-          "reg_org",
-          "default",
+          "ath_reg",
           "reagents",
           "local",
-          "org-reg-test",
+          "other-reg-test",
           "0.1.0"
         ])
 
       File.mkdir_p!(comp_dir)
 
-      manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Org registered"}
+      manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Registered"}
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      {:ok, component} = Registry.register_from_directory(ctx_org, comp_dir)
+      {:ok, component} = Registry.register_from_directory(ctx_other, comp_dir)
 
-      assert component.name == "org-reg-test"
+      assert component.name == "other-reg-test"
       assert component.version == "0.1.0"
       assert component.component_type == "reagent"
       assert component.source == "filesystem"
@@ -1072,8 +1057,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "copy-test",
@@ -1098,8 +1082,7 @@ defmodule Compendium.RegistryTest do
       # Verify manifest was stored in Arca
       path = [
         "components",
-        "local",
-        "default",
+        "ath_test",
         "catalysts",
         "local",
         "copy-test",
@@ -1118,8 +1101,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "readme-test",
@@ -1139,8 +1121,7 @@ defmodule Compendium.RegistryTest do
       # Verify README was stored in Arca
       path = [
         "components",
-        "local",
-        "default",
+        "ath_test",
         "reagents",
         "local",
         "readme-test",
@@ -1157,8 +1138,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "src-test",
@@ -1180,7 +1160,7 @@ defmodule Compendium.RegistryTest do
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
       # Verify src files stored in Arca
-      base = ["components", "local", "default", "catalysts", "local", "src-test", "1.0.0", "src"]
+      base = ["components", "ath_test", "catalysts", "local", "src-test", "1.0.0", "src"]
 
       {:ok, cargo_content} = Arca.get(ctx, base ++ ["Cargo.toml"])
       assert cargo_content =~ "src-test"
@@ -1194,8 +1174,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "reagents",
           "local",
           "minimal",
@@ -1215,8 +1194,7 @@ defmodule Compendium.RegistryTest do
       # Manifest should still be stored
       path = [
         "components",
-        "local",
-        "default",
+        "ath_test",
         "reagents",
         "local",
         "minimal",
@@ -1229,8 +1207,7 @@ defmodule Compendium.RegistryTest do
       # README should not exist
       readme_path = [
         "components",
-        "local",
-        "default",
+        "ath_test",
         "reagents",
         "local",
         "minimal",
@@ -1246,8 +1223,7 @@ defmodule Compendium.RegistryTest do
         Path.join([
           test_dir,
           "components",
-          "local",
-          "default",
+          "ath_test",
           "catalysts",
           "local",
           "empty-src",

@@ -50,14 +50,14 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   end
 
   @impl GenServer
-  def handle_info({:vault_entry_changed_global, org_id, project_id, entry_id, verb}, state)
+  def handle_info({:vault_entry_changed_global, athanor_id, entry_id, verb}, state)
       when verb in @relevant_verbs do
-    {:noreply, attempt(state, {org_id, project_id, entry_id}, 0)}
+    {:noreply, attempt(state, {athanor_id, entry_id}, 0)}
   end
 
   # A vault change with a verb we don't reconcile (e.g. :create) — expected;
   # ignore without the catch-all's warning.
-  def handle_info({:vault_entry_changed_global, _org, _proj, _entry, _verb}, state) do
+  def handle_info({:vault_entry_changed_global, _athanor, _entry, _verb}, state) do
     {:noreply, state}
   end
 
@@ -80,8 +80,8 @@ defmodule Emissary.MCP.ExternalServerReconciler do
     {:noreply, state}
   end
 
-  defp attempt(state, {org_id, project_id, entry_id} = key, attempt_no) do
-    case reconcile(org_id, project_id, entry_id) do
+  defp attempt(state, {athanor_id, entry_id} = key, attempt_no) do
+    case reconcile(athanor_id, entry_id) do
       :ok ->
         %{state | pending: Map.delete(state.pending, key)}
 
@@ -98,7 +98,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
         :telemetry.execute(
           [:emissary, :external_server, :reconcile_failed],
           %{count: 1},
-          %{org_id: org_id, project_id: project_id, entry_id: entry_id, reason: inspect(reason)}
+          %{athanor_id: athanor_id, entry_id: entry_id, reason: inspect(reason)}
         )
 
         if attempt_no < @max_fast_retries do
@@ -114,15 +114,14 @@ defmodule Emissary.MCP.ExternalServerReconciler do
     end
   end
 
-  @spec reconcile(String.t(), String.t(), String.t()) ::
-          :ok | {:error, :unresolvable | term()}
-  defp reconcile(org_id, project_id, entry_id) do
-    ctx = Sanctum.Context.internal(org_id: org_id, project_id: project_id, scope: :project)
+  @spec reconcile(String.t(), String.t()) :: :ok | {:error, :unresolvable | term()}
+  defp reconcile(athanor_id, entry_id) do
+    ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
-    case Arca.VaultStorage.get(org_id, project_id, entry_id) do
+    case Arca.VaultStorage.get(athanor_id, entry_id) do
       {:ok, entry} ->
         with {:ok, servers} <- Arca.McpServerStorage.list(ctx) do
-          stop_affected(servers, entry, org_id, project_id, entry_id, ctx)
+          stop_affected(servers, entry, athanor_id, entry_id, ctx)
           :ok
         end
 
@@ -139,26 +138,23 @@ defmodule Emissary.MCP.ExternalServerReconciler do
       {:error, Exception.message(error)}
   end
 
-  defp stop_affected(servers, entry, org_id, project_id, entry_id, ctx) do
+  defp stop_affected(servers, entry, athanor_id, entry_id, ctx) do
     ref = "vault:#{entry.name}"
     affected = Enum.filter(servers, &references?(&1, ref))
 
     if affected != [] do
-      org = Arca.QueryHelpers.normalize_org_id(org_id)
-      proj = Arca.QueryHelpers.normalize_project_id(project_id)
-
       Enum.each(affected, fn server ->
         Logger.info(
           "[ExternalServerReconciler] restarting '#{server.name}' — " <>
             "a referenced vault entry changed"
         )
 
-        Emissary.MCP.ExternalServerSupervisor.stop(server.name, org, proj)
+        Emissary.MCP.ExternalServerSupervisor.stop(server.name, athanor_id)
 
         :telemetry.execute(
           [:emissary, :external_server, :reconciled],
           %{count: 1},
-          %{server: server.name, org_id: org, project_id: proj, entry_id: entry_id}
+          %{server: server.name, athanor_id: athanor_id, entry_id: entry_id}
         )
       end)
 

@@ -9,7 +9,19 @@ defmodule Sanctum.TenancyTest do
 
   alias Sanctum.Context
   alias Sanctum.Tenancy
-  alias Sanctum.Tenancy.Memberships
+  alias Sanctum.Tenancy.{Athanors, Members}
+
+  defp group!(name) do
+    {:ok, athanor} =
+      Athanors.create(%{
+        kind: "group",
+        name: name,
+        slug: "#{name}-#{System.unique_integer([:positive])}",
+        created_by: "system"
+      })
+
+    athanor
+  end
 
   describe "resolve_into/2 — override seam" do
     setup do
@@ -24,23 +36,24 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "is a no-op when ctx already carries an org_id" do
-      ctx = %Context{user_id: "u1", org_id: "acme", project_id: "p1"}
+    test "is a no-op when ctx already carries an athanor_id" do
+      ctx = %Context{user_id: "u1", athanor_id: "ath_acme"}
       assert Tenancy.resolve_into(ctx) == ctx
     end
 
-    test "merges resolver result when ctx has no org_id" do
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherOrgResolver)
+    test "merges resolver result when ctx has no athanor_id" do
+      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
-      ctx = %Context{user_id: "u1", org_id: nil}
+      ctx = %Context{user_id: "u1", athanor_id: nil}
       result = Tenancy.resolve_into(ctx)
-      assert result.org_id == "other_org"
+      assert result.athanor_id == "ath_other"
+      assert result.scope == :athanor
     end
 
     test "logs and returns ctx unchanged when the override resolver errors" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
 
-      ctx = %Context{user_id: "u1", org_id: nil}
+      ctx = %Context{user_id: "u1", athanor_id: nil}
 
       log =
         capture_log(fn ->
@@ -70,69 +83,61 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "no membership leaves org_id unresolved" do
-      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", org_id: nil}
-      assert Tenancy.resolve_into(ctx, force: true).org_id == nil
+    test "no membership leaves athanor_id unresolved" do
+      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", athanor_id: nil}
+      assert Tenancy.resolve_into(ctx, force: true).athanor_id == nil
     end
 
-    test "a single project membership resolves scope/org/project" do
-      uid = "u-proj-#{System.unique_integer([:positive])}"
+    test "an athanor membership resolves scope and athanor" do
+      uid = "u-ath-#{System.unique_integer([:positive])}"
+      athanor = group!("home-a")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
-      {:ok, _} =
-        Memberships.create(%{
-          user_id: uid,
-          scope: "project",
-          org_id: "local",
-          project_id: "default"
-        })
-
-      result = Tenancy.resolve_into(%Context{user_id: uid, org_id: nil}, force: true)
-      assert result.scope == :project
-      assert result.org_id == "local"
-      assert result.project_id == "default"
+      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
+      assert result.scope == :athanor
+      assert result.athanor_id == athanor.id
     end
 
-    test "highest scope wins (platform > org > project)" do
+    test "platform wins the scope; the working athanor is the first athanor membership" do
       uid = "u-multi-#{System.unique_integer([:positive])}"
+      athanor = group!("home-b")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
+      {:ok, _} = Members.ensure(uid, scope: "platform")
 
-      {:ok, _} =
-        Memberships.create(%{
-          user_id: uid,
-          scope: "project",
-          org_id: "local",
-          project_id: "default"
-        })
-
-      {:ok, _} = Memberships.ensure(uid, scope: "platform")
-
-      result = Tenancy.resolve_into(%Context{user_id: uid, org_id: nil}, force: true)
+      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.scope == :platform
-      # A platform membership has no org row; it resolves to the concrete local
-      # sentinel workspace (never an empty/nil org downstream).
-      assert result.org_id == "local"
-      assert result.project_id == "default"
+      assert result.athanor_id == athanor.id
+    end
+
+    test "a platform admin with no athanor membership works in Home" do
+      uid = "u-plat-only-#{System.unique_integer([:positive])}"
+      {:ok, _} = Members.ensure(uid, scope: "platform")
+
+      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
+      assert result.scope == :platform
+      assert result.athanor_id == Athanors.home!().id
     end
 
     test "an email in CYFR_PLATFORM_ADMIN_EMAILS is bootstrapped to platform scope" do
       Application.put_env(:cyfr, :platform_admin_emails, ["admin@example.com"])
       uid = "u-admin-#{System.unique_integer([:positive])}"
 
-      ctx = %Context{user_id: uid, org_id: nil, email: "admin@example.com"}
+      ctx = %Context{user_id: uid, athanor_id: nil, email: "admin@example.com"}
       result = Tenancy.resolve_into(ctx, force: true)
 
       assert result.scope == :platform
-      assert Enum.any?(Memberships.list_by_user(uid), &(&1.scope == "platform"))
+      assert Enum.any?(Members.list_by_user(uid), &(&1.scope == "platform"))
     end
 
     test "bootstrap is idempotent across repeated sign-ins" do
       Application.put_env(:cyfr, :platform_admin_emails, ["admin2@example.com"])
       uid = "u-admin2-#{System.unique_integer([:positive])}"
-      ctx = %Context{user_id: uid, org_id: nil, email: "admin2@example.com"}
+      ctx = %Context{user_id: uid, athanor_id: nil, email: "admin2@example.com"}
 
       Tenancy.resolve_into(ctx, force: true)
       Tenancy.resolve_into(ctx, force: true)
 
-      assert [_one] = Memberships.list_by_user(uid)
+      assert [_one] = Members.list_by_user(uid)
     end
 
     test "minting platform scope emits an audit event exactly once" do
@@ -141,7 +146,7 @@ defmodule Sanctum.TenancyTest do
       # and it must not re-fire on every subsequent sign-in.
       Application.put_env(:cyfr, :platform_admin_emails, ["admin3@example.com"])
       uid = "u-admin3-#{System.unique_integer([:positive])}"
-      ctx = %Context{user_id: uid, org_id: nil, email: "admin3@example.com"}
+      ctx = %Context{user_id: uid, athanor_id: nil, email: "admin3@example.com"}
 
       handler_id = "test-platform-bootstrap-#{System.unique_integer([:positive])}"
       test_pid = self()
@@ -183,7 +188,7 @@ defmodule Sanctum.TenancyTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      Tenancy.resolve_into(%Context{user_id: uid, org_id: nil, email: "plain@example.com"},
+      Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil, email: "plain@example.com"},
         force: true
       )
 
@@ -200,12 +205,11 @@ defmodule Sanctum.TenancyTest do
 
     test "keeps platform scope while the platform membership exists" do
       uid = "u-reval-keep-#{System.unique_integer([:positive])}"
-      {:ok, _} = Memberships.ensure(uid, scope: "platform")
+      {:ok, _} = Members.ensure(uid, scope: "platform")
 
       ctx = %Context{
         user_id: uid,
-        org_id: "local",
-        project_id: "default",
+        athanor_id: Athanors.home!().id,
         scope: :platform,
         authenticated: true
       }
@@ -215,12 +219,11 @@ defmodule Sanctum.TenancyTest do
 
     test "drops a stale platform scope after the platform membership is revoked" do
       uid = "u-reval-revoke-#{System.unique_integer([:positive])}"
-      {:ok, _} = Memberships.ensure(uid, scope: "platform")
+      {:ok, _} = Members.ensure(uid, scope: "platform")
 
       ctx = %Context{
         user_id: uid,
-        org_id: "local",
-        project_id: "default",
+        athanor_id: Athanors.home!().id,
         scope: :platform,
         authenticated: true
       }
@@ -229,105 +232,101 @@ defmodule Sanctum.TenancyTest do
       assert Tenancy.revalidate(ctx).scope == :platform
 
       # Revoke it.
-      [m] = Memberships.list_by_user(uid)
-      {:ok, _} = Memberships.remove(m)
+      [m] = Members.list_by_user(uid)
+      {:ok, _} = Members.remove(m)
 
-      # The stale :platform scope must NOT survive — no memberships → org-less,
-      # and the tenant gate then rejects tenant-scoped routes.
+      # The stale :platform scope must NOT survive — no memberships → no
+      # athanor, and the tenant gate then rejects tenant-scoped routes.
       revalidated = Tenancy.revalidate(ctx)
       refute revalidated.scope == :platform
-      assert revalidated.org_id == nil
+      assert revalidated.athanor_id == nil
     end
 
-    test "downgrade platform -> org drops the elevated scope but keeps a granted workspace" do
+    test "downgrade platform -> athanor drops the elevated scope but keeps a granted athanor" do
       uid = "u-reval-down-#{System.unique_integer([:positive])}"
+      athanor = group!("home-c")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
-      {:ok, _} =
-        Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
-
-      # A session previously resolved as :platform, viewing a project in its org.
-      ctx = %Context{
-        user_id: uid,
-        org_id: "local",
-        project_id: "p1",
-        scope: :platform,
-        authenticated: true
-      }
+      # A session previously resolved as :platform, working in an athanor it
+      # is a member of.
+      ctx = %Context{user_id: uid, athanor_id: athanor.id, scope: :platform, authenticated: true}
 
       revalidated = Tenancy.revalidate(ctx)
-      assert revalidated.scope == :org
-      # Org membership grants the whole org, so the selected project is kept.
-      assert revalidated.org_id == "local"
-      assert revalidated.project_id == "p1"
+      assert revalidated.scope == :athanor
+      assert revalidated.athanor_id == athanor.id
     end
 
-    test "falls back to the broadest membership when the selected workspace is no longer granted" do
+    test "falls back to the broadest membership when the athanor is no longer granted" do
       uid = "u-reval-switch-#{System.unique_integer([:positive])}"
+      athanor = group!("home-d")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
-      {:ok, _} =
-        Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
-
-      # Session points at an org the user is NOT a member of.
-      ctx = %Context{
-        user_id: uid,
-        org_id: "other-org",
-        project_id: "p9",
-        scope: :org,
-        authenticated: true
-      }
+      # Session points at an athanor the user is NOT a member of.
+      ctx = %Context{user_id: uid, athanor_id: "ath_other", scope: :athanor, authenticated: true}
 
       revalidated = Tenancy.revalidate(ctx)
-      assert revalidated.scope == :org
-      assert revalidated.org_id == "local"
+      assert revalidated.scope == :athanor
+      assert revalidated.athanor_id == athanor.id
     end
   end
 
-  describe "list_workspaces/1" do
+  describe "list_athanors/1" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
       :ok
     end
 
-    test "platform admin sees the seeded local/default workspace" do
-      ctx = %Context{user_id: "admin-#{System.unique_integer([:positive])}", scope: :platform}
+    test "a member sees the athanors their memberships grant" do
+      uid = "u-list-#{System.unique_integer([:positive])}"
+      a = group!("list-a")
+      b = group!("list-b")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: a.id})
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: b.id})
 
-      assert Enum.any?(
-               Tenancy.list_workspaces(ctx),
-               &(&1.org_id == "local" and &1.project_id == "default")
-             )
+      ids = Tenancy.list_athanors(%Context{user_id: uid, scope: :athanor}) |> Enum.map(& &1.id)
+      assert Enum.sort(ids) == Enum.sort([a.id, b.id])
     end
 
-    test "a project member sees the workspace their membership grants" do
-      uid = "u-ws-#{System.unique_integer([:positive])}"
+    test "a platform admin sees their own memberships only, not every athanor" do
+      uid = "u-list-plat-#{System.unique_integer([:positive])}"
+      _other = group!("list-other")
+      {:ok, _} = Members.ensure(uid, scope: "platform")
 
-      {:ok, _} =
-        Memberships.create(%{
-          user_id: uid,
-          scope: "project",
-          org_id: "local",
-          project_id: "default"
-        })
-
-      ctx = %Context{user_id: uid, scope: :project, org_id: "local", project_id: "default"}
-
-      assert Enum.any?(
-               Tenancy.list_workspaces(ctx),
-               &(&1.org_id == "local" and &1.project_id == "default")
-             )
+      assert Tenancy.list_athanors(%Context{user_id: uid, scope: :platform}) == []
     end
 
-    test "a user with no membership sees no workspaces" do
-      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", scope: :project}
-      assert Tenancy.list_workspaces(ctx) == []
+    test "a user with no membership sees no athanors" do
+      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", scope: :athanor}
+      assert Tenancy.list_athanors(ctx) == []
+    end
+  end
+
+  describe "user_active?/1" do
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+      original = Application.get_env(:cyfr, :auth_provider)
+      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+      on_exit(fn -> restore(:auth_provider, original) end)
+      :ok
     end
 
-    test "each workspace carries string display names" do
-      ctx = %Context{user_id: "admin-#{System.unique_integer([:positive])}", scope: :platform}
+    test "true while the user holds any membership; false once none remain" do
+      uid = "u-active-#{System.unique_integer([:positive])}"
+      refute Tenancy.user_active?(uid)
 
-      assert Enum.all?(Tenancy.list_workspaces(ctx), fn w ->
-               is_binary(w.org_name) and is_binary(w.project_name)
-             end)
+      {:ok, m} = Members.ensure(uid, scope: "platform")
+      assert Tenancy.user_active?(uid)
+
+      {:ok, _} = Members.remove(m)
+      refute Tenancy.user_active?(uid)
+    end
+
+    test "false for a missing user id" do
+      refute Tenancy.user_active?(nil)
+      refute Tenancy.user_active?("")
     end
   end
 

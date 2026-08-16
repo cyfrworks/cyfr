@@ -28,8 +28,7 @@ defmodule Arca.DependencyStorageTest do
         exports: "[]",
         publisher: "local",
         publisher_id: "test-user",
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-        project_id: ctx.project_id || "default",
+        athanor_id: ctx.athanor_id,
         source: "test",
         inserted_at: DateTime.utc_now(),
         updated_at: DateTime.utc_now()

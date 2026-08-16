@@ -11,8 +11,7 @@ defmodule Sanctum.Consent.ProofTest do
     kind: :consent_commit,
     commit_digest: "sha256:commit-one",
     actor: "user_1",
-    org_id: "local",
-    project_id: "default",
+    athanor_id: "ath_test",
     profile_id: "prof-1",
     expected_revision: 2
   }
@@ -59,8 +58,7 @@ defmodule Sanctum.Consent.ProofTest do
     test "every binding field is load-bearing" do
       for {field, changed} <- [
             actor: "user_2",
-            org_id: "other-org",
-            project_id: "other-project",
+            athanor_id: "ath_other",
             profile_id: "prof-2",
             expected_revision: 3,
             kind: :something_else
@@ -133,7 +131,7 @@ defmodule Sanctum.Consent.ProofTest do
   # ============================================================================
 
   describe "validation" do
-    test "bindings must carry a kind and a commit digest" do
+    test "bindings must carry a kind, a commit digest and an athanor" do
       assert {:error, {:invalid_bindings, :commit_digest}} =
                Proof.mint(Map.delete(@bindings, :commit_digest))
 
@@ -141,6 +139,14 @@ defmodule Sanctum.Consent.ProofTest do
 
       assert {:error, {:invalid_bindings, :commit_digest}} =
                Proof.mint(%{@bindings | commit_digest: ""})
+
+      # A proof is minted inside one athanor; a binding that names none
+      # could be consumed from anywhere.
+      assert {:error, {:invalid_bindings, :athanor_id}} =
+               Proof.mint(Map.delete(@bindings, :athanor_id))
+
+      assert {:error, {:invalid_bindings, :athanor_id}} =
+               Proof.mint(%{@bindings | athanor_id: ""})
 
       assert {:error, {:invalid_bindings, :bindings}} = Proof.mint("nope")
     end

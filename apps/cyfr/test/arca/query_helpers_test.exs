@@ -11,140 +11,91 @@ defmodule Arca.QueryHelpersTest do
 
   defp base_query, do: from(e in Arca.Execution)
 
-  describe "where_tenant/3" do
-    test "applies both org_id and project_id filters" do
-      ctx = Context.build(user_id: "u1", org_id: "org_1", project_id: "proj_1")
+  describe "where_tenant/2" do
+    test "applies the athanor filter" do
+      ctx = Context.build(user_id: "u1", athanor_id: "ath_1")
       query = QueryHelpers.where_tenant(base_query(), ctx)
 
-      %{wheres: wheres} = query
-      assert length(wheres) == 2
+      assert length(query.wheres) == 1
     end
 
-    test "nil org_id uses empty string sentinel" do
-      ctx = Context.build(user_id: "u1", project_id: "proj_1")
-      query = QueryHelpers.where_tenant(base_query(), ctx)
-
-      %{wheres: wheres} = query
-      assert length(wheres) == 2
-    end
-
-    test "nil project_id uses default sentinel" do
-      ctx = Context.build(user_id: "u1", org_id: "org_1")
-      query = QueryHelpers.where_tenant(base_query(), ctx)
-
-      %{wheres: wheres} = query
-      assert length(wheres) == 2
-    end
-
-    test "skip_project: true applies only org_id" do
-      ctx = Context.build(user_id: "u1", org_id: "org_1", project_id: "proj_1")
-      query = QueryHelpers.where_tenant(base_query(), ctx, skip_project: true)
-
-      %{wheres: wheres} = query
-      assert length(wheres) == 1
-    end
-  end
-
-  describe "where_tenant/3 org-less fail-closed backstop" do
-    test "authenticated org-scoped context with nil org_id raises" do
-      ctx =
-        Context.build(
-          user_id: "u1",
-          namespace: "u1",
-          org_id: nil,
-          project_id: "p1",
-          scope: :org,
-          authenticated: true
-        )
-
-      assert_raise ArgumentError, ~r/a resolved org_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), ctx)
-      end
-    end
-
-    test "authenticated project-scoped context with nil org_id raises" do
-      ctx =
-        Context.build(
-          user_id: "u1",
-          namespace: "u1",
-          org_id: nil,
-          project_id: "p1",
-          scope: :project,
-          authenticated: true
-        )
-
-      assert_raise ArgumentError, ~r/a resolved org_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), ctx)
-      end
-    end
-
-    test "a hand-rolled struct with an empty-string org_id raises" do
-      # Context.build/1 coerces "" to the sentinel, so only a struct literal
-      # can carry "" — the guard must still fail closed on it.
-      ctx = %Context{
-        user_id: "u1",
-        org_id: "",
-        project_id: "p1",
-        scope: :project,
-        authenticated: true
-      }
-
-      assert_raise ArgumentError, ~r/a resolved org_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), ctx)
-      end
-    end
-
-    test "platform-scope context with nil org_id passes (scoped to the sentinel)" do
-      ctx =
-        Context.build(
-          user_id: "admin",
-          org_id: nil,
-          scope: :platform,
-          authenticated: true
-        )
-
-      query = QueryHelpers.where_tenant(base_query(), ctx)
-      assert length(query.wheres) == 2
-    end
-
-    test "the seeded local context passes unchanged" do
+    test "the test context passes unchanged" do
       ctx = Sanctum.TestContext.local()
       query = QueryHelpers.where_tenant(base_query(), ctx)
-      assert length(query.wheres) == 2
-    end
-
-    test "unauthenticated org-less context still scopes to the sentinel (no raise)" do
-      ctx = Context.build(user_id: "u1", org_id: nil, project_id: "p1")
-      query = QueryHelpers.where_tenant(base_query(), ctx)
-      assert length(query.wheres) == 2
+      assert length(query.wheres) == 1
     end
   end
 
-  describe "where_project_id/2" do
-    test "nil project_id uses default sentinel" do
-      query = QueryHelpers.where_project_id(base_query(), nil)
-      %{wheres: wheres} = query
-      assert length(wheres) == 1
+  describe "where_tenant/2 athanor-less fail-closed backstop" do
+    test "authenticated context with nil athanor_id raises" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          namespace: "u1",
+          athanor_id: nil,
+          scope: :athanor,
+          authenticated: true
+        )
+
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        QueryHelpers.where_tenant(base_query(), ctx)
+      end
     end
 
-    test "non-nil project_id uses provided value" do
-      query = QueryHelpers.where_project_id(base_query(), "proj_1")
-      %{wheres: wheres} = query
-      assert length(wheres) == 1
+    test "a hand-rolled struct with an empty-string athanor_id raises" do
+      # Context.build/1 refuses "", so only a struct literal can carry it —
+      # the guard must still fail closed on it.
+      ctx = %Context{user_id: "u1", athanor_id: "", scope: :athanor, authenticated: true}
+
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        QueryHelpers.where_tenant(base_query(), ctx)
+      end
+    end
+
+    test "a platform-scope context with no athanor raises too" do
+      # Platform readers that cross athanors use where_tenant_unless_platform/2;
+      # a platform task working inside one athanor carries that athanor.
+      ctx =
+        Context.build(user_id: "admin", athanor_id: nil, scope: :platform, authenticated: true)
+
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        QueryHelpers.where_tenant(base_query(), ctx)
+      end
+    end
+
+    test "an unauthenticated context with no athanor raises (nothing to scope to)" do
+      ctx = Context.build(user_id: "u1", athanor_id: nil)
+
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        QueryHelpers.where_tenant(base_query(), ctx)
+      end
     end
   end
 
-  describe "normalize_org_id/1" do
-    test "converts nil to the seeded local sentinel" do
-      assert QueryHelpers.normalize_org_id(nil) == "local"
+  describe "where_tenant_unless_platform/2" do
+    test "a platform context reads unfiltered" do
+      ctx =
+        Context.build(user_id: "admin", athanor_id: nil, scope: :platform, authenticated: true)
+      query = QueryHelpers.where_tenant_unless_platform(base_query(), ctx)
+      assert query.wheres == []
     end
 
-    test "passes through a non-empty org_id" do
-      assert QueryHelpers.normalize_org_id("org-123") == "org-123"
+    test "an athanor context is scoped" do
+      ctx = Context.build(user_id: "u1", athanor_id: "ath_1")
+      query = QueryHelpers.where_tenant_unless_platform(base_query(), ctx)
+      assert length(query.wheres) == 1
+    end
+  end
+
+  describe "where_athanor/2" do
+    test "filters by a bare athanor id" do
+      query = QueryHelpers.where_athanor(base_query(), "ath_1")
+      assert length(query.wheres) == 1
     end
 
-    test "converts an empty string to the local sentinel" do
-      assert QueryHelpers.normalize_org_id("") == "local"
+    test "nil and empty raise" do
+      assert_raise ArgumentError, fn -> QueryHelpers.where_athanor(base_query(), nil) end
+      assert_raise ArgumentError, fn -> QueryHelpers.where_athanor(base_query(), "") end
     end
   end
 

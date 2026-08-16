@@ -27,9 +27,7 @@ defmodule Arca.Schemas.Webhook do
     field :created_by, :string
     field :profile_id, :string
     field :rotated_at, :utc_datetime_usec
-    field :scope_type, :string
-    field :org_id, :string
-    field :project_id, :string
+    field :athanor_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

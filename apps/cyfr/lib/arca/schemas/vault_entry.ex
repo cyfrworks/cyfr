@@ -15,12 +15,10 @@ defmodule Arca.Schemas.VaultEntry do
 
   @primary_key {:id, :string, autogenerate: false}
   schema "vault_entries" do
-    field :org_id, :string, default: ""
-    field :project_id, :string, default: "default"
+    field :athanor_id, :string
     field :name, :string
     field :provider_hint, :string, default: ""
     field :kind, :string
-    field :system, :boolean, default: false
     field :provenance, :string, default: "user"
     field :field_names, :string, default: "[]"
     field :binding_digest, :string

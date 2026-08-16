@@ -69,8 +69,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   defp rows_for(ctx, request_id) do
     Arca.McpLog.list(
       request_id: request_id,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       limit: 100
     )
   end
@@ -135,7 +134,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
     {:ok, _} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
 
     [row] =
-      Arca.McpLog.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 100)
+      Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
       |> Enum.filter(&(&1.tool == "system"))
 
     # It is a root: the row's id and its chain key are the same value.
@@ -151,6 +150,6 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
     {:ok, _} = ToolRegistry.call_external("mcp_log", ctx, %{"action" => "list"})
 
-    assert Arca.McpLog.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 100) == []
+    assert Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100) == []
   end
 end

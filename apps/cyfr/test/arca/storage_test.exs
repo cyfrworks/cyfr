@@ -60,59 +60,59 @@ defmodule Arca.StorageTest do
   end
 
   describe "tenant_segments/1" do
-    test "single-user layout: org 'local' → data/local/default (namespace not in path)" do
+    test "the athanor id names the tenant directory (namespace not in path)" do
       ctx =
         Context.build(
           user_id: "user_1",
           namespace: "alice",
-          authenticated: true
-        )
-
-      # org_id defaults to the seeded "local" sentinel; namespace is identity-only.
-      assert Storage.tenant_segments(ctx) == ["local", "default"]
-    end
-
-    test "multi-tenant layout: real org_id and project_id flow through" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          namespace: "alice",
-          org_id: "acme-corp",
-          project_id: "widgets",
+          athanor_id: "ath_acme",
           authenticated: true
         )
 
       # namespace ("alice") is identity-only and does NOT appear in the path.
-      assert Storage.tenant_segments(ctx) == ["acme-corp", "widgets"]
+      assert Storage.tenant_segments(ctx) == ["ath_acme"]
     end
 
-    test "namespace is ignored — org/project alone determine the path" do
+    test "namespace is ignored — the athanor alone determines the path" do
       with_ns =
-        Context.build(user_id: "u", namespace: "alice", org_id: "acme", authenticated: true)
+        Context.build(
+          user_id: "u",
+          namespace: "alice",
+          athanor_id: "ath_acme",
+          authenticated: true
+        )
 
-      without_ns = Context.build(user_id: "u", org_id: "acme", authenticated: true)
+      without_ns = Context.build(user_id: "u", athanor_id: "ath_acme", authenticated: true)
 
       assert Storage.tenant_segments(with_ns) == Storage.tenant_segments(without_ns)
-      assert Storage.tenant_segments(with_ns) == ["acme", "default"]
+      assert Storage.tenant_segments(with_ns) == ["ath_acme"]
     end
 
-    test "raises when org_id is org-less (fail closed)" do
-      # A resolved org_id is required to name a tenant directory; a nil means a
-      # caller bypassed the Sanctum.Context.require_tenant! chokepoint.
-      ctx = Context.build(user_id: "user_1", org_id: nil, authenticated: false)
+    test "raises when the context has no athanor (fail closed)" do
+      # A resolved athanor is required to name a tenant directory; a nil means
+      # a caller bypassed the Sanctum.Context.require_tenant! chokepoint.
+      ctx = Context.build(user_id: "user_1", athanor_id: nil, authenticated: false)
 
-      assert_raise ArgumentError, ~r/a resolved org_id is required/, fn ->
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         Storage.tenant_segments(ctx)
       end
     end
 
-    test "rejects path traversal in org_id" do
+    test "raises for a platform context with no athanor too" do
+      ctx =
+        Context.build(user_id: "system", scope: :platform, athanor_id: nil, authenticated: true)
+
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        Storage.tenant_segments(ctx)
+      end
+    end
+
+    test "rejects path traversal in athanor_id" do
       ctx =
         Context.build(
           user_id: "user_1",
           namespace: "alice",
-          org_id: "..",
-          project_id: "widgets",
+          athanor_id: "..",
           authenticated: true
         )
 
@@ -120,32 +120,46 @@ defmodule Arca.StorageTest do
         Storage.tenant_segments(ctx)
       end
     end
+  end
 
-    test "rejects path traversal in project_id" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          namespace: "alice",
-          org_id: "acme",
-          project_id: "..",
-          authenticated: true
-        )
-
-      assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
-        Storage.tenant_segments(ctx)
-      end
+  describe "authorize_path/2" do
+    test "an athanor reaches its own component tree" do
+      ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+      assert :ok = Storage.authorize_path(ctx, ["components", "ath_a", "catalysts", "local"])
     end
 
-    test "system-style context resolves by org/project, ignoring namespace" do
-      ctx =
-        Context.build(
-          user_id: "system",
-          namespace: "_system",
-          authenticated: true
-        )
+    test "an athanor is refused another athanor's component tree" do
+      ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
 
-      # org defaults to "local"; the "_system" namespace is identity-only.
-      assert Storage.tenant_segments(ctx) == ["local", "default"]
+      assert {:error, :forbidden} =
+               Storage.authorize_path(ctx, ["components", "ath_b", "catalysts", "local"])
+    end
+
+    test "a bare components listing is platform-only" do
+      member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+      platform =
+        Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+
+      assert {:error, :forbidden} = Storage.authorize_path(member, ["components"])
+      assert :ok = Storage.authorize_path(platform, ["components"])
+      assert :ok = Storage.authorize_path(platform, ["components", "ath_b", "tinctures"])
+    end
+
+    test "the seed bundle is readable only by server-internal contexts" do
+      member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+      platform =
+        Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+      seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
+
+      assert {:error, :forbidden} = Storage.authorize_path(member, ["components", "_bundle"])
+      assert {:error, :forbidden} = Storage.authorize_path(platform, ["components", "_bundle"])
+      assert :ok = Storage.authorize_path(seed, ["components", "_bundle", "catalysts"])
+    end
+
+    test "non-component paths are not gated here (they are tenant-prefixed)" do
+      ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+      assert :ok = Storage.authorize_path(ctx, ["builds", "b1", "started.json"])
+      assert :ok = Storage.authorize_path(ctx, ["cache", "oci", "x"])
     end
   end
 end

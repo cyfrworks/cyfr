@@ -23,29 +23,27 @@ defmodule Sanctum.S7TinctureTokenTest do
     %Plug.Conn{query_string: query_string, req_headers: headers, remote_ip: {127, 0, 0, 1}}
   end
 
-  defp authed_org_ctx do
+  defp authed_ctx do
     Context.build(
       user_id: "u-1",
       namespace: "ns-1",
-      org_id: "acme",
-      project_id: "proj-1",
+      athanor_id: "ath_acme",
       permissions: [:read, :write],
-      scope: :project,
+      scope: :athanor,
       auth_method: :oidc,
       authenticated: true
     )
   end
 
   describe "issue_access_token/1 + ?_t= round-trip" do
-    test "mints a token that rebuilds a project-scoped :execute tincture context" do
-      token = TinctureAuth.issue_access_token(authed_org_ctx())
+    test "mints a token that rebuilds an athanor-scoped :execute tincture context" do
+      token = TinctureAuth.issue_access_token(authed_ctx())
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(conn("_t=#{token}"))
       assert out.user_id == "u-1"
       assert out.namespace == "ns-1"
-      assert out.org_id == "acme"
-      assert out.project_id == "proj-1"
-      assert out.scope == :project
+      assert out.athanor_id == "ath_acme"
+      assert out.scope == :athanor
       assert out.auth_method == :tincture
       assert out.authenticated == true
       assert MapSet.to_list(out.permissions) == [:execute]
@@ -55,11 +53,22 @@ defmodule Sanctum.S7TinctureTokenTest do
       assert TinctureAuth.authenticate(conn("_t=not-a-valid-token")) == :unauthenticated
     end
 
-    test "?_t= still flows through the platform-mode tenant gate" do
-      # An org-less context's token must not authenticate under strict policy.
-      orgless_token = TinctureAuth.issue_access_token(Sanctum.TestContext.local())
+    test "?_t= still flows through the tenant gate" do
+      # An athanor-less context's token must not authenticate: the token
+      # carries no athanor, and the rebuilt context fails tenant_ok/1.
+      unresolved =
+        Context.build(
+          user_id: "u-2",
+          namespace: "ns-2",
+          athanor_id: nil,
+          permissions: [:read],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
-      fn -> assert TinctureAuth.authenticate(conn("_t=#{orgless_token}")) == :unauthenticated end
+      token = TinctureAuth.issue_access_token(unresolved)
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == :unauthenticated
     end
   end
 

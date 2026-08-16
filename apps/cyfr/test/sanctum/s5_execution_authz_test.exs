@@ -6,8 +6,8 @@ defmodule Sanctum.S5ExecutionAuthzTest do
   The execution-events controller delegates to the single authorization
   chokepoint `Sanctum.Context.authorize(ctx, :storage_read, {:execution, exec})`. This
   pins the exact decision the controller relies on: the :storage_read
-  permission gate + per-record `verify_tenant` (org/project equality). There is
-  no owner gate — project members are interchangeable, so any same-tenant member
+  permission gate + per-record `verify_tenant` (athanor equality). There is
+  no owner gate — athanor members are interchangeable, so any same-tenant member
   with :storage_read may read the record; cross-tenant access is still rejected.
   Opus-free (the HTTP route itself is :requires_opus).
   """
@@ -20,10 +20,9 @@ defmodule Sanctum.S5ExecutionAuthzTest do
       [
         user_id: "owner-1",
         namespace: "ns",
-        org_id: "org_a",
-        project_id: "default",
+        athanor_id: "ath_a",
         permissions: perms,
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       ]
@@ -31,7 +30,7 @@ defmodule Sanctum.S5ExecutionAuthzTest do
     )
   end
 
-  @exec %{user_id: "owner-1", org_id: "org_a", project_id: "default"}
+  @exec %{user_id: "owner-1", athanor_id: "ath_a"}
 
   test "owner with :storage_read is authorized" do
     assert Context.authorize(ctx([:storage_read]), :storage_read, {:execution, @exec}) == :ok
@@ -72,9 +71,10 @@ defmodule Sanctum.S5ExecutionAuthzTest do
   end
 
   test "cross-tenant owner is refused (per-record verify_tenant)" do
-    # Same user_id, different org: ownership alone must not grant access —
+    # Same user_id, different athanor: ownership alone must not grant access —
     # verify_tenant runs before the ownership check.
-    foreign = %{user_id: "owner-1", org_id: "org_b", project_id: "default"}
-    assert {:error, _} = Context.authorize(ctx([:storage_read]), :storage_read, {:execution, foreign})
+    foreign = %{user_id: "owner-1", athanor_id: "ath_b"}
+    assert {:error, _} =
+             Context.authorize(ctx([:storage_read]), :storage_read, {:execution, foreign})
   end
 end

@@ -36,9 +36,8 @@ defmodule Sanctum.Consent.Proof do
   @type bindings :: %{
           required(:kind) => atom(),
           required(:commit_digest) => String.t(),
+          required(:athanor_id) => String.t(),
           optional(:actor) => String.t(),
-          optional(:org_id) => String.t(),
-          optional(:project_id) => String.t(),
           optional(:profile_id) => String.t(),
           optional(:expected_revision) => non_neg_integer()
         }
@@ -57,7 +56,7 @@ defmodule Sanctum.Consent.Proof do
   # OAuth pending-state TTL.
   @default_ttl_ms 120_000
 
-  @required_bindings [:kind, :commit_digest]
+  @required_bindings [:kind, :commit_digest, :athanor_id]
 
   @doc "The default proof time-to-live in milliseconds."
   @spec default_ttl_ms() :: pos_integer()

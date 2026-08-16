@@ -48,15 +48,14 @@ defmodule Compendium.RegistryRemoveCascadeTest do
       Arca.ConsentStorage.mint_profile_with_revision(
         %{
           id: profile_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           source_ref: name_ref,
           kind: "owner",
           label: "default",
           status: "active"
         },
         %{
-          org_id: ctx.org_id,
+          athanor_id: ctx.athanor_id,
           profile_id: profile_id,
           revision: 1,
           scope: "versionless",
@@ -86,14 +85,14 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
     assert profile.status == "revoked"
 
     # Consents are insert-only history — the revoked status is the gate.
     assert Arca.Repo.get(Arca.Schemas.Consent, consent.id)
 
     # Vault entries are the operator's and outlive the component.
-    assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, entry.id)
+    assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
   end
 
   test "a webhook pointed at the removed component is disabled", %{ctx: ctx} do
@@ -113,8 +112,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-hooked", "1.0.0", "local")
 
-    {scope_type, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
-    {:ok, live} = Arca.WebhookStorage.list_webhooks(scope_type, org_id, project_id)
+    {:ok, live} = Arca.WebhookStorage.list_webhooks(ctx.athanor_id)
 
     refute Enum.any?(live, &(&1.name == "cascade-hook"))
   end
@@ -126,7 +124,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-multi", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
     assert profile.status == "active"
   end
 
@@ -137,7 +135,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     :ok = Compendium.Registry.delete(ctx, "cascade-a", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, other_id)
+    {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, other_id)
     assert profile.status == "active"
   end
 end

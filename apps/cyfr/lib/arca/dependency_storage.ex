@@ -16,7 +16,7 @@ defmodule Arca.DependencyStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [where_tenant: 2, normalize_org_id: 1, normalize_project_id: 1]
+  import Arca.QueryHelpers, only: [where_tenant: 2]
 
   alias Sanctum.Context
 
@@ -42,8 +42,7 @@ defmodule Arca.DependencyStorage do
     delete_dependencies(ctx, component_id)
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    org_id = normalize_org_id(ctx.org_id)
-    project_id = normalize_project_id(ctx.project_id)
+    athanor_id = ctx.athanor_id
 
     rows =
       Enum.map(deps, fn dep ->
@@ -57,8 +56,7 @@ defmodule Arca.DependencyStorage do
           dep_version: dep[:dep_version] || dep["dep_version"],
           optional: (dep[:optional] || dep["optional"]) == true,
           reason: dep[:reason] || dep["reason"],
-          org_id: org_id,
-          project_id: project_id,
+          athanor_id: athanor_id,
           inserted_at: now,
           updated_at: now
         }

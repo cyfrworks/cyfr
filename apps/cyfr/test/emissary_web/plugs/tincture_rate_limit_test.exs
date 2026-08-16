@@ -38,7 +38,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
   end
 
   defp build_conn(ip \\ {127, 0, 0, 1}, tincture \\ "test-app", publisher \\ "local") do
-    Plug.Test.conn(:get, "/t/local/default/#{publisher}/#{tincture}")
+    Plug.Test.conn(:get, "/t/home/#{publisher}/#{tincture}")
     |> Map.put(:remote_ip, ip)
     |> Map.put(:path_params, %{"publisher" => publisher, "tincture_name" => tincture})
   end
@@ -88,7 +88,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
 
     test "falls back to path segments when path_params are absent" do
       conn =
-        Plug.Test.conn(:get, "/t/local/default/pub-x/app-x/assets/app.js")
+        Plug.Test.conn(:get, "/t/home/pub-x/app-x/assets/app.js")
         |> Map.put(:remote_ip, {127, 0, 0, 3})
 
       for _ <- 1..3 do

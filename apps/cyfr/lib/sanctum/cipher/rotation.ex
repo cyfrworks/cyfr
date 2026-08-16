@@ -40,8 +40,7 @@ defmodule Sanctum.Cipher.Rotation do
   The cipher binds the row's canonical tenant tuple as AAD. This module
   rebuilds that tuple from each row's stored columns; the shapes here MUST
   stay identical to how `Sanctum.Vault` and `Sanctum.Webhook` persist them
-  (the org/project values the storage layer persists are already normalized,
-  so re-normalizing is idempotent).
+  (the athanor id the storage layer persists is bound through unchanged).
   """
 
   require Logger
@@ -176,7 +175,7 @@ defmodule Sanctum.Cipher.Rotation do
   # ==========================================================================
 
   defp rotate_row(:webhooks, row, opts) do
-    aad = Sanctum.CipherAAD.webhook_secret(row.scope_type, row.org_id, row.project_id, row.name)
+    aad = Sanctum.CipherAAD.webhook_secret(row.athanor_id, row.name)
 
     cols =
       [{:secret_encrypted, row.sec, aad}] ++
@@ -186,7 +185,7 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   defp rotate_row(:vault_entries, row, opts) do
-    aad = Sanctum.CipherAAD.vault_entry(row.org_id, row.project_id, row.id, row.provider_hint)
+    aad = Sanctum.CipherAAD.vault_entry(row.athanor_id, row.id, row.provider_hint)
 
     rotate_columns(:vault_entries, row.id, [{:sealed_payload, row.ct, aad}], opts, fn -> :ok end)
   end
@@ -232,11 +231,14 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   # planned: %{col => new_ct} for columns that needed rotation. A column is
-  # finished only when it is already sealed on the primary key.
+  # finished only when it is already sealed on the primary key in the current
+  # envelope version.
   defp classify(cols, primary) do
+    current = Cipher.current_version()
+
     Enum.reduce_while(cols, {:skip}, fn {col, ct, aad}, state ->
       case Cipher.envelope(ct) do
-        {:ok, {3, ^primary}} ->
+        {:ok, {^current, ^primary}} ->
           {:cont, state}
 
         {:ok, {_version, _label}} ->
@@ -305,9 +307,7 @@ defmodule Sanctum.Cipher.Rotation do
     |> select([r], %{
       id: r.id,
       name: r.name,
-      scope_type: r.scope_type,
-      org_id: r.org_id,
-      project_id: r.project_id,
+      athanor_id: r.athanor_id,
       sec: r.secret_encrypted,
       prev: r.previous_secret_encrypted
     })
@@ -319,8 +319,7 @@ defmodule Sanctum.Cipher.Rotation do
     |> where([r], not is_nil(r.sealed_payload))
     |> select([r], %{
       id: r.id,
-      org_id: r.org_id,
-      project_id: r.project_id,
+      athanor_id: r.athanor_id,
       provider_hint: r.provider_hint,
       ct: r.sealed_payload
     })

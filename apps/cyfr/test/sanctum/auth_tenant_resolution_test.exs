@@ -5,10 +5,10 @@ defmodule Sanctum.AuthTenantResolutionTest do
   @moduledoc """
   Regression: every auth path that produces a `Sanctum.Context` from a fresh
   login must call `Sanctum.Tenancy.resolve_into/2` with `force: true` so the
-  caller's scope/org/project is resolved from their memberships before any
+  caller's scope/athanor is resolved from their memberships before any
   tenant-scoped operation runs.
 
-  `Sanctum.Context.build/1` leaves `org_id` nil when none is supplied, so an
+  `Sanctum.Context.build/1` leaves `athanor_id` nil when none is supplied, so an
   unresolved context is rejected by the tenant gate — the auth path is
   responsible for resolving it.
   """
@@ -17,7 +17,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
   alias Sanctum.Context
   alias Sanctum.Tenancy
-  alias Sanctum.Tenancy.Memberships
+  alias Sanctum.Tenancy.Members
 
   setup do
     # Isolate from other tests' committed membership rows: resolve_into reads
@@ -45,38 +45,38 @@ defmodule Sanctum.AuthTenantResolutionTest do
   end
 
   describe "resolve_into/2 with force: true" do
-    test "resolves a freshly-built (org-less) context via the resolver" do
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherOrgResolver)
+    test "resolves a freshly-built (athanor-less) context via the resolver" do
+      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
       # Same shape as the contexts produced by OAuth.authenticate/1 and
-      # DeviceFlow's create_session/2 — Context.build/1 leaves org_id nil.
+      # DeviceFlow's create_session/2 — Context.build/1 leaves athanor_id nil.
       ctx = oauth_shaped_context()
-      assert ctx.org_id == nil, "Context.build/1 should leave org_id unresolved"
+      assert ctx.athanor_id == nil, "Context.build/1 should leave athanor_id unresolved"
 
       result = Tenancy.resolve_into(ctx, force: true)
-      assert result.org_id == "other_org"
+      assert result.athanor_id == "ath_other"
     end
 
-    test "without force, no-ops when ctx already carries an org_id (per-request safety net)" do
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherOrgResolver)
+    test "without force, no-ops when ctx already carries an athanor_id (per-request safety net)" do
+      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
 
-      # A context whose org was already resolved at session-create time.
-      ctx = %{oauth_shaped_context() | org_id: "acme", project_id: "p1"}
+      # A context whose athanor was already resolved at session-create time.
+      ctx = %{oauth_shaped_context() | athanor_id: "ath_acme"}
 
       result = Tenancy.resolve_into(ctx)
-      assert result.org_id == "acme"
+      assert result.athanor_id == "ath_acme"
     end
 
-    test "with force and no membership, the org stays unresolved (nil)" do
+    test "with force and no membership, the athanor stays unresolved (nil)" do
       Application.delete_env(:cyfr, :tenancy_resolver_override)
 
       ctx = oauth_shaped_context()
       result = Tenancy.resolve_into(ctx, force: true)
-      assert result.org_id == nil
+      assert result.athanor_id == nil
     end
 
     test "OAuth.authenticate/1 force-resolves before returning" do
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherOrgResolver)
+      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
       configure_github_test_credentials!()
 
       auth_params = %{
@@ -87,7 +87,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       }
 
       assert {:ok, %Context{} = ctx} = Sanctum.Auth.OAuth.authenticate(auth_params)
-      assert ctx.org_id == "other_org"
+      assert ctx.athanor_id == "ath_other"
     end
   end
 
@@ -100,17 +100,17 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
       assert result.scope == :platform
       # A platform membership row is minted (idempotently) for the user.
-      assert [%{scope: "platform"}] = Memberships.list_by_user(ctx.user_id)
+      assert [%{scope: "platform"}] = Members.list_by_user(ctx.user_id)
     end
 
-    test "an unlisted, unmembered user stays unresolved (→ no_org) with no membership row" do
+    test "an unlisted, unmembered user stays unresolved with no membership row" do
       # :platform_admin_emails is [] (setup) and no membership exists for this user.
       ctx = oauth_shaped_context()
 
       result = Tenancy.resolve_into(ctx, force: true)
 
-      assert result.org_id == nil
-      assert Memberships.list_by_user(ctx.user_id) == []
+      assert result.athanor_id == nil
+      assert Members.list_by_user(ctx.user_id) == []
     end
   end
 
@@ -124,8 +124,8 @@ defmodule Sanctum.AuthTenantResolutionTest do
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",
-      # Org-less, like the real OAuth/OIDC providers — resolved via memberships.
-      org_id: nil,
+      # Athanor-less, like the real OAuth/OIDC providers — resolved via memberships.
+      athanor_id: nil,
       permissions: [:*]
     )
   end

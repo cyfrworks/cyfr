@@ -20,7 +20,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
         "name" => name
       }) do
     # Dispatch enforces auth + :storage_read; the tenant residual keeps an
-    # org-less context out of the profile store.
+    # athanor-less context out of the profile store.
     with :ok <- tenant_gate(ctx) do
       ref = "tincture:#{publisher}.#{name}"
 
@@ -33,8 +33,8 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
             publisher: publisher,
             name: name,
             public: public != nil,
-            org: ctx.org_id,
-            project: ctx.project_id
+            athanor: ctx.athanor_id,
+            url: public_url(ctx, publisher, name)
           }
 
           result =
@@ -60,6 +60,22 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
 
   def handle(_ctx, _args) do
     {:error, "Invalid tincture_visibility action. Use: get"}
+  end
+
+  # The finished public URL, so no client composes the route shape itself.
+  # An athanor that cannot be resolved (archived mid-request) yields nil.
+  defp public_url(ctx, publisher, name) do
+    case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
+      {:ok, athanor} ->
+        Cyfr.TinctureHelpers.tincture_path(
+          Cyfr.TinctureHelpers.athanor_segment(athanor),
+          publisher,
+          name
+        )
+
+      _ ->
+        nil
+    end
   end
 
   defp tenant_gate(ctx) do

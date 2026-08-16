@@ -23,15 +23,14 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
       Arca.ConsentStorage.mint_profile_with_revision(
         %{
           id: profile_id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           source_ref: "formula:local.audited",
           kind: "owner",
           label: "default",
           status: "active"
         },
         %{
-          org_id: ctx.org_id,
+          athanor_id: ctx.athanor_id,
           profile_id: profile_id,
           revision: 1,
           scope: "versionless",
@@ -70,7 +69,7 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
         value_source: "vault:vlt_123"
       })
 
-    [row] = Arca.PolicyLog.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 1)
+    [row] = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
 
     assert row.consent_id == consent.id
     assert row.activation_digest == "sha256:activation"
@@ -94,13 +93,12 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
         consent_id: consent.id
       })
 
-    [plain] = Arca.PolicyLog.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 1)
+    [plain] = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
     refute Map.has_key?(plain, :consent)
 
     [joined] =
       Arca.PolicyLog.list(
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         limit: 1,
         with_consent: true
       )
@@ -122,7 +120,7 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
         decision_reason: "domain not allowed"
       })
 
-    [row] = Arca.PolicyLog.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 1)
+    [row] = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
 
     assert row.consent_id == nil
     assert row.chain == nil
@@ -131,8 +129,7 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
     # The join is a no-op for rows with no consent.
     [unjoined] =
       Arca.PolicyLog.list(
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         limit: 1,
         with_consent: true
       )

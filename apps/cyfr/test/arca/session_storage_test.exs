@@ -25,7 +25,7 @@ defmodule Arca.SessionStorageTest do
         permissions: "[\"execute\",\"component:read\"]",
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
         token_prefix: "cyfr_",
-        scope: "project"
+        scope: "athanor"
       },
       overrides
     )
@@ -59,37 +59,15 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
-  describe "scope persistence and update_workspace/3" do
-    test "persists and returns the resolved scope and org" do
+  describe "scope persistence" do
+    test "persists and returns the resolved scope and athanor" do
       hash = make_token_hash("scope")
-      attrs = session_attrs(%{scope: "platform", org_id: "local", project_id: "default"})
+      attrs = session_attrs(%{scope: "platform", athanor_id: "ath_home"})
 
       assert :ok = SessionStorage.create_session(hash, attrs)
       assert {:ok, session} = SessionStorage.get_session(hash)
       assert session.scope == "platform"
-      assert session.org_id == "local"
-      assert session.project_id == "default"
-    end
-
-    test "update_workspace/3 switches the active org/project" do
-      hash = make_token_hash("switch")
-
-      :ok =
-        SessionStorage.create_session(
-          hash,
-          session_attrs(%{org_id: "local", project_id: "default"})
-        )
-
-      assert :ok = SessionStorage.update_workspace(hash, "acme", "team")
-
-      assert {:ok, session} = SessionStorage.get_session(hash)
-      assert session.org_id == "acme"
-      assert session.project_id == "team"
-    end
-
-    test "update_workspace/3 returns not_found for an unknown session" do
-      assert {:error, :not_found} =
-               SessionStorage.update_workspace(make_token_hash("none"), "x", "y")
+      assert session.athanor_id == "ath_home"
     end
   end
 
@@ -138,74 +116,25 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
-  describe "cleanup_expired_sessions/1 (scoped)" do
-    test "deletes expired sessions scoped to tenant" do
-      hash_a = make_token_hash("cleanup_a")
-      hash_b = make_token_hash("cleanup_b")
-
-      :ok =
-        SessionStorage.create_session(
-          hash_a,
-          session_attrs(%{
-            user_id: "cleanup_user_a",
-            org_id: "org_cleanup_a",
-            project_id: "proj_cleanup_a",
-            expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
-          })
-        )
-
-      :ok =
-        SessionStorage.create_session(
-          hash_b,
-          session_attrs(%{
-            user_id: "cleanup_user_b",
-            org_id: "org_cleanup_b",
-            project_id: "proj_cleanup_b",
-            expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
-          })
-        )
-
-      # Cleanup only tenant A
-      {:ok, count} =
-        SessionStorage.cleanup_expired_sessions(
-          org_id: "org_cleanup_a",
-          project_id: "proj_cleanup_a"
-        )
-
-      assert count == 1
-
-      # Tenant B's expired session still exists (cleanup was scoped)
-      {:ok, remaining} =
-        SessionStorage.cleanup_expired_sessions(
-          org_id: "org_cleanup_b",
-          project_id: "proj_cleanup_b"
-        )
-
-      assert remaining == 1
-    end
-  end
-
-  describe "tenant columns" do
-    test "stores and retrieves org_id and project_id" do
+  describe "tenant column" do
+    test "stores and retrieves athanor_id" do
       hash = make_token_hash("tenant")
-      attrs = session_attrs(%{org_id: "org_alpha", project_id: "proj_1"})
+      attrs = session_attrs(%{athanor_id: "ath_alpha"})
 
       assert :ok = SessionStorage.create_session(hash, attrs)
 
       assert {:ok, session} = SessionStorage.get_session(hash)
-      assert session.org_id == "org_alpha"
-      assert session.project_id == "proj_1"
+      assert session.athanor_id == "ath_alpha"
     end
 
-    test "defaults org_id to empty string and project_id to default" do
+    test "a session may exist before its athanor is resolved (nil, never a default)" do
       hash = make_token_hash("tenant_default")
       attrs = session_attrs()
 
       assert :ok = SessionStorage.create_session(hash, attrs)
 
       assert {:ok, session} = SessionStorage.get_session(hash)
-      assert session.org_id == ""
-      assert session.project_id == "default"
+      assert session.athanor_id == nil
     end
   end
 end

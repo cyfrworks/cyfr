@@ -31,7 +31,7 @@ defmodule Sanctum.VaultTest do
   end
 
   defp resource_for(ctx, id) do
-    {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, id)
+    {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, id)
     {:ok, digest} = VaultReader.binding_digest(entry)
     %{entry_id: id, binding_digest: digest}
   end
@@ -39,8 +39,7 @@ defmodule Sanctum.VaultTest do
   defp mint_profile_with_ref(ctx, entry_id, binding_digest) do
     {:ok, profile} =
       Arca.ProfileStorage.put(%{
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         source_ref: "formula:local.consumer",
         kind: "owner",
         label: "default",
@@ -50,7 +49,7 @@ defmodule Sanctum.VaultTest do
     {:ok, _consent} =
       Arca.ConsentStorage.insert_revision(
         %{
-          org_id: ctx.org_id,
+          athanor_id: ctx.athanor_id,
           profile_id: profile.id,
           revision: 1,
           scope: "versionless",
@@ -162,26 +161,29 @@ defmodule Sanctum.VaultTest do
 
     test "rotating a needs_reauth entry reactivates it", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "v"}})
-      :ok = Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, view.id, "needs_reauth")
+      :ok = Arca.VaultStorage.set_status(ctx.athanor_id, view.id, "needs_reauth")
 
       assert {:ok, 1} =
-               Vault.rotate(ctx, %{id: view.id, fields: %{"key" => "v2"}, expected_payload_rev: 0})
+               Vault.rotate(ctx, %{
+                 id: view.id,
+                 fields: %{"key" => "v2"},
+                 expected_payload_rev: 0
+               })
 
-      {:ok, entry} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
+      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
       assert entry.status == "active"
     end
 
     test "a retired v1 pointer row cannot rotate — recreate the entry", %{ctx: ctx} do
       id = Emissary.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, "legacy")
+      aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
       pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
       {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
 
       {:ok, _} =
         Arca.VaultStorage.put(%{
           id: id,
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           name: "legacy:ptr",
           provider_hint: "legacy",
           kind: "bundle",
@@ -216,7 +218,7 @@ defmodule Sanctum.VaultTest do
       # The old consent's digest no longer verifies.
       assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, old_resource)
 
-      {:ok, reloaded} = Arca.ProfileStorage.get(ctx.org_id, ctx.project_id, profile.id)
+      {:ok, reloaded} = Arca.ProfileStorage.get(ctx.athanor_id, profile.id)
       assert reloaded.status == "needs_consent"
     end
 
@@ -245,7 +247,7 @@ defmodule Sanctum.VaultTest do
 
       assert :ok = Vault.delete(ctx, view.id)
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.org_id, ctx.project_id, view.id)
+      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
       assert row.status == "tombstoned"
       assert row.sealed_payload == nil
 

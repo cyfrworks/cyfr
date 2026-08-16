@@ -21,7 +21,7 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
     anonymous =
       Context.build(
         user_id: nil,
-        org_id: nil,
+        athanor_id: nil,
         permissions: [],
         auth_method: nil,
         authenticated: false

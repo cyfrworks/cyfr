@@ -52,6 +52,7 @@ defmodule Opus.CronSchedulerTest do
 
     CronSchedule.create(%{
       user_id: "test_user",
+      athanor_id: Sanctum.TestContext.athanor_id(),
       name: name,
       cron_expression: cron,
       reference: "reagent:local.test:1.0.0",
@@ -106,16 +107,12 @@ defmodule Opus.CronSchedulerTest do
           reference: "reagent:local.test",
           resolved_reference: nil,
           profile_id: "prof_test",
-          project_id: "default",
+          athanor_id: Sanctum.TestContext.athanor_id(),
           next_run_at: DateTime.utc_now()
         })
 
-      # Build the same context that fire_schedule/2 builds at line 185-188
-      ctx =
-        Sanctum.Context.for_scheduled(schedule.user_id,
-          org_id: schedule.org_id,
-          project_id: schedule.project_id
-        )
+      # Build the same context that fire_schedule/2 builds
+      ctx = Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
 
       # This is the exact call fire_schedule makes on the nil branch (line 197)
       CronSchedule.record_error(

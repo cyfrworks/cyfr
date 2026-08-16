@@ -42,7 +42,6 @@ defmodule Sanctum.Vault do
           provider_hint: String.t(),
           status: String.t(),
           provenance: String.t(),
-          system: boolean(),
           field_names: [String.t()],
           oauth_scopes: [String.t()],
           payload_rev: non_neg_integer(),
@@ -53,10 +52,10 @@ defmodule Sanctum.Vault do
   # Read
   # ---------------------------------------------------------------------------
 
-  @doc "Living entries in the caller's tenant, metadata only."
+  @doc "Living entries in the caller's athanor, metadata only."
   @spec list(Context.t()) :: {:ok, [entry_view()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    with {:ok, rows} <- Arca.VaultStorage.list(ctx.org_id, ctx.project_id) do
+    with {:ok, rows} <- Arca.VaultStorage.list(Context.athanor!(ctx)) do
       {:ok, Enum.map(rows, &view/1)}
     end
   end
@@ -68,7 +67,7 @@ defmodule Sanctum.Vault do
   @doc """
   Create an entry holding v2 material. `params`:
 
-    * `:name` (required) — tenant-unique label among living entries
+    * `:name` (required) — athanor-unique label among living entries
     * `:kind` (required) — `"api_key" | "oauth" | "bundle"`
     * `:fields` — `%{name => value}` material map (default empty)
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
@@ -86,13 +85,12 @@ defmodule Sanctum.Vault do
          {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)) do
       id = Emissary.UUID7.generate_id("vlt")
       hint = Map.get(params, :provider_hint, "")
-      aad = CipherAAD.vault_entry(ctx.org_id, ctx.project_id, id, hint)
+      aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
       attrs = %{
         id: id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: Context.athanor!(ctx),
         name: name,
         kind: kind,
         provider_hint: hint,
@@ -107,7 +105,7 @@ defmodule Sanctum.Vault do
       with {:ok, entry} <- Arca.VaultStorage.put(attrs),
            {:ok, digest} <- VaultReader.binding_digest(entry),
            :ok <-
-           Arca.VaultStorage.update_binding(ctx.org_id, ctx.project_id, id, %{
+           Arca.VaultStorage.update_binding(Context.athanor!(ctx), id, %{
              binding_digest: digest
            }) do
         broadcast(ctx, id, :create)
@@ -126,7 +124,7 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_living(ctx, id),
          :ok <- check_name_free(ctx, new_name) do
-      Arca.VaultStorage.update_meta(ctx.org_id, ctx.project_id, id, %{name: new_name})
+      Arca.VaultStorage.update_meta(Context.athanor!(ctx), id, %{name: new_name})
     end
   end
 
@@ -149,16 +147,16 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_rotatable(ctx, id),
          :ok <- check_schema(entry, fields),
-         {:ok, current} <- unseal(ctx, entry),
+         {:ok, current} <- unseal(entry),
          {:ok, oauth} <- rotation_oauth(current, Map.get(params, :oauth)),
          {:ok, json} <- Payload.encode_material(fields, oauth) do
-      aad = CipherAAD.vault_entry(ctx.org_id, entry.project_id, entry.id, entry.provider_hint)
+      aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
-      case Arca.VaultStorage.rotate_payload(ctx.org_id, ctx.project_id, id, expected, sealed) do
+      case Arca.VaultStorage.rotate_payload(Context.athanor!(ctx), id, expected, sealed) do
         :ok ->
           if entry.status == "needs_reauth" do
-            Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, id, "active")
+            Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "active")
           end
 
           broadcast(ctx, id, :rotate)
@@ -200,15 +198,14 @@ defmodule Sanctum.Vault do
         with {:ok, digest} <- VaultReader.binding_digest(rebound),
              :ok <-
                Arca.VaultStorage.update_binding(
-                 ctx.org_id,
-                 ctx.project_id,
+                 Context.athanor!(ctx),
                  id,
                  Map.put(changes, :binding_digest, digest)
                ),
              {:ok, affected} <-
-               Arca.ConsentStorage.head_profiles_referencing(ctx.org_id, id) do
+               Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
           Enum.each(affected, fn profile_id ->
-            Arca.ProfileStorage.set_status(ctx.org_id, ctx.project_id, profile_id, "needs_consent")
+            Arca.ProfileStorage.set_status(Context.athanor!(ctx), profile_id, "needs_consent")
           end)
 
           broadcast(ctx, id, :rebind)
@@ -231,8 +228,8 @@ defmodule Sanctum.Vault do
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_living(ctx, id),
-         :ok <- Arca.VaultStorage.set_status(ctx.org_id, ctx.project_id, id, "revoked"),
-         {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(ctx.org_id, id) do
+         :ok <- Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "revoked"),
+         {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
       broadcast(ctx, id, :revoke)
       {:ok, %{affected: Enum.sort(affected)}}
     end
@@ -243,7 +240,7 @@ defmodule Sanctum.Vault do
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_any(ctx, id),
-         :ok <- Arca.VaultStorage.tombstone(ctx.org_id, ctx.project_id, id) do
+         :ok <- Arca.VaultStorage.tombstone(Context.athanor!(ctx), id) do
       broadcast(ctx, id, :delete)
       :ok
     end
@@ -261,7 +258,6 @@ defmodule Sanctum.Vault do
       provider_hint: entry.provider_hint,
       status: entry.status,
       provenance: entry.provenance,
-      system: entry.system,
       field_names: decode_list(entry.field_names),
       oauth_scopes: decode_list(entry.oauth_scopes),
       payload_rev: entry.payload_rev,
@@ -276,14 +272,14 @@ defmodule Sanctum.Vault do
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
 
   defp check_name_free(ctx, name) do
-    case Arca.VaultStorage.get_by_name(ctx.org_id, ctx.project_id, name) do
+    case Arca.VaultStorage.get_by_name(Context.athanor!(ctx), name) do
       {:error, :not_found} -> :ok
       {:ok, _} -> {:error, :name_taken}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp get_any(ctx, id), do: Arca.VaultStorage.get(ctx.org_id, ctx.project_id, id)
+  defp get_any(ctx, id), do: Arca.VaultStorage.get(Context.athanor!(ctx), id)
 
   defp get_living(ctx, id) do
     case get_any(ctx, id) do
@@ -316,8 +312,8 @@ defmodule Sanctum.Vault do
     end
   end
 
-  defp unseal(ctx, entry) do
-    aad = CipherAAD.vault_entry(ctx.org_id, entry.project_id, entry.id, entry.provider_hint)
+  defp unseal(entry) do
+    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
     with sealed when is_binary(sealed) <- entry.sealed_payload,
          {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad) do
@@ -370,7 +366,7 @@ defmodule Sanctum.Vault do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       "sanctum:vault_changed",
-      {:vault_entry_changed_global, ctx.org_id, ctx.project_id, entry_id, verb}
+      {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb}
     )
   end
 end

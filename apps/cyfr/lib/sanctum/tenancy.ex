@@ -6,8 +6,9 @@ defmodule Sanctum.Tenancy do
   Tenant resolution from memberships.
 
   `resolve_into/2` is the single chokepoint every auth path flows through to
-  attach the caller's scope/org/project to their Context. It reads the user's
-  membership rows and applies the broadest one (platform > org > project).
+  attach the caller's scope and athanor to their Context. It reads the user's
+  membership rows: a platform row makes the caller a platform admin; an
+  athanor row grants that athanor.
 
   There is no deployment "mode". A fresh install with no auth configured never
   reaches here (requests run as the unauthenticated public context). When auth
@@ -27,57 +28,49 @@ defmodule Sanctum.Tenancy do
 
   require Logger
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Memberships
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   @doc """
-  Merge the caller's scope/org/project into the context.
+  Merge the caller's scope and athanor into the context.
 
-  Without `force: true`, no-ops when the context already carries a non-empty
-  `org_id` (the per-request safety-net usage in plugs: the stored value was
-  resolved at session-create time and re-querying every request is wasteful).
-  Auth paths that produce a Context *before* membership has been resolved —
-  `Sanctum.Auth.OAuth`, `Sanctum.Auth.DeviceFlow`, `Sanctum.Auth.OIDC` — pass
-  `force: true`.
+  Without `force: true`, no-ops when the context already carries an
+  `athanor_id` (the per-request safety-net usage in plugs: the stored value
+  was resolved at session-create time and re-querying every request is
+  wasteful). Auth paths that produce a Context *before* membership has been
+  resolved — `Sanctum.Auth.OAuth`, `Sanctum.Auth.DeviceFlow`,
+  `Sanctum.Auth.OIDC` — pass `force: true`.
 
-  Resolution failure logs and returns the context unchanged — a context with no
-  resolved org is rejected downstream by the tenant gate
+  Resolution failure logs and returns the context unchanged — a context with
+  no resolved athanor is rejected downstream by the tenant gate
   (`Sanctum.Context.tenant_ok/1`).
   """
   @spec resolve_into(Context.t(), keyword()) :: Context.t()
   def resolve_into(ctx, opts \\ [])
 
-  def resolve_into(%Context{org_id: org} = ctx, opts)
-      when is_binary(org) and org != "" do
+  def resolve_into(%Context{athanor_id: athanor_id} = ctx, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
     if Keyword.get(opts, :force, false), do: do_resolve(ctx), else: ctx
   end
 
   def resolve_into(%Context{} = ctx, _opts), do: do_resolve(ctx)
 
   @doc """
-  List the workspaces (org + project pairs) the context may switch into.
-
-  A platform admin sees every org and its projects; a member sees only the
-  orgs/projects their memberships grant. This is the *authorization ceiling* for
-  the active-workspace switcher — the broadest set the principal may operate in,
-  distinct from the single workspace they are currently scoped to. Returns a list
-  of `%{org_id, org_name, project_id, project_name}` maps.
+  The athanors the context may work in — the rows behind the caller's own
+  memberships. A platform admin sees their own memberships like anyone else;
+  cross-athanor reach is a platform-scoped act, not a listing.
   """
-  @spec list_workspaces(Context.t()) :: [map()]
-  def list_workspaces(%Context{scope: :platform}) do
-    Sanctum.Tenancy.Orgs.list(limit: 200)
-    |> ensure_list()
-    |> Enum.flat_map(&projects_of/1)
-  end
-
-  def list_workspaces(%Context{user_id: user_id}) when is_binary(user_id) do
+  @spec list_athanors(Context.t()) :: [Arca.Schemas.Athanor.t()]
+  def list_athanors(%Context{user_id: user_id}) when is_binary(user_id) do
     user_id
-    |> Memberships.list_by_user()
+    |> Members.list_by_user()
     |> ensure_list()
-    |> Enum.flat_map(&workspaces_for_membership/1)
-    |> Enum.uniq_by(&{&1.org_id, &1.project_id})
+    |> Enum.map(& &1.athanor_id)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Athanors.list_by_ids()
   end
 
-  def list_workspaces(_), do: []
+  def list_athanors(_), do: []
 
   # The membership-resolution override is a test-only seam. `do_resolve/1` is
   # defined in two compile-time variants: a production release — compiled with
@@ -92,12 +85,8 @@ defmodule Sanctum.Tenancy do
 
         module ->
           case module.resolve(ctx.user_id) do
-            %{org_id: org_id} = membership ->
-              %{
-                ctx
-                | org_id: org_id,
-                  project_id: Map.get(membership, :project_id) || ctx.project_id
-              }
+            %{athanor_id: athanor_id} ->
+              %{ctx | athanor_id: athanor_id, scope: :athanor}
 
             :no_membership ->
               ctx
@@ -121,10 +110,10 @@ defmodule Sanctum.Tenancy do
   end
 
   defp apply_highest_membership(%Context{user_id: user_id} = ctx) do
-    case Memberships.list_by_user(user_id) do
+    case Members.list_by_user(user_id) do
       [] ->
-        # No membership → org_id stays as-is (nil for a fresh auth ctx) and the
-        # tenant gate rejects on tenant-scoped routes.
+        # No membership → athanor_id stays as-is (nil for a fresh auth ctx) and
+        # the tenant gate rejects on tenant-scoped routes.
         ctx
 
       memberships when is_list(memberships) ->
@@ -136,64 +125,67 @@ defmodule Sanctum.Tenancy do
     end
   end
 
-  # Set scope/org/project from the broadest of an already-loaded membership list.
+  # Set scope/athanor from an already-loaded membership list.
   #
-  # A platform membership row carries no org (`m.org_id == nil`). It still
-  # resolves to a concrete working workspace — the seeded local sentinel — so the
-  # context never carries an empty/`""` org downstream. The platform ceiling
-  # lives in `scope`, not in an absent org; cross-tenant reach is preserved by
-  # `scope: :platform`.
+  # A platform row wins the scope; it names no athanor, so the platform admin
+  # works in the first athanor a membership grants them, or Home when they
+  # hold none — the platform ceiling lives in `scope`, not in an absent
+  # athanor. Otherwise the broadest grant is the athanor row.
   defp apply_membership(%Context{} = ctx, memberships) do
-    m = highest_scope(memberships)
+    scope = ceiling_scope(memberships)
+    athanor_id = working_athanor(memberships)
 
-    %{
-      ctx
-      | scope: String.to_existing_atom(m.scope),
-        org_id: m.org_id || Arca.Tenant.local_org(),
-        project_id: m.project_id || default_project(m.org_id) || Arca.Tenant.default_project()
-    }
+    %{ctx | scope: scope, athanor_id: athanor_id}
+  end
+
+  defp working_athanor(memberships) do
+    case Enum.find(memberships, &(&1.scope == "athanor" and is_binary(&1.athanor_id))) do
+      %{athanor_id: id} -> id
+      nil -> Athanors.home!().id
+    end
   end
 
   @doc """
   Re-validate a *restored* session context against the user's CURRENT
   memberships, returning the corrected context.
 
-  Sessions persist `(scope, org_id, project_id)` so the per-request hot path
-  doesn't re-resolve, but a membership change after a session was created MUST
-  take effect immediately — otherwise a revoked platform admin keeps platform
-  reach until the session TTL expires. This recomputes the authoritative scope
-  from current memberships and keeps the session's selected workspace ONLY if it
-  is still within the (current) authorization ceiling; otherwise it falls back to
-  the broadest current membership. A user with no memberships is dropped to an
-  org-less context (the tenant gate then rejects tenant-scoped routes).
+  Sessions persist `(scope, athanor_id)` so the per-request hot path doesn't
+  re-resolve, but a membership change after a session was created MUST take
+  effect immediately — otherwise a revoked platform admin keeps platform
+  reach until the session TTL expires. This recomputes the authoritative
+  scope from current memberships and keeps the session's athanor ONLY if a
+  current membership still grants it (or the caller is platform); otherwise
+  it falls back to the broadest current membership. A user with no
+  memberships is dropped to an athanor-less context (the tenant gate then
+  rejects tenant-scoped routes).
 
-  Cost: this issues one `Memberships.list_by_user/1` query per restored request
+  Cost: this issues one `Members.list_by_user/1` query per restored request
   (small, indexed by `user_id`, limit 50 — scales with DB latency, not data
   size). It trades that query for immediate revocation instead of waiting out
   the session TTL. If profiling ever shows DB latency dominating on a
-  high-throughput deployment, add a short (30–60s) membership cache rather than
-  reverting to trusting the persisted scope.
+  high-throughput deployment, add a short (30–60s) membership cache rather
+  than reverting to trusting the persisted scope.
 
   Failing safe: on a transient membership-read error the context is returned
   unchanged rather than locking the user out or silently re-resolving.
   """
   @spec revalidate(Context.t()) :: Context.t()
-  def revalidate(%Context{user_id: user_id, org_id: org, project_id: project} = ctx)
+  def revalidate(%Context{user_id: user_id, athanor_id: athanor_id} = ctx)
       when is_binary(user_id) do
-    case Memberships.list_by_user(user_id) do
+    case Members.list_by_user(user_id) do
       memberships when is_list(memberships) and memberships != [] ->
-        if is_binary(org) and org != "" and workspace_granted?(memberships, org, project) do
-          # Selected workspace still authorized — keep it, but pin scope to the
+        if athanor_granted?(memberships, athanor_id) do
+          # Selected athanor still authorized — keep it, but pin scope to the
           # authoritative (current) ceiling so a stale elevated scope can't ride.
           %{ctx | scope: ceiling_scope(memberships)}
         else
-          # Selected workspace no longer authorized (membership removed/changed,
-          # or org-less) — fall back to the broadest current membership.
+          # Selected athanor no longer authorized (membership removed) — fall
+          # back to the broadest current membership.
           apply_membership(ctx, memberships)
         end
 
       [] ->
-        %{ctx | scope: :project, org_id: nil, project_id: nil}
+        %{ctx | scope: :athanor, athanor_id: nil}
 
       _error ->
         ctx
@@ -203,7 +195,7 @@ defmodule Sanctum.Tenancy do
   def revalidate(%Context{} = ctx), do: ctx
 
   @doc """
-  Whether `user_id` still holds a membership granting `org_id`.
+  Whether `user_id` still holds any membership.
 
   Deferred-authority ingresses (webhooks, cron schedules) execute on behalf
   of the user who created them, possibly long after that user lost access —
@@ -214,8 +206,8 @@ defmodule Sanctum.Tenancy do
   matching `revalidate/1`'s posture — a DB blip must not silently kill every
   schedule; the read is retried on the next firing.
   """
-  @spec user_active_in_org?(String.t() | nil, String.t() | nil) :: boolean()
-  def user_active_in_org?(user_id, org_id) do
+  @spec user_active?(String.t() | nil) :: boolean()
+  def user_active?(user_id) do
     cond do
       not Sanctum.auth_configured?() ->
         true
@@ -224,13 +216,9 @@ defmodule Sanctum.Tenancy do
         false
 
       true ->
-        case Memberships.list_by_user(user_id) do
+        case Members.list_by_user(user_id) do
           memberships when is_list(memberships) ->
-            Enum.any?(memberships, fn
-              %{scope: "platform"} -> true
-              %{org_id: m_org} -> m_org == org_id
-              _ -> false
-            end)
+            memberships != []
 
           error ->
             Logger.warning(
@@ -243,94 +231,25 @@ defmodule Sanctum.Tenancy do
     end
   end
 
-  # Is the workspace `(org, project)` reachable under these memberships?
-  # Platform grants every workspace; an org membership grants its org; a project
-  # membership grants exactly its (org, project).
-  defp workspace_granted?(memberships, org, project) do
+  # Is the athanor reachable under these memberships? Platform grants every
+  # athanor; an athanor membership grants exactly its athanor.
+  defp athanor_granted?(_memberships, athanor_id) when athanor_id in [nil, ""], do: false
+
+  defp athanor_granted?(memberships, athanor_id) do
     Enum.any?(memberships, fn
       %{scope: "platform"} -> true
-      %{scope: "org", org_id: m_org} -> m_org == org
-      %{scope: "project", org_id: m_org, project_id: m_proj} -> m_org == org and m_proj == project
+      %{scope: "athanor", athanor_id: id} -> id == athanor_id
       _ -> false
     end)
   end
 
+  # Platform wins over athanor.
   defp ceiling_scope(memberships) do
-    String.to_existing_atom(highest_scope(memberships).scope)
-  end
-
-  # Broadest scope wins: platform grants everything, then org, then project.
-  defp highest_scope(memberships) do
-    Enum.min_by(memberships, fn
-      %{scope: "platform"} -> 0
-      %{scope: "org"} -> 1
-      %{scope: "project"} -> 2
-      _ -> 3
-    end)
-  end
-
-  # The org's first project, or "default" when none exist yet. Single source for
-  # the default-project decision (previously duplicated in the OIDC provider).
-  defp default_project(nil), do: nil
-
-  defp default_project(org_id) do
-    case Sanctum.Tenancy.Projects.list_by_org(org_id, limit: 1) do
-      [project | _] ->
-        project.id
-
-      [] ->
-        Arca.Tenant.default_project()
-
-      {:error, reason} ->
-        Logger.error(
-          "[Sanctum.Tenancy] failed to resolve default project for org #{org_id}: #{inspect(reason)}"
-        )
-
-        Arca.Tenant.default_project()
-    end
+    if Enum.any?(memberships, &(&1.scope == "platform")), do: :platform, else: :athanor
   end
 
   defp ensure_list(list) when is_list(list), do: list
   defp ensure_list(_), do: []
-
-  # Every project within an org (platform admins and org-scoped members).
-  defp projects_of(%{id: org_id} = org) do
-    org_id
-    |> Sanctum.Tenancy.Projects.list_by_org(limit: 200)
-    |> ensure_list()
-    |> Enum.map(&workspace_entry(org, &1))
-  end
-
-  defp workspaces_for_membership(%{scope: "org", org_id: org_id}) when is_binary(org_id) do
-    case Sanctum.Tenancy.Orgs.get(org_id) do
-      {:ok, org} -> projects_of(org)
-      _ -> []
-    end
-  end
-
-  # A project-scoped membership grants exactly one workspace.
-  defp workspaces_for_membership(%{scope: "project", org_id: org_id, project_id: pid})
-       when is_binary(org_id) and is_binary(pid) do
-    with {:ok, org} <- Sanctum.Tenancy.Orgs.get(org_id),
-         {:ok, project} <- Sanctum.Tenancy.Projects.get(pid) do
-      [workspace_entry(org, project)]
-    else
-      _ -> []
-    end
-  end
-
-  # Platform memberships are handled by the :platform list_workspaces head; an
-  # org-less or unrecognized membership grants nothing switchable here.
-  defp workspaces_for_membership(_), do: []
-
-  defp workspace_entry(org, project) do
-    %{
-      org_id: org.id,
-      org_name: org.name || org.slug || org.id,
-      project_id: project.id,
-      project_name: project.name || project.slug || project.id
-    }
-  end
 
   # Uniform admin bootstrap. An email listed in CYFR_PLATFORM_ADMIN_EMAILS gets
   # a platform-scope membership minted on sign-in. Idempotent.
@@ -345,9 +264,9 @@ defmodule Sanctum.Tenancy do
        when is_binary(user_id) and is_binary(email) do
     if email_match?(email, Application.get_env(:cyfr, :platform_admin_emails, [])) do
       already_admin? =
-        Enum.any?(Memberships.list_by_user(user_id), &(&1.scope == "platform"))
+        Enum.any?(ensure_list(Members.list_by_user(user_id)), &(&1.scope == "platform"))
 
-      case Memberships.ensure(user_id, scope: "platform") do
+      case Members.ensure(user_id, scope: "platform") do
         {:ok, _membership} ->
           if already_admin?, do: :ok, else: emit_platform_bootstrap(user_id, email)
 

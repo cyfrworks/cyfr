@@ -16,7 +16,7 @@ defmodule Opus.CronMCP do
 
   alias Sanctum.Context
 
-  @max_schedules_per_user 25
+  @max_schedules_per_athanor 25
 
   def resources, do: []
   def resource_templates, do: []
@@ -63,7 +63,7 @@ defmodule Opus.CronMCP do
             },
             "name" => %{
               "type" => "string",
-              "description" => "Human-readable schedule name, unique per user (create/update)"
+              "description" => "Human-readable schedule name, unique within the athanor (create/update)"
             },
             "cron_expression" => %{
               "type" => "string",
@@ -124,8 +124,7 @@ defmodule Opus.CronMCP do
         resolved_reference: resolved_reference,
         input: input_json,
         metadata: metadata_json,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id,
+        athanor_id: ctx.athanor_id,
         next_run_at: next_run,
         profile_id: args["profile_id"]
       }
@@ -379,10 +378,10 @@ defmodule Opus.CronMCP do
   end
 
   defp validate_limit(ctx) do
-    count = Arca.CronSchedule.count_by_user(ctx)
+    count = Arca.CronSchedule.count_active(ctx)
 
-    if count >= @max_schedules_per_user do
-      {:error, "Schedule limit reached (#{@max_schedules_per_user} per user)"}
+    if count >= @max_schedules_per_athanor do
+      {:error, "Schedule limit reached (#{@max_schedules_per_athanor} per athanor)"}
     else
       :ok
     end

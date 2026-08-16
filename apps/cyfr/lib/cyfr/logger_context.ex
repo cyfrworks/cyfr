@@ -21,8 +21,7 @@ defmodule Cyfr.LoggerContext do
   def set_from_context(%Sanctum.Context{} = ctx) do
     Logger.metadata(
       user_id: ctx.user_id,
-      org_id: ctx.org_id,
-      project_id: ctx.project_id,
+      athanor_id: ctx.athanor_id,
       auth_method: ctx.auth_method
     )
   end

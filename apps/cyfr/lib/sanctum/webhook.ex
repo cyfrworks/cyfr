@@ -79,21 +79,19 @@ defmodule Sanctum.Webhook do
   @spec create(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def create(%Context{} = ctx, %{name: name, target_ref: target_ref} = opts)
       when is_binary(name) and is_binary(target_ref) do
-    {scope_t, oid, pid} = extract_scope(ctx)
+    athanor_id = athanor!(ctx)
 
     with :ok <- validate_target_ref(ctx, target_ref),
          :ok <- authorize_profile_binding(ctx, target_ref, Map.get(opts, :profile_id)),
          {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
          {:ok, secret} <- generate_secret(),
          {:ok, secret_encrypted} <-
-           Sanctum.Cipher.encrypt(secret, ctx_webhook_aad(scope_t, oid, pid, name)),
+           Sanctum.Cipher.encrypt(secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),
          slug <- generate_slug(),
          attrs <-
            build_attrs(
              ctx,
-             scope_t,
-             oid,
-             pid,
+             athanor_id,
              name,
              target_ref,
              slug,
@@ -125,22 +123,18 @@ defmodule Sanctum.Webhook do
   """
   @spec get(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get(%Context{} = ctx, name) when is_binary(name) do
-    {scope_t, oid, pid} = extract_scope(ctx)
-
-    case WebhookStorage.get_by_name(name, scope_t, oid, pid) do
+    case WebhookStorage.get_by_name(name, athanor!(ctx)) do
       {:ok, row} -> {:ok, public_view(row)}
       {:error, :not_found} -> {:error, :not_found}
     end
   end
 
   @doc """
-  List all enabled webhooks within tenant scope. Secrets are never returned.
+  List the athanor's enabled webhooks. Secrets are never returned.
   """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    {scope_t, oid, pid} = extract_scope(ctx)
-
-    case WebhookStorage.list_webhooks(scope_t, oid, pid) do
+    case WebhookStorage.list_webhooks(athanor!(ctx)) do
       {:ok, rows} -> {:ok, Enum.map(rows, &public_view/1)}
       error -> error
     end
@@ -154,19 +148,12 @@ defmodule Sanctum.Webhook do
   """
   @spec update(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def update(%Context{} = ctx, name, attrs) when is_binary(name) and is_map(attrs) do
-    {scope_t, oid, pid} = extract_scope(ctx)
+    athanor_id = athanor!(ctx)
 
     with {:ok, normalized} <- normalize_update_attrs(attrs),
          :ok <- maybe_validate_target_ref(ctx, normalized),
-         :ok <- maybe_authorize_profile_binding(ctx, name, scope_t, oid, pid, normalized),
-         :ok <-
-           WebhookStorage.update_webhook(
-             name,
-             scope_t,
-             oid,
-             pid,
-             normalized
-           ) do
+         :ok <- maybe_authorize_profile_binding(ctx, name, athanor_id, normalized),
+         :ok <- WebhookStorage.update_webhook(name, athanor_id, normalized) do
       get(ctx, name)
     end
   end
@@ -175,7 +162,7 @@ defmodule Sanctum.Webhook do
   # target the row will have after this update. An explicit nil is an
   # unbind, and an unbound webhook can never fire — refuse it here the
   # same way create does.
-  defp maybe_authorize_profile_binding(ctx, name, scope_t, oid, pid, normalized) do
+  defp maybe_authorize_profile_binding(ctx, name, athanor_id, normalized) do
     case Map.fetch(normalized, :profile_id) do
       :error ->
         :ok
@@ -190,7 +177,7 @@ defmodule Sanctum.Webhook do
               {:ok, ref}
 
             _ ->
-              case WebhookStorage.get_by_name(name, scope_t, oid, pid) do
+              case WebhookStorage.get_by_name(name, athanor_id) do
                 {:ok, row} -> {:ok, row.target_ref}
                 {:error, _} = error -> error
               end
@@ -207,8 +194,7 @@ defmodule Sanctum.Webhook do
   """
   @spec revoke(Context.t(), String.t()) :: :ok | {:error, :not_found}
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    {scope_t, oid, pid} = extract_scope(ctx)
-    WebhookStorage.set_disabled(name, scope_t, oid, pid)
+    WebhookStorage.set_disabled(name, athanor!(ctx))
   end
 
   @doc """
@@ -223,7 +209,7 @@ defmodule Sanctum.Webhook do
   """
   @spec rotate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    {scope_t, oid, pid} = extract_scope(ctx)
+    athanor_id = athanor!(ctx)
 
     previous_expires_at =
       DateTime.add(DateTime.utc_now(), @previous_secret_grace_seconds, :second)
@@ -231,13 +217,11 @@ defmodule Sanctum.Webhook do
     with {:ok, existing} <- get(ctx, name),
          {:ok, new_secret} <- generate_secret(),
          {:ok, new_secret_encrypted} <-
-           Sanctum.Cipher.encrypt(new_secret, ctx_webhook_aad(scope_t, oid, pid, name)),
+           Sanctum.Cipher.encrypt(new_secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),
          :ok <-
            WebhookStorage.rotate_secret(
              name,
-             scope_t,
-             oid,
-             pid,
+             athanor_id,
              new_secret_encrypted,
              previous_expires_at
            ) do
@@ -400,9 +384,7 @@ defmodule Sanctum.Webhook do
 
   defp build_attrs(
          ctx,
-         scope_t,
-         oid,
-         pid,
+         athanor_id,
          name,
          target_ref,
          slug,
@@ -423,9 +405,7 @@ defmodule Sanctum.Webhook do
       rate_limit: Map.get(opts, :rate_limit),
       profile_id: Map.get(opts, :profile_id),
       created_by: ctx.user_id,
-      scope_type: scope_t,
-      org_id: oid,
-      project_id: pid
+      athanor_id: athanor_id
     }
   end
 
@@ -631,28 +611,16 @@ defmodule Sanctum.Webhook do
 
   defp build_url(_), do: nil
 
-  # Single source of truth for the {scope, org_id, project_id} triple and the
-  # tenant chokepoint — Sanctum.TenantScope (shared with Secrets/OAuth) raises
-  # for an org-less non-platform context.
-  defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
-
-  # AAD for create/2 and rotate/2, built from the writing context. Symmetric
-  # with webhook_aad/1 (rebuilt from the stored row at verify time) via the
-  # single `Sanctum.CipherAAD` definition.
-  defp ctx_webhook_aad(scope_t, oid, pid, name),
-    do: Sanctum.CipherAAD.webhook_secret(scope_t, oid, pid, name)
+  # The athanor every management path keys on, behind the tenant chokepoint:
+  # an athanor-less context raises before it can touch any row.
+  defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
 
   # AAD for verify_with_grace/4, rebuilt from the stored webhook row. The
   # current and previous secret share this identity, so the rotation grace
-  # window is AAD-stable.
+  # window is AAD-stable; create/2 and rotate/2 build the same tuple from the
+  # writing context via the single `Sanctum.CipherAAD` definition.
   defp webhook_aad(webhook),
-    do:
-      Sanctum.CipherAAD.webhook_secret(
-        webhook.scope_type,
-        webhook.org_id,
-        webhook.project_id,
-        webhook.name
-      )
+    do: Sanctum.CipherAAD.webhook_secret(webhook.athanor_id, webhook.name)
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)

@@ -31,10 +31,9 @@ defmodule Prism.AgentConfigGrantsTest do
     Context.build(
       user_id: user_id,
       provider: "local",
-      org_id: Arca.Tenant.local_org(),
-      project_id: Arca.Tenant.default_project(),
+      athanor_id: Sanctum.TestContext.athanor_id(),
       permissions: [:execute],
-      scope: :project,
+      scope: :athanor,
       auth_method: :oidc,
       authenticated: true
     )

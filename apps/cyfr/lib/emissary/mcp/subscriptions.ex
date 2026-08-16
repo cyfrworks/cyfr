@@ -29,7 +29,7 @@ defmodule Emissary.MCP.Subscriptions do
   ## Tenancy
 
   Subscriptions ride tenant-scoped PubSub topics, so a listener receives events
-  for its own org and project and no other. That is a property of
+  for its own athanor and no other. That is a property of
   `Sanctum.PubSub.topic/2` rather than of this module, which is why the context
   is required to open a stream at all.
   """

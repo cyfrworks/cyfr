@@ -27,8 +27,8 @@ defmodule PrismWeb.LiveAuth do
          |> assign(:session_token, token)
          |> assign(:personal_namespace_slug, slug)}
 
-      {:error, :no_org} ->
-        {:halt, redirect(socket, to: "/login?error=no_org")}
+      {:error, :no_athanor} ->
+        {:halt, redirect(socket, to: "/login?error=no_athanor")}
 
       {:error, :unauthenticated} ->
         {:halt, redirect(socket, to: "/login")}

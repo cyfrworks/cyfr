@@ -99,13 +99,13 @@ defmodule Sanctum.MCPDispatchContractTest do
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 
-    test "sanctum://identity returns JSON with user_id/org_id/scope", %{ctx: ctx} do
+    test "sanctum://identity returns JSON with user_id/athanor_id/scope", %{ctx: ctx} do
       assert {:ok, %{content: content, mimeType: "application/json"}} =
                MCP.read(ctx, "sanctum://identity")
 
       decoded = Jason.decode!(content)
       assert decoded["user_id"] == ctx.user_id
-      assert Map.has_key?(decoded, "org_id")
+      assert Map.has_key?(decoded, "athanor_id")
       assert Map.has_key?(decoded, "scope")
     end
 

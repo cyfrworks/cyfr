@@ -75,7 +75,7 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp check_unclaimed(ctx, source_ref) do
-    case Arca.ProfileStorage.list_for_source(ctx.org_id, ctx.project_id, source_ref) do
+    case Arca.ProfileStorage.list_for_source(ctx.athanor_id, source_ref) do
       {:ok, []} -> :ok
       {:ok, _existing} -> {:skip, :already_bootstrapped}
       {:error, reason} -> {:error, reason}
@@ -118,8 +118,7 @@ defmodule Sanctum.Consent.Bootstrap do
            Arca.ConsentStorage.mint_profile_with_revision(
              %{
                id: profile_id,
-               org_id: ctx.org_id,
-               project_id: ctx.project_id,
+               athanor_id: ctx.athanor_id,
                source_ref: source_ref,
                kind: "owner",
                label: "default",

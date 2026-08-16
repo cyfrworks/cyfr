@@ -13,7 +13,7 @@ defmodule Sanctum.Policy.EnforcementTest do
   end
 
   defp rows_for(ctx, component_ref) do
-    [org_id: ctx.org_id, project_id: ctx.project_id, limit: 50]
+    [athanor_id: ctx.athanor_id, limit: 50]
     |> Arca.PolicyLog.list()
     |> Enum.filter(&(&1.component_ref == component_ref))
   end

@@ -21,7 +21,7 @@ your-project/
 │   ├── reagent/           #   Pure compute interface
 │   ├── catalyst/          #   I/O interface (HTTP, secrets, storage)
 │   └── formula/           #   Composition interface (invoke sub-components)
-├── components/{org}/{project}/   # Components, scoped by tenant (default: local/default)
+├── components/{athanor}/   # Components, one tree per athanor (Home first)
 │   ├── reagents/local/    #   name/version/reagent.wasm + cyfr-manifest.json
 │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
 │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
@@ -31,7 +31,7 @@ your-project/
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
 ```
-components/local/default/catalysts/local/my-api/0.1.0/
+components/{athanor_id}/catalysts/local/my-api/0.1.0/
 ├── cyfr-manifest.json
 ├── catalyst.wasm          # Built binary (committed)
 └── src/                   # Cargo project root (cargo init here)
@@ -45,7 +45,7 @@ components/local/default/catalysts/local/my-api/0.1.0/
         └── deps/          # Only for catalysts — only include what you import
 ```
 
-**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Shorthand prefixes: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture). Examples: `catalyst:local.claude`, `t:local.stock-dashboard`. Versionless refs resolve to the latest version and are preferred for execution and grants — a versionless consent covers every release of the component line automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{org}/{project}/{type}s/` (default workspace: `local/default`).
+**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Shorthand prefixes: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture). Examples: `catalyst:local.claude`, `t:local.stock-dashboard`. Versionless refs resolve to the latest version and are preferred for execution and grants — a versionless consent covers every release of the component line automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{athanor}/{type}s/`.
 
 ---
 
@@ -64,7 +64,7 @@ components/local/default/catalysts/local/my-api/0.1.0/
 | MCP tool access | — | — | Via `invoke::call` | — |
 | Frontend UI | — | — | — | HTML/JS/CSS |
 | Backend component invoke | — | — | — | `cyfr.invoke()` |
-| Public web access | — | — | — | `/t/:publisher/:name` (visibility via MCP) |
+| Public web access | — | — | — | `/t/:athanor/:publisher/:name` (visibility via MCP) |
 
 **Reagents** export `cyfr:reagent/compute::compute(string) -> string`. No imports, no side effects, fully deterministic. Locus rejects any reagent binary with imports.
 
@@ -90,7 +90,7 @@ cyfr new tincture stock-dashboard                    # vanilla HTML/JS/CSS
 cyfr new tincture stock-dashboard --template react   # React + Vite (requires build step)
 ```
 
-This creates everything under `components/{org}/{project}/{type}s/local/{name}/0.1.0/` (default workspace: `local/default`). Use `--version` to override the default version. WASM types get Cargo/WIT scaffolding; vanilla tinctures get `index.html`, `app.js`, `style.css`; React tinctures get `package.json`, `tsconfig.json`, `vite.config.ts`, `src/App.tsx`, and a manifest with a `build` field.
+This creates everything under `components/{athanor}/{type}s/local/{name}/0.1.0/`. Use `--version` to override the default version. WASM types get Cargo/WIT scaffolding; vanilla tinctures get `index.html`, `app.js`, `style.css`; React tinctures get `package.json`, `tsconfig.json`, `vite.config.ts`, `src/App.tsx`, and a manifest with a `build` field.
 
 You can also set up the directory structure manually — the sections below describe each file in detail.
 
@@ -371,7 +371,7 @@ fn parse_catalyst_output(result: &Value) -> Result<Value, String> {
 }
 ```
 
-> All `invoke::call` requests use MCP format: `{"tool": "...", "action": "...", "args": {...}}`. For sub-component execution use tool `"execution"` with action `"run"`. See `components/local/default/formulas/local/list-models/0.5.0` for a production example.
+> All `invoke::call` requests use MCP format: `{"tool": "...", "action": "...", "args": {...}}`. For sub-component execution use tool `"execution"` with action `"run"`. See the bundled `components/_bundle/formulas/local/list-models` formula for a production example.
 
 ### Build
 
@@ -462,7 +462,7 @@ fn race_providers(refs: &[&str], input: &Value) -> Result<Value, String> {
 }
 ```
 
-See `components/local/default/formulas/local/list-models/0.5.0` for a production example.
+See the bundled `components/_bundle/formulas/local/list-models` formula for a production example.
 
 ---
 

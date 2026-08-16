@@ -26,16 +26,15 @@ defmodule Sanctum.CipherIntegrationTest do
         else: Application.put_env(:cyfr, :crypto_keyring, orig_kr)
     end)
 
-    %{ctx: ctx("org_a")}
+    %{ctx: ctx("ath_a")}
   end
 
-  defp ctx(org) do
+  defp ctx(athanor_id) do
     Context.build(
       user_id: "u1",
       namespace: "u1",
-      org_id: org,
-      project_id: "default",
-      scope: :project,
+      athanor_id: athanor_id,
+      scope: :athanor,
       permissions: [:execute, :vault_read, :vault_write],
       auth_method: :oidc,
       authenticated: true
@@ -72,10 +71,10 @@ defmodule Sanctum.CipherIntegrationTest do
       assert {:error, :signature_mismatch} =
                Webhook.verify_with_grace(row, body, sign("wrong", body))
 
-      # Cross-tenant: same ciphertext, AAD rebuilt for another org → the
+      # Cross-tenant: same ciphertext, AAD rebuilt for another athanor → the
       # cipher's tag check fails → 401-class :signature_mismatch (not 500).
       assert {:error, :signature_mismatch} =
-               Webhook.verify_with_grace(%{row | org_id: "org_b"}, body, sign(secret, body))
+               Webhook.verify_with_grace(%{row | athanor_id: "ath_b"}, body, sign(secret, body))
 
       {:ok, %{secret: new_secret}} = Webhook.rotate(ctx, "h")
       {:ok, rotated} = Arca.WebhookStorage.get_by_slug(slug)

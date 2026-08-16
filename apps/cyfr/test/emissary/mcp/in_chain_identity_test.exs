@@ -85,9 +85,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
     ctx =
       Context.enter_guest(%Context{
         user_id: "identity_matrix_user",
-        org_id: "local",
-        project_id: "default",
-        scope: :project,
+        athanor_id: "ath_test",
+        scope: :athanor,
         permissions: MapSet.new([:*]),
         authenticated: true,
         request_id: "req_identity_matrix"
@@ -119,9 +118,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
     ctx =
       Context.enter_guest(%Context{
         user_id: "identity_matrix_user",
-        org_id: "local",
-        project_id: "default",
-        scope: :project,
+        athanor_id: "ath_test",
+        scope: :athanor,
         permissions: MapSet.new([:*]),
         authenticated: true,
         request_id: "req_identity_matrix"
@@ -143,8 +141,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     ctx =
       Context.enter_guest(%Context{
         user_id: "identity_matrix_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         authenticated: true
       })
@@ -159,8 +156,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     ctx =
       Context.enter_guest(%Context{
         user_id: "identity_matrix_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         authenticated: true,
         request_id: "req_identity_matrix"
@@ -180,8 +176,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     ctx =
       Context.enter_guest(%Context{
         user_id: "identity_matrix_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         authenticated: true,
         request_id: "req_identity_matrix"
@@ -204,8 +199,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     ctx =
       Context.enter_guest(%Context{
         user_id: "identity_matrix_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         authenticated: true,
         request_id: "req_identity_matrix"

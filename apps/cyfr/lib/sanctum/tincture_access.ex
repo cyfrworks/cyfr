@@ -54,12 +54,12 @@ defmodule Sanctum.TinctureAccess do
   """
   @spec get_public(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get_public(%Context{} = ctx, publisher, tincture_name) do
-    # Every context carries a resolved org_id (single-user installs use
-    # `"local"`). An unresolved nil/"" org_id indicates a routing bug —
-    # fail closed.
-    if ctx.org_id in [nil, ""] do
+    # The public route resolves the owning athanor before it gets here; a
+    # context without one indicates a routing bug — fail closed.
+    if ctx.athanor_id in [nil, ""] do
       Logger.warning(
-        "[TinctureAccess] org_id unresolved for public tincture lookup: #{publisher}/#{tincture_name}"
+        "[TinctureAccess] athanor unresolved for public tincture lookup: " <>
+          "#{publisher}/#{tincture_name}"
       )
 
       {:error, :not_found}
@@ -135,7 +135,7 @@ defmodule Sanctum.TinctureAccess do
         component.publisher,
         component.name,
         component.version,
-        {component.org_id, component.project_id}
+        component.athanor_id
       )
 
     component

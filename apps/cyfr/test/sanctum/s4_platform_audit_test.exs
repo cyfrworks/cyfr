@@ -60,13 +60,13 @@ defmodule Sanctum.S4PlatformAuditTest do
   end
 
   test "non-platform construction emits NO platform event" do
-    Context.build(user_id: "u", namespace: "ns", scope: :project, authenticated: true)
+    Context.build(user_id: "u", namespace: "ns", scope: :athanor, authenticated: true)
     refute_received {:platform_ctx, _, _}
   end
 
-  test "telemetry_bridge-style org-scoped unauthenticated context is not platform" do
-    # Mirrors prism/telemetry_bridge.ex after S4: scope :org, not :platform.
-    Context.build(scope: :org, org_id: "acme", project_id: "default", authenticated: false)
+  test "telemetry_bridge-style athanor-scoped unauthenticated context is not platform" do
+    # Mirrors prism/telemetry_bridge.ex: scope :athanor, not :platform.
+    Context.build(scope: :athanor, athanor_id: "ath_acme", authenticated: false)
     refute_received {:platform_ctx, _, _}
   end
 end

@@ -96,7 +96,8 @@ defmodule Sanctum.MCPTest do
 
       content = Jason.decode!(result.content)
       assert content["user_id"] == "local|local|testns"
-      assert content["scope"] == "project"
+      assert content["scope"] == "athanor"
+      assert content["athanor_id"] == ctx.athanor_id
     end
 
     test "reads permissions resource", %{ctx: ctx} do
@@ -122,7 +123,7 @@ defmodule Sanctum.MCPTest do
          %{ctx: ctx} do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
       assert result.user_id == "local|local|testns"
-      # session.whoami returns local-user fields only; scope/permissions/org_id
+      # session.whoami returns local-user fields only; scope/permissions/athanor_id
       # dropped; registry identity lives on Compendium.MCP.registry.whoami.
       assert Map.has_key?(result, :email)
       assert Map.has_key?(result, :provider)
@@ -144,7 +145,7 @@ defmodule Sanctum.MCPTest do
           user_id: "github|https://github.com|12345",
           email: "alice@example.com",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
@@ -160,7 +161,7 @@ defmodule Sanctum.MCPTest do
         Context.build(
           user_id: "github|https://github.com|12345",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :api_key,
           namespace: "testns",
           authenticated: true
@@ -328,10 +329,9 @@ defmodule Sanctum.MCPTest do
     setup do
       restricted_ctx = %Context{
         user_id: "restricted_user",
-        org_id: "local",
-        project_id: "default",
+        athanor_id: "ath_test",
         permissions: MapSet.new([:execute]),
-        scope: :project,
+        scope: :athanor,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -401,13 +401,16 @@ defmodule Sanctum.MCPTest do
       {:ok, _} =
         Arca.ProfileStorage.put(%{
           id: "prof_vis_#{:rand.uniform(1_000_000)}",
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           source_ref: "tincture:local.vis-test",
           kind: "public",
           label: "public",
           status: "active"
         })
+
+      # The URL is derived from the athanor row (its slug/kind), so the row
+      # behind the test context must exist.
+      athanor = Sanctum.TestContext.athanor!()
 
       {:ok, result} =
         MCP.handle("tincture_visibility", ctx, %{
@@ -418,6 +421,11 @@ defmodule Sanctum.MCPTest do
 
       assert result.public == true
       assert is_binary(result.public_profile_id)
+      # The finished public URL rides along, keyed by the owning athanor, so
+      # no client composes the route shape itself.
+      assert result.athanor == ctx.athanor_id
+      segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
+      assert result.url == Cyfr.TinctureHelpers.tincture_path(segment, "local", "vis-test")
     end
   end
 
@@ -523,47 +531,46 @@ defmodule Sanctum.MCPTest do
     end
   end
 
-  describe "tenant-scoped MCP actions — org-scoped vs org-less" do
+  describe "tenant-scoped MCP actions — athanor-scoped vs athanor-less" do
     setup do
-      org_ctx =
+      scoped =
         Context.build(
           user_id: "ext_user",
           namespace: "ext_ns",
-          org_id: "acme",
-          project_id: "default",
+          athanor_id: "ath_acme",
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           authenticated: true
         )
 
-      orgless =
+      unresolved =
         Context.build(
           user_id: "ext_user",
           namespace: "ext_ns",
-          org_id: nil,
+          athanor_id: nil,
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           authenticated: true
         )
 
-      {:ok, org_ctx: org_ctx, orgless: orgless}
+      {:ok, scoped: scoped, unresolved: unresolved}
     end
 
-    test "key.create: org-scoped succeeds, org-less is fail-closed under strict policy",
-         %{org_ctx: org_ctx, orgless: orgless} do
+    test "key.create: athanor-scoped succeeds, athanor-less is fail-closed",
+         %{scoped: scoped, unresolved: unresolved} do
       assert {:ok, _} =
-               MCP.handle("key", org_ctx, %{"action" => "create", "name" => "ext-ok-key"})
+               MCP.handle("key", scoped, %{"action" => "create", "name" => "ext-ok-key"})
 
       assert_fail_closed(fn ->
-        MCP.handle("key", orgless, %{"action" => "create", "name" => "ext-no-key"})
+        MCP.handle("key", unresolved, %{"action" => "create", "name" => "ext-no-key"})
       end)
     end
   end
 
-  # A tenant-scoped write must NOT succeed for an org-less context under the
-  # strict policy: it either raises (the require_tenant! chokepoint) or returns
+  # A tenant-scoped write must NOT succeed for an athanor-less context: it
+  # either raises (the require_tenant! chokepoint) or returns
   # {:error, _} (the tenant_ok early-return). Never {:ok, _}.
   defp assert_fail_closed(fun) do
     result =

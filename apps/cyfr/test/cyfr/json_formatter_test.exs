@@ -29,13 +29,13 @@ defmodule Cyfr.JsonFormatterTest do
           "test message",
           {{2026, 1, 1}, {0, 0, 0, 0}},
           user_id: "u_123",
-          org_id: "org_456",
+          athanor_id: "ath_456",
           request_id: "req_789"
         )
 
       json = output |> IO.iodata_to_binary() |> String.trim() |> Jason.decode!()
       assert json["user_id"] == "u_123"
-      assert json["org_id"] == "org_456"
+      assert json["athanor_id"] == "ath_456"
       assert json["request_id"] == "req_789"
     end
 

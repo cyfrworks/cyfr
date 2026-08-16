@@ -61,7 +61,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
   defp anonymous_ctx do
     Context.build(
       user_id: nil,
-      org_id: nil,
+      athanor_id: nil,
       permissions: [],
       auth_method: nil,
       authenticated: false

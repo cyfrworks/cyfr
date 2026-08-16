@@ -16,7 +16,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
   # The shared test conn auto-authenticates via Emissary.TestAuthProvider
   # ("test_user"), so this test exercises the cross-tenant case: an
   # unknown execution id returns 404 rather than streaming events.
-  # Cross-user-but-same-org and admin-overrides-ownership cases require
+  # Cross-user-but-same-athanor and admin-overrides-ownership cases require
   # a real Opus.ExecutionEventBuffer fixture and are left to integration
   # tests.
   describe "GET /api/executions/:id/events" do

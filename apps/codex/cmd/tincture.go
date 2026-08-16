@@ -19,19 +19,16 @@ func validateTincturePublisher(slug string) {
 	}
 }
 
-// tincturePublicPath builds the public URL path for a tincture from the
-// workspace (org/project) the tincture_visibility tool returns. Defaults to the
-// seeded local/default workspace when the server omits them.
+// tincturePublicPath is the public URL path the tincture_visibility tool
+// returns for a tincture (`/t/<athanor>/<publisher>/<name>`). The server owns
+// the URL shape; the CLI never composes it. When the server omits it, the
+// athanor/publisher/name triple is shown instead.
 func tincturePublicPath(result map[string]any, publisher, name string) string {
-	org, _ := result["org"].(string)
-	if org == "" {
-		org = "local"
+	if url, _ := result["url"].(string); url != "" {
+		return url
 	}
-	project, _ := result["project"].(string)
-	if project == "" {
-		project = "default"
-	}
-	return fmt.Sprintf("/t/%s/%s/%s/%s", org, project, publisher, name)
+	athanor, _ := result["athanor"].(string)
+	return fmt.Sprintf("athanor=%s publisher=%s name=%s", athanor, publisher, name)
 }
 
 func init() {
@@ -51,7 +48,7 @@ var tinctureCmd = &cobra.Command{
 var tinctureVisibilityCmd = &cobra.Command{
 	Use:   "visibility",
 	Short: "Manage tincture public/private visibility",
-	Long: `Control whether a tincture is publicly accessible at /t/:org/:project/:publisher/:name
+	Long: `Control whether a tincture is publicly accessible at /t/:athanor/:publisher/:name
 without authentication. Tinctures default to private (accessible only via Prism shell).`,
 }
 

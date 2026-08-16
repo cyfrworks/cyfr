@@ -7,6 +7,8 @@ defmodule Arca.CronScheduleTest do
   alias Arca.CronSchedule
   alias Sanctum.Context
 
+  @athanor Sanctum.TestContext.athanor_id()
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -14,8 +16,9 @@ defmodule Arca.CronScheduleTest do
     ctx =
       Context.build(
         user_id: "test_user",
+        athanor_id: @athanor,
         permissions: [:*],
-        scope: :project,
+        scope: :athanor,
         auth_method: :oidc,
         namespace: "testns",
         authenticated: true
@@ -28,6 +31,7 @@ defmodule Arca.CronScheduleTest do
     Map.merge(
       %{
         user_id: "test_user",
+        athanor_id: @athanor,
         name: "test-schedule-#{:rand.uniform(100_000)}",
         cron_expression: "*/5 * * * *",
         reference: "reagent:local.test:1.0.0",
@@ -79,20 +83,21 @@ defmodule Arca.CronScheduleTest do
       assert CronSchedule.get_by_user(ctx, "deleted-one") == nil
     end
 
-    test "finds a fellow member's schedule in the same project (interchangeable)" do
+    test "finds a fellow member's schedule in the same athanor (interchangeable)" do
       {:ok, created} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
 
       ctx =
         Context.build(
           user_id: "test_user",
+          athanor_id: @athanor,
           permissions: [:*],
-          scope: :project,
+          scope: :athanor,
           auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
 
-      # Same tenant (default org/project), different creator — now visible.
+      # Same athanor, different creator — visible.
       found = CronSchedule.get_by_user(ctx, "private")
       assert found != nil
       assert found.id == created.id
@@ -100,7 +105,7 @@ defmodule Arca.CronScheduleTest do
   end
 
   describe "list_by_user/2" do
-    test "lists all non-deleted schedules in the project regardless of creator", %{ctx: ctx} do
+    test "lists all non-deleted schedules in the athanor regardless of creator", %{ctx: ctx} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "s1"}))
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "s2"}))
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "other", user_id: "other_user"}))
@@ -147,13 +152,13 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
-  describe "count_by_user/1" do
+  describe "count_active/1" do
     test "counts non-deleted schedules", %{ctx: ctx} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "c1"}))
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "c2"}))
       CronSchedule.soft_delete(ctx, s2.id)
 
-      assert CronSchedule.count_by_user(ctx) == 1
+      assert CronSchedule.count_active(ctx) == 1
     end
   end
 end

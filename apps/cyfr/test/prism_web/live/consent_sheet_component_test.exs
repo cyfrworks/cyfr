@@ -21,10 +21,9 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     Context.build(
       user_id: "consent_sheet_test_user",
       namespace: "consent_sheet_test_user",
-      org_id: "local",
-      project_id: "default",
+      athanor_id: "ath_test",
       permissions: [:*],
-      scope: :project,
+      scope: :athanor,
       auth_method: :oidc,
       authenticated: true
     )

@@ -26,46 +26,43 @@ defmodule Sanctum.CipherTest do
   defp restore(k, v), do: Application.put_env(:cyfr, k, v)
 
   defp aad(over \\ %{}) do
-    Map.merge(
-      %{purpose: :secret, scope: "project", org: "org_a", project: "default", name: "API_KEY"},
-      over
-    )
+    Map.merge(%{purpose: :vault_entry, athanor: "ath_a", name: "ve_1", sub: "github"}, over)
   end
 
-  # Seals a v2 envelope exactly as the pre-v3 writer did. Production keeps
-  # zero v2-write paths, so legacy rows are fabricated here.
-  defp seal_v2(plaintext, %{purpose: purpose} = ctx, label, master) do
+  # Seals a v3 envelope exactly as the pre-athanor writer did (org/project
+  # scoped AAD). Production keeps zero v3-write paths and no v3 decrypt
+  # path, so legacy rows are fabricated here to prove they fail closed.
+  defp seal_v3(plaintext, %{purpose: purpose}, label, master) do
     info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
     iters = max(Application.get_env(:cyfr, :pbkdf2_iterations, 100_000), 100_000)
     key = :crypto.pbkdf2_hmac(:sha256, master, info, iters, 32)
     iv = :crypto.strong_rand_bytes(12)
 
     fields =
-      for k <- [:scope, :org, :project, :name, :sub] do
-        v = Map.get(ctx, k) || ""
+      for v <- ["project", "org_a", "default", "ve_1", "github", ""] do
         <<byte_size(v)::32, v::binary>>
       end
 
     aad =
       IO.iodata_to_binary([
-        "cyfrv2",
-        <<0x02>>,
+        "cyfrv3",
+        <<0x03>>,
         <<byte_size(label)::32, label::binary>>,
         <<byte_size(Atom.to_string(purpose))::32, Atom.to_string(purpose)::binary>>
         | fields
       ])
 
     {ct, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, 16, true)
-    <<0x02, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
+    <<0x03, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
   end
 
   describe "T-CIPHER-RT: versioned envelope round-trip" do
-    test "round-trips and emits a v3, labeled envelope" do
+    test "round-trips and emits a v4, labeled envelope" do
       {:ok, ct} = Cipher.encrypt("sk-secret", aad())
 
-      assert <<0x03, 2, "k1", _iv::binary-size(12), _tag::binary-size(16), _rest::binary>> = ct
+      assert <<0x04, 2, "k1", _iv::binary-size(12), _tag::binary-size(16), _rest::binary>> = ct
       assert {:ok, "k1"} = Cipher.label(ct)
-      assert {:ok, {3, "k1"}} = Cipher.envelope(ct)
+      assert {:ok, {4, "k1"}} = Cipher.envelope(ct)
       assert {:ok, "sk-secret"} = Cipher.decrypt(ct, aad())
     end
 
@@ -91,12 +88,12 @@ defmodule Sanctum.CipherTest do
 
     test "garbage and short inputs fail closed" do
       assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(<<0x99, 1, 2, 3>>, aad())
-      assert {:error, {:decrypt, :truncated}} = Cipher.decrypt(<<0x03, 5, "ab">>, aad())
+      assert {:error, {:decrypt, :truncated}} = Cipher.decrypt(<<0x04, 5, "ab">>, aad())
       assert {:error, {:decrypt, :invalid_input}} = Cipher.decrypt(:not_binary, aad())
     end
   end
 
-  describe "T-AAD-MISMATCH: tenant binding" do
+  describe "T-AAD-MISMATCH: athanor binding" do
     setup do
       {:ok, ct} = Cipher.encrypt("payload", aad())
       %{ct: ct}
@@ -106,16 +103,24 @@ defmodule Sanctum.CipherTest do
       assert {:ok, "payload"} = Cipher.decrypt(ct, aad())
     end
 
-    for {field, val} <- [org: "org_b", project: "other", name: "OTHER", scope: "org"] do
+    for {field, val} <- [athanor: "ath_b", name: "ve_other", sub: "google"] do
       test "mismatched #{field} fails closed", %{ct: ct} do
         assert {:error, {:decrypt, :aad_or_key_mismatch}} =
                  Cipher.decrypt(ct, aad(%{unquote(field) => unquote(val)}))
       end
     end
 
+    test "a row copied to another athanor cannot be opened there", %{ct: ct} do
+      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
+               Cipher.decrypt(ct, aad(%{athanor: "ath_b"}))
+
+      # ...and the owning athanor still can.
+      assert {:ok, "payload"} = Cipher.decrypt(ct, aad())
+    end
+
     test "a different purpose cannot decrypt (distinct derived key + AAD)", %{ct: ct} do
       assert {:error, {:decrypt, :aad_or_key_mismatch}} =
-               Cipher.decrypt(ct, aad(%{purpose: :oauth_token}))
+               Cipher.decrypt(ct, aad(%{purpose: :webhook_secret}))
     end
 
     test "tampering the plaintext envelope header is detected" do
@@ -129,24 +134,24 @@ defmodule Sanctum.CipherTest do
     end
   end
 
-  describe "T-CIPHER-V2-RETIRED: pre-v3 envelopes fail closed" do
-    test "a v2-sealed row is rejected as an unknown version" do
-      v2 = seal_v2("legacy-material", aad(), "k1", @k1)
+  describe "T-CIPHER-V3-RETIRED: pre-v4 envelopes fail closed" do
+    test "a v3-sealed row is rejected as an unknown version" do
+      v3 = seal_v3("legacy-material", aad(), "k1", @k1)
 
-      assert :error = Cipher.envelope(v2)
-      assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(v2, aad())
+      assert :error = Cipher.envelope(v3)
+      assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(v3, aad())
     end
 
-    test "a fresh v3 ciphertext relabeled 0x02 is rejected, not decrypted" do
-      {:ok, v3} = Cipher.encrypt("fresh", aad())
-      <<0x03, rest::binary>> = v3
+    test "a fresh v4 ciphertext relabeled 0x03 is rejected, not decrypted" do
+      {:ok, v4} = Cipher.encrypt("fresh", aad())
+      <<0x04, rest::binary>> = v4
 
       assert {:error, {:decrypt, :unknown_version}} =
-               Cipher.decrypt(<<0x02, rest::binary>>, aad())
+               Cipher.decrypt(<<0x03, rest::binary>>, aad())
     end
   end
 
-  describe "T-CIPHER-USER-FRAME: the v3 user binding" do
+  describe "T-CIPHER-USER-FRAME: the user binding" do
     test "absent :user and explicit empty :user are the same AAD" do
       {:ok, ct} = Cipher.encrypt("payload", aad())
 
@@ -165,8 +170,9 @@ defmodule Sanctum.CipherTest do
     test "rejects malformed headers" do
       assert :error = Cipher.envelope(<<>>)
       assert :error = Cipher.envelope(<<0x01, 2, "k1">>)
-      assert :error = Cipher.envelope(<<0x03, 0>>)
-      assert :error = Cipher.envelope(<<0x03, 9, "k1">>)
+      assert :error = Cipher.envelope(<<0x03, 2, "k1">>)
+      assert :error = Cipher.envelope(<<0x04, 0>>)
+      assert :error = Cipher.envelope(<<0x04, 9, "k1">>)
     end
   end
 

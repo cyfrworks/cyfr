@@ -15,41 +15,24 @@ defmodule Sanctum.Cipher do
 
       version(1) | key_label_len(1) | key_label(L) | iv(12) | tag(16) | ct
 
-  The version byte is `0x03`; any other first byte fails closed. Minimum
+  The version byte is `0x04`; any other first byte fails closed. Minimum
   31 bytes (empty ciphertext, 1-byte label).
 
   ## Tenant binding (AAD)
 
   `aad_ctx` carries `:purpose` plus the caller's canonical tenant key fields —
-  `org`/`project` already normalized via `Arca.QueryHelpers`, `scope` as the
-  raw `to_string(ctx.scope)`, the logical row `name`, an optional `sub`
-  discriminator (e.g. the OAuth provider), and a `user` frame, empty until
-  per-user credentials exist, so enabling them later re-keys nothing. This tuple is bound as AES-GCM additional authenticated data using
+  the owning `athanor` id, the logical row `name`, an optional `sub`
+  discriminator (e.g. the OAuth provider), and a `user` frame, empty on vault
+  entries until per-user credentials exist, so enabling them later re-keys
+  nothing. This tuple is bound as AES-GCM additional authenticated data using
   length-prefixed framing (collision-safe — `("a","bc")` cannot frame-collide
   with `("ab","c")`). The version byte and key label are bound too, so the
   otherwise-plaintext envelope header is tamper-evident. A row copied to
-  another tenant fails the GCM tag check on decrypt. `Sanctum.CipherAAD`
-  provides the canonical `aad_ctx` builders for each purpose.
-
-  ## Keyring & rotation
-
-  `config :cyfr, :crypto_keyring` is `%{primary: label, keys: %{label =>
-  master_binary}}` (parsed/validated at boot in `runtime.exs`). Encryption
-  always uses `primary`; decryption selects the key by the label embedded in
-  the envelope, so retired keys keep decrypting until a re-encryption pass
-  (`Sanctum.Cipher.Rotation`) moves every row onto the new primary. The GCM key
-  is `PBKDF2-HMAC-SHA256(master, "cyfr-cipher-v1|<purpose>")` so a key for one
-  purpose can never decrypt another purpose's blob; derived keys are memoized
-  in `:persistent_term` (the keyring is boot-immutable).
-  """
-
-  @typedoc """
-  AAD binding context. `:purpose` is required; the remaining keys are the
-  caller's canonical tenant partition fields (see moduledoc).
+  another athanor fails to decrypt.
   """
   @type aad_ctx :: %{required(:purpose) => atom(), optional(atom()) => term()}
 
-  @version_v3 0x03
+  @version_v4 0x04
   @iv_size 12
   @tag_size 16
   @key_len 32
@@ -62,18 +45,18 @@ defmodule Sanctum.Cipher do
     master = Map.fetch!(keyring.keys, label)
     key = derive_key(label, purpose, master)
     iv = :crypto.strong_rand_bytes(@iv_size)
-    aad = build_aad(@version_v3, label, ctx)
+    aad = build_aad(@version_v4, label, ctx)
 
     {ct, tag} =
       :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, @tag_size, true)
 
     {:ok,
-     <<@version_v3::8, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>}
+     <<@version_v4::8, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>}
   end
 
   @spec decrypt(binary(), aad_ctx()) :: {:ok, binary()} | {:error, term()}
   def decrypt(<<version::8, llen::8, rest::binary>>, %{purpose: purpose} = ctx)
-      when version == @version_v3 and
+      when version == @version_v4 and
              byte_size(rest) >= llen + @iv_size + @tag_size do
     <<label::binary-size(^llen), iv::binary-size(@iv_size), tag::binary-size(@tag_size),
       ct::binary>> = rest
@@ -93,7 +76,7 @@ defmodule Sanctum.Cipher do
     end
   end
 
-  def decrypt(<<version::8, _::binary>>, _ctx) when version == @version_v3,
+  def decrypt(<<version::8, _::binary>>, _ctx) when version == @version_v4,
     do: {:error, {:decrypt, :truncated}}
 
   def decrypt(bin, _ctx) when is_binary(bin), do: {:error, {:decrypt, :unknown_version}}
@@ -120,9 +103,9 @@ defmodule Sanctum.Cipher do
   Single source of truth for the header layout. `Sanctum.Cipher.Rotation`
   uses it to decide whether a row is already on the primary key.
   """
-  @spec envelope(binary()) :: {:ok, {3, binary()}} | :error
+  @spec envelope(binary()) :: {:ok, {4, binary()}} | :error
   def envelope(<<version::8, llen::8, rest::binary>>)
-      when version == @version_v3 and byte_size(rest) >= llen and llen > 0 do
+      when version == @version_v4 and byte_size(rest) >= llen and llen > 0 do
     <<lbl::binary-size(^llen), _::binary>> = rest
     {:ok, {version, lbl}}
   end
@@ -132,6 +115,10 @@ defmodule Sanctum.Cipher do
   @doc "The current primary key label (the label new writes use)."
   @spec primary_label() :: binary()
   def primary_label, do: keyring().primary
+
+  @doc "The envelope version `encrypt/2` writes — the only one `decrypt/2` reads."
+  @spec current_version() :: pos_integer()
+  def current_version, do: @version_v4
 
   # ============================================================================
   # Internal
@@ -143,15 +130,13 @@ defmodule Sanctum.Cipher do
   # as "" so the AAD is well-defined and identical across encrypt/decrypt for
   # a given purpose. Version + key label are bound so the plaintext header
   # cannot be tampered with undetected.
-  defp build_aad(@version_v3, label, %{purpose: purpose} = ctx) do
+  defp build_aad(@version_v4, label, %{purpose: purpose} = ctx) do
     IO.iodata_to_binary([
-      "cyfrv3",
-      <<@version_v3::8>>,
+      "cyfrv4",
+      <<@version_v4::8>>,
       frame(label),
       frame(Atom.to_string(purpose)),
-      frame(field(ctx, :scope)),
-      frame(field(ctx, :org)),
-      frame(field(ctx, :project)),
+      frame(field(ctx, :athanor)),
       frame(field(ctx, :name)),
       frame(field(ctx, :sub)),
       frame(field(ctx, :user))
@@ -184,7 +169,7 @@ defmodule Sanctum.Cipher do
         # boot-immutable). Keying the memo on the master binary keeps a stale
         # derived key from ever being returned.
         # Load-bearing literal: this info string is baked into every derived
-        # key, so renaming it (even to match the v3 envelope) orphans every
+        # key, so renaming it (even to match the envelope version) orphans every
         # blob encrypted so far. Pinned by test; change only with a
         # rotate-everything migration.
         info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)

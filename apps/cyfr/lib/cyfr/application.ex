@@ -77,7 +77,7 @@ defmodule Cyfr.Application do
       {Phoenix.PubSub, name: Emissary.PubSub},
       {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
       # subscriptions/listen stream slots — duplicate keys, one entry per open
-      # stream, keyed by {org_id, user_id}. An entry dies with its conn
+      # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
       {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
       {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
@@ -111,7 +111,10 @@ defmodule Cyfr.Application do
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
-      {Task.Supervisor, name: Prism.TaskSupervisor}
+      {Task.Supervisor, name: Prism.TaskSupervisor},
+      # Last: seeds Home from the bundle on first boot. Needs the repo, the
+      # tincture registry (the seed scan reloads it) and nothing else.
+      Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
     ]
 
     infra_children = List.flatten(infra_children)
@@ -344,7 +347,7 @@ defmodule Cyfr.Application do
 
   # When auth is configured but no platform admin is declared, no user can be
   # admitted until a membership row is seeded (authentication succeeds but the
-  # tenant gate yields no_org). Warn at boot — both under `mix phx.server` and in
+  # tenant gate yields no_athanor). Warn at boot — both under `mix phx.server` and in
   # releases — so the operator knows to set CYFR_PLATFORM_ADMIN_EMAILS. Stays
   # quiet in test, where no auth provider is configured.
   defp warn_if_no_platform_admin do

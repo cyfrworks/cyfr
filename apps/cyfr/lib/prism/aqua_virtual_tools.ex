@@ -23,7 +23,7 @@ defmodule Prism.AquaVirtualTools do
   @catalog %{
     "files" => %{
       title: "Files",
-      description: "Workspace file ops. Wraps catalyst:local.files.",
+      description: "Athanor file ops. Wraps catalyst:local.files.",
       actions: %{
         "read" => %{kind: :read, planes: [:in_chain]},
         "list" => %{kind: :read, planes: [:in_chain]},

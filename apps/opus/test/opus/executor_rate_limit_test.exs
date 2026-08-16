@@ -32,9 +32,8 @@ defmodule Opus.ExecutorRateLimitTest do
     # Create test context
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
-      org_id: "local",
-      project_id: "default",
-      scope: :project,
+      athanor_id: Sanctum.TestContext.athanor_id(),
+      scope: :athanor,
       permissions: MapSet.new([:read, :write, :execute])
     }
 
@@ -90,8 +89,7 @@ defmodule Opus.ExecutorRateLimitTest do
 
       rows =
         [
-          org_id: ctx.org_id,
-          project_id: ctx.project_id,
+          athanor_id: ctx.athanor_id,
           event_type: "policy_consultation",
           limit: 50
         ]
@@ -113,19 +111,19 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # First request should succeed
       assert {:ok, _} =
-               Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, limit_source)
+               Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
 
       # Second request should be rate limited
       assert {:error, :rate_limited, retry_after} =
-               Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, limit_source)
+               Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
 
       assert retry_after > 0
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref)
+      Opus.RateLimiter.reset(ctx.athanor_id, component_ref)
     end
 
-    test "rate limiter tracks per project and component", %{ctx: ctx} do
+    test "rate limiter tracks per athanor and component", %{ctx: ctx} do
       component_ref_a = "component-a-#{:rand.uniform(100_000)}"
       component_ref_b = "component-b-#{:rand.uniform(100_000)}"
 
@@ -133,19 +131,19 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Request to component A
       assert {:ok, _} =
-               Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref_a, limit_source)
+               Opus.RateLimiter.check(ctx.athanor_id, component_ref_a, limit_source)
 
       # Request to component B should still work (different component)
       assert {:ok, _} =
-               Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref_b, limit_source)
+               Opus.RateLimiter.check(ctx.athanor_id, component_ref_b, limit_source)
 
       # Second request to component A should be rate limited
       assert {:error, :rate_limited, _} =
-               Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref_a, limit_source)
+               Opus.RateLimiter.check(ctx.athanor_id, component_ref_a, limit_source)
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref_a)
-      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref_b)
+      Opus.RateLimiter.reset(ctx.athanor_id, component_ref_a)
+      Opus.RateLimiter.reset(ctx.athanor_id, component_ref_b)
     end
 
     test "unlimited requests when no rate limit configured", %{ctx: ctx} do
@@ -156,7 +154,7 @@ defmodule Opus.ExecutorRateLimitTest do
       # Should return :unlimited for all requests
       for _ <- 1..10 do
         assert {:ok, :unlimited} =
-                 Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, limit_source)
+                 Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
       end
     end
 
@@ -167,18 +165,18 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Check initial status
       assert {:ok, 0, 5, _window} =
-               Opus.RateLimiter.status(ctx.org_id, ctx.project_id, component_ref, limit_source)
+               Opus.RateLimiter.status(ctx.athanor_id, component_ref, limit_source)
 
       # Make a request
       assert {:ok, 4} =
-               Opus.RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, limit_source)
+               Opus.RateLimiter.check(ctx.athanor_id, component_ref, limit_source)
 
       # Check status again
       assert {:ok, 1, 4, _window} =
-               Opus.RateLimiter.status(ctx.org_id, ctx.project_id, component_ref, limit_source)
+               Opus.RateLimiter.status(ctx.athanor_id, component_ref, limit_source)
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref)
+      Opus.RateLimiter.reset(ctx.athanor_id, component_ref)
     end
   end
 end

@@ -29,7 +29,7 @@ defmodule Emissary.MCP.ExternalServerEraTest do
   # Connection is lazy — the first request for tools is what triggers it, so
   # that is also what exercises era negotiation.
   defp connect(url, name) do
-    config = [name: name, url: url, org_id: "local", project_id: "default"]
+    config = [name: name, url: url, athanor_id: "ath_test"]
     pid = start_supervised!({ExternalServer, config}, id: name)
     result = GenServer.call(pid, :get_tools, 5_000)
     {pid, result}

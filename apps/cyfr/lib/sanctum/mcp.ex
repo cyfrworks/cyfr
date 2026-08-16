@@ -64,7 +64,7 @@ defmodule Sanctum.MCP do
   """
   def read(%Context{} = ctx, "sanctum://identity") do
     content =
-      case Jason.encode(%{user_id: ctx.user_id, org_id: ctx.org_id, scope: ctx.scope}) do
+      case Jason.encode(%{user_id: ctx.user_id, athanor_id: ctx.athanor_id, scope: ctx.scope}) do
         {:ok, json} -> json
         {:error, _} -> ~s({"error":"encoding_error"})
       end
