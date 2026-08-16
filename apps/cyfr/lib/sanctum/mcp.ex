@@ -7,9 +7,12 @@ defmodule Sanctum.MCP do
 
   ## Tools
 
-  - `session` - Session management (login, logout, whoami)
+  - `session` - Session management (login, logout, whoami, use)
   - `key` - API key management (create, get, list, revoke, rotate)
   - `tincture_visibility` - Tincture public/private visibility (set, get)
+  - `athanor` - The athanors a person belongs to (list, create a group, rename, archive)
+  - `member` - Who is in an athanor (list, add, remove, leave)
+  - `door` - The server allowlist, platform admins only (allow, deny, list, requests)
 
   ## Resources
 
@@ -109,7 +112,9 @@ defmodule Sanctum.MCP do
             "logout" => %{kind: :write, planes: [:external], auth: :anonymous},
             "whoami" => %{kind: :read, planes: [:external], auth: :anonymous},
             "device_init" => %{kind: :write, planes: [:external], auth: :anonymous},
-            "device_poll" => %{kind: :write, planes: [:external], auth: :anonymous}
+            "device_poll" => %{kind: :write, planes: [:external], auth: :anonymous},
+            # Point the session at another athanor the caller may work in.
+            "use" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{
@@ -122,7 +127,8 @@ defmodule Sanctum.MCP do
                 "logout",
                 "whoami",
                 "device_init",
-                "device_poll"
+                "device_poll",
+                "use"
               ],
               "description" =>
                 "Action to perform. `device_init`/`device_poll` require the " <>
@@ -141,11 +147,19 @@ defmodule Sanctum.MCP do
             "device_code" => %{
               "type" => "string",
               "description" => "Device code from device_init (for device_poll action)"
+            },
+            "athanor" => %{
+              "type" => "string",
+              "description" =>
+                "For `use`: the athanor to work in — an id, a group slug, or @<namespace>"
             }
           },
           "required" => ["action"]
         }
       },
+      athanor_tool_definition(),
+      member_tool_definition(),
+      door_tool_definition(),
       %{
         name: "oauth",
         title: "OAuth Provider Configuration",
@@ -508,11 +522,157 @@ defmodule Sanctum.MCP do
     ]
   end
 
+  # An `athanor` argument names the athanor an action works on: an id, a
+  # group slug, or `@<namespace>`; absent, the caller's focused athanor.
+  @athanor_arg %{
+    "type" => "string",
+    "description" =>
+      "The athanor to act on — an id, a group slug, or @<namespace>. " <>
+        "Defaults to the athanor in focus."
+  }
+
+  defp athanor_tool_definition do
+    %{
+      name: "athanor",
+      title: "Athanors",
+      description:
+        "The athanors you belong to — your own and your groups. Create a group " <>
+          "(you are its first member), rename it, archive it, patch its settings. " <>
+          "A person's own athanor is minted at sign-in; a group is archived, never deleted.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          "list" => %{kind: :read, planes: [:external]},
+          "get" => %{kind: :read, planes: [:external]},
+          "create" => %{kind: :write, planes: [:external]},
+          "rename" => %{kind: :write, planes: [:external]},
+          "archive" => %{kind: :destructive, planes: [:external]},
+          "unarchive" => %{kind: :write, planes: [:external]},
+          "settings" => %{kind: :write, planes: [:external]}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["list", "get", "create", "rename", "archive", "unarchive", "settings"],
+            "description" => "Action to perform"
+          },
+          "athanor" => @athanor_arg,
+          "name" => %{"type" => "string", "description" => "Group name (create, rename)"},
+          "slug" => %{
+            "type" => "string",
+            "description" => "Optional slug for create; derived from the name when absent"
+          },
+          "settings" => %{
+            "type" => "object",
+            "description" => "For settings: keys to merge into the athanor's settings"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
+  defp member_tool_definition do
+    %{
+      name: "member",
+      title: "Members",
+      description:
+        "Who is in an athanor. Any member may add (by email or user id), remove, or " <>
+          "leave — there are no roles. Adding an email the server has not seen leaves an " <>
+          "invitation that activates on that person's first sign-in.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          "list" => %{kind: :read, planes: [:external]},
+          "add" => %{kind: :write, planes: [:external]},
+          "remove" => %{kind: :destructive, planes: [:external]},
+          "leave" => %{kind: :write, planes: [:external]}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["list", "add", "remove", "leave"],
+            "description" => "Action to perform"
+          },
+          "athanor" => @athanor_arg,
+          "email" => %{"type" => "string", "description" => "The person's email (add, remove)"},
+          "user_id" => %{
+            "type" => "string",
+            "description" => "The person's user id, when already on this server (add, remove)"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
+  defp door_tool_definition do
+    %{
+      name: "door",
+      title: "Server Allowlist",
+      description:
+        "Who may sign in to this server — platform admins only. Entries name an email, " <>
+          "an IdP subject (user id), or `*` for anyone the configured provider " <>
+          "authenticates. A deny is sticky and ejects the person; requests are invites " <>
+          "members made for addresses the door does not know.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          "list" => %{kind: :read, planes: [:external], scope: :platform},
+          "requests" => %{kind: :read, planes: [:external], scope: :platform},
+          "allow" => %{kind: :write, planes: [:external], scope: :platform},
+          "deny" => %{kind: :destructive, planes: [:external], scope: :platform},
+          "remove" => %{kind: :write, planes: [:external], scope: :platform},
+          "resolve" => %{kind: :write, planes: [:external], scope: :platform}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["list", "requests", "allow", "deny", "remove", "resolve"],
+            "description" => "Action to perform"
+          },
+          "value" => %{
+            "type" => "string",
+            "description" => "An email, an IdP subject, or * (allow, deny)"
+          },
+          "kind" => %{
+            "type" => "string",
+            "enum" => ["email", "user_id"],
+            "description" => "How to read value; inferred from its shape when absent"
+          },
+          "note" => %{"type" => "string", "description" => "Why (allow, deny)"},
+          "id" => %{"type" => "string", "description" => "Entry id (remove, resolve)"},
+          "decision" => %{
+            "type" => "string",
+            "enum" => ["allow", "reject"],
+            "description" => "For resolve"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   # ============================================================================
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================
 
   def handle("session", ctx, args), do: Sanctum.MCP.SessionTool.handle(ctx, args)
+  def handle("athanor", ctx, args), do: Sanctum.MCP.AthanorTool.handle(ctx, args)
+  def handle("member", ctx, args), do: Sanctum.MCP.MemberTool.handle(ctx, args)
+  def handle("door", ctx, args), do: Sanctum.MCP.DoorTool.handle(ctx, args)
   def handle("oauth", ctx, args), do: Sanctum.MCP.OAuthTool.handle(ctx, args)
   def handle("key", ctx, args), do: Sanctum.MCP.KeyTool.handle(ctx, args)
 

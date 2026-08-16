@@ -34,10 +34,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   defp create_hook!(ctx, name, opts \\ %{}) do
-    # ConnCase configures an auth provider, so the webhook's owner must hold
-    # a live membership or the owner re-check refuses the invoke.
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "platform")
-
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
     Sanctum.Test.ConsentFixtures.start_source!()
@@ -94,30 +90,55 @@ defmodule EmissaryWeb.WebhookControllerTest do
       assert conn.status == 404
     end
 
-    test "404 when the owner is no longer active on the server (no enumeration leak)",
+    test "the channel is the athanor's: a departed creator leaves it running, an archived athanor or a denied creator closes it (no enumeration leak)",
          %{conn: conn, ctx: ctx} do
-      # ConnCase configures an auth provider, so membership is checked; this
-      # owner has none — the webhook is a departed principal's standing
-      # channel and must refuse without leaking existence.
-      departed_ctx = %{ctx | user_id: "departed-user-#{System.unique_integer([:positive])}"}
+      n = System.unique_integer([:positive])
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Hooks #{n}")
+      in_group = %{ctx | athanor_id: group.id}
 
-      comp = "wh-orphan-#{System.unique_integer([:positive])}"
-      Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+      comp = "wh-chan-#{n}"
+
+      Sanctum.Test.ComponentHelpers.register_test_component(
+        comp,
+        "1.0.0",
+        "formula",
+        %{},
+        in_group
+      )
+
       Sanctum.Test.ConsentFixtures.start_source!()
-      profile = Sanctum.Test.ConsentFixtures.bindable_profile(departed_ctx, "f:local.#{comp}")
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(in_group, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(departed_ctx, %{
-          name: "orphaned",
+        Webhook.create(in_group, %{
+          name: "channel",
           target_ref: "f:local.#{comp}",
           profile_id: profile
         })
 
-      body = ~s({})
-      conn = post_signed(conn, slug, secret, body)
+      # the creator leaving the group (another member remains) changes nothing
+      {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: "other-#{n}"], ctx.user_id)
+      :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
+      refute post_signed(conn, slug, secret, ~s({})).status == 404
 
-      assert conn.status == 404
-      assert json_response(conn, 404)["error"] == "not_found"
+      # an archived athanor closes it, without leaking existence
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+      conn2 = post_signed(conn, slug, secret, ~s({}))
+      assert conn2.status == 404
+      assert json_response(conn2, 404)["error"] == "not_found"
+      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
+
+      # a denied creator closes it too
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: ctx.user_id,
+          provider: "github",
+          email: "hooks#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      assert post_signed(conn, slug, secret, ~s({})).status == 404
     end
 
     test "401 on missing signature header", %{conn: conn, ctx: ctx} do

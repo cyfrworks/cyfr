@@ -6,16 +6,17 @@ defmodule Sanctum.Tenancy do
   Tenant resolution from memberships.
 
   `resolve_into/2` is the single chokepoint every auth path flows through to
-  attach the caller's scope and athanor to their Context. It reads the user's
-  membership rows: a platform row makes the caller a platform admin; an
-  athanor row grants that athanor.
+  attach the caller's athanor and capabilities to their Context. It reads
+  the user's membership rows: an athanor row grants that athanor; a platform
+  row makes the caller a platform admin (`platform_admin: true`), which is a
+  capability the context carries, never a wider scope — every request works
+  inside one athanor.
 
   There is no deployment "mode". A fresh install with no auth configured never
-  reaches here (requests run as the unauthenticated public context). When auth
-  is configured, the operator declares platform admins via
-  `CYFR_PLATFORM_ADMIN_EMAILS`; the first sign-in of a listed email mints a
-  platform-scope membership. Everyone else is admitted only by an existing
-  membership row.
+  reaches here (requests run as the unauthenticated public context). With
+  auth configured, who may sign in is decided at the door
+  (`Sanctum.Door`), and the rows this module reads are written at sign-in
+  (`Sanctum.SignIn`) and by the `athanor.*` / `member.*` verbs.
 
   ## Test overrides
 
@@ -28,10 +29,10 @@ defmodule Sanctum.Tenancy do
 
   require Logger
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   @doc """
-  Merge the caller's scope and athanor into the context.
+  Merge the caller's athanor and capabilities into the context.
 
   Without `force: true`, no-ops when the context already carries an
   `athanor_id` (the per-request safety-net usage in plugs: the stored value
@@ -40,6 +41,9 @@ defmodule Sanctum.Tenancy do
   resolved — `Sanctum.Auth.OAuth`, `Sanctum.Auth.DeviceFlow`,
   `Sanctum.Auth.OIDC` — pass `force: true`.
 
+  The athanor chosen is, in order: the one the context already names when a
+  membership still grants it, the person's own athanor, the first athanor
+  a membership grants, and for a platform admin with none of those, Home.
   Resolution failure logs and returns the context unchanged — a context with
   no resolved athanor is rejected downstream by the tenant gate
   (`Sanctum.Context.tenant_ok/1`).
@@ -56,18 +60,13 @@ defmodule Sanctum.Tenancy do
 
   @doc """
   The athanors the context may work in — the rows behind the caller's own
-  memberships. A platform admin sees their own memberships like anyone else;
-  cross-athanor reach is a platform-scoped act, not a listing.
+  active memberships, and their own athanor. A platform admin sees their
+  own memberships like anyone else; opening another athanor is an explicit,
+  audited act (`Sanctum.Context.focus/2`), not a listing.
   """
   @spec list_athanors(Context.t()) :: [Arca.Schemas.Athanor.t()]
   def list_athanors(%Context{user_id: user_id}) when is_binary(user_id) do
-    user_id
-    |> Members.list_by_user()
-    |> ensure_list()
-    |> Enum.map(& &1.athanor_id)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-    |> Athanors.list_by_ids()
+    Athanors.list_for_user(user_id)
   end
 
   def list_athanors(_), do: []
@@ -104,90 +103,111 @@ defmodule Sanctum.Tenancy do
     defp do_resolve(%Context{} = ctx), do: resolve_from_memberships(ctx)
   end
 
-  defp resolve_from_memberships(%Context{} = ctx) do
-    maybe_bootstrap_platform_admin(ctx.user_id, ctx.email)
-    apply_highest_membership(ctx)
-  end
-
-  defp apply_highest_membership(%Context{user_id: user_id} = ctx) do
-    case Members.list_by_user(user_id) do
-      [] ->
-        # No membership → athanor_id stays as-is (nil for a fresh auth ctx) and
-        # the tenant gate rejects on tenant-scoped routes.
-        ctx
-
-      memberships when is_list(memberships) ->
-        apply_membership(ctx, memberships)
-
+  defp resolve_from_memberships(%Context{user_id: user_id} = ctx) do
+    with {:ok, user} <- user_row(user_id),
+         memberships when is_list(memberships) <- Members.list_by_user(user_id) do
+      apply_membership(ctx, memberships, user)
+    else
       {:error, reason} ->
         Logger.error("[Sanctum.Tenancy] resolve failed for #{user_id}: #{inspect(reason)}")
         ctx
     end
   end
 
-  # Set scope/athanor from an already-loaded membership list.
-  #
-  # A platform row wins the scope; it names no athanor, so the platform admin
-  # works in the first athanor a membership grants them, or Home when they
-  # hold none — the platform ceiling lives in `scope`, not in an absent
-  # athanor. Otherwise the broadest grant is the athanor row.
-  defp apply_membership(%Context{} = ctx, memberships) do
-    scope = ceiling_scope(memberships)
-    athanor_id = working_athanor(memberships)
-
-    %{ctx | scope: scope, athanor_id: athanor_id}
+  # A person unknown to the users table (a context minted by a test stub or
+  # a caller that never came through the door) resolves from memberships alone.
+  defp user_row(user_id) do
+    case Users.get(user_id) do
+      {:ok, user} -> {:ok, user}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, _} = err -> err
+    end
   end
 
-  defp working_athanor(memberships) do
-    case Enum.find(memberships, &(&1.scope == "athanor" and is_binary(&1.athanor_id))) do
-      %{athanor_id: id} -> id
-      nil -> Athanors.home!().id
+  # Set capability and athanor from an already-loaded membership list.
+  defp apply_membership(%Context{} = ctx, memberships, user) do
+    admin? = platform_admin?(memberships)
+
+    %{
+      ctx
+      | scope: :athanor,
+        platform_admin: admin?,
+        athanor_id: working_athanor(ctx, memberships, admin?, user)
+    }
+  end
+
+  # The candidates in order of preference, then one read for their rows so
+  # an archived athanor is skipped: the athanor the context already names
+  # (when a membership still grants it, or the caller is a platform admin who
+  # opened it deliberately), the person's own, the first membership grants,
+  # and — for a platform admin with none of those — Home.
+  defp working_athanor(%Context{} = ctx, memberships, admin?, user) do
+    current =
+      if is_binary(ctx.athanor_id) and ctx.athanor_id != "" and
+           (admin? or membership_grants?(memberships, ctx.athanor_id)),
+         do: [ctx.athanor_id],
+         else: []
+
+    personal =
+      case user do
+        %{personal_athanor_id: id} when is_binary(id) -> [id]
+        _ -> []
+      end
+
+    granted =
+      for %{scope: "athanor", status: "active", athanor_id: id} <- memberships,
+          is_binary(id),
+          do: id
+
+    candidates = Enum.uniq(current ++ personal ++ granted)
+    active = candidates |> Athanors.list_by_ids() |> Enum.filter(&(&1.status == "active"))
+
+    case Enum.find(candidates, fn id -> Enum.any?(active, &(&1.id == id)) end) do
+      nil -> if admin?, do: Athanors.home!().id, else: nil
+      id -> id
     end
+  end
+
+  defp membership_grants?(memberships, athanor_id) do
+    Enum.any?(memberships, fn
+      %{scope: "athanor", status: "active", athanor_id: id} -> id == athanor_id
+      _ -> false
+    end)
   end
 
   @doc """
   Re-validate a *restored* session context against the user's CURRENT
-  memberships, returning the corrected context.
+  standing, returning the corrected context.
 
-  Sessions persist `(scope, athanor_id)` so the per-request hot path doesn't
-  re-resolve, but a membership change after a session was created MUST take
-  effect immediately — otherwise a revoked platform admin keeps platform
-  reach until the session TTL expires. This recomputes the authoritative
-  scope from current memberships and keeps the session's athanor ONLY if a
-  current membership still grants it (or the caller is platform); otherwise
-  it falls back to the broadest current membership. A user with no
-  memberships is dropped to an athanor-less context (the tenant gate then
+  Sessions persist their athanor so the per-request hot path doesn't
+  re-resolve, but a change after the session was created MUST take effect
+  immediately: a denied user is dropped to unauthenticated, a revoked
+  platform membership loses the capability, and a session pointing at an
+  athanor the user no longer belongs to (or that was archived) is moved to
+  the broadest current membership. A user with no memberships and no own
+  athanor is dropped to an athanor-less context (the tenant gate then
   rejects tenant-scoped routes).
 
-  Cost: this issues one `Members.list_by_user/1` query per restored request
-  (small, indexed by `user_id`, limit 50 — scales with DB latency, not data
-  size). It trades that query for immediate revocation instead of waiting out
-  the session TTL. If profiling ever shows DB latency dominating on a
-  high-throughput deployment, add a short (30–60s) membership cache rather
-  than reverting to trusting the persisted scope.
+  Cost: one `users` read and one `Members.list_by_user/1` query per restored
+  request (both indexed). It trades those for immediate revocation instead
+  of waiting out the session TTL.
 
-  Failing safe: on a transient membership-read error the context is returned
-  unchanged rather than locking the user out or silently re-resolving.
+  Failing safe: on a transient read error the context is returned unchanged
+  rather than locking the user out or silently re-resolving.
   """
   @spec revalidate(Context.t()) :: Context.t()
-  def revalidate(%Context{user_id: user_id, athanor_id: athanor_id} = ctx)
-      when is_binary(user_id) do
-    case Members.list_by_user(user_id) do
-      memberships when is_list(memberships) and memberships != [] ->
-        if athanor_granted?(memberships, athanor_id) do
-          # Selected athanor still authorized — keep it, but pin scope to the
-          # authoritative (current) ceiling so a stale elevated scope can't ride.
-          %{ctx | scope: ceiling_scope(memberships)}
-        else
-          # Selected athanor no longer authorized (membership removed) — fall
-          # back to the broadest current membership.
-          apply_membership(ctx, memberships)
+  def revalidate(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
+    case user_row(user_id) do
+      {:ok, %{status: "denied"}} ->
+        %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}
+
+      {:ok, user} ->
+        case Members.list_by_user(user_id) do
+          memberships when is_list(memberships) -> apply_membership(ctx, memberships, user)
+          _error -> ctx
         end
 
-      [] ->
-        %{ctx | scope: :athanor, athanor_id: nil}
-
-      _error ->
+      {:error, _} ->
         ctx
     end
   end
@@ -195,108 +215,52 @@ defmodule Sanctum.Tenancy do
   def revalidate(%Context{} = ctx), do: ctx
 
   @doc """
-  Whether `user_id` still holds any membership.
+  Whether a standing channel (a webhook, a cron schedule, an API key) may
+  still fire: its athanor is active and its creator has not been denied on
+  this server.
 
-  Deferred-authority ingresses (webhooks, cron schedules) execute on behalf
-  of the user who created them, possibly long after that user lost access —
-  the stored row must not remain a standing execution channel for a departed
-  principal. With no `:auth_provider` configured there are no memberships to
-  consult (the operator is the only user), so every stored owner is active.
-  On a transient membership-read error the check fails safe (active),
+  Channels are athanor-owned: a creator who merely leaves the group leaves
+  the channel running for the members who remain. `created_by` may be nil or
+  a synthetic principal (`webhook:<slug>`, `_seed`, `system`) — those are
+  never denied. On a transient read error the check fails safe (active),
   matching `revalidate/1`'s posture — a DB blip must not silently kill every
   schedule; the read is retried on the next firing.
   """
-  @spec user_active?(String.t() | nil) :: boolean()
-  def user_active?(user_id) do
-    cond do
-      not Sanctum.auth_configured?() ->
-        true
+  @spec channel_active?(String.t() | nil, String.t() | nil) :: boolean()
+  def channel_active?(athanor_id, created_by) do
+    athanor_active?(athanor_id) and creator_not_denied?(created_by)
+  end
 
-      not (is_binary(user_id) and user_id != "") ->
+  defp athanor_active?(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
+    case Athanors.get(athanor_id) do
+      {:ok, %{status: status}} ->
+        status == "active"
+
+      {:error, :not_found} ->
         false
 
-      true ->
-        case Members.list_by_user(user_id) do
-          memberships when is_list(memberships) ->
-            memberships != []
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Tenancy] athanor read failed during channel re-check for " <>
+            "athanor=#{athanor_id}: #{inspect(reason)} — allowing this firing"
+        )
 
-          error ->
-            Logger.warning(
-              "[Sanctum.Tenancy] membership read failed during owner re-check for " <>
-                "user=#{user_id}: #{inspect(error)} — allowing this firing"
-            )
-
-            true
-        end
+        true
     end
   end
 
-  # Is the athanor reachable under these memberships? Platform grants every
-  # athanor; an athanor membership grants exactly its athanor.
-  defp athanor_granted?(_memberships, athanor_id) when athanor_id in [nil, ""], do: false
+  defp athanor_active?(_), do: false
 
-  defp athanor_granted?(memberships, athanor_id) do
-    Enum.any?(memberships, fn
-      %{scope: "platform"} -> true
-      %{scope: "athanor", athanor_id: id} -> id == athanor_id
-      _ -> false
-    end)
-  end
-
-  # Platform wins over athanor.
-  defp ceiling_scope(memberships) do
-    if Enum.any?(memberships, &(&1.scope == "platform")), do: :platform, else: :athanor
-  end
-
-  defp ensure_list(list) when is_list(list), do: list
-  defp ensure_list(_), do: []
-
-  # Uniform admin bootstrap. An email listed in CYFR_PLATFORM_ADMIN_EMAILS gets
-  # a platform-scope membership minted on sign-in. Idempotent.
-  #
-  # This is the widest grant in the system and its only input is an email
-  # address, so it is audited rather than silent: under a generic OIDC issuer
-  # `email_verified` may legitimately be absent (see
-  # `Sanctum.Auth.EmailVerification`), which means the address is asserted by
-  # the issuer rather than proven. An operator needs to be able to see when the
-  # grant was minted and for whom.
-  defp maybe_bootstrap_platform_admin(user_id, email)
-       when is_binary(user_id) and is_binary(email) do
-    if email_match?(email, Application.get_env(:cyfr, :platform_admin_emails, [])) do
-      already_admin? =
-        Enum.any?(ensure_list(Members.list_by_user(user_id)), &(&1.scope == "platform"))
-
-      case Members.ensure(user_id, scope: "platform") do
-        {:ok, _membership} ->
-          if already_admin?, do: :ok, else: emit_platform_bootstrap(user_id, email)
-
-        {:error, reason} ->
-          Logger.error(
-            "[Sanctum.Tenancy] platform admin bootstrap failed for #{user_id}: #{inspect(reason)}"
-          )
-      end
+  defp creator_not_denied?(user_id) when is_binary(user_id) and user_id != "" do
+    case Users.get(user_id) do
+      {:ok, %{status: "denied"}} -> false
+      _ -> true
     end
-
-    :ok
   end
 
-  defp maybe_bootstrap_platform_admin(_user_id, _email), do: :ok
+  defp creator_not_denied?(_), do: true
 
-  defp emit_platform_bootstrap(user_id, email) do
-    Logger.warning(
-      "[Sanctum.Tenancy] minted platform-scope membership for #{user_id} " <>
-        "(matched CYFR_PLATFORM_ADMIN_EMAILS)"
-    )
-
-    :telemetry.execute(
-      [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-      %{count: 1},
-      %{user_id: user_id, email: email}
-    )
-
-    :ok
+  defp platform_admin?(memberships) do
+    Enum.any?(memberships, &(&1.scope == "platform" and &1.status == "active"))
   end
-
-  defp email_match?(email, list) when is_list(list), do: String.downcase(email) in list
-  defp email_match?(_email, _list), do: false
 end

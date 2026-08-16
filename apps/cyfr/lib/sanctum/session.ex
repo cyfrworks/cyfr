@@ -141,11 +141,10 @@ defmodule Sanctum.Session do
       provider: attrs["provider"],
       permissions: attrs["permissions"],
       # A resolved context carries its athanor; a nil marks a not-yet-resolved
-      # session (user with no membership) and is re-resolved on load.
-      # Persisting `scope` lets a resolved session skip per-request membership
-      # re-resolution on reload.
+      # session (user with no membership) and is re-resolved on load. No
+      # scope is persisted: every session works inside its athanor, and the
+      # platform-admin capability is re-read from the membership row on load.
       athanor_id: ctx.athanor_id,
-      scope: to_string(ctx.scope),
       expires_at: expires_at,
       inserted_at: now
     }
@@ -310,6 +309,37 @@ defmodule Sanctum.Session do
   end
 
   @doc """
+  Point a session at another of the caller's athanors — what `session.use`
+  and Codex `--athanor` do for non-browser clients. The athanor must be one
+  `Sanctum.Context.focus/2` would grant.
+  """
+  @spec use_athanor(Context.t(), String.t()) ::
+          {:ok, Context.t()}
+          | {:error, :not_found | :archived | :not_member | :no_session | term()}
+  def use_athanor(%Context{session_token_hash: hash} = ctx, athanor_id)
+      when is_binary(hash) and is_binary(athanor_id) do
+    with {:ok, focused} <- Context.focus(ctx, athanor_id),
+         :ok <- Arca.SessionStorage.update_athanor(hash, athanor_id) do
+      {:ok, focused}
+    end
+  end
+
+  def use_athanor(%Context{}, _athanor_id), do: {:error, :no_session}
+
+  @doc """
+  Revoke every session of a person (server-denied, or removed as an
+  operator). Broadcasts `{:sessions_revoked, user_id}` on
+  `"sanctum:sessions"` so mounted LiveViews let go.
+  """
+  @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def revoke_all_for_user(user_id) when is_binary(user_id) do
+    with {:ok, count} <- Arca.SessionStorage.delete_by_user(user_id) do
+      broadcast_sessions_revoked(user_id)
+      {:ok, count}
+    end
+  end
+
+  @doc """
   Destroy a session (logout).
 
   ## Examples
@@ -408,14 +438,14 @@ defmodule Sanctum.Session do
           # time); revalidation re-reads memberships and the tenant gate still
           # bounces a genuinely athanor-less user.
           athanor_id: row.athanor_id,
-          scope: parse_scope(row.scope),
+          scope: :athanor,
           auth_method: surface_auth_method(surface),
           authenticated: true
         )
-        # Re-validate the persisted (scope, athanor) against CURRENT
-        # memberships so a membership revoked/downgraded after session create
+        # Re-validate the persisted athanor against the person's CURRENT
+        # standing so a denial, a revoked membership or an archived athanor
         # takes effect immediately (no waiting for TTL). Keeps the selected
-        # athanor when still authorized; drops a stale elevated scope.
+        # athanor when still authorized; re-derives the platform capability.
         |> Sanctum.Tenancy.revalidate()
 
       {:error, _reason} ->
@@ -429,23 +459,6 @@ defmodule Sanctum.Session do
 
   defp surface_auth_method(:console), do: :oidc
   defp surface_auth_method(:tincture), do: :session
-
-  # The column is NOT NULL and only ever written from a validated Context,
-  # so anything outside the vocabulary is corruption — floor it to the
-  # narrowest scope, loudly.
-  defp parse_scope(scope) when is_binary(scope) do
-    if scope in Sanctum.Atoms.scopes() do
-      String.to_existing_atom(scope)
-    else
-      Logger.warning(
-        "[Sanctum.Session] unknown persisted scope #{inspect(scope)} — using :athanor"
-      )
-
-      :athanor
-    end
-  end
-
-  defp parse_scope(_), do: :athanor
 
   defp row_to_external(row, token) do
     permissions =
@@ -496,4 +509,17 @@ defmodule Sanctum.Session do
     # PubSub may not be running (e.g. in tests or CLI-only mode)
     _e in [ArgumentError] -> :ok
   end
+
+  defp broadcast_sessions_revoked(user_id) do
+    case Application.get_env(:cyfr, :pubsub_name) do
+      nil -> :ok
+      pubsub -> Phoenix.PubSub.broadcast(pubsub, @session_topic, {:sessions_revoked, user_id})
+    end
+  rescue
+    _e in [ArgumentError] -> :ok
+  end
+
+  @doc "The topic session lifecycle events are broadcast on."
+  @spec topic() :: String.t()
+  def topic, do: @session_topic
 end

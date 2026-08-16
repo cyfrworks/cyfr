@@ -17,7 +17,7 @@ defmodule Arca.SchemaBaselineTest do
   )
 
   @expected_tables ~w(
-    athanors memberships sessions api_keys registry_tokens components
+    athanors users server_allowlist memberships sessions api_keys registry_tokens components
     component_dependencies executions mcp_logs policy_logs vault_entries profiles
     consents consent_vault_refs consent_proofs oauth_provider_credentials
     mcp_servers webhooks webhook_deliveries cron_schedules
@@ -57,6 +57,18 @@ defmodule Arca.SchemaBaselineTest do
       assert athanor, "#{table} lacks athanor_id"
       refute athanor.not_null?
     end
+  end
+
+  test "sessions carry no scope; the person's standing is a users + memberships fact" do
+    refute "scope" in Enum.map(columns("sessions"), & &1.name)
+    user_names = Enum.map(columns("users"), & &1.name)
+
+    for col <- ~w(email email_verified namespace personal_athanor_id status prefs),
+        do: assert(col in user_names)
+
+    membership_names = Enum.map(columns("memberships"), & &1.name)
+    for col <- ~w(email status added_by), do: assert(col in membership_names)
+    refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
   test "api_keys and webhooks have no scope_type; vault_entries has no system column" do

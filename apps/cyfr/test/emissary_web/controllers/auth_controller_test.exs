@@ -26,6 +26,8 @@ defmodule EmissaryWeb.AuthControllerTest do
     setup do
       original = Application.get_env(:cyfr, :auth_provider)
       Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
+      # The door: these callbacks sign in whoever the provider authenticates.
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
       # Point the cyfr.run REST client at an unreachable address so the
       # post-session probe fails with `:registry_unavailable` (generic
@@ -76,6 +78,60 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert json_response(conn, 401)["message"] =~ "Access denied"
     end
 
+    test "a callback for an identity the door refuses gets a 403 and no session", %{conn: conn} do
+      # Take the wildcard away: only the operators may sign in now.
+      [entry] = Sanctum.Door.Store.list()
+      :ok = Sanctum.Door.Store.remove(entry.id)
+
+      auth = %Ueberauth.Auth{
+        uid: "99999",
+        provider: :github,
+        info: %Ueberauth.Auth.Info{email: "stranger@example.com", name: "Stranger"},
+        credentials: %Ueberauth.Auth.Credentials{
+          token: "gho_x",
+          refresh_token: nil,
+          expires: false
+        },
+        extra: %{}
+      }
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> assign(:ueberauth_auth, auth)
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      assert conn.status == 403
+      assert conn.resp_body =~ "not allowed on this server"
+      refute get_session(conn, :sanctum_session_token)
+      user_id = Sanctum.Context.build_id(:github, Sanctum.Context.provider_iss(:github), "99999")
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get(user_id)
+    end
+
+    test "a denied identity is refused even when the door is *", %{conn: conn} do
+      {:ok, _} = Sanctum.Door.Store.deny("email", "banned@example.com", "test")
+
+      auth = %Ueberauth.Auth{
+        uid: "77777",
+        provider: :github,
+        info: %Ueberauth.Auth.Info{email: "banned@example.com", name: "Banned"},
+        credentials: %Ueberauth.Auth.Credentials{
+          token: "gho_x",
+          refresh_token: nil,
+          expires: false
+        },
+        extra: %{}
+      }
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> assign(:ueberauth_auth, auth)
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      assert conn.status == 403
+    end
+
     test "successful OAuth callback creates session and returns JSON", %{conn: conn} do
       # Simulate successful Ueberauth auth from GitHub
       auth = %Ueberauth.Auth{
@@ -121,6 +177,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       original_provider = Application.get_env(:cyfr, :auth_provider)
       Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)

@@ -18,6 +18,7 @@ defmodule Sanctum.Auth.EmailVerification do
   """
 
   @type result :: :ok | {:error, :missing_email | :email_not_verified}
+  @type claim :: true | false | :unknown
 
   @doc """
   Verify the email on a Ueberauth.Auth struct for the given provider.
@@ -60,6 +61,25 @@ defmodule Sanctum.Auth.EmailVerification do
     case email_verified_claim(extra) do
       true -> :ok
       _ -> {:error, :email_not_verified}
+    end
+  end
+
+  @doc """
+  `verify/3`, and what the provider actually asserted: `{:ok, true}` when
+  it proved the address, `{:ok, false}` never (that is a refusal), and
+  `{:ok, :unknown}` when it said nothing. The door admits an exact email
+  entry only on `true`; GitHub's primary email is verified by the strategy
+  itself, so its silence counts as `true`.
+  """
+  @spec verify_with_claim(atom(), String.t() | nil, map() | any()) ::
+          {:ok, claim()} | {:error, :missing_email | :email_not_verified}
+  def verify_with_claim(provider, email, extra) do
+    with :ok <- verify(provider, email, extra) do
+      case {provider, email_verified_claim(extra)} do
+        {_, true} -> {:ok, true}
+        {:github, :unknown} -> {:ok, true}
+        {_, _} -> {:ok, :unknown}
+      end
     end
   end
 

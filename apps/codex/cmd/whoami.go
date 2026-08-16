@@ -134,6 +134,12 @@ func renderWhoami(composed map[string]any, registryErr error) {
 	if email != "" {
 		fmt.Printf("Email: %s\n", email)
 	}
+	if athanor, _ := session["athanor_id"].(string); athanor != "" {
+		fmt.Printf("Athanor: %s\n", athanor)
+	}
+	if admin, _ := session["platform_admin"].(bool); admin {
+		fmt.Println("Platform admin: yes")
+	}
 
 	if hasRegistry {
 		if memberships, ok := registry["memberships"].([]any); ok && len(memberships) > 0 {

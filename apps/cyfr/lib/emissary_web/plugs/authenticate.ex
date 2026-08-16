@@ -275,6 +275,11 @@ defmodule EmissaryWeb.Plugs.Authenticate do
       {:error, :revoked} ->
         {:error, :api_key_revoked}
 
+      # The athanor is archived or the creator is denied on this server —
+      # answered exactly like a revoked key, so nothing about either leaks.
+      {:error, :channel_closed} ->
+        {:error, :api_key_revoked}
+
       {:error, :ip_not_allowed} ->
         {:error, :ip_not_allowed}
 

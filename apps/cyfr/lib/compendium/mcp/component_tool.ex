@@ -157,6 +157,12 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # Push action — upload an already-registered local component to an OCI registry.
+  # A push goes out as the person who triggered it, under a namespace they
+  # hold; an API key is an athanor's credential and is nobody's publisher.
+  def handle(%Context{auth_method: :api_key}, %{"action" => "push"}) do
+    {:error, "component.push is a person's act — sign in; an API key cannot publish"}
+  end
+
   def handle(%Context{} = ctx, %{"action" => "push"} = args) do
     reference = args["reference"]
     registry = args["registry"] || default_registry()

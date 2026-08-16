@@ -20,6 +20,26 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert render(view) =~ "Settings"
   end
 
+  test "a mounted view lets go when the person's sessions are revoked", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {view, _html} = live_authenticated(conn, "/settings")
+
+    {:ok, _} = Sanctum.Session.revoke_all_for_user(user.user_id)
+    assert_redirect(view, "/login")
+  end
+
+  test "a mounted view lets go when the person loses the athanor in focus", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    {view, _html} = live_authenticated(conn, "/settings")
+
+    home = Sanctum.Tenancy.Athanors.home!()
+    # Home is never archived by a leave; the person simply loses their seat.
+    :ok = Sanctum.Tenancy.Members.remove_member(home, user_id: user.user_id)
+    assert_redirect(view, "/")
+  end
+
   test "an anonymous conn is redirected to /login", %{conn: conn} do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, "/settings")
   end

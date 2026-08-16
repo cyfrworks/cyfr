@@ -20,7 +20,10 @@ defmodule Sanctum.Auth do
   @doc """
   Authenticate with provided credentials/params.
 
-  Returns `{:ok, context}` on success, `{:error, reason}` on failure.
+  Returns `{:ok, context}` on success, `{:error, reason}` on failure. A
+  provider maps an identity to a Context; whether that identity may sign in
+  to this server is the door's decision (`Sanctum.Door`), taken by the
+  caller that mints the session — never by the provider.
   """
   @callback authenticate(params :: map()) :: {:ok, Context.t()} | {:error, term()}
 

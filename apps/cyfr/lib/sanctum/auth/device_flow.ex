@@ -403,13 +403,19 @@ defmodule Sanctum.Auth.DeviceFlow do
 
     case http_get(@provider_urls[:github].userinfo, headers) do
       {:ok, %{"id" => id} = user_data} ->
-        # Also fetch email if not in public profile
-        email = user_data["email"] || fetch_github_email(tokens.access_token)
+        # The public profile email carries no verification signal; the
+        # primary from /user/emails does, and the door needs it.
+        {email, verified} =
+          case fetch_github_email(tokens.access_token) do
+            {:ok, primary, verified} -> {primary, verified}
+            :none -> {user_data["email"], :unknown}
+          end
 
         {:ok,
          %{
            id: to_string(id),
            email: email,
+           verified: verified,
            name: user_data["name"] || user_data["login"]
          }}
 
@@ -433,6 +439,7 @@ defmodule Sanctum.Auth.DeviceFlow do
          %{
            id: to_string(sub),
            email: user_data["email"],
+           verified: true,
            name: user_data["name"] || user_data["given_name"] || user_data["email"]
          }}
 
@@ -460,17 +467,17 @@ defmodule Sanctum.Auth.DeviceFlow do
     case http_get("https://api.github.com/user/emails", headers) do
       {:ok, emails} when is_list(emails) ->
         case Enum.find(emails, &(&1["primary"] == true)) do
-          %{"email" => email} -> email
-          _ -> nil
+          %{"email" => email} = primary -> {:ok, email, primary["verified"] == true}
+          _ -> :none
         end
 
       {:ok, %{"message" => message}} ->
         Logger.warning("Failed to fetch GitHub email: #{message}")
-        nil
+        :none
 
       {:error, reason} ->
         Logger.warning("Failed to fetch GitHub email: #{inspect(reason)}")
-        nil
+        :none
     end
   end
 
@@ -478,21 +485,29 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Session Creation
   # ============================================================================
 
+  # The door runs before the session exists and before cyfr.run hears of the
+  # identity: a refused sign-in leaves no row and makes no call.
   defp create_session(user_info, provider) do
-    ctx =
-      Context.build(
-        user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
-        email: user_info.email,
-        provider: to_string(provider),
-        # Start athanor-less; resolve_into/2 fills the athanor from memberships.
-        athanor_id: nil,
-        permissions: [:*]
-      )
+    user_id = Context.build_id(provider, Context.provider_iss(provider), user_info.id)
+    user_info = Map.merge(user_info, %{id: user_id, provider: provider})
 
-    # Resolve the caller's scope/athanor from their memberships.
-    ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
+    with {:ok, verdict} <- Sanctum.Door.admit_identity(user_id, user_info),
+         {:ok, _user} <- Sanctum.SignIn.admitted(user_info, verdict) do
+      ctx =
+        Context.build(
+          user_id: user_id,
+          email: user_info.email,
+          provider: to_string(provider),
+          # Start athanor-less; resolve_into/2 fills the athanor from memberships.
+          athanor_id: nil,
+          permissions: [:*]
+        )
 
-    Session.create(ctx)
+      # Resolve the caller's athanor and capabilities from their memberships.
+      ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
+
+      Session.create(ctx)
+    end
   end
 
   # ============================================================================

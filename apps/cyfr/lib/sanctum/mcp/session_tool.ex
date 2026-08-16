@@ -25,9 +25,41 @@ defmodule Sanctum.MCP.SessionTool do
      %{
        user_id: ctx.user_id,
        email: derive_email(ctx),
-       provider: derive_provider(ctx)
+       provider: derive_provider(ctx),
+       athanor_id: ctx.athanor_id,
+       platform_admin: ctx.platform_admin
      }}
   end
+
+  # Point the session at another athanor the caller may work in — what a
+  # non-browser client does instead of following a `/a/<athanor>` URL.
+  def handle(%Context{} = ctx, %{"action" => "use", "athanor" => athanor})
+      when is_binary(athanor) do
+    with {:ok, resolved} <- resolve_athanor(athanor),
+         {:ok, focused} <- Sanctum.Session.use_athanor(ctx, resolved.id) do
+      {:ok, %{athanor: Sanctum.MCP.AthanorTool.render(resolved), scope: focused.scope}}
+    else
+      {:error, :not_member} ->
+        {:error, "Not a member of that athanor"}
+
+      {:error, :archived} ->
+        {:error, "That athanor is archived"}
+
+      {:error, :not_found} ->
+        {:error, "Athanor not found"}
+
+      {:error, :no_session} ->
+        {:error, "session.use needs a session — a key is bound to one athanor"}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, _} ->
+        {:error, "Failed to switch athanor"}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "use"}), do: {:error, "Missing required argument: athanor"}
 
   def handle(%Context{} = _ctx, %{"action" => "login"}) do
     # Login requires browser redirect in Sanctum
@@ -116,6 +148,11 @@ defmodule Sanctum.MCP.SessionTool do
         {:error, reason} when is_binary(reason) ->
           {:error, reason}
 
+        {:error, {:door, _reason}} ->
+          # One message whichever branch refused; the list is not for
+          # strangers to learn.
+          {:error, Sanctum.Door.refusal_message()}
+
         {:error, {:token_error, code}} ->
           # Provider returned a structured error on the token exchange —
           # e.g. Google's "invalid_request" when client_secret is missing,
@@ -141,7 +178,8 @@ defmodule Sanctum.MCP.SessionTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid session action. Use: login, logout, whoami, device_init, or device_poll"}
+    {:error,
+     "Invalid session action. Use: login, logout, whoami, device_init, device_poll, or use"}
   end
 
   # session.whoami helpers: derive display fields from the Context without
@@ -171,6 +209,15 @@ defmodule Sanctum.MCP.SessionTool do
   # Installs with `:auth_provider = nil` are treated as the default (OAuth)
   # for this check,
   # so local dev without explicit config still works.
+  defp resolve_athanor("ath_" <> _ = id) do
+    case Sanctum.Tenancy.Athanors.get(id) do
+      {:ok, athanor} -> {:ok, athanor}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp resolve_athanor(slug), do: Sanctum.Tenancy.Athanors.by_route_slug(slug)
+
   defp device_flow_enabled? do
     case Application.get_env(:cyfr, :auth_provider) do
       nil -> true

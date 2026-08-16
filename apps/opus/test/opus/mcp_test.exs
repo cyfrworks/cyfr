@@ -402,36 +402,34 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - force_release action" do
-    test "platform admin can force release" do
-      # Releasing every tenant's slots is a platform-wide side effect, so the
-      # action takes platform scope AND :admin — the default system context's
-      # permission set deliberately lacks :admin.
-      platform_ctx = Sanctum.internal_context(permissions: [:admin])
+    test "the handler releases when reached; the operator gate is the annotation" do
+      # Releasing every athanor's slots is a server-wide side effect. The
+      # `scope: :platform` annotation admits platform admins alone at
+      # dispatch (`Emissary.MCP.ToolRegistry`); the handler itself does not
+      # re-check, so a direct call releases.
+      admin_ctx = %{Sanctum.TestContext.local() | platform_admin: true}
 
-      {:ok, result} = MCP.handle("execution", platform_ctx, %{"action" => "force_release"})
+      {:ok, result} = MCP.handle("execution", admin_ctx, %{"action" => "force_release"})
       assert result.force_released == true
+      # an operator sees the whole diagnostic
+      assert Map.has_key?(result, :tenants)
     end
 
-    test "a tenant admin is denied force_release", %{ctx: ctx} do
-      # TestContext.local() carries :admin via the wildcard — but it is
-      # athanor-scoped, and a per-athanor admin must not release other
-      # athanors' slots.
-      {:error, msg} = MCP.handle("execution", ctx, %{"action" => "force_release"})
-      assert msg =~ "platform-operator action"
-    end
+    test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
+      assert {:error, msg} =
+               Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
+                 "action" => "force_release"
+               })
 
-    test "non-admin user is denied force_release" do
-      non_admin_ctx = %Context{
-        user_id: "regular_user",
-        athanor_id: nil,
-        permissions: MapSet.new([:execute]),
-        scope: :athanor,
-        auth_method: :api_key,
-        api_key_type: :application
-      }
+      assert msg =~ "platform admin required"
 
-      {:error, msg} = MCP.handle("execution", non_admin_ctx, %{"action" => "force_release"})
-      assert msg =~ "platform-operator action"
+      [tool] =
+        Emissary.MCP.ToolVisibility.filter_for_context(
+          Enum.filter(Emissary.MCP.ToolRegistry.list_tools(), &(&1["name"] == "execution")),
+          ctx
+        )
+
+      refute "force_release" in get_in(tool, ["inputSchema", "properties", "action", "enum"])
     end
   end
 

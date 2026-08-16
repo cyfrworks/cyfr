@@ -551,6 +551,38 @@ defmodule Sanctum.ApiKeyTest do
   # access until the key is revoked) is the deliberate model, not an oversight.
   # Cross-tenant isolation for keys is proved separately in the cross-tenant
   # proof suite.
+  describe "a key is a standing channel of its athanor" do
+    test "it stops when the athanor is archived, and when its creator is denied", %{ctx: ctx} do
+      n = System.unique_integer([:positive])
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Keys #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan-#{n}"})
+      assert {:ok, _} = ApiKey.validate(key, [])
+
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+      assert {:error, :channel_closed} = ApiKey.validate(key, [])
+      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
+      assert {:ok, _} = ApiKey.validate(key, [])
+
+      # the creator leaving the group does not close it — members remain
+      :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
+      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
+      assert {:ok, _} = ApiKey.validate(key, [])
+
+      # the creator being denied on this server does
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: ctx.user_id,
+          provider: "github",
+          email: "keys#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      assert {:error, :revoked} = ApiKey.validate(key, [])
+    end
+  end
+
   describe "validate without a pre-supplied athanor" do
     test "validate derives the athanor from the DB record", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{name: "ext-validate-key", scope: []})

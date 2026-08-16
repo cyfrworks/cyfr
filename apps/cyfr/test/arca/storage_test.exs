@@ -137,6 +137,7 @@ defmodule Arca.StorageTest do
 
     test "a bare components listing is platform-only" do
       member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+
       platform =
         Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
 
@@ -147,8 +148,10 @@ defmodule Arca.StorageTest do
 
     test "the seed bundle is readable only by server-internal contexts" do
       member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+
       platform =
         Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+
       seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
 
       assert {:error, :forbidden} = Storage.authorize_path(member, ["components", "_bundle"])
@@ -156,10 +159,13 @@ defmodule Arca.StorageTest do
       assert :ok = Storage.authorize_path(seed, ["components", "_bundle", "catalysts"])
     end
 
-    test "non-component paths are not gated here (they are tenant-prefixed)" do
+    test "tenant-prefixed paths are not gated here; the global roots are the server's" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
       assert :ok = Storage.authorize_path(ctx, ["builds", "b1", "started.json"])
-      assert :ok = Storage.authorize_path(ctx, ["cache", "oci", "x"])
+      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["cache", "oci", "x"])
+      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["system", "health"])
+      assert :ok = Storage.authorize_path(Sanctum.system_context(), ["cache", "oci", "x"])
+      assert :ok = Storage.authorize_path(Sanctum.system_context(), ["system", "health"])
     end
   end
 end

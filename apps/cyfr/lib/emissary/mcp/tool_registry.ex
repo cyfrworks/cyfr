@@ -423,9 +423,21 @@ defmodule Emissary.MCP.ToolRegistry do
 
       true ->
         with :ok <- check_auth(name, ctx, annotation),
+             :ok <- check_scope(ctx, annotation),
              :ok <- check_permission(ctx, annotation) do
           check_consent(ctx, annotation)
         end
+    end
+  end
+
+  # `scope: :platform` is the operator capability, not a widened tenant scope:
+  # the caller still works inside one athanor and only the membership fact
+  # (`platform_admin`) admits them.
+  defp check_scope(ctx, annotation) do
+    case Map.get(annotation, :scope) do
+      nil -> :ok
+      :platform when ctx.platform_admin -> :ok
+      :platform -> {:error, "Unauthorized: platform admin required"}
     end
   end
 
@@ -694,6 +706,7 @@ defmodule Emissary.MCP.ToolRegistry do
   @valid_planes [:external, :in_chain]
   @valid_auth [:anonymous, :required]
   @valid_consent [:interactive, :staging]
+  @valid_scopes [:platform]
 
   defp audit_action(%{} = annotation) do
     kind = Map.get(annotation, :kind)
@@ -701,6 +714,7 @@ defmodule Emissary.MCP.ToolRegistry do
     auth = Map.get(annotation, :auth, :required)
     permission = Map.get(annotation, :permission)
     consent = Map.get(annotation, :consent)
+    scope = Map.get(annotation, :scope)
 
     cond do
       is_nil(kind) or not is_atom(kind) -> {:error, :missing_kind}
@@ -709,6 +723,9 @@ defmodule Emissary.MCP.ToolRegistry do
       auth not in @valid_auth -> {:error, :invalid_auth}
       not (is_nil(permission) or known_permission?(permission)) -> {:error, :invalid_permission}
       not (is_nil(consent) or consent in @valid_consent) -> {:error, :invalid_consent}
+      not (is_nil(scope) or scope in @valid_scopes) -> {:error, :invalid_scope}
+      # An operator-only action is an external-plane act; nothing in a chain is one.
+      scope == :platform and planes != [:external] -> {:error, :invalid_scope}
       true -> :ok
     end
   end

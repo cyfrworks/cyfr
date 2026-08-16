@@ -186,13 +186,22 @@ defmodule Arca.Storage do
   is the tenant: a context reaches only `components/{its own athanor}/…`
   (a platform context reaches every athanor), a bare `components` listing
   is platform-only, and the seed bundle `components/_bundle/…` is readable
-  only by server-internal contexts (`auth_method: :system`). Every other
-  path is either global or tenant-prefixed by `tenant_segments/1` and needs
-  no check here. `Arca` runs this before dispatching to any adapter.
+  only by server-internal contexts (`auth_method: :system`). The global
+  roots `cache/` (OCI blobs) and `system/` (health probes) are the server's
+  own and likewise system-only. Every other path is tenant-prefixed by
+  `tenant_segments/1` and needs no check here. `Arca` runs this before
+  dispatching to any adapter.
   """
   @spec authorize_path(Context.t(), [String.t()]) :: :ok | {:error, :forbidden}
   def authorize_path(%Context{auth_method: :system}, ["components", "_bundle" | _]), do: :ok
   def authorize_path(%Context{}, ["components", "_bundle" | _]), do: {:error, :forbidden}
+
+  def authorize_path(%Context{auth_method: :system}, [root | _]) when root in ["cache", "system"],
+    do: :ok
+
+  def authorize_path(%Context{}, [root | _]) when root in ["cache", "system"],
+    do: {:error, :forbidden}
+
   def authorize_path(%Context{scope: :platform}, ["components" | _]), do: :ok
 
   def authorize_path(%Context{athanor_id: athanor_id}, ["components", athanor_id | _])

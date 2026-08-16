@@ -33,9 +33,9 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 8 action-based tools" do
+    test "returns 10 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 7
+      assert length(tools) == 10
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -123,10 +123,13 @@ defmodule Sanctum.MCPTest do
          %{ctx: ctx} do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
       assert result.user_id == "local|local|testns"
-      # session.whoami returns local-user fields only; scope/permissions/athanor_id
-      # dropped; registry identity lives on Compendium.MCP.registry.whoami.
+      # session.whoami returns local-user fields plus where the session works
+      # (athanor, operator capability); permissions dropped; registry identity
+      # lives on Compendium.MCP.registry.whoami.
       assert Map.has_key?(result, :email)
       assert Map.has_key?(result, :provider)
+      assert result.athanor_id == ctx.athanor_id
+      assert result.platform_admin == false
       # display_name dropped — UI consumers render `email || user_id` directly.
       refute Map.has_key?(result, :display_name)
       refute Map.has_key?(result, :scope)

@@ -437,8 +437,9 @@ CYFR_OIDC_CLIENT_SECRET=...
 ```
 
 All three `CYFR_OIDC_*` values are required once `oidc` is selected.
-Authorization is still gated by `CYFR_PLATFORM_ADMIN_EMAILS` — authentication
-says who you are, the admin list says what you can touch.
+Sign-in is still gated by `CYFR_PLATFORM_ADMIN_EMAILS` and the server allowlist
+(`cyfr admin allow …`) — authentication says who you are, the door says whether
+you may come in.
 
 ### Postgres (bring your own)
 

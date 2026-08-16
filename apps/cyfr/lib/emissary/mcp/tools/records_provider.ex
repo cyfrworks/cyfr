@@ -374,7 +374,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         |> Enum.map(&mcp_log_to_map/1)
 
       import Ecto.Query
-      import Arca.QueryHelpers, only: [where_tenant: 2, maybe_put: 3]
+      import Arca.QueryHelpers, only: [where_tenant_unless_platform: 2, maybe_put: 3]
 
       exec_query =
         from(e in Arca.Execution,
@@ -383,14 +383,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           limit: 100
         )
 
-      # Platform admins correlate across tenants; everyone else is scoped to their
-      # athanor — no per-user narrowing (members are interchangeable).
-      exec_query =
-        if admin?(ctx) and ctx.scope == :platform do
-          exec_query
-        else
-          where_tenant(exec_query, ctx)
-        end
+      # Scoped to the caller's athanor — no per-user narrowing (members are
+      # interchangeable), and no cross-athanor reach for an operator either:
+      # only a server-internal context reads unfiltered.
+      exec_query = where_tenant_unless_platform(exec_query, ctx)
 
       executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
 
@@ -435,7 +431,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
           _ ->
             import Ecto.Query
-            import Arca.QueryHelpers, only: [where_tenant: 2]
+            import Arca.QueryHelpers, only: [where_tenant_unless_platform: 2]
 
             query =
               from(e in Arca.Execution,
@@ -444,14 +440,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
                 select: {e.request_id, count(e.id)}
               )
 
-            query =
-              if admin?(ctx) and ctx.scope == :platform do
-                query
-              else
-                where_tenant(query, ctx)
-              end
-
-            query |> Arca.Repo.all() |> Map.new()
+            query
+            |> where_tenant_unless_platform(ctx)
+            |> Arca.Repo.all()
+            |> Map.new()
         end
 
       {:ok, %{counts: counts}}
@@ -718,8 +710,6 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   defp decode_json(val), do: val
-
-  defp admin?(ctx), do: Context.has_permission?(ctx, :admin)
 
   defp parse_since_opt(opts, nil), do: {:ok, opts}
 

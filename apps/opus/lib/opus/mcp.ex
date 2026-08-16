@@ -256,9 +256,8 @@ defmodule Opus.MCP do
             # in-chain plane rather than serve a number that means nothing
             # to the caller.
             "status" => %{kind: :read, planes: [:external], permission: :execute},
-            # The handler additionally requires platform scope — a residual
-            # the annotation cannot express.
-            "force_release" => %{kind: :destructive, planes: [:external], permission: :admin}
+            # Releasing every athanor's slots is the operator's lever alone.
+            "force_release" => %{kind: :destructive, planes: [:external], scope: :platform}
           }
         },
         input_schema: %{
@@ -530,9 +529,9 @@ defmodule Opus.MCP do
   end
 
   # Force release action - emergency semaphore recovery. Releasing EVERY
-  # tenant's slots is a platform-wide side effect, so a tenant-scoped :admin
-  # is not enough — only the operator (platform scope) may pull this lever.
-  def handle("execution", %Context{scope: :platform} = ctx, %{"action" => "force_release"}) do
+  # athanor's slots is a server-wide side effect; the `scope: :platform`
+  # annotation admits operators alone before this arm is reached.
+  def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
     Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
 
     :telemetry.execute(
@@ -549,10 +548,6 @@ defmodule Opus.MCP do
         status = scoped_semaphore_status(ctx, Opus.ExecutionSemaphore.status())
         {:ok, Map.put(status, :force_released, true)}
     end
-  end
-
-  def handle("execution", %Context{}, %{"action" => "force_release"}) do
-    {:error, "force_release is a platform-operator action (releases every tenant's slots)"}
   end
 
   # Invalid action
@@ -627,11 +622,12 @@ defmodule Opus.MCP do
   defp format_root_result(other), do: other
 
   # The semaphore map is global: every athanor currently executing,
-  # with live counts and holder pids. Platform scope keeps the full
-  # diagnostic; a tenant member gets the shared totals plus their own
-  # tenant's count — other athanors' identifiers and activity levels are not
-  # theirs to enumerate.
+  # with live counts and holder pids. The operator (and the server's own
+  # contexts) keep the full diagnostic; a member gets the shared totals plus
+  # their own athanor's count — other athanors' identifiers and activity
+  # levels are not theirs to enumerate.
   defp scoped_semaphore_status(%Context{scope: :platform}, status), do: status
+  defp scoped_semaphore_status(%Context{platform_admin: true}, status), do: status
 
   defp scoped_semaphore_status(%Context{} = ctx, status) do
     status

@@ -60,27 +60,85 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create index(:athanors, [:status])
 
+    # The people this server knows: one row per IdP identity, written on the
+    # first admitted sign-in. `id` is the provider composite the rest of the
+    # system calls user_id. Log tables keep writing user_id without a foreign
+    # key here — synthetic principals (webhook:<slug>, _seed, system) are
+    # not people. `email` is not unique: one person may sign in through two
+    # configured providers and be two identities.
+    create table(:users, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :email, :string
+      add :email_verified, :boolean, null: false, default: false
+      add :provider, :string, null: false
+      add :display_name, :string
+      # Durable copy of the cyfr.run personal namespace once it is known.
+      add :namespace, :string
+      add :personal_athanor_id, :string
+      add :status, :string, null: false, default: "active"
+      add :prefs, :text
+      add :first_seen_at, :utc_datetime_usec, null: false
+      add :last_seen_at, :utc_datetime_usec, null: false
+      add :denied_at, :utc_datetime_usec
+      add :created_at, :utc_datetime_usec, null: false
+      add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    create index(:users, [:email])
+    create index(:users, [:status])
+    create unique_index(:users, [:namespace], where: "namespace IS NOT NULL")
+
+    create unique_index(:users, [:personal_athanor_id], where: "personal_athanor_id IS NOT NULL")
+
+    # The door: who may sign in to this server. Entries name an email, an
+    # IdP subject (user_id), or the wildcard `*`; a deny wins over everything.
+    # `requested` rows are allow entries a member asked for by inviting an
+    # email the door does not know — they take effect when a platform admin
+    # resolves them.
+    create table(:server_allowlist, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :kind, :string, null: false
+      add :value, :string, null: false
+      add :effect, :string, null: false, default: "allow"
+      add :status, :string, null: false, default: "allowed"
+      add :requested_by, :string
+      add :added_by, :string
+      add :note, :text
+      add :created_at, :utc_datetime_usec, null: false
+      add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:server_allowlist, [:kind, :value])
+    create index(:server_allowlist, [:status])
+
     # Presence-only assignments: a row means "user X is a member of athanor A"
-    # (or, with no athanor, a platform admin). No roles.
+    # (or, with no athanor, a platform admin). No roles. An `invited` row is
+    # keyed by email before the person has signed in and carries no user_id;
+    # it activates, atomically, on their first admitted sign-in.
     create table(:memberships, primary_key: false) do
       add :id, :string, primary_key: true
-      add :user_id, :string, null: false
+      add :user_id, :string
+      add :email, :string
       add :scope, :string, null: false, default: "athanor"
+      add :status, :string, null: false, default: "active"
+      add :added_by, :string
       add :athanor_id, references(:athanors, type: :string, on_delete: :delete_all)
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
     create index(:memberships, [:user_id])
+    create index(:memberships, [:email])
     create index(:memberships, [:athanor_id])
 
-    # Raw SQL because the uniqueness has to treat a NULL athanor as a value —
-    # a platform assignment carries none, and two of those for one user are
-    # the same assignment. COALESCE in an index expression is not something
+    # Raw SQL because the uniqueness has to treat a NULL as a value — a
+    # platform assignment carries no athanor, an invited row no user, an
+    # active row no email — and two rows agreeing on all four are the same
+    # assignment. COALESCE in an index expression is not something
     # `unique_index/3` can express.
     execute """
     CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (user_id, scope, COALESCE(athanor_id, ''))
+    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''), COALESCE(email, ''))
     """
   end
 
@@ -99,9 +157,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :permissions, :text, null: false, default: "[]"
       add :expires_at, :utc_datetime_usec, null: false
       # The athanor the session works in. Nullable: a session exists from
-      # sign-in on, before the person's own athanor is resolved.
+      # sign-in on, before the person's own athanor is resolved. Sessions
+      # carry no scope: every request runs inside its athanor, and being a
+      # platform admin is a membership fact re-read on each request.
       add :athanor_id, :string
-      add :scope, :string, null: false
 
       timestamps(type: :utc_datetime_usec, updated_at: false)
     end

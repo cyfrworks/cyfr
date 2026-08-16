@@ -1048,7 +1048,8 @@ A typical live-data pipeline:
 | `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
-| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails granted platform admin (cross-tenant, full access) on first sign-in. Authentication is open; this list (and athanor memberships) is the authorization gate — unlisted, unmembered users are locked out (`no_athanor`). |
+| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails of the server's operators (platform admins). They are always let in and manage the door — the server allowlist (`cyfr admin allow <email\|user_id\|*>`) that decides who else may sign in. Everyone not on either list is refused at sign-in (403). |
+| `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. |
 
 ### Platform admins
 
@@ -1056,12 +1057,17 @@ CYFR is one product: deploy it as-is (sqlite, local FS, the seeded Home
 athanor) or configure OIDC / Postgres / a custom registry. There is no separate
 "edition" or "mode".
 
-Once authentication is configured, access is governed by membership rows. The
-operator declares the bootstrap admins via `CYFR_PLATFORM_ADMIN_EMAILS` — each
-listed email is granted a platform-scope membership (full access, bypasses the
-tenant gate) the first time they sign in. A solo operator lists their own email;
-a company lists the platform staff. Other users are admitted by a membership row
-in an athanor.
+Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
+names the server's operators (platform admins): always let in, seated in the
+Home group, and able to run the operator verbs (`door.*`, `execution.force_release`)
+— but working inside one athanor at a time like everyone else; there is no
+cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
+<email|user_id|*>`, `cyfr admin deny …`, or the Settings page) is who else may
+sign in at all: a match on first sign-in lets them in, no match is a 403, and
+`*` lets in anyone the configured provider authenticates. Groups never open the
+door: adding an unknown email to a group leaves an invitation that activates on
+that person's first admitted sign-in and, when the door would refuse them, a
+request for the operator.
 
 With no auth configured, the deployment runs without sign-in: requests reach the
 public read-only surface as an unauthenticated context, and tenant-scoped

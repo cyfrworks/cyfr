@@ -366,6 +366,15 @@ if config_env() != :test do
 
   config :cyfr, :platform_admin_emails, platform_admins
 
+  # The public-door caps (Sanctum.Tenancy.Caps). Unset means off: a private
+  # box needs none of them; a server whose door is `*` sets them.
+  config :cyfr, :caps,
+    max_athanors: env!("CYFR_MAX_ATHANORS", :integer, nil),
+    max_groups_per_person: env!("CYFR_MAX_GROUPS_PER_PERSON", :integer, nil),
+    max_members_per_group: env!("CYFR_MAX_MEMBERS_PER_GROUP", :integer, nil),
+    mint_per_hour: env!("CYFR_MINT_PER_HOUR", :integer, nil),
+    athanor_storage_bytes: env!("CYFR_ATHANOR_STORAGE_BYTES", :integer, nil)
+
   # Auto-configure the auth provider from the environment.
   # Priority: explicit config > GitHub/Google credentials > none.
   #

@@ -178,7 +178,8 @@ defmodule Opus.StorageHandler do
          :ok <- validate_path_safe(path),
          :ok <- validate_allowed_paths(edge, path),
          :ok <- validate_write_size(action, request, limits),
-         :ok <- validate_public_quota(action, request, ctx, opts) do
+         :ok <- validate_public_quota(action, request, ctx, opts),
+         :ok <- validate_athanor_quota(action, request, ctx) do
       dispatch(action, request, limits, ctx)
     end
   end
@@ -226,6 +227,35 @@ defmodule Opus.StorageHandler do
       max_files: 200
     })
   end
+
+  # The operator's per-athanor ceiling for authenticated writes
+  # (`CYFR_ATHANOR_STORAGE_BYTES`) — off unless set, as a private box needs
+  # none. Measured over the athanor's whole data root: every write lands
+  # somewhere beneath it, and a per-scope measure would let a tenant fill
+  # the disk one scope at a time.
+  defp validate_athanor_quota(action, %{content: content}, ctx) when action in @writing_actions do
+    case Sanctum.Tenancy.Caps.get(:athanor_storage_bytes) do
+      nil ->
+        :ok
+
+      cap ->
+        incoming =
+          case Base.decode64(content || "") do
+            {:ok, decoded} -> byte_size(decoded)
+            :error -> byte_size(content || "")
+          end
+
+        case Arca.usage(ctx, []) do
+          {:ok, %{bytes: used}} when used + incoming > cap ->
+            {:error, :storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)"}
+
+          _ ->
+            :ok
+        end
+    end
+  end
+
+  defp validate_athanor_quota(_action, _request, _ctx), do: :ok
 
   # Usage is the RECURSIVE count and byte total under the scope root, and the
   # incoming size is the decoded payload — measuring top-level basenames (or

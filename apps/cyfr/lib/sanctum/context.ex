@@ -27,11 +27,17 @@ defmodule Sanctum.Context do
       Locus.build(ctx, source, target)
       Arca.get(ctx, path)
 
-  Context carries the tenant coordinate `athanor_id` and its `scope`
-  (`:athanor` — working inside that athanor — or `:platform`, the server's
-  operator, who carries no athanor unless focused on one). Only *how* a
-  context is constructed varies by deployment configuration — never the
-  functions that consume it.
+  Context carries the tenant coordinate `athanor_id` and its `scope`. Every
+  request context is `:athanor` — it works inside one athanor, the one its
+  session or `focus/2` named. `:platform` is the server itself: the internal
+  contexts `internal/1` builds for sweepers, retention, health probes and
+  seeding, which cross athanors by nature. A platform admin (the operator)
+  is a person like any other, focused on one athanor at a time; the
+  capability rides on the context as `platform_admin: true`, is re-read from
+  the membership row on every request, and is what the `door.*` verbs and
+  the audited "open another athanor" check — never a widened scope.
+  Only *how* a context is constructed varies by deployment configuration —
+  never the functions that consume it.
   """
 
   require Logger
@@ -57,6 +63,7 @@ defmodule Sanctum.Context do
           session_token_hash: binary() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
+          platform_admin: boolean(),
           plane: plane()
         }
 
@@ -85,6 +92,9 @@ defmodule Sanctum.Context do
     # (Sanctum.VaultReader) denies anonymous contexts — an anonymous internet
     # caller must never reach operator credentials.
     anonymous: false,
+    # The server's operator: a platform-scope membership row grants it. It is
+    # a capability, not a scope — the context still works inside one athanor.
+    platform_admin: false,
     # Which authorization plane this context is on. :external is every real
     # ingress; :guest is stamped one-way by enter_guest/1 when a context
     # enters a WASM closure (Opus.Executor before a guest run, AquaLive before an
@@ -134,7 +144,8 @@ defmodule Sanctum.Context do
     caller's athanor is resolved (or a platform context working in none) and
     is refused downstream by the tenant gate
   - `:permissions` - List or MapSet of permission atoms
-  - `:scope` - Scope atom (`:athanor` default, or `:platform`)
+  - `:scope` - Scope atom (`:athanor` default; `:platform` only through `internal/1`)
+  - `:platform_admin` - Boolean (default: false); the operator capability
   - `:auth_method` - Authentication method atom
   - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
@@ -253,6 +264,7 @@ defmodule Sanctum.Context do
       api_key_id: Map.get(attrs, :api_key_id),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
+      platform_admin: Map.get(attrs, :platform_admin, false) == true,
       plane: plane
     }
 
@@ -632,6 +644,47 @@ defmodule Sanctum.Context do
       do: athanor_id
 
   def athanor!(%__MODULE__{}), do: raise(Sanctum.UnauthorizedError, action: :athanor_required)
+
+  @doc """
+  Focus the context on an athanor: the one narrowing entry every LiveView
+  mount, `session.use` and the operator's "open another athanor" run through.
+
+  A member of the athanor may focus it. A platform admin may focus any
+  athanor — an audited act (`Sanctum.Telemetry.platform_context_event/1`),
+  never a widened scope: the result works inside that athanor exactly as a
+  member's context does. An archived athanor cannot be focused by anyone.
+  """
+  @spec focus(t(), Arca.Schemas.Athanor.t() | String.t()) ::
+          {:ok, t()} | {:error, :not_found | :archived | :not_member}
+  def focus(%__MODULE__{} = ctx, athanor_id) when is_binary(athanor_id) do
+    case Sanctum.Tenancy.Athanors.get(athanor_id) do
+      {:ok, athanor} -> focus(ctx, athanor)
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _} -> {:error, :not_found}
+    end
+  end
+
+  def focus(%__MODULE__{}, %Arca.Schemas.Athanor{status: "archived"}), do: {:error, :archived}
+
+  def focus(%__MODULE__{} = ctx, %Arca.Schemas.Athanor{id: id}) do
+    cond do
+      Sanctum.Tenancy.Members.member?(ctx.user_id, id) ->
+        {:ok, %{ctx | athanor_id: id, scope: :athanor}}
+
+      ctx.platform_admin ->
+        Sanctum.Telemetry.platform_context_event(%{
+          caller: :focus,
+          user_id: ctx.user_id,
+          athanor_id: id,
+          auth_method: ctx.auth_method
+        })
+
+        {:ok, %{ctx | athanor_id: id, scope: :athanor}}
+
+      true ->
+        {:error, :not_member}
+    end
+  end
 
   @doc """
   Tuple form of the tenant presence-gate: `:ok | {:error, :missing_tenant}`.

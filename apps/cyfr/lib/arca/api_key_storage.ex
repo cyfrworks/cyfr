@@ -200,6 +200,42 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
+  Revoke every live key a person created, across athanors. Returns the count.
+  """
+  @spec revoke_all_created_by(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  def revoke_all_created_by(user_id) when is_binary(user_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    query = from(k in ApiKey, where: k.created_by == ^user_id and k.revoked == ^false)
+    {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
+    {:ok, count}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[ApiKeyStorage] Database error in revoke_all_created_by: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
+  end
+
+  @doc """
+  Revoke every live key of an athanor. Returns the count.
+  """
+  @spec revoke_all_for_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  def revoke_all_for_athanor(athanor_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    query = from(k in ApiKey, where: k.revoked == ^false) |> where_athanor(athanor_id)
+    {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
+    {:ok, count}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[ApiKeyStorage] Database error in revoke_all_for_athanor: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
+  end
+
+  @doc """
   Rotate a key: update key_hash, key_prefix, and rotated_at.
   """
   @spec rotate_key(String.t(), String.t(), binary(), String.t()) :: :ok | {:error, :not_found}

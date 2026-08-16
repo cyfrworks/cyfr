@@ -25,4 +25,7 @@ for key <- [:base_path, :components_path, :aqua_path] do
   File.mkdir_p!(Application.fetch_env!(:cyfr, key))
 end
 
+# The athanor rows the fixtures name by hand, committed once for the run.
+Sanctum.TestContext.seed_athanors!()
+
 ExUnit.start()

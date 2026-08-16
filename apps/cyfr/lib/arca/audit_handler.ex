@@ -39,6 +39,10 @@ defmodule Arca.AuditHandler do
     # so the address is asserted rather than proven. Minting it must not be
     # silent.
     [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
+    # The door: a refused sign-in and an operator's deny are both events an
+    # operator wants to find later.
+    [:cyfr, :sanctum, :door, :refused],
+    [:cyfr, :sanctum, :door, :denied],
     [:cyfr, :opus, :execute, :start],
     [:cyfr, :opus, :execute, :stop],
     [:cyfr, :opus, :execute, :exception]

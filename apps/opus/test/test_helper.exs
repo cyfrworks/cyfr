@@ -5,4 +5,7 @@
 # (RateLimiter, SharedEngine, CronScheduler, etc.) are alive during tests.
 {:ok, _} = Application.ensure_all_started(:opus)
 
+# The athanor rows the fixtures name by hand, committed once for the run.
+Sanctum.TestContext.seed_athanors!()
+
 ExUnit.start()

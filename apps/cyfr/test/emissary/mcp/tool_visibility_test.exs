@@ -112,9 +112,19 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       refute "record" in names
     end
 
-    test "sees every session action — they are anonymous-reachable" do
+    test "sees every session action — the anonymous ones and `use`" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
-               ~w(device_init device_poll login logout whoami)
+               ~w(device_init device_poll login logout use whoami)
+    end
+
+    test "operator-only actions are shown to platform admins alone" do
+      member = ctx_with([:*])
+      admin = %{member | platform_admin: true}
+
+      assert visible_actions("door", member) == []
+
+      assert Enum.sort(visible_actions("door", admin)) ==
+               ~w(allow deny list remove requests resolve)
     end
   end
 

@@ -47,26 +47,30 @@ defmodule Compendium.MCP.AquaToolAuthorityTest do
     )
   end
 
-  test "tenant-scoped callers cannot mutate agent definitions when auth is configured" do
+  test "members cannot mutate agent definitions when auth is configured" do
     Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OIDC)
 
     for action <- ["create", "update", "delete"] do
       assert {:error, message} =
                AquaTool.handle(ctx(:athanor), %{"action" => action, "name" => "aqua"})
 
-      assert message =~ "platform scope"
+      assert message =~ "operator's act"
     end
   end
 
-  test "platform scope passes the definition gate when auth is configured" do
+  test "the operator passes the definition gate when auth is configured" do
     Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OIDC)
 
-    # The gate is what is under test: a platform caller must get past it.
-    # (The update then fails later on the missing manifest — any error is
-    # acceptable as long as it is not the platform-scope refusal.)
-    result = AquaTool.handle(ctx(:platform), %{"action" => "update", "name" => "aqua"})
+    # The gate is what is under test: an operator must get past it — as a
+    # platform admin focused on an athanor, or as the server itself. (The
+    # update then fails later on the missing manifest — any error is
+    # acceptable as long as it is not the operator refusal.)
+    admin = %{ctx(:athanor) | platform_admin: true}
+    refute platform_refusal?(AquaTool.handle(admin, %{"action" => "update", "name" => "aqua"}))
 
-    refute platform_refusal?(result)
+    refute platform_refusal?(
+             AquaTool.handle(ctx(:platform), %{"action" => "update", "name" => "aqua"})
+           )
   end
 
   test "single-user deployments keep the permission check as the only gate" do
@@ -78,7 +82,7 @@ defmodule Compendium.MCP.AquaToolAuthorityTest do
   end
 
   defp platform_refusal?({:error, message}) when is_binary(message),
-    do: message =~ "platform scope"
+    do: message =~ "operator's act"
 
   defp platform_refusal?(_), do: false
 end

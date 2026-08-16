@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Sanctum.DoorTest do
+  use ExUnit.Case, async: false
+
+  alias Sanctum.Door
+  alias Sanctum.Door.Store
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    original = Application.get_env(:cyfr, :platform_admin_emails, [])
+    Application.put_env(:cyfr, :platform_admin_emails, ["ops@example.com"])
+    on_exit(fn -> Application.put_env(:cyfr, :platform_admin_emails, original) end)
+    :ok
+  end
+
+  defp uid(n), do: "github|https://github.com|#{n}"
+
+  describe "admit/3 — the order of the door" do
+    test "an empty list admits only the platform admins" do
+      assert {:ok, :admin} = Door.admit(uid(1), "ops@example.com", true)
+      assert {:ok, :admin} = Door.admit(uid(1), "OPS@example.com", :unknown)
+      assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", true)
+    end
+
+    test "an exact email entry admits only a verified email" do
+      {:ok, _} = Store.allow("email", "Bob@Example.com", "ops")
+      assert {:ok, :allowed} = Door.admit(uid(2), "bob@example.com", true)
+      assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", :unknown)
+      assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", false)
+    end
+
+    test "a user_id entry admits an issuer that proves nothing about the email" do
+      {:ok, _} = Store.allow("user_id", uid(3), "ops")
+      assert {:ok, :allowed} = Door.admit(uid(3), "carol@example.com", :unknown)
+      assert {:ok, :allowed} = Door.admit(uid(3), nil, :unknown)
+    end
+
+    test "* admits anyone the provider authenticates, unless the email is known unverified" do
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      assert {:ok, :allowed} = Door.admit(uid(4), "dave@example.com", true)
+      assert {:ok, :allowed} = Door.admit(uid(4), "dave@example.com", :unknown)
+      assert {:error, :not_allowed} = Door.admit(uid(4), "dave@example.com", false)
+      # * grants no platform capability
+      refute match?({:ok, :admin}, Door.admit(uid(4), "dave@example.com", true))
+    end
+
+    test "a deny wins over *, over an exact entry, and is sticky until allowed again" do
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      {:ok, _} = Store.allow("email", "eve@example.com", "ops")
+      {:ok, _} = Store.deny("email", "eve@example.com", "ops")
+      assert {:error, :denied} = Door.admit(uid(5), "eve@example.com", true)
+
+      {:ok, _} = Store.deny("user_id", uid(6), "ops")
+      assert {:error, :denied} = Door.admit(uid(6), "frank@example.com", true)
+
+      {:ok, _} = Store.allow("email", "eve@example.com", "ops")
+      assert {:ok, :allowed} = Door.admit(uid(5), "eve@example.com", true)
+    end
+
+    test "a platform admin email cannot be denied" do
+      assert {:error, :platform_admin} = Store.deny("email", "ops@example.com", "ops")
+      assert {:error, :wildcard_cannot_be_denied} = Store.deny("wildcard", "*", "ops")
+    end
+
+    test "a request admits nobody until resolved" do
+      {:ok, req} = Store.request("grace@example.com", uid(1))
+      assert req.status == "requested"
+      assert {:error, :not_allowed} = Door.admit(uid(7), "grace@example.com", true)
+      refute Door.email_admitted?("grace@example.com")
+
+      {:ok, entry} = Store.resolve(req.id, :allow, uid(1))
+      assert entry.status == "allowed"
+      assert {:ok, :allowed} = Door.admit(uid(7), "grace@example.com", true)
+      assert Door.email_admitted?("grace@example.com")
+
+      # requesting again for an allowed address changes nothing
+      {:ok, same} = Store.request("grace@example.com", uid(1))
+      assert same.id == entry.id
+    end
+
+    test "rejecting a request removes it" do
+      {:ok, req} = Store.request("heidi@example.com", uid(1))
+      assert :ok = Store.resolve(req.id, :reject, uid(1))
+      assert Store.requests() == []
+    end
+  end
+
+  describe "admit_identity/2" do
+    test "wraps the verdict for a provider and audits a refusal" do
+      handler = "door-test-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :door, :refused],
+        fn _e, _m, meta, _c -> send(parent, {:refused, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:error, {:door, :not_allowed}} =
+               Door.admit_identity(uid(9), %{email: "ivan@example.com", verified: true})
+
+      assert_receive {:refused, %{reason: :not_allowed, email: "ivan@example.com"}}
+
+      assert {:ok, :admin} = Door.admit_identity(uid(1), %{email: "ops@example.com"})
+    end
+  end
+end

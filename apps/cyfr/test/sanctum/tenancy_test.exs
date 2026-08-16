@@ -98,14 +98,15 @@ defmodule Sanctum.TenancyTest do
       assert result.athanor_id == athanor.id
     end
 
-    test "platform wins the scope; the working athanor is the first athanor membership" do
+    test "a platform admin keeps :athanor scope with the capability; works in the first athanor" do
       uid = "u-multi-#{System.unique_integer([:positive])}"
       athanor = group!("home-b")
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
       result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
-      assert result.scope == :platform
+      assert result.scope == :athanor
+      assert result.platform_admin
       assert result.athanor_id == athanor.id
     end
 
@@ -114,85 +115,32 @@ defmodule Sanctum.TenancyTest do
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
       result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil}, force: true)
-      assert result.scope == :platform
+      assert result.scope == :athanor
+      assert result.platform_admin
       assert result.athanor_id == Athanors.home!().id
     end
 
-    test "an email in CYFR_PLATFORM_ADMIN_EMAILS is bootstrapped to platform scope" do
+    test "resolution never mints anything — the operator list is applied at sign-in only" do
       Application.put_env(:cyfr, :platform_admin_emails, ["admin@example.com"])
       uid = "u-admin-#{System.unique_integer([:positive])}"
 
       ctx = %Context{user_id: uid, athanor_id: nil, email: "admin@example.com"}
       result = Tenancy.resolve_into(ctx, force: true)
 
-      assert result.scope == :platform
-      assert Enum.any?(Members.list_by_user(uid), &(&1.scope == "platform"))
+      refute result.platform_admin
+      assert Members.list_by_user(uid) == []
     end
 
-    test "bootstrap is idempotent across repeated sign-ins" do
-      Application.put_env(:cyfr, :platform_admin_emails, ["admin2@example.com"])
-      uid = "u-admin2-#{System.unique_integer([:positive])}"
-      ctx = %Context{user_id: uid, athanor_id: nil, email: "admin2@example.com"}
+    test "an archived athanor is never chosen" do
+      uid = "u-archived-#{System.unique_integer([:positive])}"
+      a = group!("arch-a")
+      b = group!("arch-b")
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: a.id})
+      {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: b.id})
+      {:ok, _} = Athanors.archive(a)
 
-      Tenancy.resolve_into(ctx, force: true)
-      Tenancy.resolve_into(ctx, force: true)
-
-      assert [_one] = Members.list_by_user(uid)
-    end
-
-    test "minting platform scope emits an audit event exactly once" do
-      # The widest grant in the system, keyed only on an email address that a
-      # generic OIDC issuer may assert without verifying — it must not be silent,
-      # and it must not re-fire on every subsequent sign-in.
-      Application.put_env(:cyfr, :platform_admin_emails, ["admin3@example.com"])
-      uid = "u-admin3-#{System.unique_integer([:positive])}"
-      ctx = %Context{user_id: uid, athanor_id: nil, email: "admin3@example.com"}
-
-      handler_id = "test-platform-bootstrap-#{System.unique_integer([:positive])}"
-      test_pid = self()
-
-      :telemetry.attach(
-        handler_id,
-        [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-        fn _event, measurements, metadata, _cfg ->
-          send(test_pid, {:bootstrap_audited, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
-
-      Tenancy.resolve_into(ctx, force: true)
-      assert_receive {:bootstrap_audited, %{count: 1}, metadata}
-      assert metadata.user_id == uid
-      assert metadata.email == "admin3@example.com"
-
-      # Second sign-in finds the membership already present.
-      Tenancy.resolve_into(ctx, force: true)
-      refute_receive {:bootstrap_audited, _, _}, 100
-    end
-
-    test "no audit event when the email is not an admin" do
-      Application.put_env(:cyfr, :platform_admin_emails, ["someone-else@example.com"])
-      uid = "u-plain-#{System.unique_integer([:positive])}"
-
-      handler_id = "test-no-bootstrap-#{System.unique_integer([:positive])}"
-      test_pid = self()
-
-      :telemetry.attach(
-        handler_id,
-        [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-        fn _e, m, md, _c -> send(test_pid, {:bootstrap_audited, m, md}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
-
-      Tenancy.resolve_into(%Context{user_id: uid, athanor_id: nil, email: "plain@example.com"},
-        force: true
-      )
-
-      refute_receive {:bootstrap_audited, _, _}, 100
+      result = Tenancy.resolve_into(%Context{user_id: uid, athanor_id: a.id}, force: true)
+      assert result.athanor_id == b.id
     end
   end
 
@@ -203,56 +151,61 @@ defmodule Sanctum.TenancyTest do
       :ok
     end
 
-    test "keeps platform scope while the platform membership exists" do
+    test "keeps the capability while the platform membership exists" do
       uid = "u-reval-keep-#{System.unique_integer([:positive])}"
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
       ctx = %Context{
         user_id: uid,
         athanor_id: Athanors.home!().id,
-        scope: :platform,
+        scope: :athanor,
         authenticated: true
       }
 
-      assert Tenancy.revalidate(ctx).scope == :platform
+      out = Tenancy.revalidate(ctx)
+      assert out.platform_admin
+      assert out.scope == :athanor
     end
 
-    test "drops a stale platform scope after the platform membership is revoked" do
+    test "drops the capability once the platform membership is revoked" do
       uid = "u-reval-revoke-#{System.unique_integer([:positive])}"
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
       ctx = %Context{
         user_id: uid,
         athanor_id: Athanors.home!().id,
-        scope: :platform,
+        scope: :athanor,
+        platform_admin: true,
         authenticated: true
       }
 
-      # Reach is intact while the membership exists.
-      assert Tenancy.revalidate(ctx).scope == :platform
+      assert Tenancy.revalidate(ctx).platform_admin
 
-      # Revoke it.
       [m] = Members.list_by_user(uid)
       {:ok, _} = Members.remove(m)
 
-      # The stale :platform scope must NOT survive — no memberships → no
-      # athanor, and the tenant gate then rejects tenant-scoped routes.
+      # No memberships → no capability, no athanor; the tenant gate then
+      # rejects tenant-scoped routes.
       revalidated = Tenancy.revalidate(ctx)
-      refute revalidated.scope == :platform
+      refute revalidated.platform_admin
       assert revalidated.athanor_id == nil
     end
 
-    test "downgrade platform -> athanor drops the elevated scope but keeps a granted athanor" do
+    test "a stale capability on the context does not survive revalidation" do
       uid = "u-reval-down-#{System.unique_integer([:positive])}"
       athanor = group!("home-c")
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
 
-      # A session previously resolved as :platform, working in an athanor it
-      # is a member of.
-      ctx = %Context{user_id: uid, athanor_id: athanor.id, scope: :platform, authenticated: true}
+      ctx = %Context{
+        user_id: uid,
+        athanor_id: athanor.id,
+        scope: :athanor,
+        platform_admin: true,
+        authenticated: true
+      }
 
       revalidated = Tenancy.revalidate(ctx)
-      assert revalidated.scope == :athanor
+      refute revalidated.platform_admin
       assert revalidated.athanor_id == athanor.id
     end
 
@@ -293,7 +246,8 @@ defmodule Sanctum.TenancyTest do
       _other = group!("list-other")
       {:ok, _} = Members.ensure(uid, scope: "platform")
 
-      assert Tenancy.list_athanors(%Context{user_id: uid, scope: :platform}) == []
+      assert Tenancy.list_athanors(%Context{user_id: uid, scope: :athanor, platform_admin: true}) ==
+               []
     end
 
     test "a user with no membership sees no athanors" do
@@ -302,31 +256,43 @@ defmodule Sanctum.TenancyTest do
     end
   end
 
-  describe "user_active?/1" do
+  describe "channel_active?/2" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-      original = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
-      on_exit(fn -> restore(:auth_provider, original) end)
       :ok
     end
 
-    test "true while the user holds any membership; false once none remain" do
-      uid = "u-active-#{System.unique_integer([:positive])}"
-      refute Tenancy.user_active?(uid)
+    test "true while the athanor is active and the creator is not denied" do
+      athanor = group!("chan-a")
+      uid = "u-chan-#{System.unique_integer([:positive])}"
 
-      {:ok, m} = Members.ensure(uid, scope: "platform")
-      assert Tenancy.user_active?(uid)
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: uid,
+          provider: "github",
+          email: "chan@example.com",
+          verified: true
+        })
 
-      {:ok, _} = Members.remove(m)
-      refute Tenancy.user_active?(uid)
+      assert Tenancy.channel_active?(athanor.id, uid)
+      # a creator who merely leaves (or never was a member) leaves the channel running
+      assert Tenancy.channel_active?(athanor.id, "someone-else")
+      # synthetic principals are never denied
+      assert Tenancy.channel_active?(athanor.id, "webhook:abc")
+      assert Tenancy.channel_active?(athanor.id, nil)
+
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      refute Tenancy.channel_active?(athanor.id, uid)
+
+      {:ok, _} = Athanors.archive(athanor)
+      refute Tenancy.channel_active?(athanor.id, "someone-else")
     end
 
-    test "false for a missing user id" do
-      refute Tenancy.user_active?(nil)
-      refute Tenancy.user_active?("")
+    test "false for a missing or unknown athanor" do
+      refute Tenancy.channel_active?(nil, "u")
+      refute Tenancy.channel_active?("", "u")
+      refute Tenancy.channel_active?("ath_ghost", "u")
     end
   end
 

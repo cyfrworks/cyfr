@@ -23,13 +23,68 @@ if Mix.env() in [:test, :dev] do
 
     alias Sanctum.Context
 
-    # The athanor every permissive test context works in. No row is needed
-    # for tenant-scoped storage or queries (there is no foreign key on tenant
-    # rows); `athanor!/0` inserts one for tests that read the athanor itself.
+    # The athanor every permissive test context works in. Tenant rows carry
+    # no foreign key, so most fixtures need no row; the standing-channel
+    # gates (API keys, webhooks, schedules) do read the athanor's status, so
+    # the suite seeds the well-known test athanors once (`seed_athanors!/0`)
+    # and `athanor!/0` returns this one.
     @athanor_id "ath_test"
+
+    # The athanor ids test fixtures name by hand. Seeded once per test run,
+    # outside any sandbox, so every context that names one works against a
+    # real (active) row.
+    @well_known [
+      {"ath_test", "test"},
+      {"ath_a", "ath-a"},
+      {"ath_b", "ath-b"},
+      {"ath_acme", "ath-acme"},
+      {"ath_other", "ath-other"},
+      {"ath_1", "ath-1"},
+      {"ath_alpha", "ath-alpha"},
+      {"ath_x", "ath-x"},
+      {"ath_evt_x", "ath-evt-x"},
+      {"ath_o", "ath-o"},
+      {"ath_o1", "ath-o1"},
+      {"ath_gamma", "ath-gamma"},
+      {"ath_myorg", "ath-myorg"},
+      {"ath_reg", "ath-reg"},
+      {"ath_scaffold", "ath-scaffold"},
+      {"ath_stub", "ath-stub"},
+      {"ath_sweep", "ath-sweep"}
+    ]
 
     @doc "The athanor id `local/0` contexts carry."
     def athanor_id, do: @athanor_id
+
+    @doc """
+    Insert the well-known test athanor rows (idempotent). Called from each
+    app's `test_helper.exs` after the migrations ran, before ExUnit starts.
+    """
+    def seed_athanors! do
+      # Outside the sandbox: the rows must be committed and visible to every
+      # test's connection, and the pool may already be in manual mode when a
+      # second app's helper runs in the same BEAM.
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fn ->
+        for {id, slug} <- @well_known do
+          case Sanctum.Tenancy.Athanors.get(id) do
+            {:ok, _} ->
+              :ok
+
+            {:error, :not_found} ->
+              {:ok, _} =
+                Sanctum.Tenancy.Athanors.create(%{
+                  id: id,
+                  kind: "group",
+                  name: "Test #{slug}",
+                  slug: slug,
+                  created_by: "system"
+                })
+          end
+        end
+      end)
+
+      :ok
+    end
 
     @doc """
     Ensure the athanor row behind `local/0` exists and return it.

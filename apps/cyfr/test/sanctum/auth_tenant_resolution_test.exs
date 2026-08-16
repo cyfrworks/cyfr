@@ -91,16 +91,28 @@ defmodule Sanctum.AuthTenantResolutionTest do
     end
   end
 
-  describe "resolve_into/2 platform-admin bootstrap" do
-    test "a CYFR_PLATFORM_ADMIN_EMAILS-listed email gets platform scope on first sign-in" do
+  describe "the operator list is applied at sign-in, not by resolution" do
+    test "a CYFR_PLATFORM_ADMIN_EMAILS-listed email gets the capability on first sign-in" do
       ctx = oauth_shaped_context()
       Application.put_env(:cyfr, :platform_admin_emails, [String.downcase(ctx.email)])
 
-      result = Tenancy.resolve_into(ctx, force: true)
+      # Resolution alone mints nothing.
+      assert Tenancy.resolve_into(ctx, force: true).platform_admin == false
+      assert Members.list_by_user(ctx.user_id) == []
 
-      assert result.scope == :platform
-      # A platform membership row is minted (idempotently) for the user.
-      assert [%{scope: "platform"}] = Members.list_by_user(ctx.user_id)
+      # The door admits the operator; sign-in records it; resolution reads it.
+      assert {:ok, :admin} = Sanctum.Door.admit(ctx.user_id, ctx.email, true)
+
+      assert {:ok, _} =
+               Sanctum.SignIn.admitted(
+                 %{id: ctx.user_id, provider: "github", email: ctx.email, verified: true},
+                 :admin
+               )
+
+      result = Tenancy.resolve_into(ctx, force: true)
+      assert result.platform_admin
+      assert result.scope == :athanor
+      assert Enum.any?(Members.list_by_user(ctx.user_id), &(&1.scope == "platform"))
     end
 
     test "an unlisted, unmembered user stays unresolved with no membership row" do

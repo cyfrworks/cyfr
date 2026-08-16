@@ -71,76 +71,84 @@ defmodule EmissaryWeb.AuthController do
     # flow (DeviceFlow is the CLI counterpart).
     access_token = extract_access_token(auth)
 
-    case authenticate_with_provider(auth) do
-      {:ok, ctx} ->
-        case Session.create(ctx) do
-          {:ok, session} ->
-            # Seed CredentialStore with push tokens via cyfr.run probe.
-            case probe_and_store(ctx, access_token, auth.provider) do
-              {:reauthenticate, provider, reason} ->
-                # Recovery requires a fresh IdP access_token:
-                #   :idp_expired — probe returned 401; the current token is dead.
-                #   :local_store_failed — the personal push token landed on
-                #     cyfr.run but our CredentialStore.put failed. cyfr.run's
-                #     /v1/namespaces/personal/claim is not idempotent for the
-                #     same identity (returns 409 ALREADY_CLAIMED), so re-auth
-                #     is the only clean path to mint a fresh push token.
-                _ = Session.destroy(session.token)
+    with {:ok, ctx} <- authenticate_with_provider(auth),
+         {:ok, ctx} <- admit(ctx, auth) do
+      case Session.create(ctx) do
+        {:ok, session} ->
+          # Seed CredentialStore with push tokens via cyfr.run probe.
+          case probe_and_store(ctx, access_token, auth.provider) do
+            {:reauthenticate, provider, reason} ->
+              # Recovery requires a fresh IdP access_token:
+              #   :idp_expired — probe returned 401; the current token is dead.
+              #   :local_store_failed — the personal push token landed on
+              #     cyfr.run but our CredentialStore.put failed. cyfr.run's
+              #     /v1/namespaces/personal/claim is not idempotent for the
+              #     same identity (returns 409 ALREADY_CLAIMED), so re-auth
+              #     is the only clean path to mint a fresh push token.
+              _ = Session.destroy(session.token)
 
-                conn
-                |> safe_drop_session()
-                |> put_flash_if_available(:error, reauth_flash_message(reason))
-                |> redirect(to: "/auth/#{provider}")
+              conn
+              |> safe_drop_session()
+              |> put_flash_if_available(:error, reauth_flash_message(reason))
+              |> redirect(to: "/auth/#{provider}")
 
-              {:needs_policy_acceptance, _required_version} ->
-                # Probe gate: cyfr.run requires acceptance of the current
-                # bundled policy_version before any token mint. Stash the
-                # access_token so /auth/post-legal-accept can re-probe
-                # after the user clickwraps. Session is created — the user
-                # is logged in — but no push tokens minted yet.
+            {:needs_policy_acceptance, _required_version} ->
+              # Probe gate: cyfr.run requires acceptance of the current
+              # bundled policy_version before any token mint. Stash the
+              # access_token so /auth/post-legal-accept can re-probe
+              # after the user clickwraps. Session is created — the user
+              # is logged in — but no push tokens minted yet.
+              conn
+              |> put_session(:sanctum_session_token, session.token)
+              |> stash_pending_probe(access_token)
+              |> redirect(to: "/legal/accept")
+
+            {:ok, needs_claim?, suggested_username, warnings} ->
+              conn =
                 conn
                 |> put_session(:sanctum_session_token, session.token)
-                |> stash_pending_probe(access_token)
-                |> redirect(to: "/legal/accept")
+                |> maybe_stash_pending_probe(access_token, needs_claim?)
+                |> maybe_flash_warnings(warnings)
 
-              {:ok, needs_claim?, suggested_username, warnings} ->
-                conn =
-                  conn
-                  |> put_session(:sanctum_session_token, session.token)
-                  |> maybe_stash_pending_probe(access_token, needs_claim?)
-                  |> maybe_flash_warnings(warnings)
+              if needs_claim? do
+                # Dashboard access is gated until the user claims a personal
+                # namespace.
+                conn
+                |> put_session(:claim_suggested_username, suggested_username || "")
+                |> redirect(to: "/claim-namespace")
+              else
+                # Return JSON response for API clients.
+                conn
+                |> put_status(:ok)
+                |> json(%{
+                  ok: true,
+                  session: %{
+                    token: session.token,
+                    expires_at: session.expires_at
+                  },
+                  user: %{
+                    id: ctx.user_id,
+                    email: ctx.email,
+                    provider: ctx.provider
+                  },
+                  warnings: warnings
+                })
+              end
+          end
 
-                if needs_claim? do
-                  # Dashboard access is gated until the user claims a personal
-                  # namespace.
-                  conn
-                  |> put_session(:claim_suggested_username, suggested_username || "")
-                  |> redirect(to: "/claim-namespace")
-                else
-                  # Return JSON response for API clients.
-                  conn
-                  |> put_status(:ok)
-                  |> json(%{
-                    ok: true,
-                    session: %{
-                      token: session.token,
-                      expires_at: session.expires_at
-                    },
-                    user: %{
-                      id: ctx.user_id,
-                      email: ctx.email,
-                      provider: ctx.provider
-                    },
-                    warnings: warnings
-                  })
-                end
-            end
-
-          {:error, reason} ->
-            conn
-            |> put_status(:internal_server_error)
-            |> json(%{error: "session_error", message: friendly_error_message(reason)})
-        end
+        {:error, reason} ->
+          conn
+          |> put_status(:internal_server_error)
+          |> json(%{error: "session_error", message: friendly_error_message(reason)})
+      end
+    else
+      {:error, {:door, _reason}} ->
+        # Refused at the door: no session, no cookie, no cyfr.run call. One
+        # message whichever branch refused.
+        conn
+        |> put_status(:forbidden)
+        |> put_resp_content_type("text/html")
+        |> send_resp(403, door_refusal_page())
 
       {:error, reason} ->
         conn
@@ -568,6 +576,59 @@ defmodule EmissaryWeb.AuthController do
     configure_session(conn, drop: true)
   rescue
     ArgumentError -> conn
+  end
+
+  # The door, then what sign-in records, then the person's athanor and
+  # capabilities — before any session exists and before cyfr.run hears of the
+  # identity. It runs here, at the one place the web flow mints a session,
+  # so no auth provider (built-in or a deployment's own) can step around it.
+  # What the provider proved about the email decides how the door reads it.
+  defp admit(%Sanctum.Context{} = ctx, auth) do
+    email = ctx.email
+    extra = Map.get(auth, :extra) || %{}
+    provider = Map.get(auth, :provider)
+
+    verified =
+      case Sanctum.Auth.EmailVerification.verify_with_claim(provider, email, extra) do
+        {:ok, claim} -> claim
+        {:error, _} -> :unknown
+      end
+
+    user_info = %{
+      id: ctx.user_id,
+      provider: ctx.provider || to_string(provider),
+      email: email,
+      verified: verified,
+      name: screen_name(auth)
+    }
+
+    with {:ok, verdict} <- Sanctum.Door.admit_identity(ctx.user_id, user_info),
+         {:ok, _user} <- Sanctum.SignIn.admitted(user_info, verdict) do
+      {:ok, Sanctum.Tenancy.resolve_into(ctx, force: true)}
+    end
+  end
+
+  # The IdP screen name, persisted on the person's row.
+  defp screen_name(%{info: info}) when is_map(info) do
+    Map.get(info, :name) || Map.get(info, :nickname)
+  end
+
+  defp screen_name(_), do: nil
+
+  # A refused sign-in lands on a plain page: the person has no session and
+  # nothing of the console is theirs to see.
+  defp door_refusal_page do
+    message = Plug.HTML.html_escape(Sanctum.Door.refusal_message())
+
+    """
+    <!doctype html>
+    <html lang="en">
+    <head><meta charset="utf-8"><title>Not allowed</title>
+    <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}</style>
+    </head>
+    <body><h1>Not allowed on this server</h1><p>#{message}</p></body>
+    </html>
+    """
   end
 
   defp authenticate_with_provider(auth) do

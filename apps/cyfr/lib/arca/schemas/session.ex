@@ -19,7 +19,6 @@ defmodule Arca.Schemas.Session do
     field :permissions, :string
     field :expires_at, :utc_datetime_usec
     field :athanor_id, :string
-    field :scope, :string
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 end

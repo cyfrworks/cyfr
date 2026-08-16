@@ -90,7 +90,17 @@ defmodule Emissary.MCP.ToolVisibility do
     do: Map.get(annotation, :auth, :required) == :anonymous
 
   defp visible_action?(annotation, ctx),
-    do: permission_visible?(annotation, ctx) and consent_visible?(annotation, ctx)
+    do:
+      scope_visible?(annotation, ctx) and permission_visible?(annotation, ctx) and
+        consent_visible?(annotation, ctx)
+
+  # Operator-only actions are shown to operators alone (mirrors dispatch).
+  defp scope_visible?(annotation, ctx) do
+    case Map.get(annotation, :scope) do
+      nil -> true
+      :platform -> ctx.platform_admin
+    end
+  end
 
   defp permission_visible?(annotation, ctx) do
     case Map.get(annotation, :permission) do

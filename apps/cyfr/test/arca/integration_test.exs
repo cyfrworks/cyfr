@@ -367,33 +367,31 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "global vs user path separation" do
-    test "cache is shared across users", %{ctx: _ctx} do
-      user1_ctx = %Context{
+    test "the cache is the server's, shared by its internal contexts and closed to tenants",
+         %{ctx: _ctx} do
+      user_ctx = %Context{
         user_id: "cache_user_1",
         namespace: "cache_user_1",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         scope: :athanor,
         auth_method: :oidc,
-        api_key_type: nil
+        api_key_type: nil,
+        authenticated: true
       }
 
-      user2_ctx = %Context{
-        user_id: "cache_user_2",
-        namespace: "cache_user_2",
-        athanor_id: "ath_test",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
+      # The server caches a blob under the global root...
+      :ok = Arca.put(Sanctum.system_context(), ["cache", "oci", "sha256_abc"], "cached blob")
 
-      # User 1 caches a blob
-      :ok = Arca.put(user1_ctx, ["cache", "oci", "sha256_abc"], "cached blob")
+      # ...another internal context reads it back...
+      {:ok, content} =
+        Arca.get(Sanctum.internal_context(user_id: "_probe"), ["cache", "oci", "sha256_abc"])
 
-      # User 2 can read the cached blob
-      {:ok, content} = Arca.get(user2_ctx, ["cache", "oci", "sha256_abc"])
       assert content == "cached blob"
+
+      # ...and a tenant context, whatever its athanor, cannot reach it.
+      assert {:error, :forbidden} = Arca.get(user_ctx, ["cache", "oci", "sha256_abc"])
+      assert {:error, :forbidden} = Arca.put(user_ctx, ["cache", "oci", "x"], "nope")
     end
 
     test "executions in SQLite are user-scoped" do

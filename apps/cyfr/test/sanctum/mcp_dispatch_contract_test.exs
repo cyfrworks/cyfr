@@ -17,10 +17,13 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   alias Sanctum.MCP
 
-  @tool_names ~w(session oauth key tincture_visibility webhook vault profile)
+  @tool_names ~w(session athanor member door oauth key tincture_visibility webhook vault profile)
 
   @action_enums %{
-    "session" => ["login", "logout", "whoami", "device_init", "device_poll"],
+    "session" => ["login", "logout", "whoami", "device_init", "device_poll", "use"],
+    "athanor" => ["list", "get", "create", "rename", "archive", "unarchive", "settings"],
+    "member" => ["list", "add", "remove", "leave"],
+    "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
     "oauth" => ["set_client"],
     "key" => ["create", "get", "list", "revoke", "rotate"],
     "tincture_visibility" => ["get"],
@@ -31,7 +34,10 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   @invalid_action_errors %{
     "session" =>
-      "Invalid session action. Use: login, logout, whoami, device_init, or device_poll",
+      "Invalid session action. Use: login, logout, whoami, device_init, device_poll, or use",
+    "athanor" => "Invalid athanor action: ___no_such_action___",
+    "member" => "Invalid member action: ___no_such_action___",
+    "door" => "Invalid door action: ___no_such_action___",
     "oauth" => "Invalid oauth action. Use: set_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
@@ -42,7 +48,7 @@ defmodule Sanctum.MCPDispatchContractTest do
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 7 tools, in order" do
+    test "exactly these 10 tools, in order" do
       assert Enum.map(MCP.tools(), & &1.name) == @tool_names
     end
 

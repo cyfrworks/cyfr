@@ -59,13 +59,13 @@ defmodule EmissaryWeb.WebhookController do
         # Defensive — verify plug should have halted before us.
         conn |> put_status(500) |> json(%{error: "internal_error"})
 
-      not Sanctum.Tenancy.user_active?(webhook.created_by) ->
-        # The owner lost (or never had) access to this server — the stored
-        # row must not remain their standing execution channel. Same response
-        # shape as a disabled webhook so existence is not leaked.
+      not Sanctum.Tenancy.channel_active?(webhook.athanor_id, webhook.created_by) ->
+        # The athanor is archived or the creator was denied on this server —
+        # the stored row must not remain a standing execution channel. Same
+        # response shape as a disabled webhook so existence is not leaked.
         Logger.warning(
-          "[WebhookInvoke] owner #{inspect(webhook.created_by)} no longer active — " <>
-            "refusing slug=#{webhook.slug}"
+          "[WebhookInvoke] athanor #{webhook.athanor_id} or creator " <>
+            "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
         )
 
         conn |> put_status(404) |> json(%{error: "not_found"})

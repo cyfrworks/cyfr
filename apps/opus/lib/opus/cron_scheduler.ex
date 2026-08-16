@@ -275,19 +275,19 @@ defmodule Opus.CronScheduler do
         ctx =
           Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
 
-        if not Sanctum.Tenancy.user_active?(schedule.user_id) do
-          # The owner lost access to this server — skip the run and record
-          # why, but never auto-delete: the operator decides the schedule's
-          # fate.
+        if not Sanctum.Tenancy.channel_active?(schedule.athanor_id, schedule.user_id) do
+          # The athanor is archived or the creator was denied on this server —
+          # skip the run and record why, but never auto-delete: the members
+          # who remain decide the schedule's fate.
           Logger.warning(
-            "CronScheduler: schedule #{schedule_id} owner #{inspect(schedule.user_id)} " <>
-              "no longer active — skipping run"
+            "CronScheduler: schedule #{schedule_id} athanor #{schedule.athanor_id} or " <>
+              "creator #{inspect(schedule.user_id)} no longer active — skipping run"
           )
 
           case Arca.CronSchedule.record_error(
                  ctx,
                  schedule_id,
-                 "Owner no longer active — run skipped"
+                 "Athanor or creator no longer active — run skipped"
                ) do
             {:ok, _} ->
               :ok

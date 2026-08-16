@@ -24,8 +24,7 @@ defmodule Arca.SessionStorageTest do
         provider: "github",
         permissions: "[\"execute\",\"component:read\"]",
         expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-        token_prefix: "cyfr_",
-        scope: "athanor"
+        token_prefix: "cyfr_"
       },
       overrides
     )
@@ -59,15 +58,29 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
-  describe "scope persistence" do
-    test "persists and returns the resolved scope and athanor" do
-      hash = make_token_hash("scope")
-      attrs = session_attrs(%{scope: "platform", athanor_id: "ath_home"})
+  describe "athanor persistence" do
+    test "persists and returns the session's athanor" do
+      hash = make_token_hash("athanor")
+      attrs = session_attrs(%{athanor_id: "ath_home"})
 
       assert :ok = SessionStorage.create_session(hash, attrs)
       assert {:ok, session} = SessionStorage.get_session(hash)
-      assert session.scope == "platform"
       assert session.athanor_id == "ath_home"
+    end
+
+    test "update_athanor/2 repoints a live session; delete_by_user/1 drops every session" do
+      hash = make_token_hash("repoint")
+      :ok = SessionStorage.create_session(hash, session_attrs(%{athanor_id: "ath_a"}))
+
+      assert :ok = SessionStorage.update_athanor(hash, "ath_b")
+      assert {:ok, %{athanor_id: "ath_b"} = session} = SessionStorage.get_session(hash)
+
+      assert {:error, :not_found} =
+               SessionStorage.update_athanor(make_token_hash("none"), "ath_b")
+
+      assert {:ok, n} = SessionStorage.delete_by_user(session.user_id)
+      assert n >= 1
+      assert {:error, :not_found} = SessionStorage.get_session(hash)
     end
   end
 

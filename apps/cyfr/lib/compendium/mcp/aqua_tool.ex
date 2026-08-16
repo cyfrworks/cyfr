@@ -227,15 +227,14 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   # Agent definitions are instance-global (`aqua/` bypasses tenant
-  # segmentation), so on a deployment exposed to non-operator users a
-  # tenant-scoped caller must not be able to rewrite every user's agents.
-  # Single-user deployments (no :auth_provider) keep the permission check
-  # as the only gate.
+  # segmentation), so on a deployment exposed to non-operator users only the
+  # operator may rewrite what every athanor's AQUA runs on. Deployments
+  # without an :auth_provider keep the permission check as the only gate.
   defp require_definition_authority(%Context{} = ctx) do
-    if Sanctum.auth_configured?() and ctx.scope != :platform do
+    if Sanctum.auth_configured?() and not (ctx.platform_admin or ctx.scope == :platform) do
       {:error,
-       "Agent definitions are shared by every user of this deployment; " <>
-         "changing them requires platform scope"}
+       "Agent definitions are shared by every athanor of this server; " <>
+         "changing them is the operator's act"}
     else
       :ok
     end

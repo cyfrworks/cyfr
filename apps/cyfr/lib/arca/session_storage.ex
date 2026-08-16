@@ -41,7 +41,6 @@ defmodule Arca.SessionStorage do
       # before the caller's athanor is resolved. Membership re-resolution
       # runs on the next load; nothing is coerced.
       athanor_id: attrs[:athanor_id],
-      scope: attrs[:scope],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
@@ -75,7 +74,6 @@ defmodule Arca.SessionStorage do
           :provider,
           :permissions,
           :athanor_id,
-          :scope,
           :expires_at,
           :inserted_at
         ]
@@ -122,6 +120,37 @@ defmodule Arca.SessionStorage do
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
+  Point a session at another athanor. Returns `{:error, :not_found}` when no
+  live session has that hash.
+  """
+  @spec update_athanor(binary(), String.t()) :: :ok | {:error, :not_found | :database_error}
+  def update_athanor(token_hash, athanor_id) when is_binary(athanor_id) do
+    query = from(s in Session, where: s.token_hash == ^token_hash)
+
+    case Arca.Repo.update_all(query, set: [athanor_id: athanor_id]) do
+      {0, _} -> {:error, :not_found}
+      {_, _} -> :ok
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in update_athanor: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
+  Delete every session of one user. Returns `{:ok, count}`.
+  """
+  @spec delete_by_user(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  def delete_by_user(user_id) when is_binary(user_id) do
+    {count, _} = Arca.Repo.delete_all(from(s in Session, where: s.user_id == ^user_id))
+    {:ok, count}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in delete_by_user: #{Exception.message(e)}")
       {:error, :database_error}
   end
 

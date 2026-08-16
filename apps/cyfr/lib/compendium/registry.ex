@@ -1093,6 +1093,7 @@ defmodule Compendium.Registry do
   # login carries, which is to say the reservation held against no one.
   # "local" is unrestricted; all other namespaces are open.
   defp validate_publish_namespace("cyfr", %Context{scope: :platform}), do: :ok
+  defp validate_publish_namespace("cyfr", %Context{platform_admin: true}), do: :ok
 
   defp validate_publish_namespace("cyfr", %Context{}) do
     {:error,

@@ -53,22 +53,8 @@ defmodule Sanctum.AnonymousIngressTest do
     end
   end
 
-  describe "Tenancy.user_active?/1" do
-    test "true for any owner when no auth provider is configured" do
-      assert Sanctum.Tenancy.user_active?("anyone")
-      assert Sanctum.Tenancy.user_active?(nil)
-    end
-
-    test "membership-checked when an auth provider is configured" do
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OIDC)
-      on_exit(fn -> Application.delete_env(:cyfr, :auth_provider) end)
-
-      # Orphaned or missing owners are inactive
-      refute Sanctum.Tenancy.user_active?(nil)
-      refute Sanctum.Tenancy.user_active?("")
-      refute Sanctum.Tenancy.user_active?("departed-user")
-
-      # Any surviving membership keeps the owner active: an athanor row...
+  describe "Tenancy.channel_active?/2" do
+    test "a standing channel needs an active athanor and a creator who is not denied" do
       {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create(%{
           kind: "group",
@@ -77,18 +63,18 @@ defmodule Sanctum.AnonymousIngressTest do
           created_by: "system"
         })
 
-      {:ok, member} =
-        Sanctum.Tenancy.Members.ensure("member-user", scope: "athanor", athanor_id: athanor.id)
+      # Whoever created it — a member who left, a synthetic principal, nobody
+      # in particular — the channel belongs to the athanor and keeps running.
+      assert Sanctum.Tenancy.channel_active?(athanor.id, "departed-user")
+      assert Sanctum.Tenancy.channel_active?(athanor.id, "webhook:hook")
+      assert Sanctum.Tenancy.channel_active?(athanor.id, nil)
 
-      assert Sanctum.Tenancy.user_active?("member-user")
+      # An archived athanor closes every channel it owns.
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
+      refute Sanctum.Tenancy.channel_active?(athanor.id, "departed-user")
 
-      # ...or a platform row.
-      {:ok, _} = Sanctum.Tenancy.Members.ensure("admin-user", scope: "platform")
-      assert Sanctum.Tenancy.user_active?("admin-user")
-
-      # Losing the last membership makes the owner inactive again.
-      {:ok, _} = Sanctum.Tenancy.Members.remove(member)
-      refute Sanctum.Tenancy.user_active?("member-user")
+      # And no channel survives without an athanor.
+      refute Sanctum.Tenancy.channel_active?(nil, "anyone")
     end
   end
 end

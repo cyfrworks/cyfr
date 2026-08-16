@@ -320,6 +320,18 @@ defmodule Sanctum.ApiKey do
     Arca.ApiKeyStorage.revoke_key(name, athanor!(ctx))
   end
 
+  @doc "Revoke every live key a person created — part of denying them on this server."
+  @spec revoke_all_created_by(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def revoke_all_created_by(user_id) when is_binary(user_id) do
+    Arca.ApiKeyStorage.revoke_all_created_by(user_id)
+  end
+
+  @doc "Revoke every live key of an athanor."
+  @spec revoke_all_for_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def revoke_all_for_athanor(athanor_id) when is_binary(athanor_id) do
+    Arca.ApiKeyStorage.revoke_all_for_athanor(athanor_id)
+  end
+
   @doc """
   Rotate a key - creates a new key with the same name and settings.
   """
@@ -405,6 +417,10 @@ defmodule Sanctum.ApiKey do
   # single untenanted hash lookup is therefore correct and authoritative; the
   # tenant binding is enforced on the resulting Context via require_tenant!
   # (see Sanctum.ApiKey.context_from_metadata/1), not at lookup time.
+  #
+  # A key is a standing channel of its athanor: it stops when the athanor is
+  # archived or its creator is denied on this server (its creator merely
+  # leaving the group leaves it running for the members who remain).
   defp validate_key_against_store(key, key_type, client_ip) do
     case Arca.ApiKeyStorage.get_key_by_hash(hash_key(key)) do
       {:error, :not_found} ->
@@ -417,6 +433,9 @@ defmodule Sanctum.ApiKey do
         ip_allowlist = decode_json(row.ip_allowlist, nil)
 
         cond do
+          not Sanctum.Tenancy.channel_active?(row.athanor_id, row.created_by) ->
+            {:error, :channel_closed}
+
           ip_allowlist in [nil, []] ->
             {:ok, build_key_metadata(row, key_type)}
 

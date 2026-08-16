@@ -20,6 +20,16 @@ defmodule Compendium.MCP.RegistryTool do
   # the IdP access token carried in args.
   @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove)
 
+  # A push or a registry mutation is a person's act under their own
+  # namespace; an API key belongs to an athanor and is nobody's registry
+  # identity, so it never wields one.
+  @person_only @identity_mutations ++ ~w(report legal_accept appeal)
+
+  def handle(%Context{auth_method: :api_key}, %{"action" => action})
+      when action in @person_only do
+    {:error, "registry.#{action} is a person's act — sign in; an API key cannot do it"}
+  end
+
   def handle(%Context{} = ctx, %{"action" => action} = args)
       when action in @identity_mutations do
     handle_gated(ctx, args)

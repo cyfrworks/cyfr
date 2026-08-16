@@ -103,13 +103,18 @@ defmodule Emissary.MCP.ToolProvider do
     admits API keys. The domain keeps its own finer Authz checks (the
     digest-pinned commit arm, conditional registration bindings) — dispatch
     applies the coarse class, the domain the exact one.
+  - `:scope` — `:platform` admits only the server's operators
+    (`Sanctum.Context.platform_admin`): the door verbs, and the one
+    semaphore action that releases every athanor's slots. Everyone else is
+    refused and does not see the action listed.
   """
   @type action_annotation :: %{
           required(:kind) => action_kind(),
           required(:planes) => [plane(), ...],
           optional(:auth) => :anonymous | :required,
           optional(:permission) => atom(),
-          optional(:consent) => :interactive | :staging
+          optional(:consent) => :interactive | :staging,
+          optional(:scope) => :platform
         }
 
   @type tool_definition :: %{
