@@ -3,6 +3,7 @@
 
 defmodule Arca.Retention do
   require Logger
+  require Arca.Repo.Errors
 
   @moduledoc """
   Retention policy enforcement for CYFR storage.
@@ -65,6 +66,7 @@ defmodule Arca.Retention do
   @default_build_retention 100
   @default_mcp_log_days 30
   @default_policy_log_days 30
+  @default_messages_days 365
 
   # ============================================================================
   # Configuration
@@ -79,7 +81,8 @@ defmodule Arca.Retention do
           executions: non_neg_integer(),
           builds: non_neg_integer(),
           mcp_log_days: non_neg_integer(),
-          policy_log_days: non_neg_integer()
+          policy_log_days: non_neg_integer(),
+          messages_days: non_neg_integer()
         }
   def settings do
     config = Application.get_env(:cyfr, __MODULE__, [])
@@ -88,7 +91,8 @@ defmodule Arca.Retention do
       executions: Keyword.get(config, :executions, @default_execution_retention),
       builds: Keyword.get(config, :builds, @default_build_retention),
       mcp_log_days: Keyword.get(config, :mcp_log_days, @default_mcp_log_days),
-      policy_log_days: Keyword.get(config, :policy_log_days, @default_policy_log_days)
+      policy_log_days: Keyword.get(config, :policy_log_days, @default_policy_log_days),
+      messages_days: Keyword.get(config, :messages_days, @default_messages_days)
     }
   end
 
@@ -109,7 +113,8 @@ defmodule Arca.Retention do
           "executions" => user_settings["executions"] || defaults.executions,
           "builds" => user_settings["builds"] || defaults.builds,
           "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days,
-          "policy_log_days" => user_settings["policy_log_days"] || defaults.policy_log_days
+          "policy_log_days" => user_settings["policy_log_days"] || defaults.policy_log_days,
+          "messages_days" => user_settings["messages_days"] || defaults.messages_days
         }
 
       {:error, _} ->
@@ -117,7 +122,8 @@ defmodule Arca.Retention do
           "executions" => defaults.executions,
           "builds" => defaults.builds,
           "mcp_log_days" => defaults.mcp_log_days,
-          "policy_log_days" => defaults.policy_log_days
+          "policy_log_days" => defaults.policy_log_days,
+          "messages_days" => defaults.messages_days
         }
     end
   end
@@ -137,7 +143,8 @@ defmodule Arca.Retention do
       "builds" => get_positive_int(new_settings, "builds", current["builds"]),
       "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"]),
       "policy_log_days" =>
-        get_positive_int(new_settings, "policy_log_days", current["policy_log_days"])
+        get_positive_int(new_settings, "policy_log_days", current["policy_log_days"]),
+      "messages_days" => get_positive_int(new_settings, "messages_days", current["messages_days"])
     }
 
     Arca.put_json(ctx, ["config", "retention.json"], updated)
@@ -252,29 +259,33 @@ defmodule Arca.Retention do
   end
 
   @doc """
-  Clean up MCP and policy logs for every athanor that has any, each inside
-  its own context (its own retention settings). Returns per-kind totals and
-  the athanors whose cleanup failed.
+  Clean up MCP logs, policy logs and stale conversations for every athanor
+  that has any, each inside its own context (its own retention settings).
+  Returns per-kind totals and the athanors whose cleanup failed.
   """
   @spec cleanup_all_logs(keyword()) :: {:ok, map()}
   def cleanup_all_logs(opts \\ []) do
     athanors =
-      (Arca.McpLog.distinct_athanors() ++ Arca.PolicyLog.distinct_athanors())
+      (Arca.McpLog.distinct_athanors() ++
+         Arca.PolicyLog.distinct_athanors() ++ Arca.ConversationStorage.distinct_athanors())
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
 
     results =
       Enum.map(athanors, fn athanor_id ->
         ctx = Sanctum.internal_context(user_id: "system", athanor_id: athanor_id, scope: :athanor)
-        {athanor_id, cleanup_mcp_logs(ctx, opts), cleanup_policy_logs(ctx, opts)}
+
+        {athanor_id, cleanup_mcp_logs(ctx, opts), cleanup_policy_logs(ctx, opts),
+         cleanup_conversations(ctx, opts)}
       end)
 
-    mcp_deleted = results |> Enum.map(fn {_, r, _} -> count_of(r) end) |> Enum.sum()
-    policy_deleted = results |> Enum.map(fn {_, _, r} -> count_of(r) end) |> Enum.sum()
+    mcp_deleted = results |> Enum.map(fn {_, r, _, _} -> count_of(r) end) |> Enum.sum()
+    policy_deleted = results |> Enum.map(fn {_, _, r, _} -> count_of(r) end) |> Enum.sum()
+    conversations_deleted = results |> Enum.map(fn {_, _, _, r} -> count_of(r) end) |> Enum.sum()
 
     errors =
-      for {athanor_id, mcp, policy} <- results,
-          {kind, {:error, reason}} <- [mcp_logs: mcp, policy_logs: policy],
+      for {athanor_id, mcp, policy, conv} <- results,
+          {kind, {:error, reason}} <- [mcp_logs: mcp, policy_logs: policy, conversations: conv],
           do: {athanor_id, kind, reason}
 
     {:ok,
@@ -282,6 +293,7 @@ defmodule Arca.Retention do
        tenants: length(athanors),
        mcp_logs_deleted: mcp_deleted,
        policy_logs_deleted: policy_deleted,
+       conversations_deleted: conversations_deleted,
        errors: errors
      }}
   end
@@ -422,6 +434,50 @@ defmodule Arca.Retention do
         {count, _} -> {:ok, count}
       end
     end
+  end
+
+  @doc """
+  Clean up the athanor's conversations whose last activity is older than
+  the configured `messages_days` (messages go with them). A conversation
+  with a running turn is never touched.
+
+  ## Options
+
+  - `:days` - Override the number of days to keep (default from config)
+  - `:dry_run` - If true, returns what would be deleted without deleting
+
+  ## Returns
+
+  - `{:ok, deleted_count}` / `{:ok, %{would_delete: count}}` on dry run
+  """
+  @spec cleanup_conversations(Context.t(), keyword()) ::
+          {:ok, non_neg_integer() | map()} | {:error, term()}
+  def cleanup_conversations(%Context{} = ctx, opts \\ []) do
+    import Ecto.Query
+
+    days = Keyword.get(opts, :days, get_settings(ctx)["messages_days"])
+    dry_run = Keyword.get(opts, :dry_run, false)
+    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
+    athanor_id = ctx.athanor_id
+
+    if dry_run do
+      count =
+        from(c in Arca.Schemas.Conversation,
+          where:
+            c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
+              coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+        )
+        |> Arca.Repo.aggregate(:count)
+
+      {:ok, %{would_delete: count}}
+    else
+      {count, _} = Arca.ConversationStorage.delete_before(cutoff, athanor_id: athanor_id)
+      {:ok, count}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.Retention] cleanup_conversations failed: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   # ============================================================================

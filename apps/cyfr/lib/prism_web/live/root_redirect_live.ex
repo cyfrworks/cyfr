@@ -3,9 +3,8 @@
 
 defmodule PrismWeb.RootRedirectLive do
   @moduledoc """
-  `/` and `/a` land in the session's athanor; `/a/<athanor>` lands on that
-  athanor's activity stream — the home view since the cockpit-with-cards
-  landing was retired in favour of live indicators in the topbar.
+  `/` and `/a` land in the session's athanor — its chat
+  (`PrismWeb.ConversationLive` at `/a/<athanor>`).
   """
 
   use PrismWeb, :live_view
@@ -13,7 +12,7 @@ defmodule PrismWeb.RootRedirectLive do
   def mount(_params, _session, socket) do
     case socket.assigns[:athanor] do
       nil -> {:ok, redirect(socket, to: "/login?error=no_athanor")}
-      athanor -> {:ok, push_navigate(socket, to: PrismWeb.Focus.path(athanor, "/activities"))}
+      athanor -> {:ok, push_navigate(socket, to: PrismWeb.Focus.path(athanor, ""))}
     end
   end
 

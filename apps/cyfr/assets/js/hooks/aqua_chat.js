@@ -1,4 +1,4 @@
-// AquaLive textarea hook.
+// Chat composer textarea hook (ConversationLive).
 //
 // - Auto-grows from one row up to a max height (then scrolls).
 // - Enter (no modifiers) submits the composer form.

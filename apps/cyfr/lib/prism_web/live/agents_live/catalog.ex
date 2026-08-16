@@ -1,88 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.AquaLive.AgentState do
+defmodule PrismWeb.AgentsLive.Catalog do
   @moduledoc """
-  Pure agent / approval / tool-action state transforms for `PrismWeb.AquaLive`.
-
-  Every function here is a plain data transform — no `socket`, no assigns, no
-  markup. Extracted from the LiveView to keep the surface small; behaviour is
-  identical to the in-line versions.
+  Pure data transforms behind the Agents page: the tool/action catalog the
+  capability matrix renders, kind classification, and the model-picker
+  value codec. No `socket`, no markup.
   """
 
   require Logger
-
-  @doc """
-  True when an approval intent's `{tool, action}` proposal is in the
-  conversation grant set (i.e. already auto-approved for this chat).
-  """
-  def proposal_granted?(%{proposal: %{tool: t, action: a}}, grants)
-      when is_binary(t) and is_binary(a),
-      do: MapSet.member?(grants, {t, a})
-
-  def proposal_granted?(_, _), do: false
-
-  # Surface suspicious dropped intents as in-chat system messages.
-  # Currently only flags request_approval drops where the proposal violated
-  # policy — those are the security-relevant ones. Routine drops (path not
-  # in allowlist, malformed JSON) stay logger-only.
-  def tripwire_messages(drops) do
-    drops
-    |> Enum.filter(&approval_tripwire?/1)
-    |> Enum.map(fn %{reason: reason, raw: raw} ->
-      proposal_label =
-        case raw do
-          %{"proposal" => %{"tool" => t, "action" => a}} -> "#{t}.#{a}"
-          _ -> "(no proposal)"
-        end
-
-      %{
-        role: "error",
-        content: "⚠ Agent requested an action outside policy: #{proposal_label} — #{reason}",
-        timestamp: DateTime.utc_now()
-      }
-    end)
-  end
-
-  defp approval_tripwire?(%{raw: %{"kind" => "ui.request_approval"}, reason: reason})
-       when is_binary(reason) do
-    reason =~ "allowlist"
-  end
-
-  defp approval_tripwire?(_), do: false
-
-  @doc """
-  Build the `{result_summary, system_text}` pair for a resolved approval.
-  """
-  def build_outcome_summary(:approved, %{result: result}, title, _proposal) do
-    short = result_short(result)
-    {short, "[System: user approved '#{title}'. Result: #{short}]"}
-  end
-
-  def build_outcome_summary(:declined, %{reason: reason}, title, _proposal) do
-    txt =
-      if reason && reason != "",
-        do: "[System: user declined '#{title}'. Reason: #{reason}]",
-        else: "[System: user declined '#{title}'.]"
-
-    {reason, txt}
-  end
-
-  def build_outcome_summary(:error, %{reason: reason}, title, _proposal) do
-    short = inspect(reason) |> String.slice(0, 200)
-    {short, "[System: action '#{title}' failed: #{short}]"}
-  end
-
-  defp result_short(result) when is_map(result) do
-    result
-    |> Map.take([:status, "status", :id, "id", :name, "name"])
-    |> case do
-      empty when map_size(empty) == 0 -> "ok"
-      m -> inspect(m) |> String.slice(0, 120)
-    end
-  end
-
-  defp result_short(other), do: other |> inspect() |> String.slice(0, 120)
 
   @doc """
   Enumerate `(tool, [actions...])` from the live MCP registry — populated
@@ -155,7 +81,7 @@ defmodule PrismWeb.AquaLive.AgentState do
 
   def kind_from_meta(_, tool, action) do
     Logger.warning(
-      "[AquaLive] Tool action `#{tool}.#{action}` has no kind annotation — defaulting to :write"
+      "[AgentsLive] Tool action `#{tool}.#{action}` has no kind annotation — defaulting to :write"
     )
 
     :write
@@ -212,4 +138,22 @@ defmodule PrismWeb.AquaLive.AgentState do
       end)
     end
   end
+
+  @doc """
+  Catalysts return their list-models response verbatim — typically a list
+  of `%{"id" => ...}` objects, sometimes wrapped in a `{"data": [...]}`
+  envelope. Reduce to a plain list of model ids.
+  """
+  def normalize_provider_models(value) do
+    cond do
+      is_list(value) -> Enum.map(value, &model_id/1) |> Enum.reject(&is_nil/1)
+      is_map(value) and is_list(value["data"]) -> normalize_provider_models(value["data"])
+      true -> []
+    end
+  end
+
+  defp model_id(m) when is_binary(m), do: m
+  defp model_id(%{"id" => id}) when is_binary(id), do: id
+  defp model_id(%{id: id}) when is_binary(id), do: id
+  defp model_id(_), do: nil
 end

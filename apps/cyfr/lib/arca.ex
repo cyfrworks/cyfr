@@ -19,7 +19,6 @@ defmodule Arca do
   - `["components" | rest]` → component artifacts root (`:components_path`);
     `Compendium.ComponentPath` puts the tenant inside the segments, so the
     on-disk layout is `components/{athanor_id}/{type}s/...`
-  - `["aqua" | rest]` → AQUA agent prompts root (`:aqua_path`)
   - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix), under `:base_path`
   - everything else → tenant-scoped under `{athanor_id}/...`
     (`namespace` is identity-only and not part of the path)
@@ -111,7 +110,8 @@ defmodule Arca do
       :ok
 
   """
-  def put(%Context{} = ctx, path, content), do: guarded(ctx, path, fn -> adapter().put(ctx, path, content) end)
+  def put(%Context{} = ctx, path, content),
+    do: guarded(ctx, path, fn -> adapter().put(ctx, path, content) end)
 
   @doc """
   Encode and write JSON content to storage.
@@ -164,7 +164,8 @@ defmodule Arca do
       {:error, :not_found}
 
   """
-  def delete(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().delete(ctx, path) end)
+  def delete(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter().delete(ctx, path) end)
 
   @doc """
   List contents at path.
@@ -222,7 +223,8 @@ defmodule Arca do
       :ok
 
   """
-  def delete_tree(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().delete_tree(ctx, path) end)
+  def delete_tree(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter().delete_tree(ctx, path) end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -238,7 +240,8 @@ defmodule Arca do
 
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
-  def read_subtree(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().read_subtree(ctx, path) end)
+  def read_subtree(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter().read_subtree(ctx, path) end)
 
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).

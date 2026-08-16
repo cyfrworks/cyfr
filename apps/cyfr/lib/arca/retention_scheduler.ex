@@ -90,9 +90,19 @@ defmodule Arca.RetentionScheduler do
 
     try do
       case Arca.Retention.cleanup_all_logs() do
-        {:ok, %{mcp_logs_deleted: mcp, policy_logs_deleted: policy, errors: errors}} ->
-          if mcp + policy > 0,
-            do: Logger.info("[RetentionScheduler] Cleaned #{mcp} MCP logs, #{policy} policy logs")
+        {:ok,
+         %{
+           mcp_logs_deleted: mcp,
+           policy_logs_deleted: policy,
+           conversations_deleted: conversations,
+           errors: errors
+         }} ->
+          if mcp + policy + conversations > 0,
+            do:
+              Logger.info(
+                "[RetentionScheduler] Cleaned #{mcp} MCP logs, #{policy} policy logs, " <>
+                  "#{conversations} conversations"
+              )
 
           for {athanor_id, kind, reason} <- errors do
             Logger.warning(

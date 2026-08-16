@@ -4,7 +4,7 @@
 set -e
 
 # Seed /app/aqua/ from /app/aqua-defaults/ on first start.
-# Compendium.MCP reads aqua/agent.json from /app/aqua at runtime. We bake
+# /app/aqua is the AQUA agent template every new athanor is given. We bake
 # defaults into /app/aqua-defaults at image build time and copy them on
 # first start so the directory always has working orchestrators — works
 # whether /app/aqua is the image filesystem or a host bind mount.

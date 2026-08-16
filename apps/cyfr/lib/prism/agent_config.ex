@@ -12,62 +12,40 @@ defmodule Prism.AgentConfig do
 
   alias Sanctum.Context
 
-  # Per-user approval grants live under the TENANT-scoped `aqua-grants/`
-  # prefix, never in the shared agent.json: the manifest is instance-global
-  # (Arca routes `aqua/` outside tenant segmentation), so one user's
-  # "always approve" click must not change what the agent may do for
-  # everyone else. The overlay is merged into the effective policy at
-  # run/parse time only — manifest reads and the Agents editor stay pure.
-  @grants_prefix "aqua-grants"
+  # The agent's `tool_policy` is the athanor's own — one allowlist for every
+  # member, edited in place. A chat decision that outlives the turn ("always
+  # approve", "never") is a policy edit, not a private overlay: the
+  # conversation is shared, and so is what the agent may do in it.
 
   @doc """
-  The caller's personal approval overlay for `agent_name`:
-  `%{"tool.action" => "auto" | "deny"}`. `"auto"` is a persisted
-  "always approve"; `"deny"` a persisted "never".
+  Mark `key` (`"tool.action"`) `"auto"` in `agent_name`'s allowlist — the
+  agent no longer asks before that action, for every member.
   """
-  def user_tool_grants(%Context{} = ctx, agent_name) do
-    case Arca.get_json(ctx, grants_path(ctx)) do
-      {:ok, %{} = grants} -> Map.get(grants, agent_name, %{})
-      _ -> %{}
+  @spec set_tool_auto(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def set_tool_auto(%Context{} = ctx, agent_name, key)
+      when is_binary(agent_name) and is_binary(key) do
+    update_tool_policy(ctx, agent_name, &Map.put(&1, key, "auto"))
+  end
+
+  @doc """
+  Drop `key` (`"tool.action"`) from `agent_name`'s allowlist — absence from
+  the allowlist is what makes an action uncallable.
+  """
+  @spec drop_tool(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def drop_tool(%Context{} = ctx, agent_name, key)
+      when is_binary(agent_name) and is_binary(key) do
+    update_tool_policy(ctx, agent_name, &Map.delete(&1, key))
+  end
+
+  defp update_tool_policy(ctx, agent_name, fun) do
+    with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => agent_name}),
+         policy = fun.(guide["tool_policy"] || %{}),
+         {:ok, _} <-
+           call_aqua(ctx, %{"action" => "update", "name" => agent_name, "tool_policy" => policy}) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
     end
-  end
-
-  @doc "Persist one per-user grant (`\"auto\"` or `\"deny\"`) for `agent_name`."
-  def put_user_tool_grant(%Context{} = ctx, agent_name, key, mode)
-      when is_binary(agent_name) and is_binary(key) and mode in ["auto", "deny"] do
-    grants =
-      case Arca.get_json(ctx, grants_path(ctx)) do
-        {:ok, %{} = existing} -> existing
-        _ -> %{}
-      end
-
-    updated = Map.update(grants, agent_name, %{key => mode}, &Map.put(&1, key, mode))
-    Arca.put_json(ctx, grants_path(ctx), updated)
-  end
-
-  @doc """
-  The manifest policy overlaid with the caller's personal grants:
-  `"auto"` entries are added, `"deny"` entries removed (absence from the
-  allowlist is what makes an action uncallable).
-  """
-  def effective_tool_policy(%Context{} = ctx, agent_name, manifest_policy)
-      when is_map(manifest_policy) do
-    {denies, autos} =
-      ctx
-      |> user_tool_grants(agent_name)
-      |> Enum.split_with(fn {_k, mode} -> mode == "deny" end)
-
-    manifest_policy
-    |> Map.merge(Map.new(autos))
-    |> Map.drop(Enum.map(denies, &elem(&1, 0)))
-  end
-
-  # One file per user; ids are `<provider>|<iss>|<sub>` so they are hashed
-  # into a fixed-width filename instead of sanitized.
-  defp grants_path(%Context{} = ctx) do
-    user = ctx.user_id || "local"
-    digest = Base.encode16(:crypto.hash(:sha256, user), case: :lower)
-    [@grants_prefix, digest <> ".json"]
   end
 
   @doc """

@@ -25,6 +25,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     executions_and_logs()
     vault_and_consent()
     registrations()
+    conversations()
     seed_home()
   end
 
@@ -584,6 +585,65 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "status != 'deleted'",
              name: :cron_schedules_athanor_name_active
            )
+  end
+
+  # ==========================================================================
+  # Conversations
+  # ==========================================================================
+
+  # A conversation belongs to the athanor; every member sees the same thread.
+  # Rows are the shared, durable record — no browser session owns a turn.
+  defp conversations do
+    create table(:conversations, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :title, :string, null: false, default: "New conversation"
+      # Attribution: the person who opened it. The athanor owns it.
+      add :created_by, :string, null: false
+      # Provider-shape history the AQUA formula returns at the end of a turn
+      # and takes back on the next — JSON text, one snapshot per turn.
+      add :history, :text
+      # Execution running this conversation's current turn, or NULL.
+      add :execution_id, :string
+      add :last_message_at, :utc_datetime_usec
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create index(:conversations, [:athanor_id, :last_message_at])
+    create index(:conversations, [:athanor_id, :execution_id])
+
+    create table(:messages, primary_key: false) do
+      add :id, :string, primary_key: true
+
+      add :conversation_id,
+          references(:conversations, type: :string, on_delete: :delete_all),
+          null: false
+
+      add :athanor_id, :string, null: false
+      # Position in the thread; assigned by the runner, dense per conversation.
+      add :seq, :integer, null: false
+      # Who wrote it: a user id, "aqua", or "system".
+      add :author, :string, null: false
+      # text | approval | error | system
+      add :kind, :string, null: false, default: "text"
+      add :content, :text, null: false, default: ""
+      # Kind-specific JSON: an approval's intent + proposal, a text message's
+      # attachment refs, an error's source.
+      add :payload, :text
+      # Approvals: pending | running | approved | declined | error.
+      add :status, :string
+      add :resolved_by, :string
+      add :resolved_at, :utc_datetime_usec
+      # Approvals: the decision's reason/result summary/scope, JSON.
+      add :resolution, :text
+      add :execution_id, :string
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:messages, [:conversation_id, :seq])
+    create index(:messages, [:athanor_id, :inserted_at])
+    create index(:messages, [:conversation_id, :status])
   end
 
   # ==========================================================================

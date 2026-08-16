@@ -55,6 +55,12 @@ defmodule PrismWeb.ConnCase do
       for sup <- supervisors, child <- Task.Supervisor.children(sup) do
         Task.Supervisor.terminate_child(sup, child)
       end
+
+      # Conversation runners the chat page started idle out on their own,
+      # which is far too late for the next test's sandbox.
+      for {_, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor) do
+        DynamicSupervisor.terminate_child(Prism.ConversationSupervisor, pid)
+      end
     end)
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}

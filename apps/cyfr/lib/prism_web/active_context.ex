@@ -18,36 +18,16 @@ defmodule PrismWeb.ActiveContext do
   `socket.assigns.active_context.focused_resource` to surface contextual
   actions like "Rerun current request" or "Copy current component ref".
 
-  ## Phase 3 consumer
-
-  The AQUA overlay (`PrismWeb.AquaLive`) is `live_render`'d into the
-  layout's portal slot, which gives it its own LiveView socket separate
-  from the page-level LiveView. It subscribes to
-  `prism:active_context:<session_id>` on mount; the page-level LiveView
-  broadcasts to that topic on every `handle_params`. The overlay then
-  forwards `active_context` as input to `formula:local.aqua` so the
-  agent always knows the current page and focused resource.
-
   ## Wiring
 
   Hooked via `live_session :on_mount`. Every authenticated LiveView gets
   `socket.assigns.active_context` populated automatically on mount and
-  on every subsequent `handle_params`. The same hook also broadcasts to
-  the per-session topic for the overlay to consume.
+  on every subsequent `handle_params`.
   """
 
   import Phoenix.Component, only: [assign: 3]
 
   alias Phoenix.LiveView
-
-  @broadcast_base "prism:active_context"
-
-  @doc """
-  PubSub topic used by the overlay to receive context updates for a
-  given Phoenix session. Keyed by `session_id` so live_render'd children
-  (the overlay) can subscribe by passing through the session.
-  """
-  def topic(session_id) when is_binary(session_id), do: "#{@broadcast_base}:#{session_id}"
 
   @type focused_resource ::
           {:request, String.t()}
@@ -91,11 +71,10 @@ defmodule PrismWeb.ActiveContext do
         ...
       end
   """
-  def on_mount(:assign, params, session, socket) do
+  def on_mount(:assign, params, _session, socket) do
     socket =
       socket
       |> assign(:active_context, derive(params, nil))
-      |> assign(:prism_session_id, session_id_from_session(session))
       |> LiveView.attach_hook(
         :prism_active_context,
         :handle_params,
@@ -105,35 +84,10 @@ defmodule PrismWeb.ActiveContext do
     {:cont, socket}
   end
 
-  # Stable per-Phoenix-session identifier for the broadcast topic.
-  # Hash the session_token so the raw credential never appears in topics
-  # (PubSub stays server-internal, but defense-in-depth still beats a
-  # cleartext-token suffix). Falls back to the CSRF token for the rare
-  # mounts that arrive without a session_token.
-  defp session_id_from_session(session) when is_map(session) do
-    seed = session["sanctum_session_token"] || session["_csrf_token"] || ""
-
-    case seed do
-      "" -> nil
-      bin when is_binary(bin) -> :crypto.hash(:sha256, bin) |> Base.url_encode64(padding: false)
-      _ -> nil
-    end
-  end
-
-  defp session_id_from_session(_), do: nil
-
   @doc """
-  Resolve the same per-session topic key from a session map. Used by
-  child LiveViews (e.g. AquaLive) that receive the session at
-  mount time and need to subscribe.
-  """
-  def session_id(session), do: session_id_from_session(session)
-
-  @doc """
-  Attach a page snapshot to the active context and re-broadcast so the AQUA
-  overlay sees it. Snapshot describes "what is currently on screen" — a
-  small list of items the user is looking at, so the agent can reason
-  about the page without making read tool calls.
+  Attach a page snapshot to the active context. A snapshot describes "what
+  is currently on screen" — a small list of items the user is looking at,
+  so a consumer can reason about the page without making read tool calls.
 
   Pages opt in from their LiveView after loading data:
 
@@ -154,27 +108,11 @@ defmodule PrismWeb.ActiveContext do
       socket.assigns[:active_context] ||
         %{route: nil, focused_resource: nil, params: %{}, snapshot: nil}
 
-    next_ctx = Map.put(current, :snapshot, capped)
-    socket = assign(socket, :active_context, next_ctx)
-    broadcast_change(socket, next_ctx)
-    socket
+    assign(socket, :active_context, Map.put(current, :snapshot, capped))
   end
 
   defp handle_params_hook(params, uri, socket) do
-    ctx = derive(params, uri)
-    socket = assign(socket, :active_context, ctx)
-    broadcast_change(socket, ctx)
-    {:cont, socket}
-  end
-
-  defp broadcast_change(socket, ctx) do
-    case socket.assigns[:prism_session_id] do
-      sid when is_binary(sid) ->
-        Phoenix.PubSub.broadcast(Emissary.PubSub, topic(sid), {:active_context, ctx})
-
-      _ ->
-        :ok
-    end
+    {:cont, assign(socket, :active_context, derive(params, uri))}
   end
 
   # ============================================================================

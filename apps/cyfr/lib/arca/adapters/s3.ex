@@ -17,14 +17,13 @@ defmodule Arca.Adapters.S3 do
   identically against the other:
 
   - **Component paths** (`["components" | rest]`) → `<prefix>/components/<rest>`
-  - **AQUA paths** (`["aqua" | rest]`) → `<prefix>/aqua/<rest>`
   - **Global paths** (`["cache" | rest]`, `["system" | rest]`) → `<prefix>/cache/<rest>`,
     `<prefix>/system/<rest>` (not tenant-scoped)
   - **Tenant-scoped paths** (everything else) → `<prefix>/data/{athanor_id}/<rest>`
 
   The `data/` root keeps tenant storage in its own top-level namespace —
   mirroring the Local adapter's `data/` base directory and keeping it disjoint
-  from the `components/`/`aqua/`/`cache/` roots, so an athanor id that happens
+  from the `components/`/`cache/` roots, so an athanor id that happens
   to equal a reserved root name can never collide with it inside the bucket.
   `namespace` is identity-only and is not part of the path.
 
@@ -306,16 +305,12 @@ defmodule Arca.Adapters.S3 do
           # logical root inside the bucket.
           segments
 
-        ["aqua" | _rest] ->
-          # AQUA agent files — separate logical root, mirrors Local's aqua_path.
-          segments
-
         [prefix | _rest] ->
           if prefix in Arca.Storage.global_prefixes() do
             segments
           else
             # Tenant storage lives under its own `data/` root, disjoint from the
-            # components/aqua/cache roots (so an athanor named after a reserved root
+            # components/cache roots (so an athanor named after a reserved root
             # can't collide) and aligned with the Local adapter's data/ base dir.
             ["data" | Arca.Storage.tenant_segments(ctx) ++ segments]
           end

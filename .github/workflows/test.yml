@@ -194,6 +194,9 @@ jobs:
             'Prism\.AuthExchange\b' \
             'PrismWeb\.LiveClaimGate\b' \
             'CYFR_PRISM_' \
+            'PrismWeb\.AquaLive\b' \
+            'Prism\.AquaConversations\b' \
+            ':aqua_path\b' \
             ':4001\b|4001:4001' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"

@@ -49,7 +49,6 @@ defmodule Arca.Storage do
     pin them: a context may only reach `components/{its own athanor}/...`
     (a platform context reaches every athanor), and the seed bundle
     `components/_bundle/...` is readable only by system contexts.
-  - **AQUA paths**: `["aqua" | rest]` → routed to `aqua_path`
   - **Global paths**: `cache`, `system` → stored at root level
   - **Tenant-scoped paths**: everything else → stored under
     `{athanor_id}/...` (see `tenant_segments/1`)
@@ -70,14 +69,13 @@ defmodule Arca.Storage do
       ├── _bundle/{type}s/local/{name}/{version}/   # the seed source, never a tenant
       └── {athanor_id}/{type}s/{publisher}/{name}/{version}/
 
-      aqua/                              # AQUA agent prompts/manifest (separate root)
-
       data/
       ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       ├── system/                        # Global: server-internal scratch (health probe)
       └── {athanor_id}/                  # Tenant-scoped
+          ├── aqua/                      # the athanor's AQUA agent definitions
           ├── builds/                    # Locus build lifecycle
           ├── data/                      # Athanor data (agent conversations, etc.)
           ├── config/                    # Athanor config (retention settings, etc.)
@@ -142,9 +140,12 @@ defmodule Arca.Storage do
   - `cache` — global cache (OCI blobs, etc.) under `data/cache/`
   - `system` — server-internal scratch (the storage health probe) under
     `data/system/`
-  - `aqua` — AQUA agent prompts and manifest, routed to `:cyfr, :aqua_path`
+
+  AQUA agent definitions (`aqua/agent.json` and the prompts) are the
+  athanor's own — an ordinary tenant path, seeded from the shipped template
+  by `Compendium.AquaTemplate` when the athanor is provisioned.
   """
-  @global_prefixes ["cache", "system", "aqua"]
+  @global_prefixes ["cache", "system"]
 
   def global_prefixes, do: @global_prefixes
 

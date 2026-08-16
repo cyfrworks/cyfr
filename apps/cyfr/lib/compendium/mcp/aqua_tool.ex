@@ -6,7 +6,9 @@ defmodule Compendium.MCP.AquaTool do
   AQUA tool handlers for the Compendium MCP provider — agent system
   (orchestrators, sub-agents, prompts) and documentation guides.
 
-  Extracted from `Compendium.MCP`; behaviour preserved exactly.
+  Agent definitions are the athanor's own (`aqua/agent.json` and the prompt
+  files under its tenant storage), seeded from the shipped template by
+  `Compendium.AquaTemplate`; every member of the athanor may edit them.
   """
 
   alias Sanctum.Context
@@ -125,8 +127,7 @@ defmodule Compendium.MCP.AquaTool do
   # orchestrator. Pass `type: "doc"` to create a markdown guide entry.
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- require_definition_authority(ctx),
-         :ok <- validate_tool_policy(args["tool_policy"]) do
+    with :ok <- validate_tool_policy(args["tool_policy"]) do
       type = inferred_aqua_create_type(args)
 
       case type do
@@ -144,8 +145,7 @@ defmodule Compendium.MCP.AquaTool do
   # --- update ---
 
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
-    with :ok <- require_definition_authority(ctx),
-         :ok <- validate_tool_policy(args["tool_policy"]),
+    with :ok <- validate_tool_policy(args["tool_policy"]),
          {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       # Update manifest fields if provided
@@ -193,8 +193,7 @@ defmodule Compendium.MCP.AquaTool do
   # --- delete ---
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
-    with :ok <- require_definition_authority(ctx),
-         {:ok, manifest} <- read_agent_manifest(ctx),
+    with {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       {updated, prompt_file} =
         case location do
@@ -224,20 +223,6 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(_ctx, _args) do
     {:error, "Invalid aqua action. Use: list, get, create, update, or delete"}
-  end
-
-  # Agent definitions are instance-global (`aqua/` bypasses tenant
-  # segmentation), so on a deployment exposed to non-operator users only the
-  # operator may rewrite what every athanor's AQUA runs on. Deployments
-  # without an :auth_provider keep the permission check as the only gate.
-  defp require_definition_authority(%Context{} = ctx) do
-    if Sanctum.auth_configured?() and not (ctx.platform_admin or ctx.scope == :platform) do
-      {:error,
-       "Agent definitions are shared by every athanor of this server; " <>
-         "changing them is the operator's act"}
-    else
-      :ok
-    end
   end
 
   # --- aqua create helpers ---
@@ -337,21 +322,17 @@ defmodule Compendium.MCP.AquaTool do
 
   # --- AQUA private helpers ---
   #
-  # All AQUA reads/writes go through Arca (see Arca.Storage @global_prefixes
-  # — `aqua` routes to `:cyfr, :aqua_path`, default `./aqua`). Tests still
-  # override the location via `Application.put_env(:cyfr, :aqua_path, tmp)`
-  # because the Local adapter resolves `aqua_path/0` from that env key.
+  # All AQUA reads/writes go through Arca under the athanor's own `aqua/`
+  # prefix. An athanor without a manifest yet is given the shipped template
+  # on first read, so a row provisioned before the copy existed still works.
 
   defp read_agent_manifest(%Context{} = ctx) do
-    case Arca.get(ctx, ["aqua", "agent.json"]) do
-      {:ok, raw} ->
-        case Jason.decode(raw) do
-          {:ok, manifest} -> {:ok, manifest}
-          {:error, _} -> {:error, :manifest_not_found}
-        end
-
-      {:error, _} ->
-        {:error, :manifest_not_found}
+    with :ok <- Compendium.AquaTemplate.ensure(ctx),
+         {:ok, raw} <- Arca.get(ctx, ["aqua", "agent.json"]),
+         {:ok, manifest} <- Jason.decode(raw) do
+      {:ok, manifest}
+    else
+      _ -> {:error, :manifest_not_found}
     end
   end
 
@@ -380,13 +361,7 @@ defmodule Compendium.MCP.AquaTool do
                title: config["title"],
                catalyst_ref: config["catalyst_ref"],
                model: config["model"],
-               tool_policy: config["tool_policy"],
-               # Manifest policy merged with the caller's persisted per-user
-               # grants (auto/deny) — the one policy harnesses feed into the
-               # formula input. `tool_policy` above stays manifest-only for
-               # the editors.
-               effective_tool_policy:
-                 Prism.AgentConfig.effective_tool_policy(ctx, name, config["tool_policy"] || %{})
+               tool_policy: config["tool_policy"] || %{}
              }}
           else
             _ -> {:error, "Failed to read prompt for orchestrator: #{name}"}
@@ -415,9 +390,7 @@ defmodule Compendium.MCP.AquaTool do
                  parent: parent,
                  title: sa["title"],
                  description: sa["description"],
-                 tool_policy: sa["tool_policy"],
-                 effective_tool_policy:
-                   Prism.AgentConfig.effective_tool_policy(ctx, name, sa["tool_policy"] || %{}),
+                 tool_policy: sa["tool_policy"] || %{},
                  catalyst_ref: sa["catalyst_ref"],
                  model: sa["model"]
                }}

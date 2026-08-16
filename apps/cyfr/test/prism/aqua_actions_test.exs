@@ -224,7 +224,7 @@ defmodule Prism.AquaActionsTest do
       assert intent.proposal == %{tool: "key", action: "revoke", args: %{"name" => "old"}}
       # action_kind comes from the tool registry's annotations when it's
       # populated. In test isolation it may be nil; production paths render
-      # via aqua_live.ex which always has the registry loaded.
+      # via the conversation runner which always has the registry loaded.
       assert intent.action_kind in [nil, :write]
       assert intent.hinted_risk == "low"
     end

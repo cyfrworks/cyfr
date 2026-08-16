@@ -111,6 +111,12 @@ defmodule Cyfr.Application do
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Prism.TaskSupervisor},
+      # Conversation runners: one process per conversation with a live
+      # turn, started on demand; the recovery task re-follows the turns
+      # that were running when the server last stopped.
+      {Registry, keys: :unique, name: Prism.ConversationRegistry},
+      {DynamicSupervisor, name: Prism.ConversationSupervisor, strategy: :one_for_one},
+      maybe_conversation_recovery(),
       # Last: seeds Home from the bundle on first boot. Needs the repo, the
       # tincture registry (the seed scan reloads it) and nothing else.
       Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
@@ -133,6 +139,21 @@ defmodule Cyfr.Application do
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
+  end
+
+  # Off in the test env: suites drive runners directly.
+  defp maybe_conversation_recovery do
+    if Application.get_env(:cyfr, :conversation_recovery, true) do
+      [
+        Supervisor.child_spec(
+          {Task, &Prism.ConversationRunner.recover_all/0},
+          id: Prism.ConversationRecovery,
+          restart: :temporary
+        )
+      ]
+    else
+      []
+    end
   end
 
   defp maybe_proof_memory do

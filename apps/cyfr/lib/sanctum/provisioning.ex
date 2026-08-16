@@ -4,9 +4,10 @@
 defmodule Sanctum.Provisioning do
   @moduledoc """
   What turns an athanor row into a working athanor: the seed bundle copied
-  in and registered, the published components the bundle depends on pulled
-  from the registry, and a baseline consent minted for every executable
-  local component — so the athanor's AQUA answers from the first prompt.
+  in and registered, the AQUA agent definitions copied from the shipped
+  template, the published components the bundle depends on pulled from the
+  registry, and a baseline consent minted for every executable local
+  component — so the athanor's AQUA answers from the first prompt.
 
   A person's own athanor is minted here on their first admitted sign-in
   (`after_sign_in/1`, once their cyfr.run namespace is known — the athanor's
@@ -106,6 +107,7 @@ defmodule Sanctum.Provisioning do
     ctx = acting_ctx || seed_ctx(athanor_id)
 
     with :ok <- AthanorSeeder.seed(athanor),
+         :ok <- aqua_definitions(ctx),
          %{failed: []} = closure <- Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx)),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
          :ok <- all_minted(bootstrap) do
@@ -212,6 +214,15 @@ defmodule Sanctum.Provisioning do
 
   defp seed_ctx(athanor_id) do
     Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+  end
+
+  # The athanor's own AQUA agent definitions, from the shipped template. A
+  # copy already there (a retry after a later step failed) is kept as is.
+  defp aqua_definitions(ctx) do
+    case Compendium.AquaTemplate.ensure(ctx) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:aqua_template, reason}}
+    end
   end
 
   # Every static dependency the athanor's local components declare that

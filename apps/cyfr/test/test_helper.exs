@@ -21,7 +21,7 @@ excludes =
 if excludes != [], do: ExUnit.configure(exclude: excludes)
 
 # The tmp storage roots configured in config/test.exs.
-for key <- [:base_path, :components_path, :aqua_path] do
+for key <- [:base_path, :components_path] do
   File.mkdir_p!(Application.fetch_env!(:cyfr, key))
 end
 

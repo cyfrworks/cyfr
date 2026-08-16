@@ -6,7 +6,7 @@ import IframeBridge from "./hooks/iframe_bridge"
 import CommandPalette from "./hooks/command_palette"
 import PageLoadingIndicator from "./hooks/page_loading_indicator"
 import OptimisticNav from "./hooks/optimistic_nav"
-import Aqua from "./hooks/aqua"
+import Conversation from "./hooks/conversation"
 import AquaChat from "./hooks/aqua_chat"
 import {marked} from "../vendor/marked.esm.js"
 import DOMPurify from "../vendor/purify.es.mjs"
@@ -28,7 +28,7 @@ Hooks.IframeBridge = IframeBridge
 Hooks.CommandPalette = CommandPalette
 Hooks.PageLoadingIndicator = PageLoadingIndicator
 Hooks.OptimisticNav = OptimisticNav
-Hooks.Aqua = Aqua
+Hooks.Conversation = Conversation
 Hooks.AquaChat = AquaChat
 
 // ---------------------------------------------------------------------------

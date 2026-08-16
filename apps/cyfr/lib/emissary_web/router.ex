@@ -294,7 +294,8 @@ defmodule EmissaryWeb.Router do
       live "/a", RootRedirectLive, :index
 
       scope "/a/:athanor" do
-        live "/", RootRedirectLive, :athanor
+        live "/", ConversationLive, :index
+        live "/agents", AgentsLive, :index
         # /activities: unified activities feed (mcp_log + execution fan-out).
         live "/activities", ActivitiesLive, :index
         # /enforcements: live policy-decision feed (Arca.PolicyLog rows from

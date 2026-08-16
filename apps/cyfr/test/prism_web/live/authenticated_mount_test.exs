@@ -91,6 +91,6 @@ defmodule PrismWeb.AuthenticatedMountTest do
     conn = log_in_user(conn, test_user())
     home = Sanctum.Tenancy.Athanors.home!()
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
-    assert to == PrismWeb.Focus.path(home, "/activities")
+    assert to == PrismWeb.Focus.path(home, "")
   end
 end

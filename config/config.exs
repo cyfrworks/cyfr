@@ -105,8 +105,11 @@ config :cyfr, ecto_repos: [Arca.Repo]
 config :cyfr,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
-  components_path: Path.expand("./components"),
-  aqua_path: Path.expand("./aqua")
+  components_path: Path.expand("./components")
+
+# The AQUA agent template every new athanor is given (`Compendium.AquaTemplate`).
+# Anchored to the repo, not the CWD: it is read wherever the app runs from.
+config :cyfr, :aqua_template_path, Path.expand("../aqua", __DIR__)
 
 # WIT path + build timeout for component scaffolding and WASM builds. Locus
 # reads these under the `:cyfr` app key (Locus.Builder), not `:locus`.

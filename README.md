@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes three surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the developer dashboard, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy): a shell-style window manager with executions, components, builds, activities, enforcements, connections, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
+- **Prism** — the console, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy): each athanor's chat with AQUA (a shared thread every member sees, with approvals any member can decide), its Agents page, and the developer views — executions, components, builds, activities, enforcements, connections, API keys, schedules, MCP servers, tinctures.
 - **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, schedules, components, MCP servers, and settings.
 
 ## Quick Start
@@ -95,7 +95,7 @@ open http://localhost:4000
 
 CYFR includes **Prism**, a web-based dashboard at `http://localhost:4000` (the same origin as the API — one endpoint, one login) with a shell-style window manager. Built-in apps include:
 
-- **Ask AQUA** — AI agent harness with builder, artisan, explorer, planner, web, and arcade specialists for interactive component development and web research
+- **AQUA chat** — the athanor's agent harness with builder, artisan, explorer, planner, web, and arcade specialists for interactive component development and web research; every member shares the thread and each athanor shapes its own agents
 - **Executions** — monitor running and past executions in real-time
 - **Activities** — unified MCP-log + execution feed with request-anchored causal chains
 - **Components** — browse registered components and their consent profiles
@@ -142,7 +142,7 @@ your-project/
 │       │   └── local/      # Bundled formulas: list-models, aqua
 │       └── tinctures/
 │           └── local/      # Bundled example tinctures + your own
-├── aqua/                   # AQUA agent manifest (agent.json) + role prompts
+├── aqua/                   # AQUA agent template (agent.json + role prompts) every athanor is given
 └── data/
     └── cyfr.db             # Connections, consents, execution records (.gitignored)
 ```
@@ -276,7 +276,7 @@ cyfr build compile c:local.my-sentiment:1.0.0
 
 Forking is useful when you want to customize an existing component instead of starting from scratch. Pull the component first, and make sure the published component includes source code. For tinctures, the fork starts from the source files rather than any local runtime `data.db`.
 
-If you prefer a guided workflow, you can also use **Prism**'s **Ask AQUA** to build components interactively. AQUA has access to component guides, file operations, build/execution tools, and component setup flows, so with a capable model configured it can handle a large share of the scaffolding and iteration for you quickly.
+If you prefer a guided workflow, you can also use **Prism**'s **AQUA chat** to build components interactively. AQUA has access to component guides, file operations, build/execution tools, and component setup flows, so with a capable model configured it can handle a large share of the scaffolding and iteration for you quickly.
 
 > See [component-guide.md](component-guide.md) and [tincture-guide.md](tincture-guide.md) for the full guides on building catalysts, reagents, formulas, and tinctures. See [integration-guide.md](integration-guide.md) for app-backend patterns and tincture data flows.
 

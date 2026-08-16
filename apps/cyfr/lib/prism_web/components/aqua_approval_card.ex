@@ -6,10 +6,10 @@ defmodule PrismWeb.AquaApprovalCard do
   Inline approval card rendered in the AQUA chat thread.
 
   The agent ends a reply with a `ui.request_approval` block carrying a
-  `proposal: {tool, action, args}` payload. `PrismWeb.AquaLive` queues the
-  intent server-side as a message with `role: "approval"` and renders this
-  component for it. On approve/decline the parent LiveView dispatches the
-  user's decision.
+  `proposal: {tool, action, args}` payload. `Prism.ConversationRunner`
+  stores the intent as an approval message and `PrismWeb.ConversationLive`
+  renders this component for it. On approve/decline the parent LiveView
+  dispatches the member's decision to the runner.
 
   Approve carries a *scope*:
 
@@ -25,8 +25,8 @@ defmodule PrismWeb.AquaApprovalCard do
   case (`:write`) stays calm and the loud styling is reserved for the loud
   kinds.
 
-  All execution and side effects live in the parent LiveView (`AquaLive`);
-  this component is purely presentational + dispatch-by-event.
+  All execution and side effects live in the runner; this component is
+  purely presentational + dispatch-by-event.
   """
 
   use PrismWeb, :live_component
@@ -39,10 +39,13 @@ defmodule PrismWeb.AquaApprovalCard do
       |> Map.put(:proposal, assigns.payload[:proposal] || assigns.payload["proposal"])
 
     ~H"""
-    <div class={[
-      "rounded-lg border-l-4 bg-gray-900/80 border border-gray-800 p-3 text-sm",
-      kind_border(@kind)
-    ]}>
+    <div
+      id={@id}
+      class={[
+        "rounded-lg border-l-4 bg-gray-900/80 border border-gray-800 p-3 text-sm",
+        kind_border(@kind)
+      ]}
+    >
       <div class="flex items-center gap-2 mb-1.5">
         <span class={[
           "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider",
@@ -180,6 +183,7 @@ defmodule PrismWeb.AquaApprovalCard do
         <% status(@status) == :approved -> %>
           <div class="mt-2 flex items-center gap-2 text-[11px]">
             <span class="text-green-400">✓ Approved</span>
+            <span :if={@resolved_by} class="text-gray-500">by {@resolved_by}</span>
             <span :if={@scope == :conversation} class="text-gray-500">
               — auto-approved for this chat
             </span>
@@ -190,6 +194,7 @@ defmodule PrismWeb.AquaApprovalCard do
         <% status(@status) == :declined -> %>
           <div class="mt-2 flex items-center gap-2 text-[11px]">
             <span class="text-gray-400">✕ Declined</span>
+            <span :if={@resolved_by} class="text-gray-500">by {@resolved_by}</span>
             <span :if={@scope == :never} class="text-gray-500">— capability removed</span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span
@@ -222,6 +227,7 @@ defmodule PrismWeb.AquaApprovalCard do
      |> assign_new(:result_summary, fn -> nil end)
      |> assign_new(:reason, fn -> nil end)
      |> assign_new(:scope, fn -> nil end)
+     |> assign_new(:resolved_by, fn -> nil end)
      |> assign_new(:decided_at, fn -> nil end)}
   end
 

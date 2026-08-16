@@ -62,12 +62,13 @@ COPY LICENSES/ /app/LICENSES/
 # Copy WIT interface definitions (needed by scaffolding and compilation)
 COPY wit/ wit/
 
-# Copy bundled AQUA orchestrator manifest + prompts to a defaults location.
-# Compendium.MCP @aqua_root resolves to /app/aqua at compile time
-# (apps/cyfr/lib/compendium/mcp.ex), and docker-entrypoint.sh seeds
-# /app/aqua/ from this defaults dir on first start. This pattern works
-# whether or not the user has a host volume mount at /app/aqua: empty
-# mount → entrypoint seeds it; pre-populated mount → entrypoint skips.
+# Copy the AQUA agent template (manifest + prompts) to a defaults location.
+# The release reads the template from /app/aqua (`:cyfr, :aqua_template_path`)
+# and copies it into each athanor's own storage when the athanor is
+# provisioned; docker-entrypoint.sh seeds /app/aqua/ from this defaults dir
+# on first start. This works whether or not the user has a host volume mount
+# at /app/aqua: empty mount → entrypoint seeds it; pre-populated mount →
+# entrypoint skips.
 COPY --from=builder /app/aqua /app/aqua-defaults
 
 # gosu for entrypoint privilege drop (standard Docker pattern)

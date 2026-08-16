@@ -10,7 +10,6 @@ defmodule Arca.Adapters.Local do
   Paths are automatically scoped based on the first segment:
 
   - **Component paths**: `["components" | rest]` → `components_path/{rest}`
-  - **AQUA paths**: `["aqua" | rest]` → `aqua_path/{rest}`
   - **Global paths**: `cache`, `system` → `data/cache/{path}`, `data/system/{path}`
   - **Tenant-scoped paths**: everything else → `data/{athanor_id}/{path}`
 
@@ -26,8 +25,6 @@ defmodule Arca.Adapters.Local do
           ├── {type}.wasm
           ├── cyfr-manifest.json
           └── src/
-
-      aqua/                              # AQUA agent prompts/manifest (separate root)
 
       data/
       ├── {env}.db                       # SQLite database (all structured data)
@@ -261,7 +258,6 @@ defmodule Arca.Adapters.Local do
   Build the full filesystem path, respecting component, global, and tenant-scoped paths.
 
   - `["components" | rest]` → `components_path/{rest}`
-  - `["aqua" | rest]` → `aqua_path/{rest}`
   - `["cache" | rest]` → `base_path/cache/{rest}` (global, root-level)
   - everything else → `base_path/{athanor_id}/{rest}` (tenant-scoped)
 
@@ -279,10 +275,6 @@ defmodule Arca.Adapters.Local do
         # ["components", athanor_id, "catalysts", ...] or the seed bundle
         # ["components", "_bundle", "catalysts", ...].
         Path.join([components_path() | rest])
-
-      ["aqua" | rest] ->
-        # AQUA agent prompts/manifest — separate root, like components/.
-        Path.join([aqua_path() | rest])
 
       [prefix | _rest] ->
         if prefix in Arca.Storage.global_prefixes() do
@@ -308,12 +300,6 @@ defmodule Arca.Adapters.Local do
   @doc "Get the expanded components path for component storage."
   def components_path do
     Application.fetch_env!(:cyfr, :components_path)
-    |> Path.expand()
-  end
-
-  @doc "Get the expanded aqua path for AQUA agent prompts."
-  def aqua_path do
-    Application.fetch_env!(:cyfr, :aqua_path)
     |> Path.expand()
   end
 end

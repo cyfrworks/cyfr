@@ -423,7 +423,7 @@ defmodule PrismWeb.TopbarLive do
             <ul class="space-y-0.5 text-sm">
               <li :for={a <- @athanors}>
                 <.link
-                  navigate={PrismWeb.Focus.path(a, "/activities")}
+                  navigate={PrismWeb.Focus.path(a, "")}
                   class={[
                     "flex items-center justify-between rounded-md px-2 py-1.5",
                     if(a.id == @context.athanor_id,

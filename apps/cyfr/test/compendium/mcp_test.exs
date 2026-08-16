@@ -14,8 +14,9 @@ defmodule Compendium.MCPTest do
                 <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
+  # The athanor's own AQUA definitions live under its tenant storage.
   defp setup_aqua_dir(test_dir) do
-    aqua_dir = Path.join(test_dir, "aqua")
+    aqua_dir = Path.join([test_dir, Sanctum.TestContext.athanor_id(), "aqua"])
     File.mkdir_p!(aqua_dir)
 
     manifest = %{
@@ -96,13 +97,11 @@ defmodule Compendium.MCPTest do
     File.mkdir_p!(test_dir)
     original_base_path = Application.fetch_env!(:cyfr, :base_path)
     original_components_path = Application.fetch_env!(:cyfr, :components_path)
-    original_aqua_path = Application.fetch_env!(:cyfr, :aqua_path)
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
-    # Set up aqua/ directory with agent manifest and test prompts
+    # Set up the athanor's aqua/ directory with agent manifest and test prompts
     setup_aqua_dir(test_dir)
-    Application.put_env(:cyfr, :aqua_path, Path.join(test_dir, "aqua"))
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
     # don't hit the real API or timeout waiting.
@@ -116,7 +115,6 @@ defmodule Compendium.MCPTest do
       File.rm_rf!(test_dir)
       Application.put_env(:cyfr, :base_path, original_base_path)
       Application.put_env(:cyfr, :components_path, original_components_path)
-      Application.put_env(:cyfr, :aqua_path, original_aqua_path)
 
       if original_registry_url,
         do: Application.put_env(:cyfr, :registry_url, original_registry_url),
@@ -1348,19 +1346,19 @@ defmodule Compendium.MCPTest do
       assert is_map(result.tool_policy)
     end
 
-    test "get returns the caller's effective (overlay-merged) policy", %{ctx: ctx} do
-      # A persisted per-user "deny" removes the pair; a persisted "auto"
-      # adds one. The manifest field itself stays untouched for editors.
-      :ok = Prism.AgentConfig.put_user_tool_grant(ctx, "aqua_builder", "build.compile", "deny")
-      :ok = Prism.AgentConfig.put_user_tool_grant(ctx, "aqua_builder", "files.write", "auto")
+    test "get returns the athanor's policy — one allowlist for every member", %{ctx: ctx} do
+      {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      assert before.tool_policy["build.compile"] == "auto"
 
-      {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+      :ok = Prism.AgentConfig.drop_tool(ctx, "aqua_builder", "build.compile")
+      :ok = Prism.AgentConfig.set_tool_auto(ctx, "aqua_builder", "files.write")
 
-      assert result.tool_policy["build.compile"] == "auto"
-      refute Map.has_key?(result.effective_tool_policy, "build.compile")
-      assert result.effective_tool_policy["files.write"] == "auto"
-      assert result.effective_tool_policy["component.list"] == "auto"
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
+
+      refute Map.has_key?(result.tool_policy, "build.compile")
+      assert result.tool_policy["files.write"] == "auto"
+      assert result.tool_policy["component.list"] == "auto"
+      refute Map.has_key?(result, :effective_tool_policy)
     end
 
     test "update rejects the retired allow/approval/block vocabulary", %{ctx: ctx} do
@@ -1698,7 +1696,10 @@ defmodule Compendium.MCPTest do
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} = Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{"action" => "register"})
+      {:error, msg} =
+        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+          "action" => "register"
+        })
 
       assert msg =~ "Unauthorized"
       assert msg =~ "component_manage"

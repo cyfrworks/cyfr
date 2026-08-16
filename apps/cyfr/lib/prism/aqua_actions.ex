@@ -13,9 +13,9 @@ defmodule Prism.AquaActions do
       [{"kind": "ui.execution.focus", "id": "exec_abc"}]
       ```
 
-  Cyfr's host (`PrismWeb.AquaLive`) parses + strips the block on stream
-  complete, then `push_event/3`s the validated intents to the `Aqua` JS hook
-  for client-side dispatch.
+  Cyfr's host (`Prism.ConversationRunner`) parses + strips the block on
+  stream complete; `PrismWeb.ConversationLive` `push_event/3`s the validated
+  client intents to the `Conversation` JS hook for dispatch.
 
   ## Public API
 

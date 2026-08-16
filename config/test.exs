@@ -90,22 +90,26 @@ config :cyfr, cron_scheduler_enabled: false
 # checkout — the seeder is exercised directly by its own tests.
 config :cyfr, provisioning_boot_enabled: false
 
+# Likewise the conversation-runner boot recovery reads the repo before any
+# sandbox exists; the runner suite drives recovery itself.
+config :cyfr, conversation_recovery: false
+
 # The stale-execution sweeper has the same shape (permanent named GenServer
 # querying on a 60s timer) and the same sandbox hazard; its own suite
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
 
-# Default storage roots for tests (individual tests may override). All three
-# live under one throwaway root: `base_path` (data), `components_path` and
-# `aqua_path` are routed separately by the local adapter, so leaving either at
-# its config.exs default would make tests write into the repo's real
-# `components/` and `aqua/` trees.
+# Default storage roots for tests (individual tests may override). Both live
+# under one throwaway root: `base_path` (data) and `components_path` are
+# routed separately by the local adapter, so leaving either at its
+# config.exs default would make tests write into the repo's real
+# `components/` tree. The AQUA template stays the shipped one — it is only
+# ever read, and copied into an athanor's own storage under `base_path`.
 test_root = Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
 
 config :cyfr,
   base_path: test_root,
-  components_path: Path.join(test_root, "components"),
-  aqua_path: Path.join(test_root, "aqua")
+  components_path: Path.join(test_root, "components")
 
 # Sanctum test configuration
 config :cyfr,
