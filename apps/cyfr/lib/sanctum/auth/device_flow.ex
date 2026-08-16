@@ -633,6 +633,8 @@ defmodule Sanctum.Auth.DeviceFlow do
               }
 
             _ ->
+              # The namespace is known now: the person's own athanor is minted.
+              if personal_stored?, do: _ = Sanctum.Provisioning.after_sign_in(session.user_id)
               %{needs_personal_namespace: false}
           end
 

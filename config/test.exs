@@ -66,6 +66,11 @@ end
 # Disable auto-migration in tests — mix aliases handle ecto.migrate
 config :cyfr, auto_migrate: false
 
+# The suite's fake servers (Bypass, a local registry) live on loopback; the
+# operator's private-egress allowlist names them, as it would name a real
+# internal host. Tests that exercise the refusal override this.
+config :cyfr, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]
+
 # Allow tests to inject a membership-resolution override (Sanctum.Tenancy).
 # Compile-time gate: production releases compile this to false and never honor
 # the override. See Sanctum.Tenancy "Test overrides".

@@ -61,7 +61,11 @@ defmodule Cyfr.Network do
 
     * `:allow_private` - when `true`, permits private IPs except
       169.254.0.0/16 (link-local/cloud metadata) which is always blocked.
-      Useful for default-mode deployments with localhost registries.
+      `:policy` permits a private IP only when the host or the IP is on the
+      operator's private-egress allowlist (`CYFR_PRIVATE_EGRESS_TARGETS`,
+      `private_allowed?/2`) — the posture every deployment shares once it has
+      a door: a compose-network mcp-bridge or the lights in Home are named,
+      not implied by "single user".
 
   Returns `:ok` or `{:error, reason_string}`.
   """
@@ -213,7 +217,7 @@ defmodule Cyfr.Network do
         # 169.254.0.0/16 always blocked — cloud metadata endpoint
         {:error, "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
       else
-        if allow_private do
+        if private_permitted?(allow_private, hostname, ip_tuple) do
           :ok
         else
           {:error, "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
@@ -221,6 +225,33 @@ defmodule Cyfr.Network do
       end
     else
       :ok
+    end
+  end
+
+  defp private_permitted?(true, _hostname, _ip), do: true
+  defp private_permitted?(:policy, hostname, ip), do: private_allowed?(hostname, ip)
+  defp private_permitted?(_, _hostname, _ip), do: false
+
+  @doc """
+  Whether the operator's private-egress allowlist names this target: the
+  hostname exactly (case-insensitive), or the resolved IP by address or
+  CIDR. Read from `config :cyfr, :private_egress_targets`; empty refuses.
+  """
+  @spec private_allowed?(String.t() | nil, :inet.ip_address()) :: boolean()
+  def private_allowed?(hostname, ip_tuple) do
+    host = if is_binary(hostname), do: String.downcase(hostname), else: nil
+
+    Enum.any?(private_egress_targets(), fn target ->
+      String.downcase(target) == host or Sanctum.Cidr.match?(ip_tuple, target)
+    end)
+  end
+
+  @doc "The private-egress allowlist as configured (hostnames, IPs, CIDRs)."
+  @spec private_egress_targets() :: [String.t()]
+  def private_egress_targets do
+    case Application.get_env(:cyfr, :private_egress_targets, []) do
+      list when is_list(list) -> Enum.filter(list, &is_binary/1)
+      _ -> []
     end
   end
 

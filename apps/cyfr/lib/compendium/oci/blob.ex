@@ -177,7 +177,7 @@ defmodule Compendium.OCI.Blob do
     location = normalize_url(location, ref)
 
     case Cyfr.Network.validate_redirect_url(location,
-           allow_private: not Sanctum.auth_configured?()
+           allow_private: :policy
          ) do
       :ok ->
         # Append digest query param to the upload URL
@@ -217,7 +217,7 @@ defmodule Compendium.OCI.Blob do
     # A redirect target is attacker-influenced (a malicious/compromised registry
     # chooses it). pinned_request validates the resolved IP AND connects to that
     # exact IP (no second resolution), closing the DNS-rebinding window.
-    opts = [receive_timeout: 60_000, allow_private: not Sanctum.auth_configured?()]
+    opts = [receive_timeout: 60_000, allow_private: :policy]
 
     case Cyfr.Network.pinned_request(:get, url, [], nil, opts) do
       {:ok, 200, _headers, body} ->

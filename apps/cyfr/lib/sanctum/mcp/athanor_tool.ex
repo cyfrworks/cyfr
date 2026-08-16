@@ -38,7 +38,7 @@ defmodule Sanctum.MCP.AthanorTool do
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args)
       when is_binary(name) do
-    case Athanors.create_group(ctx.user_id, name, slug: Map.get(args, "slug")) do
+    case Sanctum.Provisioning.ensure_group_athanor(ctx, name, slug: Map.get(args, "slug")) do
       {:ok, athanor} ->
         broadcast_athanors_changed(ctx, athanor)
         {:ok, render(athanor)}
@@ -191,6 +191,7 @@ defmodule Sanctum.MCP.AthanorTool do
       member_count: Members.count_by_athanor(athanor.id),
       settings: Athanors.settings(athanor),
       provisioned: not is_nil(athanor.provisioned_at),
+      provisioning_error: Athanors.settings(athanor)["provisioning_error"],
       created_at: athanor.created_at
     }
   end

@@ -294,6 +294,9 @@ defmodule EmissaryWeb.AuthController do
             {:reauthenticate, provider, :local_store_failed}
 
           true ->
+            # The namespace is known now: the person's own athanor is minted
+            # (or, on a later sign-in, found provisioned).
+            _ = Sanctum.Provisioning.after_sign_in(ctx.user_id)
             {:ok, false, nil, warnings}
         end
 

@@ -10,7 +10,9 @@ defmodule Sanctum.SignIn do
   `:admin`) gets the platform-admin membership and a seat in Home, and a
   person the env list no longer names loses the platform row; every
   `invited` group row for the person's verified email becomes their active
-  membership; the cyfr.run namespace, when already known, is recorded.
+  membership; and — once the cyfr.run namespace is known — the person's own
+  athanor is minted and provisioned (`Sanctum.Provisioning.after_sign_in/1`;
+  a person still ahead of the claim gate gets theirs when they claim).
 
   Providers call `admitted/2` between `Sanctum.Door.admit/3` and building
   the context. `Sanctum.Tenancy.resolve_into/2` — which runs per request —
@@ -30,8 +32,10 @@ defmodule Sanctum.SignIn do
     with {:ok, user} <- Users.upsert_from_provider(user_info) do
       apply_platform(user_id, verdict)
       {:ok, _n} = Members.activate_invited(user)
-      user = record_namespace(user)
-      {:ok, user}
+      # Provisioning failure is recorded on the athanor and retried on the
+      # next sign-in; it never refuses the sign-in itself.
+      _ = Sanctum.Provisioning.after_sign_in(user_id)
+      Users.get(user_id)
     end
   end
 
@@ -50,6 +54,9 @@ defmodule Sanctum.SignIn do
 
         case Members.ensure(user_id, scope: "athanor", athanor_id: home.id, added_by: "system") do
           {:ok, _} ->
+            # Home is provisioned at boot; an operator's sign-in retries a
+            # boot that could not reach the registry, with their credential.
+            _ = Sanctum.Provisioning.retry_home(user_id)
             :ok
 
           {:error, reason} ->
@@ -86,18 +93,5 @@ defmodule Sanctum.SignIn do
       %{count: 1},
       %{user_id: user_id}
     )
-  end
-
-  defp record_namespace(user) do
-    case Sanctum.Namespace.lookup(user.id) do
-      slug when is_binary(slug) ->
-        case Users.set_namespace(user, slug) do
-          {:ok, user} -> user
-          {:error, _} -> user
-        end
-
-      _ ->
-        user
-    end
   end
 end

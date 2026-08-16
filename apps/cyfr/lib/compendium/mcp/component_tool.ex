@@ -309,6 +309,11 @@ defmodule Compendium.MCP.ComponentTool do
 
     broadcast_components_changed(ctx)
 
+    # A freshly registered local component gets its baseline consent at
+    # once — provisioning mints for the seed bundle, this mints for what a
+    # person registers later — so it is invocable without a manual step.
+    minted = bootstrap_registered(ctx, result.components)
+
     dep_fields =
       case dep_info do
         {:error, {:dependency_check_failed, reason}} ->
@@ -340,7 +345,8 @@ defmodule Compendium.MCP.ComponentTool do
          errors: result.errors,
          total: result.total,
          elapsed_ms: result.elapsed_ms,
-         scanned_dirs: result.scanned_dirs
+         scanned_dirs: result.scanned_dirs,
+         bootstrapped: minted
        },
        dep_fields
      )}
@@ -799,67 +805,7 @@ defmodule Compendium.MCP.ComponentTool do
   # Local components are registered via `cyfr register`, not pulled. This is
   # an early, friendlier message only — a ref carrying a registry host skips
   # this branch entirely, so the binding refusal lives in `OCI.Client.pull/2`.
-  defp convert_to_oci_ref(reference) do
-    case Sanctum.ComponentRef.parse(reference) do
-      {:ok, %Sanctum.ComponentRef{namespace: ns}} = parsed ->
-        if Compendium.ComponentPath.local_publisher?(ns) do
-          {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
-        else
-          to_oci_ref(parsed)
-        end
-
-      {:error, reason} ->
-        {:error, "Invalid reference: #{reason}"}
-    end
-  end
-
-  defp to_oci_ref({:ok, %Sanctum.ComponentRef{version: nil} = cref}) do
-    registry = Compendium.Registry.canonical_host()
-    {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
-
-    case resolve_latest_oci_tag(oci_ref) do
-      {:ok, tag} -> {:ok, Compendium.OCI.Reference.to_string(%{oci_ref | tag: tag})}
-      {:error, _} -> {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
-    end
-  end
-
-  defp to_oci_ref({:ok, %Sanctum.ComponentRef{} = cref}) do
-    registry = Compendium.Registry.canonical_host()
-    {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
-    {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
-  end
-
-  # Resolve the latest semver tag from an OCI repository (for versionless pulls).
-  # Public `/tags/list` read (anonymous on cyfr.run) — passes `nil` ctx.
-  defp resolve_latest_oci_tag(%Compendium.OCI.Reference{} = ref) do
-    path = "/v2/#{ref.repository}/tags/list"
-
-    case Compendium.OCI.Transport.request(nil, :get, path, ref) do
-      {:ok, 200, _headers, body} ->
-        case Jason.decode(body) do
-          {:ok, %{"tags" => tags}} when is_list(tags) ->
-            # Descending Version-aware sort (prereleases order correctly:
-            # 1.0.0-rc1 < 1.0.0), so the head is the latest release.
-            semver_tags =
-              tags
-              |> Enum.filter(&semver_tag?/1)
-              |> Enum.sort(fn a, b -> not version_gt?(b, a) end)
-
-            case semver_tags do
-              [latest | _] -> {:ok, latest}
-              [] -> {:error, :no_semver_tags}
-            end
-
-          _ ->
-            {:error, :unexpected_response}
-        end
-
-      _ ->
-        {:error, :tags_fetch_failed}
-    end
-  end
-
-  defp semver_tag?(tag), do: Regex.match?(~r/^\d+\.\d+\.\d+/, tag)
+  defp convert_to_oci_ref(reference), do: Compendium.Pull.oci_reference_for(reference)
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do
@@ -1000,6 +946,25 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
+
+  defp bootstrap_registered(ctx, components) do
+    refs =
+      for comp <- components,
+          (comp[:status] || comp["status"]) == "registered",
+          type = comp[:type] || comp["type"] || comp[:component_type] || comp["component_type"],
+          name = comp[:name] || comp["name"],
+          is_binary(type) and is_binary(name),
+          do: "#{type}:local.#{name}"
+
+    case refs do
+      [] ->
+        []
+
+      _ ->
+        {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run_for(ctx, refs)
+        minted
+    end
+  end
 
   # ============================================================================
   # Component Resolution

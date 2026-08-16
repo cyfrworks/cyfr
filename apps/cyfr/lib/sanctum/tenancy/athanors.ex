@@ -259,6 +259,16 @@ defmodule Sanctum.Tenancy.Athanors do
 
   def active?(_), do: false
 
+  @doc "How many athanors were created after `since`."
+  @spec count_created_since(DateTime.t()) :: non_neg_integer()
+  def count_created_since(%DateTime{} = since) do
+    Arca.Repo.one(from(a in Athanor, where: a.created_at > ^since, select: count(a.id))) || 0
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("Sanctum.Tenancy.Athanors: count_created_since failed (#{Exception.message(e)})")
+      0
+  end
+
   @doc "How many athanors this server holds."
   @spec count() :: non_neg_integer()
   def count do

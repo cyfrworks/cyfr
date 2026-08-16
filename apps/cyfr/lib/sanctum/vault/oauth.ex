@@ -243,16 +243,16 @@ defmodule Sanctum.Vault.OAuth do
   # The token URL is caller-supplied (vault.create / vault.rebind
   # oauth_endpoints), so this POST rides the pinned SSRF path like every
   # other outbound request: resolve-validate once, connect to the validated
-  # IP, never follow redirects. Private targets follow the deployment-wide
-  # posture — a single-operator install may run an internal IdP; once an
-  # auth provider is configured, private IPs refuse and the exchange must
-  # ride https.
+  # IP, never follow redirects. A private token endpoint (an internal IdP)
+  # is reachable only when the operator named it in the private-egress
+  # allowlist; once an auth provider is configured the exchange must ride
+  # https.
   def http_post(url, headers, body) do
     multi_user? = Sanctum.auth_configured?()
 
     with :ok <- require_https(url, multi_user?) do
       case Cyfr.Network.pinned_request(:post, url, headers, body,
-             allow_private: not multi_user?,
+             allow_private: :policy,
              receive_timeout: 15_000
            ) do
         {:ok, status, _resp_headers, resp_body} when status in 200..299 ->

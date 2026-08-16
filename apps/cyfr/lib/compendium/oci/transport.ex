@@ -89,12 +89,12 @@ defmodule Compendium.OCI.Transport do
     headers = auth_headers ++ extra_headers
 
     # pinned_request validates the resolved IP and connects to it directly (no
-    # second DNS resolution → no rebinding), preserving SNI/Host. allow_private
-    # mirrors the redirect checks: local/no-auth installs may push to a
-    # localhost registry.
+    # second DNS resolution → no rebinding), preserving SNI/Host. A private
+    # registry is reachable only when the operator named it in the
+    # private-egress allowlist.
     case Cyfr.Network.pinned_request(method, url, headers, body,
            receive_timeout: @receive_timeout,
-           allow_private: not Sanctum.auth_configured?()
+           allow_private: :policy
          ) do
       {:ok, 401, resp_headers, resp_body} ->
         # Push tokens don't do realm exchange. 401 means the token is missing

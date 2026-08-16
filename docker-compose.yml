@@ -46,6 +46,8 @@ services:
       # Extra reverse-proxy layers in front of Caddy need this raised to match
       # (see README "Production configuration").
       - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
+      # The private hosts outbound calls may reach; the bridge is one.
+      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-mcp-bridge}
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
     # default 10s grace would SIGKILL mid-drain.

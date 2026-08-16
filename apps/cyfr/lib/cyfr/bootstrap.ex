@@ -3,13 +3,13 @@
 
 defmodule Cyfr.Bootstrap do
   @moduledoc """
-  One-shot boot task: make sure the server's Home athanor holds the seed
-  bundle.
+  One-shot boot task: make sure the server's Home athanor is provisioned.
 
-  Home is seeded by the baseline migration as a bare row; this task copies
-  the bundle into it (`Compendium.AthanorSeeder`) the first time the server
-  boots and marks it provisioned. A failure is logged, never fatal — the app
-  keeps serving and the next boot retries.
+  Home is seeded by the baseline migration as a bare row; this task fills it
+  (`Sanctum.Provisioning.provision/2`, as the server — the registry pull is
+  anonymous) the first time the server boots. A failure is logged, never
+  fatal — the app keeps serving, the operator's first sign-in retries, and
+  so does the next boot.
 
   Disabled by `config :cyfr, provisioning_boot_enabled: false` (the test
   environment, where a boot-time write would precede any sandbox checkout).
@@ -18,7 +18,6 @@ defmodule Cyfr.Bootstrap do
   use Task, restart: :temporary
   require Logger
 
-  alias Compendium.AthanorSeeder
   alias Sanctum.Tenancy.Athanors
 
   def start_link(_opts) do
@@ -38,14 +37,13 @@ defmodule Cyfr.Bootstrap do
     home = Athanors.home!()
 
     if is_nil(home.provisioned_at) do
-      case AthanorSeeder.seed(home) do
-        :ok ->
-          {:ok, _} = Athanors.mark_provisioned(home)
-          Logger.info("[Cyfr.Bootstrap] Home athanor #{home.id} seeded from the bundle")
+      case Sanctum.Provisioning.provision(home, nil) do
+        {:ok, _} ->
+          Logger.info("[Cyfr.Bootstrap] Home athanor #{home.id} provisioned")
 
         {:error, reason} ->
           Logger.error(
-            "[Cyfr.Bootstrap] Home athanor #{home.id} could not be seeded: #{inspect(reason)}"
+            "[Cyfr.Bootstrap] Home athanor #{home.id} not provisioned: #{inspect(reason)}"
           )
       end
     end

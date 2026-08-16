@@ -71,6 +71,8 @@ defmodule EmissaryWeb.ClaimNamespaceController do
             :ok ->
               # Prime the cache so the next request exits the gate immediately.
               EmissaryWeb.Plugs.PersonalNamespaceCache.put_claimed(user_id, registry)
+              # The namespace is the person's athanor slug: mint it now.
+              _ = Sanctum.Provisioning.after_sign_in(user_id)
 
               conn
               |> clear_pending_probe()

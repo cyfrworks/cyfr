@@ -532,11 +532,11 @@ defmodule Emissary.MCP.ExternalServer do
         # Pin to the validated IP on EVERY request (not just at init), with the
         # original hostname preserved for SNI/Host. This both blocks SSRF and
         # closes the DNS-rebinding gap that connecting by hostname would reopen.
-        # allow_private mirrors validate_server_url: local/no-auth installs may
-        # legitimately target localhost servers.
+        # A private server (mcp-bridge on the compose network) is reachable
+        # only when the operator named it in the private-egress allowlist.
         opts = [
           receive_timeout: state.timeout_ms,
-          allow_private: not Sanctum.auth_configured?()
+          allow_private: :policy
         ]
 
         case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
@@ -843,7 +843,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp validate_server_url(url) do
     Cyfr.Network.validate_redirect_url(url,
-      allow_private: not Sanctum.auth_configured?()
+      allow_private: :policy
     )
   end
 

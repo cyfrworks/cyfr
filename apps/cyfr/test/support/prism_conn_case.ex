@@ -39,13 +39,23 @@ defmodule PrismWeb.ConnCase do
     end
 
     # LiveViews spawn work on these supervisors (session refresh, AQUA calls,
-    # MCP tool dispatch); let that work reach the sandbox connection.
-    for name <- [Prism.TaskSupervisor, Emissary.TaskSupervisor] do
-      case Process.whereis(name) do
-        pid when is_pid(pid) -> Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), pid)
-        nil -> :ok
+    # MCP tool dispatch); let that work reach the sandbox connection — and
+    # stop whatever is still running when the test ends, or a straggler
+    # holding the sandbox connection makes the next test's first write
+    # find the database busy.
+    supervisors =
+      for name <- [Prism.TaskSupervisor, Emissary.TaskSupervisor],
+          pid = Process.whereis(name),
+          is_pid(pid) do
+        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), pid)
+        pid
       end
-    end
+
+    on_exit(fn ->
+      for sup <- supervisors, child <- Task.Supervisor.children(sup) do
+        Task.Supervisor.terminate_child(sup, child)
+      end
+    end)
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end

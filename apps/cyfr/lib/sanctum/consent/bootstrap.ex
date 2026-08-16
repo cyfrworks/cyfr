@@ -22,11 +22,33 @@ defmodule Sanctum.Consent.Bootstrap do
 
   @type result :: %{minted: [String.t()], skipped: [{String.t(), term()}]}
 
-  @doc "Bootstrap every executable local component in the caller's tenant."
+  @doc """
+  Bootstrap every executable local component in the caller's athanor.
+
+  `granted_by` names who the mint is attributed to: the person whose
+  sign-in provisioned the athanor (`ctx.user_id` when a person), or
+  `"system:bootstrap"` for a server-side mint (Home at boot, a seed context).
+  """
   @spec run(Context.t()) :: {:ok, result()}
   def run(%Context{} = ctx) do
-    components = executable_local_components(ctx)
+    run_components(ctx, executable_local_components(ctx))
+  end
 
+  @doc """
+  Bootstrap only the named source refs (`"formula:local.aqua"`, …) — what
+  `component.register` does for the component it just registered.
+  """
+  @spec run_for(Context.t(), [String.t()]) :: {:ok, result()}
+  def run_for(%Context{} = ctx, source_refs) when is_list(source_refs) do
+    components =
+      ctx
+      |> executable_local_components()
+      |> Enum.filter(&(Compendium.Activation.node_key(&1) in source_refs))
+
+    run_components(ctx, components)
+  end
+
+  defp run_components(ctx, components) do
     {minted, skipped} =
       Enum.reduce(components, {[], []}, fn component, {minted, skipped} ->
         source_ref = Compendium.Activation.node_key(component)
@@ -109,6 +131,12 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
+  # A person's provisioning is attributed to the person; a server-side mint
+  # (Home at boot, a seed context) to the system.
+  defp granted_by(%Context{auth_method: :system}), do: "system:bootstrap"
+  defp granted_by(%Context{user_id: user_id}) when is_binary(user_id), do: user_id
+  defp granted_by(_), do: "system:bootstrap"
+
   defp insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs) do
     profile_id = Emissary.UUID7.generate_id("prof")
 
@@ -134,7 +162,7 @@ defmodule Sanctum.Consent.Bootstrap do
                commit_digest: digests.commit_digest,
                resolved_policy: blob_json,
                activation: activation_json,
-               granted_by: "system:bootstrap",
+               granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },
              vault_refs

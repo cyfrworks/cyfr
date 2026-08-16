@@ -289,6 +289,17 @@ if config_env() != :test do
            |> Enum.reject(&(&1 == ""))
   end
 
+  # Private egress: the hostnames, IPs or CIDRs on the private network that
+  # outbound requests may reach (a compose-network mcp-bridge, an internal
+  # registry or IdP, the lights). Empty refuses every private target; the
+  # link-local metadata range is refused regardless.
+  config :cyfr,
+         :private_egress_targets,
+         (env!("CYFR_PRIVATE_EGRESS_TARGETS", :string, nil) || "")
+         |> String.split(",")
+         |> Enum.map(&String.trim/1)
+         |> Enum.reject(&(&1 == ""))
+
   # GitHub OAuth
   # Device Flow (CLI) only needs client ID - no secret required
   # Server-side OAuth (web login) requires both client ID and secret

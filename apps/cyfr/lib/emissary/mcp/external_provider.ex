@@ -438,7 +438,7 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   defp validate_create_url(url) do
-    case Cyfr.Network.validate_redirect_url(url, allow_private: not Sanctum.auth_configured?()) do
+    case Cyfr.Network.validate_redirect_url(url, allow_private: :policy) do
       :ok -> :ok
       {:error, reason} -> {:error, "Invalid URL: #{reason}"}
     end
