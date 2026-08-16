@@ -11,9 +11,9 @@ ITEMS=(
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/ components/ aqua/
   # Deploy files: `cyfr init` lays these down so `cyfr up` brings up the full
-  # self-hosted stack (cyfr + porta + mcp-bridge, plus caddy in TLS mode).
+  # self-hosted stack (cyfr + mcp-bridge, plus caddy in TLS mode).
   # They are the single source of truth — the codex binary no longer embeds
-  # its own copies. Dockerfile.node builds the porta and mcp-bridge images;
+  # its own copies. Dockerfile.node builds the mcp-bridge image;
   # apps/mcp-bridge/ is the Node source for the bridge.
   docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/
 )

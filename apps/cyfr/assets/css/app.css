@@ -4,10 +4,7 @@
 @import "../vendor/github-dark.css";
 
 /* =============================================================================
- * Shared design tokens — kept in sync with apps/porta/src-ui/src/index.css.
- * If you change a value here, mirror it there. The two apps live in different
- * build systems (Elixir Tailwind plugin vs Vite plugin) so the tokens are
- * intentionally duplicated rather than imported from a shared file.
+ * Design tokens.
  * ============================================================================= */
 @theme {
   --color-surface-base: #0f0f1a;

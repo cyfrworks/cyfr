@@ -46,6 +46,7 @@ defmodule PrismWeb.LiveAuth do
          |> assign(:context, ctx)
          |> assign(:session_token, token)
          |> assign(:personal_namespace_slug, slug)
+         |> assign(:ui_mode, ui_mode(ctx))
          |> attach_hook(:sanctum_standing, :handle_info, &standing_changed/2)}
 
       {:error, :no_athanor} ->
@@ -55,6 +56,17 @@ defmodule PrismWeb.LiveAuth do
         {:halt, redirect(socket, to: "/login")}
     end
   end
+
+  # The person's lite/dev preference decides which views the layout offers
+  # and what it calls them (`Prism.Labels`).
+  defp ui_mode(%{user_id: user_id}) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, user} -> Prism.Labels.mode(Sanctum.Tenancy.Users.prefs(user)["mode"])
+      _ -> Prism.Labels.default()
+    end
+  end
+
+  defp ui_mode(_), do: Prism.Labels.default()
 
   # Revoked sessions end the LiveView; a lost focus sends the person back to
   # the root, where the next mount re-derives what they may work in. The

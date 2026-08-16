@@ -93,4 +93,30 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
     assert to == PrismWeb.Focus.path(home, "")
   end
+
+  test "lite mode hides the developer views and speaks the everyday words", %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+
+    # Dev (the default): the full sidebar in the runtime's vocabulary.
+    {_view, html} = mount_athanor(conn, "/settings")
+    assert html =~ "nav-executions"
+    assert html =~ "Tinctures"
+
+    {:ok, row} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: user.user_id,
+        provider: "github",
+        email: user.email
+      })
+
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
+
+    {_view, html} = mount_athanor(conn, "/settings")
+    refute html =~ "nav-executions"
+    refute html =~ "nav-api-keys"
+    assert html =~ "nav-chat"
+    assert html =~ "Apps"
+    refute html =~ ">Tinctures<"
+  end
 end

@@ -199,7 +199,7 @@ defmodule EmissaryWeb.Router do
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture_invoke
-    # Cross-origin token mint (Porta): session/Bearer header → short-lived ?_t=.
+    # Cross-origin token mint: session/Bearer header → short-lived ?_t=.
     get "/access-token", TinctureController, :access_token
     match :options, "/access-token", TinctureController, :access_token
     post "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke

@@ -4,10 +4,10 @@
 defmodule Emissary.MCP.ClientProtocolDriftTest do
   @moduledoc """
   The protocol version has one Elixir source (`Emissary.MCP.Protocol`), but
-  three first-party clients live outside the BEAM and must carry their own
-  literal: the Go CLI, the mcp-bridge, and the Porta PWA. This test binds
-  those literals to the server's version so a revision bump cannot strand a
-  bundled client on a version the server refuses.
+  two first-party clients live outside the BEAM and must carry their own
+  literal: the Go CLI and the mcp-bridge. This test binds those literals to
+  the server's version so a revision bump cannot strand a bundled client on
+  a version the server refuses.
 
   Outbound legacy support is deliberate — third-party servers and npx
   children are on their own release cadence — but it is *one* legacy
@@ -23,9 +23,7 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
 
   @clients [
     {"apps/codex/internal/mcp/client.go", ~r/protocolVersion\s*=\s*"(\d{4}-\d{2}-\d{2})"/},
-    {"apps/mcp-bridge/server.mjs", ~r/const PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/},
-    {"apps/porta/src-ui/src/api/mcp-client.ts",
-     ~r/const PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
+    {"apps/mcp-bridge/server.mjs", ~r/const PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
   ]
 
   for {path, regex} <- @clients do
@@ -56,8 +54,7 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
     @legacy_sources [
       {"apps/cyfr/lib/emissary/mcp/external_server.ex",
        ~r/@legacy_protocol_version\s+"(\d{4}-\d{2}-\d{2})"/},
-      {"apps/mcp-bridge/server.mjs",
-       ~r/const CHILD_PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
+      {"apps/mcp-bridge/server.mjs", ~r/const CHILD_PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
     ]
 
     test "every outbound fallback offers the same legacy revision" do

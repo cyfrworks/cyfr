@@ -5,7 +5,7 @@ defmodule EmissaryWeb.TinctureController do
   @moduledoc """
   Tincture HTTP serving on EmissaryWeb (the platform API surface).
 
-  All clients (Prism shell, Porta desktop, CLI, API keys) access tinctures
+  All clients (Prism shell, CLI, API keys) access tinctures
   through this single controller. Authentication is delegated to
   `Sanctum.TinctureAuth`, which accepts a Phoenix signed token (`?_t=`) or an
   `Authorization: Bearer` credential. Account credentials are never read from
@@ -44,7 +44,7 @@ defmodule EmissaryWeb.TinctureController do
   @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
   # -------------------------------------------------------------------
-  # Access-token mint — a cross-origin client (Porta) exchanges its
+  # Access-token mint — a cross-origin client (a CLI, an integration) exchanges its
   # session/Bearer credential (sent as a header, never a URL) for a
   # short-lived, single-purpose `?_t=` token, so a raw credential never
   # travels in a tincture iframe/`<img>` URL. Same-origin Prism mints
@@ -195,7 +195,7 @@ defmodule EmissaryWeb.TinctureController do
   #   1. Path-prefixed signed token (`_s/{token}/...`) — used by the iframe
   #      base_href that the entry route hands out for private tinctures.
   #   2. Public tincture — anyone can fetch.
-  #   3. Authenticated session — Porta picker fetches icons/previews from
+  #   3. Authenticated session — a picker fetches icons/previews from
   #      <img> tags outside any iframe, so it relies on the same auth that
   #      the entry route uses (MCP session / API key / signed token via
   #      query param, all handled by `Sanctum.TinctureAuth`).

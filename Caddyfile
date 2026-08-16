@@ -27,10 +27,9 @@
 {$CYFR_HOST:localhost} {
 	encode zstd gzip
 
-	# --- Prism (everything else): the LiveView face on the same origin ---
-	# cyfr sets its own CSP/XFO/HSTS on every response it serves.
+	# Everything: cyfr's one endpoint (Prism, /mcp, /api, /auth, /t). cyfr sets
+	# its own CSP/XFO/HSTS on every response it serves.
 	handle {
 		reverse_proxy cyfr:4000
 	}
-}
 }

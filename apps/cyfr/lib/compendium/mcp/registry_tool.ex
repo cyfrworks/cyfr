@@ -49,7 +49,7 @@ defmodule Compendium.MCP.RegistryTool do
       {:ok, body} ->
         # Persist returned push tokens into CredentialStore for authenticated
         # callers. Mirrors what Sanctum.Auth.DeviceFlow.probe_after_session/3
-        # does server-side during the device-flow path; for codex/porta
+        # does server-side during the device-flow path; for codex
         # post-legal_accept flows that re-call probe directly, this writes
         # the same locally-cached credentials.
         body_with_warnings = maybe_store_probe_credentials(ctx, body)
@@ -57,7 +57,7 @@ defmodule Compendium.MCP.RegistryTool do
 
       {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
         # Server bumped the bundled policy version between the user's last
-        # acceptance and this re-probe (race on the codex/porta post-accept
+        # acceptance and this re-probe (race on the codex post-accept
         # path). Surface the same structured shape DeviceFlow.probe_after_session/3
         # emits so clients can route back into the clickwrap UI without
         # parsing string errors.
@@ -403,7 +403,7 @@ defmodule Compendium.MCP.RegistryTool do
 
   # Persists every push token from a registry.probe response into the
   # caller's local CredentialStore. Used by the post-legal_accept re-probe
-  # flow (codex/porta) so the cached credentials are populated without a
+  # flow (codex) so the cached credentials are populated without a
   # separate session.* round-trip. Mirrors
   # Sanctum.Auth.DeviceFlow.store_probe_results/4 (the device-flow path
   # that runs at OAuth completion).

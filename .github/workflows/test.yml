@@ -172,7 +172,7 @@ jobs:
         run: |
           set -uo pipefail
           paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.runner-base docker-entrypoint.sh .env.example .gitignore README.md CLAUDE.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
-          excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/** :(exclude)apps/porta/**'
+          excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \
             '\borg_id\b' \
@@ -198,6 +198,9 @@ jobs:
             'Prism\.AquaConversations\b' \
             ':aqua_path\b' \
             ':4001\b|4001:4001' \
+            'CYFR_PORTA_' \
+            'cyfr-porta' \
+            'apps/porta/' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then
@@ -206,7 +209,6 @@ jobs:
               fail=1
             fi
           done
-          # enabled in commit 6: 'CYFR_PORTA_'
           # Positive assertions on the shape the patterns protect.
           m=apps/cyfr/priv/repo/migrations/20260815000000_baseline.exs
           nullable="$(grep -cE 'add :athanor_id' "$m")"

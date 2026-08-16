@@ -658,7 +658,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {:error, :invalid_access_token} ->
         # IdP access_token expired or was revoked between OAuth completion and
         # probe. Cannot recover without user re-auth — surface `reauthenticate`
-        # so codex / Porta can discard the device_code and re-run `cyfr login`.
+        # so codex can discard the device_code and re-run `cyfr login`.
         Logger.warning(
           "[Sanctum.Auth.DeviceFlow] probe_identity returned 401 invalid_access_token; " <>
             "user must re-authenticate"

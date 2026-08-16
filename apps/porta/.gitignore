@@ -1,5 +1,0 @@
-# Node / web build artifacts
-src-ui/node_modules/
-src-ui/dist/
-src-ui/dev-dist/
-src-ui/*.tsbuildinfo

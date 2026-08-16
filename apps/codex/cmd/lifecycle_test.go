@@ -8,17 +8,16 @@ import (
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\n# MCP_BRIDGE_TOKEN=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCYFR_PORTA_BIND=0.0.0.0:8080\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\n# MCP_BRIDGE_TOKEN=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 
 	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
-	// CYFR_BEHIND_PROXY and CYFR_PORTA_BIND.
+	// CYFR_BEHIND_PROXY.
 	got := renderEnvFile(tmpl, "SEKRIT", "BRIDGETOK", "example.com", "me@example.com", "ops@example.com", true)
 	for _, want := range []string{
 		"CYFR_SECRET_KEY_BASE=SEKRIT",
 		"MCP_BRIDGE_TOKEN=BRIDGETOK",
 		"CYFR_HOST=example.com",
 		"CYFR_BEHIND_PROXY=true",
-		"CYFR_PORTA_BIND=127.0.0.1:8080",
 		"CADDY_ACME_EMAIL=ops@example.com",
 		"CYFR_PLATFORM_ADMIN_EMAILS=me@example.com",
 		"CYFR_PORT=4000",
@@ -35,7 +34,7 @@ func TestRenderEnvFile(t *testing.T) {
 	}
 
 	// Direct mode: localhost, no allowed user, no ACME, tls=false. Comment
-	// line untouched, ACME left blank, BEHIND_PROXY=false, PORTA_BIND public.
+	// line untouched, ACME left blank, BEHIND_PROXY=false.
 	got = renderEnvFile(tmpl, "SEKRIT", "BRIDGETOK", "localhost", "", "", false)
 	if !strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com") {
 		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS line should be untouched:\n%s", got)
@@ -46,8 +45,8 @@ func TestRenderEnvFile(t *testing.T) {
 	if !strings.Contains(got, "CYFR_BEHIND_PROXY=false") {
 		t.Errorf("CYFR_BEHIND_PROXY should be false in direct mode:\n%s", got)
 	}
-	if !strings.Contains(got, "CYFR_PORTA_BIND=0.0.0.0:8080") {
-		t.Errorf("CYFR_PORTA_BIND should be 0.0.0.0:8080 in direct mode:\n%s", got)
+	if strings.Contains(got, "PORTA") {
+		t.Errorf("no porta variable belongs in .env:\n%s", got)
 	}
 }
 
@@ -57,8 +56,6 @@ func TestImagesFromCompose(t *testing.T) {
 	body := `services:
   cyfr:
     image: ghcr.io/cyfrworks/cyfr:latest
-  porta:
-    image: ghcr.io/cyfrworks/cyfr-porta:latest
   caddy:
     image: caddy:2-alpine
   mcp-bridge:
@@ -72,7 +69,6 @@ func TestImagesFromCompose(t *testing.T) {
 	got := imagesFromCompose(path)
 	want := []string{
 		"ghcr.io/cyfrworks/cyfr:latest",
-		"ghcr.io/cyfrworks/cyfr-porta:latest",
 		"caddy:2-alpine",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

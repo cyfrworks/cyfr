@@ -5,7 +5,7 @@ defmodule Prism.AquaActions do
   @moduledoc """
   Server-side parser/dispatcher for the `aqua-actions` text-intent protocol.
 
-  Elixir port of `apps/porta/src-ui/src/harness/porta-actions-parser.ts`. The
+  The
   AQUA agent emits a fenced block at the end of its reply containing a JSON
   array of typed UI intents:
 
@@ -61,9 +61,8 @@ defmodule Prism.AquaActions do
   @excluded_routes ~w(/logs /logs/:id /components/:ref)
 
   @allowed_overlay_states ~w(half full)
-  # Risk values for `ui.request_approval`. Prism derives its own risk from
-  # the action's `kind`; Porta displays this field on the approval card, so
-  # the vocabulary is shared intent shape, not advisory decoration.
+  # Risk values for `ui.request_approval`. Prism derives the card's risk from
+  # the action's `kind`; the hinted value stays part of the intent shape.
   @allowed_risks ~w(low medium high)
 
   @id_re ~r/^[\w.\-]+$/

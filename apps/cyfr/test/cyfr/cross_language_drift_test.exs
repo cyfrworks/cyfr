@@ -4,9 +4,9 @@
 defmodule Cyfr.CrossLanguageDriftTest do
   @moduledoc """
   Mechanical drift guards for logic implemented more than once across
-  languages. The three suites (mix / go test / vitest) run in mutually
-  exclusive path-filtered CI workflows, so nothing else can notice when a
-  port and its original stop agreeing. Companion to
+  languages. The suites (mix / go test / node) run in mutually exclusive
+  path-filtered CI workflows, so nothing else can notice when a port and
+  its original stop agreeing. Companion to
   `Emissary.MCP.ClientProtocolDriftTest`, which pins the protocol revision.
 
   Style follows `Cyfr.IngressInventoryTest`: read the sources, compare
@@ -18,25 +18,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
   @root Path.expand("../../../..", __DIR__)
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
-
-  test "the TS conversation compactor matches Prism.ConversationCompactor" do
-    elixir = read!("apps/cyfr/lib/prism/conversation_compactor.ex")
-    ts = read!("apps/porta/src-ui/src/lib/compactor.ts")
-
-    pairs = [
-      {~r/@token_budget_chars (\d[\d_]*)/, ~r/TOKEN_BUDGET_CHARS = (\d[\d_]*)/},
-      {~r/@truncated_result_chars (\d[\d_]*)/, ~r/TRUNCATED_RESULT_CHARS = (\d[\d_]*)/},
-      {~r/@preserve_recent (\d[\d_]*)/, ~r/PRESERVE_RECENT = (\d[\d_]*)/}
-    ]
-
-    for {ex_re, ts_re} <- pairs do
-      [_, ex_val] = Regex.run(ex_re, elixir)
-      [_, ts_val] = Regex.run(ts_re, ts)
-
-      assert ex_val == ts_val,
-             "compactor constant drifted: elixir=#{ex_val} ts=#{ts_val} (#{inspect(ts_re)})"
-    end
-  end
 
   test "the Go ref grammar matches Sanctum.ComponentRef" do
     elixir = read!("apps/cyfr/lib/sanctum/component_ref.ex")
@@ -65,7 +46,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     for rel <- [
           "apps/codex/internal/mcp/client.go",
-          "apps/porta/src-ui/src/api/mcp-client.ts",
           "apps/mcp-bridge/server.mjs"
         ] do
       assert String.contains?(read!(rel), ~s("#{version}")),

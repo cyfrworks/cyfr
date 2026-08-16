@@ -29,19 +29,18 @@ Formulas support **execution event streaming** — long-running formulas (like a
 
 ### Interfaces
 
-CYFR exposes three surfaces over the same runtime:
+CYFR exposes two surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the console, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy): each athanor's chat with AQUA (a shared thread every member sees, with approvals any member can decide), its Agents page, and the developer views — executions, components, builds, activities, enforcements, connections, API keys, schedules, MCP servers, tinctures.
-- **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, schedules, components, MCP servers, and settings.
+- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: each athanor's chat with **AQUA** — your friendly assistant — (a shared thread every member sees, with approvals any member can decide), its Agents page, and the developer views — executions, components, builds, activities, enforcements, connections, API keys, schedules, MCP servers, tinctures.
 
 ## Quick Start
 
 There are two ways to use CYFR; pick the one that fits.
 
-### Deploy it for end users (A.Q.U.A.)
+### Deploy it for end users
 
-Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-a-server)) and your users just open `https://<your-domain>/`, sign in, and get the A.Q.U.A. PWA — no CLI on their side. "Add to Home Screen" installs it like a native app; it runs equally well on a phone.
+Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-a-server)) and your users just open `https://<your-domain>/`, sign in, and get their athanor's chat — no CLI on their side. "Add to Home Screen" installs it like a native app; it runs equally well on a phone.
 
 ### Develop with Codex + Prism
 
@@ -89,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: API, MCP, tinctures and Prism), `porta` (the A.Q.U.A. PWA on `:8080`), and `mcp-bridge`; `cyfr up` brings all three up. A fourth service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Dashboard (Prism)
 
@@ -120,9 +119,9 @@ your-project/
 ├── integration-guide.md   # How to use CYFR as your app backend
 ├── component-guide.md      # Full guide to building components
 ├── tincture-guide.md       # Guide to building tinctures
-├── docker-compose.yml      # Self-hosted stack: cyfr + porta + mcp-bridge (+ caddy in TLS mode)
-├── Caddyfile               # Reverse proxy (TLS mode only): PWA at /, API under /mcp /api /auth /t
-├── Dockerfile.node         # Builds the `porta` and `mcp-bridge` images
+├── docker-compose.yml      # Self-hosted stack: cyfr + mcp-bridge (+ caddy in TLS mode)
+├── Caddyfile               # Reverse proxy (TLS mode only): everything → cyfr:4000
+├── Dockerfile.node         # Builds the `mcp-bridge` image
 ├── cyfr.yaml
 ├── .env                    # Secret key and config (do not commit)
 ├── .gitignore
@@ -308,16 +307,15 @@ CYFR is self-hosted as a small `docker compose` stack:
 
 | service | what it is |
 |---|---|
-| `cyfr` | the one endpoint on `:4000`: API, MCP, tinctures and the Prism dashboard |
-| `porta` | the **A.Q.U.A.** PWA — `vite preview` serves the built React bundle on `:8080` (`ghcr.io/cyfrworks/cyfr-porta`) and proxies `/mcp /api /auth /t` to `cyfr:4000` so the PWA is same-origin in both modes |
+| `cyfr` | the one endpoint on `:4000`: Prism (chat + console, a PWA), API, MCP, tinctures |
 | `mcp-bridge` | the HTTP MCP gateway. Wraps stdio/`npx` MCP servers (filesystem, github, …) behind one endpoint and surfaces their tools through cyfr. Built locally from `Dockerfile.node`; backends live in `./data/mcp-bridge/backends.json` |
-| `caddy` *(profile: `tls`)* | TLS terminator + reverse proxy: PWA at `/`, API under `/mcp` `/api/*` `/auth/*` `/t/*`. Started only when `CYFR_BEHIND_PROXY=true` in `.env` |
+| `caddy` *(profile: `tls`)* | TLS terminator + reverse proxy in front of `cyfr:4000`. Started only when `CYFR_BEHIND_PROXY=true` in `.env` |
 
 Two modes:
-- **Direct** (local / LAN): cyfr + porta + mcp-bridge. PWA at `http://<CYFR_HOST>:8080/`.
-- **TLS** (VPS with a hostname): also runs caddy (`--profile tls`). PWA at `https://<CYFR_HOST>/`.
+- **Direct** (local): cyfr + mcp-bridge. Prism at `http://localhost:4000/`.
+- **TLS** (VPS with a hostname): also runs caddy (`--profile tls`). Prism at `https://<CYFR_HOST>/`.
 
-`cyfr init` prompts which mode you want and writes the right values into `.env` (`CYFR_BEHIND_PROXY` and `CYFR_PORTA_BIND`). `cyfr up` reads `.env` and toggles the `tls` profile automatically.
+`cyfr init` prompts which mode you want and writes the right value into `.env` (`CYFR_BEHIND_PROXY`). `cyfr up` reads `.env` and toggles the `tls` profile automatically.
 
 There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
 
@@ -325,7 +323,7 @@ There is **no censorship-circumvention layer** here — Caddy gives you TLS, not
 
 - A Linux VPS (or any Docker host) with Docker + the Compose plugin.
 - For TLS mode: a domain pointing at the VPS. For direct mode: nothing extra.
-- Firewall: TLS mode → open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). Direct mode → open `8080/tcp` (or whatever you bind `CYFR_PORTA_BIND` to).
+- Firewall: TLS mode → open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). Direct mode publishes `:4000` on `127.0.0.1` only — it is for the box you run it on.
 
 ### Setup
 
@@ -338,7 +336,7 @@ curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install
 
 mkdir my-cyfr && cd my-cyfr
 cyfr init        # downloads compose + Caddyfile, writes .env, asks the TLS y/n question
-cyfr up          # starts cyfr + porta + mcp-bridge (and caddy if TLS mode)
+cyfr up          # starts cyfr + mcp-bridge (and caddy if TLS mode)
 ```
 
 <details><summary>Prefer a source checkout?</summary>
@@ -351,7 +349,6 @@ cp .env.example .env
 #   CYFR_HOST            — your domain (or "localhost")
 #   CYFR_PLATFORM_ADMIN_EMAILS — your email (platform admin; required to access the instance)
 #   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct
-#   CYFR_PORTA_BIND      — 127.0.0.1:8080 (TLS) or 0.0.0.0:8080 (direct)
 #   CADDY_ACME_EMAIL     — your email (only needed for TLS mode)
 
 # Direct:
@@ -361,7 +358,7 @@ docker compose --profile tls up -d
 ```
 </details>
 
-Then open `https://<your-domain>/` (TLS) or `http://<your-host>:8080/` (direct), sign in, and you're in A.Q.U.A. "Add to Home Screen" installs it as a PWA (works on phones too). In TLS mode caddy proxies everything to `cyfr:4000` (Prism at `/`, and `/api` `/mcp` `/auth` `/t` on the same origin); in direct mode porta's `vite preview` proxies the API paths internally. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
+Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In TLS mode caddy proxies everything to `cyfr:4000` — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
 **Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. From a source checkout: `docker compose pull && docker compose up -d` (add `--profile tls` if you're running with caddy). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first.
 
@@ -369,7 +366,7 @@ Then open `https://<your-domain>/` (TLS) or `http://<your-host>:8080/` (direct),
 
 CYFR can only register **HTTP** MCP servers. To use a stdio MCP server (anything that launches with `npx -y …`), the `mcp-bridge` container wraps it: it spawns the child process and exposes a single HTTP MCP endpoint that surfaces all the children's tools, prefixed by backend name.
 
-The PWA wires this up for you:
+Prism wires this up for you:
 
 1. Open **MCP Servers** in the sidebar, click **+ Setup MCP Bridge**. That registers the gateway with CYFR (one external MCP entry named `bridge`, URL `http://mcp-bridge:8001/mcp` resolved inside the compose network — the browser never connects to it directly).
 2. Below the server list, a **Bridge backends** section appears. Click **Add backend**, pick a name (e.g. `fs`) and a command (e.g. `npx -y @modelcontextprotocol/server-filesystem ./data`).
@@ -409,8 +406,8 @@ CYFR_CORS_ALLOWED_ORIGINS=https://app.example.com
 ```
 
 Comma-separate multiple origins. An empty value allows no cross-origin
-callers at all; same-origin traffic (the bundled PWA behind the same host)
-never needs CORS. Local `mix phx.server` runs only warn, so development is
+callers at all; same-origin traffic (Prism on the same host) never needs
+CORS. Local `mix phx.server` runs only warn, so development is
 unaffected.
 
 ### Prometheus metrics
@@ -513,9 +510,9 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks the TLS y/n question), creates dirs (`--force` re-fetches the deploy files; never touches `.env`) |
-| `cyfr up` / `cyfr down` | Start / stop the stack (cyfr + porta + mcp-bridge, plus caddy when `CYFR_BEHIND_PROXY=true` in `.env`) |
+| `cyfr up` / `cyfr down` | Start / stop the stack (cyfr + mcp-bridge, plus caddy when `CYFR_BEHIND_PROXY=true` in `.env`) |
 | `cyfr upgrade` | Upgrade the CYFR Codex binary (system-wide) |
-| `cyfr update` | Pull the latest stack images (cyfr, porta, caddy when TLS) and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone |
+| `cyfr update` | Pull the latest stack images (cyfr, caddy when TLS) and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
 

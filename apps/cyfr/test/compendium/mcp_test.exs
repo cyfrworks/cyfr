@@ -1769,7 +1769,7 @@ defmodule Compendium.MCPTest do
   # Bypass-based wire tests for the post-refactor error-formatting fixes:
   # the MCP layer must surface registry errors as readable strings (not
   # inspected struct dumps), and registry.probe must surface 412
-  # POLICY_ACCEPTANCE_REQUIRED structurally so codex/porta can route into
+  # POLICY_ACCEPTANCE_REQUIRED structurally so codex can route into
   # the clickwrap UI without parsing strings.
   describe "registry MCP — error formatting + structured probe 412 (Bypass)" do
     setup do

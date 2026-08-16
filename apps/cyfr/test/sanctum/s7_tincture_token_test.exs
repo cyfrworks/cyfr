@@ -102,10 +102,9 @@ defmodule Sanctum.S7TinctureTokenTest do
     test "a valid ?_key=cyfr_… no longer authenticates", %{ctx: ctx} do
       {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "legacy-key"})
 
-      # This path was kept while Porta still built iframe URLs with a raw
-      # credential. Porta now mints the scoped ?_t= token instead, so the
-      # query channel is closed: a URL is visible in browser history, Referer
-      # and every intermediary log.
+      # Clients mint the scoped ?_t= token instead of putting a credential in
+      # the URL, so the query channel is closed: a URL is visible in browser
+      # history, Referer and every intermediary log.
       assert TinctureAuth.authenticate(conn("_key=#{key}")) == :unauthenticated
 
       cn = conn("", [{"authorization", "Bearer #{key}"}])

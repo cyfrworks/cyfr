@@ -521,7 +521,7 @@ defmodule Compendium.Registry.Client do
   @doc """
   Call `GET /v1/legal/version`. Returns `{policy_version, policies}` where
   `policies` is a list of `{name, title, sha256}` for the current bundled
-  set. Drives the clickwrap UI in prism / porta / codex.
+  set. Drives the clickwrap UI in prism / codex.
   """
   @spec get_legal_version() :: {:ok, map()} | {:error, Errors.t()}
   def get_legal_version do

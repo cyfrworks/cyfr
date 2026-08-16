@@ -35,7 +35,7 @@ components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
 ├── style.css             ← styles
 ├── public/
 │   └── media/
-│       ├── icon.svg          ← shown in Prism sidebar + Porta carousel (auto-discovered)
+│       ├── icon.svg          ← shown in the Prism tincture picker (auto-discovered)
 │       └── preview-1.svg     ← screenshot strip on the focused card (up to preview-6)
 └── src/                  ← optional source for forking
 ```
@@ -54,7 +54,7 @@ components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
 │   └── index-def456.css
 ├── public/
 │   └── media/
-│       ├── icon.svg          ← shown in Prism sidebar + Porta carousel (auto-discovered)
+│       ├── icon.svg          ← shown in the Prism tincture picker (auto-discovered)
 │       └── preview-1.svg     ← screenshot strip on the focused card (up to preview-6)
 ├── src/                  ← React/TypeScript source (not served — .tsx not in extension allowlist)
 │   ├── main.tsx
@@ -131,7 +131,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 |-------|------|---------|-------------|
 | `entry` | string | `"index.html"` | Entry point file |
 | `icon` | string | `"palette"` | Glyph fallback used by the picker when no `public/media/icon.{svg,png}` exists. Accepts an emoji (e.g. `"🎮"`) or a Lucide icon name (e.g. `"palette"`) |
-| `tagline` | string | — | Short one-line tagline shown under the title in the Porta tincture picker. Distinct from `description`, which is used as the card title |
+| `tagline` | string | — | Short one-line tagline shown under the title in the tincture picker. Distinct from `description`, which is used as the card title |
 | `public` | boolean | `false` | Metadata hint. Actual public access is the stored `is_public` visibility flag — set with the `tincture_visibility.set` MCP tool |
 | `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
 | `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
@@ -140,7 +140,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 
 ### Media Convention
 
-CYFR auto-discovers tincture media from a fixed `public/media/` layout. **No manifest fields needed** — drop the files in the right slots and the picker (Prism sidebar + Porta carousel) finds them.
+CYFR auto-discovers tincture media from a fixed `public/media/` layout. **No manifest fields needed** — drop the files in the right slots and the Prism picker finds them.
 
 ```
 components/{athanor_id}/tinctures/local/{name}/{version}/
@@ -154,10 +154,10 @@ components/{athanor_id}/tinctures/local/{name}/{version}/
 
 | Slot | Path | Notes |
 |------|------|-------|
-| Icon | `public/media/icon.svg` (or `.png`) | Rendered 20×20 in Prism sidebar, 48×48 in the Porta info bar, and up to 192×192 as the in-stage fallback when a tincture has no previews. SVG strongly preferred — scales crisply at every size. |
-| Previews | `public/media/preview-1.svg` … `preview-6.svg` (or `.png`) | Up to 6 numbered slots. Shown one at a time in the Porta preview stage; ↑/↓ cycles through them. Add them in order; gaps are skipped. |
+| Icon | `public/media/icon.svg` (or `.png`) | Rendered 20×20 in the picker list, 48×48 in the info bar, and up to 192×192 as the in-stage fallback when a tincture has no previews. SVG strongly preferred — scales crisply at every size. |
+| Previews | `public/media/preview-1.svg` … `preview-6.svg` (or `.png`) | Up to 6 numbered slots. Shown one at a time in the preview stage; ↑/↓ cycles through them. Add them in order; gaps are skipped. |
 
-**Preview dimensions and aspect ratios:** the Porta preview stage is a fixed 16:9 landscape container, and previews are *contained* (not cropped) — so any aspect ratio works without trimming. Anything wider or taller than 16:9 is letterboxed against a softly-blurred copy of the image, which makes the bars look intentional. Recommended:
+**Preview dimensions and aspect ratios:** the preview stage is a fixed 16:9 landscape container, and previews are *contained* (not cropped) — so any aspect ratio works without trimming. Anything wider or taller than 16:9 is letterboxed against a softly-blurred copy of the image, which makes the bars look intentional. Recommended:
 
 - **16:9 landscape** (e.g. 1280×720, 1920×1080): fills the stage edge-to-edge, the most polished look.
 - **Other landscape** (4:3, 3:2): small letterbox bars top/bottom, still looks great.

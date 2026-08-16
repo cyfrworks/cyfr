@@ -2,9 +2,31 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.McpServersLive do
+  @moduledoc """
+  External MCP servers registered with the athanor — list / add / delete /
+  test / refresh / enable / disable over the `mcp_servers` tool. Tools a
+  server exposes reach AQUA as `<name>:<tool>`.
+
+  Built-in preset: the **mcp-bridge** gateway, the sidecar in the docker
+  stack that wraps stdio/npx MCP servers (filesystem, github, …) behind one
+  HTTP endpoint. CYFR sees one external server called `bridge`; the
+  gateway's admin tools (`bridge:list_backends`, `bridge:add_backend`,
+  `bridge:remove_backend`, `bridge:restart_backend`) let a member manage
+  the stdio backends from this page once the bridge is registered. The URL
+  `http://mcp-bridge:8001/mcp` resolves inside the compose network; the
+  browser never connects to it directly. The bridge boots closed behind
+  `MCP_BRIDGE_TOKEN`; the preset sends it as `Authorization:
+  vault:mcp_bridge_token` — a Connection named `mcp_bridge_token` holding
+  the same value.
+  """
+
   use PrismWeb, :live_view
 
   require Logger
+
+  @bridge_name "bridge"
+  @bridge_url "http://mcp-bridge:8001/mcp"
+  @bridge_headers %{"Authorization" => "vault:mcp_bridge_token"}
 
   @placeholder_config Jason.encode!(
                         %{
@@ -26,6 +48,8 @@ defmodule PrismWeb.McpServersLive do
       |> assign(:expanded_name, nil)
       |> assign(:detail, nil)
       |> assign(:json_error, nil)
+      |> assign(:backends, [])
+      |> assign(:show_add_backend, false)
 
     {:ok, socket}
   end
@@ -64,6 +88,77 @@ defmodule PrismWeb.McpServersLive do
       {:url, _} ->
         {:noreply, assign(socket, :json_error, "Config must include a \"url\" field.")}
     end
+  end
+
+  # Register the local mcp-bridge gateway with the preset entry.
+  def handle_event("setup_bridge", _params, socket) do
+    case call_tool(socket, "mcp_servers/create", %{
+           "name" => @bridge_name,
+           "config" => %{"url" => @bridge_url, "headers" => @bridge_headers}
+         }) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> refresh_servers()
+         |> put_flash(
+           :info,
+           "MCP Bridge registered. Store the bridge token as a Connection named " <>
+             "mcp_bridge_token, then add backends below."
+         )}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to register the bridge: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("toggle_add_backend", _params, socket) do
+    {:noreply, assign(socket, :show_add_backend, !socket.assigns.show_add_backend)}
+  end
+
+  def handle_event("add_backend", %{"name" => name, "command" => command}, socket) do
+    name = String.trim(name)
+    command = String.trim(command)
+
+    if name == "" or command == "" do
+      {:noreply, put_flash(socket, :error, "A backend needs a name and a command.")}
+    else
+      case call_tool(socket, bridge_tool("add_backend"), %{"name" => name, "command" => command}) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> assign(:show_add_backend, false)
+           |> refresh_backends()
+           |> put_flash(:info, "Backend '#{name}' added.")}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Bridge: #{inspect(reason)}")}
+      end
+    end
+  end
+
+  def handle_event("remove_backend", %{"name" => name}, socket) do
+    case call_tool(socket, bridge_tool("remove_backend"), %{"name" => name}) do
+      {:ok, _} ->
+        {:noreply, socket |> refresh_backends() |> put_flash(:info, "Backend '#{name}' removed.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Bridge: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("restart_backend", %{"name" => name}, socket) do
+    case call_tool(socket, bridge_tool("restart_backend"), %{"name" => name}) do
+      {:ok, _} ->
+        {:noreply,
+         socket |> refresh_backends() |> put_flash(:info, "Backend '#{name}' restarted.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Bridge: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("refresh_backends", _params, socket) do
+    {:noreply, refresh_backends(socket)}
   end
 
   def handle_event("delete", %{"name" => name}, socket) do
@@ -193,7 +288,65 @@ defmodule PrismWeb.McpServersLive do
       end
       |> Enum.map(&normalize_keys/1)
 
-    assign(socket, :servers, servers)
+    socket
+    |> assign(:servers, servers)
+    |> refresh_backends()
+  end
+
+  # The bridge's own backends, when the bridge is registered and answering.
+  defp refresh_backends(socket) do
+    if bridge_ready?(socket.assigns.servers) do
+      backends =
+        case call_tool(socket, bridge_tool("list_backends"), %{}) do
+          {:ok, result} -> coerce_backends(result)
+          {:error, _} -> []
+        end
+
+      assign(socket, :backends, backends)
+    else
+      assign(socket, :backends, [])
+    end
+  end
+
+  defp bridge_entry(servers), do: Enum.find(servers, &(&1[:name] == @bridge_name))
+
+  defp bridge_ready?(servers) do
+    case bridge_entry(servers) do
+      %{enabled: true, status: status} -> status in ["ready", "connected"]
+      _ -> false
+    end
+  end
+
+  defp bridge_tool(tool), do: @bridge_name <> ":" <> tool
+
+  # The bridge answers as MCP content (a JSON text block) or, in-process, as
+  # the decoded map; either way the list is under "backends".
+  defp coerce_backends(result) do
+    obj =
+      case result do
+        %{"content" => [%{"text" => text} | _]} when is_binary(text) ->
+          case Jason.decode(text) do
+            {:ok, %{} = m} -> m
+            _ -> %{}
+          end
+
+        %{} = m ->
+          m
+
+        _ ->
+          %{}
+      end
+
+    (obj["backends"] || obj[:backends] || [])
+    |> Enum.map(fn b ->
+      %{
+        name: to_string(b["name"] || b[:name] || ""),
+        command: to_string(b["command"] || b[:command] || ""),
+        status: to_string(b["status"] || b[:status] || "unknown"),
+        tool_count: b["tool_count"] || b[:tool_count] || 0,
+        error: b["error"] || b[:error]
+      }
+    end)
   end
 
   @known_server_keys %{
@@ -220,12 +373,19 @@ defmodule PrismWeb.McpServersLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :placeholder_config, @placeholder_config)
+    assigns =
+      assigns
+      |> assign(:placeholder_config, @placeholder_config)
+      |> assign(:bridge, bridge_entry(assigns.servers))
+      |> assign(:bridge_ready, bridge_ready?(assigns.servers))
 
     ~H"""
     <div class="space-y-6">
       <.page_header title="External MCP Servers">
         <:actions>
+          <.button :if={!@loading and is_nil(@bridge)} variant="ghost" phx-click="setup_bridge">
+            + Setup MCP Bridge
+          </.button>
           <.button phx-click="toggle_add">
             {if @show_add, do: "Cancel", else: "Add Server"}
           </.button>
@@ -368,13 +528,118 @@ defmodule PrismWeb.McpServersLive do
           </table>
         </div>
       </.card>
+
+      <.card :if={@bridge}>
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h3 class="text-sm font-medium text-gray-200">Bridge backends</h3>
+            <p class="text-xs text-gray-500 mt-0.5">
+              stdio / npx MCP servers the <span class="font-mono">bridge</span>
+              gateway runs; their tools surface as <span class="font-mono">bridge:&lt;backend&gt;__&lt;tool&gt;</span>.
+            </p>
+          </div>
+          <div class="flex gap-2">
+            <.button variant="ghost" phx-click="refresh_backends" disabled={!@bridge_ready}>
+              Refresh
+            </.button>
+            <.button variant="ghost" phx-click="toggle_add_backend" disabled={!@bridge_ready}>
+              {if @show_add_backend, do: "Cancel", else: "Add backend"}
+            </.button>
+          </div>
+        </div>
+
+        <p :if={!@bridge_ready} class="text-xs text-amber-400">
+          The bridge is registered but not answering yet — check the
+          <span class="font-mono">mcp-bridge</span>
+          container and the <span class="font-mono">mcp_bridge_token</span>
+          Connection,
+          then Test the server above.
+        </p>
+
+        <form
+          :if={@show_add_backend and @bridge_ready}
+          phx-submit="add_backend"
+          class="space-y-3 mb-4"
+        >
+          <div class="grid gap-3 md:grid-cols-2">
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
+              <.input name="name" required placeholder="fs" class="font-mono" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Command</label>
+              <.input
+                name="command"
+                required
+                placeholder="npx -y @modelcontextprotocol/server-filesystem /data"
+                class="font-mono"
+              />
+            </div>
+          </div>
+          <.button type="submit">Add backend</.button>
+        </form>
+
+        <div :if={@bridge_ready and @backends == []} class="py-4 text-sm text-gray-500">
+          No backends yet.
+        </div>
+        <div :if={@backends != []} class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-800">
+            <thead>
+              <tr>
+                <th class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Name
+                </th>
+                <th class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Command
+                </th>
+                <th class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Status
+                </th>
+                <th class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Tools
+                </th>
+                <th class="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800">
+              <tr :for={b <- @backends}>
+                <td class="px-4 py-2 text-sm font-mono text-blue-400 whitespace-nowrap">{b.name}</td>
+                <td class="px-4 py-2 text-xs font-mono text-gray-400 truncate max-w-md">
+                  {b.command}
+                </td>
+                <td class="px-4 py-2 text-sm whitespace-nowrap">
+                  <.badge color={status_color(b.status)}>{b.status}</.badge>
+                  <span :if={b.error} class="ml-2 text-xs text-red-400 truncate">{b.error}</span>
+                </td>
+                <td class="px-4 py-2 text-sm text-gray-300">{b.tool_count}</td>
+                <td class="px-4 py-2 text-right whitespace-nowrap">
+                  <.button variant="ghost" phx-click="restart_backend" phx-value-name={b.name}>
+                    Restart
+                  </.button>
+                  <.button
+                    variant="ghost"
+                    phx-click="remove_backend"
+                    phx-value-name={b.name}
+                    data-confirm={"Remove backend '#{b.name}'?"}
+                  >
+                    Remove
+                  </.button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </.card>
     </div>
     """
   end
 
   defp status_color("ready"), do: "green"
   defp status_color("connected"), do: "green"
+  defp status_color("running"), do: "green"
   defp status_color("error"), do: "red"
+  defp status_color("crashed"), do: "red"
   defp status_color("disconnected"), do: "yellow"
+  defp status_color("starting"), do: "yellow"
   defp status_color(_), do: "gray"
 end

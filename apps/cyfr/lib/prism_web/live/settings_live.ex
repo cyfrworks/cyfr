@@ -76,7 +76,12 @@ defmodule PrismWeb.SettingsLive do
     case Sanctum.Tenancy.Users.get(socket.assigns.context.user_id) do
       {:ok, user} ->
         {:ok, _} = Sanctum.Tenancy.Users.put_prefs(user, %{"mode" => mode})
-        {:noreply, socket |> assign(:mode, mode) |> put_flash(:info, "Mode saved.")}
+
+        {:noreply,
+         socket
+         |> assign(:mode, mode)
+         |> assign(:ui_mode, mode)
+         |> put_flash(:info, "Mode saved.")}
 
       _ ->
         {:noreply, put_flash(socket, :error, "Could not save the preference.")}

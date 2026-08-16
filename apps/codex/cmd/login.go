@@ -410,8 +410,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 // registry.legal_accept. Returns true on success (acceptance recorded);
 // false if the user bails or any step fails.
 //
-// This is the codex-CLI counterpart to the prism web flow's
-// LegalAcceptController and the porta UI's LegalAcceptPage.
+// This is the codex-CLI counterpart to the web flow's LegalAcceptController.
 func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string) bool {
 	if !prompt.IsInteractive(flagNoInteractive) {
 		fmt.Fprintln(os.Stderr,

@@ -46,7 +46,8 @@ defmodule Cyfr.TinctureHelpers do
   def build_public_context(athanor_segment) when is_binary(athanor_segment) do
     case resolve_athanor(athanor_segment) do
       {:ok, athanor} ->
-        {:ok, Sanctum.Context.build(athanor_id: athanor.id, scope: :athanor, authenticated: false)}
+        {:ok,
+         Sanctum.Context.build(athanor_id: athanor.id, scope: :athanor, authenticated: false)}
 
       {:error, :not_found} ->
         {:error, :not_found}
@@ -101,7 +102,6 @@ defmodule Cyfr.TinctureHelpers do
   # and S3 (which has no real directories).
   @media_icon_candidates ~w(public/media/icon.svg public/media/icon.png)
   @media_preview_extensions ~w(svg png)
-  # Mirrored by MAX_PREVIEWS in porta's tincture-store.ts — change both.
   @media_preview_count 6
 
   @doc """

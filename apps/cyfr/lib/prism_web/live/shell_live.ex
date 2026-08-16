@@ -11,7 +11,7 @@ defmodule PrismWeb.ShellLive do
   @moduledoc """
   Tincture browser for Prism shell — preview-first picker.
 
-  Mirrors the Porta tinctures page UX: large 16:9 preview stage with vertical
+  Large 16:9 preview stage with vertical
   capsule navigation, compact info bar, keyboard nav (←/→ tinctures, ↑/↓
   previews, Enter launches). When a tincture is launched the iframe overlays
   the picker; close from inside the tincture or via the top-right capsule
@@ -433,7 +433,7 @@ defmodule PrismWeb.ShellLive do
   defp emoji_from_hint(_), do: nil
 
   # Stable per-tincture gradient for the preview-fallback area when there are
-  # no preview images. Mirrors Porta's `gradientFor` palette.
+  # no preview images.
   @gradients [
     "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
     "linear-gradient(135deg, #ec4899 0%, #f43f5e 100%)",

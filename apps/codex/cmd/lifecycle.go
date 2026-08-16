@@ -39,7 +39,7 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project in the current directory",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + porta + mcp-bridge, plus optional caddy) with "cyfr up".
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + mcp-bridge, plus optional caddy) with "cyfr up".
 
 Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, example components, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/components/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
 
@@ -71,16 +71,13 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
 
-		// Warm-pull every image referenced in docker-compose.yml (cyfr, porta,
-		// caddy — mcp-bridge is `build:`-only and has no image: line, so it's
-		// skipped). Plain `docker pull` doesn't need .env to exist. Falls back
-		// to our two published images on a dev build (no compose).
+		// Warm-pull every image referenced in docker-compose.yml (cyfr, caddy —
+		// mcp-bridge is `build:`-only and has no image: line, so it's skipped).
+		// Plain `docker pull` doesn't need .env to exist. Falls back to the
+		// published cyfr image on a dev build (no compose).
 		images := imagesFromCompose("docker-compose.yml")
 		if len(images) == 0 {
-			images = []string{
-				"ghcr.io/cyfrworks/cyfr:latest",
-				"ghcr.io/cyfrworks/cyfr-porta:latest",
-			}
+			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
 		}
 		for _, img := range images {
 			fmt.Printf("Pulling %s ...\n", img)
@@ -216,7 +213,7 @@ components/_bundle/**/node_modules/
 		fmt.Println("CYFR project initialized.")
 		if releaseBuild {
 			if composeExists {
-				fmt.Println("  docker-compose.yml ready (cyfr + porta + mcp-bridge; caddy via `tls` profile)")
+				fmt.Println("  docker-compose.yml ready (cyfr + mcp-bridge; caddy via `tls` profile)")
 			}
 			if caddyfileExists {
 				fmt.Println("  Caddyfile ready")
@@ -260,8 +257,7 @@ components/_bundle/**/node_modules/
 		fmt.Println("")
 		if composeExists {
 			fmt.Println("Next: run 'cyfr up' to start the stack.")
-			fmt.Println("  A.Q.U.A. PWA:    https://<your CYFR_HOST>/  (TLS mode)  or  http://<your CYFR_HOST>:8080/  (direct)")
-			fmt.Println("  Prism:           http://localhost:4000")
+			fmt.Println("  Prism:           https://<your CYFR_HOST>/  (TLS mode)  or  http://localhost:4000/  (direct)")
 		} else {
 			fmt.Println("Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 		}
@@ -321,14 +317,12 @@ func ask(r *bufio.Reader, question, def string) string {
 
 // renderEnvFile fills in a .env.example template: substitutes the generated
 // secret key, un-comments and sets MCP_BRIDGE_TOKEN so the bridge boots closed,
-// sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips CYFR_BEHIND_PROXY +
-// CYFR_PORTA_BIND based on the TLS choice, and (if adminEmail is non-empty)
-// un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS. Everything else is left as-is.
+// sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips CYFR_BEHIND_PROXY
+// based on the TLS choice, and (if adminEmail is non-empty) un-comments and
+// sets CYFR_PLATFORM_ADMIN_EMAILS. Everything else is left as-is.
 func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail string, tls bool) string {
-	portaBind := "0.0.0.0:8080"
 	behindProxy := "false"
 	if tls {
-		portaBind = "127.0.0.1:8080"
 		behindProxy = "true"
 	}
 	lines := strings.Split(template, "\n")
@@ -342,8 +336,6 @@ func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail
 			lines[i] = "CYFR_HOST=" + host
 		case strings.HasPrefix(line, "CYFR_BEHIND_PROXY="):
 			lines[i] = "CYFR_BEHIND_PROXY=" + behindProxy
-		case strings.HasPrefix(line, "CYFR_PORTA_BIND="):
-			lines[i] = "CYFR_PORTA_BIND=" + portaBind
 		case acmeEmail != "" && strings.HasPrefix(line, "CADDY_ACME_EMAIL="):
 			lines[i] = "CADDY_ACME_EMAIL=" + acmeEmail
 		case adminEmail != "" && strings.HasPrefix(line, "# CYFR_PLATFORM_ADMIN_EMAILS="):
@@ -355,13 +347,13 @@ func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr + porta + mcp-bridge, plus caddy in TLS mode)",
+	Short:   "Start the CYFR stack (cyfr + mcp-bridge, plus caddy in TLS mode)",
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-Always brings up cyfr (API + Prism), porta (the A.Q.U.A. PWA via vite preview on :8080), and mcp-bridge (HTTP MCP gateway that wraps stdio/npx MCP servers — register it from the PWA's "MCP Servers" page).
+Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bridge (HTTP MCP gateway that wraps stdio/npx MCP servers — register it from Prism's "MCP Servers" page).
 
-When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts the PWA on :80/:443. Otherwise the PWA is reachable directly at http://<CYFR_HOST>:8080.`,
+When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts cyfr on :80/:443. Otherwise cyfr is reachable directly at http://localhost:4000.`,
 	Example: `  cyfr up`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Registry auth is per-user: `cyfr login` (device flow) after
@@ -411,16 +403,15 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 		if healthy {
 			fmt.Println("Server is ready.")
 			if tls {
-				fmt.Println("  A.Q.U.A. PWA:    https://<your CYFR_HOST>/   (via Caddy on :80/:443)")
+				fmt.Println("  Prism:           https://<your CYFR_HOST>/   (via Caddy on :80/:443)")
 			} else {
-				fmt.Println("  A.Q.U.A. PWA:    http://<your CYFR_HOST>:8080/   (direct mode)")
+				fmt.Println("  Prism:           http://localhost:4000/   (direct mode)")
 			}
-			fmt.Println("  Prism:           http://localhost:4000")
 			fmt.Println("")
 			fmt.Println("Optional next steps:")
 			fmt.Println("  cyfr login      authenticate this CLI")
 			fmt.Println("  cyfr register   scan & register the bundled components")
-			fmt.Println("  Then in the PWA's \"MCP Servers\" page, click \"Setup MCP Bridge\"")
+			fmt.Println("  Then in Prism's \"MCP Servers\" page, click \"Setup MCP Bridge\"")
 			fmt.Println("  to wire stdio/npx MCP servers (filesystem, github, …) into AQUA.")
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: server did not become healthy within 30s. Check 'docker compose logs'.\n")
