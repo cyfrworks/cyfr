@@ -83,4 +83,24 @@ defmodule Arca.ProviderCredentialStorage do
   def exists?(athanor_id, provider) when is_binary(provider) do
     match?({:ok, _}, get(athanor_id, provider))
   end
+
+  @doc "The athanor's rows, by provider name — never the ciphertext."
+  @spec list(String.t()) ::
+          {:ok, [%{provider: String.t(), created_by: String.t() | nil, updated_at: DateTime.t()}]}
+          | {:error, :database_error}
+  def list(athanor_id) do
+    rows =
+      from(c in OauthProviderCredential,
+        order_by: [asc: c.provider],
+        select: %{provider: c.provider, created_by: c.created_by, updated_at: c.updated_at}
+      )
+      |> where_athanor(athanor_id)
+      |> Arca.Repo.all()
+
+    {:ok, rows}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[ProviderCredentialStorage] Database error in list: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
 end

@@ -164,17 +164,23 @@ defmodule Sanctum.MCP do
         name: "oauth",
         title: "OAuth Provider Configuration",
         description:
-          "Store OAuth app client credentials per provider. Grants are connection-keyed: " <>
-            "start them with vault.authorize.",
+          "Store, list and remove OAuth app client credentials per provider. Grants are " <>
+            "connection-keyed: start them with vault.authorize.",
         annotations: %{
           readOnlyHint: false,
-          destructiveHint: false,
+          destructiveHint: true,
           actions: %{
             # External only, like every other credential write (key.create,
             # vault.create, webhook.create). This one writes the operator's
             # OAuth *client* secret, so a component reaching it from inside
             # the sandbox would be the widest of the set, not the narrowest.
-            "set_client" => %{kind: :write, planes: [:external], permission: :vault_write}
+            "set_client" => %{kind: :write, planes: [:external], permission: :vault_write},
+            "list" => %{kind: :read, planes: [:external], permission: :vault_read},
+            "delete_client" => %{
+              kind: :destructive,
+              planes: [:external],
+              permission: :vault_write
+            }
           }
         },
         input_schema: %{
@@ -182,7 +188,7 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["set_client"],
+              "enum" => ["set_client", "list", "delete_client"],
               "description" => "Action to perform"
             },
             "provider" => %{

@@ -60,6 +60,17 @@ defmodule Sanctum.ProviderCredentials do
     end
   end
 
+  @doc """
+  The providers the caller's athanor has client credentials for — names,
+  who stored them and when; never the secret.
+  """
+  @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
+  def list(%Context{} = ctx) do
+    with :ok <- Context.require_permission(ctx, :vault_read) do
+      Arca.ProviderCredentialStorage.list(athanor!(ctx))
+    end
+  end
+
   @doc "Whether client credentials are stored for a provider (presence only)."
   @spec configured?(Context.t(), String.t()) :: boolean() | {:error, term()}
   def configured?(%Context{} = ctx, provider) do

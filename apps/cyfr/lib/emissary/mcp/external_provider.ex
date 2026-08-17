@@ -617,7 +617,11 @@ defmodule Emissary.MCP.ExternalProvider do
               url: server.url,
               enabled: server.enabled,
               status: format_status(status),
-              tool_count: format_tool_count(status)
+              tool_count: format_tool_count(status),
+              # The Connections this server's headers draw on, by name only
+              # (`vault:<entry>` values) — so a Connection can show who
+              # consumes it before someone revokes it out from under a server.
+              vault_refs: vault_refs(server)
             }
           end)
 
@@ -877,6 +881,19 @@ defmodule Emissary.MCP.ExternalProvider do
       timeout_ms: config["timeout_ms"] || 30_000,
       athanor_id: ctx.athanor_id
     ]
+  end
+
+  # The vault entry names a server's headers reference (`vault:<name>`).
+  defp vault_refs(server) do
+    server
+    |> server_config_map()
+    |> Map.get("headers", %{})
+    |> Enum.flat_map(fn
+      {_header, "vault:" <> name} when name != "" -> [name]
+      _ -> []
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   # Resolve the config map from either a stored `%Arca.Schemas.McpServer{}`

@@ -24,6 +24,8 @@ defmodule PrismWeb.ConnectionsLive do
       |> assign(:page_title, "Connections")
       |> assign(:active_nav, "connections")
       |> assign(:entries, [])
+      |> assign(:used_by, %{})
+      |> assign(:clients, [])
       |> assign(:show_add, nil)
       |> assign(:pending_grant, nil)
       |> assign(:rotating, nil)
@@ -37,7 +39,9 @@ defmodule PrismWeb.ConnectionsLive do
     if connected?(socket) do
       ctx = socket.assigns[:context]
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("vault:changed", ctx))
-      {:noreply, socket |> fetch_entries() |> assign(:loading, false)}
+
+      {:noreply,
+       socket |> fetch_entries() |> fetch_used_by() |> fetch_clients() |> assign(:loading, false)}
     else
       {:noreply, socket}
     end
@@ -51,6 +55,39 @@ defmodule PrismWeb.ConnectionsLive do
   def handle_event("show_add", %{"mode" => mode}, socket) do
     {:noreply,
      assign(socket, :show_add, if(socket.assigns.show_add == mode, do: nil, else: mode))}
+  end
+
+  # The operator's OAuth app for a provider — the client id/secret a
+  # Connection's OAuth grant is obtained with. Stored per athanor; listed by
+  # provider name only, never the secret.
+  def handle_event("set_client", %{"provider" => provider, "client_id" => client_id} = params, socket) do
+    args = %{
+      "provider" => String.trim(provider),
+      "client_id" => String.trim(client_id),
+      "client_secret" => blank_to_nil(params["client_secret"])
+    }
+
+    case call_tool(socket, "oauth/set_client", args) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> fetch_clients()
+         |> assign(:show_add, nil)
+         |> put_flash(:info, "Client credentials stored for #{args["provider"]}.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not store: #{fmt(reason)}")}
+    end
+  end
+
+  def handle_event("delete_client", %{"provider" => provider}, socket) do
+    case call_tool(socket, "oauth/delete_client", %{"provider" => provider}) do
+      {:ok, _} ->
+        {:noreply, socket |> fetch_clients() |> put_flash(:info, "Client credentials removed.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not remove: #{fmt(reason)}")}
+    end
   end
 
   def handle_event("create", %{"name" => name, "kind" => kind, "fields" => fields_text}, socket) do
@@ -232,6 +269,38 @@ defmodule PrismWeb.ConnectionsLive do
     })
   end
 
+  # Which MCP servers draw on each Connection (`vault:<name>` headers) —
+  # shown on the row, so revoking one is done knowing what it breaks.
+  defp fetch_used_by(socket) do
+    used_by =
+      case call_tool(socket, "mcp_servers/list", %{}) do
+        {:ok, %{servers: servers}} when is_list(servers) ->
+          Enum.reduce(servers, %{}, fn server, acc ->
+            Enum.reduce(server[:vault_refs] || server["vault_refs"] || [], acc, fn ref, acc ->
+              Map.update(acc, ref, [server[:name] || server["name"]], &[server[:name] | &1])
+            end)
+          end)
+
+        _ ->
+          %{}
+      end
+
+    assign(socket, :used_by, used_by)
+  end
+
+  defp fetch_clients(socket) do
+    clients =
+      case call_tool(socket, "oauth/list", %{}) do
+        {:ok, %{providers: rows}} when is_list(rows) -> rows
+        _ -> []
+      end
+
+    assign(socket, :clients, clients)
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: s)
+
   @entry_keys ~w(id name kind provider_hint status provenance field_names oauth_scopes payload_rev last_used_at)a
 
   defp normalize_entry(entry) do
@@ -399,6 +468,9 @@ defmodule PrismWeb.ConnectionsLive do
             <div class="space-y-1">
               <span class="font-medium">{entry.name}</span>
               <div class="text-xs text-gray-500 font-mono">{entry.id}</div>
+              <div :if={Map.get(@used_by, entry.name, []) != []} class="text-xs text-amber-400/90">
+                {used_by_line(@used_by[entry.name])}
+              </div>
             </div>
           </:col>
           <:col :let={entry} label="Kind">
@@ -442,7 +514,7 @@ defmodule PrismWeb.ConnectionsLive do
                 variant="ghost"
                 phx-click="revoke"
                 phx-value-id={entry.id}
-                data-confirm="Profiles bound to this connection stop receiving it at their next run. Revoke?"
+                data-confirm={revoke_confirm(entry, @used_by)}
               >
                 Revoke
               </.button>
@@ -483,7 +555,74 @@ defmodule PrismWeb.ConnectionsLive do
           <.button type="submit">Rotate material</.button>
         </form>
       </.card>
+      
+    <!-- OAuth client credentials: the operator's app per provider -->
+      <.card>
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-sm font-medium text-gray-400">OAuth client credentials</h3>
+          <.button variant="ghost" phx-click="show_add" phx-value-mode="client">
+            {if @show_add == "client", do: "Cancel", else: "Set client"}
+          </.button>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">
+          The OAuth app (client id and secret) an OAuth Connection is authorized through, one
+          per provider. Stored sealed in this athanor; only the provider name is ever shown.
+        </p>
+
+        <form :if={@show_add == "client"} phx-submit="set_client" class="space-y-3 mb-4">
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
+              <.input name="provider" required placeholder="google" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Client id</label>
+              <.input name="client_id" required placeholder="…apps.googleusercontent.com" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Client secret</label>
+              <.input name="client_secret" type="password" placeholder="(public clients: empty)" />
+            </div>
+          </div>
+          <.button type="submit">Store client credentials</.button>
+        </form>
+
+        <div :if={@clients == []} class="text-xs text-gray-500">No client credentials stored.</div>
+        <ul :if={@clients != []} class="divide-y divide-gray-800">
+          <li
+            :for={c <- @clients}
+            class="flex items-center justify-between py-2 text-sm"
+          >
+            <span>
+              <span class="font-medium text-gray-200">{c[:provider] || c["provider"]}</span>
+              <span class="ml-2 text-xs text-gray-500">
+                set by {c[:created_by] || c["created_by"] || "-"}
+              </span>
+            </span>
+            <.button
+              variant="ghost"
+              phx-click="delete_client"
+              phx-value-provider={c[:provider] || c["provider"]}
+              data-confirm="Remove these client credentials? OAuth Connections for this provider cannot refresh until new ones are stored."
+            >
+              Remove
+            </.button>
+          </li>
+        </ul>
+      </.card>
     </div>
     """
+  end
+
+  defp used_by_line([server]), do: "used by MCP server #{server}"
+  defp used_by_line(servers), do: "used by MCP servers #{Enum.join(Enum.sort(servers), ", ")}"
+
+  defp revoke_confirm(entry, used_by) do
+    base = "Profiles bound to this connection stop receiving it at their next run."
+
+    case Map.get(used_by, entry.name, []) do
+      [] -> base <> " Revoke?"
+      servers -> base <> " MCP server(s) #{Enum.join(servers, ", ")} read it too. Revoke?"
+    end
   end
 end
