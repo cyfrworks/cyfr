@@ -12,8 +12,11 @@ defmodule Prism.ConversationRunnerTest do
   alias Sanctum.Context
 
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    # The runners outlive the test body and are stopped from `on_exit`; the
+    # sandbox owner is a separate process so they still have their
+    # connection then (callbacks run last-registered first).
+    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, shared: true)
+    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
 
     test_path = Path.join(System.tmp_dir!(), "conv_runner_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
@@ -22,7 +25,8 @@ defmodule Prism.ConversationRunnerTest do
     Prism.FakeAquaTurn.listen()
 
     on_exit(fn ->
-      for {_id, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor) do
+      for {_id, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor),
+          is_pid(pid) do
         DynamicSupervisor.terminate_child(Prism.ConversationSupervisor, pid)
       end
 

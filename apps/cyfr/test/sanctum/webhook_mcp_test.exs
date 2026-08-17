@@ -4,7 +4,6 @@
 defmodule Sanctum.WebhookMCPTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Context
   alias Sanctum.MCP
 
   setup do

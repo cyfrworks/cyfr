@@ -6,7 +6,6 @@ defmodule Compendium.ResolverTest do
 
   alias Compendium.Resolver
   alias Compendium.Registry
-  alias Sanctum.Context
 
   # Valid minimal WASM with export section
   # magic + version

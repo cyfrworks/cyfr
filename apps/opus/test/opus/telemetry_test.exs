@@ -6,7 +6,6 @@ defmodule Opus.TelemetryTest do
 
   alias Opus.Telemetry
   alias Opus.ExecutionRecord
-  alias Sanctum.Context
 
   setup do
     test_pid = self()

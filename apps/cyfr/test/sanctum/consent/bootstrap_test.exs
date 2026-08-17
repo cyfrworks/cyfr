@@ -8,7 +8,6 @@ defmodule Sanctum.Consent.BootstrapTest do
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
-  alias Sanctum.VaultReader
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 

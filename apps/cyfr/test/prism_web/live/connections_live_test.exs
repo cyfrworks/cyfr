@@ -20,7 +20,6 @@ defmodule PrismWeb.ConnectionsLiveTest do
 
   test "a Connection shows the MCP servers that read it through vault: headers", %{conn: conn} do
     user = test_user()
-    conn = log_in_user(conn, user)
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Wired #{user.namespace}")
 
     ctx =
@@ -51,7 +50,7 @@ defmodule PrismWeb.ConnectionsLiveTest do
         }
       })
 
-    conn = log_in_user(build_conn(), user, athanor_id: group.id)
+    conn = log_in_user(conn, user, athanor_id: group.id)
     {_view, html} = mount_athanor(conn, "/connections", group)
     assert html =~ "bridge-token"
     assert html =~ "used by MCP server bridge"

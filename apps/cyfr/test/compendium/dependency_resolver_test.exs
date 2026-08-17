@@ -5,7 +5,6 @@ defmodule Compendium.DependencyResolverTest do
   use ExUnit.Case, async: false
 
   alias Compendium.DependencyResolver
-  alias Sanctum.Context
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

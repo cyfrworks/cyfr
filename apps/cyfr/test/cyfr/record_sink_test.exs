@@ -16,7 +16,7 @@ defmodule Cyfr.RecordSinkTest do
     :ok
   end
 
-  defp policy_attrs(overrides \\ %{}) do
+  defp policy_attrs(overrides) do
     Map.merge(
       %{
         id: Emissary.UUID7.generate_id("plog"),

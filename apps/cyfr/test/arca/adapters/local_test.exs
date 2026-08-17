@@ -5,7 +5,6 @@ defmodule Arca.Adapters.LocalTest do
   use ExUnit.Case, async: false
 
   alias Arca.Adapters.Local
-  alias Sanctum.Context
 
   @test_base_path System.tmp_dir!() |> Path.join("arca_test_#{:rand.uniform(100_000)}")
 

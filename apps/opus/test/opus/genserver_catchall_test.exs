@@ -10,7 +10,6 @@ defmodule Opus.GenServerCatchallTest do
 
   import ExUnit.CaptureLog
 
-  require Logger
 
   describe "RateLimiter catch-all" do
     test "survives unexpected message and logs warning" do

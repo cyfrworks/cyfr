@@ -6,7 +6,6 @@ defmodule Sanctum.MCPTest do
 
   alias Sanctum.Context
   alias Sanctum.MCP
-  import Sanctum.Test.ComponentHelpers
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

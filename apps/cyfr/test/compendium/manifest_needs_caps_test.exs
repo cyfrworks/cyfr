@@ -2,7 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Compendium.ManifestNeedsCapsTest do
-  use ExUnit.Case, async: true
+  # The registration block below runs the sandbox in shared mode and points
+  # the storage roots at its own directory — both are global, so this module
+  # cannot run beside others.
+  use ExUnit.Case, async: false
 
   alias Compendium.Manifest.Caps
   alias Compendium.Manifest.Needs

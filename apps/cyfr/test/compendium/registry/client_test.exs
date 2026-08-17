@@ -7,7 +7,6 @@ defmodule Compendium.Registry.ClientTest do
   alias Compendium.Registry.Client
   alias Compendium.MCP
   alias Compendium.OCI.Errors
-  alias Sanctum.Context
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

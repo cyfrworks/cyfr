@@ -6,7 +6,6 @@ defmodule Compendium.AutoIndexerTest do
 
   alias Compendium.AutoIndexer
   alias Compendium.Registry
-  alias Sanctum.Context
 
   # Valid minimal WASM with export section
   # magic + version

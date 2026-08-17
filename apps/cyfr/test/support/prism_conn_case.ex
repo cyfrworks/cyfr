@@ -32,11 +32,15 @@ defmodule PrismWeb.ConnCase do
   end
 
   setup tags do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-
-    unless tags[:async] do
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    end
+    # The sandbox owner is its own process, not the test: the work a page
+    # leaves behind (a conversation runner finishing a turn, a task on one
+    # of the supervisors below) is stopped from `on_exit`, which runs after
+    # the test process is gone. Were the test the owner, that work would
+    # lose its connection first, crash, and be restarting when the teardown
+    # reaches it. Callbacks run last-registered first, so the owner is
+    # stopped only after everything that used it has been.
+    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, shared: not tags[:async])
+    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
 
     # LiveViews spawn work on these supervisors (session refresh, AQUA calls,
     # MCP tool dispatch); let that work reach the sandbox connection — and
@@ -47,7 +51,7 @@ defmodule PrismWeb.ConnCase do
       for name <- [Prism.TaskSupervisor, Emissary.TaskSupervisor],
           pid = Process.whereis(name),
           is_pid(pid) do
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), pid)
+        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, pid)
         pid
       end
 
@@ -58,7 +62,8 @@ defmodule PrismWeb.ConnCase do
 
       # Conversation runners the chat page started idle out on their own,
       # which is far too late for the next test's sandbox.
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor) do
+      for {_, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor),
+          is_pid(pid) do
         DynamicSupervisor.terminate_child(Prism.ConversationSupervisor, pid)
       end
     end)

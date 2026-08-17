@@ -78,7 +78,18 @@ defmodule Sanctum.Tenancy.CapsTest do
   end
 
   test "athanor_storage_bytes is one check for every writer" do
-    ctx = Sanctum.TestContext.local()
+    # An athanor nothing else has written under, so the usage walk starts
+    # at zero regardless of what ran before.
+    ctx =
+      Sanctum.Context.build(
+        user_id: "local|local|caps",
+        athanor_id: "ath_caps_#{System.unique_integer([:positive])}",
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
     assert :ok = Caps.check_storage(ctx, 50)
     assert {:error, {:limit_reached, :athanor_storage_bytes, 100}} = Caps.check_storage(ctx, 1_000)

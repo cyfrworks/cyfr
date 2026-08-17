@@ -5,7 +5,6 @@ defmodule Compendium.ScaffoldTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Scaffold
-  alias Sanctum.Context
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

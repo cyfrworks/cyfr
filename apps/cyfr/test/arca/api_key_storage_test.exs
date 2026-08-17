@@ -81,7 +81,7 @@ defmodule Arca.ApiKeyStorageTest do
       assert "list-b" in names
     end
 
-    test "returns empty list when no keys", %{athanor_id: athanor_id} do
+    test "returns empty list when no keys" do
       {:ok, keys} = ApiKeyStorage.list_keys("ath_empty")
       assert keys == []
     end
