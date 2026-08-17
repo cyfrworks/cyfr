@@ -44,6 +44,9 @@ defmodule PrismWeb.LoginLive do
       "You're signed in, but you have no athanor here yet. If you were just " <>
         "let in, sign in again; otherwise ask the operator."
 
+  defp error_from_params(%{"error" => "unavailable"}),
+    do: "The server could not read your account just now. Try again in a moment."
+
   defp error_from_params(%{"error" => "signed_out"}), do: nil
   defp error_from_params(_), do: nil
 

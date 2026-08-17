@@ -581,7 +581,17 @@ defmodule Compendium.MCPTest do
 
     test "push of a local component resolves the caller's claimed personal namespace",
          %{ctx: ctx} do
-      # Claiming a namespace stores a personal (bare-slug) push-token credential.
+      # A claimed namespace is on the users row; the push token beside it.
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: ctx.user_id,
+          provider: "local",
+          email: "testns@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
+
       :ok =
         Registry.CredentialStore.put(ctx.user_id, Registry.canonical_host(), "testns", %{
           type: :push_token,

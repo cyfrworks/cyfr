@@ -1032,7 +1032,7 @@ defmodule Compendium.OCI.Client do
           {:error, _reason} ->
             {:error,
              "Could not resolve your personal namespace for #{registry} " <>
-               "(registry credential store unavailable). Please retry."}
+               "(your account could not be read just now). Please retry."}
         end
 
       slug when is_binary(slug) and slug != "" ->

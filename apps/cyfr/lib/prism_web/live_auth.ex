@@ -29,11 +29,16 @@ defmodule PrismWeb.LiveAuth do
       # unauthenticated: the claim gate comes first. The HTTP plug sends the
       # first GET there; the LiveView socket never passes the router, so the
       # connected mount is gated here.
-      {:ok, %{authenticated: false}} ->
+      {:ok, %{authenticated: false, namespace: nil}} ->
         {:halt, redirect(socket, to: "/claim-namespace")}
 
+      # A namespace but no standing: denied at the door since the session
+      # was minted.
+      {:ok, %{authenticated: false}} ->
+        {:halt, redirect(socket, to: "/login")}
+
       {:ok, ctx} ->
-        slug = PrismWeb.AuthHelpers.personal_namespace_slug(ctx.user_id)
+        slug = ctx.namespace
 
         if connected?(socket) do
           Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Session.topic())
@@ -51,6 +56,11 @@ defmodule PrismWeb.LiveAuth do
 
       {:error, :no_athanor} ->
         {:halt, redirect(socket, to: "/login?error=no_athanor")}
+
+      # A transient failure reading who the person is: say so, never bounce
+      # them into a claim they have already made.
+      {:error, :namespace_unavailable} ->
+        {:halt, redirect(socket, to: "/login?error=unavailable")}
 
       {:error, :unauthenticated} ->
         {:halt, redirect(socket, to: "/login")}

@@ -51,6 +51,33 @@ defmodule Emissary.MCP.ToolVisibility do
   end
 
   @doc """
+  May this caller reach an action with this annotation, as far as
+  authentication goes? Authenticated callers always may; `:anonymous`
+  actions serve anyone; `:signed_in` actions serve a session that has not
+  claimed its namespace yet (`user_id` set, `authenticated: false`).
+  """
+  @spec admits?(map(), Context.t()) :: boolean()
+  def admits?(annotation, %Context{} = ctx) do
+    case Map.get(annotation, :auth, :required) do
+      :anonymous -> true
+      :signed_in -> ctx.authenticated or is_binary(ctx.user_id)
+      _ -> ctx.authenticated
+    end
+  end
+
+  @doc "`admits?/2` by tool and action name, for the Router's invocation gate."
+  @spec admits_action?(String.t(), String.t(), Context.t()) :: boolean()
+  def admits_action?(name, action, %Context{} = ctx) do
+    case Arca.Cache.get({:mcp_tool, name}) do
+      {:ok, {_module, meta}} ->
+        admits?(get_in(meta, [:annotations, :actions, action]) || %{}, ctx)
+
+      :miss ->
+        false
+    end
+  end
+
+  @doc """
   Filter tool definitions to only include tools/actions the caller can see.
 
   - For each tool: prunes the action enum to actions whose annotation admits
@@ -85,9 +112,10 @@ defmodule Emissary.MCP.ToolVisibility do
   # Unclassified action: invisible, matching the dispatch refusal.
   defp visible_action?(nil, _ctx), do: false
 
-  # A caller with no credential sees only what dispatch would let it call.
-  defp visible_action?(annotation, %Context{authenticated: false}),
-    do: Map.get(annotation, :auth, :required) == :anonymous
+  # A caller with no credential — or a session ahead of its claim — sees
+  # only what dispatch would let it call.
+  defp visible_action?(annotation, %Context{authenticated: false} = ctx),
+    do: admits?(annotation, ctx)
 
   defp visible_action?(annotation, ctx),
     do:

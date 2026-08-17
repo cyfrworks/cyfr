@@ -52,7 +52,7 @@ defmodule PrismWeb.TopbarLive do
             Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Tenancy.Members.topic(ctx.user_id))
           end
 
-          slug = PrismWeb.AuthHelpers.personal_namespace_slug(ctx.user_id)
+          slug = ctx.namespace
 
           socket
           |> assign(:context, ctx)

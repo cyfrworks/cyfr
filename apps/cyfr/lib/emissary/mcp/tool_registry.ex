@@ -442,7 +442,7 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp check_auth(name, ctx, annotation) do
-    if Map.get(annotation, :auth, :required) == :anonymous or ctx.authenticated do
+    if Emissary.MCP.ToolVisibility.admits?(annotation, ctx) do
       :ok
     else
       {:error, "Unauthorized: tool '#{name}' requires authentication"}
@@ -704,7 +704,7 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   @valid_planes [:external, :in_chain]
-  @valid_auth [:anonymous, :required]
+  @valid_auth [:anonymous, :signed_in, :required]
   @valid_consent [:interactive, :staging]
   @valid_scopes [:platform]
 

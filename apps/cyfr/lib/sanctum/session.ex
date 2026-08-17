@@ -414,9 +414,10 @@ defmodule Sanctum.Session do
 
     case Sanctum.Namespace.lookup_status(row.user_id) do
       :not_claimed ->
-        # Session valid, but the user has no claimed namespace yet — keep the
-        # context unauthenticated so RequirePersonalNamespace plug forwards
-        # them to /claim-namespace before any tenant-scoped operation runs.
+        # Session valid, but the person's users row records no namespace yet
+        # (the claim is ahead of them) — keep the context unauthenticated so
+        # the claim gate forwards them before any tenant-scoped operation
+        # runs; the actions annotated `auth: :signed_in` still serve it.
         # The session's athanor rides along: it is a fact of the sign-in, not
         # of the claim, and tincture access (which is not tenant
         # administration) is granted on it.
@@ -452,9 +453,9 @@ defmodule Sanctum.Session do
         |> Sanctum.Tenancy.revalidate()
 
       {:error, _reason} ->
-        # Transient CredentialStore/DB failure — distinct from "not claimed".
+        # The users row could not be read — distinct from "not claimed".
         # Surface a retryable error so the caller returns 503 rather than
-        # silently downgrading a valid user to unauthenticated and wedging
+        # silently downgrading a valid person to unauthenticated and wedging
         # them at /claim-namespace (re-claim then 409s).
         {:error, :namespace_unavailable}
     end

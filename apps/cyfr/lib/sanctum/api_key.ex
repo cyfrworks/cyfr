@@ -470,7 +470,7 @@ defmodule Sanctum.ApiKey do
   stored key row (set at creation, gated by the tenant gate), NEVER from the
   request or the creating user's *current* membership. The namespace segment
   is the creator's personal slug (`Sanctum.Namespace.lookup/1`) with a
-  `"_system"` orphan fallback when the creator's CredentialStore entry is gone
+  `"_system"` orphan fallback when the creator's users row records none
   (deleted user / wiped slug) so storage path construction fails safe rather
   than crashing.
 
@@ -487,8 +487,8 @@ defmodule Sanctum.ApiKey do
       |> Enum.filter(&is_atom/1)
 
     # namespace is identity-only (not path-bearing), so a nil is fine. An
-    # orphaned key (owner's CredentialStore entry gone) still works — log it so
-    # operators can spot keys worth revoking.
+    # orphaned key (owner's namespace gone from their users row) still works —
+    # log it so operators can spot keys worth revoking.
     namespace = Sanctum.Namespace.lookup(metadata[:user_id])
 
     if is_nil(namespace) do
@@ -496,7 +496,7 @@ defmodule Sanctum.ApiKey do
         "[Sanctum.ApiKey] API key namespace lookup returned nil — " <>
           "user_id=#{inspect(metadata[:user_id])} " <>
           "api_key_id=#{inspect(metadata[:id])}. The owning user's " <>
-          "CredentialStore entry is missing; consider revoking the key."
+          "namespace is not recorded; consider revoking the key."
       )
     end
 

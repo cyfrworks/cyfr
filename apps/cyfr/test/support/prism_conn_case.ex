@@ -92,25 +92,21 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Record a claimed personal namespace for `user` in the CredentialStore, the
+  Record a claimed personal namespace for `user` on their users row, the
   way the cyfr.run probe/claim does — a session restores as authenticated
-  only when the user has one.
+  only when the row carries one.
   """
-  def claim_namespace!(%{user_id: user_id, namespace: slug}) do
-    :ok =
-      Compendium.Registry.CredentialStore.put(
-        user_id,
-        Compendium.Registry.canonical_host(),
-        slug,
-        %{
-          type: :push_token,
-          token: "cyfr_pt_test_#{slug}",
-          namespace: slug,
-          issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          label: "test"
-        }
-      )
+  def claim_namespace!(%{user_id: user_id, namespace: slug} = user) do
+    {:ok, row} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: user_id,
+        provider: "github",
+        email: Map.get(user, :email),
+        verified: true,
+        name: nil
+      })
 
+    {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, slug)
     :ok
   end
 

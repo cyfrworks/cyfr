@@ -132,15 +132,11 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert conn.status == 403
     end
 
-    test "successful OAuth callback creates session and returns JSON", %{conn: conn} do
-      # Simulate successful Ueberauth auth from GitHub
-      auth = %Ueberauth.Auth{
-        uid: "12345",
+    defp github_auth(uid, email) do
+      %Ueberauth.Auth{
+        uid: uid,
         provider: :github,
-        info: %Ueberauth.Auth.Info{
-          email: "test@example.com",
-          name: "Test User"
-        },
+        info: %Ueberauth.Auth.Info{email: email, name: "Test User"},
         credentials: %Ueberauth.Auth.Credentials{
           token: "gho_mock_access_token",
           refresh_token: nil,
@@ -148,20 +144,58 @@ defmodule EmissaryWeb.AuthControllerTest do
         },
         extra: %{}
       }
+    end
 
-      # Initialize session (required for get_session calls in callback)
+    test "a first-time person whom cyfr.run cannot place gets a page, no session, no cookie",
+         %{conn: conn} do
+      uid = "first-#{System.unique_integer([:positive])}"
+
       conn =
         conn
         |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, auth)
+        |> assign(:ueberauth_auth, github_auth(uid, "test@example.com"))
         |> EmissaryWeb.AuthController.callback(%{})
 
-      response = json_response(conn, 200)
-      assert response["ok"] == true
-      assert response["session"]["token"]
-      assert response["session"]["expires_at"]
-      assert response["user"]["email"] == "test@example.com"
-      assert response["user"]["provider"] == "github"
+      assert conn.status == 503
+      assert conn.resp_body =~ "cyfr.run could not be reached"
+      assert conn.resp_body =~ "Try again"
+      refute Plug.Conn.get_session(conn, :sanctum_session_token)
+      refute Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
+      refute Enum.any?(Plug.Conn.get_resp_header(conn, "content-type"), &(&1 =~ "json"))
+      # Nothing was set up: no users row is left carrying a namespace.
+      assert {:ok, %{namespace: nil}} =
+               Sanctum.Tenancy.Users.get("github|https://github.com|#{uid}")
+    end
+
+    test "a returning person signs in and lands in the chat even with cyfr.run unreachable",
+         %{conn: conn} do
+      uid = "back-#{System.unique_integer([:positive])}"
+      user_id = "github|https://github.com|#{uid}"
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user_id,
+          provider: "github",
+          email: "back@example.com",
+          verified: true
+        })
+
+      {:ok, _} =
+        Sanctum.Tenancy.Users.set_namespace(user, "back#{System.unique_integer([:positive])}")
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> Phoenix.ConnTest.fetch_flash()
+        |> assign(:ueberauth_auth, github_auth(uid, "back@example.com"))
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      assert redirected_to(conn) == "/"
+      token = Plug.Conn.get_session(conn, :sanctum_session_token)
+      assert is_binary(token)
+      assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
+      # The token travels in the cookie only.
+      refute conn.resp_body =~ token
     end
   end
 
@@ -239,33 +273,47 @@ defmodule EmissaryWeb.AuthControllerTest do
     # can leak across tests. Each test uses a unique uid so writes don't
     # collide.
 
-    test "happy path: probe succeeds, tokens stored, 200 JSON response",
+    defp callback(conn, auth) do
+      # The pending-probe cookie is encrypted: the conn needs a key base, as
+      # the endpoint gives it in production.
+      %{conn | secret_key_base: String.duplicate("a", 64)}
+      |> Plug.Test.init_test_session(%{})
+      |> Phoenix.ConnTest.fetch_flash()
+      |> assign(:ueberauth_auth, auth)
+      |> EmissaryWeb.AuthController.callback(%{})
+    end
+
+    defp session_of(conn), do: Plug.Conn.get_session(conn, :sanctum_session_token)
+
+    test "happy path: namespace recorded, tokens stored, redirect to the chat",
          %{conn: conn, bypass: bypass} do
-      uid = "auth_cb_happy_#{System.unique_integer([:positive])}"
+      n = System.unique_integer([:positive])
+      uid = "auth_cb_happy_#{n}"
       user_id = "github|https://github.com|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "alice", "token" => "cyfr_pt_personal"},
+          "personal_namespace" => %{"slug" => "alice#{n}", "token" => "cyfr_pt_personal"},
           "memberships" => []
         })
       end)
 
-      conn =
-        conn
-        |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, verified_github_auth(uid))
-        |> EmissaryWeb.AuthController.callback(%{})
+      conn = callback(conn, verified_github_auth(uid))
 
-      response = json_response(conn, 200)
-      assert response["ok"] == true
-      assert response["user"]["email"] == "alice@example.com"
+      assert redirected_to(conn) == "/"
+      assert is_binary(session_of(conn))
+      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(user_id)
+      assert ns == "alice#{n}"
 
       assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
-               CredentialStore.get(user_id, "registry.test", "alice")
+               CredentialStore.get(user_id, "registry.test", ns)
+
+      # The session is a working one: the person is authenticated at once.
+      assert {:ok, %{authenticated: true, namespace: ^ns}} =
+               Sanctum.Session.load(session_of(conn), surface: :console)
     end
 
-    test "unclaimed path: probe succeeds, no personal → redirect to /claim-namespace",
+    test "unclaimed path: no personal → session, IdP token stashed, redirect to /claim-namespace",
          %{conn: conn, bypass: bypass} do
       uid = "auth_cb_unclaimed_#{System.unique_integer([:positive])}"
       user_id = "github|https://github.com|#{uid}"
@@ -274,19 +322,33 @@ defmodule EmissaryWeb.AuthControllerTest do
         json_resp(c, 200, %{"personal_namespace" => nil, "memberships" => []})
       end)
 
-      conn =
-        conn
-        |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, verified_github_auth(uid))
-        |> EmissaryWeb.AuthController.callback(%{})
+      conn = callback(conn, verified_github_auth(uid))
 
       assert redirected_to(conn) == "/claim-namespace"
-      assert Plug.Conn.get_session(conn, :sanctum_session_token)
+      assert is_binary(session_of(conn))
+      assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
+      # A session ahead of its claim is not a working one yet.
+      assert {:ok, %{authenticated: false, namespace: nil}} =
+               Sanctum.Session.load(session_of(conn), surface: :console)
 
       assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
     end
 
-    test "probe 401: session destroyed, bounce to /auth/<provider>",
+    test "412: session, IdP token stashed, redirect to /legal/accept",
+         %{conn: conn, bypass: bypass} do
+      uid = "auth_cb_412_#{System.unique_integer([:positive])}"
+
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
+      end)
+
+      conn = callback(conn, verified_github_auth(uid))
+      assert redirected_to(conn) == "/legal/accept"
+      assert is_binary(session_of(conn))
+      assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
+    end
+
+    test "probe 401 for a first-time person: no session, bounce to /auth/<provider>",
          %{conn: conn, bypass: bypass} do
       uid = "auth_cb_401_#{System.unique_integer([:positive])}"
       user_id = "github|https://github.com|#{uid}"
@@ -295,44 +357,47 @@ defmodule EmissaryWeb.AuthControllerTest do
         json_resp(c, 401, %{"error" => "invalid_access_token"})
       end)
 
-      conn =
-        conn
-        |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, verified_github_auth(uid, token: "expired_token"))
-        |> EmissaryWeb.AuthController.callback(%{})
+      conn = callback(conn, verified_github_auth(uid, token: "expired_token"))
 
       assert redirected_to(conn) =~ ~r{^/auth/github}
-
+      refute session_of(conn)
       assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
     end
 
-    test "probe 5xx: session survives, CredentialStore empty, 200 JSON",
+    test "probe 5xx: a first-time person gets the page and no session; a returning one signs in",
          %{conn: conn, bypass: bypass} do
-      uid = "auth_cb_5xx_#{System.unique_integer([:positive])}"
-      user_id = "github|https://github.com|#{uid}"
-
       Bypass.expect(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 500, %{"error" => "internal"})
       end)
 
-      conn =
-        conn
-        |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, verified_github_auth(uid))
-        |> EmissaryWeb.AuthController.callback(%{})
+      uid = "auth_cb_5xx_#{System.unique_integer([:positive])}"
+      conn1 = callback(conn, verified_github_auth(uid))
+      assert conn1.status == 503
+      refute session_of(conn1)
+      refute Map.has_key?(conn1.resp_cookies, "_cyfr_pending_probe")
 
-      response = json_response(conn, 200)
-      assert response["ok"] == true
+      n = System.unique_integer([:positive])
+      back = "auth_cb_5xx_back_#{n}"
 
-      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|#{back}",
+          provider: "github",
+          email: "alice@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "back#{n}")
+      conn2 = callback(build_conn(), verified_github_auth(back))
+      assert redirected_to(conn2) == "/"
+      assert is_binary(session_of(conn2))
+      assert Phoenix.Flash.get(conn2.assigns.flash, :error) =~ "couldn't be reached"
     end
 
-    test "probe succeeds but personal CredentialStore.put fails: reauth bounce",
+    test "the namespace is the identity: a push token that cannot be stored still signs the person in",
          %{conn: conn, bypass: bypass} do
-      # Force at-rest encryption to fail by clearing the resolved keyring.
-      # CredentialStore.put → Sanctum.Cipher.encrypt fetches
-      # `:crypto_keyring`; without it, encrypt raises. Every put_cred in
-      # the test scope fails, driving the phantom-gate branch end-to-end.
+      # Force at-rest encryption to fail by clearing the resolved keyring:
+      # CredentialStore.put → Sanctum.Cipher.encrypt raises without it.
       original_keyring = Application.get_env(:cyfr, :crypto_keyring)
       Application.delete_env(:cyfr, :crypto_keyring)
 
@@ -342,71 +407,41 @@ defmodule EmissaryWeb.AuthControllerTest do
           else: Application.delete_env(:cyfr, :crypto_keyring)
       end)
 
-      uid = "auth_cb_putfail_#{System.unique_integer([:positive])}"
+      n = System.unique_integer([:positive])
+      uid = "auth_cb_putfail_#{n}"
       user_id = "github|https://github.com|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "alice", "token" => "cyfr_pt_personal"},
+          "personal_namespace" => %{"slug" => "alice#{n}", "token" => "cyfr_pt_personal"},
           "memberships" => []
         })
       end)
 
-      conn =
-        conn
-        |> Plug.Test.init_test_session(%{})
-        |> Phoenix.ConnTest.fetch_flash()
-        |> assign(:ueberauth_auth, verified_github_auth(uid))
-        |> EmissaryWeb.AuthController.callback(%{})
+      conn = callback(conn, verified_github_auth(uid))
 
-      # Re-auth redirect to /auth/<provider>; session destroyed.
-      assert redirected_to(conn) =~ ~r{^/auth/github}
-
-      # Personal slug's put was attempted and failed (with encrypt erroring);
-      # list_for_user returns nothing for this user.
-      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
-
-      # Flash message mentions the local-store failure.
-      flash = Phoenix.Flash.get(conn.assigns.flash, :error) || ""
-      assert flash =~ "credential couldn't be stored locally"
+      assert redirected_to(conn) == "/"
+      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(user_id)
+      assert ns == "alice#{n}"
+      assert :not_found = CredentialStore.get(user_id, "registry.test", ns)
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
     end
 
-    test "partial membership put-failure: dashboard + warnings in JSON payload",
+    test "no browser outcome is a JSON document, and no body carries a session token",
          %{conn: conn, bypass: bypass} do
-      # The membership-only failure case exercises store_probe_results' warning
-      # path without forcing global crypto failure. We push an invalid
-      # membership token (non-binary → put_cred returns :skipped, not :error).
-      # To force an actual {:error, _} we use a membership slug that contains
-      # a value that serializes fine but whose Secrets.set fails — simplest
-      # reliable path: simulate by letting probe return a nil token in the
-      # membership, which put_cred's non-matching head treats as :skipped.
-      # :skipped doesn't warn. So we use `captures_log` around a deliberate
-      # encrypt failure bracketed to just the membership phase. Since we can't
-      # easily gate per-slug, we settle for asserting the happy-path warnings
-      # contract: empty memberships + successful personal produces an empty
-      # warnings list in the 200 JSON payload.
-      uid = "auth_cb_partial_#{System.unique_integer([:positive])}"
-      user_id = "github|https://github.com|#{uid}"
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "alice", "token" => "cyfr_pt_personal"},
-          "memberships" => []
-        })
+      Bypass.expect(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 500, %{"error" => "internal"})
       end)
 
-      conn =
-        conn
-        |> Plug.Test.init_test_session(%{})
-        |> assign(:ueberauth_auth, verified_github_auth(uid))
-        |> EmissaryWeb.AuthController.callback(%{})
+      uid = "auth_cb_nojson_#{System.unique_integer([:positive])}"
 
-      response = json_response(conn, 200)
-      assert response["ok"] == true
-      # The new `warnings` key is present on the happy-path JSON response.
-      assert response["warnings"] == []
-
-      assert {:ok, _} = CredentialStore.get(user_id, "registry.test", "alice")
+      # A first-time person: the registry down, and the IdP giving no token.
+      for auth <- [verified_github_auth(uid), verified_github_auth(uid, token: nil)] do
+        conn = callback(conn, auth)
+        assert conn.status == 503
+        refute Enum.any?(Plug.Conn.get_resp_header(conn, "content-type"), &(&1 =~ "json"))
+        refute conn.resp_body =~ "session_token"
+      end
     end
   end
 

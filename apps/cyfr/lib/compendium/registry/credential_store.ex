@@ -57,19 +57,13 @@ defmodule Compendium.Registry.CredentialStore do
     aad = CipherAAD.registry_token(user_id, registry, namespace_slug)
     {:ok, ciphertext} = Sanctum.Cipher.encrypt(value, aad)
 
-    result =
-      RegistryTokenStorage.put(%{
-        user_id: user_id,
-        registry: registry,
-        namespace_slug: namespace_slug,
-        credential_ciphertext: ciphertext,
-        issued_at: credential_issued_at(credential)
-      })
-
-    # A credential write can change the user's resolved namespace slug —
-    # drop the auth-path cache so the change is visible immediately.
-    Sanctum.Namespace.invalidate(user_id)
-    result
+    RegistryTokenStorage.put(%{
+      user_id: user_id,
+      registry: registry,
+      namespace_slug: namespace_slug,
+      credential_ciphertext: ciphertext,
+      issued_at: credential_issued_at(credential)
+    })
   end
 
   @doc """
@@ -138,9 +132,8 @@ defmodule Compendium.Registry.CredentialStore do
   Returns a list ordered personal-first then publisher-alphabetical.
   Empty list if the user has no credentials.
 
-  Used by:
-  - The web claim-gate plug to detect whether a user has any personal-namespace
-    credential (bare slug, no dot) and skip the gate.
+  Push-token uses only — who a person is lives on the `users` row
+  (`Sanctum.Namespace`). Used by:
   - `Compendium.Registry.Client.auth_headers/1` to pick a bearer for
     non-namespace-scoped calls (e.g. `/v1/identity/probe`).
   - Registry `whoami` to present personal + membership identity.
@@ -174,41 +167,11 @@ defmodule Compendium.Registry.CredentialStore do
   @spec delete(String.t(), String.t(), String.t()) :: :ok
   def delete(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    result =
-      case RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
-        :ok -> :ok
-        {:error, _} -> :ok
-      end
-
-    Sanctum.Namespace.invalidate(user_id)
-    result
+    case RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
+      :ok -> :ok
+      {:error, _} -> :ok
+    end
   end
-
-  @doc """
-  Returns true if the user has a credential under a personal-namespace slug
-  on this registry.
-
-  A personal slug is bare (no dot); publisher slugs are dotted (`stripe.com`).
-  Reserved slugs are also bare, but reserved-slug claims require admin approval
-  and never end up in a regular user's CredentialStore — so a bare-slug
-  credential here is, in practice, the user's personal namespace.
-
-  Used by the claim-namespace gate (HTTP plug + LiveView on_mount) to decide
-  whether the user has finished post-OAuth claim and can access the dashboard.
-  """
-  @spec has_personal?(String.t(), String.t()) :: boolean()
-  def has_personal?(user_id, registry)
-      when is_binary(user_id) and is_binary(registry) do
-    list_for_user(user_id, registry)
-    |> Enum.any?(fn cred ->
-      slug = personal_slug(cred)
-      is_binary(slug) and slug != "" and not String.contains?(slug, ".")
-    end)
-  end
-
-  defp personal_slug(%{namespace: slug}), do: slug
-  defp personal_slug(%{"namespace" => slug}), do: slug
-  defp personal_slug(_), do: nil
 
   # ============================================================================
   # Internal

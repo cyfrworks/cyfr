@@ -94,7 +94,10 @@ defmodule Emissary.MCP.ToolProvider do
   a caller is shown and what a caller may invoke cannot drift apart.
 
   - `:auth` — `:anonymous` serves uncredentialed callers (device flow,
-    health); the default `:required` refuses them.
+    health); `:signed_in` serves anyone holding a live session, claimed or
+    not (the registry bootstrap a first sign-in still has ahead of it:
+    probe, claim, legal acceptance); the default `:required` needs a
+    claimed, authenticated caller.
   - `:permission` — a `Sanctum.Atoms` permission atom, enforced through
     `Sanctum.Context.require_permission_for_plane/2`. Absent means any
     authenticated caller.
@@ -111,7 +114,7 @@ defmodule Emissary.MCP.ToolProvider do
   @type action_annotation :: %{
           required(:kind) => action_kind(),
           required(:planes) => [plane(), ...],
-          optional(:auth) => :anonymous | :required,
+          optional(:auth) => :anonymous | :signed_in | :required,
           optional(:permission) => atom(),
           optional(:consent) => :interactive | :staging,
           optional(:scope) => :platform

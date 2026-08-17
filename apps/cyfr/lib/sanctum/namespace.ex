@@ -3,78 +3,67 @@
 
 defmodule Sanctum.Namespace do
   @moduledoc """
-  Single seam for retrieving a user's personal namespace slug from cyfr.run.
+  A person's cyfr.run namespace, as this server knows it.
 
-  cyfr.run is the namespace authority — slugs are minted by
-  `Compendium.Registry.Client.claim_personal_namespace/4` and persisted
-  locally via `Compendium.Registry.CredentialStore`. This module is the
-  one-line lookup callers use to materialize `ctx.namespace` from the
-  persistent identity (`ctx.user_id`).
+  cyfr.run is the authority for *what* the slug is — it is claimed once,
+  bound to the IdP identity there, and the same on every server. The
+  `users` row is the authority for *whether this server knows it*: the
+  slug is recorded on `users.namespace` the moment a probe or a claim
+  yields it (`Sanctum.SignIn.record_namespace/2`) and read from there
+  ever after. The registry push tokens in `Compendium.Registry.CredentialStore`
+  are what a push needs, not who a person is — losing them costs a
+  re-probe, never the identity.
 
-  Used by:
-  - `EmissaryWeb.Plugs.Authenticate`
-  - `PrismWeb.AuthHelpers.maybe_resolve_membership/1`
-  - `Sanctum.Session.row_to_context/1` (via session-resolution wrapper)
-  - the configured auth provider's `authenticate/1` (after `resolve_membership/1`)
-  - `Context.for_scheduled/2` (auto-resolve for real user_ids; sentinel
-    `"_system"` for `"system"` / `"cron:*"`)
-
-  A "personal" slug is bare (no dot); publisher slugs contain a dot.
-  CredentialStore returns entries personal-first, so the first bare-slug
-  hit wins.
+  This module is the one-line lookup callers use to materialize
+  `ctx.namespace` from `ctx.user_id`: `EmissaryWeb.Plugs.Authenticate`,
+  `PrismWeb.AuthHelpers`, `Sanctum.Session.row_to_context/2`, the auth
+  providers, API-key and webhook attribution.
   """
 
-  alias Compendium.Registry.CredentialStore
+  require Logger
+  require Arca.Repo.Errors
 
-  @doc """
-  Resolve a user's personal namespace slug.
+  alias Sanctum.Tenancy.Users
 
-  Returns the slug string when the user has claimed one on cyfr.run AND
-  the stored slug still satisfies the canonical rule
-  (`Sanctum.ComponentRef.valid_personal_slug?/1`). Otherwise returns `nil`.
-  Safe to call with `nil` / non-binary user_id (returns `nil`).
-
-  Defense-in-depth: we re-validate even though cyfr.run already enforced the
-  rule at claim time — a corrupted CredentialStore row shouldn't be able to
-  inject `..`, slashes, or other path-unsafe characters into `ctx.namespace`.
-
-  Network/DB errors are caught and reported as `nil` — the caller's
-  invariant is "namespace populated when known, nil when not", and a
-  CredentialStore failure shouldn't crash an unrelated request.
-  """
-  # The Authenticate plug calls this on EVERY bearer request, and the
-  # uncached path is a DB read plus an AES-GCM unseal per credential row.
-  # A claimed slug changes only through CredentialStore writes (which
-  # invalidate below), so a short TTL is safe and takes the decrypt off
-  # the hot path. Only positive results cache: an unclaimed user stays on
-  # the live path so a fresh claim is visible immediately.
+  # Read on every request that carries a session or a bearer credential;
+  # the users row changes only through `Users.set_namespace/2` (which
+  # invalidates below), so a short TTL keeps the read off the hot path.
+  # Only positive results cache: an unclaimed person stays on the live path
+  # so a fresh claim is visible immediately. (The test config sets the TTL
+  # to 0: a sandbox rollback is a write no invalidation sees.)
   @cache_ttl_ms 60_000
 
+  # A read that raises is a transient failure, never "unclaimed".
+  @transient [DBConnection.OwnershipError, ArgumentError] ++ Arca.Repo.Errors.db_errors()
+
+  @doc """
+  Resolve a person's namespace slug.
+
+  Returns the slug when this server has recorded one for the person AND
+  it still satisfies the canonical rule
+  (`Sanctum.ComponentRef.valid_personal_slug?/1`). Otherwise `nil`. Safe to
+  call with `nil` / non-binary user_id (returns `nil`).
+
+  Defense-in-depth: the rule is re-checked even though cyfr.run enforced it
+  at claim time — a corrupted row must not inject `..`, slashes, or other
+  path-unsafe characters into `ctx.namespace`.
+
+  A read failure is reported as `nil` — the caller's invariant is
+  "namespace populated when known, nil when not"; `lookup_status/1` is
+  the form that tells a failure from an unclaimed person.
+  """
   @spec lookup(String.t() | nil) :: String.t() | nil
-  def lookup(user_id) when is_binary(user_id) and user_id != "" do
-    key = {:namespace_slug, user_id}
-
-    case Arca.Cache.get(key) do
-      {:ok, slug} ->
-        slug
-
-      :miss ->
-        case lookup_status(user_id) do
-          {:ok, slug} ->
-            Arca.Cache.put(key, slug, @cache_ttl_ms)
-            slug
-
-          _ ->
-            nil
-        end
+  def lookup(user_id) do
+    case lookup_status(user_id) do
+      {:ok, slug} -> slug
+      _ -> nil
     end
   end
 
-  def lookup(_), do: nil
-
   @doc """
-  Drop the cached slug for `user_id` — called by CredentialStore writes so
-  a claim/unclaim is visible on the next request, not after the TTL.
+  Drop the cached slug for `user_id` — called when the users row's
+  namespace is written, so a claim is visible on the next request, not
+  after the TTL.
   """
   @spec invalidate(String.t() | term()) :: :ok
   def invalidate(user_id) when is_binary(user_id) do
@@ -90,34 +79,50 @@ defmodule Sanctum.Namespace do
   @doc """
   Like `lookup/1` but distinguishes a **transient store error**
   (`{:error, reason}` — retryable; the caller should surface a 503 rather
-  than wedge the user at namespace claiming) from a genuinely **unclaimed**
-  namespace (`:not_claimed`). A blanket `rescue _ -> nil` previously
-  conflated the two, silently downgrading a valid user on a transient error.
+  than wedge the person at namespace claiming) from a genuinely
+  **unclaimed** namespace (`:not_claimed`).
   """
   @spec lookup_status(String.t() | nil) :: status()
   def lookup_status(user_id) when is_binary(user_id) and user_id != "" do
-    registry = Compendium.Registry.canonical_host()
+    key = {:namespace_slug, user_id}
+    ttl = Application.get_env(:cyfr, :namespace_cache_ttl_ms, @cache_ttl_ms)
 
-    slug =
-      user_id
-      |> CredentialStore.list_for_user(registry)
-      |> Enum.find_value(fn cred ->
-        s = cred[:namespace] || cred["namespace"]
-        if Sanctum.ComponentRef.valid_personal_slug?(s), do: s
-      end)
+    case Arca.Cache.get(key) do
+      {:ok, slug} ->
+        {:ok, slug}
 
-    if is_binary(slug), do: {:ok, slug}, else: :not_claimed
+      :miss ->
+        case Users.get(user_id) do
+          {:ok, %{namespace: slug}} when is_binary(slug) ->
+            if Sanctum.ComponentRef.valid_personal_slug?(slug) do
+              if ttl > 0, do: Arca.Cache.put(key, slug, ttl)
+              {:ok, slug}
+            else
+              Logger.warning(
+                "[Sanctum.Namespace] users.namespace for user_id=#{inspect(user_id)} " <>
+                  "is not a valid personal slug — treating as unclaimed"
+              )
+
+              :not_claimed
+            end
+
+          {:ok, _} ->
+            :not_claimed
+
+          {:error, :not_found} ->
+            :not_claimed
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Sanctum.Namespace] transient namespace lookup failure for " <>
+                "user_id=#{inspect(user_id)}: #{inspect(reason)} — treating as retryable"
+            )
+
+            {:error, reason}
+        end
+    end
   rescue
-    e in [
-      RuntimeError,
-      ArgumentError,
-      MatchError,
-      Ecto.QueryError,
-      DBConnection.ConnectionError,
-      DBConnection.OwnershipError
-    ] ->
-      require Logger
-
+    e in @transient ->
       Logger.warning(
         "[Sanctum.Namespace] transient namespace lookup failure for " <>
           "user_id=#{inspect(user_id)}: #{Exception.message(e)} — treating as retryable"

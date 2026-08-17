@@ -703,7 +703,7 @@ defmodule Sanctum.Context do
 
   # The single tenant presence-gate. `:platform` scope is exempt — system
   # tasks legitimately cross tenant boundaries (retention, audit fan-out, the
-  # registry CredentialStore that backs `Sanctum.Namespace.lookup/1`),
+  # users row that backs `Sanctum.Namespace.lookup/1`),
   # symmetric with `verify_tenant/2`. Otherwise requires a resolved athanor_id.
   defp tenant_gate(%__MODULE__{scope: :platform}), do: :ok
   defp tenant_gate(%__MODULE__{} = ctx), do: Sanctum.TenantPolicy.require_athanor(ctx)

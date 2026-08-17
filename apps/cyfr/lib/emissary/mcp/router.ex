@@ -173,7 +173,7 @@ defmodule Emissary.MCP.Router do
             :ok ->
               action = arguments["action"]
 
-              if not ctx.authenticated and not public_tool_action?(name, action) do
+              if not ToolVisibility.admits_action?(name, action, ctx) do
                 {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
               else
                 has_output_schema =
@@ -398,7 +398,4 @@ defmodule Emissary.MCP.Router do
   # where it is actually used, through the `tools` tool
   # (`Emissary.MCP.Tools.SystemProvider`), which is how a running component
   # discovers what it may call.
-
-  defp public_tool_action?(name, action),
-    do: ToolVisibility.anonymous_action?(name, action)
 end

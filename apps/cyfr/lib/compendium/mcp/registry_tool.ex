@@ -358,41 +358,42 @@ defmodule Compendium.MCP.RegistryTool do
 
   defp personal_bearer(_), do: {:error, "authentication required"}
 
-  # Persists the push token returned by claim_personal into CredentialStore
-  # when the caller is authenticated. Returns the body unchanged on success,
-  # or with a `"local_store_failed": true` marker on DB/encrypt failure so
-  # the CLI can surface a warning.
-  defp maybe_store_personal_credential(%Context{authenticated: true, user_id: user_id}, body)
+  # A claim made by a signed-in person is their identity from here on: it
+  # lands on their users row (`Sanctum.SignIn.record_namespace/2`) and the
+  # push token is cached best-effort. A claim from a session that is still
+  # ahead of its own claim counts too — that is exactly when the CLI makes
+  # it. Returns the body unchanged, or with a `"local_store_failed": true`
+  # marker when the token could not be cached, so the CLI can say so.
+  defp maybe_store_personal_credential(%Context{user_id: user_id}, body)
        when is_binary(user_id) and user_id != "" do
     slug = body["slug"]
-    token = body["token"]
 
-    if is_binary(slug) and is_binary(token) do
-      registry = Compendium.Registry.canonical_host()
-
-      cred = %{
-        type: :push_token,
-        token: token,
-        namespace: slug,
-        role: "personal",
-        issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-        label: Compendium.Registry.Client.device_label()
-      }
-
-      case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
-        :ok ->
-          body
+    if is_binary(slug) do
+      case Sanctum.SignIn.record_namespace(user_id, slug) do
+        {:ok, _} ->
+          :ok
 
         {:error, reason} ->
           require Logger
 
           Logger.warning(
-            "[Compendium.MCP] claim_personal CredentialStore.put failed for " <>
-              "#{user_id}/#{slug}: #{inspect(reason)} — orphan cyfr.run token " <>
-              "will be reaped server-side after 365 days"
+            "[Compendium.MCP] claim_personal: namespace #{slug} not recorded for #{user_id}: " <>
+              inspect(reason)
           )
+      end
 
-          Map.put(body, "local_store_failed", true)
+      registry = Compendium.Registry.canonical_host()
+
+      case Compendium.Registry.CredentialStore.put_push_token(
+             user_id,
+             registry,
+             slug,
+             body["token"],
+             "personal"
+           ) do
+        :ok -> body
+        :skipped -> body
+        {:error, _} -> Map.put(body, "local_store_failed", true)
       end
     else
       body
@@ -401,98 +402,16 @@ defmodule Compendium.MCP.RegistryTool do
 
   defp maybe_store_personal_credential(_ctx, body), do: body
 
-  # Persists every push token from a registry.probe response into the
-  # caller's local CredentialStore. Used by the post-legal_accept re-probe
-  # flow (codex) so the cached credentials are populated without a
-  # separate session.* round-trip. Mirrors
-  # Sanctum.Auth.DeviceFlow.store_probe_results/4 (the device-flow path
-  # that runs at OAuth completion).
-  #
-  # Annotates the body with `"credential_store_warnings": [slugs]` when any
-  # individual put fails — partial failure is non-fatal (each namespace
-  # is independent), and surfaces as a soft warning the client can show.
-  defp maybe_store_probe_credentials(%Context{authenticated: true, user_id: user_id}, body)
+  # A probe made by a signed-in person records their namespace and caches
+  # every push token in the answer (`Sanctum.SignIn.absorb_probe/2`) —
+  # the CLI's post-legal-accept re-probe and `cyfr whoami` land here.
+  # Annotates the body with `"credential_store_warnings": [slugs]` when a
+  # put fails — partial failure is non-fatal, each namespace is independent.
+  defp maybe_store_probe_credentials(%Context{user_id: user_id}, body)
        when is_binary(user_id) and user_id != "" do
-    require Logger
-
-    registry = Compendium.Registry.canonical_host()
-    label = Compendium.Registry.Client.device_label()
-
-    personal = body["personal_namespace"]
-    memberships = body["memberships"] || []
-
-    personal_warning =
-      case personal do
-        %{"slug" => slug, "token" => token}
-        when is_binary(slug) and is_binary(token) ->
-          cred = %{
-            type: :push_token,
-            token: token,
-            namespace: slug,
-            role: "personal",
-            issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-            label: label
-          }
-
-          case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
-            :ok ->
-              nil
-
-            {:error, reason} ->
-              Logger.warning(
-                "[Compendium.MCP] probe CredentialStore.put failed (personal) " <>
-                  "#{user_id}/#{slug}: #{inspect(reason)}"
-              )
-
-              slug
-          end
-
-        _ ->
-          nil
-      end
-
-    membership_warnings =
-      memberships
-      |> Enum.map(fn m ->
-        slug = m["slug"]
-        token = m["token"]
-        role = m["role"] || "member"
-
-        if is_binary(slug) and is_binary(token) do
-          cred = %{
-            type: :push_token,
-            token: token,
-            namespace: slug,
-            role: role,
-            issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-            label: label
-          }
-
-          case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
-            :ok ->
-              nil
-
-            {:error, reason} ->
-              Logger.warning(
-                "[Compendium.MCP] probe CredentialStore.put failed (member) " <>
-                  "#{user_id}/#{slug}: #{inspect(reason)}"
-              )
-
-              slug
-          end
-        else
-          nil
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    warnings =
-      [personal_warning | membership_warnings] |> Enum.reject(&is_nil/1)
-
-    if warnings == [] do
-      body
-    else
-      Map.put(body, "credential_store_warnings", warnings)
+    case Sanctum.SignIn.absorb_probe(user_id, body) do
+      [] -> body
+      warnings -> Map.put(body, "credential_store_warnings", warnings)
     end
   end
 

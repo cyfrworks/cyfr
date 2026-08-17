@@ -3,20 +3,24 @@
 
 defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   @moduledoc """
-  Gates browser routes behind a claimed personal namespace on cyfr.run.
+  Gates browser routes behind a claimed personal namespace.
 
   Logic:
 
-  1. Bypass `/claim-namespace/*`, `/auth/*`, `/api/health`, `/mcp/*`,
-     `/assets/*`, `/t/*` (tincture routes use query-param auth, not session).
-  2. Load the user from the session cookie; if anonymous, let through —
-     route-level auth plugs or controller guards handle un-authed access.
-  3. Consult `EmissaryWeb.Plugs.PersonalNamespaceCache` (30s TTL ETS).
-  4. On cache miss, look up `Compendium.Registry.CredentialStore.list_for_user/2`.
-     A personal namespace is a bare slug (no dot); publisher namespaces
-     contain a dot. The presence of any bare-slug credential proves the user
-     has claimed their personal namespace. Populate the cache on success.
-  5. On still-no-claim, halt the conn and redirect to `/claim-namespace`.
+  1. Bypass `/claim-namespace/*`, `/legal/*`, `/login`, `/auth/*`,
+     `/api/health`, `/mcp/*`, `/assets/*`, `/t/*` (tincture routes use
+     query-param auth, not the session).
+  2. Load the session from the cookie; no session, or one this server no
+     longer recognises, lets the request through — route-level auth plugs
+     or controller guards handle un-authed access.
+  3. A session that loads `authenticated: true` passes: the person's
+     namespace is recorded on their `users` row (`Sanctum.Namespace`).
+  4. A session that loads `authenticated: false` with no namespace is a
+     person ahead of the claim — halt and redirect to `/claim-namespace`.
+     One with a namespace but still unauthenticated has been denied at the
+     door since it was minted — drop it and send them to `/login`.
+  5. A transient failure reading who the person is answers 503, never a
+     redirect into a claim they have already made.
 
   This plug answers HTTP GETs. The LiveView socket is handled by the
   endpoint before the router and never passes through here, so the
@@ -31,9 +35,6 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
 
   require Logger
 
-  alias Compendium.Registry.CredentialStore
-  alias EmissaryWeb.Plugs.PersonalNamespaceCache
-
   @bypass_prefixes ~w(/claim-namespace /legal /login /auth /api/health /mcp /assets /t)
 
   def init(opts), do: opts
@@ -42,9 +43,11 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
     if bypass?(conn.request_path) do
       conn
     else
-      case load_user_id(conn) do
-        {:ok, user_id} -> enforce(conn, user_id)
-        :anonymous -> conn
+      conn = fetch_session(conn)
+
+      case get_session(conn, :sanctum_session_token) do
+        token when is_binary(token) and token != "" -> gate(conn, token)
+        _ -> conn
       end
     end
   end
@@ -58,55 +61,35 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
     end)
   end
 
-  defp load_user_id(conn) do
-    conn = fetch_session(conn)
-
-    case get_session(conn, :sanctum_session_token) do
-      token when is_binary(token) and token != "" ->
-        case Sanctum.Session.load(token, surface: :console) do
-          {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
-          _ -> :anonymous
-        end
-
-      _ ->
-        :anonymous
-    end
-  end
-
-  defp enforce(conn, user_id) do
-    registry = Compendium.Registry.canonical_host()
-
-    case PersonalNamespaceCache.claimed?(user_id, registry) do
-      :hit ->
+  defp gate(conn, token) do
+    case Sanctum.Session.load(token, surface: :console) do
+      {:ok, %{authenticated: true}} ->
         conn
 
-      :miss ->
-        if has_personal_namespace?(user_id, registry) do
-          PersonalNamespaceCache.put_claimed(user_id, registry)
-          conn
-        else
-          conn
-          |> Phoenix.Controller.redirect(to: "/claim-namespace")
-          |> halt()
-        end
+      {:ok, %{authenticated: false, namespace: nil, user_id: user_id}} when is_binary(user_id) ->
+        conn
+        |> Phoenix.Controller.redirect(to: "/claim-namespace")
+        |> halt()
+
+      {:ok, %{authenticated: false, user_id: user_id}} when is_binary(user_id) ->
+        conn
+        |> configure_session(drop: true)
+        |> Phoenix.Controller.redirect(to: "/login")
+        |> halt()
+
+      {:error, reason} when reason in [:namespace_unavailable, :database_error] ->
+        Logger.warning(
+          "[RequirePersonalNamespace] could not read who the session belongs to " <>
+            "(#{inspect(reason)}) — answering 503, not the claim gate"
+        )
+
+        conn
+        |> put_resp_content_type("text/plain")
+        |> send_resp(503, "Try again shortly.")
+        |> halt()
+
+      _ ->
+        conn
     end
-  end
-
-  defp has_personal_namespace?(user_id, registry) do
-    CredentialStore.has_personal?(user_id, registry)
-  rescue
-    # CredentialStore can raise if its store isn't ready (e.g., during app
-    # boot). Treat as no-claim — the redirect to
-    # /claim-namespace will render the static claim page without hitting
-    # CredentialStore again on that bypass path. Log so silent decryption /
-    # DB errors don't disappear into the void.
-    e ->
-      Logger.warning(
-        "[RequirePersonalNamespace] CredentialStore.has_personal?/2 failed " <>
-          "for user_id=#{inspect(user_id)} registry=#{inspect(registry)}: " <>
-          Exception.message(e) <> " — gating user as not-claimed"
-      )
-
-      false
   end
 end

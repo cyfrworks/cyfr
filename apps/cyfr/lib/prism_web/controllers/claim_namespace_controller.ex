@@ -39,52 +39,51 @@ defmodule PrismWeb.ClaimNamespaceController do
          {:ok, body} <-
            Client.claim_personal_namespace(username, provider, access_token) do
       slug = body["slug"] || username
-      token = body["token"]
-      registry = Compendium.Registry.canonical_host()
 
-      cond do
-        not is_binary(token) ->
-          # Server returned success but omitted the token field. Treat as a
-          # local-store failure so the user retries rather than landing on a
-          # dashboard without a usable push credential.
+      # The claim is the person's identity from here on: it lands on the
+      # users row first, and that is what lets them through. The push token
+      # is cached best-effort — a later probe re-mints it.
+      case Sanctum.SignIn.record_namespace(user_id, slug) do
+        {:ok, _user} ->
+          registry = Compendium.Registry.canonical_host()
+
+          conn =
+            case CredentialStore.put_push_token(
+                   user_id,
+                   registry,
+                   slug,
+                   body["token"],
+                   "personal"
+                 ) do
+              :ok ->
+                conn
+
+              _ ->
+                Logger.warning(
+                  "[ClaimNamespaceController] push token for #{user_id}/#{slug} was not " <>
+                    "cached — a later probe re-mints it"
+                )
+
+                put_flash(
+                  conn,
+                  :error,
+                  "Your namespace is claimed; the push credential didn't sync yet — " <>
+                    "it is re-minted at your next sign-in or `cyfr registry probe`."
+                )
+            end
+
+          conn
+          |> clear_pending_probe()
+          |> delete_session(:claim_suggested_username)
+          |> EmissaryWeb.SafeRedirect.post_login()
+
+        {:error, reason} ->
           Logger.error(
-            "[ClaimNamespaceController] claim succeeded for #{slug} but " <>
-              "response omitted `token`; refusing to mark claim-gate passed"
+            "[ClaimNamespaceController] namespace #{slug} claimed on cyfr.run for " <>
+              "#{user_id} but not recorded locally: #{inspect(reason)}"
           )
 
-          send_store_error_page(conn, username)
-
-        true ->
-          cred = %{
-            type: :push_token,
-            token: token,
-            namespace: slug,
-            role: "personal",
-            issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-            label: Client.device_label()
-          }
-
-          case CredentialStore.put(user_id, registry, slug, cred) do
-            :ok ->
-              # Prime the cache so the next request exits the gate immediately.
-              EmissaryWeb.Plugs.PersonalNamespaceCache.put_claimed(user_id, registry)
-              # The namespace is the person's athanor slug: mint it now.
-              _ = Sanctum.Provisioning.after_sign_in(user_id)
-
-              conn
-              |> clear_pending_probe()
-              |> delete_session(:claim_suggested_username)
-              |> EmissaryWeb.SafeRedirect.post_login()
-
-            {:error, reason} ->
-              Logger.error(
-                "[ClaimNamespaceController] CredentialStore.put failed for " <>
-                  "#{user_id}/#{slug}: #{inspect(reason)}. Namespace is claimed on " <>
-                  "cyfr.run but local credential is missing; user must re-login."
-              )
-
-              send_store_error_page(conn, username)
-          end
+          send_store_error_page(conn, username, reason)
       end
     else
       {:expired, conn} ->
@@ -135,18 +134,20 @@ defmodule PrismWeb.ClaimNamespaceController do
   # Internal
   # ============================================================================
 
-  # Renders a 500 page when the claim succeeded server-side but the local
-  # credential store write failed. Session keys are preserved so the user can
-  # retry without losing OAuth-redirect context. UX hint directs them to
-  # re-login rather than refresh-loop on the same dead cookie.
-  defp send_store_error_page(conn, username) do
-    page(
-      conn,
-      500,
-      username,
-      "Namespace claimed on cyfr.run but we couldn't save the credential locally. " <>
-        "Please sign out and sign back in to retry."
-    )
+  # Renders a 500 page when the claim succeeded on cyfr.run but the users
+  # row could not record it. Session keys are preserved; the next sign-in
+  # probes the registry, finds the claim, and records it then.
+  defp send_store_error_page(conn, username, reason) do
+    detail =
+      case reason do
+        :namespace_owned_by_another_identity ->
+          "another identity on this server already holds that namespace — ask the operator."
+
+        _ ->
+          "we couldn't record it locally. Sign out and sign back in to retry."
+      end
+
+    page(conn, 500, username, "Namespace claimed on cyfr.run but " <> detail)
   end
 
   # The one page this controller renders — the form, in the Prism root

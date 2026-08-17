@@ -93,30 +93,33 @@ defmodule Sanctum.Auth.DeviceFlow do
   end
 
   @doc """
-  Poll for token and create session if authorized.
+  Poll for the IdP token; once authorized, run the door, sign-in and the
+  one sign-in decision (`Sanctum.SignIn.complete/3`).
 
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
   - `{:ok, %{status: "complete", session_token: token, user: user_info,
       needs_personal_namespace: bool, suggested_username: string | nil,
+      needs_policy_acceptance: true (optional), required_policy_version: string | nil,
       access_token: string (optional), probe_error: string (optional),
       reauthenticate: true (optional),
-      credential_store_warnings: [slug] (optional)}}` - Authorized. When
-    `reauthenticate: true` is present, the IdP access_token expired during
-    probe; the CLI MUST discard the device_code and restart DeviceFlow from
-    scratch. When `probe_error` is present without `reauthenticate`, the
-    session exists but the cyfr.run probe failed transiently; the CLI should
-    offer a "Retry probe" action. `credential_store_warnings` lists namespace
-    slugs whose push tokens were issued by cyfr.run but not cached locally —
-    the user should re-run `cyfr whoami` to retry storage.
-    `access_token` (string) is included only when `needs_personal_namespace: true`
-    so the CLI can forward it once to `registry.claim-personal`. This matches
-    the signed-cookie flow used by the web callback; consumer discards after
-    the claim call. Omitted when the probe already seeded a personal namespace
-    (in which case no claim is needed) or when `reauthenticate: true` (the
-    IdP token is dead and must be re-obtained via a fresh DeviceFlow).
+      credential_store_warnings: [slug] (optional)}}` - Authorized.
+    `needs_personal_namespace: true` (first sign-in, no namespace on
+    cyfr.run yet) and `needs_policy_acceptance: true` are the two cases that
+    carry `access_token`, once, so the CLI can forward it to
+    `registry.claim_personal` / `registry.legal_accept`; consumer discards
+    it after the call. `reauthenticate: true` (with no `session_token`): the
+    IdP token was refused; the CLI restarts the flow. `probe_error` without
+    `reauthenticate`: a returning person is signed in but the cyfr.run probe
+    failed transiently — push tokens refresh on the next probe.
+    `credential_store_warnings` lists namespaces whose push tokens were
+    issued but not cached locally.
+  - `{:ok, %{status: "registry_unavailable", message: string}}` - A
+    first-time person and cyfr.run could not be reached: nothing was set
+    up, no session; run `cyfr login` again.
   - `{:ok, %{status: "expired"}}` - Device code expired
-  - `{:ok, %{status: "denied"}}` - User denied authorization
+  - `{:ok, %{status: "denied"}}` - User denied authorization, or the door
+    refused them
 
   ## Examples
 
@@ -141,68 +144,11 @@ defmodule Sanctum.Auth.DeviceFlow do
       client_id ->
         case request_token(provider, client_id, device_code) do
           {:ok, tokens} ->
-            # Got tokens - fetch user info and create session
+            # Got tokens: user info, the door, what sign-in records, then the
+            # one decision both sign-in paths take.
             with {:ok, user_info} <- fetch_user_info(provider, tokens),
-                 {:ok, session} <- create_session(user_info, provider) do
-              # Accepted cross-layer coupling: DeviceFlow is part of the auth
-              # sliver but invokes Compendium.Registry.Client after Session.create
-              # to seed CredentialStore with push tokens. This is the only edge
-              # from the auth sliver into Compendium, and it happens post-session.
-              {probe_fields, probe_error} =
-                probe_after_session(provider, tokens.access_token, session)
-
-              base = %{
-                status: "complete",
-                session_token: session.token,
-                user: %{
-                  id: user_info.id,
-                  email: user_info.email,
-                  name: user_info.name
-                }
-              }
-
-              # Session creation succeeded; surface any probe error so the CLI
-              # can offer a retry (re-run DeviceFlow). Absence of `:probe_error`
-              # means the probe itself succeeded — `needs_personal_namespace`
-              # then reflects actual server state, not a network failure.
-              # `:invalid_access_token` is a distinct outcome: the IdP token is
-              # unrecoverable; probe_fields already carries `reauthenticate: true`.
-              # Map probe outcomes to STABLE, enumerated strings — never
-              # inspect() an internal error into a client-facing field (it can
-              # leak internal structure / reflected detail).
-              extras =
-                case probe_error do
-                  nil ->
-                    probe_fields
-
-                  :invalid_access_token ->
-                    Map.put(probe_fields, :probe_error, "invalid_access_token")
-
-                  :policy_acceptance_required ->
-                    Map.put(probe_fields, :probe_error, "policy_acceptance_required")
-
-                  _ ->
-                    Map.put(probe_fields, :probe_error, "probe_failed")
-                end
-
-              # Option X — when the server reports `needs_personal_namespace: true`,
-              # the CLI has to forward the IdP access_token to `registry.claim-personal`
-              # to prove provider identity at claim time. The web path stashes this
-              # in a signed cookie (see EmissaryWeb.AuthController); the CLI path
-              # returns it once in the poll response. Consumer discards after the
-              # claim call. Only include when a claim is actually required — don't
-              # expose the token when the user is already fully set up.
-              extras =
-                if (Map.get(extras, :needs_personal_namespace) == true or
-                      Map.get(extras, :needs_policy_acceptance) == true) and
-                     not Map.has_key?(extras, :reauthenticate) and
-                     is_binary(tokens.access_token) do
-                  Map.put(extras, :access_token, tokens.access_token)
-                else
-                  extras
-                end
-
-              {:ok, Map.merge(base, extras)}
+                 {:ok, user, ctx} <- admit(user_info, provider) do
+              {:ok, complete(user, ctx, user_info, provider, tokens.access_token)}
             else
               {:error, :user_not_allowed} ->
                 {:ok, %{status: "denied"}}
@@ -487,12 +433,12 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   # The door runs before the session exists and before cyfr.run hears of the
   # identity: a refused sign-in leaves no row and makes no call.
-  defp create_session(user_info, provider) do
+  defp admit(user_info, provider) do
     user_id = Context.build_id(provider, Context.provider_iss(provider), user_info.id)
     user_info = Map.merge(user_info, %{id: user_id, provider: provider})
 
     with {:ok, verdict} <- Sanctum.Door.admit_identity(user_id, user_info),
-         {:ok, _user} <- Sanctum.SignIn.admitted(user_info, verdict) do
+         {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
       ctx =
         Context.build(
           user_id: user_id,
@@ -503,12 +449,99 @@ defmodule Sanctum.Auth.DeviceFlow do
           permissions: [:*]
         )
 
-      # Resolve the caller's athanor and capabilities from their memberships.
-      ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
-
-      Session.create(ctx)
+      {:ok, user, ctx}
     end
   end
+
+  # What follows the door, as the CLI sees it. A session is minted only for
+  # an outcome the person can act on with one; the IdP token travels only
+  # for the claim or the policy acceptance it is needed for.
+  defp complete(user, ctx, user_info, provider, access_token) do
+    base = %{
+      status: "complete",
+      user: %{id: user_info.id, email: user_info.email, name: user_info.name}
+    }
+
+    case Sanctum.SignIn.complete(user, provider, access_token) do
+      {:proceed, user, report} ->
+        with_session(base, %{ctx | namespace: user.namespace}, fn ->
+          %{needs_personal_namespace: false} |> put_report(report)
+        end)
+
+      {:needs_legal, version} ->
+        with_session(base, ctx, fn ->
+          %{
+            needs_policy_acceptance: true,
+            required_policy_version: version,
+            needs_personal_namespace: false,
+            access_token: access_token
+          }
+        end)
+
+      {:needs_claim, suggested} ->
+        with_session(base, ctx, fn ->
+          %{
+            needs_personal_namespace: true,
+            suggested_username: suggested,
+            access_token: access_token
+          }
+        end)
+
+      {:reauthenticate, _reason} ->
+        Map.merge(base, %{
+          reauthenticate: true,
+          probe_error: "invalid_access_token",
+          needs_personal_namespace: true
+        })
+
+      {:unavailable, reason} ->
+        %{status: "registry_unavailable", message: unavailable_message(reason)}
+    end
+  end
+
+  defp with_session(base, ctx, extras) do
+    ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
+
+    case Session.create(ctx) do
+      {:ok, session} ->
+        base
+        |> Map.put(:session_token, session.token)
+        |> Map.merge(extras.())
+
+      {:error, reason} ->
+        Logger.error("[Sanctum.Auth.DeviceFlow] session create failed: #{inspect(reason)}")
+        %{status: "error", message: "The session could not be created. Run `cyfr login` again."}
+    end
+  end
+
+  # What the registry said, as stable client-facing fields: namespaces
+  # whose push tokens didn't land locally, and a probe that failed or was
+  # refused (`cyfr whoami` re-probes). Never an inspected internal error.
+  defp put_report(fields, %{unsynced: unsynced, probe: probe}) do
+    fields =
+      if unsynced == [], do: fields, else: Map.put(fields, :credential_store_warnings, unsynced)
+
+    case probe do
+      :failed -> Map.put(fields, :probe_error, "probe_failed")
+      :invalid_token -> Map.put(fields, :probe_error, "invalid_access_token")
+      _ -> fields
+    end
+  end
+
+  defp unavailable_message(:no_access_token),
+    do:
+      "Your identity provider returned no access token, so cyfr.run could not be asked " <>
+        "for your namespace. Nothing was set up. Run `cyfr login` again."
+
+  defp unavailable_message(:namespace_conflict),
+    do:
+      "cyfr.run names you by a namespace another identity on this server already holds. " <>
+        "Ask the operator to sort it out."
+
+  defp unavailable_message(_),
+    do:
+      "cyfr.run could not be reached to find or claim your namespace. Nothing was set up. " <>
+        "Run `cyfr login` again in a moment."
 
   # ============================================================================
   # Configuration
@@ -594,181 +627,5 @@ defmodule Sanctum.Auth.DeviceFlow do
     body
     |> to_string()
     |> Jason.decode()
-  end
-
-  # ============================================================================
-  # Post-session registry probe (accepted cross-layer coupling)
-  # ============================================================================
-
-  # Invokes cyfr.run's /v1/identity/probe to exchange the IdP access_token for
-  # per-namespace push tokens, then stores them via CredentialStore.put/4.
-  # Returns a map of extra MCP response fields (needs_personal_namespace,
-  # suggested_username, reauthenticate, credential_store_warnings) plus an
-  # optional error (logged, non-blocking).
-  #
-  # Edge case: if the IdP probe returns a personal namespace but the local
-  # CredentialStore.put fails, the slug is appended to credential_store_warnings.
-  # Users retry with `cyfr registry probe` (or `cyfr whoami` auto-probe) —
-  # probe mints fresh tokens, unlike /v1/namespaces/personal/claim which
-  # 409 ALREADY_CLAIMED on a second call by the same identity. `needs_personal_namespace`
-  # stays `false` in that case so codex doesn't prompt for a (futile) claim.
-  @doc false
-  def probe_after_session(provider, access_token, session) do
-    registry = Compendium.Registry.canonical_host()
-
-    case Compendium.Registry.Client.probe_identity(provider, access_token) do
-      {:ok, %{} = body} ->
-        personal = body["personal_namespace"]
-        memberships = body["memberships"] || []
-
-        %{personal_stored?: personal_stored?, membership_failures: failures} =
-          store_probe_results(session.user_id, registry, personal, memberships)
-
-        base =
-          case personal do
-            nil ->
-              %{
-                needs_personal_namespace: true,
-                suggested_username: suggest_username(provider, session)
-              }
-
-            _ ->
-              # The namespace is known now: the person's own athanor is minted.
-              if personal_stored?, do: _ = Sanctum.Provisioning.after_sign_in(session.user_id)
-              %{needs_personal_namespace: false}
-          end
-
-        failure_slugs = Enum.map(failures, &elem(&1, 0))
-
-        failure_slugs =
-          case personal do
-            %{"slug" => slug} when not personal_stored? -> [slug | failure_slugs]
-            _ -> failure_slugs
-          end
-
-        extra =
-          if failure_slugs == [] do
-            base
-          else
-            Map.put(base, :credential_store_warnings, failure_slugs)
-          end
-
-        {extra, nil}
-
-      {:error, :invalid_access_token} ->
-        # IdP access_token expired or was revoked between OAuth completion and
-        # probe. Cannot recover without user re-auth — surface `reauthenticate`
-        # so codex can discard the device_code and re-run `cyfr login`.
-        Logger.warning(
-          "[Sanctum.Auth.DeviceFlow] probe_identity returned 401 invalid_access_token; " <>
-            "user must re-authenticate"
-        )
-
-        {%{
-           needs_personal_namespace: true,
-           reauthenticate: true
-         }, :invalid_access_token}
-
-      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
-        # cyfr.run requires the identity to clickwrap-accept the current
-        # bundled policy_version before any token mint. Surface the
-        # required version so the client can route to the legal-accept UI;
-        # the access_token is exposed by poll_for_session/2's existing
-        # logic when needs_policy_acceptance is true.
-        required =
-          case err.detail do
-            %{required_version: v} when is_binary(v) -> v
-            %{"required_version" => v} when is_binary(v) -> v
-            _ -> nil
-          end
-
-        Logger.info(
-          "[Sanctum.Auth.DeviceFlow] probe_identity returned 412 — policy acceptance " <>
-            "required (version: #{inspect(required)})"
-        )
-
-        {%{
-           needs_policy_acceptance: true,
-           required_policy_version: required,
-           # No tokens were minted — keep needs_personal_namespace=false so
-           # we don't race the claim gate. The client re-probes after
-           # legal-accept, at which point the real personal-namespace
-           # state is reflected.
-           needs_personal_namespace: false
-         }, :policy_acceptance_required}
-
-      {:error, err} ->
-        Logger.warning(
-          "[Sanctum.Auth.DeviceFlow] probe_identity failed — #{inspect(err)}; " <>
-            "continuing with session but CredentialStore is unseeded"
-        )
-
-        # Session still succeeds; user hits the claim-gate or re-probes later.
-        {%{needs_personal_namespace: true}, err}
-    end
-  end
-
-  # Returns `%{personal_stored?: boolean, membership_failures: [{slug, reason}]}`.
-  # Partial failures don't abort the loop — every namespace is attempted; caller
-  # surfaces failures as `credential_store_warnings` so the user can re-probe.
-  defp store_probe_results(user_id, registry, personal, memberships) do
-    personal_result =
-      if personal do
-        slug = personal["slug"] || personal[:slug]
-        token = personal["token"] || personal[:token]
-
-        if is_binary(slug) and is_binary(token) do
-          Compendium.Registry.CredentialStore.put_push_token(
-            user_id,
-            registry,
-            slug,
-            token,
-            "personal"
-          )
-        else
-          :skipped
-        end
-      else
-        :skipped
-      end
-
-    membership_failures =
-      memberships
-      |> Enum.map(fn m ->
-        slug = m["slug"] || m[:slug]
-        token = m["token"] || m[:token]
-        role = m["role"] || m[:role] || "member"
-
-        result =
-          if is_binary(slug) and is_binary(token) do
-            Compendium.Registry.CredentialStore.put_push_token(
-              user_id,
-              registry,
-              slug,
-              token,
-              role
-            )
-          else
-            :skipped
-          end
-
-        {slug, result}
-      end)
-      |> Enum.reject(fn {_slug, result} -> result == :ok or result == :skipped end)
-
-    %{personal_stored?: personal_result == :ok, membership_failures: membership_failures}
-  end
-
-  defp suggest_username(provider, session) do
-    # Email local-part is the handle we have at this layer. `Context.suggest_slug/1`
-    # normalizes it to match the server-side `INVALID_USERNAME` rules (bare
-    # `[a-z0-9-]+`, no leading/trailing/consecutive hyphens, ≤39 chars) so the
-    # default doesn't doom-submit when the local-part has dots / `+` / etc.
-    # Returns `nil` on un-derivable input; caller (probe_after_session) passes
-    # that through and the UI falls back to a blank field.
-    case Context.suggest_slug(session.email) do
-      nil -> "user-#{to_string(provider)}" |> Context.suggest_slug()
-      slug -> slug
-    end
   end
 end

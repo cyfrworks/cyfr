@@ -70,17 +70,18 @@ defmodule Sanctum.TinctureAuthTest do
   describe "authenticate/1 — session-token path" do
     test "a bearer session token authenticates once the namespace is claimed",
          %{ctx: ctx} do
-      # `Session.load` resolves through the user's claimed namespace, and a user
-      # with none loads as unauthenticated by design — the claim gate runs before
-      # anything tenant-scoped.
-      :ok =
-        Compendium.Registry.CredentialStore.put_push_token(
-          ctx.user_id,
-          Compendium.Registry.canonical_host(),
-          ctx.namespace,
-          "test-token",
-          "owner"
-        )
+      # `Session.load` resolves through the namespace on the users row, and a
+      # person with none loads as unauthenticated by design — the claim gate
+      # runs before anything tenant-scoped.
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: ctx.user_id,
+          provider: "local",
+          email: "testns@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
 
       # A restored session is re-validated against current memberships; the
       # test user must actually be a member of the athanor it works in.

@@ -122,6 +122,53 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
              Sanctum.Door.admit("github|https://github.com|s", stranger, true)
   end
 
+  test "an address two identities sign in with, or one a provider has not verified, is refused with the reason — never a dead invite",
+       %{alice: alice, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Careful #{n}"})
+
+    shared = "shared#{n}@example.com"
+
+    for provider <- ["github", "google"] do
+      {:ok, _} =
+        Users.upsert_from_provider(%{
+          id: "#{provider}|https://#{provider}.com|dup-#{n}",
+          provider: provider,
+          email: shared,
+          verified: true
+        })
+    end
+
+    assert {:error, msg} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => shared})
+
+    assert msg =~ "More than one person"
+
+    unverified = "unverified#{n}@example.com"
+
+    {:ok, _} =
+      Users.upsert_from_provider(%{
+        id: "oidc|https://idp.example|unv-#{n}",
+        provider: "oidc",
+        email: unverified,
+        verified: :unknown
+      })
+
+    assert {:error, msg} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => unverified})
+
+    assert msg =~ "not verified"
+    refute Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
+
+    # By user id both are seatable — the id is the person.
+    assert {:ok, %{state: "added"}} =
+             call(a, "member", %{
+               "action" => "add",
+               "athanor" => group.id,
+               "user_id" => "oidc|https://idp.example|unv-#{n}"
+             })
+  end
+
   test "an API key cannot create groups or add members", %{alice: alice, ctx: ctx} do
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
 

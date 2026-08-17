@@ -152,12 +152,17 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Add someone to an athanor: a person already on this server (`user_id:`)
-  becomes an active member; an `email:` becomes an active member when an
-  identity with that verified email is known, else an `invited` row — and,
-  when the door would not admit that address, a pending request for the
-  platform admin. Answers uniformly so it cannot be used to learn who is on
-  the server. The per-group member cap applies. A person's own athanor has
-  exactly one member — its owner — on every path, not only in the UI.
+  becomes an active member; an `email:` becomes an active member when
+  exactly one identity with that verified email is known, else an `invited`
+  row — and, when the door would not admit that address, a pending request
+  for the platform admin. Answers uniformly for a stranger's address and a
+  known one so it cannot be used to learn who is on the server; the two
+  addresses it cannot seat — one that two identities here sign in with
+  (`:ambiguous_email`: add by user id), and one a known person's provider
+  has not verified (`:email_unverified`: a permanent invite would be the
+  alternative) — are refused with the reason. The per-group member cap
+  applies. A person's own athanor has exactly one member — its owner — on
+  every path, not only in the UI.
   """
   @spec add(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()], String.t()) ::
           {:ok, :added | :invited} | {:error, term()}
@@ -192,19 +197,28 @@ defmodule Sanctum.Tenancy.Members do
 
     with true <- String.contains?(email, "@") or {:error, :invalid_email},
          :ok <- Caps.check(:max_members_per_group, count_seats(athanor_id)) do
-      case Enum.filter(Users.list_by_email(email), &known_and_active?/1) do
-        [%User{id: user_id} | _] ->
+      known = Users.list_by_email(email)
+
+      case Enum.filter(known, &known_and_active?/1) do
+        [%User{id: user_id}] ->
           add(athanor, [user_id: user_id], added_by)
 
-        [] ->
-          with {:ok, _} <- invite(athanor_id, email, added_by) do
-            unless Door.email_admitted?(email) do
-              Door.Store.request(email, added_by)
-              Sanctum.Notify.allowlist_request(email)
-            end
+        [_, _ | _] ->
+          {:error, :ambiguous_email}
 
-            Sanctum.Notify.member_changed(athanor.id)
-            {:ok, :invited}
+        [] ->
+          if Enum.any?(known, &(&1.status == "active" and not &1.email_verified)) do
+            {:error, :email_unverified}
+          else
+            with {:ok, _} <- invite(athanor_id, email, added_by) do
+              unless Door.email_admitted?(email) do
+                Door.Store.request(email, added_by)
+                Sanctum.Notify.allowlist_request(email)
+              end
+
+              Sanctum.Notify.member_changed(athanor.id)
+              {:ok, :invited}
+            end
           end
       end
     end

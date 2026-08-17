@@ -7,7 +7,6 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
   import Plug.Test
   import Plug.Conn
 
-  alias EmissaryWeb.Plugs.PersonalNamespaceCache
   alias EmissaryWeb.Plugs.RequirePersonalNamespace
   alias Sanctum.{Context, Session}
 
@@ -90,59 +89,41 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
   end
 
   describe "authed users" do
-    test "with a cached claim pass through", %{registry: registry} do
+    test "whose users row records a namespace pass through", %{registry: registry} do
       user = build_user()
+      claim!(user, "alice")
       {:ok, session} = Session.create(user)
-
-      PersonalNamespaceCache.put_claimed(user.user_id, registry)
 
       conn = authed_conn(session.token)
       result = RequirePersonalNamespace.call(conn, [])
 
       refute result.halted
       refute result.status
-    end
 
-    test "with a personal-namespace credential pass through and populate cache",
-         %{registry: registry} do
-      user = build_user()
-      {:ok, session} = Session.create(user)
-
-      PersonalNamespaceCache.invalidate(user.user_id, registry)
-
-      :ok =
-        Compendium.Registry.CredentialStore.put(user.user_id, registry, "alice", %{
-          type: :push_token,
-          token: "cyfr_pt_testtoken",
-          namespace: "alice",
-          role: "personal",
-          issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          label: "test"
-        })
-
-      conn = authed_conn(session.token)
-      result = RequirePersonalNamespace.call(conn, [])
-
+      # Push tokens are not what lets them through: without any, still in.
+      :ok = Compendium.Registry.CredentialStore.delete(user.user_id, registry, "alice")
+      Sanctum.Namespace.invalidate(user.user_id)
+      result = RequirePersonalNamespace.call(authed_conn(session.token), [])
       refute result.halted
-      assert PersonalNamespaceCache.claimed?(user.user_id, registry) == :hit
     end
 
-    test "with only publisher credentials (dotted slugs) are redirected",
-         %{registry: registry} do
+    test "with push tokens but no recorded namespace are redirected", %{registry: registry} do
       user = build_user()
+      seed_row(user)
       {:ok, session} = Session.create(user)
 
-      PersonalNamespaceCache.invalidate(user.user_id, registry)
-
-      :ok =
-        Compendium.Registry.CredentialStore.put(user.user_id, registry, "stripe.com", %{
-          type: :push_token,
-          token: "cyfr_pt_pubtoken",
-          namespace: "stripe.com",
-          role: "admin",
-          issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          label: "test"
-        })
+      # A publisher token, and even a bare-slug token, is a credential — not
+      # an identity. The users row decides.
+      for slug <- ["stripe.com", "alice"] do
+        :ok =
+          Compendium.Registry.CredentialStore.put_push_token(
+            user.user_id,
+            registry,
+            slug,
+            "cyfr_pt_#{slug}",
+            "personal"
+          )
+      end
 
       conn = authed_conn(session.token)
       result = RequirePersonalNamespace.call(conn, [])
@@ -152,11 +133,10 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       assert Plug.Conn.get_resp_header(result, "location") == ["/claim-namespace"]
     end
 
-    test "with no credentials are redirected", %{registry: registry} do
+    test "with no namespace are redirected" do
       user = build_user()
+      seed_row(user)
       {:ok, session} = Session.create(user)
-
-      PersonalNamespaceCache.invalidate(user.user_id, registry)
 
       conn = authed_conn(session.token)
       result = RequirePersonalNamespace.call(conn, [])
@@ -165,11 +145,31 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       assert Plug.Conn.get_resp_header(result, "location") == ["/claim-namespace"]
     end
 
-    test "/claim-namespace-fake is NOT bypassed (prefix boundary)",
-         %{registry: registry} do
+    test "denied at the door since the session was minted are sent to /login, not the claim" do
       user = build_user()
+      claim!(user, "denied")
+      {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(row)
+
+      # A session that loads after the deny carries the namespace but no
+      # standing — the shape the plug must tell from "not claimed yet".
       {:ok, session} = Session.create(user)
-      PersonalNamespaceCache.invalidate(user.user_id, registry)
+
+      case Session.load(session.token, surface: :console) do
+        {:ok, %{authenticated: false, namespace: ns}} when is_binary(ns) ->
+          result = RequirePersonalNamespace.call(authed_conn(session.token), [])
+          assert result.halted
+          assert Plug.Conn.get_resp_header(result, "location") == ["/login"]
+
+        other ->
+          flunk("expected an unauthenticated context with a namespace, got #{inspect(other)}")
+      end
+    end
+
+    test "/claim-namespace-fake is NOT bypassed (prefix boundary)" do
+      user = build_user()
+      seed_row(user)
+      {:ok, session} = Session.create(user)
 
       conn =
         build_conn(:get, "/claim-namespace-fake")
@@ -179,6 +179,12 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
 
       assert result.halted
       assert Plug.Conn.get_resp_header(result, "location") == ["/claim-namespace"]
+    end
+
+    test "a session this server does not recognise passes through (route auth handles it)" do
+      conn = authed_conn("cyfr_sess_not_a_real_token")
+      result = RequirePersonalNamespace.call(conn, [])
+      refute result.halted
     end
   end
 
@@ -196,6 +202,24 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       namespace: "testns",
       authenticated: true
     )
+  end
+
+  # The person as the door records them, with or without a namespace.
+  defp seed_row(user) do
+    {:ok, row} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: user.user_id,
+        provider: "github",
+        email: user.email,
+        verified: true
+      })
+
+    row
+  end
+
+  defp claim!(user, slug) do
+    {:ok, _} = user |> seed_row() |> Sanctum.Tenancy.Users.set_namespace(slug)
+    :ok
   end
 
   defp build_conn(method, path) do

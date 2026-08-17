@@ -10,7 +10,9 @@ defmodule EmissaryWeb.AuthController do
   ## Routes
 
   - `GET /auth/:provider` - Redirects to OAuth provider
-  - `GET /auth/:provider/callback` - Handles OAuth callback
+  - `GET /auth/:provider/callback` - Handles OAuth callback (redirects; the
+    session token lives in the cookie, never in a body)
+  - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
   - `DELETE /auth/logout` - Destroys session
 
   ## Usage
@@ -53,93 +55,71 @@ defmodule EmissaryWeb.AuthController do
   end
 
   @doc """
-  Handles OAuth callback from provider.
+  Handles the OAuth callback from the provider — the browser sign-in.
 
-  On success:
-  - Creates session for user
-  - Returns JSON with session token and user info
-  - For browser clients, can redirect to frontend with token
+  Door → what sign-in records → the one decision (`Sanctum.SignIn.complete/3`)
+  → a session and a redirect. Every outcome is a redirect or a page; the
+  session token travels in the cookie and nowhere else.
 
-  On failure:
-  - Returns JSON error
+  - proceed → session, cookie, `/`
+  - policy acceptance required → session, cookie, `/legal/accept`
+  - claim required → session (loads unauthenticated until the claim), cookie,
+    `/claim-namespace`
+  - IdP token refused → no session, back through `/auth/:provider`
+  - a first-time person and no registry answer → no session, a page saying so
+  - refused at the door → 403 page, no session, no cyfr.run call
   """
   def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
-    # Accepted cross-layer coupling: this controller is part of the auth
-    # sliver but intentionally calls Compendium.Registry.Client.probe_identity/3
-    # and Compendium.Registry.CredentialStore.put/4 after Session.create/1.
-    # This is the only edge from the auth sliver into Compendium in the web
-    # flow (DeviceFlow is the CLI counterpart).
     access_token = extract_access_token(auth)
+    provider = auth.provider
 
     with {:ok, ctx} <- authenticate_with_provider(auth),
-         {:ok, ctx} <- admit(ctx, auth) do
-      case Session.create(ctx) do
-        {:ok, session} ->
-          # Seed CredentialStore with push tokens via cyfr.run probe.
-          case probe_and_store(ctx, access_token, auth.provider) do
-            {:reauthenticate, provider, reason} ->
-              # Recovery requires a fresh IdP access_token:
-              #   :idp_expired — probe returned 401; the current token is dead.
-              #   :local_store_failed — the personal push token landed on
-              #     cyfr.run but our CredentialStore.put failed. cyfr.run's
-              #     /v1/namespaces/personal/claim is not idempotent for the
-              #     same identity (returns 409 ALREADY_CLAIMED), so re-auth
-              #     is the only clean path to mint a fresh push token.
-              _ = Session.destroy(session.token)
+         {:ok, ctx, user} <- admit(ctx, auth) do
+      case Sanctum.SignIn.complete(user, provider, access_token) do
+        {:proceed, user, report} ->
+          # The athanor may have been minted a moment ago: resolve again so
+          # the session names it.
+          ctx = Sanctum.Tenancy.resolve_into(%{ctx | namespace: user.namespace}, force: true)
 
-              conn
-              |> safe_drop_session()
-              |> put_flash_if_available(:error, reauth_flash_message(reason))
-              |> redirect(to: "/auth/#{provider}")
+          with_session(conn, ctx, fn conn, _session ->
+            conn
+            |> flash_report(report)
+            |> EmissaryWeb.SafeRedirect.post_login()
+          end)
 
-            {:needs_policy_acceptance, _required_version} ->
-              # Probe gate: cyfr.run requires acceptance of the current
-              # bundled policy_version before any token mint. Stash the
-              # access_token so /auth/post-legal-accept can re-probe
-              # after the user clickwraps. Session is created — the user
-              # is logged in — but no push tokens minted yet.
-              conn
-              |> put_session(:sanctum_session_token, session.token)
-              |> stash_pending_probe(access_token)
-              |> redirect(to: "/legal/accept")
+        {:needs_legal, _required_version} ->
+          # cyfr.run requires acceptance of the current policy before any
+          # token mint. The IdP token is stashed for /auth/post-legal-accept
+          # to re-probe once the person has accepted.
+          with_session(conn, ctx, fn conn, _session ->
+            conn
+            |> stash_pending_probe(access_token)
+            |> redirect(to: "/legal/accept")
+          end)
 
-            {:ok, needs_claim?, suggested_username, warnings} ->
-              conn =
-                conn
-                |> put_session(:sanctum_session_token, session.token)
-                |> maybe_stash_pending_probe(access_token, needs_claim?)
-                |> maybe_flash_warnings(warnings)
+        {:needs_claim, suggested} ->
+          # No personal namespace yet: the session loads unauthenticated
+          # until the claim, and the console is gated until then.
+          with_session(conn, ctx, fn conn, _session ->
+            conn
+            |> stash_pending_probe(access_token)
+            |> put_session(:claim_suggested_username, suggested || "")
+            |> redirect(to: "/claim-namespace")
+          end)
 
-              if needs_claim? do
-                # Dashboard access is gated until the user claims a personal
-                # namespace.
-                conn
-                |> put_session(:claim_suggested_username, suggested_username || "")
-                |> redirect(to: "/claim-namespace")
-              else
-                # Return JSON response for API clients.
-                conn
-                |> put_status(:ok)
-                |> json(%{
-                  ok: true,
-                  session: %{
-                    token: session.token,
-                    expires_at: session.expires_at
-                  },
-                  user: %{
-                    id: ctx.user_id,
-                    email: ctx.email,
-                    provider: ctx.provider
-                  },
-                  warnings: warnings
-                })
-              end
-          end
-
-        {:error, reason} ->
+        {:reauthenticate, reason} ->
           conn
-          |> put_status(:internal_server_error)
-          |> json(%{error: "session_error", message: friendly_error_message(reason)})
+          |> safe_drop_session()
+          |> put_flash_if_available(:error, reauth_flash_message(reason))
+          |> redirect(to: "/auth/#{provider}")
+
+        {:unavailable, reason} ->
+          # Nothing was set up and no session exists: the person tries again.
+          conn
+          |> safe_drop_session()
+          |> put_status(:service_unavailable)
+          |> put_resp_content_type("text/html")
+          |> send_resp(503, unavailable_page(reason))
       end
     else
       {:error, {:door, _reason}} ->
@@ -176,11 +156,10 @@ defmodule EmissaryWeb.AuthController do
   end
 
   @doc """
-  Post-legal-accept landing handler. The user just submitted /legal/accept
-  and we need to re-run probe_and_store with the still-valid IdP
-  access_token (stashed in `_cyfr_pending_probe`). Routes to
-  /claim-namespace if the user still needs to claim a personal namespace,
-  else to the dashboard.
+  Post-legal-accept landing handler. The person just submitted /legal/accept
+  and the probe re-runs with the still-valid IdP access_token (stashed in
+  `_cyfr_pending_probe`): the same decision as the callback, from a session
+  that already exists.
 
   Closes the loop:
     probe → 412 → /legal/accept → /auth/post-legal-accept → probe → ok
@@ -204,37 +183,42 @@ defmodule EmissaryWeb.AuthController do
         conn |> redirect(to: "/auth/github")
 
       true ->
-        case Sanctum.Session.load(session_token, surface: :console) do
-          {:ok, ctx} ->
-            provider = ctx.provider || "github"
+        with {:ok, ctx} <- Sanctum.Session.load(session_token, surface: :console),
+             {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
+          provider = ctx.provider || "github"
 
-            case probe_and_store(ctx, access_token, provider) do
-              {:reauthenticate, prov, _reason} ->
-                conn
-                |> delete_resp_cookie("_cyfr_pending_probe")
-                |> redirect(to: "/auth/#{prov}")
+          case Sanctum.SignIn.complete(user, provider, access_token) do
+            {:proceed, _user, report} ->
+              conn
+              |> delete_resp_cookie("_cyfr_pending_probe")
+              |> flash_report(report)
+              |> EmissaryWeb.SafeRedirect.post_login()
 
-              {:needs_policy_acceptance, _v} ->
-                # Server bumped between accept and re-probe. Loop back.
-                conn |> redirect(to: "/legal/accept")
+            {:needs_legal, _v} ->
+              # Server bumped between accept and re-probe. Loop back.
+              conn |> redirect(to: "/legal/accept")
 
-              {:ok, true, suggested_username, warnings} ->
-                # Probe succeeded but user has no personal namespace yet.
-                conn
-                |> put_session(:claim_suggested_username, suggested_username || "")
-                |> maybe_flash_warnings(warnings)
-                |> redirect(to: "/claim-namespace")
+            {:needs_claim, suggested} ->
+              conn
+              |> put_session(:claim_suggested_username, suggested || "")
+              |> redirect(to: "/claim-namespace")
 
-              {:ok, false, _suggested, warnings} ->
-                # Fully set up. Clear pending probe + go to the landing target.
-                conn
-                |> delete_resp_cookie("_cyfr_pending_probe")
-                |> maybe_flash_warnings(warnings)
-                |> EmissaryWeb.SafeRedirect.post_login()
-            end
+            {:reauthenticate, _reason} ->
+              _ = Session.destroy(session_token)
 
-          _ ->
-            conn |> redirect(to: "/auth/github")
+              conn
+              |> delete_resp_cookie("_cyfr_pending_probe")
+              |> safe_drop_session()
+              |> redirect(to: "/auth/#{provider}")
+
+            {:unavailable, reason} ->
+              conn
+              |> put_status(:service_unavailable)
+              |> put_resp_content_type("text/html")
+              |> send_resp(503, unavailable_page(reason, "/auth/post-legal-accept"))
+          end
+        else
+          _ -> conn |> redirect(to: "/auth/github")
         end
     end
   end
@@ -245,204 +229,28 @@ defmodule EmissaryWeb.AuthController do
   defp extract_access_token(%{credentials: %{token: token}}) when is_binary(token), do: token
   defp extract_access_token(_), do: nil
 
-  # Returns one of:
-  # - `{:ok, needs_claim?, suggested_username, warnings}` — probe succeeded
-  #   (or failed transiently); `warnings` is a list of slugs whose push tokens
-  #   were issued server-side but couldn't be cached locally. Caller surfaces
-  #   these via flash (browser) or `warnings:` key (JSON).
-  # - `{:reauthenticate, provider, reason}` — session must be destroyed and
-  #   the user bounced back through OAuth. `reason` is either `:idp_expired`
-  #   (probe returned 401) or `:local_store_failed` (personal push token was
-  #   minted on cyfr.run but couldn't be stored locally; cyfr.run's claim
-  #   endpoint isn't idempotent so a fresh access_token is the only recovery).
-  defp probe_and_store(_ctx, nil, _provider) do
-    Logger.warning(
-      "[EmissaryWeb.AuthController] no access_token on Ueberauth struct — skipping probe; " <>
-        "user will need to re-authenticate or claim namespace manually"
-    )
-
-    # Don't force the gate just because the access_token is absent — the user
-    # might have a valid session via an IdP that doesn't expose one. They'll
-    # hit the gate on browser page loads only if CredentialStore is empty.
-    {:ok, false, nil, []}
-  end
-
-  defp probe_and_store(ctx, access_token, provider) do
-    case Compendium.Registry.Client.probe_identity(provider, access_token) do
-      {:ok, body} ->
-        registry = Compendium.Registry.canonical_host()
-        {personal_stored?, warnings} = store_probe_results(ctx.user_id, registry, body)
-
-        personal = body["personal_namespace"]
-
-        cond do
-          is_nil(personal) ->
-            # Probe succeeded but the user hasn't claimed a personal namespace
-            # yet. Gate them until they do.
-            {:ok, true, suggest_username(ctx), warnings}
-
-          not personal_stored? ->
-            # Personal push token was issued by cyfr.run but the local
-            # CredentialStore.put failed. Retrying the claim endpoint would
-            # 409 ALREADY_CLAIMED (not idempotent per identity); a fresh probe
-            # needs a fresh access_token, so we force re-auth.
-            Logger.warning(
-              "[EmissaryWeb.AuthController] CredentialStore.put failed for personal " <>
-                "slug #{inspect(personal["slug"])} — bouncing to OAuth for fresh access_token"
-            )
-
-            {:reauthenticate, provider, :local_store_failed}
-
-          true ->
-            # The namespace is known now: the person's own athanor is minted
-            # (or, on a later sign-in, found provisioned).
-            _ = Sanctum.Provisioning.after_sign_in(ctx.user_id)
-            {:ok, false, nil, warnings}
-        end
-
-      {:error, :invalid_access_token} ->
-        Logger.warning(
-          "[EmissaryWeb.AuthController] probe_identity returned 401 invalid_access_token; " <>
-            "destroying session and redirecting to /auth/#{provider}"
-        )
-
-        {:reauthenticate, provider, :idp_expired}
-
-      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
-        required =
-          case err.detail do
-            %{required_version: v} when is_binary(v) -> v
-            %{"required_version" => v} when is_binary(v) -> v
-            _ -> nil
-          end
-
-        Logger.info(
-          "[EmissaryWeb.AuthController] probe_identity returned 412 — policy " <>
-            "acceptance required (version: #{inspect(required)})"
-        )
-
-        {:needs_policy_acceptance, required}
-
-      {:error, err} ->
-        # Network / server-side probe failure — don't block session creation.
-        # The user lands on the dashboard; the browser-side plug will route
-        # them through the claim-gate when CredentialStore is empty.
-        Logger.warning(
-          "[EmissaryWeb.AuthController] probe_identity failed — #{inspect(err)}; " <>
-            "session created without push-token seeding, gate will prompt on next page load"
-        )
-
-        {:ok, false, nil, []}
-    end
-  end
-
-  # Returns `{personal_stored?, warnings}`.
-  #
-  # `personal_stored?` is `true` when probe returned no personal namespace
-  # (nothing to store) OR when the personal-slug put succeeded. It is `false`
-  # only when the personal put actually failed — this distinction drives the
-  # caller's decision to force re-auth vs. let the user continue.
-  #
-  # `warnings` is a list of slugs whose push tokens cyfr.run issued but the
-  # local CredentialStore couldn't cache — membership failures always appear;
-  # the personal slug appears only when its put failed (caller still forces
-  # re-auth but the slug is visible in logs).
-  defp store_probe_results(user_id, registry, body) do
-    personal = body["personal_namespace"]
-    memberships = body["memberships"] || []
-
-    {personal_stored?, personal_warning} =
-      case personal do
-        nil ->
-          {true, nil}
-
-        %{"slug" => slug, "token" => _} ->
-          case Compendium.Registry.CredentialStore.put_push_token(
-                 user_id,
-                 registry,
-                 slug,
-                 personal["token"],
-                 "personal"
-               ) do
-            :ok -> {true, nil}
-            :skipped -> {true, nil}
-            {:error, _} -> {false, slug}
-          end
-
-        _ ->
-          {true, nil}
-      end
-
-    membership_warnings =
-      Enum.flat_map(memberships, fn m ->
-        case Compendium.Registry.CredentialStore.put_push_token(
-               user_id,
-               registry,
-               m["slug"],
-               m["token"],
-               m["role"] || "member"
-             ) do
-          :ok -> []
-          :skipped -> []
-          {:error, _} -> [m["slug"]]
-        end
-      end)
-
-    warnings = Enum.reject([personal_warning | membership_warnings], &is_nil/1)
-
-    if warnings != [] do
-      Logger.info(
-        "[EmissaryWeb.AuthController] probe stored partial credentials; failed slugs=" <>
-          inspect(warnings)
-      )
-    end
-
-    {personal_stored?, warnings}
-  end
-
-  # Email local-part normalized to the server-side personal-slug shape
-  # (see `Sanctum.Context.suggest_slug/1`). Returns nil when the local-part
-  # can't be reduced to a valid slug — the claim-gate UI then shows an
-  # empty field.
-  defp suggest_username(%{email: email}), do: Sanctum.Context.suggest_slug(email)
-  defp suggest_username(_), do: nil
-
-  defp maybe_stash_pending_probe(conn, access_token, true)
-       when is_binary(access_token) do
-    # 10-min TTL signed-cookie holds the access_token for a single retry /
-    # claim submission. Not stored in LiveView assigns (endpoint restarts
-    # lose them) and not in the session DB (secret sprawl).
-    #
-    # Guarded against missing secret_key_base (e.g., some test-only conn
-    # paths). The cookie is a UX nicety; absence means the user must
-    # re-authenticate to retry the probe.
-    try do
-      put_resp_cookie(conn, "_cyfr_pending_probe", access_token,
-        # Encrypted, not merely signed: a signed cookie's value is plaintext
-        # to anyone who can read it, and this one holds a live IdP access
-        # token.
-        encrypt: true,
-        max_age: 600,
-        http_only: true,
-        same_site: "Lax",
-        secure: Cyfr.RuntimeConfig.cookie_secure?()
-      )
-    rescue
-      e ->
-        Logger.warning(
-          "[EmissaryWeb.AuthController] failed to stash pending_probe cookie: #{Exception.message(e)}"
-        )
-
+  # The session, then the cookie, then whatever the outcome renders. A
+  # session that cannot be written is a 500 — the only non-redirect answer a
+  # browser sees on an admitted sign-in.
+  defp with_session(conn, ctx, fun) do
+    case Session.create(ctx) do
+      {:ok, session} ->
         conn
+        |> put_session(:sanctum_session_token, session.token)
+        |> fun.(session)
+
+      {:error, reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "session_error", message: friendly_error_message(reason)})
     end
   end
 
-  defp maybe_stash_pending_probe(conn, _access_token, _needs_claim?), do: conn
-
-  # Unconditional sibling of maybe_stash_pending_probe/3. Used by the
-  # probe-policy-acceptance gate path: we always need the access_token
-  # available to /auth/post-legal-accept regardless of whether the user
-  # also needs to claim a personal namespace afterwards.
+  # 10-min encrypted cookie holding the IdP access_token for the one thing
+  # that still needs it: the claim submission, or the re-probe after legal
+  # acceptance. Not stored in the session DB (secret sprawl). Guarded
+  # against a missing secret_key_base (some test-only conn paths) — the
+  # cookie is what makes the claim possible, and its absence is logged.
   defp stash_pending_probe(conn, access_token) when is_binary(access_token) do
     try do
       put_resp_cookie(conn, "_cyfr_pending_probe", access_token,
@@ -465,23 +273,42 @@ defmodule EmissaryWeb.AuthController do
     end
   end
 
-  # Surface credential-store warnings to the user so they know some push
-  # tokens didn't land locally. Membership failures are the common case;
-  # `cyfr registry probe` re-mints and re-stores. Only called on redirect
-  # paths (browser) — JSON-response branch surfaces warnings in the payload.
-  defp maybe_flash_warnings(conn, []), do: conn
+  # What the registry said, when it matters to the person: push tokens that
+  # didn't land locally (`cyfr registry probe` re-mints and re-stores), or a
+  # probe that could not run at all — the sign-in stands either way.
+  defp flash_report(conn, %{unsynced: unsynced, probe: probe}) do
+    conn =
+      case unsynced do
+        [] ->
+          conn
 
-  defp maybe_flash_warnings(conn, warnings) do
-    msg =
-      "Some cyfr.run tokens didn't fully sync: " <>
-        Enum.join(warnings, ", ") <>
-        ". Run `cyfr registry probe` to retry."
+        slugs ->
+          put_flash_if_available(
+            conn,
+            :error,
+            "Some cyfr.run tokens didn't fully sync: " <>
+              Enum.join(slugs, ", ") <> ". Run `cyfr registry probe` to retry."
+          )
+      end
 
-    put_flash_if_available(conn, :error, msg)
-  end
+    case probe do
+      :failed ->
+        put_flash_if_available(
+          conn,
+          :error,
+          "cyfr.run couldn't be reached — you're signed in; push credentials refresh next time."
+        )
 
-  defp reauth_flash_message(:local_store_failed) do
-    "Your cyfr.run credential couldn't be stored locally. Please sign in again."
+      :invalid_token ->
+        put_flash_if_available(
+          conn,
+          :error,
+          "cyfr.run refused the sign-in token — you're signed in; sign in again before pushing."
+        )
+
+      _ ->
+        conn
+    end
   end
 
   defp reauth_flash_message(:idp_expired) do
@@ -606,8 +433,8 @@ defmodule EmissaryWeb.AuthController do
     }
 
     with {:ok, verdict} <- Sanctum.Door.admit_identity(ctx.user_id, user_info),
-         {:ok, _user} <- Sanctum.SignIn.admitted(user_info, verdict) do
-      {:ok, Sanctum.Tenancy.resolve_into(ctx, force: true)}
+         {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
+      {:ok, Sanctum.Tenancy.resolve_into(ctx, force: true), user}
     end
   end
 
@@ -632,6 +459,41 @@ defmodule EmissaryWeb.AuthController do
     <body><h1>Not allowed on this server</h1><p>#{message}</p></body>
     </html>
     """
+  end
+
+  # A first-time person whom the registry could not place: nothing was set
+  # up and there is no session — a plain page and a way to try again.
+  defp unavailable_page(reason, retry_path \\ "/login") do
+    {title, message} = unavailable_copy(reason)
+    href = Plug.HTML.html_escape(retry_path)
+
+    """
+    <!doctype html>
+    <html lang="en">
+    <head><meta charset="utf-8"><title>#{title}</title>
+    <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}</style>
+    </head>
+    <body><h1>#{title}</h1><p>#{message}</p><p><a href="#{href}">Try again</a></p></body>
+    </html>
+    """
+  end
+
+  defp unavailable_copy(:registry_unreachable) do
+    {"cyfr.run could not be reached",
+     "Your namespace on cyfr.run is your identity on every server, and this server " <>
+       "could not reach it to find or claim yours. Nothing was set up. Try again in a moment."}
+  end
+
+  defp unavailable_copy(:no_access_token) do
+    {"Sign-in incomplete",
+     "Your identity provider returned no access token, so cyfr.run could not be asked " <>
+       "for your namespace. Nothing was set up. Sign in again."}
+  end
+
+  defp unavailable_copy(:namespace_conflict) do
+    {"Namespace already in use here",
+     "cyfr.run names you by a namespace another identity on this server already holds. " <>
+       "Ask the operator to sort it out."}
   end
 
   defp authenticate_with_provider(auth) do

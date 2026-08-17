@@ -160,28 +160,5 @@ defmodule Compendium.Registry.CredentialStoreTest do
       # `:no_push_token` and prompt B to log in / claim. Privacy guarantee.
       assert :not_found = CredentialStore.get(@user2, @reg, "alice")
     end
-
-    test "user B's has_personal? is false even when user A has claimed" do
-      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
-
-      assert CredentialStore.has_personal?(@user, @reg) == true
-      assert CredentialStore.has_personal?(@user2, @reg) == false
-    end
-  end
-
-  describe "has_personal?/2" do
-    test "true when user holds any bare-slug credential" do
-      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
-      assert CredentialStore.has_personal?(@user, @reg) == true
-    end
-
-    test "false when user holds only publisher (dotted) credentials" do
-      assert :ok = CredentialStore.put(@user, @reg, "stripe.com", push_token_cred("stripe.com"))
-      assert CredentialStore.has_personal?(@user, @reg) == false
-    end
-
-    test "false when user holds no credentials" do
-      assert CredentialStore.has_personal?(@user, @reg) == false
-    end
   end
 end

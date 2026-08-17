@@ -98,7 +98,15 @@ defmodule Compendium.OCI.Errors do
   # version without re-parsing the JSON.
   def from_response(412, body, registry) do
     parsed = parse_errors(body)
-    code = parsed |> List.first(%{}) |> Map.get("code", "")
+
+    # A 412 whose body is not the `errors` array shape (a proxy page, a
+    # bare string) is still a 412 — read what code there is, never crash on
+    # the shape.
+    code =
+      case parsed do
+        [%{"code" => c} | _] when is_binary(c) -> c
+        _ -> ""
+      end
 
     reason =
       case code do

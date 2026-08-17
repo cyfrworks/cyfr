@@ -186,7 +186,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # Belt-and-suspenders: Session.load/row_to_context already populates
   # ctx.namespace via Sanctum.Namespace.lookup/1, but if a Context arrives
   # here from a path that didn't go through Session.load (e.g. auth_provider
-  # synthesizing a fresh Context), refresh from CredentialStore.
+  # synthesizing a fresh Context), refresh from the users row.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
 
   defp ensure_namespace(%Context{} = ctx),

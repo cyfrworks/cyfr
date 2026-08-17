@@ -156,9 +156,11 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   # The same credential the header used to carry, in the place it belongs.
   describe "call/2 — a session token as a bearer credential" do
     test "authenticates and resolves the stored context", %{conn: conn} do
+      user_id = "test|https://test.example|hydrate_user"
+
       ctx =
         Sanctum.Context.build(
-          user_id: "hydrate_user",
+          user_id: user_id,
           email: "hydrate@example.com",
           provider: "test",
           permissions: [:read],
@@ -167,12 +169,18 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
           authenticated: true
         )
 
-      Compendium.Registry.CredentialStore.put(
-        "hydrate_user",
-        Compendium.Registry.canonical_host(),
-        "testns",
-        %{type: :push_token, token: "test-token", role: "owner"}
-      )
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user_id,
+          provider: "test",
+          email: "hydrate@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
+      # A restored session is re-validated against current memberships.
+      Sanctum.TestContext.athanor!()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: "ath_test")
 
       {:ok, session} = Sanctum.Session.create(ctx)
 
@@ -182,7 +190,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         |> Authenticate.call([])
 
       refute conn.halted
-      assert conn.assigns[:context].user_id == "hydrate_user"
+      assert conn.assigns[:context].user_id == user_id
       assert conn.assigns[:auth_method] == :session_token
 
       Sanctum.Session.destroy(session.token)

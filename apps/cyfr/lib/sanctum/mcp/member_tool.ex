@@ -55,6 +55,14 @@ defmodule Sanctum.MCP.MemberTool do
         {:error, :person_athanor} ->
           {:error, "A person's own athanor has one member — its owner; add people to a group"}
 
+        {:error, :ambiguous_email} ->
+          {:error, "More than one person here signs in with that email — add them by user id"}
+
+        {:error, :email_unverified} ->
+          {:error,
+           "That address can't be seated by email — their sign-in provider has not verified it; " <>
+             "add them by user id"}
+
         {:error, :athanor_archived} ->
           {:error, "That athanor is archived"}
 

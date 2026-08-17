@@ -146,12 +146,19 @@ defmodule Sanctum.Tenancy.Users do
       []
   end
 
-  @doc "Record the person's cyfr.run namespace once it is known."
+  @doc """
+  Record the person's cyfr.run namespace once it is known. This row is what
+  every request reads for it (`Sanctum.Namespace`), so the write drops the
+  cached slug.
+  """
   @spec set_namespace(User.t(), String.t()) :: {:ok, User.t()} | {:error, term()}
   def set_namespace(%User{namespace: ns} = user, ns), do: {:ok, user}
 
   def set_namespace(%User{} = user, namespace) when is_binary(namespace) do
-    update(user, %{namespace: namespace})
+    with {:ok, updated} <- update(user, %{namespace: namespace}) do
+      Sanctum.Namespace.invalidate(updated.id)
+      {:ok, updated}
+    end
   end
 
   @doc "Record the person's own athanor once minted."

@@ -79,25 +79,12 @@ defmodule PrismWeb.AuthHelpers do
     end
   end
 
-  # Populate ctx.namespace from CredentialStore via Sanctum.Namespace.lookup/1.
-  # Session.load/1 already attempts this in row_to_context, but going through a
-  # plug pipeline that re-resolves membership may have rebuilt the context with
-  # a stale namespace; this is a belt-and-suspenders refresh.
+  # Populate ctx.namespace from the users row via Sanctum.Namespace.lookup/1.
+  # Session.load/1 already does this in row_to_context, but a plug pipeline
+  # that re-resolves membership may have rebuilt the context with a stale
+  # namespace; this is a belt-and-suspenders refresh.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
 
   defp ensure_namespace(%Context{} = ctx),
     do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
-
-  # If a context has no athanor, ask the tenancy resolver.
-  # with one configured it queries the memberships table.
-
-  @doc """
-  Return the user's personal-namespace slug on cyfr.run, or `nil` when they
-  have not claimed one yet.
-
-  Delegates to `Sanctum.Namespace.lookup/1` (Sanctum-level seam) so any
-  module can call it without a PrismWeb dependency.
-  """
-  @spec personal_namespace_slug(String.t() | nil) :: String.t() | nil
-  defdelegate personal_namespace_slug(user_id), to: Sanctum.Namespace, as: :lookup
 end

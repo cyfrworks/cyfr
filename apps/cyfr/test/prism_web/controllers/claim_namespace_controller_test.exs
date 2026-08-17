@@ -176,6 +176,113 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
     end
   end
 
+  describe "POST /claim-namespace/submit — the claim (Bypass)" do
+    setup do
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      bypass = Bypass.open()
+      original_scheme = Application.get_env(:cyfr, :registry_scheme)
+      original_oci = Application.get_env(:cyfr, :oci_registry_url)
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_scheme, "http")
+      Application.put_env(:cyfr, :oci_registry_url, "registry.test")
+
+      on_exit(fn ->
+        if original_scheme,
+          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
+          else: Application.delete_env(:cyfr, :registry_scheme)
+
+        if original_oci,
+          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    # A person past the door but ahead of the claim: a users row without a
+    # namespace, and a session that loads unauthenticated.
+    defp unclaimed_person do
+      n = System.unique_integer([:positive])
+      user_id = "github|https://github.com|claim-#{n}"
+
+      {:ok, _} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user_id,
+          provider: "github",
+          email: "claim#{n}@example.com",
+          verified: true
+        })
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user_id,
+          email: "claim#{n}@example.com",
+          provider: "github",
+          permissions: [:*]
+        )
+
+      {:ok, session} = Sanctum.Session.create(ctx)
+      {user_id, session.token, "claimed#{n}"}
+    end
+
+    defp submit(username, session_token) do
+      csrf = get_csrf_from_form(build_conn())
+      endpoint_secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+
+      %{value: cookie_value} =
+        build_conn()
+        |> Map.put(:secret_key_base, endpoint_secret)
+        |> put_resp_cookie("_cyfr_pending_probe", "gho_probe", encrypt: true, max_age: 600)
+        |> Map.fetch!(:resp_cookies)
+        |> Map.fetch!("_cyfr_pending_probe")
+
+      build_conn()
+      |> Plug.Test.init_test_session(%{sanctum_session_token: session_token})
+      |> Plug.Test.put_req_cookie("_cyfr_pending_probe", cookie_value)
+      |> post(~p"/claim-namespace/submit", %{"_csrf_token" => csrf, "username" => username})
+    end
+
+    test "the claim lands on the users row first; the session becomes a working one", %{
+      bypass: bypass
+    } do
+      {user_id, token, slug} = unclaimed_person()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug, "token" => "cyfr_pt_new"}))
+      end)
+
+      assert {:ok, %{authenticated: false}} = Sanctum.Session.load(token, surface: :console)
+      conn = submit(slug, token)
+      assert redirected_to(conn) == "/"
+
+      assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
+
+      assert {:ok, %{authenticated: true, namespace: ^slug}} =
+               Sanctum.Session.load(token, surface: :console)
+
+      assert {:ok, %{token: "cyfr_pt_new"}} =
+               Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+    end
+
+    test "a claim answered without a token still records the identity", %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug}))
+      end)
+
+      conn = submit(slug, token)
+      assert redirected_to(conn) == "/"
+      assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
+      assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
+      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+    end
+  end
+
   # The submit failure pages render with varying status codes depending on the
   # branch (400 expired, 302 not-logged-in redirect, 200 form re-render); read
   # whatever body came back without pinning the status.

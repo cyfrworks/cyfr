@@ -51,6 +51,11 @@ defmodule Emissary.MCP.RouterTenancyTest do
   # An anonymous call is refused whether the Router turns it away or the
   # dispatcher does. Both are "you may not", and a test that accepts only one
   # of them mistakes a dead promise for a working door.
+  # The gate's own refusal, as opposed to a tool that ran and answered with
+  # an error of its own (a missing argument, an unreachable registry).
+  defp auth_refused?({:error, :auth_required, _}), do: true
+  defp auth_refused?(_), do: false
+
   defp refused?(result) do
     case result do
       {:error, :auth_required, _} -> true
@@ -118,6 +123,32 @@ defmodule Emissary.MCP.RouterTenancyTest do
               ] do
             assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
                    "#{tool}.#{action} answered an anonymous caller"
+          end
+        end)
+      end
+
+      test "a session ahead of its claim reaches the registry bootstrap and nothing else" do
+        with_auth_provider(@provider, fn ->
+          # What `Session.load` builds for a signed-in person who has not
+          # claimed a namespace: a user_id, no authentication.
+          ctx =
+            Sanctum.Context.build(
+              user_id: "github|https://github.com|unclaimed",
+              athanor_id: nil,
+              permissions: [],
+              scope: :athanor,
+              auth_method: :oidc,
+              authenticated: false
+            )
+
+          for action <- ~w(probe claim_personal legal_page legal_version legal_accept) do
+            refute auth_refused?(Router.dispatch(ctx, tool_call_msg("registry", action))),
+                   "registry.#{action} refused a signed-in person ahead of the claim"
+          end
+
+          for {tool, action} <- [{"aqua", "list"}, {"component", "list"}, {"registry", "whoami"}] do
+            assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
+                   "#{tool}.#{action} answered a session ahead of its claim"
           end
         end)
       end

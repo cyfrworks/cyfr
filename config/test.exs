@@ -131,6 +131,11 @@ config :cyfr,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# The namespace read is cached per person for a minute in production; a
+# sandbox rollback is a write no invalidation ever sees, so tests read the
+# users row every time.
+config :cyfr, :namespace_cache_ttl_ms, 0
+
 # A subscription stream is long-lived by design, so a test that opens one would
 # otherwise block until the production bound. Short enough that the graceful
 # close is what the assertions actually observe.

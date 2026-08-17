@@ -93,7 +93,6 @@ defmodule Cyfr.Application do
       Emissary.MCP.Progress,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       Emissary.MCP.RunningTasks,
-      EmissaryWeb.Plugs.PersonalNamespaceCache,
       # Compendium registry — Finch pool for cyfr.run REST + OCI HTTP.
       {Finch, name: Compendium.Finch},
       # Sanctum auth sliver — separate Finch pool for IdP OAuth Device-Flow

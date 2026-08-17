@@ -402,8 +402,14 @@ defmodule Compendium.MCP do
             # Bootstrap/spec reads stay open (they run before a session
             # exists per the cyfr.run spec); identity mutations mirror
             # RegistryTool's gate.
-            "probe" => %{kind: :execute, planes: [:external, :in_chain]},
-            "claim_personal" => %{kind: :write, planes: [:external, :in_chain]},
+            # The bootstrap a first sign-in still has ahead of it: a session
+            # exists but the claim gate is not passed — these serve it.
+            "probe" => %{kind: :execute, planes: [:external, :in_chain], auth: :signed_in},
+            "claim_personal" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              auth: :signed_in
+            },
             "claim_publisher" => %{
               kind: :write,
               planes: [:external],
@@ -437,9 +443,9 @@ defmodule Compendium.MCP do
             "get_namespace" => %{kind: :read, planes: [:external, :in_chain]},
             "report" => %{kind: :write, planes: [:external, :in_chain]},
             "list_my_reports" => %{kind: :read, planes: [:external, :in_chain]},
-            "legal_page" => %{kind: :read, planes: [:external, :in_chain]},
-            "legal_version" => %{kind: :read, planes: [:external, :in_chain]},
-            "legal_accept" => %{kind: :write, planes: [:external, :in_chain]},
+            "legal_page" => %{kind: :read, planes: [:external, :in_chain], auth: :signed_in},
+            "legal_version" => %{kind: :read, planes: [:external, :in_chain], auth: :signed_in},
+            "legal_accept" => %{kind: :write, planes: [:external, :in_chain], auth: :signed_in},
             "appeal" => %{kind: :write, planes: [:external, :in_chain]}
           }
         },

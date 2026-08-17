@@ -88,6 +88,54 @@ defmodule Sanctum.SessionTest do
       assert retrieved_ctx.namespace == nil
     end
 
+    test "a session loads authenticated from the users row's namespace, and survives losing every push token" do
+      n = System.unique_integer([:positive])
+      user_id = "github|https://github.com|sess-#{n}"
+
+      {:ok, row} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user_id,
+          provider: "github",
+          email: "sess#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, "sess#{n}")
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user_id,
+          email: "sess#{n}@example.com",
+          provider: "github",
+          namespace: "sess#{n}",
+          permissions: [:read]
+        )
+
+      {:ok, session} = Session.create(ctx)
+
+      assert {:ok, %{authenticated: true, namespace: ns}} =
+               Session.load(session.token, surface: :console)
+
+      assert ns == "sess#{n}"
+
+      # Push tokens are for pushing: none were ever stored, and storing then
+      # deleting one changes nothing about who the person is.
+      registry = Compendium.Registry.canonical_host()
+
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          user_id,
+          registry,
+          "sess#{n}",
+          "t",
+          "personal"
+        )
+
+      :ok = Compendium.Registry.CredentialStore.delete(user_id, registry, "sess#{n}")
+      Sanctum.Namespace.invalidate(user_id)
+      assert {:ok, %{authenticated: true}} = Session.load(session.token, surface: :console)
+    end
+
     test "returns error for invalid token", %{ctx: _ctx} do
       assert {:error, :invalid_session} = Session.load("invalid_token", surface: :console)
     end

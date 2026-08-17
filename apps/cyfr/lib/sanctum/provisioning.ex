@@ -29,25 +29,29 @@ defmodule Sanctum.Provisioning do
   alias Sanctum.Tenancy.{Athanors, Caps, Members, Users}
 
   @doc """
-  Called once the person is admitted and their namespace may be known:
-  records the namespace, mints their own athanor, and retries any group of
-  theirs whose provisioning failed earlier. A person without a namespace
-  yet (the claim gate is ahead of them) gets theirs on the next call.
+  Called once the person is admitted and whenever their namespace is
+  recorded (`Sanctum.SignIn.record_namespace/2`): mints their own athanor,
+  and retries any group of theirs whose provisioning failed earlier. A
+  person without a namespace yet (the claim gate is ahead of them) gets
+  theirs on the next call.
   """
   @spec after_sign_in(String.t()) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()} | :pending
   def after_sign_in(user_id) when is_binary(user_id) do
-    with {:ok, user} <- Users.get(user_id),
-         {:ok, user} <- record_namespace(user) do
-      retry_groups_async(user_id)
+    case Users.get(user_id) do
+      {:ok, user} ->
+        retry_groups_async(user_id)
 
-      case user.namespace do
-        nil -> :pending
-        _ -> ensure_personal_athanor(user)
-      end
-    else
-      {:error, :not_found} -> :pending
-      {:error, _} = err -> err
+        case user.namespace do
+          nil -> :pending
+          _ -> ensure_personal_athanor(user)
+        end
+
+      {:error, :not_found} ->
+        :pending
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -217,15 +221,6 @@ defmodule Sanctum.Provisioning do
 
   defp record_personal(%{personal_athanor_id: id} = user, %{id: id}), do: {:ok, user}
   defp record_personal(user, athanor), do: Users.set_personal_athanor(user, athanor.id)
-
-  defp record_namespace(%{namespace: ns} = user) when is_binary(ns), do: {:ok, user}
-
-  defp record_namespace(user) do
-    case Sanctum.Namespace.lookup(user.id) do
-      slug when is_binary(slug) -> Users.set_namespace(user, slug)
-      _ -> {:ok, user}
-    end
-  end
 
   # The mint rate is a per-server cap on personal athanors minted per hour.
   defp mint_allowed do

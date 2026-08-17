@@ -31,9 +31,10 @@ var loginCmd = &cobra.Command{
 
 The CLI prints a one-time code and a verification URL; open the URL in a
 browser, enter the code, and the CLI will receive a session token
-automatically. On first login (or when this machine hasn't probed cyfr.run
-for push tokens yet), the CLI will also prompt you to claim a personal
-namespace on cyfr.run — required before you can push components.`,
+automatically. On your first login to a server the CLI asks cyfr.run for
+your personal namespace and prompts you to claim one if you have none —
+your namespace is your identity on every server, and required before you
+can push components. Later logins do not need cyfr.run to be reachable.`,
 	Example: `  cyfr login
   cyfr login --provider google`,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -277,6 +278,17 @@ namespace on cyfr.run — required before you can push components.`,
 
 			case "denied":
 				output.Error("Authorization denied.")
+
+			case "registry_unavailable", "error":
+				// A first sign-in needs cyfr.run once, to find or claim the
+				// namespace that is this person's identity everywhere; the
+				// server set nothing up and issued no session. Say so and
+				// stop — the device code is one-shot.
+				msg, _ := pollResult["message"].(string)
+				if msg == "" {
+					msg = "cyfr.run could not be reached. Run `cyfr login` again in a moment."
+				}
+				output.Error(msg)
 
 			default:
 				// "pending" or unknown — keep polling

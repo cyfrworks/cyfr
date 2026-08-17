@@ -103,22 +103,32 @@ defmodule Sanctum.SignInTest do
     assert Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
   end
 
-  test "the namespace is recorded when the person has claimed one" do
+  test "record_namespace/2 lands the claim on the users row, mints the athanor, and refuses a slug another identity holds" do
     i = info(6)
+    assert {:ok, _} = SignIn.admitted(i, :allowed)
 
-    :ok =
-      Compendium.Registry.CredentialStore.put_push_token(
-        i.id,
-        Compendium.Registry.canonical_host(),
-        "user6ns",
-        "cyfr_pt_x",
-        "owner"
-      )
-
-    assert {:ok, user} = SignIn.admitted(i, :allowed)
+    assert {:ok, user} = SignIn.record_namespace(i.id, "user6ns")
     assert user.namespace == "user6ns"
     assert {:ok, %{id: id}} = Users.get_by_namespace("user6ns")
     assert id == i.id
+    assert {:ok, %{kind: "person"}} = Athanors.get_by_slug("person", "user6ns")
+    assert Sanctum.Namespace.lookup(i.id) == "user6ns"
+
+    # Idempotent; a different slug from the registry keeps the recorded one.
+    assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(i.id, "user6ns")
+    assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(i.id, "user6other")
+
+    # Another identity cannot take it, and a malformed slug is refused.
+    j = info(7)
+    assert {:ok, _} = SignIn.admitted(j, :allowed)
+
+    assert {:error, :namespace_owned_by_another_identity} =
+             SignIn.record_namespace(j.id, "user6ns")
+
+    assert {:error, :invalid_slug} = SignIn.record_namespace(j.id, "Not A Slug")
+
+    assert {:error, :not_found} =
+             SignIn.record_namespace("github|https://github.com|ghost", "ghost")
   end
 
   test "`*` on the door admits a stranger who then gets their own athanor — no platform bit, no group" do
@@ -129,16 +139,8 @@ defmodule Sanctum.SignInTest do
     assert {:ok, verdict} = Sanctum.Door.admit(i.id, i.email, true)
     assert verdict == :allowed
 
-    :ok =
-      Compendium.Registry.CredentialStore.put_push_token(
-        i.id,
-        Compendium.Registry.canonical_host(),
-        "stranger#{n}",
-        "cyfr_pt_x",
-        "owner"
-      )
-
-    assert {:ok, user} = SignIn.admitted(i, verdict)
+    assert {:ok, _} = SignIn.admitted(i, verdict)
+    assert {:ok, user} = SignIn.record_namespace(i.id, "stranger#{n}")
 
     assert {:ok, %{kind: "person", owner_user_id: owner}} =
              Athanors.get_by_slug("person", "stranger#{n}")
