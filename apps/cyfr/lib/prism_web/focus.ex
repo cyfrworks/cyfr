@@ -25,6 +25,8 @@ defmodule PrismWeb.Focus do
   def on_mount(:assign, %{"athanor" => segment}, _session, socket) do
     ctx = socket.assigns.context
 
+    # `by_route_slug/1` names active athanors only, so an archived one is a
+    # 404 here — `Context.focus/2` never sees it.
     with {:ok, athanor} <- Athanors.by_route_slug(segment),
          {:ok, focused} <- Context.focus(ctx, athanor) do
       {:cont, focus_assigns(socket, focused, athanor)}
@@ -33,12 +35,6 @@ defmodule PrismWeb.Focus do
         {:halt,
          socket
          |> put_flash(:error, "There is no athanor at #{segment}.")
-         |> redirect(to: "/")}
-
-      {:error, :archived} ->
-        {:halt,
-         socket
-         |> put_flash(:error, "That athanor is archived.")
          |> redirect(to: "/")}
 
       {:error, :not_member} ->

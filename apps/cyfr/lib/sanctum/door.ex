@@ -18,7 +18,9 @@ defmodule Sanctum.Door do
   `verified == true` (a provider that does not assert verification is
   matched by a `user_id` entry instead), and `*` admits any identity whose
   email is not known to be unverified. The operator's own list is trusted as
-  typed. Refusals carry no detail a stranger could use to enumerate the list.
+  typed — an absent claim admits (audited by `Sanctum.SignIn`), a provider
+  that positively says the address is unverified does not. Refusals carry no
+  detail a stranger could use to enumerate the list.
   """
 
   alias Sanctum.Door.Store
@@ -37,7 +39,7 @@ defmodule Sanctum.Door do
 
     cond do
       Store.denied?(user_id, email) -> {:error, :denied}
-      platform_admin_email?(email) -> {:ok, :admin}
+      platform_admin_email?(email) and verified != false -> {:ok, :admin}
       Store.wildcard?() and verified != false -> {:ok, :allowed}
       Store.allowed?("user_id", user_id) -> {:ok, :allowed}
       verified == true and Store.allowed?("email", email) -> {:ok, :allowed}

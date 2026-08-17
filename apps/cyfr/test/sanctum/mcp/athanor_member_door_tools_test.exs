@@ -236,4 +236,106 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} = call(k, "session", %{"action" => "use", "athanor" => group.slug})
     assert msg =~ "needs a session"
   end
+
+  test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
+       %{alice: alice, bob: bob, ctx: ctx, n: n} do
+    {:ok, personal} =
+      Athanors.create(%{
+        kind: "person",
+        name: "Alice",
+        slug: "alice#{n}",
+        owner_user_id: alice,
+        created_by: alice
+      })
+
+    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
+    a = ctx.(alice, personal.id, [])
+
+    for target <- [%{"user_id" => bob}, %{"email" => "bob#{n}@example.com"}] do
+      assert {:error, msg} = call(a, "member", Map.merge(%{"action" => "add"}, target))
+      assert msg =~ "one member"
+    end
+
+    assert {:error, msg} = call(a, "member", %{"action" => "remove", "user_id" => alice})
+    assert msg =~ "owner"
+    assert Members.member?(alice, personal.id)
+    assert Members.count_by_athanor(personal.id) == 1
+
+    # The domain function refuses too — the tool is not the only guard.
+    assert {:error, :person_athanor} = Members.add(personal, [user_id: bob], alice)
+    assert {:error, :person_athanor} = Members.remove_member(personal, user_id: alice)
+  end
+
+  test "an archived athanor refuses every mutation by id, for a member and for an operator; reads and unarchive still work",
+       %{alice: alice, bob: bob, ops: ops, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Closed #{n}"})
+    a = ctx.(alice, group.id, [])
+    assert {:ok, %{status: "archived"}} = call(a, "athanor", %{"action" => "archive"})
+
+    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    for who <- [a, operator],
+        {tool, args} <- [
+          {"athanor", %{"action" => "rename", "name" => "Reopened"}},
+          {"athanor",
+           %{"action" => "settings", "settings" => %{"aqua" => %{"answer_mode" => "all"}}}},
+          {"athanor", %{"action" => "provision"}},
+          {"member", %{"action" => "add", "user_id" => bob}},
+          {"member", %{"action" => "remove", "user_id" => alice}}
+        ] do
+      assert {:error, msg} = call(who, tool, Map.put(args, "athanor", group.id))
+      assert msg =~ "archived", "#{tool}.#{args["action"]} ran on an archived athanor"
+    end
+
+    {:ok, unchanged} = Athanors.get(group.id)
+    assert unchanged.name == "Closed #{n}"
+
+    # Reads still answer, for the member and for the operator.
+    assert {:ok, %{status: "archived"}} =
+             call(a, "athanor", %{"action" => "get", "athanor" => group.id})
+
+    assert {:ok, %{members: [_]}} =
+             call(operator, "member", %{"action" => "list", "athanor" => group.id})
+
+    # Restore — by a member, and by an operator who was never a member.
+    assert {:ok, %{status: "active"}} =
+             call(operator, "athanor", %{"action" => "unarchive", "athanor" => group.id})
+
+    assert {:ok, %{name: "Reopened"}} =
+             call(a, "athanor", %{
+               "action" => "rename",
+               "name" => "Reopened",
+               "athanor" => group.id
+             })
+  end
+
+  test "a denied person's own athanor is reopened by allow at the door, not by unarchive",
+       %{alice: alice, ops: ops, ctx: ctx, n: n} do
+    {:ok, personal} =
+      Athanors.create(%{
+        kind: "person",
+        name: "Alice",
+        slug: "alice#{n}",
+        owner_user_id: alice,
+        created_by: alice
+      })
+
+    {:ok, user} = Users.get(alice)
+    {:ok, user} = Users.set_personal_athanor(user, personal.id)
+    {:ok, _} = Users.deny(user)
+    assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
+
+    operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    assert {:error, msg} =
+             call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
+
+    assert msg =~ "denied at the door"
+    assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
+
+    {:ok, user} = Users.get(alice)
+    {:ok, _} = Users.allow(user)
+    assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
+  end
 end

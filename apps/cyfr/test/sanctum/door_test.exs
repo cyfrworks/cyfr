@@ -23,6 +23,9 @@ defmodule Sanctum.DoorTest do
     test "an empty list admits only the platform admins" do
       assert {:ok, :admin} = Door.admit(uid(1), "ops@example.com", true)
       assert {:ok, :admin} = Door.admit(uid(1), "OPS@example.com", :unknown)
+      # A provider that positively says the operator's address is unverified
+      # is a signal, not silence: the widest grant does not key on it.
+      assert {:error, :not_allowed} = Door.admit(uid(1), "ops@example.com", false)
       assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", true)
     end
 

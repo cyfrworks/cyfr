@@ -156,11 +156,14 @@ defmodule Sanctum.Tenancy.Members do
   identity with that verified email is known, else an `invited` row — and,
   when the door would not admit that address, a pending request for the
   platform admin. Answers uniformly so it cannot be used to learn who is on
-  the server. The per-group member cap applies.
+  the server. The per-group member cap applies. A person's own athanor has
+  exactly one member — its owner — on every path, not only in the UI.
   """
   @spec add(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()], String.t()) ::
           {:ok, :added | :invited} | {:error, term()}
   def add(athanor, target, added_by)
+
+  def add(%{kind: "person"}, _target, _added_by), do: {:error, :person_athanor}
 
   def add(%{id: athanor_id, status: "active"} = athanor, [user_id: user_id], added_by)
       when is_binary(user_id) do
@@ -295,10 +298,14 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Remove a person from an athanor (or a pending invite by email). The last
-  active member leaving a group archives it; Home is never archived.
+  active member leaving a group archives it; Home is never archived. The
+  owner of a person's athanor is that athanor's one member and is never
+  removed — deny at the door is the only way out of one's own furnace.
   """
   @spec remove_member(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()]) ::
           :ok | {:error, term()}
+  def remove_member(%{kind: "person"}, _target), do: {:error, :person_athanor}
+
   def remove_member(%{id: athanor_id} = athanor, user_id: user_id) when is_binary(user_id) do
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          {:ok, _} <- remove(row) do

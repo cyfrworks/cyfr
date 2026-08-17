@@ -34,9 +34,12 @@ defmodule Sanctum.MCP.DoorTool do
     with {:ok, kind} <- kind_for(value, Map.get(args, "kind")) do
       case Store.allow(kind, value, ctx.user_id, Map.get(args, "note")) do
         {:ok, entry} ->
-          # A person denied earlier may sign in again; their own athanor reopens.
-          Enum.each(known_users(kind, value), &Users.allow/1)
-          {:ok, render(entry)}
+          # A person denied earlier may sign in again and their own athanor
+          # reopens; the group seats the deny removed stay removed — a
+          # member adds them again. Said in the result, not left to guess.
+          restored = denied_users(kind, value)
+          Enum.each(restored, &Users.allow/1)
+          {:ok, with_restore_note(render(entry), restored)}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] door.allow failed: #{inspect(reason)}")
@@ -84,10 +87,13 @@ defmodule Sanctum.MCP.DoorTool do
       # Removing a deny is letting the person back through: undo what the
       # deny did to their account, exactly as `allow` does — otherwise they
       # stay `denied` with no entry left to explain why.
-      if entry.effect == "deny",
-        do: Enum.each(known_users(entry.kind, entry.value), &Users.allow/1)
+      restored =
+        if entry.effect == "deny",
+          do: denied_users(entry.kind, entry.value),
+          else: []
 
-      {:ok, %{id: id, removed: true}}
+      Enum.each(restored, &Users.allow/1)
+      {:ok, with_restore_note(%{id: id, removed: true}, restored)}
     else
       {:error, :not_found} -> {:error, "Entry not found"}
     end
@@ -116,6 +122,18 @@ defmodule Sanctum.MCP.DoorTool do
   def handle(_ctx, _args), do: {:error, "Missing required argument: action"}
 
   # The people an entry names, when they are already known here.
+  # Allowing a denied person back reopens their own athanor only; the
+  # result says what did not come back so the operator re-adds them where
+  # they belong.
+  defp with_restore_note(result, []), do: result
+
+  defp with_restore_note(result, restored) do
+    Map.merge(result, %{
+      restored: length(restored),
+      note: "Their own athanor is reopened; group seats removed by the deny are not restored"
+    })
+  end
+
   defp known_users("email", value), do: Users.list_by_email(value)
 
   defp known_users("user_id", value) do
@@ -126,6 +144,9 @@ defmodule Sanctum.MCP.DoorTool do
   end
 
   defp known_users(_kind, _value), do: []
+
+  defp denied_users(kind, value),
+    do: kind |> known_users(value) |> Enum.filter(&(&1.status == "denied"))
 
   # `*` is the wildcard; an `@` makes an email; anything else is an IdP
   # subject unless the caller said otherwise.

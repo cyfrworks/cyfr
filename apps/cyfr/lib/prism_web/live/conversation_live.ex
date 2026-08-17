@@ -408,8 +408,21 @@ defmodule PrismWeb.ConversationLive do
     {:noreply, assign(socket, :models_loaded, true)}
   end
 
+  # A rename or a settings change re-reads the row; an archive closes the
+  # page — the runner behind it has already stopped.
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
-    {:noreply, reload_athanor(socket)}
+    socket = reload_athanor(socket)
+
+    case socket.assigns.athanor do
+      %{status: "archived"} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "This athanor has been archived.")
+         |> redirect(to: "/")}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -531,6 +544,12 @@ defmodule PrismWeb.ConversationLive do
 
       {:error, :not_member} ->
         {:noreply, put_flash(socket, :error, "You are no longer a member here.")}
+
+      {:error, :archived} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "This athanor has been archived.")
+         |> redirect(to: "/")}
 
       {:error, :no_orchestrator} ->
         {:noreply, put_flash(socket, :error, "No orchestrator configured — see Agents.")}

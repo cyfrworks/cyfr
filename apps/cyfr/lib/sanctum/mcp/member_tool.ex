@@ -29,7 +29,7 @@ defmodule Sanctum.MCP.MemberTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
-    with {:ok, athanor} <- AthanorTool.resolve(ctx, args) do
+    with {:ok, athanor} <- AthanorTool.resolve(ctx, args, include_archived: true) do
       members =
         Members.list_by_athanor(athanor.id,
           limit: int_arg(args, "limit", 500),
@@ -52,6 +52,9 @@ defmodule Sanctum.MCP.MemberTool do
         {:error, :invalid_email} ->
           {:error, "That is not an email address"}
 
+        {:error, :person_athanor} ->
+          {:error, "A person's own athanor has one member — its owner; add people to a group"}
+
         {:error, :athanor_archived} ->
           {:error, "That athanor is archived"}
 
@@ -71,6 +74,9 @@ defmodule Sanctum.MCP.MemberTool do
       case Members.remove_member(athanor, target) do
         :ok ->
           {:ok, %{athanor: athanor.id, member: shown(target), state: "removed"}}
+
+        {:error, :person_athanor} ->
+          {:error, "You cannot remove the owner of a person's athanor"}
 
         {:error, :not_found} ->
           {:error, "Not a member"}

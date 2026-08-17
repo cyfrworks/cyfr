@@ -320,24 +320,18 @@ defmodule Compendium.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            # list/get are deliberately open to any authenticated caller,
-            # including in-chain: agent definitions are instance-global
-            # shared reads (owner decision 2026-08-15).
+            # Agent definitions are the athanor's own. Reading them is open
+            # to any authenticated caller, a running chain included; editing
+            # them — the roster, the prompts, the `tool_policy` that decides
+            # what a chain may call — is a member's act from outside, never
+            # something a chain can do to itself.
             "list" => %{kind: :read, planes: [:external, :in_chain]},
             "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "create" => %{
-              kind: :write,
-              planes: [:external, :in_chain],
-              permission: :component_manage
-            },
-            "update" => %{
-              kind: :write,
-              planes: [:external, :in_chain],
-              permission: :component_manage
-            },
+            "create" => %{kind: :write, planes: [:external], permission: :component_manage},
+            "update" => %{kind: :write, planes: [:external], permission: :component_manage},
             "delete" => %{
               kind: :destructive,
-              planes: [:external, :in_chain],
+              planes: [:external],
               permission: :component_manage
             }
           }

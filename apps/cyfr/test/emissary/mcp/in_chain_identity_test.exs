@@ -193,13 +193,19 @@ defmodule Emissary.MCP.InChainIdentityTest do
     assert msg =~ "not reachable from a running chain"
   end
 
+  @tag :requires_opus_modules
   test "the tenancy verbs are people's acts — never reachable from a running chain" do
     verbs = [
       {"athanor", "create"},
       {"athanor", "archive"},
       {"member", "add"},
       {"member", "remove"},
-      {"door", "allow"}
+      {"door", "allow"},
+      # A chain may read the athanor's agent definitions, never rewrite them
+      # — the tool_policy it runs under is not its own to widen.
+      {"aqua", "create"},
+      {"aqua", "update"},
+      {"aqua", "delete"}
     ]
 
     auth = granting_authority(in_chain_pairs() ++ verbs)

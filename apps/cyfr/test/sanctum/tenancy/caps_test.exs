@@ -49,6 +49,14 @@ defmodule Sanctum.Tenancy.CapsTest do
                created_by: "system"
              })
 
+    # An archived athanor frees its place: the cap counts active furnaces.
+    uid0 = "github|https://github.com|freed-#{System.unique_integer([:positive])}"
+    Application.delete_env(:cyfr, :caps)
+    {:ok, doomed} = Athanors.create_group(uid0, "Doomed")
+    {:ok, _} = Athanors.archive(doomed)
+    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count() + 1)
+    assert {:ok, _} = Athanors.create_group(uid0, "Fits")
+
     Application.put_env(:cyfr, :caps, max_groups_per_person: 1)
     uid = "github|https://github.com|capped-#{System.unique_integer([:positive])}"
     assert {:ok, _} = Athanors.create_group(uid, "First")
@@ -88,6 +96,12 @@ defmodule Sanctum.Tenancy.CapsTest do
     # one was minted this hour already (above)
     assert {:error, {:limit_reached, :mint_per_hour, 1}} =
              Sanctum.Provisioning.ensure_personal_athanor(user2)
+
+    # Groups people create do not draw on the mint budget: the cap measures
+    # person athanors, so a member's `athanor.create` cannot starve sign-ins.
+    Application.put_env(:cyfr, :caps, mint_per_hour: 2)
+    {:ok, _} = Athanors.create_group(user.id, "Not a mint")
+    assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user2)
   end
 
   test "athanor_storage_bytes is one check for every writer" do

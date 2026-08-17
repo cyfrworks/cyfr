@@ -207,8 +207,10 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc """
-  Reverse `deny/1`: the person may sign in again and their own athanor is
-  reopened. Revoked sessions and keys stay revoked.
+  Reverse `deny/1` at the door: the person may sign in again and their own
+  athanor is reopened. Revoked sessions and keys stay revoked, and the group
+  seats the deny removed are not restored — eject is permanent for groups;
+  a member adds them again.
   """
   @spec allow(User.t()) :: {:ok, User.t()} | {:error, term()}
   def allow(%User{} = user) do

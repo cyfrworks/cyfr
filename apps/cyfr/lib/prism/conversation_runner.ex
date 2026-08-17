@@ -159,7 +159,8 @@ defmodule Prism.ConversationRunner do
   `:orchestrator` (a name; an `@name` mention in the text wins).
   `{:error, :busy}` when the queue is full (nothing is written);
   `{:error, :no_orchestrator}` when the athanor has none;
-  `{:error, :not_member}` when the sender no longer belongs here.
+  `{:error, :not_member}` when the sender no longer belongs here;
+  `{:error, :archived}` when the athanor has been archived.
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           :ok | {:error, term()}
@@ -314,6 +315,9 @@ defmodule Prism.ConversationRunner do
     cond do
       text == "" and attachments == [] ->
         {:reply, {:error, :empty}, state}
+
+      not Athanors.active?(state.athanor_id) ->
+        {:reply, {:error, :archived}, state}
 
       not may_act?(ctx, state) ->
         {:reply, {:error, :not_member}, state}
@@ -718,20 +722,27 @@ defmodule Prism.ConversationRunner do
   end
 
   # The athanor changed (a rename, a settings patch such as the answer
-  # mode, an archive): re-read what the runner keeps of it. Every other
-  # notify on the athanor's topic — approvals, executions, members — is
-  # for the tray, not the runner.
+  # mode, an archive): re-read what the runner keeps of it. An archive ends
+  # the runner — the turn is interrupted and recorded, the queue dropped —
+  # so an already-open chat cannot keep running turns in a closed furnace.
+  # Every other notify on the athanor's topic — approvals, executions,
+  # members — is for the tray, not the runner.
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
-    state =
-      case Athanors.get(state.athanor_id) do
-        {:ok, athanor} ->
-          %{state | answer_mode: Athanors.answer_mode(athanor), orchestrators_at: 0}
+    case Athanors.get(state.athanor_id) do
+      {:ok, %{status: "archived"}} ->
+        state =
+          if state.running,
+            do: shutdown(state, "the athanor was archived"),
+            else: clear_queue(state)
 
-        _ ->
-          state
-      end
+        {:stop, :normal, state}
 
-    {:noreply, state}
+      {:ok, athanor} ->
+        {:noreply, %{state | answer_mode: Athanors.answer_mode(athanor), orchestrators_at: 0}}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
@@ -763,24 +774,25 @@ defmodule Prism.ConversationRunner do
   def terminate({:shutdown, _}, %{running: true} = state), do: shutdown(state)
   def terminate(_reason, _state), do: :ok
 
-  defp shutdown(state) do
+  defp shutdown(state, why \\ "the server stopped") do
     exec_id = state.execution_id
     ctx = state.turn_ctx || state.system_ctx
 
-    state
-    |> clear_queue()
-    |> interrupted(exec_id, "the server stopped")
+    state =
+      state
+      |> clear_queue()
+      |> interrupted(exec_id, why)
 
     if exec_id do
       state.turn.unsubscribe(exec_id, ctx)
       state.turn.cancel(ctx, exec_id)
     end
 
-    :ok
+    state
   rescue
-    _ -> :ok
+    _ -> %{state | running: false, execution_id: nil}
   catch
-    :exit, _ -> :ok
+    :exit, _ -> %{state | running: false, execution_id: nil}
   end
 
   # ---------------------------------------------------------------------------

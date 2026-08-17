@@ -509,6 +509,27 @@ defmodule Prism.ConversationRunnerTest do
     refute recovered =~ "the server stopped"
   end
 
+  test "archiving the athanor ends the runner: the turn is interrupted, the queue dropped, later sends refused",
+       %{alice: alice, bob: bob, conv: conv, group: group} do
+    {eid, runner, _} = start_turn(alice, conv, "long question")
+    :ok = ConversationRunner.send_message(bob, conv.id, "me next")
+    assert_receive {:conversation, _, {:queued, 1}}, 5_000
+
+    ref = Process.monitor(runner)
+    {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+
+    assert_receive {:conversation, _, {:message, %{kind: "system", content: text}}}, 5_000
+    assert text =~ "archived"
+    assert_receive {:fake_cancel, ^eid}, 5_000
+    assert_receive {:DOWN, ^ref, :process, _, :normal}, 5_000
+    {:ok, row} = Conversations.get(alice, conv.id)
+    assert row.execution_id == nil
+
+    # Nothing queued runs, and no member can start a turn in a closed furnace.
+    refute_receive {:fake_start, _, _, _}, 300
+    assert {:error, :archived} = ConversationRunner.send_message(alice, conv.id, "hello?")
+  end
+
   test "a note written while a turn runs survives the turn's own history snapshot",
        %{alice: alice, bob: bob, conv: conv} do
     # First turn leaves an approval pending.

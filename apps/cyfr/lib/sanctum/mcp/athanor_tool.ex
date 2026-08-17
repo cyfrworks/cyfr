@@ -31,7 +31,7 @@ defmodule Sanctum.MCP.AthanorTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get"} = args) do
-    with {:ok, athanor} <- resolve(ctx, args) do
+    with {:ok, athanor} <- resolve(ctx, args, include_archived: true) do
       {:ok, render(athanor)}
     end
   end
@@ -94,8 +94,12 @@ defmodule Sanctum.MCP.AthanorTool do
     end
   end
 
+  # A person's own athanor is closed by the door (deny) and reopened by the
+  # door (allow); restoring it here while its owner is still denied would
+  # reopen a furnace nobody may enter.
   def handle(%Context{} = ctx, %{"action" => "unarchive"} = args) do
-    with {:ok, athanor} <- resolve(ctx, args, include_archived: true) do
+    with {:ok, athanor} <- resolve(ctx, args, include_archived: true),
+         :ok <- owner_admitted(athanor) do
       case Athanors.unarchive(athanor) do
         {:ok, restored} ->
           broadcast_athanors_changed(ctx, restored)
@@ -148,7 +152,10 @@ defmodule Sanctum.MCP.AthanorTool do
   def handle(_ctx, _args), do: {:error, "Missing required argument: action"}
 
   # The athanor an action names — `athanor` (an id or route slug), else the
-  # caller's focused one — as long as the caller may work in it.
+  # caller's focused one — as long as the caller may work in it. An archived
+  # athanor is refused on every path unless the action asks for it
+  # (`include_archived: true` — a read, or `unarchive` itself): archive is
+  # a hard stop for members and Codex alike, not only for the browser.
   @doc false
   def resolve(%Context{} = ctx, args, opts \\ []) do
     with {:ok, athanor} <- lookup(ctx, Map.get(args, "athanor"), opts) do
@@ -157,9 +164,21 @@ defmodule Sanctum.MCP.AthanorTool do
           {:ok, athanor}
 
         # An operator opening an athanor they do not belong to: the audited
-        # act `Context.focus/2` records.
+        # act `Context.focus/2` records — or, for an archived one that only
+        # `unarchive`/`get` may name, the same audit event written here,
+        # since focus rightly refuses an archived athanor.
+        ctx.platform_admin and athanor.status == "archived" ->
+          Sanctum.Telemetry.platform_context_event(%{
+            caller: :athanor_tool,
+            user_id: ctx.user_id,
+            athanor_id: athanor.id,
+            auth_method: ctx.auth_method
+          })
+
+          {:ok, athanor}
+
         ctx.platform_admin ->
-          case Context.focus(ctx, %{athanor | status: "active"}) do
+          case Context.focus(ctx, athanor) do
             {:ok, _} -> {:ok, athanor}
             {:error, _} -> {:error, "Not a member of that athanor"}
           end
@@ -170,10 +189,10 @@ defmodule Sanctum.MCP.AthanorTool do
     end
   end
 
-  defp lookup(%Context{athanor_id: id}, nil, _opts) when is_binary(id), do: get(id)
+  defp lookup(%Context{athanor_id: id}, nil, opts) when is_binary(id), do: get(id, opts)
   defp lookup(%Context{}, nil, _opts), do: {:error, "No athanor in focus — pass athanor"}
 
-  defp lookup(%Context{}, "ath_" <> _ = id, _opts), do: get(id)
+  defp lookup(%Context{}, "ath_" <> _ = id, opts), do: get(id, opts)
 
   defp lookup(%Context{}, slug, opts) when is_binary(slug) do
     if Keyword.get(opts, :include_archived, false) do
@@ -186,10 +205,33 @@ defmodule Sanctum.MCP.AthanorTool do
     end
   end
 
-  defp get(id), do: Athanors.get(id) |> or_not_found()
+  defp get(id, opts) do
+    case Athanors.get(id) do
+      {:ok, %{status: "archived"} = athanor} ->
+        if Keyword.get(opts, :include_archived, false),
+          do: {:ok, athanor},
+          else: {:error, "That athanor is archived"}
+
+      other ->
+        or_not_found(other)
+    end
+  end
 
   defp or_not_found({:ok, athanor}), do: {:ok, athanor}
   defp or_not_found(_), do: {:error, "Athanor not found"}
+
+  defp owner_admitted(%{kind: "person", owner_user_id: owner}) when is_binary(owner) do
+    case Sanctum.Tenancy.Users.get(owner) do
+      {:ok, %{status: "denied"}} ->
+        {:error,
+         "That person is denied at the door — allow them first; that reopens their athanor"}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp owner_admitted(_athanor), do: :ok
 
   defp rename(athanor, name) do
     case Athanors.rename(athanor, name) do

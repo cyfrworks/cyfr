@@ -315,10 +315,18 @@ defmodule Sanctum.Tenancy.Athanors do
 
   def active?(_), do: false
 
-  @doc "How many athanors were created after `since`."
+  @doc """
+  How many person athanors were minted after `since` — the mint-rate cap's
+  measure; groups people create are bounded by their own cap.
+  """
   @spec count_created_since(DateTime.t()) :: non_neg_integer()
   def count_created_since(%DateTime{} = since) do
-    Arca.Repo.one(from(a in Athanor, where: a.created_at > ^since, select: count(a.id))) || 0
+    Arca.Repo.one(
+      from(a in Athanor,
+        where: a.kind == "person" and a.created_at > ^since,
+        select: count(a.id)
+      )
+    ) || 0
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
@@ -328,10 +336,10 @@ defmodule Sanctum.Tenancy.Athanors do
       0
   end
 
-  @doc "How many athanors this server holds."
+  @doc "How many active athanors this server holds — an archived one frees its place."
   @spec count() :: non_neg_integer()
   def count do
-    Arca.Repo.one(from(a in Athanor, select: count(a.id))) || 0
+    Arca.Repo.one(from(a in Athanor, where: a.status == "active", select: count(a.id))) || 0
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Athanors: count failed (#{Exception.message(e)})")

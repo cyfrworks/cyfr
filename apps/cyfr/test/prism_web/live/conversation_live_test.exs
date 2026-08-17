@@ -309,6 +309,21 @@ defmodule PrismWeb.ConversationLiveTest do
     assert Sanctum.Tenancy.Athanors.settings(row)["provisioning_error"]["step"]
   end
 
+  test "archiving the athanor sends every open chat away", %{conn: conn} do
+    alice = test_user()
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Gone #{alice.namespace}")
+    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
+    {view, _} = mount_athanor(alice_conn, "", group)
+
+    {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+    assert_redirect(view, "/")
+
+    # A fresh open is refused too — the root, or the login page when the
+    # archived group was the only athanor the session had.
+    assert {:error, {_, %{to: to}}} = live(alice_conn, athanor_path("", group))
+    assert to in ["/", "/login?error=no_athanor"]
+  end
+
   test "the Agents page mounts with the athanor's orchestrators", %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "/agents")
