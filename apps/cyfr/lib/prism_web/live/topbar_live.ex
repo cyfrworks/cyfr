@@ -474,7 +474,10 @@ defmodule PrismWeb.TopbarLive do
             </ul>
             <form
               phx-submit="create_group"
-              class={["flex items-center gap-1 px-1", if(length(@athanors) > 1, do: "mt-2 pt-2 border-t border-gray-800", else: "")]}
+              class={[
+                "flex items-center gap-1 px-1",
+                if(length(@athanors) > 1, do: "mt-2 pt-2 border-t border-gray-800", else: "")
+              ]}
             >
               <input
                 type="text"

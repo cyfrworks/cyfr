@@ -57,7 +57,14 @@ defmodule Compendium.ComponentPathTest do
 
   describe "file_path/6" do
     test "produces an athanor-scoped path to an arbitrary file" do
-      assert ComponentPath.file_path("catalyst", "local", "my-tool", "1.0.0", "README.md", @athanor) ==
+      assert ComponentPath.file_path(
+               "catalyst",
+               "local",
+               "my-tool",
+               "1.0.0",
+               "README.md",
+               @athanor
+             ) ==
                ["components", "ath_a", "catalysts", "local", "my-tool", "1.0.0", "README.md"]
     end
   end

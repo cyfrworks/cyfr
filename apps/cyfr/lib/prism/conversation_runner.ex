@@ -724,8 +724,11 @@ defmodule Prism.ConversationRunner do
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
     state =
       case Athanors.get(state.athanor_id) do
-        {:ok, athanor} -> %{state | answer_mode: Athanors.answer_mode(athanor), orchestrators_at: 0}
-        _ -> state
+        {:ok, athanor} ->
+          %{state | answer_mode: Athanors.answer_mode(athanor), orchestrators_at: 0}
+
+        _ ->
+          state
       end
 
     {:noreply, state}

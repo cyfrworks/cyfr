@@ -10,7 +10,6 @@ defmodule Opus.GenServerCatchallTest do
 
   import ExUnit.CaptureLog
 
-
   describe "RateLimiter catch-all" do
     test "survives unexpected message and logs warning" do
       {:ok, pid} = GenServer.start_link(Opus.RateLimiter, [], [])

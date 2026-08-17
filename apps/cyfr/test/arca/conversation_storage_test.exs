@@ -137,7 +137,9 @@ defmodule Arca.ConversationStorageTest do
 
   test "messages/3 windows the thread by seq, and the turn cursor round-trips", %{ctx: ctx} do
     {:ok, conv} = Conversations.create(ctx)
-    for n <- 1..4, do: {:ok, _} = Conversations.append(ctx, conv.id, %{author: "u", content: "m#{n}"})
+
+    for n <- 1..4,
+        do: {:ok, _} = Conversations.append(ctx, conv.id, %{author: "u", content: "m#{n}"})
 
     seqs = fn opts -> Conversations.messages(ctx, conv.id, opts) |> Enum.map(& &1.seq) end
     assert seqs.([]) == [1, 2, 3, 4]
@@ -152,7 +154,10 @@ defmodule Arca.ConversationStorageTest do
 
   test "the title drops a leading @mention but the row keeps the text as typed", %{ctx: ctx} do
     {:ok, conv} = Conversations.create(ctx)
-    {:ok, msg} = Conversations.append(ctx, conv.id, %{author: "u", content: "@aqua what's the plan?"})
+
+    {:ok, msg} =
+      Conversations.append(ctx, conv.id, %{author: "u", content: "@aqua what's the plan?"})
+
     assert msg.content == "@aqua what's the plan?"
     assert {:ok, %{title: "what's the plan?"}} = Conversations.get(ctx, conv.id)
   end

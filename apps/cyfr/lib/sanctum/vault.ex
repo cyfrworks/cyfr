@@ -105,9 +105,9 @@ defmodule Sanctum.Vault do
       with {:ok, entry} <- Arca.VaultStorage.put(attrs),
            {:ok, digest} <- VaultReader.binding_digest(entry),
            :ok <-
-           Arca.VaultStorage.update_binding(Context.athanor!(ctx), id, %{
-             binding_digest: digest
-           }) do
+             Arca.VaultStorage.update_binding(Context.athanor!(ctx), id, %{
+               binding_digest: digest
+             }) do
         broadcast(ctx, id, :create)
         {:ok, view(%{entry | binding_digest: digest})}
       end
@@ -229,7 +229,8 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_living(ctx, id),
          :ok <- Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "revoked"),
-         {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
+         {:ok, affected} <-
+           Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
       broadcast(ctx, id, :revoke)
       {:ok, %{affected: Enum.sort(affected)}}
     end

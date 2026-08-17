@@ -262,5 +262,4 @@ defmodule Emissary.MCP.Message do
       Map.get(@cyfr_error_codes, atom) ||
       -32603
   end
-
 end

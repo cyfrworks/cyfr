@@ -922,7 +922,6 @@ defmodule Emissary.MCP.ExternalProvider do
 
   defp decode_config_json(_), do: %{}
 
-
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"
   defp format_status(_), do: "unknown"

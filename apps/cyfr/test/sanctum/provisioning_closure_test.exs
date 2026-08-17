@@ -101,7 +101,9 @@ defmodule Sanctum.ProvisioningClosureTest do
             private_egress_targets: prev.egress,
             sigstore: prev.sigstore
           ] do
-        if value, do: Application.put_env(:cyfr, key, value), else: Application.delete_env(:cyfr, key)
+        if value,
+          do: Application.put_env(:cyfr, key, value),
+          else: Application.delete_env(:cyfr, key)
       end
 
       File.rm_rf!(test_dir)

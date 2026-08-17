@@ -141,7 +141,11 @@ defmodule Locus.BuildLimiter do
         %{state | holders: Map.delete(state.holders, pid), in_use: state.in_use - 1}
 
       {ref, count, since} ->
-        %{state | holders: Map.put(state.holders, pid, {ref, count - 1, since}), in_use: state.in_use - 1}
+        %{
+          state
+          | holders: Map.put(state.holders, pid, {ref, count - 1, since}),
+            in_use: state.in_use - 1
+        }
     end
   end
 

@@ -21,7 +21,16 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   @action_enums %{
     "session" => ["login", "logout", "whoami", "device_init", "device_poll", "use"],
-    "athanor" => ["list", "get", "create", "rename", "archive", "unarchive", "settings", "provision"],
+    "athanor" => [
+      "list",
+      "get",
+      "create",
+      "rename",
+      "archive",
+      "unarchive",
+      "settings",
+      "provision"
+    ],
     "member" => ["list", "add", "remove", "leave"],
     "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
     "oauth" => ["set_client", "list", "delete_client"],

@@ -101,13 +101,19 @@ defmodule PrismWeb.ConnectionsLiveTest do
     assert {:ok, %{providers: [%{provider: "google"}]}} =
              ToolRegistry.call_external("oauth", ctx, %{"action" => "list"})
 
-    view |> element("button[phx-click=delete_client][phx-value-provider=google]") |> render_click()
+    view
+    |> element("button[phx-click=delete_client][phx-value-provider=google]")
+    |> render_click()
+
     assert render(view) =~ "No client credentials stored"
     assert {:error, _} = Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
 
     # removing what is not there says so
     assert {:error, msg} =
-             ToolRegistry.call_external("oauth", ctx, %{"action" => "delete_client", "provider" => "google"})
+             ToolRegistry.call_external("oauth", ctx, %{
+               "action" => "delete_client",
+               "provider" => "google"
+             })
 
     assert msg =~ "No client credentials"
   end

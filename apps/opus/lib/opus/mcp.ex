@@ -246,8 +246,11 @@ defmodule Opus.MCP do
           destructiveHint: true,
           actions: %{
             "run" => %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
-            "run_stream" =>
-              %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
+            "run_stream" => %{
+              kind: :execute,
+              planes: [:external, :in_chain],
+              permission: :execute
+            },
             "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
             "logs" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
             "cancel" => %{kind: :write, planes: [:external, :in_chain], permission: :execute},

@@ -8,7 +8,13 @@ defmodule Prism.LabelsTest do
 
   setup do
     prev = Application.get_env(:cyfr, :auth_provider)
-    on_exit(fn -> if prev, do: Application.put_env(:cyfr, :auth_provider, prev), else: Application.delete_env(:cyfr, :auth_provider) end)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:cyfr, :auth_provider, prev),
+        else: Application.delete_env(:cyfr, :auth_provider)
+    end)
+
     :ok
   end
 

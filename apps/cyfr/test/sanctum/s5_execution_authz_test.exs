@@ -74,6 +74,7 @@ defmodule Sanctum.S5ExecutionAuthzTest do
     # Same user_id, different athanor: ownership alone must not grant access —
     # verify_tenant runs before the ownership check.
     foreign = %{user_id: "owner-1", athanor_id: "ath_b"}
+
     assert {:error, _} =
              Context.authorize(ctx([:storage_read]), :storage_read, {:execution, foreign})
   end

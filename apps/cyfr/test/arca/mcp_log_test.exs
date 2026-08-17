@@ -335,14 +335,10 @@ defmodule Arca.McpLogTest do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
       {:ok, _} =
-        McpLog.record(
-          log_attrs(%{id: "req_iso_a", athanor_id: ctx_a.athanor_id})
-        )
+        McpLog.record(log_attrs(%{id: "req_iso_a", athanor_id: ctx_a.athanor_id}))
 
       {:ok, _} =
-        McpLog.record(
-          log_attrs(%{id: "req_iso_b", athanor_id: ctx_b.athanor_id})
-        )
+        McpLog.record(log_attrs(%{id: "req_iso_b", athanor_id: ctx_b.athanor_id}))
 
       logs_a = McpLog.list(athanor_id: ctx_a.athanor_id)
       logs_b = McpLog.list(athanor_id: ctx_b.athanor_id)

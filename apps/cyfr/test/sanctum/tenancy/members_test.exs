@@ -158,7 +158,12 @@ defmodule Sanctum.Tenancy.MembersTest do
     test "the member cap counts invitations as seats", %{athanor: athanor} do
       prev = Application.get_env(:cyfr, :caps)
       Application.put_env(:cyfr, :caps, max_members_per_group: 2)
-      on_exit(fn -> if prev, do: Application.put_env(:cyfr, :caps, prev), else: Application.delete_env(:cyfr, :caps) end)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:cyfr, :caps, prev),
+          else: Application.delete_env(:cyfr, :caps)
+      end)
 
       n = System.unique_integer([:positive])
       # the group's creator is not seated by create/1 here, so two seats are free
@@ -183,7 +188,14 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :invited} = Members.add(other, [email: email], "system")
 
       user = person(n)
-      {:ok, user} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user.id, provider: "github", email: email, verified: true})
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user.id,
+          provider: "github",
+          email: email,
+          verified: true
+        })
 
       Phoenix.PubSub.subscribe(Emissary.PubSub, Members.topic(user.id))
       assert {:ok, 2} = Members.activate_invited(user)
@@ -206,15 +218,34 @@ defmodule Sanctum.Tenancy.MembersTest do
       n = System.unique_integer([:positive])
       email = "dup#{n}@example.com"
       user = person(n)
-      {:ok, user} = Sanctum.Tenancy.Users.upsert_from_provider(%{id: user.id, provider: "github", email: email, verified: true})
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user.id,
+          provider: "github",
+          email: email,
+          verified: true
+        })
+
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
 
       # an invite written by email before anyone noticed the person is here
       {:ok, _} =
-        Members.create(%{email: email, scope: "athanor", status: "invited", athanor_id: athanor.id})
+        Members.create(%{
+          email: email,
+          scope: "athanor",
+          status: "invited",
+          athanor_id: athanor.id
+        })
 
       assert {:ok, 0} = Members.activate_invited(user)
-      rows = Enum.filter(Members.list_by_athanor(athanor.id), &(&1.user_id == user.id or &1.email == email))
+
+      rows =
+        Enum.filter(
+          Members.list_by_athanor(athanor.id),
+          &(&1.user_id == user.id or &1.email == email)
+        )
+
       assert [%{status: "active"}] = rows
     end
   end

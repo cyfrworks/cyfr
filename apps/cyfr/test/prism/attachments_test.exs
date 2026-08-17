@@ -54,7 +54,9 @@ defmodule Prism.AttachmentsTest do
   end
 
   test "bounds: too many files, a file too large, or a full athanor writes nothing", %{ctx: ctx} do
-    many = for n <- 1..11, do: %{"filename" => "f#{n}", "media_type" => "text/plain", "bytes" => "x"}
+    many =
+      for n <- 1..11, do: %{"filename" => "f#{n}", "media_type" => "text/plain", "bytes" => "x"}
+
     assert {:error, :too_many_attachments} = Attachments.store(ctx, "c", "m", many)
 
     big = [%{"filename" => "big", "media_type" => "x", "bytes" => :binary.copy("a", 20_000_001)}]

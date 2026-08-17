@@ -821,7 +821,9 @@ defmodule PrismWeb.ConversationLive do
           <span class="min-w-0 truncate">
             This athanor is still being set up
             <span :if={provisioning_error(@athanor)} class="text-amber-300/80">
-              — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(@athanor)}
+              — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(
+                @athanor
+              )}
             </span>
           </span>
           <button

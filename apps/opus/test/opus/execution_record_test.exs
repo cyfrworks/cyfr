@@ -174,7 +174,6 @@ defmodule Opus.ExecutionRecordTest do
 
       assert completed.duration_ms >= 10
     end
-
   end
 
   describe "fail/3" do

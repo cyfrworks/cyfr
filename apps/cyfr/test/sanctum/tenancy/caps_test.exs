@@ -16,7 +16,13 @@ defmodule Sanctum.Tenancy.CapsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     prev = Application.get_env(:cyfr, :caps)
-    on_exit(fn -> if prev, do: Application.put_env(:cyfr, :caps, prev), else: Application.delete_env(:cyfr, :caps) end)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:cyfr, :caps, prev),
+        else: Application.delete_env(:cyfr, :caps)
+    end)
+
     :ok
   end
 
@@ -36,12 +42,19 @@ defmodule Sanctum.Tenancy.CapsTest do
     Application.put_env(:cyfr, :caps, max_athanors: Athanors.count())
 
     assert {:error, {:limit_reached, :max_athanors, _}} =
-             Athanors.create(%{kind: "group", name: "One more", slug: "onemore-#{System.unique_integer([:positive])}", created_by: "system"})
+             Athanors.create(%{
+               kind: "group",
+               name: "One more",
+               slug: "onemore-#{System.unique_integer([:positive])}",
+               created_by: "system"
+             })
 
     Application.put_env(:cyfr, :caps, max_groups_per_person: 1)
     uid = "github|https://github.com|capped-#{System.unique_integer([:positive])}"
     assert {:ok, _} = Athanors.create_group(uid, "First")
-    assert {:error, {:limit_reached, :max_groups_per_person, 1}} = Athanors.create_group(uid, "Second")
+
+    assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
+             Athanors.create_group(uid, "Second")
   end
 
   test "mint_per_hour bounds personal athanors minted per hour" do
@@ -92,7 +105,10 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
     assert :ok = Caps.check_storage(ctx, 50)
-    assert {:error, {:limit_reached, :athanor_storage_bytes, 100}} = Caps.check_storage(ctx, 1_000)
+
+    assert {:error, {:limit_reached, :athanor_storage_bytes, 100}} =
+             Caps.check_storage(ctx, 1_000)
+
     Application.delete_env(:cyfr, :caps)
     assert :ok = Caps.check_storage(ctx, 1_000_000_000)
   end
@@ -103,6 +119,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     {:ok, group} = Athanors.create_group(uid, "Seats")
     # creator holds one seat; one invitation fills the second
     assert {:ok, :invited} = Members.add(group, [email: "a-#{uid}@example.com"], uid)
+
     assert {:error, {:limit_reached, :max_members_per_group, 2}} =
              Members.add(group, [email: "b@example.com"], uid)
   end

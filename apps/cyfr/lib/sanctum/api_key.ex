@@ -354,7 +354,13 @@ defmodule Sanctum.ApiKey do
                  ) do
               :ok ->
                 {:ok,
-                 %{api_key: new_key, name: name, type: key_type, scope: scope_list, rotated_at: now}}
+                 %{
+                   api_key: new_key,
+                   name: name,
+                   type: key_type,
+                   scope: scope_list,
+                   rotated_at: now
+                 }}
 
               error ->
                 error

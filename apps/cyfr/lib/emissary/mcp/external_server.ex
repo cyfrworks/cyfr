@@ -766,7 +766,10 @@ defmodule Emissary.MCP.ExternalServer do
         end
 
       {:error, _} ->
-        Logger.debug("[ExternalServer] vault header reference unresolved for athanor=#{athanor_id}")
+        Logger.debug(
+          "[ExternalServer] vault header reference unresolved for athanor=#{athanor_id}"
+        )
+
         {:error, :vault_ref_unavailable}
     end
   end

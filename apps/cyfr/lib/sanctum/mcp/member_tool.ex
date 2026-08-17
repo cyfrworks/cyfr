@@ -114,9 +114,17 @@ defmodule Sanctum.MCP.MemberTool do
 
   defp int_arg(args, key, default) do
     case Map.get(args, key) do
-      n when is_integer(n) -> n
-      s when is_binary(s) -> case Integer.parse(s) do {n, ""} -> n; _ -> default end
-      _ -> default
+      n when is_integer(n) ->
+        n
+
+      s when is_binary(s) ->
+        case Integer.parse(s) do
+          {n, ""} -> n
+          _ -> default
+        end
+
+      _ ->
+        default
     end
   end
 

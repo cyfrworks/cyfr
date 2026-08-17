@@ -76,6 +76,7 @@ defmodule Arca.QueryHelpersTest do
     test "a platform context reads unfiltered" do
       ctx =
         Context.build(user_id: "admin", athanor_id: nil, scope: :platform, authenticated: true)
+
       query = QueryHelpers.where_tenant_unless_platform(base_query(), ctx)
       assert query.wheres == []
     end

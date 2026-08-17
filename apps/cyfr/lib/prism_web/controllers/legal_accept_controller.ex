@@ -86,7 +86,11 @@ defmodule PrismWeb.LegalAcceptController do
 
         {:error, %Compendium.OCI.Errors{reason: :unauthorized}} ->
           # 403 IDENTITY_BANNED at the accept endpoint. Surface as a flat error.
-          error_page(conn, 403, "This identity is currently restricted from publishing on cyfr.run.")
+          error_page(
+            conn,
+            403,
+            "This identity is currently restricted from publishing on cyfr.run."
+          )
 
         {:error, :invalid_access_token} ->
           # IdP token expired between OAuth callback and accept submit.

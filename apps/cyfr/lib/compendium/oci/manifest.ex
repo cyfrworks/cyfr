@@ -35,7 +35,6 @@ defmodule Compendium.OCI.Manifest do
   @doc "CYFR config blob media type."
   def config_media_type, do: @config_media_type
 
-
   @doc "CYFR README layer media type."
   def readme_media_type, do: @readme_media_type
 
@@ -213,7 +212,6 @@ defmodule Compendium.OCI.Manifest do
       layer -> {:ok, layer}
     end
   end
-
 
   @doc """
   Extract the README layer descriptor from a parsed manifest.

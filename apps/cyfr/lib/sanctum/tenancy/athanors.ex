@@ -238,7 +238,10 @@ defmodule Sanctum.Tenancy.Athanors do
     :ok
   rescue
     e ->
-      Logger.warning("Sanctum.Tenancy.Athanors: cancel on archive failed (#{Exception.message(e)})")
+      Logger.warning(
+        "Sanctum.Tenancy.Athanors: cancel on archive failed (#{Exception.message(e)})"
+      )
+
       :ok
   end
 
@@ -318,7 +321,10 @@ defmodule Sanctum.Tenancy.Athanors do
     Arca.Repo.one(from(a in Athanor, where: a.created_at > ^since, select: count(a.id))) || 0
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Athanors: count_created_since failed (#{Exception.message(e)})")
+      Logger.error(
+        "Sanctum.Tenancy.Athanors: count_created_since failed (#{Exception.message(e)})"
+      )
+
       0
   end
 

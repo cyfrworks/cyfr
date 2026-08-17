@@ -567,7 +567,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, reason} ->
-          Logger.error("[Emissary.MCP.Tools.RecordsProvider] Failed to update retention settings: #{inspect(reason)}")
+          Logger.error(
+            "[Emissary.MCP.Tools.RecordsProvider] Failed to update retention settings: #{inspect(reason)}"
+          )
+
           {:error, "Failed to update retention settings"}
       end
     end

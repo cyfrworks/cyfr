@@ -116,5 +116,4 @@ defmodule Compendium.MCP.Shared do
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
   def ensure_fully_qualified(%Sanctum.ComponentRef{}), do: :ok
-
 end

@@ -30,6 +30,7 @@ defmodule Arca.StorageAuthorizePathTest do
 
     a =
       Context.build(user_id: "alice", athanor_id: "ath_a", permissions: [:*], authenticated: true)
+
     b = Context.build(user_id: "bob", athanor_id: "ath_b", permissions: [:*], authenticated: true)
     seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
 

@@ -173,6 +173,7 @@ defmodule Compendium.OCI.ClientTest do
       path =
         ["components", ctx.athanor_id, "catalysts", "testpub", "my-tool", "1.0.0"] ++
           ["cyfr-manifest.json"]
+
       content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
 
       :ok = Arca.put(ctx, path, content)
@@ -216,6 +217,7 @@ defmodule Compendium.OCI.ClientTest do
     test "reading non-existent file from Arca returns error", %{ctx: ctx} do
       path =
         ["components", ctx.athanor_id, "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
+
       assert {:error, _} = Arca.get(ctx, path)
     end
   end

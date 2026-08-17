@@ -63,7 +63,8 @@ defmodule Opus.CronMCP do
             },
             "name" => %{
               "type" => "string",
-              "description" => "Human-readable schedule name, unique within the athanor (create/update)"
+              "description" =>
+                "Human-readable schedule name, unique within the athanor (create/update)"
             },
             "cron_expression" => %{
               "type" => "string",

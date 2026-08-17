@@ -65,7 +65,9 @@ defmodule Opus.BootstrapFirstRunTest do
     # the rows land — but with the deps absent their activation cannot
     # resolve, so bootstrap mints nothing for them: the fail-closed CI truth.
     for rel <- @pull_gated do
-      assert {:ok, _} = Compendium.Registry.register_from_directory(ctx, Path.join(@bundle_root, rel)), rel
+      assert {:ok, _} =
+               Compendium.Registry.register_from_directory(ctx, Path.join(@bundle_root, rel)),
+             rel
     end
 
     {:ok, %{minted: minted} = outcome} = Bootstrap.run(ctx)

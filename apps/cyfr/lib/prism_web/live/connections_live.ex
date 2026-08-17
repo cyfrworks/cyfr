@@ -60,7 +60,11 @@ defmodule PrismWeb.ConnectionsLive do
   # The operator's OAuth app for a provider — the client id/secret a
   # Connection's OAuth grant is obtained with. Stored per athanor; listed by
   # provider name only, never the secret.
-  def handle_event("set_client", %{"provider" => provider, "client_id" => client_id} = params, socket) do
+  def handle_event(
+        "set_client",
+        %{"provider" => provider, "client_id" => client_id} = params,
+        socket
+      ) do
     args = %{
       "provider" => String.trim(provider),
       "client_id" => String.trim(client_id),

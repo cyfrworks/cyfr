@@ -131,5 +131,4 @@ defmodule Sanctum do
       anonymous: anonymous
     )
   end
-
 end

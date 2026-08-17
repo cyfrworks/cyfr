@@ -59,7 +59,15 @@ defmodule Compendium.AthanorSeederTest do
 
     # Blob copied under the athanor.
     copied =
-      Path.join([components_dir, "ath_acme", "catalysts", "local", "foo", "1.0.0", "catalyst.wasm"])
+      Path.join([
+        components_dir,
+        "ath_acme",
+        "catalysts",
+        "local",
+        "foo",
+        "1.0.0",
+        "catalyst.wasm"
+      ])
 
     assert File.exists?(copied)
 

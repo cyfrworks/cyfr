@@ -11,12 +11,10 @@ defmodule Sanctum.MCP.Shared do
   to `def` so the tool modules can call them.
   """
 
-
   def format_permissions(permissions) do
     permissions
     |> MapSet.to_list()
     |> Enum.map(&to_string/1)
     |> Enum.sort()
   end
-
 end

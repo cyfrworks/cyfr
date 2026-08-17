@@ -243,11 +243,13 @@ defmodule Opus.ExecutionEventBuffer do
   @impl true
   def handle_cast({:buffer, event}, state) do
     events = (state.events ++ [event]) |> Enum.take(-@max_events)
+
     Arca.Cache.put(
       Arca.Cache.Keys.exec_events(state.execution_id, state.athanor_id),
       events,
       @buffer_ttl_ms
     )
+
     {:noreply, %{state | events: events}, @idle_timeout}
   end
 

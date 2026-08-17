@@ -109,7 +109,11 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     # bob (known, verified) is active at once; the stranger sits invited
     assert Members.member?(bob, group.id)
-    assert Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited" and &1.email == stranger))
+
+    assert Enum.any?(
+             Members.list_by_athanor(group.id),
+             &(&1.status == "invited" and &1.email == stranger)
+           )
 
     # and the door queued a request rather than admitting anyone
     assert [%{value: ^stranger, status: "requested"}] = Sanctum.Door.Store.requests()

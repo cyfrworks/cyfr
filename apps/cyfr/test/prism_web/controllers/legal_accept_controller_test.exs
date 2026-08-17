@@ -23,7 +23,9 @@ defmodule PrismWeb.LegalAcceptControllerTest do
     :ok
   end
 
-  test "GET renders the error face in the Prism layout when cyfr.run cannot be reached", %{conn: conn} do
+  test "GET renders the error face in the Prism layout when cyfr.run cannot be reached", %{
+    conn: conn
+  } do
     conn = get(conn, "/legal/accept")
     body = response(conn, 502)
     assert body =~ "load policies from cyfr.run"
@@ -52,7 +54,9 @@ defmodule PrismWeb.LegalAcceptControllerTest do
     assert response(missing, 400) =~ "policy_version is required"
   end
 
-  test "POST with every policy ticked but no pending probe cookie says the login expired", %{conn: conn} do
+  test "POST with every policy ticked but no pending probe cookie says the login expired", %{
+    conn: conn
+  } do
     conn = log_in_user(conn, test_user())
 
     acks =

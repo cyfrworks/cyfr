@@ -227,97 +227,97 @@ defmodule Locus.MCP do
 
   defp do_run_compile(ctx, reference, build_id) do
     build_meta = %{
-        build_id: build_id,
-        reference: reference,
-        athanor_id: ctx.athanor_id,
-        user_id: ctx.user_id
-      }
+      build_id: build_id,
+      reference: reference,
+      athanor_id: ctx.athanor_id,
+      user_id: ctx.user_id
+    }
 
-      on_progress = build_progress_callback(build_id, ctx, build_meta)
+    on_progress = build_progress_callback(build_id, ctx, build_meta)
 
-      :telemetry.execute(
-        [:cyfr, :locus, :build, :start],
-        %{system_time: System.system_time()},
-        build_meta
-      )
+    :telemetry.execute(
+      [:cyfr, :locus, :build, :start],
+      %{system_time: System.system_time()},
+      build_meta
+    )
 
-      start_native = System.monotonic_time()
+    start_native = System.monotonic_time()
 
-      outcome =
-        with {:ok, type, name, version} <- parse_reference(reference),
-             {:ok, version} <- resolve_version(ctx, reference, type, name, version),
-             {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-             {:ok, result} <- do_compile(source_files, type, on_progress) do
-          # Save compiled artifacts — WASM binary or tincture output files
-          store_result =
-            if Map.has_key?(result, :output_files) do
-              store_tincture_output(ctx, type, "local", name, version, result.output_files)
-            else
-              wasm_path =
-                Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx)
+    outcome =
+      with {:ok, type, name, version} <- parse_reference(reference),
+           {:ok, version} <- resolve_version(ctx, reference, type, name, version),
+           {:ok, source_files} <- read_source_tree(ctx, type, name, version),
+           {:ok, result} <- do_compile(source_files, type, on_progress) do
+        # Save compiled artifacts — WASM binary or tincture output files
+        store_result =
+          if Map.has_key?(result, :output_files) do
+            store_tincture_output(ctx, type, "local", name, version, result.output_files)
+          else
+            wasm_path =
+              Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx)
 
-              Arca.put(ctx, wasm_path, result.wasm_bytes)
-            end
-
-          case store_result do
-            :ok ->
-              # Fire-and-forget registration — Locus compiles, CYFR registers.
-              # Routed through the dispatch chokepoint (not a direct provider
-              # handle/3 call) so this state-changing mutation gets the same
-              # auth gate, timeout containment, and request-log audit row as
-              # every other dispatch — and supervised, unlike a bare
-              # Task.start.
-              Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-                case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-                       "action" => "register"
-                     }) do
-                  {:ok, _} ->
-                    :ok
-
-                  {:error, reason} ->
-                    Logger.warning(
-                      "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
-                    )
-
-                    Compendium.AutoIndexer.scan(ctx: ctx)
-                end
-              end)
-
-              {:ok,
-               %{
-                 status: "compiled",
-                 reference: reference,
-                 digest: result.digest,
-                 size: result.size,
-                 files: result |> Map.get(:output_files, %{}) |> Map.keys(),
-                 exports: Map.get(result, :exports, []),
-                 language: result.language,
-                 target_type: result.target_type,
-                 registration: "pending"
-               }}
-
-            {:error, reason} ->
-              {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
+            Arca.put(ctx, wasm_path, result.wasm_bytes)
           end
+
+        case store_result do
+          :ok ->
+            # Fire-and-forget registration — Locus compiles, CYFR registers.
+            # Routed through the dispatch chokepoint (not a direct provider
+            # handle/3 call) so this state-changing mutation gets the same
+            # auth gate, timeout containment, and request-log audit row as
+            # every other dispatch — and supervised, unlike a bare
+            # Task.start.
+            Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+              case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+                     "action" => "register"
+                   }) do
+                {:ok, _} ->
+                  :ok
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
+                  )
+
+                  Compendium.AutoIndexer.scan(ctx: ctx)
+              end
+            end)
+
+            {:ok,
+             %{
+               status: "compiled",
+               reference: reference,
+               digest: result.digest,
+               size: result.size,
+               files: result |> Map.get(:output_files, %{}) |> Map.keys(),
+               exports: Map.get(result, :exports, []),
+               language: result.language,
+               target_type: result.target_type,
+               registration: "pending"
+             }}
+
+          {:error, reason} ->
+            {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
         end
+      end
 
-      duration_ms =
-        System.convert_time_unit(
-          System.monotonic_time() - start_native,
-          :native,
-          :millisecond
-        )
-
-      :telemetry.execute(
-        [:cyfr, :locus, :build, :stop],
-        %{duration_ms: duration_ms},
-        Map.merge(build_meta, %{
-          status: if(match?({:ok, _}, outcome), do: :ok, else: :error),
-          error: if(match?({:error, _}, outcome), do: elem(outcome, 1), else: nil)
-        })
+    duration_ms =
+      System.convert_time_unit(
+        System.monotonic_time() - start_native,
+        :native,
+        :millisecond
       )
 
-      outcome
+    :telemetry.execute(
+      [:cyfr, :locus, :build, :stop],
+      %{duration_ms: duration_ms},
+      Map.merge(build_meta, %{
+        status: if(match?({:ok, _}, outcome), do: :ok, else: :error),
+        error: if(match?({:error, _}, outcome), do: elem(outcome, 1), else: nil)
+      })
+    )
+
+    outcome
   end
 
   # ============================================================================
@@ -518,5 +518,4 @@ defmodule Locus.MCP do
       :ok
     end
   end
-
 end

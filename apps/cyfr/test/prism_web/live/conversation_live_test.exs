@@ -222,11 +222,16 @@ defmodule PrismWeb.ConversationLiveTest do
     assert input["task"] =~ ~r/: book it$/
   end
 
-  test "an attachment is stored as a blob any member can fetch, and never from outside", %{conn: conn} do
+  test "an attachment is stored as a blob any member can fetch, and never from outside", %{
+    conn: conn
+  } do
     alice = test_user()
     bob = test_user()
     carol = test_user()
-    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Files #{alice.namespace}")
+
+    {:ok, group} =
+      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Files #{alice.namespace}")
+
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
     carol_conn = log_in_user(build_conn(), carol)
@@ -284,7 +289,9 @@ defmodule PrismWeb.ConversationLiveTest do
     assert get(bob_conn, athanor_path("/attachments/#{msg.id}/nope.txt", group)).status == 404
   end
 
-  test "an athanor still being set up says so, and any member can retry from the chat", %{conn: conn} do
+  test "an athanor still being set up says so, and any member can retry from the chat", %{
+    conn: conn
+  } do
     alice = test_user()
     # a bare group row: created, never provisioned (no bundle in this suite)
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Bare #{alice.namespace}")

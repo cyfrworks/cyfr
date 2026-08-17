@@ -11,7 +11,9 @@ defmodule PrismWeb.MembersLiveTest do
 
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  test "adding an email seats an invited row; removing an active member takes them out", %{conn: conn} do
+  test "adding an email seats an invited row; removing an active member takes them out", %{
+    conn: conn
+  } do
     alice = test_user()
     bob = test_user()
     conn = log_in_user(conn, alice)
@@ -37,7 +39,11 @@ defmodule PrismWeb.MembersLiveTest do
     |> render_submit()
 
     assert render(view) =~ stranger
-    assert Enum.any?(Members.list_by_athanor(group.id), &(&1.email == stranger and &1.status == "invited"))
+
+    assert Enum.any?(
+             Members.list_by_athanor(group.id),
+             &(&1.email == stranger and &1.status == "invited")
+           )
 
     view
     |> element("button[phx-click=remove][phx-value-user-id='#{bob.user_id}']")

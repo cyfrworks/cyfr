@@ -44,9 +44,15 @@ defmodule Prism.ConversationRunnerTest do
     alice = user_ctx("local|idp|alice")
     bob = user_ctx("local|idp|bob")
     {:ok, group} = Sanctum.Tenancy.Athanors.get("ath_a")
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(alice.user_id, scope: "athanor", athanor_id: group.id)
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(alice.user_id, scope: "athanor", athanor_id: group.id)
+
     {:ok, _} = Sanctum.Tenancy.Members.ensure(bob.user_id, scope: "athanor", athanor_id: group.id)
-    {:ok, group} = Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "all"}})
+
+    {:ok, group} =
+      Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "all"}})
+
     {:ok, conv} = Conversations.create(alice)
     ConversationRunner.subscribe(conv.id)
     {:ok, alice: alice, bob: bob, conv: conv, group: group}
@@ -186,6 +192,7 @@ defmodule Prism.ConversationRunnerTest do
     assert_receive {:conversation, _, {:queued, 2}}, 5_000
 
     emit(runner, "conversation_complete", %{"messages" => [%{"role" => "user", "content" => "x"}]})
+
     complete(runner)
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
 
@@ -220,7 +227,9 @@ defmodule Prism.ConversationRunnerTest do
 
   test "in a group that answers when mentioned, people talk freely and the next @turn hears it all",
        %{alice: alice, bob: bob, conv: conv, group: group} do
-    {:ok, _} = Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "mentioned"}})
+    {:ok, _} =
+      Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "mentioned"}})
+
     assert ConversationRunner.state(conv.id, conv.athanor_id).answer_mode == "mentioned"
 
     :ok = ConversationRunner.send_message(alice, conv.id, "shall we go out tonight?")
@@ -253,7 +262,9 @@ defmodule Prism.ConversationRunnerTest do
     _ = ConversationRunner.state(conv.id, conv.athanor_id)
     assert ConversationRunner.state(conv.id, conv.athanor_id).answer_mode == "all"
 
-    {:ok, _} = Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "mentioned"}})
+    {:ok, _} =
+      Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "mentioned"}})
+
     # the settings write is broadcast on the athanor's notify topic
     Process.sleep(50)
     assert ConversationRunner.state(conv.id, conv.athanor_id).answer_mode == "mentioned"
@@ -437,7 +448,10 @@ defmodule Prism.ConversationRunnerTest do
     defmodule StillRunningTurn do
       def start(_ctx, _input), do: {:error, :unused}
       def engine_available?, do: true
-      def subscribe(execution_id, _ctx), do: send(:recover_probe, {:subscribed, execution_id, self()})
+
+      def subscribe(execution_id, _ctx),
+        do: send(:recover_probe, {:subscribed, execution_id, self()})
+
       def unsubscribe(_, _), do: :ok
       def cancel(_, _), do: :ok
       def cancel_for_restart(_, _, _), do: :ok
@@ -448,7 +462,10 @@ defmodule Prism.ConversationRunnerTest do
 
     Process.register(self(), :recover_probe)
     Application.put_env(:cyfr, :aqua_turn, StillRunningTurn)
-    {:ok, _} = Conversations.update(alice, conv.id, %{execution_id: "exec_live", orchestrator: "aqua"})
+
+    {:ok, _} =
+      Conversations.update(alice, conv.id, %{execution_id: "exec_live", orchestrator: "aqua"})
+
     {:ok, _pid} = ConversationRunner.ensure(conv.id, conv.athanor_id)
 
     assert_receive {:subscribed, "exec_live", runner}, 10_000
@@ -513,7 +530,10 @@ defmodule Prism.ConversationRunnerTest do
     :ok = ConversationRunner.decline(bob, conv.id, apr.id, "no thanks")
     assert_receive {:conversation, _, {:message_updated, %{status: "declined"}}}, 5_000
 
-    emit(runner2, "conversation_complete", %{"messages" => [%{"role" => "user", "content" => "meanwhile"}]})
+    emit(runner2, "conversation_complete", %{
+      "messages" => [%{"role" => "user", "content" => "meanwhile"}]
+    })
+
     complete(runner2)
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
 

@@ -218,14 +218,10 @@ defmodule Arca.PolicyLogTest do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
       {:ok, _} =
-        PolicyLog.record(
-          log_attrs(%{id: "pl_iso_a", athanor_id: ctx_a.athanor_id})
-        )
+        PolicyLog.record(log_attrs(%{id: "pl_iso_a", athanor_id: ctx_a.athanor_id}))
 
       {:ok, _} =
-        PolicyLog.record(
-          log_attrs(%{id: "pl_iso_b", athanor_id: ctx_b.athanor_id})
-        )
+        PolicyLog.record(log_attrs(%{id: "pl_iso_b", athanor_id: ctx_b.athanor_id}))
 
       logs_a = PolicyLog.list(athanor_id: ctx_a.athanor_id)
       logs_b = PolicyLog.list(athanor_id: ctx_b.athanor_id)

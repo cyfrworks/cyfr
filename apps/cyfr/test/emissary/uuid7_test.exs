@@ -69,7 +69,6 @@ defmodule Emissary.UUID7Test do
 
       assert uuid1 < uuid2
     end
-
   end
 
   # ============================================================================

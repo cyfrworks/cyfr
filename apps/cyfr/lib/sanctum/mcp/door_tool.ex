@@ -84,7 +84,9 @@ defmodule Sanctum.MCP.DoorTool do
       # Removing a deny is letting the person back through: undo what the
       # deny did to their account, exactly as `allow` does — otherwise they
       # stay `denied` with no entry left to explain why.
-      if entry.effect == "deny", do: Enum.each(known_users(entry.kind, entry.value), &Users.allow/1)
+      if entry.effect == "deny",
+        do: Enum.each(known_users(entry.kind, entry.value), &Users.allow/1)
+
       {:ok, %{id: id, removed: true}}
     else
       {:error, :not_found} -> {:error, "Entry not found"}

@@ -220,7 +220,9 @@ defmodule EmissaryWeb.TinctureController do
             Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments, public: true)
 
           {:ok, tincture, :private, ctx} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments, public: false)
+            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
+              public: false
+            )
 
           {:error, :not_found} ->
             send_resp(conn, 404, "Not Found")
@@ -230,9 +232,7 @@ defmodule EmissaryWeb.TinctureController do
 
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
     with {:ok, {^athanor, ^publisher, ^tincture_name}} <-
-           Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token,
-             max_age: @token_max_age
-           ),
+           Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token, max_age: @token_max_age),
          {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
          {:ok, tincture} <- TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
       Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,

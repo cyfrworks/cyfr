@@ -581,7 +581,6 @@ defmodule Arca.TenantIsolationTest do
       all_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)
       assert length(all_a) == 3
     end
-
   end
 
   # ============================================================================
@@ -778,17 +777,13 @@ defmodule Arca.TenantIsolationTest do
 
       # Stats for A should show 3
       stats_a =
-        Arca.McpLog.stats(
-          athanor_id: ctx_a.athanor_id
-        )
+        Arca.McpLog.stats(athanor_id: ctx_a.athanor_id)
 
       assert stats_a.total == 3
 
       # Stats for B should show 2
       stats_b =
-        Arca.McpLog.stats(
-          athanor_id: ctx_b.athanor_id
-        )
+        Arca.McpLog.stats(athanor_id: ctx_b.athanor_id)
 
       assert stats_b.total == 2
     end

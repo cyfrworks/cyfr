@@ -139,7 +139,10 @@ defmodule Sanctum.SignInTest do
       )
 
     assert {:ok, user} = SignIn.admitted(i, verdict)
-    assert {:ok, %{kind: "person", owner_user_id: owner}} = Athanors.get_by_slug("person", "stranger#{n}")
+
+    assert {:ok, %{kind: "person", owner_user_id: owner}} =
+             Athanors.get_by_slug("person", "stranger#{n}")
+
     assert owner == user.id
 
     rows = Members.list_by_user(user.id)

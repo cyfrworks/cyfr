@@ -69,7 +69,9 @@ defmodule Prism.TelemetryBridgeTest do
         reason: :invalid_input
       })
 
-      assert_receive {:notify, @athanor, :schedule_failed, %{schedule_id: "sched_x", reason: :invalid_input}}
+      assert_receive {:notify, @athanor, :schedule_failed,
+                      %{schedule_id: "sched_x", reason: :invalid_input}}
+
       assert_receive {:schedule_failed, %{schedule_id: "sched_x"}, _}
     end
 

@@ -96,7 +96,13 @@ defmodule Opus.StorageHandler do
 
   A map with the `"cyfr:storage/files@0.1.0"` namespace containing a `"call"` function.
   """
-  @spec build_storage_imports(Edge.t() | nil, Limits.t() | nil, Context.t(), String.t(), keyword()) ::
+  @spec build_storage_imports(
+          Edge.t() | nil,
+          Limits.t() | nil,
+          Context.t(),
+          String.t(),
+          keyword()
+        ) ::
           map()
   def build_storage_imports(edge, limits, %Context{} = ctx, component_ref, opts \\ []) do
     %{

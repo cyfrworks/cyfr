@@ -84,5 +84,4 @@ defmodule Sanctum.Telemetry do
   def platform_context_event(metadata) when is_map(metadata) do
     :telemetry.execute(@platform_context_event, %{count: 1}, metadata)
   end
-
 end

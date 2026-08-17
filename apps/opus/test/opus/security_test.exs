@@ -237,7 +237,6 @@ defmodule Opus.SecurityTest do
       # This test verifies the module compiles with expected defaults
       assert Code.ensure_loaded?(Opus.Runtime)
     end
-
   end
 
   # ============================================================================

@@ -125,9 +125,14 @@ defmodule Arca.ConversationStorage do
   defp delete_blobs(ctx, conversation_ids) do
     Enum.each(conversation_ids, fn id ->
       case Arca.delete_tree(ctx, blob_root(id)) do
-        :ok -> :ok
-        {:error, :not_found} -> :ok
-        {:error, reason} -> Logger.warning("[ConversationStorage] blobs of #{id}: #{inspect(reason)}")
+        :ok ->
+          :ok
+
+        {:error, :not_found} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[ConversationStorage] blobs of #{id}: #{inspect(reason)}")
       end
     end)
   end
@@ -154,7 +159,8 @@ defmodule Arca.ConversationStorage do
   """
   @spec messages(Context.t(), String.t(), keyword()) :: [Message.t()]
   def messages(%Context{} = ctx, conversation_id, opts \\ []) when is_binary(conversation_id) do
-    query = from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
+    query =
+      from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
 
     query =
       case Keyword.get(opts, :after_seq) do

@@ -141,38 +141,55 @@ defmodule Compendium.MCP do
           actions: %{
             "search" => %{kind: :read, planes: [:external, :in_chain]},
             "inspect" => %{kind: :read, planes: [:external, :in_chain]},
-            "pull" => %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
+            "pull" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
             "push" => %{kind: :write, planes: [:external], permission: :component_manage},
-            "register" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
+            "register" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
             "categories" => %{kind: :read, planes: [:external, :in_chain]},
-            "get_blob" =>
-              %{kind: :read, planes: [:external, :in_chain], permission: :component_read},
-            "discover" =>
-              %{kind: :read, planes: [:external, :in_chain], permission: :component_read},
+            "get_blob" => %{
+              kind: :read,
+              planes: [:external, :in_chain],
+              permission: :component_read
+            },
+            "discover" => %{
+              kind: :read,
+              planes: [:external, :in_chain],
+              permission: :component_read
+            },
             "setup_plan" => %{kind: :read, planes: [:external, :in_chain]},
             "list" => %{kind: :read, planes: [:external, :in_chain]},
             "delete" => %{kind: :destructive, planes: [:external], permission: :component_manage},
-            "create" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
-            "fork" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
+            "create" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
+            "fork" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
             # deprecate/yank were the one write pair with no permission gate —
             # discovery already advertised :component_manage, and every
             # sibling mutation carries it; the handlers' namespace-bearer
             # check remains as the registry-identity residual.
-            "deprecate" =>
-              %{
-                kind: :destructive,
-                planes: [:external, :in_chain],
-                permission: :component_manage
-              },
-            "yank" =>
-              %{
-                kind: :destructive,
-                planes: [:external, :in_chain],
-                permission: :component_manage
-              }
+            "deprecate" => %{
+              kind: :destructive,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
+            "yank" => %{
+              kind: :destructive,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            }
           }
         },
         input_schema: %{
@@ -308,16 +325,21 @@ defmodule Compendium.MCP do
             # shared reads (owner decision 2026-08-15).
             "list" => %{kind: :read, planes: [:external, :in_chain]},
             "get" => %{kind: :read, planes: [:external, :in_chain]},
-            "create" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
-            "update" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
-            "delete" =>
-              %{
-                kind: :destructive,
-                planes: [:external, :in_chain],
-                permission: :component_manage
-              }
+            "create" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
+            "update" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
+            "delete" => %{
+              kind: :destructive,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            }
           }
         },
         input_schema: %{
@@ -388,22 +410,35 @@ defmodule Compendium.MCP do
             # RegistryTool's gate.
             "probe" => %{kind: :execute, planes: [:external, :in_chain]},
             "claim_personal" => %{kind: :write, planes: [:external, :in_chain]},
-            "claim_publisher" =>
-              %{kind: :write, planes: [:external], permission: :component_manage},
-            "verify_publisher" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
+            "claim_publisher" => %{
+              kind: :write,
+              planes: [:external],
+              permission: :component_manage
+            },
+            "verify_publisher" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
             "tokens_list" => %{kind: :read, planes: [:external, :in_chain]},
-            "tokens_issue" =>
-              %{kind: :write, planes: [:external], permission: :component_manage},
-            "tokens_revoke" =>
-              %{kind: :write, planes: [:external, :in_chain], permission: :component_manage},
+            "tokens_issue" => %{kind: :write, planes: [:external], permission: :component_manage},
+            "tokens_revoke" => %{
+              kind: :write,
+              planes: [:external, :in_chain],
+              permission: :component_manage
+            },
             "members_list" => %{kind: :read, planes: [:external, :in_chain]},
-            "members_add" =>
-              %{kind: :write, planes: [:external], permission: :component_manage},
-            "members_update" =>
-              %{kind: :write, planes: [:external], permission: :component_manage},
-            "members_remove" =>
-              %{kind: :write, planes: [:external], permission: :component_manage},
+            "members_add" => %{kind: :write, planes: [:external], permission: :component_manage},
+            "members_update" => %{
+              kind: :write,
+              planes: [:external],
+              permission: :component_manage
+            },
+            "members_remove" => %{
+              kind: :write,
+              planes: [:external],
+              permission: :component_manage
+            },
             "whoami" => %{kind: :read, planes: [:external, :in_chain]},
             "get_namespace" => %{kind: :read, planes: [:external, :in_chain]},
             "report" => %{kind: :write, planes: [:external, :in_chain]},

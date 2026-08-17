@@ -155,7 +155,8 @@ defmodule Emissary.MCP.RequestLogTest do
     end
 
     test "redacts credentials in structuredContent", %{request_id: request_id, ctx: ctx} do
-      :ok = RequestLog.log_started(ctx, request_id, %{tool: "webhook", action: "create", input: %{}})
+      :ok =
+        RequestLog.log_started(ctx, request_id, %{tool: "webhook", action: "create", input: %{}})
 
       :ok =
         RequestLog.log_completed(ctx, request_id, %{
@@ -176,7 +177,8 @@ defmodule Emissary.MCP.RequestLogTest do
     end
 
     test "leaves prose text blocks untouched", %{request_id: request_id, ctx: ctx} do
-      :ok = RequestLog.log_started(ctx, request_id, %{tool: "system", action: "status", input: %{}})
+      :ok =
+        RequestLog.log_started(ctx, request_id, %{tool: "system", action: "status", input: %{}})
 
       :ok =
         RequestLog.log_completed(ctx, request_id, %{

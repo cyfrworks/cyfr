@@ -23,7 +23,6 @@ defmodule Sanctum.Test.AuthorityGen do
   @max_nodes 5
   @max_edges 10
 
-
   @doc "A name-level ref from a small alphabet, so collisions are common."
   def ref do
     gen all(type <- member_of(@types), name <- member_of(@names)) do

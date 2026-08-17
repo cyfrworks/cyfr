@@ -27,6 +27,7 @@ defmodule Sanctum.TinctureAccessTest do
     # Public tincture
     pub_dir =
       Path.join([components_dir, "ath_test", "tinctures", "local", "public-dash", "1.0.0"])
+
     File.mkdir_p!(pub_dir)
 
     pub_manifest = %{
@@ -58,6 +59,7 @@ defmodule Sanctum.TinctureAccessTest do
     # Private tincture
     priv_dir =
       Path.join([components_dir, "ath_test", "tinctures", "local", "private-dash", "1.0.0"])
+
     File.mkdir_p!(priv_dir)
 
     priv_manifest = %{

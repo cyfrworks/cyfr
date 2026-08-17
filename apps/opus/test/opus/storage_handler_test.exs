@@ -889,7 +889,9 @@ defmodule Opus.StorageHandlerTest do
       content = Base.encode64(String.duplicate("x", 24))
       request = ~s({"action": "write", "path": "data/big.txt", "content": "#{content}"})
 
-      decoded = Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+      decoded =
+        Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+
       assert decoded["error"]["type"] == "request_too_large"
     end
 
@@ -897,7 +899,9 @@ defmodule Opus.StorageHandlerTest do
       content = Base.encode64("tiny")
       request = ~s({"action": "write", "path": "data/small.txt", "content": "#{content}"})
 
-      decoded = Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+      decoded =
+        Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+
       assert decoded["written"] == true
     end
 
@@ -908,7 +912,10 @@ defmodule Opus.StorageHandlerTest do
       :ok = Arca.put(ctx, ["data", "big.txt"], String.duplicate("y", 64))
 
       request = ~s({"action": "read", "path": "data/big.txt"})
-      decoded = Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+
+      decoded =
+        Jason.decode!(StorageHandler.execute(request, rw_edge(), small_limits(), ctx, ref))
+
       assert decoded["error"]["type"] == "response_too_large"
     end
   end

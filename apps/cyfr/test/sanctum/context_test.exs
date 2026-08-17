@@ -407,6 +407,7 @@ defmodule Sanctum.ContextTest do
 
       assert {:error, msg} =
                Context.authorize(ctx, :storage_read, {:execution, %{athanor_id: "ath_a"}})
+
       assert msg =~ "malformed execution resource"
     end
 
