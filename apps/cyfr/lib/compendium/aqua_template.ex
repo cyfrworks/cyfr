@@ -33,6 +33,9 @@ defmodule Compendium.AquaTemplate do
   def files do
     dir = template_path()
 
+    # arca:bypass-ok=D — the template is a directory of the release, not
+    # tenant storage; it is read here once and its content rejoins Arca in
+    # `copy_into/1`.
     case File.ls(dir) do
       {:ok, names} ->
         names
@@ -61,6 +64,7 @@ defmodule Compendium.AquaTemplate do
       names ->
         if @manifest in names do
           Enum.reduce_while(names, :ok, fn name, :ok ->
+            # arca:bypass-ok=D — same release directory as `files/0`.
             content = File.read!(Path.join(template_path(), name))
 
             case Arca.put(ctx, ["aqua", name], content) do
