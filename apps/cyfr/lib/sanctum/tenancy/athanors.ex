@@ -343,6 +343,26 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
+  @answer_modes ~w(mentioned all)
+
+  @doc """
+  When the group's AQUA answers: `"mentioned"` (a message that `@`-names an
+  orchestrator) or `"all"` (every message) — `settings["aqua"]["answer_mode"]`,
+  `"mentioned"` unless set. A person's own athanor always answers; the
+  runner reads the kind first.
+  """
+  @spec answer_mode(Athanor.t()) :: String.t()
+  def answer_mode(%Athanor{} = athanor) do
+    case get_in(settings(athanor), ["aqua", "answer_mode"]) do
+      mode when mode in @answer_modes -> mode
+      _ -> "mentioned"
+    end
+  end
+
+  @doc "The recognised answer modes."
+  @spec answer_modes() :: [String.t()]
+  def answer_modes, do: @answer_modes
+
   @doc """
   Merge `patch` into the athanor's settings document, one level deep: a map
   under a key merges into the map already there (so `%{"aqua" => %{"answer_mode"

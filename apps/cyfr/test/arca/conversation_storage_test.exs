@@ -123,12 +123,38 @@ defmodule Arca.ConversationStorageTest do
              Conversations.resolve_approval(ctx, "msg_nope", "pending", "running")
   end
 
-  test "delete removes the messages too", %{ctx: ctx} do
+  test "delete removes the messages and the attachment blobs too", %{ctx: ctx} do
     {:ok, conv} = Conversations.create(ctx)
-    {:ok, _} = Conversations.append(ctx, conv.id, %{author: "aqua", content: "x"})
+    {:ok, msg} = Conversations.append(ctx, conv.id, %{author: "aqua", content: "x"})
+    blob = Conversations.blob_root(conv.id) ++ [msg.id, "0-a.txt"]
+    :ok = Arca.put(ctx, blob, "bytes")
+
     :ok = Conversations.delete(ctx, conv.id)
     assert Conversations.messages(ctx, conv.id) == []
     assert {:error, :not_found} = Conversations.get(ctx, conv.id)
+    refute Arca.exists?(ctx, blob)
+  end
+
+  test "messages/3 windows the thread by seq, and the turn cursor round-trips", %{ctx: ctx} do
+    {:ok, conv} = Conversations.create(ctx)
+    for n <- 1..4, do: {:ok, _} = Conversations.append(ctx, conv.id, %{author: "u", content: "m#{n}"})
+
+    seqs = fn opts -> Conversations.messages(ctx, conv.id, opts) |> Enum.map(& &1.seq) end
+    assert seqs.([]) == [1, 2, 3, 4]
+    assert seqs.(after_seq: 1) == [2, 3, 4]
+    assert seqs.(after_seq: 1, upto_seq: 3) == [2, 3]
+    assert seqs.(upto_seq: 2) == [1, 2]
+
+    assert {:ok, %{turn_seq: 0, orchestrator: nil}} = Conversations.get(ctx, conv.id)
+    {:ok, updated} = Conversations.update(ctx, conv.id, %{turn_seq: 3, orchestrator: "aqua"})
+    assert updated.turn_seq == 3 and updated.orchestrator == "aqua"
+  end
+
+  test "the title drops a leading @mention but the row keeps the text as typed", %{ctx: ctx} do
+    {:ok, conv} = Conversations.create(ctx)
+    {:ok, msg} = Conversations.append(ctx, conv.id, %{author: "u", content: "@aqua what's the plan?"})
+    assert msg.content == "@aqua what's the plan?"
+    assert {:ok, %{title: "what's the plan?"}} = Conversations.get(ctx, conv.id)
   end
 
   test "retention drops stale idle conversations and keeps a running one", %{ctx: ctx} do
@@ -143,8 +169,12 @@ defmodule Arca.ConversationStorageTest do
     {:ok, _} =
       Conversations.update(ctx, running.id, %{last_message_at: old, execution_id: "exec_1"})
 
+    # a blob under the stale conversation goes with it
+    :ok = Arca.put(ctx, Conversations.blob_root(stale.id) ++ ["msg_1", "note.txt"], "bytes")
+
     cutoff = DateTime.add(DateTime.utc_now(), -365 * 86_400, :second)
-    assert {1, nil} = Conversations.delete_before(cutoff, athanor_id: "ath_a")
+    assert {1, nil} = Conversations.delete_before(ctx, cutoff)
+    refute Arca.exists?(ctx, Conversations.blob_root(stale.id) ++ ["msg_1", "note.txt"])
 
     ids = Conversations.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([running.id, fresh.id])

@@ -471,7 +471,7 @@ defmodule Arca.Retention do
 
       {:ok, %{would_delete: count}}
     else
-      {count, _} = Arca.ConversationStorage.delete_before(cutoff, athanor_id: athanor_id)
+      {count, _} = Arca.ConversationStorage.delete_before(ctx, cutoff)
       {:ok, count}
     end
   rescue

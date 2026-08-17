@@ -51,17 +51,21 @@ defmodule PrismWeb.ConversationLive do
       |> assign(:restart_prompt, nil)
       |> assign(:cancel_requested, false)
       |> assign(:members, %{})
+      |> assign(:queued, 0)
+      |> assign(:answer_mode, answer_mode(socket))
       |> allow_upload(:attachments,
         accept: :any,
-        max_entries: 10,
+        max_entries: Prism.Attachments.limits().max_files,
         # 20 MB — sized with EmissaryWeb.Endpoint's Plug.Parsers :length so a
         # base64-encoded attachment of this size fits through POST /mcp.
-        max_file_size: 20_000_000,
+        max_file_size: Prism.Attachments.limits().max_file_bytes,
         auto_upload: true
       )
 
     socket =
       if connected?(socket) and ctx do
+        Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
+
         socket
         |> assign(:orchestrators, Prism.AquaTurn.orchestrators(ctx))
         |> assign(:members, member_labels(ctx))
@@ -72,6 +76,12 @@ defmodule PrismWeb.ConversationLive do
 
     {:ok, socket}
   end
+
+  # A group's answer mode is on the athanor row; the runner reads the same.
+  defp answer_mode(%{assigns: %{athanor: %Arca.Schemas.Athanor{} = athanor}}),
+    do: Sanctum.Tenancy.Athanors.answer_mode(athanor)
+
+  defp answer_mode(_socket), do: "mentioned"
 
   @impl true
   def handle_params(params, _uri, socket) do
@@ -128,6 +138,7 @@ defmodule PrismWeb.ConversationLive do
   defp reset_live(socket) do
     socket
     |> assign(:running, false)
+    |> assign(:queued, 0)
     |> assign(:turn_user, nil)
     |> assign(:streaming_text, "")
     |> assign(:tool_activity, [])
@@ -141,6 +152,7 @@ defmodule PrismWeb.ConversationLive do
   defp apply_live(socket, %{} = live) do
     socket
     |> assign(:running, live.running)
+    |> assign(:queued, Map.get(live, :queued, 0))
     |> assign(:turn_user, live.turn_user)
     |> assign(:streaming_text, live.streaming_text)
     |> assign(:tool_activity, live.tool_activity)
@@ -164,10 +176,22 @@ defmodule PrismWeb.ConversationLive do
     message = String.trim(params["message"] || "")
     has_uploads = socket.assigns.uploads.attachments.entries != []
 
-    cond do
-      message == "" and not has_uploads -> {:noreply, socket}
-      socket.assigns.running -> {:noreply, socket}
-      true -> send_message(socket, message, consume_attachments(socket))
+    if message == "" and not has_uploads,
+      do: {:noreply, socket},
+      else: send_message(socket, message, consume_attachments(socket))
+  end
+
+  # A group setting: does AQUA answer everything, or only when @-mentioned?
+  def handle_event("answer_mode", %{"answer_mode" => mode}, socket) do
+    if mode in Sanctum.Tenancy.Athanors.answer_modes() do
+      case call_tool(socket, "athanor/settings", %{
+             "settings" => %{"aqua" => %{"answer_mode" => mode}}
+           }) do
+        {:ok, _} -> {:noreply, assign(socket, :answer_mode, mode)}
+        {:error, reason} -> {:noreply, put_flash(socket, :error, "Could not save: #{reason}")}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
@@ -341,6 +365,19 @@ defmodule PrismWeb.ConversationLive do
     {:noreply, assign(socket, :models_loaded, true)}
   end
 
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+    case Sanctum.Tenancy.Athanors.get(socket.assigns.context.athanor_id) do
+      {:ok, athanor} ->
+        {:noreply,
+         socket
+         |> assign(:athanor, athanor)
+         |> assign(:answer_mode, Sanctum.Tenancy.Athanors.answer_mode(athanor))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ---------------------------------------------------------------------------
@@ -357,6 +394,8 @@ defmodule PrismWeb.ConversationLive do
     assign(socket, :messages, upsert_row(socket.assigns.messages, row))
   end
 
+  # A turn may start for a message queued earlier — the sender's draft of
+  # a newer message stays where it is (`send_message/3` clears on send).
   defp handle_conversation_event(socket, {:turn_starting, user_id}) do
     socket
     |> assign(:running, true)
@@ -364,11 +403,9 @@ defmodule PrismWeb.ConversationLive do
     |> assign(:streaming_text, "")
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
-    |> assign(
-      :input,
-      if(user_id == socket.assigns.context.user_id, do: "", else: socket.assigns.input)
-    )
   end
+
+  defp handle_conversation_event(socket, {:queued, n}), do: assign(socket, :queued, n)
 
   defp handle_conversation_event(socket, {:turn_started, _eid}),
     do: assign(socket, :running, true)
@@ -431,13 +468,19 @@ defmodule PrismWeb.ConversationLive do
   # Sending
   # ---------------------------------------------------------------------------
 
-  defp send_message(socket, message, attachments) do
+  # The message id is minted here so the attachment bytes can be written
+  # under it — by this member, in this process — before the runner sees
+  # the message; the runner then only records the refs.
+  defp send_message(socket, message, files) do
     ctx = socket.assigns.context
+    message_id = Emissary.UUID7.generate_id("msg")
 
     with {:ok, conv} <- current_or_new(socket),
+         {:ok, refs} <- Prism.Attachments.store(ctx, conv.id, message_id, files),
          :ok <-
            ConversationRunner.send_message(ctx, conv.id, message,
-             attachments: attachments,
+             id: message_id,
+             attachments: refs,
              model: socket.assigns.model_override,
              orchestrator: socket.assigns.orchestrator && socket.assigns.orchestrator["name"]
            ) do
@@ -449,11 +492,23 @@ defmodule PrismWeb.ConversationLive do
         {:noreply, push_patch(socket, to: chat_path(socket, conv.id))}
       end
     else
-      {:error, :running} ->
-        {:noreply, put_flash(socket, :error, "A turn is already running.")}
+      {:error, :busy} ->
+        {:noreply, put_flash(socket, :error, "AQUA is busy — wait for the current answer.")}
+
+      {:error, :not_member} ->
+        {:noreply, put_flash(socket, :error, "You are no longer a member here.")}
 
       {:error, :no_orchestrator} ->
         {:noreply, put_flash(socket, :error, "No orchestrator configured — see Agents.")}
+
+      {:error, :storage_full} ->
+        {:noreply, put_flash(socket, :error, "This athanor's storage is full.")}
+
+      {:error, :too_many_attachments} ->
+        {:noreply, put_flash(socket, :error, "Too many attachments for one message.")}
+
+      {:error, :attachment_too_large} ->
+        {:noreply, put_flash(socket, :error, "An attachment is too large.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not send: #{inspect(reason)}")}
@@ -474,13 +529,11 @@ defmodule PrismWeb.ConversationLive do
   defp consume_attachments(socket) do
     consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
       # arca:bypass-ok=D — Plug-managed upload tmp file.
-      data = File.read!(path) |> Base.encode64()
-
       {:ok,
        %{
          "filename" => entry.client_name,
          "media_type" => entry.client_type,
-         "data" => data
+         "bytes" => File.read!(path)
        }}
     end)
   rescue
@@ -491,6 +544,20 @@ defmodule PrismWeb.ConversationLive do
 
   defp pending_in(messages) do
     Enum.filter(messages, &(&1.kind == "approval" and &1.status == "pending"))
+  end
+
+  defp composer_placeholder(%{kind: "group"}, "mentioned"),
+    do: "Talk to the group · @aqua to ask AQUA  (Enter to send · Shift+Enter for newline)"
+
+  defp composer_placeholder(_athanor, _mode),
+    do: "Ask AQUA…  (Enter to send · Shift+Enter for newline)"
+
+  # The route a second device reads an attachment's bytes from.
+  defp attachment_path(athanor_route, message_id, filename) do
+    PrismWeb.Focus.path(
+      athanor_route,
+      "/attachments/#{URI.encode(message_id)}/#{URI.encode(filename)}"
+    )
   end
 
   defp chat_path(socket, nil), do: PrismWeb.Focus.path(socket.assigns.athanor_route, "")
@@ -645,6 +712,25 @@ defmodule PrismWeb.ConversationLive do
             <span :if={@orchestrators == []} class="text-xs text-amber-400">
               No orchestrator configured
             </span>
+            <select
+              :if={@athanor.kind == "group"}
+              phx-change="answer_mode"
+              name="answer_mode"
+              class="bg-transparent text-[10px] text-gray-500 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer"
+              title="When AQUA answers in this group"
+            >
+              <option value="mentioned" selected={@answer_mode == "mentioned"}>
+                answers when @mentioned
+              </option>
+              <option value="all" selected={@answer_mode == "all"}>answers everything</option>
+            </select>
+            <span
+              :if={@queued > 0}
+              class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+              title="Messages waiting for AQUA"
+            >
+              {@queued} queued
+            </span>
             <span
               :if={MapSet.size(@grants) > 0}
               class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
@@ -774,6 +860,7 @@ defmodule PrismWeb.ConversationLive do
                 content={msg.content}
                 author={author_label(msg, @members, @context)}
                 attachments={Conversations.payload(msg)["attachments"] || []}
+                attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
               />
             <% end %>
           <% end %>
@@ -876,13 +963,12 @@ defmodule PrismWeb.ConversationLive do
               name="message"
               phx-change="update_input"
               rows="1"
-              placeholder="Ask AQUA…  (Enter to send · Shift+Enter for newline)"
+              placeholder={composer_placeholder(@athanor, @answer_mode)}
               class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
               autofocus
-              disabled={@running or @orchestrators == []}
+              disabled={@orchestrators == []}
             >{@input}</textarea>
             <button
-              :if={!@running}
               type="submit"
               disabled={@orchestrators == [] or (@input == "" and @uploads.attachments.entries == [])}
               class="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -919,6 +1005,7 @@ defmodule PrismWeb.ConversationLive do
   attr :content, :string, required: true
   attr :author, :any, default: nil
   attr :attachments, :list, default: []
+  attr :attachment_href, :any, default: nil
 
   defp message_bubble(assigns) do
     # Strip aqua-actions blocks for display, then trim — a stray block or the
@@ -946,12 +1033,22 @@ defmodule PrismWeb.ConversationLive do
           <span class="whitespace-pre-wrap">{@display_content}</span>
         <% end %>
         <div :if={@attachments != []} class="mt-1 flex flex-wrap gap-1">
-          <span
-            :for={a <- @attachments}
-            class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px]"
-          >
-            📎 {a["filename"]}
-          </span>
+          <%= for a <- @attachments do %>
+            <a
+              :if={@attachment_href && a["path"]}
+              href={@attachment_href.(a["filename"])}
+              download={a["filename"]}
+              class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px] hover:bg-black/40 underline-offset-2 hover:underline"
+            >
+              📎 {a["filename"]}
+            </a>
+            <span
+              :if={!(@attachment_href && a["path"])}
+              class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px]"
+            >
+              📎 {a["filename"]}
+            </span>
+          <% end %>
         </div>
       </div>
     </div>

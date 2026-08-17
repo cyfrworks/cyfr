@@ -94,9 +94,9 @@ defmodule Prism.AquaTurn do
 
   `opts`: `:history` (provider-shape messages from the previous turn),
   `:attachments` (`[%{"filename", "media_type", "data"}]`, base64 data),
-  `:model` (an override for the orchestrator's model), `:author`
-  (`%{"id", "name"}` of the person sending — the formula tags the user
-  turn with it so a group's agent knows who is speaking).
+  `:model` (an override for the orchestrator's model), `:group` (`true` in
+  a group athanor — the system prompt then explains that people are
+  speaking, each line of the task prefixed with the speaker's name).
 
   Returns `%{input: map, tool_policy: map}` — the policy is what the turn's
   intents are later checked against.
@@ -111,7 +111,8 @@ defmodule Prism.AquaTurn do
     # never emit UI intents.
     system_prompt =
       Prism.AgentConfig.build_system_prompt(ctx, name) <>
-        Prism.AquaActions.system_prelude(tool_policy)
+        Prism.AquaActions.system_prelude(tool_policy) <>
+        group_prelude(Keyword.get(opts, :group, false))
 
     resolved_catalyst =
       case Prism.AgentConfig.resolve_catalyst(ctx, orchestrator["catalyst_ref"]) do
@@ -131,17 +132,22 @@ defmodule Prism.AquaTurn do
         "model" => Keyword.get(opts, :model) || orchestrator["model"]
       }
       |> Prism.AgentConfig.put_formula_tool_surface(tool_policy)
-      |> put_author(Keyword.get(opts, :author))
       |> put_attachments(Keyword.get(opts, :attachments, []))
       |> put_messages(Keyword.get(opts, :history, []))
 
     %{input: input, tool_policy: tool_policy}
   end
 
-  defp put_author(input, %{} = author) when map_size(author) > 0,
-    do: Map.put(input, "author", author)
+  # A group's agent hears several people; the runner writes each line of the
+  # task as `Name: text`, and the prompt says so, so the model attributes
+  # rather than assumes one speaker.
+  @group_prelude "\n\nThis is a group conversation with several people. Each line of the " <>
+                   "task is prefixed with the name of the person who said it, as `Name: text`. " <>
+                   "Address people by name when it helps; you are the group's assistant, not " <>
+                   "any one person's."
 
-  defp put_author(input, _), do: input
+  defp group_prelude(true), do: @group_prelude
+  defp group_prelude(_), do: ""
 
   defp put_attachments(input, []), do: input
   defp put_attachments(input, attachments), do: Map.put(input, "attachments", attachments)
@@ -176,19 +182,16 @@ defmodule Prism.AquaTurn do
 
   defp strip_actions_in_part(part), do: part
 
-  @doc "The `author` map for a person: their display name, or their email, or the id."
-  @spec author_of(Context.t()) :: map()
-  def author_of(%Context{user_id: nil}), do: %{}
+  @doc "How a person is named in a group turn: display name, else email, else id."
+  @spec display_name(String.t() | nil) :: String.t()
+  def display_name(nil), do: "someone"
 
-  def author_of(%Context{user_id: user_id}) do
-    name =
-      case Sanctum.Tenancy.Users.get(user_id) do
-        {:ok, %{display_name: name}} when is_binary(name) and name != "" -> name
-        {:ok, %{email: email}} when is_binary(email) and email != "" -> email
-        _ -> user_id
-      end
-
-    %{"id" => user_id, "name" => name}
+  def display_name(user_id) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{display_name: name}} when is_binary(name) and name != "" -> name
+      {:ok, %{email: email}} when is_binary(email) and email != "" -> email
+      _ -> user_id
+    end
   end
 
   # ---------------------------------------------------------------------------

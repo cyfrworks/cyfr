@@ -21,6 +21,7 @@ defmodule Arca.ConversationStorage do
   """
 
   import Ecto.Query
+  require Logger
 
   alias Arca.QueryHelpers
   alias Arca.Repo
@@ -75,21 +76,27 @@ defmodule Arca.ConversationStorage do
     |> Repo.insert()
   end
 
-  @doc "Update a conversation's title, history or running execution."
+  @doc """
+  Update a conversation's title, history, running execution, orchestrator
+  or turn cursor.
+  """
   @spec update(Context.t(), String.t(), map()) ::
           {:ok, Conversation.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def update(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
     with {:ok, conv} <- get(ctx, id) do
       attrs =
         attrs
-        |> Map.take([:title, :history, :execution_id, :last_message_at])
+        |> Map.take([:title, :history, :execution_id, :orchestrator, :turn_seq, :last_message_at])
         |> encode_history()
 
       conv |> Conversation.changeset(attrs) |> Repo.update()
     end
   end
 
-  @doc "Delete a conversation and its messages."
+  @doc """
+  Delete a conversation, its messages and its attachment blobs
+  (`blob_root/1` under the athanor's storage).
+  """
   @spec delete(Context.t(), String.t()) :: :ok | {:error, :not_found}
   def delete(%Context{} = ctx, id) when is_binary(id) do
     with {:ok, conv} <- get(ctx, id) do
@@ -100,8 +107,29 @@ defmodule Arca.ConversationStorage do
         Repo.delete!(conv)
       end)
 
+      delete_blobs(ctx, [conv.id])
       :ok
     end
+  end
+
+  @doc """
+  Where a conversation's attachment bytes live under the athanor's storage:
+  `conversations/<conversation_id>/<message_id>/<filename>`.
+  """
+  @spec blob_root(String.t()) :: [String.t()]
+  def blob_root(conversation_id) when is_binary(conversation_id),
+    do: ["conversations", conversation_id]
+
+  # Best effort: the rows are gone either way; an orphaned directory is a
+  # retention concern, never a correctness one.
+  defp delete_blobs(ctx, conversation_ids) do
+    Enum.each(conversation_ids, fn id ->
+      case Arca.delete_tree(ctx, blob_root(id)) do
+        :ok -> :ok
+        {:error, :not_found} -> :ok
+        {:error, reason} -> Logger.warning("[ConversationStorage] blobs of #{id}: #{inspect(reason)}")
+      end
+    end)
   end
 
   @doc "The provider-shape history stored on a conversation, decoded (`[]` when none)."
@@ -119,10 +147,28 @@ defmodule Arca.ConversationStorage do
   # Messages
   # ---------------------------------------------------------------------------
 
-  @doc "Every message of a conversation, oldest first."
-  @spec messages(Context.t(), String.t()) :: [Message.t()]
-  def messages(%Context{} = ctx, conversation_id) when is_binary(conversation_id) do
-    from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
+  @doc """
+  The messages of a conversation, oldest first. `after_seq:` / `upto_seq:`
+  bound the window (exclusive / inclusive) — a turn's task is the human
+  rows between the last turn's cursor and the message that started it.
+  """
+  @spec messages(Context.t(), String.t(), keyword()) :: [Message.t()]
+  def messages(%Context{} = ctx, conversation_id, opts \\ []) when is_binary(conversation_id) do
+    query = from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
+
+    query =
+      case Keyword.get(opts, :after_seq) do
+        nil -> query
+        seq -> from(m in query, where: m.seq > ^seq)
+      end
+
+    query =
+      case Keyword.get(opts, :upto_seq) do
+        nil -> query
+        seq -> from(m in query, where: m.seq <= ^seq)
+      end
+
+    query
     |> QueryHelpers.where_tenant(ctx)
     |> Repo.all()
   end
@@ -234,7 +280,10 @@ defmodule Arca.ConversationStorage do
          content: content
        })
        when author not in ["aqua", "system"] and is_binary(content) do
-    case content |> String.trim() |> String.split("\n", parts: 2) |> List.first() do
+    # The row keeps the text as typed; the title drops a leading `@aqua`.
+    first_line = content |> String.trim() |> String.split("\n", parts: 2) |> List.first()
+
+    case first_line && Regex.replace(~r/^@\S+\s*/, first_line, "") do
       "" -> @default_title
       nil -> @default_title
       line -> String.slice(line, 0, @title_max)
@@ -335,12 +384,13 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc """
-  Delete an athanor's conversations whose last activity is older than
-  `cutoff`, messages included. Requires `:athanor_id`.
+  Delete the athanor's conversations whose last activity is older than
+  `cutoff` — messages and attachment blobs included. The context is the
+  athanor's (retention walks each with an internal context).
   """
-  @spec delete_before(DateTime.t(), keyword()) :: {non_neg_integer(), nil}
-  def delete_before(%DateTime{} = cutoff, opts) do
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
+  @spec delete_before(Context.t(), DateTime.t()) :: {non_neg_integer(), nil}
+  def delete_before(%Context{} = ctx, %DateTime{} = cutoff) do
+    athanor_id = Context.athanor!(ctx)
 
     stale =
       from(c in Conversation,
@@ -356,7 +406,9 @@ defmodule Arca.ConversationStorage do
       {0, nil}
     else
       Repo.delete_all(from(m in Message, where: m.conversation_id in ^ids))
-      Repo.delete_all(from(c in Conversation, where: c.id in ^ids))
+      result = Repo.delete_all(from(c in Conversation, where: c.id in ^ids))
+      delete_blobs(ctx, ids)
+      result
     end
   end
 

@@ -279,6 +279,22 @@ defmodule EmissaryWeb.Router do
 
   # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as
   # `@<namespace>`, a group's by slug. Two tabs can be two athanors, and
+  # A chat attachment's bytes, for the member reading the thread on another
+  # device. Its own pipeline: no `:accepts` (a browser asks for an image or
+  # a PDF, not html), the session cookie for who, the URL's athanor for
+  # where — the controller focuses it exactly as a LiveView mount does.
+  pipeline :attachment do
+    plug :fetch_session
+    plug :put_secure_browser_headers
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+  end
+
+  scope "/a/:athanor", PrismWeb do
+    pipe_through :attachment
+
+    get "/attachments/:message_id/:filename", AttachmentController, :show
+  end
+
   # "open Home" is a link. `PrismWeb.Focus` resolves the segment and narrows
   # the context (`Sanctum.Context.focus/2`) before the page mounts.
   scope "/", PrismWeb do

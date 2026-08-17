@@ -230,28 +230,21 @@ defmodule Opus.StorageHandler do
 
   # The operator's per-athanor ceiling for authenticated writes
   # (`CYFR_ATHANOR_STORAGE_BYTES`) — off unless set, as a private box needs
-  # none. Measured over the athanor's whole data root: every write lands
-  # somewhere beneath it, and a per-scope measure would let a tenant fill
-  # the disk one scope at a time.
+  # none. `Sanctum.Tenancy.Caps.check_storage/2` measures the athanor's
+  # whole root; the incoming size is the decoded payload.
   defp validate_athanor_quota(action, %{content: content}, ctx) when action in @writing_actions do
-    case Sanctum.Tenancy.Caps.get(:athanor_storage_bytes) do
-      nil ->
+    incoming =
+      case Base.decode64(content || "") do
+        {:ok, decoded} -> byte_size(decoded)
+        :error -> byte_size(content || "")
+      end
+
+    case Sanctum.Tenancy.Caps.check_storage(ctx, incoming) do
+      :ok ->
         :ok
 
-      cap ->
-        incoming =
-          case Base.decode64(content || "") do
-            {:ok, decoded} -> byte_size(decoded)
-            :error -> byte_size(content || "")
-          end
-
-        case Arca.usage(ctx, []) do
-          {:ok, %{bytes: used}} when used + incoming > cap ->
-            {:error, :storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)"}
-
-          _ ->
-            :ok
-        end
+      {:error, {:limit_reached, :athanor_storage_bytes, cap}} ->
+        {:error, :storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)"}
     end
   end
 

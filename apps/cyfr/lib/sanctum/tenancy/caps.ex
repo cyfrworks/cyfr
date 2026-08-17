@@ -47,6 +47,32 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
+  @doc """
+  `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
+  `:athanor_storage_bytes` cap (or the cap is off). Measured over the whole
+  athanor root — every write lands somewhere beneath it, and a per-scope
+  measure would let one tenant fill the disk one scope at a time. The one
+  place the cap is computed: authenticated WASM writes and chat attachments
+  both come here.
+  """
+  @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
+          :ok | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}
+  def check_storage(%Sanctum.Context{} = ctx, incoming) when is_integer(incoming) do
+    case get(:athanor_storage_bytes) do
+      nil ->
+        :ok
+
+      cap ->
+        case Arca.usage(ctx, []) do
+          {:ok, %{bytes: used}} when used + incoming > cap ->
+            {:error, {:limit_reached, :athanor_storage_bytes, cap}}
+
+          _ ->
+            :ok
+        end
+    end
+  end
+
   @doc "The keys, for config resolution."
   @spec keys() :: [key()]
   def keys, do: @keys

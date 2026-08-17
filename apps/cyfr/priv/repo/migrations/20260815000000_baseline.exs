@@ -590,6 +590,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :history, :text
       # Execution running this conversation's current turn, or NULL.
       add :execution_id, :string
+      # The orchestrator the current/last turn ran as; a recovered turn
+      # reads its policy from it.
+      add :orchestrator, :string
+      # `seq` of the last human message a turn has taken up: the next turn's
+      # task is every human row after it.
+      add :turn_seq, :integer, null: false, default: 0
       add :last_message_at, :utc_datetime_usec
 
       timestamps(type: :utc_datetime_usec)
@@ -614,7 +620,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :kind, :string, null: false, default: "text"
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent + proposal, a text message's
-      # attachment refs, an error's source.
+      # attachment refs (`%{"attachments" => [%{filename, media_type, size,
+      # path}]}`, bytes under data/{athanor}/conversations/{conv}/{msg}/),
+      # an error's source.
       add :payload, :text
       # Approvals: pending | running | approved | declined | error.
       add :status, :string

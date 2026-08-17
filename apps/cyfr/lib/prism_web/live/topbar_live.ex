@@ -147,7 +147,17 @@ defmodule PrismWeb.TopbarLive do
 
   # The tray: one fan-in topic per athanor the person belongs to. Something
   # happening in an athanor that is not in focus becomes a badge on its row;
-  # the focused one shows its own live indicators.
+  # the focused one shows its own live indicators. Only what wants a
+  # person's attention badges: a card settled by someone else does not,
+  # and an athanor renamed or reconfigured just redraws the list.
+  def handle_info({:notify, _athanor_id, :approval_resolved, _payload}, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+    {:noreply, load_athanors(socket, socket.assigns.context)}
+  end
+
   def handle_info({:notify, athanor_id, _kind, _payload}, socket) do
     if athanor_id == socket.assigns.context.athanor_id do
       {:noreply, socket}

@@ -20,12 +20,27 @@ defmodule Prism.ConversationRunner do
   sent the message (their consented authority, their attribution on the
   execution).
 
+  ## Who is being spoken to
+
+  Every message is persisted and shown to every member as soon as it is
+  sent — people talk to each other in the thread. Whether it also starts
+  an AQUA turn is *addressing*: in a person's own athanor every message
+  does; in a group only a message that `@`-mentions an orchestrator does,
+  unless the group's setting says AQUA answers everything
+  (`Sanctum.Tenancy.Athanors.answer_mode/1`). A turn's task is every human
+  message since the last turn — the ones that did not address AQUA
+  included, so the agent hears the whole exchange — each line prefixed
+  with the speaker's name in a group. One turn runs at a time; a message
+  that addresses AQUA while one runs is queued (bounded) and starts when
+  the running turn completes.
+
   ## Broadcasts — `{:conversation, conversation_id, event}`
 
   - `{:message, %Arca.Schemas.Message{}}` — a row appended
   - `{:message_updated, %Arca.Schemas.Message{}}` — an approval decided,
     a streamed reply finalised
-  - `{:turn_started, execution_id}` / `{:turn_finished}`
+  - `{:turn_starting, user_id}` / `{:turn_started, execution_id}` /
+    `{:turn_finished}`; `{:queued, n}` — the number of turns waiting
   - `{:delta, chunk}`, `{:tool_activity, list}`, `{:usage, %{input, output}}`
   - `{:grants, MapSet}` — the "for this conversation" auto-approvals
   - `{:intents, intents, user_id}` — client intents (navigate, copy) for
@@ -50,12 +65,20 @@ defmodule Prism.ConversationRunner do
   require Logger
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Prism.AquaTurn
+  alias Prism.{AquaTurn, Attachments}
   alias Sanctum.Context
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   @idle_ms :timer.minutes(15)
   @recover_retry_ms 2_000
   @recover_attempts 15
+  # Turns waiting behind the running one; beyond it a sender is told `:busy`.
+  @queue_max 8
+  # A turn's task is bounded — a long-quiet group can pile up chatter.
+  @window_rows 50
+  @window_bytes 60_000
+  # The athanor's orchestrator names are an MCP round trip; cached briefly.
+  @orchestrators_ttl_ms 60_000
 
   @type scope :: :once | :conversation | :always
 
@@ -85,6 +108,8 @@ defmodule Prism.ConversationRunner do
              ) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
+          # `init/1` found no such conversation or athanor.
+          :ignore -> {:error, :not_found}
           {:error, reason} -> {:error, reason}
         end
     end
@@ -126,11 +151,15 @@ defmodule Prism.ConversationRunner do
   end
 
   @doc """
-  Send a message: the row is appended and the turn starts.
+  Send a message: the row is appended and shown to every member; if it
+  addresses AQUA a turn starts — or waits its turn behind the running one.
 
-  `opts`: `:attachments`, `:model`, `:orchestrator` (a name; an `@name`
-  mention in the text wins). `{:error, :running}` while a turn is in
-  flight; `{:error, :no_orchestrator}` when the athanor has none.
+  `opts`: `:id` (a pre-minted message id — the sender wrote its
+  attachments under it first), `:attachments` (their refs), `:model`,
+  `:orchestrator` (a name; an `@name` mention in the text wins).
+  `{:error, :busy}` when the queue is full (nothing is written);
+  `{:error, :no_orchestrator}` when the athanor has none;
+  `{:error, :not_member}` when the sender no longer belongs here.
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           :ok | {:error, term()}
@@ -210,46 +239,66 @@ defmodule Prism.ConversationRunner do
 
   @impl true
   def init({conversation_id, athanor_id}) do
+    # Trapping exits so a supervisor shutdown mid-turn reaches terminate/2.
+    Process.flag(:trap_exit, true)
     ctx = system_ctx(athanor_id)
 
-    case Conversations.get(ctx, conversation_id) do
-      {:ok, conv} ->
-        state = %{
-          id: conv.id,
-          athanor_id: athanor_id,
-          system_ctx: ctx,
-          turn: Application.get_env(:cyfr, :aqua_turn, AquaTurn),
-          # The context of the member whose turn is running.
-          turn_ctx: nil,
-          running: false,
-          execution_id: nil,
-          # Set while a turn is starting: the async start has not yet
-          # returned an execution id.
-          starting: nil,
-          cancel_requested: false,
-          streaming_text: "",
-          tool_activity: [],
-          usage: %{input: 0, output: 0},
-          grants: MapSet.new(),
-          orchestrator: nil,
-          tool_policy: %{},
-          history: Conversations.history(conv),
-          last_user_text: nil,
-          idle_ref: nil
-        }
+    with {:ok, conv} <- Conversations.get(ctx, conversation_id),
+         {:ok, athanor} <- Athanors.get(athanor_id) do
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
 
-        state =
-          if conv.execution_id do
-            send(self(), {:recover, conv.execution_id, @recover_attempts})
-            state
-          else
-            state
-          end
+      state = %{
+        id: conv.id,
+        athanor_id: athanor_id,
+        # person | group — a person's athanor addresses AQUA with every message.
+        kind: athanor.kind,
+        answer_mode: Athanors.answer_mode(athanor),
+        system_ctx: ctx,
+        turn: Application.get_env(:cyfr, :aqua_turn, AquaTurn),
+        # The context of the member whose turn is running.
+        turn_ctx: nil,
+        running: false,
+        execution_id: nil,
+        # Set while a turn is starting: the async start has not yet
+        # returned an execution id.
+        starting: nil,
+        cancel_requested: false,
+        streaming_text: "",
+        tool_activity: [],
+        usage: %{input: 0, output: 0},
+        grants: MapSet.new(),
+        orchestrator: nil,
+        tool_policy: %{},
+        history: Conversations.history(conv),
+        # System notes (approval outcomes) written while a turn runs — merged
+        # into the history the turn hands back, so they are not lost to it.
+        notes_in_flight: [],
+        # The task text of the running turn, for the cancel synthesis.
+        last_task: nil,
+        # `seq` of the last human row a turn took up.
+        turn_seq: conv.turn_seq || 0,
+        # Turns waiting behind the running one.
+        queue: [],
+        # The athanor's orchestrator names, cached (mention detection).
+        orchestrators: [],
+        orchestrators_at: 0,
+        # Display names of members, cached for the group prefix.
+        names: %{},
+        idle_ref: nil
+      }
 
-        {:ok, touch(state)}
+      state =
+        if conv.execution_id do
+          send(self(), {:recover, conv.execution_id, conv.orchestrator, @recover_attempts})
+          state
+        else
+          state
+        end
 
-      {:error, :not_found} ->
-        :ignore
+      {:ok, touch(state)}
+    else
+      {:error, :not_found} -> :ignore
+      {:error, _} -> :ignore
     end
   end
 
@@ -258,28 +307,46 @@ defmodule Prism.ConversationRunner do
     {:reply, public_state(state), touch(state)}
   end
 
-  def handle_call({:send, _ctx, _text, _opts}, _from, %{running: true} = state) do
-    {:reply, {:error, :running}, state}
-  end
-
   def handle_call({:send, ctx, text, opts}, _from, state) do
     text = String.trim(text || "")
     attachments = Keyword.get(opts, :attachments, [])
 
-    if text == "" and attachments == [] do
-      {:reply, {:error, :empty}, state}
-    else
-      case pick_orchestrator(ctx, state, text, opts) do
-        {:ok, orchestrator, message} ->
-          {:reply, :ok, start_turn(state, ctx, orchestrator, message, attachments, opts)}
+    cond do
+      text == "" and attachments == [] ->
+        {:reply, {:error, :empty}, state}
 
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
+      not may_act?(ctx, state) ->
+        {:reply, {:error, :not_member}, state}
+
+      true ->
+        state = refresh_orchestrators(state, ctx)
+
+        case addressing(state, ctx, text, opts) do
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+
+          # The queue is full: nothing is written, the sender keeps the draft.
+          {:turn, _orch} when state.running and length(state.queue) >= @queue_max ->
+            {:reply, {:error, :busy}, state}
+
+          decision ->
+            case persist_message(state, ctx, text, opts) do
+              {:ok, row} ->
+                state = broadcast(state, {:message, row})
+                {:reply, :ok, after_persist(state, ctx, row, decision, opts)}
+
+              {:error, reason} ->
+                {:reply, {:error, reason}, state}
+            end
+        end
     end
   end
 
+  # Stop ends the running turn and drops what was waiting behind it — a
+  # member who says stop means the conversation, not one reply.
   def handle_call({:stop, ctx}, _from, state) do
+    state = clear_queue(state)
+
     cond do
       state.running and state.execution_id ->
         {:reply, :ok, cancel_turn(state, ctx)}
@@ -315,6 +382,7 @@ defmodule Prism.ConversationRunner do
            }) do
       if scope == :never, do: drop_from_policy(ctx, msg)
       approval_telemetry(state, ctx, msg, :declined, scope, reason)
+      notify_resolved(state, msg)
       state = state |> append_history(system_text) |> broadcast({:message_updated, msg})
       {:reply, :ok, touch(state)}
     else
@@ -343,10 +411,13 @@ defmodule Prism.ConversationRunner do
         turn.cancel_for_restart(ctx, exec_id, payload)
       end)
 
+      # The sender is asked to re-send; a queued turn firing now would send
+      # for them.
       state =
         state
+        |> clear_queue()
         |> finish_turn()
-        |> broadcast({:restart_prompt, state.last_user_text, ctx.user_id})
+        |> broadcast({:restart_prompt, state.last_task, ctx.user_id})
 
       {:reply, :ok, state}
     else
@@ -355,34 +426,126 @@ defmodule Prism.ConversationRunner do
   end
 
   # ---------------------------------------------------------------------------
+  # Sending: persist, address, start or queue
+  # ---------------------------------------------------------------------------
+
+  # A member of the athanor may act; so may an operator who opened it
+  # (`Context.focus/2` audited that). A context minted at mount is not
+  # trusted forever: this is re-asked on every send and at every dequeue.
+  defp may_act?(%Context{platform_admin: true}, _state), do: true
+  defp may_act?(%Context{user_id: user_id}, state), do: Members.member?(user_id, state.athanor_id)
+
+  defp persist_message(state, ctx, text, opts) do
+    Conversations.append(ctx, state.id, %{
+      id: Keyword.get(opts, :id),
+      author: ctx.user_id || "system",
+      kind: "text",
+      content: text,
+      payload: attachment_payload(Keyword.get(opts, :attachments, []))
+    })
+  end
+
+  defp attachment_payload([]), do: nil
+  defp attachment_payload(refs) when is_list(refs), do: %{"attachments" => refs}
+
+  # What a message means for AQUA: `:post` (people talking), or a turn for
+  # an orchestrator. A person's athanor addresses AQUA with every message;
+  # a group only when the text mentions an orchestrator, unless the group
+  # answers everything.
+  defp addressing(state, ctx, text, opts) do
+    {_message, mentioned} = AquaTurn.parse_mention(text, state.orchestrators)
+
+    addressed? = state.kind == "person" or state.answer_mode == "all" or not is_nil(mentioned)
+
+    if addressed? do
+      case pick_orchestrator(ctx, state, mentioned, opts) do
+        {:ok, orchestrator} -> {:turn, orchestrator}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :post
+    end
+  end
+
+  defp after_persist(state, _ctx, _row, :post, _opts), do: touch(state)
+
+  defp after_persist(state, ctx, row, {:turn, orchestrator}, opts) do
+    entry = %{
+      ctx: ctx,
+      orchestrator: orchestrator,
+      seq: row.seq,
+      message_id: row.id,
+      model: Keyword.get(opts, :model)
+    }
+
+    if state.running do
+      state = %{state | queue: state.queue ++ [entry]}
+      state |> broadcast({:queued, length(state.queue)}) |> touch()
+    else
+      start_turn(state, entry)
+    end
+  end
+
+  # The next waiting turn, if any — only after a turn *completed*; a stop,
+  # a failure or a restart prompt never launches what was queued.
+  defp start_next(%{queue: []} = state), do: state
+
+  defp start_next(%{queue: [entry | rest]} = state) do
+    state = %{state | queue: rest} |> broadcast({:queued, length(rest)})
+
+    if may_act?(entry.ctx, state) do
+      start_turn(state, entry)
+    else
+      # The sender left the athanor while waiting; their turn does not run.
+      state
+      |> append_and_broadcast(%{
+        author: "system",
+        kind: "system",
+        content: "A queued message was dropped — its sender is no longer a member."
+      })
+      |> start_next()
+    end
+  end
+
+  defp clear_queue(%{queue: []} = state), do: state
+  defp clear_queue(state), do: %{state | queue: []} |> broadcast({:queued, 0})
+
+  # ---------------------------------------------------------------------------
   # Turn start
   # ---------------------------------------------------------------------------
 
-  defp start_turn(state, ctx, orchestrator, message, attachments, opts) do
-    {:ok, row} =
-      Conversations.append(ctx, state.id, %{
-        author: ctx.user_id || "system",
-        kind: "text",
-        content: message,
-        payload: attachment_refs(attachments)
-      })
+  # The task is every human message since the last turn, up to and
+  # including the one that addressed AQUA — bounded, mention-stripped, and
+  # in a group prefixed with who said it. The cursor advances at start;
+  # what a cancelled or failed turn consumed is folded into the history
+  # instead (`cancel_turn/2`), so nothing is lost and nothing is fed twice.
+  defp start_turn(state, %{ctx: ctx, orchestrator: orchestrator, seq: seq} = entry) do
+    rows = window_rows(state, seq)
+    {task, state} = task_of(state, rows)
+    refs = Enum.flat_map(rows, &Attachments.refs_of/1)
+
+    Conversations.update(state.system_ctx, state.id, %{
+      turn_seq: seq,
+      orchestrator: orchestrator["name"]
+    })
 
     ref = make_ref()
     runner = self()
     history = state.history
-    model = Keyword.get(opts, :model)
-    author = AquaTurn.author_of(ctx)
+    group? = state.kind == "group"
     turn = state.turn
 
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       result =
         try do
+          attachments = Attachments.load(ctx, refs)
+
           %{input: input, tool_policy: policy} =
-            AquaTurn.build_input(ctx, orchestrator, message,
+            AquaTurn.build_input(ctx, orchestrator, task,
               history: history,
               attachments: attachments,
-              model: model,
-              author: author
+              model: entry.model,
+              group: group?
             )
 
           case turn.start(ctx, input) do
@@ -408,36 +571,72 @@ defmodule Prism.ConversationRunner do
         usage: %{input: 0, output: 0},
         orchestrator: orchestrator,
         tool_policy: orchestrator["tool_policy"] || %{},
-        last_user_text: message
+        turn_seq: seq,
+        last_task: task
     }
 
     state
-    |> broadcast({:message, row})
     |> broadcast({:turn_starting, ctx.user_id})
     |> touch()
   end
 
-  defp attachment_refs([]), do: nil
+  # The human text rows a turn takes up: after the last cursor, up to the
+  # addressing message; the newest @window_rows / @window_bytes of them.
+  defp window_rows(state, upto_seq) do
+    rows =
+      Conversations.messages(state.system_ctx, state.id,
+        after_seq: state.turn_seq,
+        upto_seq: upto_seq
+      )
+      |> Enum.filter(&(&1.kind == "text" and &1.author not in ["aqua", "system"]))
 
-  defp attachment_refs(attachments) do
-    %{
-      "attachments" =>
-        Enum.map(attachments, fn a ->
-          %{"filename" => a["filename"], "media_type" => a["media_type"]}
-        end)
-    }
+    rows
+    |> Enum.reverse()
+    |> Enum.take(@window_rows)
+    |> Enum.reduce_while({[], 0}, fn row, {kept, bytes} ->
+      size = byte_size(row.content || "")
+
+      if kept != [] and bytes + size > @window_bytes,
+        do: {:halt, {kept, bytes}},
+        else: {:cont, {[row | kept], bytes + size}}
+    end)
+    |> elem(0)
+  end
+
+  defp task_of(state, rows) do
+    {lines, state} =
+      Enum.map_reduce(rows, state, fn row, acc ->
+        {text, _mention} = AquaTurn.parse_mention(row.content || "", acc.orchestrators)
+
+        if acc.kind == "group" do
+          {name, acc} = name_of(acc, row.author)
+          {"#{name}: #{text}", acc}
+        else
+          {text, acc}
+        end
+      end)
+
+    {Enum.join(lines, "\n"), state}
+  end
+
+  defp name_of(state, user_id) do
+    case Map.fetch(state.names, user_id) do
+      {:ok, name} ->
+        {name, state}
+
+      :error ->
+        name = AquaTurn.display_name(user_id)
+        {name, %{state | names: Map.put(state.names, user_id, name)}}
+    end
   end
 
   # `@name` in the text wins, then an explicit option, then the
   # orchestrator of the previous turn, then the athanor's first.
-  defp pick_orchestrator(ctx, state, text, opts) do
-    orchestrators = AquaTurn.orchestrators(ctx)
-    {message, mentioned} = AquaTurn.parse_mention(text, orchestrators)
-
+  defp pick_orchestrator(ctx, state, mentioned, opts) do
     name =
       mentioned || Keyword.get(opts, :orchestrator) ||
         (state.orchestrator && state.orchestrator["name"]) ||
-        (List.first(orchestrators) || %{})["name"]
+        (List.first(state.orchestrators) || %{})["name"]
 
     cond do
       is_nil(name) ->
@@ -445,13 +644,25 @@ defmodule Prism.ConversationRunner do
 
       state.orchestrator && state.orchestrator["name"] == name && is_nil(mentioned) &&
           is_nil(Keyword.get(opts, :orchestrator)) ->
-        {:ok, state.orchestrator, message}
+        {:ok, state.orchestrator}
 
       true ->
         case AquaTurn.orchestrator(ctx, name) do
           nil -> {:error, :no_orchestrator}
-          orchestrator -> {:ok, orchestrator, message}
+          orchestrator -> {:ok, orchestrator}
         end
+    end
+  end
+
+  # The athanor's orchestrator names — an MCP call as the sender, so cached
+  # for a while; a change to the athanor invalidates the cache.
+  defp refresh_orchestrators(state, ctx) do
+    now = System.monotonic_time(:millisecond)
+
+    if state.orchestrators == [] or now - state.orchestrators_at > @orchestrators_ttl_ms do
+      %{state | orchestrators: AquaTurn.orchestrators(ctx), orchestrators_at: now}
+    else
+      state
     end
   end
 
@@ -502,9 +713,28 @@ defmodule Prism.ConversationRunner do
     {:noreply, complete_approval(state, ctx, message_id, outcome, payload)}
   end
 
-  def handle_info({:recover, execution_id, attempts}, state) do
-    {:noreply, recover(state, execution_id, attempts)}
+  def handle_info({:recover, execution_id, orchestrator_name, attempts}, state) do
+    {:noreply, recover(state, execution_id, orchestrator_name, attempts)}
   end
+
+  # The athanor changed (a rename, a settings patch such as the answer
+  # mode, an archive): re-read what the runner keeps of it. Every other
+  # notify on the athanor's topic — approvals, executions, members — is
+  # for the tray, not the runner.
+  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
+    state =
+      case Athanors.get(state.athanor_id) do
+        {:ok, athanor} -> %{state | answer_mode: Athanors.answer_mode(athanor), orchestrators_at: 0}
+        _ -> state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
+
+  # Trapping exits: a linked process ending is not the runner's concern.
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(:idle, %{running: false} = state) do
     {:stop, :normal, state}
@@ -515,6 +745,39 @@ defmodule Prism.ConversationRunner do
   def handle_info(msg, state) do
     Logger.debug("[Prism.ConversationRunner] unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  # A supervisor stop (a shutdown, a rolling deploy) mid-turn: write the
+  # interruption while the Repo is still up, drop the queue, and let the
+  # engine know — inline, since a task started here would die with us. A
+  # crash writes nothing and keeps the row's `execution_id`, so the
+  # transient restart re-follows a still-live execution.
+  @impl true
+  def terminate(reason, %{running: true} = state) when reason in [:normal, :shutdown] do
+    shutdown(state)
+  end
+
+  def terminate({:shutdown, _}, %{running: true} = state), do: shutdown(state)
+  def terminate(_reason, _state), do: :ok
+
+  defp shutdown(state) do
+    exec_id = state.execution_id
+    ctx = state.turn_ctx || state.system_ctx
+
+    state
+    |> clear_queue()
+    |> interrupted(exec_id, "the server stopped")
+
+    if exec_id do
+      state.turn.unsubscribe(exec_id, ctx)
+      state.turn.cancel(ctx, exec_id)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   # ---------------------------------------------------------------------------
@@ -558,9 +821,11 @@ defmodule Prism.ConversationRunner do
   end
 
   # The formula's full history (provider-canonical shape); kept for the
-  # next turn so the agent has multi-turn memory.
+  # next turn so the agent has multi-turn memory. Notes appended while the
+  # turn ran (an approval outcome) ride along, not under it.
   defp handle_emit(state, "conversation_complete", data) do
-    %{state | history: data["messages"] || data[:messages] || []}
+    history = (data["messages"] || data[:messages] || []) ++ state.notes_in_flight
+    %{state | history: history, notes_in_flight: []}
   end
 
   defp handle_emit(state, _kind, _data), do: state
@@ -633,20 +898,23 @@ defmodule Prism.ConversationRunner do
 
     # Conversation-grant fast path: a proposal the members already chose to
     # auto-approve "for this chat" runs at once.
-    Enum.reduce(approval_rows, state, fn row, acc ->
-      intent = approval_intent(row)
+    state =
+      Enum.reduce(approval_rows, state, fn row, acc ->
+        intent = approval_intent(row)
 
-      if AquaTurn.granted?(atomize_intent(intent), acc.grants) do
-        case Conversations.resolve_approval(ctx, row.id, "pending", "running", %{
-               resolution: %{"scope" => :conversation}
-             }) do
-          {:ok, msg} -> run_approval(acc, ctx, msg, :conversation)
-          _ -> acc
+        if AquaTurn.granted?(atomize_intent(intent), acc.grants) do
+          case Conversations.resolve_approval(ctx, row.id, "pending", "running", %{
+                 resolution: %{"scope" => :conversation}
+               }) do
+            {:ok, msg} -> run_approval(acc, ctx, msg, :conversation)
+            _ -> acc
+          end
+        else
+          acc
         end
-      else
-        acc
-      end
-    end)
+      end)
+
+    start_next(state)
   end
 
   defp broadcast_intents(state, []), do: state
@@ -701,8 +969,8 @@ defmodule Prism.ConversationRunner do
       end
 
     user_turn =
-      if state.last_user_text,
-        do: [%{"role" => "user", "content" => state.last_user_text}],
+      if state.last_task,
+        do: [%{"role" => "user", "content" => state.last_task}],
         else: []
 
     assistant_turn =
@@ -710,7 +978,11 @@ defmodule Prism.ConversationRunner do
         do: [%{"role" => "assistant", "content" => partial <> "\n\n(cancelled)"}],
         else: []
 
-    %{state | history: state.history ++ user_turn ++ assistant_turn}
+    %{
+      state
+      | history: state.history ++ user_turn ++ assistant_turn ++ state.notes_in_flight,
+        notes_in_flight: []
+    }
     |> finish_turn()
   end
 
@@ -840,6 +1112,7 @@ defmodule Prism.ConversationRunner do
              }) do
           {:ok, updated} ->
             approval_telemetry(state, ctx, updated, outcome, scope, payload[:reason])
+            notify_resolved(state, updated)
 
             state
             |> append_history(system_text)
@@ -855,10 +1128,26 @@ defmodule Prism.ConversationRunner do
     end
   end
 
+  # A synthetic turn the agent should see next time. While a turn runs the
+  # formula will hand back its own snapshot of the history at the end, so
+  # the note is also kept aside and merged into that snapshot.
   defp append_history(state, system_text) do
-    history = state.history ++ [%{"role" => "user", "content" => system_text}]
+    note = %{"role" => "user", "content" => system_text}
+    history = state.history ++ [note]
     Conversations.update(state.system_ctx, state.id, %{history: history})
-    %{state | history: history}
+
+    notes = if state.running, do: state.notes_in_flight ++ [note], else: state.notes_in_flight
+    %{state | history: history, notes_in_flight: notes}
+  end
+
+  # The tray: a card someone else was looking at is settled.
+  defp notify_resolved(state, msg) do
+    Sanctum.Notify.broadcast(state.athanor_id, :approval_resolved, %{
+      conversation_id: state.id,
+      message_id: msg.id,
+      status: msg.status,
+      resolved_by: msg.resolved_by
+    })
   end
 
   defp approval_telemetry(state, ctx, msg, outcome, scope, reason) do
@@ -908,7 +1197,7 @@ defmodule Prism.ConversationRunner do
   # up yet, wait for it; if the execution is still running, follow it again
   # (its buffered events replay through the same handlers); if it finished
   # meanwhile, close the turn off with what the buffer still holds.
-  defp recover(state, execution_id, attempts) do
+  defp recover(state, execution_id, orchestrator_name, attempts) do
     ctx = state.system_ctx
     turn = state.turn
 
@@ -917,7 +1206,12 @@ defmodule Prism.ConversationRunner do
         state
 
       not turn.engine_available?() and attempts > 0 ->
-        Process.send_after(self(), {:recover, execution_id, attempts - 1}, @recover_retry_ms)
+        Process.send_after(
+          self(),
+          {:recover, execution_id, orchestrator_name, attempts - 1},
+          @recover_retry_ms
+        )
+
         state
 
       not turn.engine_available?() ->
@@ -927,12 +1221,20 @@ defmodule Prism.ConversationRunner do
         events = turn.events_since(execution_id, state.athanor_id)
         finished? = Enum.any?(events, &(&1.type in ["complete", "error"]))
 
+        # The turn's policy is the orchestrator's; the row remembers which,
+        # so a recovered completion checks its intents against the right one
+        # instead of an empty allowlist that would drop them all.
+        orchestrator =
+          state.orchestrator ||
+            (orchestrator_name && AquaTurn.orchestrator(ctx, orchestrator_name))
+
         state = %{
           state
           | running: true,
             execution_id: execution_id,
             turn_ctx: ctx,
-            tool_policy: (state.orchestrator || %{})["tool_policy"] || %{}
+            orchestrator: orchestrator,
+            tool_policy: (orchestrator || %{})["tool_policy"] || %{}
         }
 
         state = replay(state, events)
@@ -1012,7 +1314,10 @@ defmodule Prism.ConversationRunner do
       usage: state.usage,
       grants: state.grants,
       orchestrator: state.orchestrator,
-      turn_user: turn_user(state)
+      turn_user: turn_user(state),
+      queued: length(state.queue),
+      kind: state.kind,
+      answer_mode: state.answer_mode
     }
   end
 

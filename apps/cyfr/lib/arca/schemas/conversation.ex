@@ -26,11 +26,23 @@ defmodule Arca.Schemas.Conversation do
     field :created_by, :string
     field :history, :string
     field :execution_id, :string
+    field :orchestrator, :string
+    field :turn_seq, :integer, default: 0
     field :last_message_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
   end
 
-  @fields [:id, :athanor_id, :title, :created_by, :history, :execution_id, :last_message_at]
+  @fields [
+    :id,
+    :athanor_id,
+    :title,
+    :created_by,
+    :history,
+    :execution_id,
+    :orchestrator,
+    :turn_seq,
+    :last_message_at
+  ]
 
   def changeset(row, attrs) do
     row
