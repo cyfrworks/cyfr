@@ -27,15 +27,23 @@ defmodule Compendium.Pull do
 
   @type outcome :: %{pulled: [String.t()], failed: [{String.t(), term()}], present: [String.t()]}
 
+  @type progress :: :pulling | :pulled | {:failed, term()}
+
   @doc """
   Make sure every ref in `refs`, and everything those pull depend on, is
   registered in the caller's athanor. Refs already present are left alone.
+
+  `on_progress: fn ref, progress -> _ end` is told about every ref this
+  walk pulls (`:pulling`, then `:pulled` or `{:failed, reason}`) — the
+  register/pull tools relay it to the console and the CLI.
   """
-  @spec ensure_published_deps(Context.t(), [String.t()]) :: outcome()
-  def ensure_published_deps(%Context{} = ctx, refs) when is_list(refs) do
+  @spec ensure_published_deps(Context.t(), [String.t()], keyword()) :: outcome()
+  def ensure_published_deps(%Context{} = ctx, refs, opts \\ []) when is_list(refs) do
+    on_progress = Keyword.get(opts, :on_progress, fn _ref, _progress -> :ok end)
+
     {outcome, _visited} =
       Enum.reduce(refs, {%{pulled: [], failed: [], present: []}, MapSet.new()}, fn ref, acc ->
-        walk(ctx, ref, acc)
+        walk(ctx, ref, acc, on_progress)
       end)
 
     %{
@@ -83,7 +91,7 @@ defmodule Compendium.Pull do
 
   # ---- internal --------------------------------------------------------------
 
-  defp walk(ctx, ref, {outcome, visited}) do
+  defp walk(ctx, ref, {outcome, visited}, on_progress) do
     cond do
       MapSet.member?(visited, ref) ->
         {outcome, visited}
@@ -93,17 +101,20 @@ defmodule Compendium.Pull do
 
       true ->
         visited = MapSet.put(visited, ref)
+        on_progress.(ref, :pulling)
 
         case pull(ctx, ref) do
           {:ok, component} ->
+            on_progress.(ref, :pulled)
             outcome = %{outcome | pulled: [ref | outcome.pulled]}
 
             Enum.reduce(missing_deps(ctx, component), {outcome, visited}, fn dep, acc ->
-              walk(ctx, dep, acc)
+              walk(ctx, dep, acc, on_progress)
             end)
 
           {:error, reason} ->
             Logger.warning("[Compendium.Pull] #{ref}: #{inspect(reason)}")
+            on_progress.(ref, {:failed, reason})
             {%{outcome | failed: [{ref, reason} | outcome.failed]}, visited}
         end
     end

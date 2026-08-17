@@ -143,7 +143,7 @@ defmodule Opus.CronMCP do
   # List
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
     limit = min(args["limit"] || 25, 1000)
-    schedules = Arca.CronSchedule.list_by_user(ctx, limit: limit)
+    schedules = Arca.CronSchedule.list(ctx, limit: limit)
 
     {:ok,
      %{
@@ -154,7 +154,7 @@ defmodule Opus.CronMCP do
 
   # Get
   def handle("schedule", %Context{} = ctx, %{"action" => "get", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_user(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
       nil -> {:error, "Schedule not found: #{id}"}
       schedule -> {:ok, format_schedule(schedule)}
     end
@@ -167,7 +167,7 @@ defmodule Opus.CronMCP do
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
     with {:schedule, schedule} when not is_nil(schedule) <-
-           {:schedule, Arca.CronSchedule.get_by_user(ctx, id)},
+           {:schedule, Arca.CronSchedule.get_by_id_or_name(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]) do
       update_attrs = %{}
 
@@ -232,7 +232,7 @@ defmodule Opus.CronMCP do
 
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_user(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
       nil ->
         {:error, "Schedule not found: #{id}"}
 
@@ -254,7 +254,7 @@ defmodule Opus.CronMCP do
 
   # Resume
   def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_user(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
       nil ->
         {:error, "Schedule not found: #{id}"}
 
@@ -285,7 +285,7 @@ defmodule Opus.CronMCP do
 
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_user(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
       nil ->
         {:error, "Schedule not found: #{id}"}
 
@@ -307,7 +307,7 @@ defmodule Opus.CronMCP do
 
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_user(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
       nil ->
         {:error, "Schedule not found: #{id}"}
 

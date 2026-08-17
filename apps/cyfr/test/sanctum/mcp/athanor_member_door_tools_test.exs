@@ -109,7 +109,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     # bob (known, verified) is active at once; the stranger sits invited
     assert Members.member?(bob, group.id)
-    assert Enum.any?(Members.list(group.id), &(&1.status == "invited" and &1.email == stranger))
+    assert Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited" and &1.email == stranger))
 
     # and the door queued a request rather than admitting anyone
     assert [%{value: ^stranger, status: "requested"}] = Sanctum.Door.Store.requests()
@@ -196,6 +196,15 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     # allowing again reverses the standing
     assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => email})
     assert {:ok, %{status: "active"}} = Users.get("github|https://github.com|carol-#{n}")
+
+    # so does removing a deny entry — nobody is left denied with no entry to say why
+    assert {:ok, %{effect: "deny", id: deny_id}} =
+             call(admin, "door", %{"action" => "deny", "value" => email})
+
+    assert {:ok, %{status: "denied"}} = Users.get("github|https://github.com|carol-#{n}")
+    assert {:ok, %{removed: true}} = call(admin, "door", %{"action" => "remove", "id" => deny_id})
+    assert {:ok, %{status: "active"}} = Users.get("github|https://github.com|carol-#{n}")
+    assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|c", email, true)
   end
 
   test "session.use repoints the session and refuses what focus refuses",

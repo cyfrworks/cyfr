@@ -6,6 +6,27 @@ defmodule PrismWeb.DisplayHelpersTest do
 
   import PrismWeb.DisplayHelpers
 
+  describe "principal_label/1" do
+    test "the server's synthetic principals read as what they are" do
+      assert principal_label("system") == "System"
+      assert principal_label("_seed") == "System (seed)"
+      assert principal_label("_health_probe") == "System (health probe)"
+      assert principal_label("_system_scan") == "System (scan)"
+      assert principal_label("_tincture") == "Public tincture"
+      assert principal_label("webhook:orders") == "Webhook orders"
+      assert principal_label("aqua") == "AQUA"
+      assert principal_label(nil) == "-"
+    end
+
+    test "an unknown person id is shortened, never shown raw in full" do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      id = "github|https://github.com|" <> String.duplicate("9", 40)
+      label = principal_label(id)
+      assert String.ends_with?(label, "…")
+      assert byte_size(label) < byte_size(id)
+    end
+  end
+
   describe "format_ref/1" do
     test "nil returns dash" do
       assert format_ref(nil) == "-"

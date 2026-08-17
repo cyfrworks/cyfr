@@ -52,7 +52,7 @@ config :cyfr, EmissaryWeb.Endpoint,
     layout: false
   ],
   pubsub_server: Emissary.PubSub,
-  live_view: [signing_salt: "Pr1smLV0"]
+  live_view: [signing_salt: "cyfrLVdev"]
 
 # Configures Elixir's Logger
 config :logger, :default_formatter,

@@ -167,11 +167,10 @@ jobs:
       # ports — cannot creep back into code, config, or operator-facing docs.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
-      # Patterns marked "enabled in commit N" join as those commits land.
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.runner-base docker-entrypoint.sh .env.example .gitignore README.md CLAUDE.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.runner-base docker-entrypoint.sh .env.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
           excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \

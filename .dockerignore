@@ -13,7 +13,6 @@ dist/
 node_modules/
 **/node_modules/
 *.tsbuildinfo
-apps/porta/src-ui/dev-dist/
 test/
 .github/
 scripts/
@@ -29,6 +28,9 @@ docker-compose*.yml
 tmp/
 .env
 .env.*
-components/
+components/*
+!components/_bundle/
+components/_bundle/**/target/
+components/_bundle/**/node_modules/
 apps/*/test/
 _build_pg/

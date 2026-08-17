@@ -3,11 +3,11 @@
 // A LiveView origin cannot serve a cached application shell — every page is
 // rendered by the server and kept live over a socket — so navigations are
 // network-only. What the worker caches is the same-origin static assets the
-// shell needs (`/assets/*`, `/images/*`, `/fonts/*`), cache-first, so a
+// shell needs (`/assets/*`, `/images/*`), cache-first, so a
 // reload on a slow link paints at once. Nothing under /mcp, /api, /auth, /t
 // or /live is ever touched.
 const CACHE = "cyfr-static-v1";
-const CACHED_PREFIXES = ["/assets/", "/images/", "/fonts/"];
+const CACHED_PREFIXES = ["/assets/", "/images/"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());

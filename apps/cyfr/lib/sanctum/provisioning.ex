@@ -39,7 +39,7 @@ defmodule Sanctum.Provisioning do
   def after_sign_in(user_id) when is_binary(user_id) do
     with {:ok, user} <- Users.get(user_id),
          {:ok, user} <- record_namespace(user) do
-      retry_groups(user_id)
+      retry_groups_async(user_id)
 
       case user.namespace do
         nil -> :pending
@@ -75,8 +75,22 @@ defmodule Sanctum.Provisioning do
   """
   @spec retry_home(String.t()) :: {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
   def retry_home(user_id) when is_binary(user_id) do
-    home = Athanors.home!()
-    provision(home, person_ctx(user_id, home.id))
+    with {:ok, home} <- Athanors.home() do
+      provision(home, person_ctx(user_id, home.id))
+    end
+  end
+
+  @doc """
+  `retry_home/1` off the sign-in path: a boot that could not reach the
+  registry is retried with the operator's credential without holding their
+  sign-in on the pull. The outcome lands on Home's row.
+  """
+  @spec retry_home_async(String.t()) :: :ok
+  def retry_home_async(user_id) when is_binary(user_id) do
+    case Athanors.home() do
+      {:ok, %{provisioned_at: nil}} -> in_background(fn -> retry_home(user_id) end)
+      _ -> :ok
+    end
   end
 
   @doc """
@@ -143,12 +157,38 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  defp retry_groups(user_id) do
-    for %{kind: "group", provisioned_at: nil} = group <- Athanors.list_for_user(user_id) do
-      provision(group, person_ctx(user_id, group.id))
+  # A person's unprovisioned groups are retried with their credential — off
+  # the sign-in path, since each retry may pull from the registry, and a
+  # sign-in must not hang on an unreachable one. Bounded per sign-in; a
+  # failure lands on the group's row and the next sign-in (or a member's
+  # `athanor.provision`) tries again.
+  @retry_groups_per_sign_in 5
+
+  defp retry_groups_async(user_id) do
+    pending =
+      Athanors.list_for_user(user_id)
+      |> Enum.filter(&match?(%{kind: "group", provisioned_at: nil}, &1))
+      |> Enum.take(@retry_groups_per_sign_in)
+
+    if pending != [] do
+      in_background(fn ->
+        Enum.each(pending, fn group -> provision(group, person_ctx(user_id, group.id)) end)
+      end)
     end
 
     :ok
+  end
+
+  # Under test the sandbox owns the connection, so background work runs
+  # inline (the tests assert on rows right after the call).
+  defp in_background(fun) do
+    if Application.get_env(:cyfr, :provisioning_inline, false) do
+      fun.()
+      :ok
+    else
+      {:ok, _pid} = Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fun)
+      :ok
+    end
   end
 
   defp find_or_create_personal(user_id, namespace, display_name) do

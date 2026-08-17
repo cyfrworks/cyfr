@@ -187,6 +187,28 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       assert Athanors.settings(athanor) == %{"aqua" => %{"name" => "Home"}, "theme" => "dark"}
     end
+
+    test "a nested patch merges into the map already there; nil deletes a key" do
+      athanor = group!()
+      {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => %{"name" => "Home"}})
+      {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => %{"answer_mode" => "all"}})
+
+      assert Athanors.settings(athanor)["aqua"] == %{"name" => "Home", "answer_mode" => "all"}
+
+      {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => %{"answer_mode" => nil}})
+      assert Athanors.settings(athanor)["aqua"] == %{"name" => "Home"}
+
+      {:ok, athanor} = Athanors.put_settings(athanor, %{"aqua" => nil})
+      refute Map.has_key?(Athanors.settings(athanor), "aqua")
+    end
+
+    test "a settings change is broadcast on the athanor's notify topic" do
+      athanor = group!()
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor.id))
+      {:ok, _} = Athanors.put_settings(athanor, %{"theme" => "dark"})
+      assert_receive {:notify, id, :athanor_changed, _}
+      assert id == athanor.id
+    end
   end
 
   describe "mark_provisioned/1 and list_by_ids/1" do
@@ -194,8 +216,11 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       a = group!()
       b = group!()
 
+      {:ok, a} = Athanors.put_settings(a, %{"provisioning_error" => %{"step" => "closure"}})
       {:ok, a} = Athanors.mark_provisioned(a)
       assert a.provisioned_at != nil
+      # a successful run forgets the earlier failure
+      refute Map.has_key?(Athanors.settings(a), "provisioning_error")
 
       ids = Athanors.list_by_ids([a.id, b.id, "ath_missing"]) |> Enum.map(& &1.id)
       assert Enum.sort(ids) == Enum.sort([a.id, b.id])

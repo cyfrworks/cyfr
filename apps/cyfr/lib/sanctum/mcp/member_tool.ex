@@ -30,7 +30,12 @@ defmodule Sanctum.MCP.MemberTool do
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
     with {:ok, athanor} <- AthanorTool.resolve(ctx, args) do
-      members = Members.list(athanor.id)
+      members =
+        Members.list_by_athanor(athanor.id,
+          limit: int_arg(args, "limit", 500),
+          offset: int_arg(args, "offset", 0)
+        )
+
       {:ok, %{athanor: athanor.id, members: Enum.map(members, &render/1), count: length(members)}}
     end
   end
@@ -106,6 +111,14 @@ defmodule Sanctum.MCP.MemberTool do
 
   defp shown(email: email), do: %{email: String.downcase(email)}
   defp shown(user_id: user_id), do: %{user_id: user_id}
+
+  defp int_arg(args, key, default) do
+    case Map.get(args, key) do
+      n when is_integer(n) -> n
+      s when is_binary(s) -> case Integer.parse(s) do {n, ""} -> n; _ -> default end
+      _ -> default
+    end
+  end
 
   defp render(row) do
     %{

@@ -607,7 +607,12 @@ defmodule Sanctum.MCP do
           "user_id" => %{
             "type" => "string",
             "description" => "The person's user id, when already on this server (add, remove)"
-          }
+          },
+          "limit" => %{
+            "type" => "integer",
+            "description" => "Page size for list (default and ceiling 500)"
+          },
+          "offset" => %{"type" => "integer", "description" => "Rows to skip for list (default 0)"}
         },
         "required" => ["action"]
       }

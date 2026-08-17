@@ -71,6 +71,13 @@ COPY wit/ wit/
 # entrypoint skips.
 COPY --from=builder /app/aqua /app/aqua-defaults
 
+# The seed bundle every athanor is provisioned from (`components/_bundle/`,
+# read via `:cyfr, :components_path`). Baked to a defaults location for the
+# same reason as the AQUA template: docker-entrypoint.sh seeds
+# /app/components/_bundle from it when the (possibly bind-mounted)
+# components dir has none, so a bare image boot can still mint athanors.
+COPY components/_bundle/ /app/components-defaults/_bundle/
+
 # gosu for entrypoint privilege drop (standard Docker pattern)
 RUN set -eux; \
     dpkgArch="$(dpkg --print-architecture)"; \

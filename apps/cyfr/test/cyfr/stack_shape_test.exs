@@ -30,13 +30,34 @@ defmodule Cyfr.StackShapeTest do
   test "compose runs cyfr, mcp-bridge and caddy — one web origin" do
     compose = read!("docker-compose.yml")
 
+    # Only the keys under `services:` — the file also has `volumes:` and
+    # `networks:` blocks with the same indentation.
+    [_, services_block | _] = Regex.split(~r/^services:\s*$/m, compose)
+    [services_block | _] = Regex.split(~r/^[a-z]/m, services_block)
+
     services =
-      Regex.scan(~r/^  ([a-z][a-z0-9-]*):\s*$/m, compose, capture: :all_but_first)
+      Regex.scan(~r/^  ([a-z][a-z0-9_-]*):\s*$/m, services_block, capture: :all_but_first)
       |> List.flatten()
       |> Enum.sort()
 
     assert services == ["caddy", "cyfr", "mcp-bridge"]
     refute compose =~ ~r/porta|4001|8080/
+  end
+
+  test "the image carries the seed bundle and seeds it on first start" do
+    # A bare image boot (no host bind mount) must still be able to provision
+    # Home: the bundle rides in the image at a defaults path, and the
+    # entrypoint copies it into place when the components dir has none —
+    # the same shape as the AQUA template.
+    dockerfile = read!("Dockerfile")
+    entrypoint = read!("docker-entrypoint.sh")
+    dockerignore = read!(".dockerignore")
+
+    assert dockerfile =~ ~r/^COPY components\/_bundle\/ \/app\/components-defaults\/_bundle\/$/m
+    assert entrypoint =~ "/app/components-defaults/_bundle"
+    assert entrypoint =~ ~r/\[ ! -d \/app\/components\/_bundle \]/
+    assert dockerignore =~ ~r/^!components\/_bundle\/$/m
+    refute dockerignore =~ ~r/^components\/$/m
   end
 
   test "the env template names no retired knobs" do

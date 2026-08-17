@@ -2,14 +2,15 @@
 # Medium/Low findings still print for humans but do not gate.
 #
 # Ignored checks — each is a structural false positive here, verified:
-#   Config.CSP       — both endpoints set Content-Security-Policy in an
-#                      endpoint-level `security_headers` plug
-#                      (EmissaryWeb.Endpoint / PrismWeb.Endpoint), which
-#                      Sobelow's router-pipeline scan cannot see.
-#   Config.Headers   — the :tincture pipeline deliberately skips
+#   Config.CSP       — Content-Security-Policy is set by our own pipeline
+#                      plugs (EmissaryWeb.Plugs.BrowserCSP on :browser,
+#                      EmissaryWeb.Plugs.ApiSecurityHeaders on the API/MCP
+#                      pipelines), which Sobelow's scan does not recognise
+#                      as a CSP source.
+#   Config.Headers   — the :tincture pipelines deliberately skip
 #                      put_secure_browser_headers; the tincture controller
-#                      sets its own CSP/sandbox headers (frame-ancestors *
-#                      is safe only with the allow-scripts-only iframe pin).
+#                      sets its own CSP/sandbox headers (frame-ancestors
+#                      'self' plus the allow-scripts-only iframe pin).
 #   Config.CSRFRoute — GET+POST mapped to `method_not_allowed` is the
 #                      deliberate 405 responder for /mcp, not action reuse.
 # `skip: true` honors inline `# sobelow_skip [...]` annotations, each of

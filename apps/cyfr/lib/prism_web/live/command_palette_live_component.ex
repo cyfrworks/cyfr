@@ -16,9 +16,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   platform-scope variants. Action invocation goes through
   `Emissary.MCP.ToolRegistry.call/3` with the user's context — same authz
   path as a normal page interaction.
-
-  In Phase 3, Cmd+K rebinds to the AQUA overlay; Cmd+Shift+K (or Cmd+P)
-  inherits this palette.
   """
 
   use PrismWeb, :live_component

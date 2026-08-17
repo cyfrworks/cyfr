@@ -64,23 +64,23 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
-  describe "get_by_user/2" do
+  describe "get_by_id_or_name/2" do
     test "finds by name", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "find-me"}))
-      found = CronSchedule.get_by_user(ctx, "find-me")
+      found = CronSchedule.get_by_id_or_name(ctx, "find-me")
       assert found.id == schedule.id
     end
 
     test "finds by id", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs())
-      found = CronSchedule.get_by_user(ctx, schedule.id)
+      found = CronSchedule.get_by_id_or_name(ctx, schedule.id)
       assert found.id == schedule.id
     end
 
     test "does not find deleted schedules", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "deleted-one"}))
       CronSchedule.soft_delete(ctx, schedule.id)
-      assert CronSchedule.get_by_user(ctx, "deleted-one") == nil
+      assert CronSchedule.get_by_id_or_name(ctx, "deleted-one") == nil
     end
 
     test "finds a fellow member's schedule in the same athanor (interchangeable)" do
@@ -98,20 +98,20 @@ defmodule Arca.CronScheduleTest do
         )
 
       # Same athanor, different creator — visible.
-      found = CronSchedule.get_by_user(ctx, "private")
+      found = CronSchedule.get_by_id_or_name(ctx, "private")
       assert found != nil
       assert found.id == created.id
     end
   end
 
-  describe "list_by_user/2" do
+  describe "list/2" do
     test "lists all non-deleted schedules in the athanor regardless of creator", %{ctx: ctx} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "s1"}))
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "s2"}))
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "other", user_id: "other_user"}))
       CronSchedule.soft_delete(ctx, s2.id)
 
-      schedules = CronSchedule.list_by_user(ctx)
+      schedules = CronSchedule.list(ctx)
       names = Enum.map(schedules, & &1.name)
 
       assert length(schedules) == 2

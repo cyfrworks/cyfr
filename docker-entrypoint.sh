@@ -13,6 +13,16 @@ if [ -d /app/aqua-defaults ] && [ ! -f /app/aqua/agent.json ]; then
     cp -r /app/aqua-defaults/. /app/aqua/
 fi
 
+# Seed /app/components/_bundle/ from /app/components-defaults/ on first start.
+# The bundle is what every athanor is provisioned from; without it Home
+# cannot be provisioned at boot. Same shape as the AQUA template above:
+# an empty (or absent) components dir gets the baked copy, a pre-populated
+# bind mount is left alone.
+if [ -d /app/components-defaults/_bundle ] && [ ! -d /app/components/_bundle ]; then
+    mkdir -p /app/components
+    cp -r /app/components-defaults/. /app/components/
+fi
+
 # Fix ownership of bind-mounted data directories.
 # No-op when using Docker named volumes; needed for host bind mounts on Linux.
 chown -R app:app /app/data /app/components /app/aqua 2>/dev/null || true

@@ -90,6 +90,49 @@ defmodule Sanctum.ContextFocusTest do
     assert inspect(query) =~ "athanor_id"
   end
 
+  test "an admin focused on A cannot reach B's execution or files through the tools either",
+       %{a: a, b: b, ops: ops, ctx: ctx} do
+    {:ok, focused} = Context.focus(ctx.(ops, nil, true), a)
+    b_exec = "exec_b_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Arca.Execution.record_start(%{
+        id: b_exec,
+        reference: "formula:local.test:1.0.0",
+        user_id: "github|https://github.com|someone",
+        athanor_id: b.id,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "formula"
+      })
+
+    b_ctx = ctx.("github|https://github.com|someone", b.id, false)
+    :ok = Arca.put(b_ctx, ["data", "secret.txt"], "b's bytes")
+
+    # the audit ledger of B is invisible from A
+    assert {:error, msg} =
+             Emissary.MCP.ToolRegistry.call_external("record", focused, %{
+               "action" => "get",
+               "id" => b_exec
+             })
+
+    assert msg =~ "not found"
+
+    assert {:ok, %{executions: listed}} =
+             Emissary.MCP.ToolRegistry.call_external("record", focused, %{"action" => "list"})
+
+    refute Enum.any?(listed, &(&1.id == b_exec))
+
+    # and so is B's storage: a URI is rooted in the focused athanor, never another
+    assert {:error, "File not found" <> _} =
+             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/data/secret.txt")
+
+    assert {:ok, %{content: content}} =
+             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/data/secret.txt")
+
+    assert Base.decode64!(content) == "b's bytes"
+  end
+
   test "resolve_into gives an admin the capability, an :athanor scope, and their own athanor",
        %{ops: ops} do
     home = Athanors.home!()

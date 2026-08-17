@@ -199,7 +199,9 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "connect-src 'self'"
-      assert csp =~ "frame-ancestors"
+      # one origin: a tincture may be framed by Prism and by nothing else
+      assert csp =~ "frame-ancestors 'self'"
+      refute csp =~ "frame-ancestors *"
     end
 
     test "injects base tag with signed token for private tincture", %{

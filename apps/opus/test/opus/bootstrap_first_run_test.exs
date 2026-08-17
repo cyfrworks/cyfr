@@ -8,10 +8,11 @@ defmodule Opus.BootstrapFirstRunTest do
   their consents from the caps blocks, and a needs-declaring component
   reads not-ready until a Connection is bound through the walk.
 
-  The moonmoon69 catalysts arrive only via registry pull, so AQUA's
-  bootstrap legitimately skips on a tree without them — asserted as the
-  CI truth rather than worked around. The full pulled-bundle first run
-  is the manual operator smoke.
+  The moonmoon69 catalysts arrive only via registry pull, so on a tree
+  without them AQUA and list-models register (a manifest's dependency
+  refs only have to parse) but their bootstrap legitimately skips as
+  unresolvable — asserted as the CI truth rather than worked around. The
+  full pulled-bundle first run is `Sanctum.Provisioning`'s closure pull.
   """
 
   use ExUnit.Case, async: false
@@ -59,19 +60,20 @@ defmodule Opus.BootstrapFirstRunTest do
     end
 
     # AQUA's and list-models' static deps are name-level moonmoon69 refs
-    # that arrive only via registry pull (register-time auto-pull on a
-    # real install), so on a bare tree their registration refuses at
-    # dependency indexing — the fail-closed CI truth; the pulled-bundle
-    # first run is the manual operator smoke.
+    # that arrive only via registry pull (the closure pull at provisioning
+    # on a real install). Registration only asks that the refs parse —
+    # the rows land — but with the deps absent their activation cannot
+    # resolve, so bootstrap mints nothing for them: the fail-closed CI truth.
     for rel <- @pull_gated do
-      assert {:error, {:dependency_index_failed, _}} =
-               Compendium.Registry.register_from_directory(ctx, Path.join(@bundle_root, rel)),
-             rel
+      assert {:ok, _} = Compendium.Registry.register_from_directory(ctx, Path.join(@bundle_root, rel)), rel
     end
 
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    {:ok, %{minted: minted} = outcome} = Bootstrap.run(ctx)
     assert "catalyst:local.files" in minted
     assert "catalyst:local.http" in minted
+    refute "formula:local.aqua" in minted
+    refute "formula:local.list-models" in minted
+    assert Enum.any?(outcome.skipped, fn {ref, _reason} -> ref == "formula:local.aqua" end)
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.

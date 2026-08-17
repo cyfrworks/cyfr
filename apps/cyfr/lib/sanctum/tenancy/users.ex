@@ -122,12 +122,24 @@ defmodule Sanctum.Tenancy.Users do
       {:error, :database_error}
   end
 
-  @doc "Everyone the server knows, newest first. A platform view."
+  @max_page 500
+
+  @doc """
+  Everyone the server knows, newest first. A platform view, paged with
+  `limit:` (default and ceiling #{@max_page}) and `offset:`.
+  """
   @spec list(keyword()) :: [User.t()]
   def list(opts \\ []) do
-    limit = Keyword.get(opts, :limit, 500)
+    limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
+    offset = opts |> Keyword.get(:offset, 0) |> max(0)
 
-    Arca.Repo.all(from(u in User, order_by: [desc: u.last_seen_at], limit: ^limit))
+    Arca.Repo.all(
+      from(u in User,
+        order_by: [desc: u.last_seen_at, asc: u.id],
+        limit: ^limit,
+        offset: ^offset
+      )
+    )
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Users: list failed (#{Exception.message(e)})")
@@ -180,14 +192,17 @@ defmodule Sanctum.Tenancy.Users do
       Sanctum.Session.revoke_all_for_user(user.id)
       Sanctum.ApiKey.revoke_all_created_by(user.id)
       archive_personal(user)
-      Members.remove_all_for_user(user.id)
 
-      :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
-        user_id: user.id,
-        email: user.email
-      })
+      # The status is written (the person is out at the door either way);
+      # what fails here is reported so the operator can retry, not hidden.
+      with :ok <- Members.remove_all_for_user(user.id) do
+        :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
+          user_id: user.id,
+          email: user.email
+        })
 
-      {:ok, user}
+        {:ok, user}
+      end
     end
   end
 

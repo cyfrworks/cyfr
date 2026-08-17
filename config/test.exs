@@ -98,6 +98,9 @@ config :cyfr, conversation_recovery: false
 # test's, and every assertion reads the row right after the call.
 config :cyfr, record_sink_inline: true
 
+# Same for the provisioning retries a sign-in kicks off.
+config :cyfr, provisioning_inline: true
+
 # The stale-execution sweeper has the same shape (permanent named GenServer
 # querying on a 60s timer) and the same sandbox hazard; its own suite
 # exercises sweep logic directly.

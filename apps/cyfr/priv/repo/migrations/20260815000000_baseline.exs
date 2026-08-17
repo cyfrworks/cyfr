@@ -249,30 +249,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:components, [:digest])
 
     create unique_index(:components, [:athanor_id, :publisher, :name, :version, :component_type])
-
-    create table(:component_dependencies, primary_key: false) do
-      add :id, :string, primary_key: true
-
-      add :component_id,
-          references(:components, type: :string, on_delete: :delete_all),
-          null: false
-
-      add :dependency_ref, :string, null: false
-      add :dep_type, :string, null: false
-      add :dep_namespace, :string, null: false
-      add :dep_name, :string, null: false
-      add :dep_version, :string, null: false
-      add :optional, :boolean, null: false, default: false
-      add :reason, :string
-      add :athanor_id, :string, null: false
-
-      timestamps(type: :utc_datetime_usec)
-    end
-
-    create index(:component_dependencies, [:component_id])
-    create index(:component_dependencies, [:dep_name])
-    create unique_index(:component_dependencies, [:component_id, :dependency_ref])
-    create index(:component_dependencies, [:athanor_id])
   end
 
   # ==========================================================================

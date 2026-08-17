@@ -85,13 +85,13 @@ defmodule Sanctum.SignInTest do
     {:ok, :invited} = Members.add(group, [email: "User4@Example.com"], "creator")
 
     assert [%{status: "invited", email: "user4@example.com"}] =
-             Enum.filter(Members.list(group.id), &(&1.status == "invited"))
+             Enum.filter(Members.list_by_athanor(group.id), &(&1.status == "invited"))
 
     i = info(4)
     assert {:ok, _} = SignIn.admitted(i, :allowed)
 
     assert Members.member?(i.id, group.id)
-    refute Enum.any?(Members.list(group.id), &(&1.status == "invited"))
+    refute Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
   end
 
   test "an unverified email activates nothing" do
@@ -100,7 +100,7 @@ defmodule Sanctum.SignInTest do
 
     assert {:ok, _} = SignIn.admitted(info(5, %{verified: :unknown}), :allowed)
     refute Members.member?(info(5).id, group.id)
-    assert Enum.any?(Members.list(group.id), &(&1.status == "invited"))
+    assert Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
   end
 
   test "the namespace is recorded when the person has claimed one" do
@@ -119,5 +119,31 @@ defmodule Sanctum.SignInTest do
     assert user.namespace == "user6ns"
     assert {:ok, %{id: id}} = Users.get_by_namespace("user6ns")
     assert id == i.id
+  end
+
+  test "`*` on the door admits a stranger who then gets their own athanor — no platform bit, no group" do
+    n = System.unique_integer([:positive])
+    i = info(n, %{email: "stranger#{n}@example.com"})
+    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
+
+    assert {:ok, verdict} = Sanctum.Door.admit(i.id, i.email, true)
+    assert verdict == :allowed
+
+    :ok =
+      Compendium.Registry.CredentialStore.put_push_token(
+        i.id,
+        Compendium.Registry.canonical_host(),
+        "stranger#{n}",
+        "cyfr_pt_x",
+        "owner"
+      )
+
+    assert {:ok, user} = SignIn.admitted(i, verdict)
+    assert {:ok, %{kind: "person", owner_user_id: owner}} = Athanors.get_by_slug("person", "stranger#{n}")
+    assert owner == user.id
+
+    rows = Members.list_by_user(user.id)
+    refute Enum.any?(rows, &(&1.scope == "platform"))
+    assert Enum.map(Athanors.list_for_user(user.id), & &1.kind) == ["person"]
   end
 end

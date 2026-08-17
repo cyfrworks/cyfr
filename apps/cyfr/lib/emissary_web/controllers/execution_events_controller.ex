@@ -67,10 +67,12 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # Same leash as `subscriptions/listen`: a per-user cap on concurrent
   # streams and a hard deadline on each. The slot is a SubscriptionRegistry
   # entry under a TAGGED key with its own budget — sharing the listen key
-  # would let one surface starve the other. Registry entries die with this
-  # process, so a vanished client frees its slot without bookkeeping.
+  # would let one surface starve the other. (The tag is this controller's
+  # own; `Arca.Cache.Keys.exec_events/2` is a different store and a
+  # different key.) Registry entries die with this process, so a vanished
+  # client frees its slot without bookkeeping.
   defp claim_stream_slot(ctx) do
-    key = {:exec_events, ctx.athanor_id, ctx.user_id}
+    key = {:sse_slot, ctx.athanor_id, ctx.user_id}
     limit = Application.get_env(:cyfr, :execution_events_max_concurrent, 8)
 
     if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do

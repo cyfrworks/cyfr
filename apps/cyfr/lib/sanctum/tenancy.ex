@@ -163,8 +163,16 @@ defmodule Sanctum.Tenancy do
     active = candidates |> Athanors.list_by_ids() |> Enum.filter(&(&1.status == "active"))
 
     case Enum.find(candidates, fn id -> Enum.any?(active, &(&1.id == id)) end) do
-      nil -> if admin?, do: Athanors.home!().id, else: nil
+      nil -> if admin?, do: home_id(), else: nil
       id -> id
+    end
+  end
+
+  # A missing Home is an install defect; a request must not 500 on it.
+  defp home_id do
+    case Athanors.home() do
+      {:ok, home} -> home.id
+      _ -> nil
     end
   end
 

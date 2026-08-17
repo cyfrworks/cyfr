@@ -11,7 +11,8 @@ defmodule Sanctum.Session do
 
   ## Usage
 
-      # Create a session after OAuth callback
+      # Create a session — only after the door admitted the identity
+      # (`EmissaryWeb.AuthController.callback/2`, `Sanctum.Auth.DeviceFlow`)
       {:ok, session} = Sanctum.Session.create(ctx)
 
       # Load context from session token
@@ -89,7 +90,9 @@ defmodule Sanctum.Session do
   # ============================================================================
 
   @doc """
-  Create a new session for an authenticated context.
+  Create a new session for an authenticated context. Callers are the two
+  sign-in paths, after `Sanctum.Door.admit_identity/2` said yes; nothing
+  else mints one.
 
   Returns a session map containing the token and identity fields.
 

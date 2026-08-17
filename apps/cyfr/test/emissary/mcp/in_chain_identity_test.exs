@@ -193,6 +193,35 @@ defmodule Emissary.MCP.InChainIdentityTest do
     assert msg =~ "not reachable from a running chain"
   end
 
+  test "the tenancy verbs are people's acts — never reachable from a running chain" do
+    verbs = [
+      {"athanor", "create"},
+      {"athanor", "archive"},
+      {"member", "add"},
+      {"member", "remove"},
+      {"door", "allow"}
+    ]
+
+    auth = granting_authority(in_chain_pairs() ++ verbs)
+
+    ctx =
+      Context.enter_guest(%Context{
+        user_id: "identity_matrix_user",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:*]),
+        authenticated: true,
+        platform_admin: true,
+        request_id: "req_identity_matrix"
+      })
+
+    for {tool, action} <- verbs do
+      assert {:error, msg} =
+               ToolRegistry.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
+
+      assert msg =~ "not reachable from a running chain", "#{tool}.#{action}: #{msg}"
+    end
+  end
+
   test "an external server tool under an authority denies without a granted digest" do
     auth = granting_authority([{"component", "list"}])
 

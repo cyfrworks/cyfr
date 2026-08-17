@@ -342,6 +342,8 @@ defmodule Opus.CronScheduler do
             "Re-create or update the schedule to pin a resolved version."
         )
 
+        emit_schedule_failed(schedule_id, ctx, :unresolved_reference)
+
         case Arca.CronSchedule.record_error(
                ctx,
                schedule_id,
@@ -370,6 +372,8 @@ defmodule Opus.CronScheduler do
             Logger.error(
               "CronScheduler: schedule #{schedule_id} has invalid JSON input, skipping execution"
             )
+
+            emit_schedule_failed(schedule_id, ctx, :invalid_input)
 
             case Arca.CronSchedule.record_error(ctx, schedule_id, "Invalid JSON input") do
               {:ok, _} ->
@@ -519,6 +523,7 @@ defmodule Opus.CronScheduler do
                })
 
                Logger.warning("CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}")
+               emit_schedule_failed(schedule_id, ctx, reason, execution_id)
 
                case Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason)) do
                  {:ok, _} ->
@@ -553,6 +558,7 @@ defmodule Opus.CronScheduler do
         )
 
         Arca.CronSchedule.release_claim(schedule_id, node_name())
+        emit_schedule_failed(schedule_id, ctx, {:spawn_failed, reason})
 
         case Arca.CronSchedule.record_error(
                ctx,
@@ -583,9 +589,12 @@ defmodule Opus.CronScheduler do
       )
 
       :telemetry.execute([:cyfr, :cron_scheduler, :fire_failed], %{count: 1}, %{
-        schedule_id: schedule_id
+        schedule_id: schedule_id,
+        athanor_id: ctx.athanor_id,
+        user_id: ctx.user_id
       })
 
+      emit_schedule_failed(schedule_id, ctx, {:db, Exception.message(e)})
       retry_later(schedule_id, state)
   catch
     :exit, reason ->
@@ -594,6 +603,19 @@ defmodule Opus.CronScheduler do
       )
 
       retry_later(schedule_id, state)
+  end
+
+  # A schedule that could not run, or ran and failed: one event the tray
+  # bridges into the athanor's badges (`Prism.TelemetryBridge`), beside the
+  # scheduler-internal `fire_failed`. The athanor is always known here.
+  defp emit_schedule_failed(schedule_id, ctx, reason, execution_id \\ nil) do
+    :telemetry.execute([:cyfr, :opus, :schedule, :failed], %{count: 1}, %{
+      schedule_id: schedule_id,
+      athanor_id: ctx.athanor_id,
+      user_id: ctx.user_id,
+      execution_id: execution_id,
+      reason: reason
+    })
   end
 
   # A retry after a failure waits 30 s plus a little noise, so nodes that

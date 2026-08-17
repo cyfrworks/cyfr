@@ -42,7 +42,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
     with :ok <- Caps.check(:max_athanors, count()) do
       %Athanor{}
-      |> Athanor.changeset(attrs)
+      |> Athanor.create_changeset(attrs)
       |> Arca.Repo.insert()
     end
   rescue
@@ -155,7 +155,7 @@ defmodule Sanctum.Tenancy.Athanors do
     attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())
 
     athanor
-    |> Athanor.changeset(attrs)
+    |> Athanor.update_changeset(attrs)
     |> Arca.Repo.update()
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -174,7 +174,11 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
-  Mark an athanor archived. Nothing is deleted; every ingress gate refuses it.
+  Mark an athanor archived. Nothing is deleted; every ingress gate refuses
+  it, its API keys are revoked, whatever is running in it is cancelled, and
+  its members are told — the same on every path that archives (a member's
+  `athanor.archive`, the last member leaving, a person being denied), so no
+  path leaves work running in a furnace nobody may enter.
 
   Home and person athanors refuse unless `force: true` — the arm
   `Sanctum.Tenancy.Users.deny/1` uses when it ejects a person.
@@ -186,6 +190,9 @@ defmodule Sanctum.Tenancy.Athanors do
     with {:ok, current} <- get(athanor.id) do
       cond do
         current.status == "archived" ->
+          # Idempotent — but a retry after a half-finished archive still
+          # closes what the first attempt may not have reached.
+          close(current)
           {:ok, current}
 
         current.home and not Keyword.get(opts, :force, false) ->
@@ -195,9 +202,44 @@ defmodule Sanctum.Tenancy.Athanors do
           {:error, :person_athanor_cannot_be_archived}
 
         true ->
-          update(current, %{status: "archived", archived_at: DateTime.utc_now()})
+          with {:ok, archived} <-
+                 update(current, %{status: "archived", archived_at: DateTime.utc_now()}) do
+            close(archived)
+            Sanctum.Notify.broadcast(archived.id, :athanor_changed, %{name: archived.name})
+            {:ok, archived}
+          end
       end
     end
+  end
+
+  # What archiving closes: standing credentials and in-flight work. Runs as
+  # the server inside the athanor (an internal context focused on it —
+  # cancellation is attributed to `system`); best effort, since the status
+  # gates already refuse new work.
+  defp close(%Athanor{id: id}) do
+    Sanctum.ApiKey.revoke_all_for_athanor(id)
+    cancel_running(id)
+    :ok
+  end
+
+  defp cancel_running(athanor_id) do
+    if Cyfr.Execution.available?() do
+      ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+
+      case Cyfr.Execution.list(ctx, status: :running, limit: 500) do
+        {:ok, running} when is_list(running) ->
+          Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("Sanctum.Tenancy.Athanors: cancel on archive failed (#{Exception.message(e)})")
+      :ok
   end
 
   @spec unarchive(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
@@ -207,10 +249,18 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  @doc "Record that provisioning (seed + consents) completed."
+  @doc """
+  Record that provisioning (seed + consents) completed — and forget any
+  earlier failure recorded on the row.
+  """
   @spec mark_provisioned(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
   def mark_provisioned(%Athanor{} = athanor) do
-    update(athanor, %{provisioned_at: DateTime.utc_now()})
+    settings = athanor |> settings() |> Map.delete("provisioning_error")
+
+    update(athanor, %{
+      provisioned_at: DateTime.utc_now(),
+      settings: Jason.encode!(settings)
+    })
   end
 
   @spec list_by_ids([String.t()]) :: [Athanor.t()]
@@ -228,6 +278,10 @@ defmodule Sanctum.Tenancy.Athanors do
   The active athanors a person may work in: their own, then every group an
   active membership grants, oldest first. Uncapped — a person's memberships
   are few, and a truncated list would hide a chat.
+
+  One row per athanor without `DISTINCT`: the membership assignment index
+  admits one active row per person and athanor, and Postgres refuses a
+  `SELECT DISTINCT` ordered by an expression outside the select list.
   """
   @spec list_for_user(String.t()) :: [Athanor.t()]
   def list_for_user(user_id) when is_binary(user_id) do
@@ -238,8 +292,7 @@ defmodule Sanctum.Tenancy.Athanors do
         where:
           m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
             a.status == "active",
-        distinct: true,
-        order_by: [desc: a.kind == "person", asc: a.created_at]
+        order_by: [desc: a.kind == "person", asc: a.created_at, asc: a.id]
       )
     )
   rescue
@@ -290,11 +343,37 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  @doc "Merge `patch` into the athanor's settings document."
+  @doc """
+  Merge `patch` into the athanor's settings document, one level deep: a map
+  under a key merges into the map already there (so `%{"aqua" => %{"answer_mode"
+  => "all"}}` leaves the other `aqua` keys alone), a `nil` deletes the key,
+  anything else replaces. Every member's open views hear of the change on
+  the athanor's notify topic.
+  """
   @spec put_settings(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
   def put_settings(%Athanor{} = athanor, patch) when is_map(patch) do
-    merged = Map.merge(settings(athanor), patch)
-    update(athanor, %{settings: Jason.encode!(merged)})
+    merged = deep_merge(settings(athanor), patch)
+
+    with {:ok, updated} <- update(athanor, %{settings: Jason.encode!(merged)}) do
+      Sanctum.Notify.broadcast(updated.id, :athanor_changed, %{name: updated.name})
+      {:ok, updated}
+    end
+  end
+
+  defp deep_merge(base, patch) do
+    Enum.reduce(patch, base, fn
+      {key, nil}, acc ->
+        Map.delete(acc, key)
+
+      {key, value}, acc when is_map(value) ->
+        case Map.get(acc, key) do
+          existing when is_map(existing) -> Map.put(acc, key, deep_merge(existing, value))
+          _ -> Map.put(acc, key, value)
+        end
+
+      {key, value}, acc ->
+        Map.put(acc, key, value)
+    end)
   end
 
   # ---- internal --------------------------------------------------------------

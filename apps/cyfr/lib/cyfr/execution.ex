@@ -27,8 +27,8 @@ defmodule Cyfr.Execution do
   @callback subscribe_events(String.t(), Context.t()) :: :ok | {:error, term()}
   @callback unsubscribe_events(String.t(), Context.t()) :: :ok | {:error, term()}
   @callback events_since(String.t(), non_neg_integer(), String.t()) :: [map()]
-  @callback cancel(Context.t(), String.t()) :: :ok | {:error, term()}
-  @callback cancel_for_restart(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  @callback cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  @callback cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   @callback get(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @callback list(Context.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   @callback ready?() :: boolean()
@@ -75,10 +75,10 @@ defmodule Cyfr.Execution do
     end
   end
 
-  @spec cancel(Context.t(), String.t()) :: :ok | {:error, term()}
+  @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(ctx, execution_id), do: call(:cancel, [ctx, execution_id])
 
-  @spec cancel_for_restart(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def cancel_for_restart(ctx, execution_id, payload),
     do: call(:cancel_for_restart, [ctx, execution_id, payload])
 

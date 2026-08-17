@@ -18,9 +18,9 @@ defmodule Sanctum.Auth.OAuth do
   - `CYFR_GITHUB_CLIENT_ID` / `CYFR_GITHUB_CLIENT_SECRET` for GitHub
   - `CYFR_GOOGLE_CLIENT_ID` / `CYFR_GOOGLE_CLIENT_SECRET` for Google
 
-  Authentication is open to any account from a configured provider; authorization
-  is gated downstream by platform-admin status (`CYFR_PLATFORM_ADMIN_EMAILS`) or an
-  athanor membership.
+  This module proves who someone is; whether they may sign in to this server
+  is the door's decision (`Sanctum.Door`), taken by the two sign-in paths
+  before any session is minted.
 
   ## Supported Providers
 
@@ -99,23 +99,6 @@ defmodule Sanctum.Auth.OAuth do
           {:error, _} -> nil
         end
     end
-  end
-
-  @doc """
-  Create a session for an authenticated context.
-
-  Call this after successful OAuth callback to create a session token.
-
-  ## Examples
-
-      {:ok, session} = OAuth.create_session(ctx)
-      session.token
-      #=> "abc123..."
-
-  """
-  @spec create_session(Context.t()) :: {:ok, Session.session()} | {:error, term()}
-  def create_session(%Context{} = ctx) do
-    Session.create(ctx)
   end
 
   # ============================================================================

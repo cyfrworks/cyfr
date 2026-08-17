@@ -113,8 +113,12 @@ defmodule Sanctum.Tenancy.Members do
   @spec ensure_platform(String.t()) :: {:ok, Membership.t()} | {:error, term()}
   def ensure_platform(user_id), do: ensure(user_id, scope: "platform")
 
-  @doc "Remove the platform-admin row for `user_id`, if any."
-  @spec revoke_platform(String.t()) :: :ok
+  @doc """
+  Remove the platform-admin row for `user_id`, if any. A failure is
+  reported, not swallowed: the caller is taking a capability away, and
+  answering `:ok` while the row survives would leave the operator bit on.
+  """
+  @spec revoke_platform(String.t()) :: :ok | {:error, :database_error}
   def revoke_platform(user_id) when is_binary(user_id) do
     Arca.Repo.delete_all(
       from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
@@ -124,7 +128,7 @@ defmodule Sanctum.Tenancy.Members do
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: revoke_platform failed (#{Exception.message(e)})")
-      :ok
+      {:error, :database_error}
   end
 
   def get(id) do
@@ -162,11 +166,20 @@ defmodule Sanctum.Tenancy.Members do
       when is_binary(user_id) do
     opts = [scope: "athanor", athanor_id: athanor_id, added_by: added_by]
 
-    with :ok <- Caps.check(:max_members_per_group, count_by_athanor(athanor_id)),
+    # A membership names a person: an id nobody has signed in with, or one
+    # the door has since denied, is refused. (Unlike the email arm, a
+    # verified email is not required — a person admitted by a `user_id`
+    # door entry may have none.)
+    with {:ok, %User{status: "active"}} <- Users.get(user_id),
+         :ok <- Caps.check(:max_members_per_group, count_seats(athanor_id)),
          {:ok, _} <- ensure(user_id, opts) do
       broadcast_change(user_id, athanor.id, :joined)
       Sanctum.Notify.member_changed(athanor.id)
       {:ok, :added}
+    else
+      {:ok, %User{}} -> {:error, :unknown_user}
+      {:error, :not_found} -> {:error, :unknown_user}
+      other -> other
     end
   end
 
@@ -175,7 +188,7 @@ defmodule Sanctum.Tenancy.Members do
     email = String.downcase(String.trim(email))
 
     with true <- String.contains?(email, "@") or {:error, :invalid_email},
-         :ok <- Caps.check(:max_members_per_group, count_by_athanor(athanor_id)) do
+         :ok <- Caps.check(:max_members_per_group, count_seats(athanor_id)) do
       case Enum.filter(Users.list_by_email(email), &known_and_active?/1) do
         [%User{id: user_id} | _] ->
           add(athanor, [user_id: user_id], added_by)
@@ -216,42 +229,54 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Turn every `invited` row for the person's verified email into their active
-  membership. One statement per row set; an active row that already exists
-  wins and the invitation is consumed.
+  membership — two set-based statements in one transaction, so two
+  first sign-ins of the same identity cannot both claim a row: invitations
+  for athanors where the person is already active are dropped, the rest are
+  activated with the email consumed (the assignment index then admits no
+  second row for the person and athanor). Returns how many activated.
   """
   @spec activate_invited(User.t()) :: {:ok, non_neg_integer()}
   def activate_invited(%User{email: email, email_verified: true, id: user_id})
       when is_binary(email) do
+    now = DateTime.utc_now()
+
     invited =
-      Arca.Repo.all(from(m in Membership, where: m.email == ^email and m.status == "invited"))
+      from(m in Membership,
+        where: m.email == ^email and m.status == "invited" and m.scope == "athanor"
+      )
 
-    activated =
-      Enum.reduce(invited, 0, fn row, n ->
-        case find(user_id, "athanor", row.athanor_id) do
-          {:ok, _active} ->
-            remove(row)
-            n
+    # An invitation for an athanor the person is already an active member of
+    # is superseded. Written as a subquery, not a join: SQLite refuses joins
+    # on DELETE.
+    superseded =
+      from(m in invited,
+        where:
+          m.athanor_id in subquery(
+            from(a in Membership,
+              where: a.user_id == ^user_id and a.scope == "athanor" and a.status == "active",
+              select: a.athanor_id
+            )
+          )
+      )
 
-          _ ->
-            case row
-                 |> Membership.changeset(%{
-                   user_id: user_id,
-                   status: "active",
-                   updated_at: DateTime.utc_now()
-                 })
-                 |> Arca.Repo.update() do
-              {:ok, _} ->
-                broadcast_change(user_id, row.athanor_id, :joined)
-                Sanctum.Notify.member_changed(row.athanor_id)
-                n + 1
+    {:ok, athanor_ids} =
+      Arca.Repo.transaction(fn ->
+        Arca.Repo.delete_all(superseded)
 
-              {:error, _} ->
-                n
-            end
-        end
+        {_n, ids} =
+          Arca.Repo.update_all(from(m in invited, select: m.athanor_id),
+            set: [user_id: user_id, status: "active", email: nil, updated_at: now]
+          )
+
+        ids
       end)
 
-    {:ok, activated}
+    for athanor_id <- athanor_ids do
+      broadcast_change(user_id, athanor_id, :joined)
+      Sanctum.Notify.member_changed(athanor_id)
+    end
+
+    {:ok, length(athanor_ids)}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: activate_invited failed (#{Exception.message(e)})")
@@ -292,8 +317,13 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  @doc "Remove every group row of a person (a denied user's rows). Platform rows too."
-  @spec remove_all_for_user(String.t()) :: :ok
+  @doc """
+  Remove every row of a person (a denied user's rows) — group and platform
+  alike. A group they were the last active member of is archived, as when
+  they leave it. A failure is reported: the caller is ejecting someone and
+  must not answer "done" while rows survive.
+  """
+  @spec remove_all_for_user(String.t()) :: :ok | {:error, :database_error}
   def remove_all_for_user(user_id) when is_binary(user_id) do
     rows = Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id))
     Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
@@ -301,24 +331,41 @@ defmodule Sanctum.Tenancy.Members do
     for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
       broadcast_change(user_id, athanor_id, :left)
       Sanctum.Notify.member_changed(athanor_id)
+
+      case Athanors.get(athanor_id) do
+        {:ok, athanor} -> archive_when_empty(athanor)
+        _ -> :ok
+      end
     end
 
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: remove_all failed (#{Exception.message(e)})")
-      :ok
+      {:error, :database_error}
   end
 
-  @doc "The members of an athanor — active and invited — as display rows."
-  @spec list(String.t()) :: [map()]
-  def list(athanor_id) when is_binary(athanor_id) do
+  @max_page 500
+
+  @doc """
+  The members of an athanor — active and invited — as display rows, oldest
+  first: `%{user_id, email, display_name, namespace, status, added_by, since}`.
+  Paged with `limit:` (default and ceiling #{@max_page}) and `offset:`; the
+  member cap bounds the roster, the page bounds one read.
+  """
+  @spec list_by_athanor(String.t(), keyword()) :: [map()]
+  def list_by_athanor(athanor_id, opts \\ []) when is_binary(athanor_id) do
+    limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
+    offset = opts |> Keyword.get(:offset, 0) |> max(0)
+
     Arca.Repo.all(
       from(m in Membership,
         left_join: u in User,
         on: u.id == m.user_id,
         where: m.athanor_id == ^athanor_id and m.scope == "athanor",
-        order_by: [asc: m.created_at],
+        order_by: [asc: m.created_at, asc: m.id],
+        limit: ^limit,
+        offset: ^offset,
         select: %{
           user_id: m.user_id,
           email: coalesce(m.email, u.email),
@@ -332,23 +379,8 @@ defmodule Sanctum.Tenancy.Members do
     )
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: list failed (#{Exception.message(e)})")
-      []
-  end
-
-  def list_by_athanor(athanor_id, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 500)
-
-    from(m in Membership,
-      where: m.athanor_id == ^athanor_id,
-      order_by: [desc: m.created_at],
-      limit: ^limit
-    )
-    |> Arca.Repo.all()
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: list_by_athanor failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      []
   end
 
   @doc "Every row of a person: platform and athanor, active only. Uncapped."
@@ -376,6 +408,22 @@ defmodule Sanctum.Tenancy.Members do
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: count_by_athanor failed (#{Exception.message(e)})")
+      0
+  end
+
+  # Every seat the athanor has handed out — active members and pending
+  # invitations — which is what the member cap bounds; an invitation is a
+  # seat someone will take.
+  defp count_seats(athanor_id) do
+    Arca.Repo.one(
+      from(m in Membership,
+        where: m.athanor_id == ^athanor_id and m.scope == "athanor",
+        select: count(m.id)
+      )
+    ) || 0
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("Sanctum.Tenancy.Members: count_seats failed (#{Exception.message(e)})")
       0
   end
 
@@ -415,6 +463,7 @@ defmodule Sanctum.Tenancy.Members do
     query =
       from(m in Membership,
         where: m.user_id == ^user_id and m.scope == ^scope,
+        order_by: [asc: m.created_at, asc: m.id],
         limit: 1
       )
 

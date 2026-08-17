@@ -209,6 +209,7 @@ defmodule Compendium.MCP.ComponentTool do
                       "Pushed #{result[:oci_reference] || reference}"
                     )
 
+                    record_push(ctx, reference, result)
                     {:ok, result}
 
                   {:error, reason} ->
@@ -705,37 +706,28 @@ defmodule Compendium.MCP.ComponentTool do
     end
   end
 
-  # Auto-pull published (non-local) missing dependencies via OCI.
+  # Auto-pull published (non-local) missing dependencies — the closure walk
+  # is `Compendium.Pull`'s, the same one provisioning uses; this only relays
+  # its progress to the console and the CLI.
   defp auto_pull_published_deps(ctx, published_missing, register_id) do
-    {pulled, failed, _visited} =
-      Enum.reduce(published_missing, {[], [], MapSet.new()}, fn dep, {acc, failed_acc, visited} ->
-        ref = dep[:dependency_ref]
+    refs = Enum.map(published_missing, & &1[:dependency_ref])
+
+    on_progress = fn
+      ref, :pulling ->
         Logger.info("[Compendium.MCP] Auto-pulling dependency after register: #{ref}")
         broadcast_register_progress(ctx, register_id, :pulling, "Pulling #{ref}...")
 
-        case do_auto_pull(ctx, ref, visited) do
-          {:ok, :cycle_skipped} ->
-            {acc, failed_acc, visited}
+      ref, :pulled ->
+        broadcast_register_progress(ctx, register_id, :pulled, "Pulled #{ref}")
 
-          {:ok, _} ->
-            broadcast_register_progress(ctx, register_id, :pulled, "Pulled #{ref}")
-            {[ref | acc], failed_acc, MapSet.put(visited, ref)}
+      ref, {:failed, _reason} ->
+        broadcast_register_progress(ctx, register_id, :pull_failed, "Failed to pull #{ref}")
+    end
 
-          {:error, reason} ->
-            Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
+    %{pulled: pulled, failed: failed} =
+      Compendium.Pull.ensure_published_deps(ctx, refs, on_progress: on_progress)
 
-            broadcast_register_progress(
-              ctx,
-              register_id,
-              :pull_failed,
-              "Failed to pull #{ref}"
-            )
-
-            {acc, [ref | failed_acc], visited}
-        end
-      end)
-
-    {Enum.reverse(pulled), Enum.reverse(failed)}
+    {pulled, Enum.map(failed, fn {ref, _reason} -> ref end)}
   end
 
   # Broadcast register progress to both PubSub (the console) and the MCP
@@ -765,6 +757,44 @@ defmodule Compendium.MCP.ComponentTool do
 
     :ok
   end
+
+  # A push is a person's act from an athanor under a namespace they hold:
+  # record all three. The namespace is the one the push resolved to
+  # (`local.*` refs are published under the caller's own), so it is read
+  # from the result, not the argument.
+  defp record_push(ctx, reference, result) do
+    oci_reference = result[:oci_reference] || result["oci_reference"]
+    namespace = namespace_of(oci_reference)
+
+    Logger.info(
+      "[Compendium.MCP] pushed #{reference} as #{inspect(oci_reference)} " <>
+        "(athanor=#{ctx.athanor_id} user=#{ctx.user_id} namespace=#{inspect(namespace)})"
+    )
+
+    :telemetry.execute([:cyfr, :compendium, :component, :push], %{count: 1}, %{
+      athanor_id: ctx.athanor_id,
+      user_id: ctx.user_id,
+      namespace: namespace,
+      reference: reference,
+      oci_reference: oci_reference
+    })
+  end
+
+  # `registry.host/<namespace>/<name>:<tag>` → the namespace segment.
+  defp namespace_of(oci_reference) when is_binary(oci_reference) do
+    case Compendium.OCI.Reference.parse(oci_reference) do
+      {:ok, %{repository: repo}} when is_binary(repo) ->
+        case String.split(repo, "/", parts: 2) do
+          [ns | _] when ns != "" -> ns
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp namespace_of(_), do: nil
 
   # Broadcast to all Prism LiveViews subscribed to prism:components.
   # Fires after any state-changing component operation (pull, register, delete, new, publish).
@@ -900,49 +930,26 @@ defmodule Compendium.MCP.ComponentTool do
       result
   end
 
-  # Auto-pull missing dependencies. Uses a visited set for cycle detection.
+  # Auto-pull the missing dependencies of a just-pulled component, closure
+  # and all (`Compendium.Pull` walks transitive deps with one visited set).
   defp auto_pull_deps(ctx, deps, result) do
     availability = Compendium.DependencyResolver.classify_availability(ctx, deps)
+    refs = Enum.map(availability.missing, & &1[:dependency_ref])
 
-    {pulled, failed, _visited} =
-      Enum.reduce(availability.missing, {[], [], MapSet.new()}, fn dep,
-                                                                   {acc, failed_acc, visited} ->
-        ref = dep[:dependency_ref]
-        Logger.info("[Compendium.MCP] Auto-pulling dependency: #{ref}")
-
-        case do_auto_pull(ctx, ref, visited) do
-          {:ok, :cycle_skipped} ->
-            {acc, failed_acc, visited}
-
-          {:ok, _} ->
-            {[ref | acc], failed_acc, MapSet.put(visited, ref)}
-
-          {:error, reason} ->
-            Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
-            {acc, [ref | failed_acc], visited}
+    %{pulled: pulled, failed: failed} =
+      Compendium.Pull.ensure_published_deps(ctx, refs,
+        on_progress: fn
+          ref, :pulling -> Logger.info("[Compendium.MCP] Auto-pulling dependency: #{ref}")
+          _ref, _ -> :ok
         end
-      end)
+      )
 
     optional_missing = Enum.map(availability.optional_missing, & &1[:dependency_ref])
 
     result
-    |> Map.put(:pulled_dependencies, Enum.reverse(pulled))
-    |> Map.put(:failed_pulls, Enum.reverse(failed))
+    |> Map.put(:pulled_dependencies, pulled)
+    |> Map.put(:failed_pulls, Enum.map(failed, fn {ref, _reason} -> ref end))
     |> Map.put(:optional_missing, optional_missing)
-  end
-
-  # Recursive auto-pull with cycle detection.
-  # Calls the pull handler for the dependency, which in turn triggers
-  # enrich_pull_with_deps for transitive dependency resolution.
-  defp do_auto_pull(ctx, ref, visited) when is_binary(ref) do
-    if MapSet.member?(visited, ref) do
-      {:ok, :cycle_skipped}
-    else
-      case handle(ctx, %{"action" => "pull", "reference" => ref}) do
-        {:ok, _result} -> {:ok, :pulled}
-        {:error, reason} -> {:error, reason}
-      end
-    end
   end
 
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode

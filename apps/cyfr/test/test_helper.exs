@@ -28,4 +28,25 @@ end
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()
 
+# The suite must never write into the repo's own component trees: every
+# storage root is under tmp (config/test.exs), and the only thing tracked
+# under `components/` is the seed bundle. A stray write here would mean a
+# test reached the real filesystem around the tmp roots.
+ExUnit.after_suite(fn _ ->
+  repo_root = Path.expand("../../..", __DIR__)
+
+  for dir <- ["components", "apps/cyfr/components", "apps/opus/components"] do
+    path = Path.join(repo_root, dir)
+
+    if File.dir?(path) do
+      entries = path |> File.ls!() |> Enum.reject(&(&1 == "_bundle"))
+
+      if entries != [] do
+        IO.puts(:stderr, "\n** the suite wrote into #{dir}/: #{inspect(entries)}")
+        System.at_exit(fn _ -> exit({:shutdown, 1}) end)
+      end
+    end
+  end
+end)
+
 ExUnit.start()

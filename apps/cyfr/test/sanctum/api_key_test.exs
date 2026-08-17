@@ -559,14 +559,20 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan-#{n}"})
       assert {:ok, _} = ApiKey.validate(key, [])
 
+      # archiving revokes the athanor's keys for good — reopening the
+      # athanor does not bring a revoked credential back
       {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
-      assert {:error, :channel_closed} = ApiKey.validate(key, [])
+      assert {:error, :revoked} = ApiKey.validate(key, [])
       {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
-      assert {:ok, _} = ApiKey.validate(key, [])
+      assert {:error, :revoked} = ApiKey.validate(key, [])
 
-      # the creator leaving the group does not close it — members remain
+      # a key minted in the reopened athanor works while a member remains,
+      # even after its creator leaves the group
+      other = "github|https://github.com|other-#{n}"
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(other, scope: "athanor", athanor_id: group.id)
+      {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan2-#{n}"})
+      assert {:ok, _} = ApiKey.validate(key, [])
       :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
-      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
       assert {:ok, _} = ApiKey.validate(key, [])
 
       # the creator being denied on this server does

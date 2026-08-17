@@ -39,6 +39,24 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert length(Users.list_by_email("SAME@example.com")) == 2
   end
 
+  test "a users row is a person: synthetic principal ids are refused" do
+    for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes"] do
+      assert {:error, %Ecto.Changeset{errors: errors}} =
+               Users.upsert_from_provider(%{id: id, provider: "github", email: "x@example.com"})
+
+      assert Keyword.has_key?(errors, :id), "#{id} was accepted as a person"
+    end
+  end
+
+  test "list/1 pages the people the server knows" do
+    a = person(7)
+    b = person(8)
+    all = Users.list() |> Enum.map(& &1.id)
+    assert a.id in all and b.id in all
+    assert length(Users.list(limit: 1)) == 1
+    assert Users.list(limit: 1) != Users.list(limit: 1, offset: 1)
+  end
+
   test "prefs are a merged JSON document" do
     u = person(3)
     assert Users.prefs(u) == %{}

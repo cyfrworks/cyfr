@@ -235,7 +235,7 @@ defmodule Arca.TenantIsolationTest do
   # ============================================================================
 
   describe "CronSchedule tenant isolation" do
-    test "list_by_user scoped to tenant" do
+    test "list scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       {:ok, _} =
@@ -258,11 +258,11 @@ defmodule Arca.TenantIsolationTest do
           athanor_id: ctx_b.athanor_id
         })
 
-      a_schedules = Arca.CronSchedule.list_by_user(ctx_a)
+      a_schedules = Arca.CronSchedule.list(ctx_a)
       assert length(a_schedules) == 1
       assert hd(a_schedules).name == "sched-a"
 
-      b_schedules = Arca.CronSchedule.list_by_user(ctx_b)
+      b_schedules = Arca.CronSchedule.list(ctx_b)
       assert length(b_schedules) == 1
       assert hd(b_schedules).name == "sched-b"
     end
@@ -284,7 +284,7 @@ defmodule Arca.TenantIsolationTest do
       assert Arca.CronSchedule.count_active(ctx_b) == 0
     end
 
-    test "get_by_user scoped to tenant" do
+    test "get_by_id_or_name scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       {:ok, sched} =
@@ -298,10 +298,10 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can find by name
-      assert Arca.CronSchedule.get_by_user(ctx_a, "get-sched-a") != nil
+      assert Arca.CronSchedule.get_by_id_or_name(ctx_a, "get-sched-a") != nil
 
       # B cannot find A's schedule even by ID
-      assert Arca.CronSchedule.get_by_user(ctx_b, sched.id) == nil
+      assert Arca.CronSchedule.get_by_id_or_name(ctx_b, sched.id) == nil
     end
   end
 
@@ -371,64 +371,6 @@ defmodule Arca.TenantIsolationTest do
       assert comp_a.description == "Same component, tenant A"
       assert comp_b.description == "Same component, tenant B"
       assert comp_a.id != comp_b.id
-    end
-  end
-
-  # ============================================================================
-  # DependencyStorage Isolation (1b)
-  # ============================================================================
-
-  describe "DependencyStorage tenant isolation" do
-    test "tenant A's dependencies invisible to tenant B" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
-
-      comp_id = insert_stub_component(ctx_a, "dep-vis-comp", "comp_aaa")
-
-      {:ok, 1} =
-        Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
-          %{
-            dependency_ref: "reagent:local.helper:1.0.0",
-            dep_type: "reagent",
-            dep_namespace: "local",
-            dep_name: "helper",
-            dep_version: "1.0.0",
-            optional: false,
-            reason: nil
-          }
-        ])
-
-      # A can see it
-      {:ok, deps_a} = Arca.DependencyStorage.get_dependencies(ctx_a, comp_id)
-      assert length(deps_a) == 1
-
-      # B cannot see it
-      {:ok, deps_b} = Arca.DependencyStorage.get_dependencies(ctx_b, comp_id)
-      assert deps_b == []
-    end
-
-    test "delete scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
-
-      comp_id = insert_stub_component(ctx_a, "dep-del-comp", "comp_del_dep")
-
-      {:ok, 1} =
-        Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
-          %{
-            dependency_ref: "reagent:local.x:1.0.0",
-            dep_type: "reagent",
-            dep_namespace: "local",
-            dep_name: "x",
-            dep_version: "1.0.0",
-            optional: false,
-            reason: nil
-          }
-        ])
-
-      # B tries to delete — should not affect A's dependencies
-      :ok = Arca.DependencyStorage.delete_dependencies(ctx_b, comp_id)
-
-      {:ok, deps_a} = Arca.DependencyStorage.get_dependencies(ctx_a, comp_id)
-      assert length(deps_a) == 1
     end
   end
 
@@ -921,34 +863,5 @@ defmodule Arca.TenantIsolationTest do
       |> binary_part(0, 16)
 
     "comp_#{hash}"
-  end
-
-  defp insert_stub_component(ctx, name, id) do
-    now = DateTime.utc_now()
-
-    attrs = %{
-      id: id,
-      name: name,
-      version: "1.0.0",
-      component_type: "reagent",
-      description: "stub",
-      tags: "[]",
-      digest: "sha256:stub_#{id}",
-      size: 100,
-      exports: "[]",
-      manifest: nil,
-      publisher: "local",
-      publisher_id: ctx.user_id,
-      athanor_id: ctx.athanor_id,
-      source: "published",
-      signature_verified: false,
-      signer_identity: nil,
-      signer_issuer: nil,
-      inserted_at: now,
-      updated_at: now
-    }
-
-    {:ok, _} = Arca.ComponentStorage.put_component(ctx, attrs)
-    id
   end
 end

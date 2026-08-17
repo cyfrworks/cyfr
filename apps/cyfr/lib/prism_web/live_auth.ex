@@ -59,14 +59,14 @@ defmodule PrismWeb.LiveAuth do
 
   # The person's lite/dev preference decides which views the layout offers
   # and what it calls them (`Prism.Labels`).
-  defp ui_mode(%{user_id: user_id}) when is_binary(user_id) do
+  defp ui_mode(%{user_id: user_id} = ctx) when is_binary(user_id) do
     case Sanctum.Tenancy.Users.get(user_id) do
-      {:ok, user} -> Prism.Labels.mode(Sanctum.Tenancy.Users.prefs(user)["mode"])
-      _ -> Prism.Labels.default()
+      {:ok, user} -> Prism.Labels.mode(Sanctum.Tenancy.Users.prefs(user)["mode"], ctx)
+      _ -> Prism.Labels.default(ctx)
     end
   end
 
-  defp ui_mode(_), do: Prism.Labels.default()
+  defp ui_mode(ctx), do: Prism.Labels.default(ctx)
 
   # Revoked sessions end the LiveView; a lost focus sends the person back to
   # the root, where the next mount re-derives what they may work in. The

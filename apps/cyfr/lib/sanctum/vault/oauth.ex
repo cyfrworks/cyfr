@@ -248,9 +248,9 @@ defmodule Sanctum.Vault.OAuth do
   # allowlist; once an auth provider is configured the exchange must ride
   # https.
   def http_post(url, headers, body) do
-    multi_user? = Sanctum.auth_configured?()
+    door_server? = Sanctum.auth_configured?()
 
-    with :ok <- require_https(url, multi_user?) do
+    with :ok <- require_https(url, door_server?) do
       case Cyfr.Network.pinned_request(:post, url, headers, body,
              allow_private: :policy,
              receive_timeout: 15_000

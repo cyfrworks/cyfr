@@ -68,6 +68,18 @@
           "type": "array",
           "description": "Conversation history for continuation"
         },
+        "attachments": {
+          "type": "array",
+          "description": "Files attached to the task: objects with filename, media_type and base64 data (canonical content blocks are built per provider)"
+        },
+        "tool_policy": {
+          "type": "object",
+          "description": "Per-tool approval policy overlay (\"ask\" | \"auto\") the harness resolved for this turn"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "description": "Completion token cap for the provider call"
+        },
         "visible_tools": {
           "type": "array",
           "items": {

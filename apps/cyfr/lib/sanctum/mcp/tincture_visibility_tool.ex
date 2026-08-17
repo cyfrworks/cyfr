@@ -43,11 +43,15 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
           {:ok, result}
 
         {:error, _reason} ->
+          # Same shape as the answer above, so a client never has to guess
+          # which keys are there.
           {:ok,
            %{
              publisher: publisher,
              name: name,
              public: false,
+             athanor: ctx.athanor_id,
+             url: public_url(ctx, publisher, name),
              note: "No profiles — publish with profile.publish"
            }}
       end

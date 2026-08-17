@@ -57,6 +57,22 @@ defmodule Prism.TelemetryBridgeTest do
       assert_receive {:execution_failed, %{component: "test", reason: :timeout}, %{duration: 50}}
     end
 
+    test "a failed schedule fire reaches the athanor's notify topic (the tray)" do
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(@athanor))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:schedules"))
+
+      :telemetry.execute([:cyfr, :opus, :schedule, :failed], %{count: 1}, %{
+        schedule_id: "sched_x",
+        athanor_id: @athanor,
+        user_id: "u",
+        execution_id: nil,
+        reason: :invalid_input
+      })
+
+      assert_receive {:notify, @athanor, :schedule_failed, %{schedule_id: "sched_x", reason: :invalid_input}}
+      assert_receive {:schedule_failed, %{schedule_id: "sched_x"}, _}
+    end
+
     test "broadcasts request events to subscribers" do
       Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:requests"))
 
@@ -108,7 +124,8 @@ defmodule Prism.TelemetryBridgeTest do
         {[:cyfr, :opus, :execute, :stop], "prism-execution_stop"},
         {[:cyfr, :opus, :execute, :exception], "prism-execution_exception"},
         {[:cyfr, :emissary, :request], "prism-request"},
-        {[:cyfr, :sanctum, :policy, :decision], "prism-policy_decision"}
+        {[:cyfr, :sanctum, :policy, :decision], "prism-policy_decision"},
+        {[:cyfr, :opus, :schedule, :failed], "prism-schedule_failed"}
       ]
 
       for {event, handler_id} <- expected do

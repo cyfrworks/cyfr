@@ -128,7 +128,12 @@ defmodule Sanctum.Door.Store do
 
   # ---- what the door reads ---------------------------------------------------
 
-  @doc "Is there a deny entry for this identity or email?"
+  @doc """
+  Is there a deny entry for this identity or email? Deliberately reads
+  `effect` alone — unlike `allowed?/2`, which also wants `status:
+  "allowed"` — so a deny row is honoured whatever its status says: a
+  malformed or half-written deny must never read as an admit.
+  """
   @spec denied?(String.t() | nil, String.t() | nil) :: boolean()
   def denied?(user_id, email) do
     values = [{"user_id", user_id}, {"email", downcase(email)}]

@@ -61,6 +61,21 @@ defmodule Sanctum.DoorTest do
       assert {:ok, :allowed} = Door.admit(uid(5), "eve@example.com", true)
     end
 
+    test "a deny row is honoured whatever its status column says" do
+      {:ok, entry} = Store.deny("email", "grace@example.com", "ops")
+
+      import Ecto.Query, only: [from: 2]
+      id = entry.id
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.ServerAllowlistEntry, where: e.id == ^id),
+          set: [status: "requested"]
+        )
+
+      assert {:error, :denied} = Door.admit(uid(7), "grace@example.com", true)
+    end
+
     test "a platform admin email cannot be denied" do
       assert {:error, :platform_admin} = Store.deny("email", "ops@example.com", "ops")
       assert {:error, :wildcard_cannot_be_denied} = Store.deny("wildcard", "*", "ops")

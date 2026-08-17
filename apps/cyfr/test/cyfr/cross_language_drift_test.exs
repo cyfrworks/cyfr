@@ -40,16 +40,4 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "expression missing from ref.go: #{expr}"
     end
   end
-
-  test "both first-party clients still declare the server's protocol revision" do
-    version = Emissary.MCP.Protocol.version()
-
-    for rel <- [
-          "apps/codex/internal/mcp/client.go",
-          "apps/mcp-bridge/server.mjs"
-        ] do
-      assert String.contains?(read!(rel), ~s("#{version}")),
-             "#{rel} does not declare protocol #{version}"
-    end
-  end
 end

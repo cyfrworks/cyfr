@@ -28,17 +28,9 @@ defmodule Sanctum.Auth.OIDC do
 
   ## Usage
 
-  This provider is used by `EmissaryWeb.AuthController` to handle OAuth callbacks:
-
-      # In AuthController.callback/2
-      case Sanctum.Auth.OIDC.authenticate(auth) do
-        {:ok, user} ->
-          {:ok, session} = Sanctum.Session.create(user)
-          # Redirect with session token
-
-        {:error, reason} ->
-          # Handle error
-      end
+  This provider proves an identity for `EmissaryWeb.AuthController.callback/2`,
+  which then asks the door (`Sanctum.Door.admit_identity/2`) and only on
+  admission mints the session. The provider itself never creates one.
 
   """
 

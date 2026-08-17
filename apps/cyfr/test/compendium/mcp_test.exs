@@ -1695,6 +1695,26 @@ defmodule Compendium.MCPTest do
       assert msg =~ "component_manage"
     end
 
+    test "component.push is a person's act — an API key with every permission is still refused" do
+      key_ctx = %Context{
+        user_id: "github|https://github.com|keyholder",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:*]),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:error, msg} =
+        Emissary.MCP.ToolRegistry.call_external("component", key_ctx, %{
+          "action" => "push",
+          "reference" => "reagent:local.test:0.1.0"
+        })
+
+      assert msg =~ "person's act"
+    end
+
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
         Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{

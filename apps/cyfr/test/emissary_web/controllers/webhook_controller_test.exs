@@ -117,7 +117,17 @@ defmodule EmissaryWeb.WebhookControllerTest do
         })
 
       # the creator leaving the group (another member remains) changes nothing
-      {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: "other-#{n}"], ctx.user_id)
+      other = "github|https://github.com|other-#{n}"
+
+      {:ok, _} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: other,
+          provider: "github",
+          email: "other#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, :added} = Sanctum.Tenancy.Members.add(group, [user_id: other], ctx.user_id)
       :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
       refute post_signed(conn, slug, secret, ~s({})).status == 404
 

@@ -265,7 +265,7 @@ defmodule Sanctum.TenancyTest do
 
     test "true while the athanor is active and the creator is not denied" do
       athanor = group!("chan-a")
-      uid = "u-chan-#{System.unique_integer([:positive])}"
+      uid = "github|https://github.com|chan-#{System.unique_integer([:positive])}"
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{

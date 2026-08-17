@@ -51,8 +51,19 @@ defmodule Sanctum.MCP.DoorTool do
       case Store.deny(kind, value, ctx.user_id, Map.get(args, "note")) do
         {:ok, entry} ->
           denied = known_users(kind, value)
-          Enum.each(denied, &Users.deny/1)
-          {:ok, Map.put(render(entry), :ejected, length(denied))}
+          results = Enum.map(denied, &Users.deny/1)
+          ejected = Enum.count(results, &match?({:ok, _}, &1))
+          rendered = Map.put(render(entry), :ejected, ejected)
+
+          if ejected == length(denied) do
+            {:ok, rendered}
+          else
+            # The entry is written (the door is shut) but a person's sessions,
+            # keys or rows may survive — say so rather than report a clean eject.
+            {:error,
+             "Denied at the door, but ejecting #{length(denied) - ejected} of #{length(denied)} " <>
+               "known accounts failed — retry deny to finish"}
+          end
 
         {:error, :platform_admin} ->
           {:error, "That email is a platform admin (CYFR_PLATFORM_ADMIN_EMAILS); remove it there"}
@@ -68,8 +79,14 @@ defmodule Sanctum.MCP.DoorTool do
   end
 
   def handle(%Context{}, %{"action" => "remove", "id" => id}) when is_binary(id) do
-    case Store.remove(id) do
-      :ok -> {:ok, %{id: id, removed: true}}
+    with {:ok, entry} <- Store.get(id),
+         :ok <- Store.remove(id) do
+      # Removing a deny is letting the person back through: undo what the
+      # deny did to their account, exactly as `allow` does — otherwise they
+      # stay `denied` with no entry left to explain why.
+      if entry.effect == "deny", do: Enum.each(known_users(entry.kind, entry.value), &Users.allow/1)
+      {:ok, %{id: id, removed: true}}
+    else
       {:error, :not_found} -> {:error, "Entry not found"}
     end
   end

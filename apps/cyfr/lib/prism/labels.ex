@@ -12,7 +12,6 @@ defmodule Prism.Labels do
   """
 
   @modes ~w(lite dev)
-  @default "dev"
 
   @lite %{
     tincture: "App",
@@ -47,13 +46,24 @@ defmodule Prism.Labels do
   @doc "The recognised modes."
   def modes, do: @modes
 
-  @doc "The mode a person without a saved preference sees."
-  def default, do: @default
+  @doc """
+  The mode a person without a saved preference sees. On a server with a
+  door — an auth provider — everyone but the operators lands in `lite`,
+  the chat; a private box, or an operator, gets `dev`.
+  """
+  @spec default(map() | nil) :: String.t()
+  def default(%{platform_admin: true}), do: "dev"
+  def default(_ctx), do: if(Sanctum.auth_configured?(), do: "lite", else: "dev")
 
-  @doc "Normalise a stored preference to a mode."
+  @doc "Normalise a stored preference to a mode, falling back to `default/1`."
+  @spec mode(term(), map() | nil) :: String.t()
+  def mode(mode, _ctx) when mode in @modes, do: mode
+  def mode(_, ctx), do: default(ctx)
+
+  @doc "Normalise a mode already resolved for a person (a layout assign)."
   @spec mode(term()) :: String.t()
   def mode(mode) when mode in @modes, do: mode
-  def mode(_), do: @default
+  def mode(_), do: "dev"
 
   @doc "The label for `noun` in `mode`."
   @spec label(atom(), String.t()) :: String.t()

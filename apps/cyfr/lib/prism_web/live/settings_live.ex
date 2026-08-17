@@ -27,7 +27,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:door_requests, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
-      |> assign(:mode, "dev")
+      |> assign(:mode, Prism.Labels.default(socket.assigns.context))
       |> assign(:loading, true)
 
     {:ok, socket}
@@ -159,9 +159,14 @@ defmodule PrismWeb.SettingsLive do
   defp load_door(socket), do: socket
 
   defp load_prefs(socket) do
-    case Sanctum.Tenancy.Users.get(socket.assigns.context.user_id) do
-      {:ok, user} -> assign(socket, :mode, Sanctum.Tenancy.Users.prefs(user)["mode"] || "dev")
-      _ -> socket
+    ctx = socket.assigns.context
+
+    case Sanctum.Tenancy.Users.get(ctx.user_id) do
+      {:ok, user} ->
+        assign(socket, :mode, Prism.Labels.mode(Sanctum.Tenancy.Users.prefs(user)["mode"], ctx))
+
+      _ ->
+        socket
     end
   end
 

@@ -75,9 +75,10 @@ defmodule Sanctum.MCP.AthanorTool do
     with {:ok, athanor} <- resolve(ctx, args) do
       case Athanors.archive(athanor) do
         {:ok, archived} ->
-          Sanctum.ApiKey.revoke_all_for_athanor(archived.id)
-          cancel_running(%{ctx | athanor_id: archived.id, scope: :athanor})
-          broadcast_athanors_changed(ctx, archived)
+          # Keys, running work and the members' views are closed by
+          # `Athanors.archive/2` itself; only the actor's own chat list is
+          # this tool's to refresh.
+          Members.broadcast_change(ctx.user_id, archived.id, :athanor_changed)
           {:ok, render(archived)}
 
         {:error, :home_cannot_be_archived} ->
@@ -195,23 +196,6 @@ defmodule Sanctum.MCP.AthanorTool do
       provisioning_error: Athanors.settings(athanor)["provisioning_error"],
       created_at: athanor.created_at
     }
-  end
-
-  # An archived athanor runs nothing: whatever was in flight is cancelled
-  # through the execution port (best effort — the status gates already refuse
-  # new work).
-  defp cancel_running(ctx) do
-    if Cyfr.Execution.available?() do
-      case Cyfr.Execution.list(ctx, status: :running, limit: 500) do
-        {:ok, running} when is_list(running) ->
-          Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
-
-        _ ->
-          :ok
-      end
-    end
-
-    :ok
   end
 
   # The person's own chat list re-derives on their membership topic; the

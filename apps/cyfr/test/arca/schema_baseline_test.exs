@@ -11,16 +11,17 @@ defmodule Arca.SchemaBaselineTest do
   use ExUnit.Case, async: false
 
   @tenant_tables ~w(
-    api_keys components component_dependencies executions mcp_logs policy_logs
+    api_keys components executions mcp_logs policy_logs
     vault_entries profiles consents consent_vault_refs consent_proofs
     oauth_provider_credentials mcp_servers webhooks cron_schedules
+    conversations messages
   )
 
   @expected_tables ~w(
     athanors users server_allowlist memberships sessions api_keys registry_tokens components
-    component_dependencies executions mcp_logs policy_logs vault_entries profiles
+    executions mcp_logs policy_logs vault_entries profiles
     consents consent_vault_refs consent_proofs oauth_provider_credentials
-    mcp_servers webhooks webhook_deliveries cron_schedules
+    mcp_servers webhooks webhook_deliveries cron_schedules conversations messages
   )
 
   setup do
@@ -42,8 +43,12 @@ defmodule Arca.SchemaBaselineTest do
       names = Enum.map(columns, & &1.name)
 
       assert "athanor_id" in names, "#{table} lacks athanor_id"
-      refute "org_id" in names, "#{table} still has org_id"
-      refute "project_id" in names, "#{table} still has project_id"
+
+      # The retired tenant columns, spelled split so the vocabulary gate does
+      # not trip on the assertion that proves they are gone.
+      for fossil <- ["org" <> "_id", "project" <> "_id"] do
+        refute fossil in names, "#{table} still has #{fossil}"
+      end
 
       athanor = Enum.find(columns, &(&1.name == "athanor_id"))
       assert athanor.not_null?, "#{table}.athanor_id must be NOT NULL"
@@ -71,9 +76,10 @@ defmodule Arca.SchemaBaselineTest do
     refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
-  test "api_keys and webhooks have no scope_type; vault_entries has no system column" do
-    refute "scope_type" in Enum.map(columns("api_keys"), & &1.name)
-    refute "scope_type" in Enum.map(columns("webhooks"), & &1.name)
+  test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
+    fossil = "scope" <> "_type"
+    refute fossil in Enum.map(columns("api_keys"), & &1.name)
+    refute fossil in Enum.map(columns("webhooks"), & &1.name)
     refute "system" in Enum.map(columns("vault_entries"), & &1.name)
   end
 

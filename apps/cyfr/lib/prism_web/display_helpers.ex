@@ -7,6 +7,36 @@ defmodule PrismWeb.DisplayHelpers do
   """
 
   @doc """
+  A short human label for a principal id as it appears on executions, logs
+  and messages: a person (their display name, else email, else a shortened
+  id) or one of the server's synthetic principals — `system`, `_seed`,
+  `_health_probe`, `_system_scan`, `webhook:<slug>`, `_tincture` — which
+  are never people and read as what they are.
+  """
+  @spec principal_label(String.t() | nil) :: String.t()
+  def principal_label(nil), do: "-"
+  def principal_label("system"), do: "System"
+  def principal_label("_seed"), do: "System (seed)"
+  def principal_label("_health_probe"), do: "System (health probe)"
+  def principal_label("_system_scan"), do: "System (scan)"
+  def principal_label("_tincture"), do: "Public tincture"
+  def principal_label("webhook:" <> slug), do: "Webhook " <> slug
+  def principal_label("aqua"), do: "AQUA"
+
+  def principal_label(user_id) when is_binary(user_id) do
+    case Sanctum.Tenancy.Users.get(user_id) do
+      {:ok, %{display_name: name}} when is_binary(name) and name != "" -> name
+      {:ok, %{email: email}} when is_binary(email) and email != "" -> email
+      _ -> short_id(user_id)
+    end
+  end
+
+  def principal_label(other), do: inspect(other)
+
+  defp short_id(id) when byte_size(id) > 24, do: String.slice(id, 0, 24) <> "…"
+  defp short_id(id), do: id
+
+  @doc """
   Format an execution reference for display. Non-binary values render via
   `inspect/1` as a defensive fallback.
   """

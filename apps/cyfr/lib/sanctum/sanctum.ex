@@ -10,19 +10,18 @@ defmodule Sanctum do
   - **Authorization**: What they're allowed to do (permissions)
   - **Context**: The execution context that flows through all services
 
-  ## CLI authentication
+  ## Signing in
 
-  Uses OAuth Device Flow for CLI authentication:
+  A session is minted at exactly two places, and the door
+  (`Sanctum.Door.admit_identity/2`) is asked first at both:
 
-      # User runs: cyfr login
-      # After auth completes:
-      {:ok, ctx} = Sanctum.authenticate(params)
+  - the browser flow — `EmissaryWeb.AuthController.callback/2` after the
+    configured `:auth_provider` (`Sanctum.Auth.OAuth` or `Sanctum.Auth.OIDC`)
+    proves the identity;
+  - the CLI flow — `Sanctum.Auth.DeviceFlow.poll_for_session/2` behind the
+    `session` MCP tool (`cyfr login`).
 
-  ## Configurable Auth Provider
-
-  With a configurable OIDC auth provider, uses full OIDC authentication:
-
-      {:ok, ctx} = Sanctum.authenticate(params)
+  Providers prove who someone is; they never mint sessions themselves.
 
   ## Configuration
 
@@ -32,20 +31,6 @@ defmodule Sanctum do
   """
 
   alias Sanctum.Context
-
-  @doc """
-  Get current Context from request connection.
-  """
-  def current_user(conn) do
-    auth_provider().current_user(conn)
-  end
-
-  @doc """
-  Authenticate with provided credentials/params.
-  """
-  def authenticate(params) do
-    auth_provider().authenticate(params)
-  end
 
   @doc """
   True when an auth provider is configured.
@@ -147,9 +132,4 @@ defmodule Sanctum do
     )
   end
 
-  defp auth_provider do
-    Application.get_env(:cyfr, :auth_provider) ||
-      raise "No auth provider configured. Set config :cyfr, :auth_provider " <>
-              "(the default OAuth provider is enabled by setting CYFR_GITHUB_CLIENT_ID)."
-  end
 end

@@ -561,7 +561,7 @@ defmodule PrismWeb.ConversationLive do
     |> Enum.reduce(%{}, fn m, acc ->
       case m.user_id do
         nil -> acc
-        id -> Map.put(acc, id, m.email || id)
+        id -> Map.put(acc, id, m.display_name || m.email || id)
       end
     end)
   rescue
@@ -971,13 +971,10 @@ defmodule PrismWeb.ConversationLive do
   defp label_for(_members, user_id, %{user_id: user_id}), do: "You"
 
   defp label_for(members, user_id, _ctx) when is_binary(user_id) do
-    Map.get(members, user_id) || short(user_id)
+    Map.get(members, user_id) || PrismWeb.DisplayHelpers.principal_label(user_id)
   end
 
   defp label_for(_members, _user_id, _ctx), do: nil
-
-  defp short(s) when is_binary(s) and byte_size(s) > 24, do: String.slice(s, 0, 24) <> "…"
-  defp short(s), do: s
 
   defp scope_atom("conversation"), do: :conversation
   defp scope_atom("always"), do: :always

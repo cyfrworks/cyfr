@@ -182,7 +182,7 @@ defmodule Compendium.Registry do
              manifest_map: manifest_map
            ),
          {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
-         :ok <- index_dependencies(ctx, component, manifest_bytes) do
+         :ok <- validate_dependencies(component, manifest_bytes) do
       invalidate_executor_caches(ctx)
       {:ok, component}
     end
@@ -249,7 +249,7 @@ defmodule Compendium.Registry do
              manifest_map: manifest_map
            ),
          {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
-         :ok <- index_dependencies(ctx, component, manifest_bytes) do
+         :ok <- validate_dependencies(component, manifest_bytes) do
       invalidate_executor_caches(ctx)
       {:ok, component}
     end
@@ -357,7 +357,7 @@ defmodule Compendium.Registry do
         Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
 
         with {:ok, _} <- put_component(ctx, component),
-             :ok <- index_dependencies(ctx, component, manifest) do
+             :ok <- validate_dependencies(component, manifest) do
           invalidate_executor_caches(ctx)
 
           :telemetry.execute(
@@ -401,12 +401,11 @@ defmodule Compendium.Registry do
 
     for comp <- stale do
       publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-      # DB-only cleanup: remove registry entry and associated grants/policies.
+      # DB-only cleanup: remove the registry entry.
       # Do NOT delete filesystem files — prune is an automatic process that runs
       # during scan/register. If a component temporarily fails to be discovered
       # (mid-edit, transient error), we must not destroy user source files.
       # File deletion only happens via explicit `component.delete` (Registry.delete).
-      cleanup_db_associations(ctx, comp)
       Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
     end
 
@@ -816,82 +815,40 @@ defmodule Compendium.Registry do
   end
 
   # ============================================================================
-  # Dependency Indexing
+  # Dependency validation
   # ============================================================================
+  #
+  # A manifest's dependency refs must parse; the edges themselves are read
+  # from the manifest at activation time (`Compendium.Activation`), so
+  # nothing is stored here — a bad ref simply refuses the registration.
 
-  defp index_dependencies(_ctx, _component, nil), do: :ok
+  defp validate_dependencies(_component, nil), do: :ok
 
-  defp index_dependencies(ctx, component, manifest) when is_binary(manifest) do
+  defp validate_dependencies(component, manifest) when is_binary(manifest) do
     case Jason.decode(manifest) do
       {:ok, decoded} ->
-        index_dependencies(ctx, component, decoded)
+        validate_dependencies(component, decoded)
 
       {:error, err} ->
         Logger.warning(
-          "[Registry] Failed to decode manifest for dependency indexing: #{inspect(err)}"
+          "[Registry] Failed to decode manifest for dependency validation: #{inspect(err)}"
         )
 
         :ok
     end
   end
 
-  defp index_dependencies(ctx, component, manifest) when is_map(manifest) do
+  defp validate_dependencies(component, manifest) when is_map(manifest) do
     component_id = component[:id] || component["id"]
 
     case DependencyResolver.extract_from_manifest(manifest, component_id) do
-      {:ok, []} ->
+      {:ok, _deps} ->
         :ok
-
-      {:ok, deps} ->
-        case resolve_dep_versions(ctx, deps) do
-          {:ok, resolved_deps} ->
-            dep_attrs =
-              Enum.map(resolved_deps, fn dep ->
-                Map.new(dep, fn {k, v} -> {to_string(k), v} end)
-              end)
-
-            case Arca.DependencyStorage.put_dependencies(ctx, component_id, dep_attrs) do
-              {:ok, _} ->
-                :ok
-
-              {:error, reason} ->
-                Logger.warning(
-                  "[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}"
-                )
-
-                {:error, {:dependency_index_failed, reason}}
-            end
-        end
 
       {:error, reason} ->
         Logger.warning("[Compendium.Registry] Failed to extract dependencies: #{inspect(reason)}")
         {:error, {:dependency_extraction_failed, reason}}
     end
-  end
-
-  defp resolve_dep_versions(ctx, deps) do
-    resolved =
-      Enum.map(deps, fn dep ->
-        if dep.dep_version == nil do
-          case Compendium.Resolver.resolve(ctx, dep.dependency_ref) do
-            {:ok, resolved_ref, _metadata} ->
-              {:ok, parsed} = Sanctum.ComponentRef.parse(resolved_ref)
-              %{dep | dep_version: parsed.version, dependency_ref: resolved_ref}
-
-            {:error, _reason} ->
-              # Not resolvable locally — store as-is for downstream auto-pull
-              Logger.debug(
-                "[Compendium.Registry] Dep #{dep.dependency_ref} not resolvable locally, storing versionless"
-              )
-
-              dep
-          end
-        else
-          dep
-        end
-      end)
-
-    {:ok, resolved}
   end
 
   # ============================================================================
@@ -1473,20 +1430,6 @@ defmodule Compendium.Registry do
   # Cleanup Helpers
   # ============================================================================
 
-  defp cleanup_db_associations(ctx, comp) do
-    publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-    component_type = Map.get(comp, :component_type, "")
-    name = comp.name
-    version = comp.version
-
-    component_id = generate_id(name, version, publisher, component_type, ctx.athanor_id)
-
-    # Delete dependencies
-    Arca.DependencyStorage.delete_dependencies(ctx, component_id)
-
-    :ok
-  end
-
   # Called AFTER delete_component to check if the removed version was the last one.
   # If no versions remain, revokes profiles and disables registrations so
   # a future component with the same name inherits nothing.
@@ -1555,7 +1498,7 @@ defmodule Compendium.Registry do
 
   defp disable_schedules(ctx, name_ref) do
     ctx
-    |> Arca.CronSchedule.list_by_user(limit: 1000)
+    |> Arca.CronSchedule.list(limit: 1000)
     |> Enum.filter(fn schedule ->
       targets?(schedule.resolved_reference, name_ref) or
         targets?(Map.get(schedule, :reference), name_ref)
@@ -1586,8 +1529,6 @@ defmodule Compendium.Registry do
   defp targets?(_target_ref, _name_ref), do: false
 
   defp cleanup_component_associations(ctx, comp) do
-    cleanup_db_associations(ctx, comp)
-
     component_type = Map.get(comp, :component_type, "")
     publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 

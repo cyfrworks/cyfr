@@ -129,8 +129,8 @@ defmodule Arca.CronSchedule do
     Arca.Repo.get(__MODULE__, id)
   end
 
-  @doc "Gets a schedule by context and either ID or name."
-  def get_by_user(%Context{} = ctx, id_or_name) do
+  @doc "Gets one of the athanor's schedules by either ID or name."
+  def get_by_id_or_name(%Context{} = ctx, id_or_name) do
     from(s in __MODULE__,
       where: s.status != "deleted",
       where: s.id == ^id_or_name or s.name == ^id_or_name
@@ -139,8 +139,8 @@ defmodule Arca.CronSchedule do
     |> Arca.Repo.one()
   end
 
-  @doc "Lists schedules for a context."
-  def list_by_user(%Context{} = ctx, opts \\ []) do
+  @doc "Lists the athanor's schedules, newest first."
+  def list(%Context{} = ctx, opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
 
     from(s in __MODULE__,

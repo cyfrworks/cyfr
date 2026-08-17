@@ -106,6 +106,8 @@ defmodule Cyfr.Application do
       # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock)
       {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
       {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor},
+      # Provisioning retries that must not ride a sign-in (registry pulls).
+      {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
       # Single-use consent authorizations. The shipped store is the DB
       # (config.exs pins Proof.DB); the in-memory GenServer starts only
       # when a deployment explicitly configures it, so production does not

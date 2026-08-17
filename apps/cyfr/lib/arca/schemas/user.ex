@@ -60,6 +60,11 @@ defmodule Arca.Schemas.User do
       :updated_at
     ])
     |> validate_required([:id, :provider, :first_seen_at, :last_seen_at])
+    # A person's id is the IdP composite `provider|issuer|subject`
+    # (`Sanctum.Context.build_id/3`). The server's synthetic principals —
+    # `system`, `_seed`, `webhook:<slug>`, … — never have that shape, so
+    # they can never become a `users` row.
+    |> validate_format(:id, ~r/^[^|]+\|[^|]+\|.+$/, message: "is not an identity")
     |> validate_inclusion(:status, @statuses)
     |> update_change(:email, &downcase/1)
     |> unique_constraint(:namespace)

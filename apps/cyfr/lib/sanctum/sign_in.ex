@@ -50,18 +50,7 @@ defmodule Sanctum.SignIn do
     case Members.ensure_platform(user_id) do
       {:ok, _} ->
         unless already?, do: emit_platform_bootstrap(user_id)
-        home = Athanors.home!()
-
-        case Members.ensure(user_id, scope: "athanor", athanor_id: home.id, added_by: "system") do
-          {:ok, _} ->
-            # Home is provisioned at boot; an operator's sign-in retries a
-            # boot that could not reach the registry, with their credential.
-            _ = Sanctum.Provisioning.retry_home(user_id)
-            :ok
-
-          {:error, reason} ->
-            Logger.error("[Sanctum.SignIn] Home seat failed: #{inspect(reason)}")
-        end
+        seat_in_home(user_id)
 
       {:error, reason} ->
         Logger.error(
@@ -70,7 +59,39 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp apply_platform(user_id, :allowed), do: Members.revoke_platform(user_id)
+  # An email dropped from CYFR_PLATFORM_ADMIN_EMAILS loses the operator bit
+  # here. The bit is re-read from the row on every request, so a revoke that
+  # fails leaves an operator who should not be one — never silent.
+  defp apply_platform(user_id, :allowed) do
+    case Members.revoke_platform(user_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[Sanctum.SignIn] platform revoke failed for #{user_id}: #{inspect(reason)}")
+
+        :telemetry.execute([:cyfr, :sanctum, :door, :revoke_failed], %{count: 1}, %{
+          user_id: user_id
+        })
+
+        :ok
+    end
+  end
+
+  # A sign-in must not 500 on a broken install: no Home means no seat, loudly.
+  defp seat_in_home(user_id) do
+    with {:ok, home} <- Athanors.home(),
+         {:ok, _} <-
+           Members.ensure(user_id, scope: "athanor", athanor_id: home.id, added_by: "system") do
+      # Home is provisioned at boot; an operator's sign-in retries a boot
+      # that could not reach the registry, with their credential.
+      Sanctum.Provisioning.retry_home_async(user_id)
+    else
+      {:error, reason} ->
+        Logger.error("[Sanctum.SignIn] Home seat failed: #{inspect(reason)}")
+        :ok
+    end
+  end
 
   defp platform_admin?(user_id) do
     case Members.list_by_user(user_id) do
