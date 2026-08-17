@@ -20,6 +20,7 @@ defmodule PrismWeb.ConversationLive do
   require Logger
 
   alias Arca.ConversationStorage, as: Conversations
+  alias Phoenix.LiveView.JS
   alias Prism.ConversationRunner
 
   @list_models_ref "formula:local.list-models"
@@ -696,17 +697,31 @@ defmodule PrismWeb.ConversationLive do
   def render(assigns) do
     ~H"""
     <div id="conversation-root" phx-hook="Conversation" class="flex h-full min-h-0">
-      <aside class="hidden md:flex w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-900/40">
+      <!-- The athanor's threads: a column beside the chat, a panel over it on a phone -->
+      <aside
+        id="conversation-list"
+        class="flex w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-900/40 max-md:fixed max-md:inset-y-12 max-md:bottom-0 max-md:left-0 max-md:z-30 max-md:hidden max-md:bg-gray-900 max-md:shadow-xl md:flex"
+      >
         <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
           <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">Chats</span>
-          <button
-            type="button"
-            phx-click="new_conversation"
-            class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
-            title="Start a new conversation"
-          >
-            + New
-          </button>
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              phx-click="new_conversation"
+              class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+              title="Start a new conversation"
+            >
+              + New
+            </button>
+            <button
+              type="button"
+              phx-click={JS.add_class("max-md:hidden", to: "#conversation-list")}
+              class="md:hidden rounded px-2 py-1 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+              aria-label="Close the list"
+            >
+              ×
+            </button>
+          </div>
         </div>
         <div :if={@conversations == []} class="px-3 py-4 text-xs text-gray-500">
           No conversations yet.
@@ -719,8 +734,10 @@ defmodule PrismWeb.ConversationLive do
               "group flex items-start gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-gray-800/50",
               if(@conversation && conv.id == @conversation.id, do: "bg-gray-800/80", else: "")
             ]}
-            phx-click="open_conversation"
-            phx-value-id={conv.id}
+            phx-click={
+              JS.push("open_conversation", value: %{id: conv.id})
+              |> JS.add_class("max-md:hidden", to: "#conversation-list")
+            }
           >
             <div class="flex-1 min-w-0">
               <p class="text-gray-200 truncate">{conv.title}</p>
@@ -746,6 +763,14 @@ defmodule PrismWeb.ConversationLive do
       <section class="flex flex-1 min-w-0 flex-col">
         <header class="flex items-center justify-between gap-2 border-b border-gray-800 px-4 py-2">
           <div class="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              phx-click={JS.toggle_class("max-md:hidden", to: "#conversation-list")}
+              class="md:hidden rounded px-1.5 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+              title="Chats"
+            >
+              Chats
+            </button>
             <span class="text-sm font-medium text-gray-200 shrink-0">A.Q.U.A.</span>
             <select
               :if={@orchestrators != []}

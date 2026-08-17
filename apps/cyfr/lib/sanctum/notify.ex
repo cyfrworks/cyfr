@@ -16,6 +16,7 @@ defmodule Sanctum.Notify do
           :member_changed
           | :athanor_changed
           | :allowlist_request
+          | :allowlist_changed
           | :execution_finished
           | :execution_failed
           | :approval_pending
@@ -56,4 +57,7 @@ defmodule Sanctum.Notify do
 
   @doc false
   def allowlist_request(email), do: broadcast_platform(:allowlist_request, %{email: email})
+
+  @doc "The door's list changed (an allow, deny, remove or resolve): operators re-read it."
+  def allowlist_changed, do: broadcast_platform(:allowlist_changed)
 end

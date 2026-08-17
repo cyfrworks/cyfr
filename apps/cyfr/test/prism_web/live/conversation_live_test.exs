@@ -324,10 +324,18 @@ defmodule PrismWeb.ConversationLiveTest do
     assert to in ["/", "/login?error=no_athanor"]
   end
 
-  test "the Agents page mounts with the athanor's orchestrators", %{conn: conn} do
+  test "the Agents page mounts with the athanor's orchestrators, and opens the grant sheet for a model",
+       %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "/agents")
     assert render(view) =~ "orchestrator"
     assert has_element?(view, "code", "aqua")
+
+    # "Connect a model" is the lite path to a key: the consent sheet for the
+    # orchestrator's catalyst, from this page.
+    render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.0"})
+    assert has_element?(view, ".consent-sheet")
+    send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.0"})
+    refute has_element?(view, ".consent-sheet")
   end
 end

@@ -84,29 +84,22 @@ cyfr profile grant c:moonmoon69.claude
 # Learn more about other commands
 cyfr -h
 
-# Open the Prism dashboard
+# Open Prism — your athanor's chat
 open http://localhost:4000
 ```
 
 `cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
-## Dashboard (Prism)
+## Prism — the web face
 
-CYFR includes **Prism**, a web-based dashboard at `http://localhost:4000` (the same origin as the API — one endpoint, one login) with a shell-style window manager. Built-in apps include:
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your conversation with your own AQUA — the same thread on your phone and your laptop; a group athanor is a group chat every member sees, with the group's AQUA in it answering when `@mentioned` (or to everything, a group setting) and approval cards any member can decide. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
-- **AQUA chat** — the athanor's agent harness with builder, artisan, explorer, planner, web, and arcade specialists for interactive component development and web research; every member shares the thread and each athanor shapes its own agents
-- **Executions** — monitor running and past executions in real-time
-- **Activities** — unified MCP-log + execution feed with request-anchored causal chains
-- **Components** — browse registered components and their consent profiles
-- **Builds** — compilation tracking and history
-- **Enforcements** — per-execution enforcement decisions and audit records
-- **Connections** — manage sealed credential Connections and the consent grants that bind them to components
-- **API Keys** — create and manage tiered API keys for external access
-- **Schedules** — cron-based recurring component execution
-- **MCP Servers** — manage external MCP server connections
-- **Registry** — namespaces, publishers, and push tokens
-- **Tinctures** — open and manage frontend experiences inside Prism's shell
-- **Settings** — server configuration
+Around the chat:
+
+- **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
+- **The drawer** — off the chat, on every screen size: **Apps** (tinctures), **Members**, **Connections**, **Agents**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **Agents** — the grant sheet binds a sealed Connection to the model's catalyst — no developer view needed.
+- **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
+- **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
 Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<athanor>/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
 
@@ -222,7 +215,7 @@ The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr 
 
 ### Tinctures
 
-Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<athanor>/<publisher>/<name>` (when explicitly made public).
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism (private, authenticated — **Apps** in the drawer) or as standalone public pages at `https://<host>/t/<athanor>/<publisher>/<name>` (when explicitly made public).
 
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
@@ -437,6 +430,20 @@ All three `CYFR_OIDC_*` values are required once `oidc` is selected.
 Sign-in is still gated by `CYFR_PLATFORM_ADMIN_EMAILS` and the server allowlist
 (`cyfr admin allow …`) — authentication says who you are, the door says whether
 you may come in.
+
+### The door, and what a first sign-in needs
+
+A person's first sign-in on a server asks cyfr.run once for their personal
+namespace — the same on every server, claimed once — and mints their own
+athanor, seeded and baseline-consented (the bundled `catalyst:local.http`
+is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
+private addresses stay behind `CYFR_PRIVATE_EGRESS_TARGETS`). If cyfr.run
+cannot be reached at that moment, nothing is set up and the person is told
+to try again; later sign-ins do not need cyfr.run at all — the namespace is
+recorded on their `users` row. `cyfr admin deny <email>` revokes their
+sessions and keys, archives their own athanor and removes them from every
+group; `cyfr admin allow` lets them back in and reopens their own athanor —
+group seats are not restored, a member adds them again.
 
 ### Postgres (bring your own)
 

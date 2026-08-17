@@ -93,7 +93,8 @@ defmodule PrismWeb.SettingsLive do
     {:noreply, load_log_stats(socket)}
   end
 
-  def handle_info({:notify, :platform, :allowlist_request, _payload}, socket) do
+  def handle_info({:notify, :platform, kind, _payload}, socket)
+      when kind in [:allowlist_request, :allowlist_changed] do
     {:noreply, load_door(socket)}
   end
 

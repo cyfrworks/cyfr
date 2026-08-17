@@ -3,10 +3,14 @@
 
 defmodule PrismWeb.TopbarLive do
   @moduledoc """
-  Live "vital signs" topbar — nested LiveView mounted via `live_render` in
-  the app layout, persistent across page navigation.
+  The chrome — a nested LiveView mounted via `live_render` in the app
+  layout, remounted with every page: the brand, the athanor switcher (You,
+  then your groups; the one create, New group…), the drawer button, a
+  search icon for the palette, the person, and — for a platform admin —
+  how many door requests wait.
 
-  Seven indicators, each a small icon/badge with click-to-expand popover:
+  In `dev` it also carries the live indicators, each a small icon/badge
+  with a click-to-expand popover:
 
   | Indicator   | Source                 | Subscribes              |
   |-------------|------------------------|-------------------------|
@@ -17,9 +21,15 @@ defmodule PrismWeb.TopbarLive do
   | Schedules   | schedule/list          | prism:schedules         |
   | Builds      | telemetry-only         | prism:builds            |
   | Tinctures   | telemetry-only         | prism:tinctures         |
+  | User        | the session            |                         |
 
   Builds and Tinctures hide entirely when there's nothing to show, so the
-  bar stays compact in normal operation.
+  bar stays compact in normal operation. `lite` shows none of them: the
+  chat is the page.
+
+  The tray — badges on the switcher rows for what happened in an athanor
+  while the person was elsewhere — is `Prism.Tray`, per session, so it
+  survives the remounts and clears when the athanor is opened.
   """
 
   use PrismWeb, :live_view
@@ -37,31 +47,29 @@ defmodule PrismWeb.TopbarLive do
     socket =
       case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
         {:ok, ctx} ->
-          if connected?(socket) do
-            for topic <- [
-                  "prism:requests",
-                  "prism:executions",
-                  "prism:schedules",
-                  "prism:builds",
-                  "prism:tinctures"
-                ] do
-              Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic(topic, ctx))
-            end
+          ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 
+          if connected?(socket) do
             # The person's own memberships change what the switcher lists.
             Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Tenancy.Members.topic(ctx.user_id))
-          end
 
-          slug = ctx.namespace
+            if ctx.platform_admin,
+              do: Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.platform_topic())
+
+            if ui_mode == "dev", do: subscribe_indicators(ctx)
+          end
 
           socket
           |> assign(:context, ctx)
           |> assign(:current_user, ctx)
-          |> assign(:personal_namespace_slug, slug)
+          |> assign(:personal_namespace_slug, ctx.namespace)
           |> assign(:authenticated, true)
           |> assign(:session_token, token)
+          |> assign(:ui_mode, ui_mode)
           |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
-          |> assign(:badges, %{})
+          # Opening an athanor reads its badge; the others stay.
+          |> assign(:badges, Prism.Tray.clear(token, ctx.athanor_id))
+          |> assign(:platform_requests, platform_requests(ctx))
           |> load_athanors(ctx)
 
         _ ->
@@ -70,9 +78,11 @@ defmodule PrismWeb.TopbarLive do
           |> assign(:personal_namespace_slug, nil)
           |> assign(:authenticated, false)
           |> assign(:session_token, nil)
+          |> assign(:ui_mode, Prism.Labels.mode(session["ui_mode"]))
           |> assign(:athanor_route, nil)
           |> assign(:athanors, [])
           |> assign(:badges, %{})
+          |> assign(:platform_requests, 0)
       end
 
     {:ok,
@@ -87,6 +97,23 @@ defmodule PrismWeb.TopbarLive do
      |> assign(:recent_tinctures, [])
      |> load_initial_state(), layout: false}
   end
+
+  # The live indicators are dev's: their fan-in is subscribed only there.
+  defp subscribe_indicators(ctx) do
+    for topic <- [
+          "prism:requests",
+          "prism:executions",
+          "prism:schedules",
+          "prism:builds",
+          "prism:tinctures"
+        ] do
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic(topic, ctx))
+    end
+  end
+
+  # How many people wait at the door — an operator's number, nobody else's.
+  defp platform_requests(%{platform_admin: true}), do: length(Sanctum.Door.Store.requests())
+  defp platform_requests(_ctx), do: 0
 
   # ============================================================================
   # Events
@@ -173,11 +200,17 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
+  # The door's queue changed: an operator's chip re-counts.
+  def handle_info({:notify, :platform, _kind, _payload}, socket) do
+    {:noreply, assign(socket, :platform_requests, platform_requests(socket.assigns.context))}
+  end
+
   def handle_info({:notify, athanor_id, _kind, _payload}, socket) do
     if athanor_id == socket.assigns.context.athanor_id do
       {:noreply, socket}
     else
-      {:noreply, update(socket, :badges, &Map.update(&1, athanor_id, 1, fn n -> n + 1 end))}
+      badges = Prism.Tray.bump(socket.assigns.session_token, athanor_id)
+      {:noreply, assign(socket, :badges, badges)}
     end
   end
 
@@ -195,7 +228,7 @@ defmodule PrismWeb.TopbarLive do
   # ============================================================================
 
   defp load_initial_state(socket) do
-    if socket.assigns[:authenticated] do
+    if socket.assigns[:authenticated] and socket.assigns[:ui_mode] == "dev" do
       socket
       |> load_system_status()
       |> load_running_requests()
@@ -414,8 +447,22 @@ defmodule PrismWeb.TopbarLive do
 
     ~H"""
     <div class="flex h-12 items-center justify-between gap-2 border-b border-gray-800 bg-gray-900 px-3 text-xs">
-      <!-- Brand + the athanor in focus (the switcher: You, then your groups) -->
+      <!-- The drawer, the brand, the athanor in focus (the switcher: You, then your groups) -->
       <div class="flex items-center gap-2 lg:w-[15rem] lg:pl-1">
+        <button
+          :if={@authenticated}
+          type="button"
+          id="open-drawer"
+          phx-click={Phoenix.LiveView.JS.show(to: "#drawer")}
+          class={[
+            "rounded-md p-1.5 text-gray-400 hover:bg-gray-800 hover:text-gray-200",
+            if(@ui_mode == "dev", do: "lg:hidden", else: "")
+          ]}
+          aria-label="Open menu"
+          title="Menu"
+        >
+          <.icon name="grid" class="h-5 w-5" />
+        </button>
         <.link navigate="/" class="flex items-center gap-2">
           <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-7 w-7 rounded-md" />
           <span class="text-lg font-bold text-white tracking-tight">CYFR</span>
@@ -438,7 +485,8 @@ defmodule PrismWeb.TopbarLive do
               :if={badge_total(@badges, @context) > 0}
               class="h-2 w-2 rounded-full bg-blue-400 shrink-0"
             />
-            <span class="text-gray-500">▾</span>
+            <span :if={length(@athanors) > 1} class="text-gray-500">▾</span>
+            <span :if={length(@athanors) <= 1} class="text-gray-600">+</span>
           </button>
           <div
             :if={@open_popover == "athanors"}
@@ -501,232 +549,259 @@ defmodule PrismWeb.TopbarLive do
       </div>
 
       <div class="flex items-center gap-2">
-        <!-- Builds (only when active) -->
-        <.indicator
-          :if={@builds_count > 0}
-          name="builds"
-          open={@open_popover == "builds"}
-          label={"#{@builds_count}"}
-          icon="wrench"
-          dot_class="bg-amber-400 animate-pulse"
+        <!-- Door requests: an operator's chip -->
+        <.link
+          :if={@platform_requests > 0}
+          navigate={PrismWeb.Focus.path(@athanor_route, "/settings")}
+          id="door-requests"
+          class="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] text-amber-200 hover:bg-amber-500/30"
+          title="People waiting at the door"
         >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">Builds in flight</h4>
-            <ul class="space-y-1 text-sm">
-              <%= for b <- @in_flight_builds do %>
-                <li class="flex items-center gap-2">
-                  <span class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
-                  <span class="text-gray-300 font-mono text-xs truncate">
-                    {b.reference || b.build_id}
-                  </span>
-                </li>
-              <% end %>
-            </ul>
-            <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/builds")}
-              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
-            >
-              View all builds →
-            </.link>
-          </:popover>
-        </.indicator>
-        
+          <span class="h-1.5 w-1.5 rounded-full bg-amber-400" />
+          {@platform_requests} {if @platform_requests == 1, do: "request", else: "requests"}
+        </.link>
+        <!-- Search: the palette, by click as well as ⌘⇧K -->
+        <button
+          :if={@authenticated}
+          type="button"
+          id="open-palette"
+          phx-click={Phoenix.LiveView.JS.push("toggle", target: "#command-palette")}
+          class="rounded-md p-1.5 text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+          aria-label="Search"
+          title="Search (⌘⇧K)"
+        >
+          <.icon name="grid" class="h-4 w-4" />
+        </button>
+        <div :if={@ui_mode == "dev"} id="live-indicators" class="hidden md:flex items-center gap-2">
+          <!-- Builds (only when active) -->
+          <.indicator
+            :if={@builds_count > 0}
+            name="builds"
+            open={@open_popover == "builds"}
+            label={"#{@builds_count}"}
+            icon="wrench"
+            dot_class="bg-amber-400 animate-pulse"
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Builds in flight</h4>
+              <ul class="space-y-1 text-sm">
+                <%= for b <- @in_flight_builds do %>
+                  <li class="flex items-center gap-2">
+                    <span class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                    <span class="text-gray-300 font-mono text-xs truncate">
+                      {b.reference || b.build_id}
+                    </span>
+                  </li>
+                <% end %>
+              </ul>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/builds")}
+                class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                View all builds →
+              </.link>
+            </:popover>
+          </.indicator>
+          
     <!-- Tinctures (only when recent activity) -->
-        <.indicator
-          :if={@tincture_count > 0}
-          name="tinctures"
-          open={@open_popover == "tinctures"}
-          label={"#{@tincture_count}"}
-          icon="palette"
-        >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">Recent tincture invokes</h4>
-            <ul class="space-y-1 text-sm">
-              <%= for t <- @recent_tinctures do %>
-                <li class="flex items-center gap-2">
-                  <.status_indicator status={t.status} />
-                  <span class="text-gray-300 font-mono text-xs truncate">
-                    {t.tincture_ref || t.reference || t.request_id}
-                  </span>
-                </li>
-              <% end %>
-            </ul>
-            <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/tinctures")}
-              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
-            >
-              Open Tinctures →
-            </.link>
-          </:popover>
-        </.indicator>
-        
+          <.indicator
+            :if={@tincture_count > 0}
+            name="tinctures"
+            open={@open_popover == "tinctures"}
+            label={"#{@tincture_count}"}
+            icon="palette"
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Recent tincture invokes</h4>
+              <ul class="space-y-1 text-sm">
+                <%= for t <- @recent_tinctures do %>
+                  <li class="flex items-center gap-2">
+                    <.status_indicator status={t.status} />
+                    <span class="text-gray-300 font-mono text-xs truncate">
+                      {t.tincture_ref || t.reference || t.request_id}
+                    </span>
+                  </li>
+                <% end %>
+              </ul>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/tinctures")}
+                class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                Open Tinctures →
+              </.link>
+            </:popover>
+          </.indicator>
+          
     <!-- Schedules -->
-        <.indicator
-          :if={@next_schedule}
-          name="schedules"
-          open={@open_popover == "schedules"}
-          label={f(@next_schedule, :name) || short(f(@next_schedule, :id))}
-          icon="clock"
-        >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">Upcoming schedules</h4>
-            <ul class="space-y-1 text-sm">
-              <%= for s <- @upcoming_schedules do %>
-                <li class="flex items-center justify-between gap-2">
-                  <span class="text-gray-300 truncate">{f(s, :name) || f(s, :id)}</span>
-                  <span class="text-xs text-gray-500 whitespace-nowrap">
-                    {relative_time(f(s, :next_run_at))}
-                  </span>
-                </li>
-              <% end %>
-            </ul>
-            <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/schedules")}
-              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
-            >
-              All schedules →
-            </.link>
-          </:popover>
-        </.indicator>
-        
+          <.indicator
+            :if={@next_schedule}
+            name="schedules"
+            open={@open_popover == "schedules"}
+            label={f(@next_schedule, :name) || short(f(@next_schedule, :id))}
+            icon="clock"
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Upcoming schedules</h4>
+              <ul class="space-y-1 text-sm">
+                <%= for s <- @upcoming_schedules do %>
+                  <li class="flex items-center justify-between gap-2">
+                    <span class="text-gray-300 truncate">{f(s, :name) || f(s, :id)}</span>
+                    <span class="text-xs text-gray-500 whitespace-nowrap">
+                      {relative_time(f(s, :next_run_at))}
+                    </span>
+                  </li>
+                <% end %>
+              </ul>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/schedules")}
+                class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                All schedules →
+              </.link>
+            </:popover>
+          </.indicator>
+          
     <!-- Rate -->
-        <.indicator
-          name="rate"
-          open={@open_popover == "rate"}
-          label={"#{@log_stats.total}/h"}
-        >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">Request rate (last 1h)</h4>
-            <dl class="grid grid-cols-3 gap-3 text-sm">
-              <div>
-                <dt class="text-xs text-gray-500 uppercase">Total</dt>
-                <dd class="text-white font-medium">{@log_stats.total}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500 uppercase">Errors</dt>
-                <dd class={[
-                  "font-medium",
-                  if(@log_stats.error_rate > 0, do: "text-red-400", else: "text-green-400")
-                ]}>
-                  {@log_stats.error_rate}%
-                </dd>
-              </div>
-              <div>
-                <dt class="text-xs text-gray-500 uppercase">Avg ms</dt>
-                <dd class="text-white font-medium">{@log_stats.avg_duration_ms}</dd>
-              </div>
-            </dl>
-            <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/activities")}
-              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
-            >
-              View activity →
-            </.link>
-          </:popover>
-        </.indicator>
-        
-    <!-- Executions -->
-        <.indicator
-          name="executions"
-          open={@open_popover == "executions"}
-          label={"#{@running_executions_count}"}
-          icon="cube"
-          dot_class={
-            if @running_executions_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
-          }
-        >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">
-              Running executions ({@running_executions_count})
-            </h4>
-            <.live_empty :if={@running_executions == []} message="No executions running." />
-            <ul :if={@running_executions != []} class="space-y-1 text-sm">
-              <%= for exec <- Enum.take(@running_executions, 8) do %>
-                <li class="flex items-center gap-2">
-                  <.status_indicator status={to_string(f(exec, :status) || "running")} />
-                  <span class="text-gray-300 font-mono text-xs truncate flex-1">
-                    {format_ref(f(exec, :reference))}
-                  </span>
-                </li>
-              <% end %>
-            </ul>
-            <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/executions?status=running")}
-              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
-            >
-              View all executions →
-            </.link>
-          </:popover>
-        </.indicator>
-        
-    <!-- Activity -->
-        <.indicator
-          name="activity"
-          open={@open_popover == "activity"}
-          label={"#{@running_requests_count}"}
-          icon="play"
-          dot_class={
-            if @running_requests_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
-          }
-        >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">
-              In-flight requests ({@running_requests_count})
-            </h4>
-            <.live_empty :if={@running_requests == []} message="No requests in flight." />
-            <ul :if={@running_requests != []} class="space-y-1 text-sm">
-              <%= for log <- @running_requests do %>
-                <li class="flex items-center gap-2">
-                  <span class={[
-                    "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0",
-                    source_class(f(log, :tool))
+          <.indicator
+            name="rate"
+            open={@open_popover == "rate"}
+            label={"#{@log_stats.total}/h"}
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Request rate (last 1h)</h4>
+              <dl class="grid grid-cols-3 gap-3 text-sm">
+                <div>
+                  <dt class="text-xs text-gray-500 uppercase">Total</dt>
+                  <dd class="text-white font-medium">{@log_stats.total}</dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-gray-500 uppercase">Errors</dt>
+                  <dd class={[
+                    "font-medium",
+                    if(@log_stats.error_rate > 0, do: "text-red-400", else: "text-green-400")
                   ]}>
-                    {source_label(f(log, :tool))}
-                  </span>
-                  <span class="text-gray-300 font-mono text-xs truncate flex-1">
-                    {f(log, :tool) || "?"} / {f(log, :action) || "?"}
-                  </span>
-                </li>
-              <% end %>
-            </ul>
-            <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/activities?status=pending")}
-              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
-            >
-              View activity →
-            </.link>
-          </:popover>
-        </.indicator>
-        
+                    {@log_stats.error_rate}%
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-gray-500 uppercase">Avg ms</dt>
+                  <dd class="text-white font-medium">{@log_stats.avg_duration_ms}</dd>
+                </div>
+              </dl>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/activities")}
+                class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                View activity →
+              </.link>
+            </:popover>
+          </.indicator>
+          
+    <!-- Executions -->
+          <.indicator
+            name="executions"
+            open={@open_popover == "executions"}
+            label={"#{@running_executions_count}"}
+            icon="cube"
+            dot_class={
+              if @running_executions_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
+            }
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">
+                Running executions ({@running_executions_count})
+              </h4>
+              <.live_empty :if={@running_executions == []} message="No executions running." />
+              <ul :if={@running_executions != []} class="space-y-1 text-sm">
+                <%= for exec <- Enum.take(@running_executions, 8) do %>
+                  <li class="flex items-center gap-2">
+                    <.status_indicator status={to_string(f(exec, :status) || "running")} />
+                    <span class="text-gray-300 font-mono text-xs truncate flex-1">
+                      {format_ref(f(exec, :reference))}
+                    </span>
+                  </li>
+                <% end %>
+              </ul>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/executions?status=running")}
+                class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                View all executions →
+              </.link>
+            </:popover>
+          </.indicator>
+          
+    <!-- Activity -->
+          <.indicator
+            name="activity"
+            open={@open_popover == "activity"}
+            label={"#{@running_requests_count}"}
+            icon="play"
+            dot_class={
+              if @running_requests_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
+            }
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">
+                In-flight requests ({@running_requests_count})
+              </h4>
+              <.live_empty :if={@running_requests == []} message="No requests in flight." />
+              <ul :if={@running_requests != []} class="space-y-1 text-sm">
+                <%= for log <- @running_requests do %>
+                  <li class="flex items-center gap-2">
+                    <span class={[
+                      "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0",
+                      source_class(f(log, :tool))
+                    ]}>
+                      {source_label(f(log, :tool))}
+                    </span>
+                    <span class="text-gray-300 font-mono text-xs truncate flex-1">
+                      {f(log, :tool) || "?"} / {f(log, :action) || "?"}
+                    </span>
+                  </li>
+                <% end %>
+              </ul>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/activities?status=pending")}
+                class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                View activity →
+              </.link>
+            </:popover>
+          </.indicator>
+          
     <!-- Health -->
-        <.indicator
-          name="health"
-          open={@open_popover == "health"}
-          label={status_field(@system_status, :version) || "—"}
-          dot_class={health_dot_class(@services)}
-        >
-          <:popover>
-            <h4 class="text-xs font-medium text-gray-400 mb-2">Service health</h4>
-            <.live_empty :if={@services == %{}} message="No service data." />
-            <ul :if={@services != %{}} class="space-y-1 text-sm">
-              <%= for {name, status} <- Enum.sort(@services) do %>
-                <li class="flex items-center justify-between gap-3">
-                  <div class="flex items-center gap-2">
-                    <span class={["h-2 w-2 rounded-full", service_dot(status)]} />
-                    <span class="text-gray-300">{name}</span>
-                  </div>
-                  <span class="text-xs text-gray-500 font-mono">{status}</span>
-                </li>
-              <% end %>
-            </ul>
-            <div class="mt-2 pt-2 border-t border-gray-800 text-xs text-gray-500 space-y-0.5">
-              <div :if={status_field(@system_status, :version)}>
-                version:
-                <span class="text-gray-300 font-mono">{status_field(@system_status, :version)}</span>
+          <.indicator
+            name="health"
+            open={@open_popover == "health"}
+            label={status_field(@system_status, :version) || "—"}
+            dot_class={health_dot_class(@services)}
+          >
+            <:popover>
+              <h4 class="text-xs font-medium text-gray-400 mb-2">Service health</h4>
+              <.live_empty :if={@services == %{}} message="No service data." />
+              <ul :if={@services != %{}} class="space-y-1 text-sm">
+                <%= for {name, status} <- Enum.sort(@services) do %>
+                  <li class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-2">
+                      <span class={["h-2 w-2 rounded-full", service_dot(status)]} />
+                      <span class="text-gray-300">{name}</span>
+                    </div>
+                    <span class="text-xs text-gray-500 font-mono">{status}</span>
+                  </li>
+                <% end %>
+              </ul>
+              <div class="mt-2 pt-2 border-t border-gray-800 text-xs text-gray-500 space-y-0.5">
+                <div :if={status_field(@system_status, :version)}>
+                  version:
+                  <span class="text-gray-300 font-mono">
+                    {status_field(@system_status, :version)}
+                  </span>
+                </div>
               </div>
-            </div>
-          </:popover>
-        </.indicator>
+            </:popover>
+          </.indicator>
+        </div>
         
     <!-- User -->
         <.indicator

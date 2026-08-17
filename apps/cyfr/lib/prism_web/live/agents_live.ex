@@ -7,6 +7,11 @@ defmodule PrismWeb.AgentsLive do
   a prompt, a model and a capability allowlist. The definitions are the
   athanor's own (`Compendium.AquaTemplate` seeds them); every member edits
   the same ones, through the `aqua` tool.
+
+  This is also where a person connects a model: an orchestrator's catalyst
+  needs an API key bound to it before AQUA can answer, and "Connect a
+  model" opens the consent sheet for that catalyst — reachable in `lite`,
+  so a box that never opens `dev` still gets its key in.
   """
 
   use PrismWeb, :live_view
@@ -29,6 +34,8 @@ defmodule PrismWeb.AgentsLive do
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
       |> assign(:tool_actions, nil)
+      |> assign(:consent_sheet_ref, nil)
+      |> assign(:model_status, %{})
 
     socket =
       if connected?(socket) and socket.assigns[:context],
@@ -245,7 +252,25 @@ defmodule PrismWeb.AgentsLive do
   # PubSub fan-in
   # ============================================================================
 
+  # The consent sheet for an orchestrator's catalyst: the model gets its key.
+  def handle_event("open_consent", %{"ref" => ref}, socket) when is_binary(ref) and ref != "" do
+    {:noreply, assign(socket, :consent_sheet_ref, ref)}
+  end
+
   @impl true
+  def handle_info({:consent_granted, _ref, _result}, socket) do
+    {:noreply,
+     socket
+     |> assign(:consent_sheet_ref, nil)
+     |> put_flash(:info, "Model connected.")
+     |> load_editor_agents()
+     |> load_models()}
+  end
+
+  def handle_info({:consent_sheet_closed, _ref}, socket) do
+    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  end
+
   def handle_info(:editor_refresh, socket) do
     {:noreply, load_editor_agents(socket)}
   end
@@ -355,7 +380,36 @@ defmodule PrismWeb.AgentsLive do
 
     socket
     |> assign(:editor_agents, agents)
+    |> assign(:model_status, model_status(ctx, agents))
     |> ensure_tool_actions_loaded()
+  end
+
+  # For each orchestrator's catalyst: the installed release it resolves to
+  # and whether its consent is complete — `%{catalyst_ref => {:ready |
+  # :needs_key | :missing, resolved_ref}}`. A model with no key is the one
+  # thing that keeps a fresh athanor's AQUA silent.
+  defp model_status(nil, _agents), do: %{}
+
+  defp model_status(ctx, agents) do
+    agents
+    |> Enum.filter(&(&1["type"] == "orchestrator"))
+    |> Enum.map(& &1["catalyst_ref"])
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+    |> Map.new(fn ref -> {ref, catalyst_status(ctx, ref)} end)
+  end
+
+  defp catalyst_status(ctx, ref) do
+    with {:ok, resolved} <- Prism.AgentConfig.resolve_catalyst(ctx, ref),
+         {:ok, plan} <-
+           Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+             "action" => "setup_plan",
+             "reference" => resolved
+           }) do
+      if plan[:ready] || plan["ready"], do: {:ready, resolved}, else: {:needs_key, resolved}
+    else
+      _ -> {:missing, ref}
+    end
   end
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
@@ -463,6 +517,7 @@ defmodule PrismWeb.AgentsLive do
           models_by_provider={@models_by_provider}
           tool_actions={@tool_actions || []}
           is_orchestrator={true}
+          model_status={Map.get(@model_status, orch["catalyst_ref"])}
         />
         <div :if={sub_agents != []} class="ml-6 space-y-3 border-l border-gray-800 pl-4">
           <.agent_card
@@ -516,6 +571,20 @@ defmodule PrismWeb.AgentsLive do
           </form>
         </div>
       <% end %>
+      
+    <!-- Consent sheet: bind a Connection to an orchestrator's model -->
+      <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60"></div>
+        <div class="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">
+          <.live_component
+            module={PrismWeb.ConsentSheetComponent}
+            id={"consent-#{@consent_sheet_ref}"}
+            ref={@consent_sheet_ref}
+            context={@context}
+            athanor_route={@athanor_route}
+          />
+        </div>
+      </div>
       
     <!-- Prompt editor modal — shared by orchestrators and sub-agents -->
       <div
@@ -572,6 +641,7 @@ defmodule PrismWeb.AgentsLive do
   attr :models_by_provider, :map, required: true
   attr :tool_actions, :list, required: true
   attr :is_orchestrator, :boolean, default: false
+  attr :model_status, :any, default: nil
 
   defp agent_card(assigns) do
     assigns =
@@ -644,6 +714,30 @@ defmodule PrismWeb.AgentsLive do
           class="w-full rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
         />
       </form>
+
+      <div
+        :if={@is_orchestrator and @model_status}
+        class="flex flex-wrap items-center gap-2 text-[11px]"
+      >
+        <span :if={match?({:ready, _}, @model_status)} class="text-emerald-400">
+          Model connected
+        </span>
+        <span :if={match?({:needs_key, _}, @model_status)} class="text-amber-300">
+          Not connected — the model has no key yet
+        </span>
+        <span :if={match?({:missing, _}, @model_status)} class="text-amber-300">
+          The model's catalyst is not installed here yet
+        </span>
+        <button
+          :if={match?({status, _} when status in [:ready, :needs_key], @model_status)}
+          type="button"
+          phx-click="open_consent"
+          phx-value-ref={elem(@model_status, 1)}
+          class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] font-medium text-white"
+        >
+          {if match?({:ready, _}, @model_status), do: "Change the key", else: "Connect a model"}
+        </button>
+      </div>
 
       <form phx-change="editor_set_model">
         <input type="hidden" name="name" value={@agent["name"]} />

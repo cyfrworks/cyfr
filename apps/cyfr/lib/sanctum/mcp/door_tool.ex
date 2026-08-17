@@ -39,6 +39,7 @@ defmodule Sanctum.MCP.DoorTool do
           # member adds them again. Said in the result, not left to guess.
           restored = denied_users(kind, value)
           Enum.each(restored, &Users.allow/1)
+          Sanctum.Notify.allowlist_changed()
           {:ok, with_restore_note(render(entry), restored)}
 
         {:error, reason} ->
@@ -57,6 +58,7 @@ defmodule Sanctum.MCP.DoorTool do
           results = Enum.map(denied, &Users.deny/1)
           ejected = Enum.count(results, &match?({:ok, _}, &1))
           rendered = Map.put(render(entry), :ejected, ejected)
+          Sanctum.Notify.allowlist_changed()
 
           if ejected == length(denied) do
             {:ok, rendered}
@@ -93,6 +95,7 @@ defmodule Sanctum.MCP.DoorTool do
           else: []
 
       Enum.each(restored, &Users.allow/1)
+      Sanctum.Notify.allowlist_changed()
       {:ok, with_restore_note(%{id: id, removed: true}, restored)}
     else
       {:error, :not_found} -> {:error, "Entry not found"}
@@ -101,7 +104,10 @@ defmodule Sanctum.MCP.DoorTool do
 
   def handle(%Context{} = ctx, %{"action" => "resolve", "id" => id, "decision" => decision})
       when is_binary(id) and decision in ["allow", "reject"] do
-    case Store.resolve(id, String.to_existing_atom(decision), ctx.user_id) do
+    result = Store.resolve(id, String.to_existing_atom(decision), ctx.user_id)
+    Sanctum.Notify.allowlist_changed()
+
+    case result do
       {:ok, entry} -> {:ok, render(entry)}
       :ok -> {:ok, %{id: id, rejected: true}}
       {:error, :not_found} -> {:error, "Request not found"}

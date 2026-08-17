@@ -138,6 +138,19 @@ defmodule PrismWeb.ConsentSheetComponent do
       <p :if={@error} class="consent-sheet__error" role="alert">{@error}</p>
 
       <div :if={@plan}>
+        <section :if={warnings(@plan) != []} class="consent-sheet__warnings">
+          <p :for={warning <- warnings(@plan)}>{warning}</p>
+          <p :if={assigns[:athanor_route]}>
+            <.link
+              navigate={PrismWeb.Focus.path(@athanor_route, "/connections")}
+              class="consent-sheet__link"
+            >
+              Add a Connection
+            </.link>
+            first, then come back here.
+          </p>
+        </section>
+
         <section :if={@plan[:shape_diff] not in [nil, []]} class="consent-sheet__delta">
           <h3>What changed</h3>
           <ul>
@@ -245,4 +258,5 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp egress(plan), do: get_in(plan, [:caps, "egress", "domains"]) || []
   defp tools(plan), do: get_in(plan, [:caps, "tools"]) || []
+  defp warnings(plan), do: plan[:warnings] || plan["warnings"] || []
 end

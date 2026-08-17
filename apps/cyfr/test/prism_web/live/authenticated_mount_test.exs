@@ -119,4 +119,56 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert html =~ "Apps"
     refute html =~ ">Tinctures<"
   end
+
+  test "lite is chat + switcher + drawer: no sidebar, no live indicators; dev keeps both",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+
+    # Dev: the sidebar with every page (webhooks and enforcements included),
+    # the live indicators, and the drawer for narrow screens.
+    {view, html} = mount_athanor(conn, "/settings")
+    assert html =~ ~s(id="nav-webhooks")
+    assert html =~ ~s(id="nav-enforcements")
+    assert has_element?(view, "#drawer #drawer-nav-executions")
+    assert render(find_live_child(view, "topbar")) =~ ~s(id="live-indicators")
+
+    {:ok, row} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: user.user_id,
+        provider: "github",
+        email: user.email
+      })
+
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
+
+    # Lite: no sidebar link at all, the drawer holds the lite pages, and the
+    # topbar carries no indicators — the drawer button is always shown.
+    {view, html} = mount_athanor(conn, "/settings")
+    refute html =~ ~s(id="nav-chat")
+    refute html =~ ~s(id="nav-webhooks")
+
+    for key <-
+          ~w(chat agents tinctures members connections schedules webhooks mcp-servers settings) do
+      assert has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer lacks #{key}"
+    end
+
+    for key <- ~w(executions api-keys enforcements builds registry) do
+      refute has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer shows #{key}"
+    end
+
+    bar = find_live_child(view, "topbar")
+    refute render(bar) =~ ~s(id="live-indicators")
+    assert has_element?(bar, "#open-drawer")
+    assert has_element?(bar, "#open-palette")
+    assert has_element?(view, "#drawer-search")
+    assert has_element?(view, "#drawer-new-group")
+  end
+
+  test "the chat page's thread list is a panel a phone can open and close", %{conn: conn} do
+    conn = log_in_user(conn, test_user())
+    {_view, html} = mount_athanor(conn, "")
+    assert html =~ ~s(id="conversation-list")
+    assert html =~ "max-md:hidden"
+  end
 end

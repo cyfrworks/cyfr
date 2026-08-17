@@ -1,77 +1,34 @@
 <div class="flex h-screen flex-col overflow-hidden bg-gray-950">
-  <!-- Full-width topbar (carries brand on the left, live indicators on the right) -->
+  <% mode = Prism.Labels.mode(assigns[:ui_mode]) %>
+  <!-- The chrome: brand, the athanor switcher, the drawer, the person — and in dev the live indicators -->
   {live_render(@socket, PrismWeb.TopbarLive,
     id: "topbar",
-    session: %{"athanor_id" => assigns[:athanor] && @athanor.id}
+    session: %{"athanor_id" => assigns[:athanor] && @athanor.id, "ui_mode" => mode}
   )}
 
-  <!-- Body row: sidebar + main content -->
+  <!-- Body row: sidebar (dev, wide screens) + drawer (both modes) + main content -->
   <div class="flex flex-1 overflow-hidden">
-    <!-- Sidebar -->
-    <nav class="hidden lg:flex lg:flex-shrink-0">
-      <div class="flex w-64 flex-col border-r border-gray-800 bg-gray-900">
-        <div class="flex flex-1 flex-col overflow-y-auto pt-3 pb-4">
-          <% mode = Prism.Labels.mode(assigns[:ui_mode]) %>
-          <% dev? = Prism.Labels.dev?(mode) %>
-          <nav class="flex-1 space-y-1 px-3">
-            <.nav_link id="nav-chat" href={PrismWeb.Focus.path(@athanor_route, "")} icon="play" label="Chat" active={assigns[:active_nav] == "chat"} />
-            <.nav_link id="nav-agents" href={PrismWeb.Focus.path(@athanor_route, "/agents")} icon="user" label="Agents" active={assigns[:active_nav] == "agents"} />
-            <.nav_link id="nav-tinctures" href={PrismWeb.Focus.path(@athanor_route, "/tinctures")} icon="palette" label={Prism.Labels.label(:tinctures, mode)} active={assigns[:active_nav] == "tinctures"} />
-
-            <%= if dev? do %>
-              <div class="pt-4 pb-1">
-                <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                  Observability
-                </p>
-              </div>
-              <.nav_link id="nav-activities" href={PrismWeb.Focus.path(@athanor_route, "/activities")} icon="play" label="Activities" active={assigns[:active_nav] == "activities"} />
-              <.nav_link id="nav-executions" href={PrismWeb.Focus.path(@athanor_route, "/executions")} icon="cube" label={Prism.Labels.label(:executions, mode)} active={assigns[:active_nav] == "executions"} />
-              <.nav_link id="nav-schedules" href={PrismWeb.Focus.path(@athanor_route, "/schedules")} icon="clock" label="Schedules" active={assigns[:active_nav] == "schedules"} />
-
-              <div class="pt-4 pb-1">
-                <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                  Components
-                </p>
-              </div>
-              <.nav_link id="nav-components" href={PrismWeb.Focus.path(@athanor_route, "/components")} icon="cube" label={Prism.Labels.label(:components, mode)} active={assigns[:active_nav] == "components"} />
-              <.nav_link id="nav-builds" href={PrismWeb.Focus.path(@athanor_route, "/builds")} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
-              <.nav_link id="nav-registry" href={PrismWeb.Focus.path(@athanor_route, "/registry")} icon="globe" label="Registry" active={assigns[:active_nav] == "registry"} />
-            <% end %>
-
-            <div class="pt-4 pb-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Configuration
-              </p>
-            </div>
-            <.nav_link id="nav-connections" href={PrismWeb.Focus.path(@athanor_route, "/connections")} icon="key" label="Connections" active={assigns[:active_nav] == "connections"} />
-            <.nav_link :if={dev?} id="nav-api-keys" href={PrismWeb.Focus.path(@athanor_route, "/api-keys")} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
-            <.nav_link id="nav-members" href={PrismWeb.Focus.path(@athanor_route, "/members")} icon="user" label="Members" active={assigns[:active_nav] == "members"} />
-            <.nav_link id="nav-mcp-servers" href={PrismWeb.Focus.path(@athanor_route, "/mcp-servers")} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
-            <.nav_link id="nav-settings" href={PrismWeb.Focus.path(@athanor_route, "/settings")} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
-
-            <div class="pt-4 pb-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Other
-              </p>
-            </div>
-            <.nav_link :if={dev?} id="nav-reports" href={PrismWeb.Focus.path(@athanor_route, "/reports")} icon="flag" label="Reports" active={assigns[:active_nav] == "reports"} />
-            <.nav_link id="nav-legal" href={PrismWeb.Focus.path(@athanor_route, "/legal")} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
-          </nav>
-        </div>
-      </div>
-    </nav>
+    <.sidebar
+      :if={Prism.Labels.dev?(mode)}
+      mode={mode}
+      athanor_route={@athanor_route}
+      active_nav={assigns[:active_nav]}
+    />
+    <.drawer mode={mode} athanor_route={@athanor_route} active_nav={assigns[:active_nav]} />
 
     <!-- Main content -->
     <div class="flex flex-1 flex-col overflow-hidden">
       <.flash_group flash={@flash} />
-      <!-- Phase 2.3 — Cmd+K command palette. The companion JS hook listens for
-           the keyboard shortcut and pushes toggle/close into this component. -->
+      <!-- The command palette (⌘⇧K, the topbar's search icon, the drawer's
+           Search… row). The companion JS hook listens for the shortcut and
+           pushes toggle/close into this component. -->
       <.live_component
         :if={assigns[:context]}
         module={PrismWeb.CommandPaletteLiveComponent}
         id="command-palette"
         context={@context}
         active_context={assigns[:active_context]}
+        ui_mode={mode}
       />
 
       <!-- Page content -->

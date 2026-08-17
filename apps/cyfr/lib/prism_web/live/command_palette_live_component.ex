@@ -3,12 +3,14 @@
 
 defmodule PrismWeb.CommandPaletteLiveComponent do
   @moduledoc """
-  Cmd+K command palette — fuzzy-search across navigation, recent activity,
-  components, and tinctures.
+  The command palette (⌘⇧K, the topbar's search icon, the drawer's
+  Search… row) — fuzzy-search across the mode's pages and, in `dev`, recent
+  activity, components and tinctures.
 
   Stateless modal LiveComponent rendered from the app layout. The companion
   JS hook (`assets/js/hooks/command_palette.js`) listens for the keyboard
-  shortcut and pushes `toggle` / `close` events here.
+  shortcut and pushes `toggle` / `close` events here; the click triggers
+  push the same events by target.
 
   All backing queries pass through tenant-scoped APIs — `Arca.McpLog.list`
   requires an `athanor_id`, and Compendium / TinctureRegistry
@@ -54,7 +56,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   # Every target is a page of the athanor in focus: the palette speaks in
   # page paths and the focus prefix is added here, once.
-  def handle_event("pick", %{"to" => path}, socket) when is_binary(path) and path != "" do
+  def handle_event("pick", %{"to" => path}, socket) when is_binary(path) do
     route = PrismWeb.Focus.route_of(socket.assigns.context)
     {:noreply, socket |> close() |> push_navigate(to: PrismWeb.Focus.path(route, path))}
   end
@@ -72,18 +74,26 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   # Item assembly
   # ============================================================================
 
+  # The mode's pages always; the developer's lookups — recent requests,
+  # components — only where those pages exist to open.
   defp load_items(socket) do
     ctx = socket.assigns[:context]
+    mode = Prism.Labels.mode(socket.assigns[:ui_mode])
 
     items =
-      if ctx do
-        nav_items() ++
-          context_actions(socket.assigns[:active_context]) ++
-          recent_request_items(ctx) ++
-          component_items(ctx) ++
-          tincture_items(ctx)
-      else
-        nav_items()
+      cond do
+        is_nil(ctx) ->
+          nav_items(mode)
+
+        Prism.Labels.dev?(mode) ->
+          nav_items(mode) ++
+            context_actions(socket.assigns[:active_context]) ++
+            recent_request_items(ctx) ++
+            component_items(ctx) ++
+            tincture_items(ctx)
+
+        true ->
+          nav_items(mode) ++ tincture_items(ctx)
       end
 
     filtered = filter_items(items, socket.assigns.query)
@@ -91,29 +101,15 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     assign(socket, :items, filtered)
   end
 
-  defp nav_items do
-    [
-      nav_item("Activities", "/activities", "play"),
-      nav_item("Executions", "/executions", "cube"),
-      nav_item("Schedules", "/schedules", "clock"),
-      nav_item("Components", "/components", "cube"),
-      nav_item("Builds", "/builds", "wrench"),
-      nav_item("Registry", "/registry", "globe"),
-      nav_item("Tinctures", "/tinctures", "palette"),
-      nav_item("Connections", "/connections", "key"),
-      nav_item("API Keys", "/api-keys", "lock"),
-      nav_item("MCP Servers", "/mcp-servers", "globe"),
-      nav_item("Settings", "/settings", "cog"),
-      nav_item("Reports", "/reports", "flag"),
-      nav_item("Legal", "/legal", "document")
-    ]
+  defp nav_items(mode) do
+    for item <- PrismWeb.Nav.items(mode), do: nav_item(item.label, item.path, item.icon)
   end
 
   defp nav_item(label, path, icon) do
     %{
       kind: :nav,
       label: label,
-      hint: path,
+      hint: if(path == "", do: "/", else: path),
       to: path,
       icon: icon,
       keywords: [label, path] |> Enum.join(" ") |> String.downcase()
@@ -317,7 +313,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
           <div class="flex items-center justify-between border-t border-gray-800 px-4 py-2 text-[11px] text-gray-500">
             <span>↑ ↓ navigate</span>
-            <span>Cmd+K toggle</span>
+            <span>⌘⇧K toggle</span>
           </div>
         </div>
       </div>

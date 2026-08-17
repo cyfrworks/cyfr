@@ -58,4 +58,75 @@ defmodule PrismWeb.TopbarLiveTest do
     :sys.get_state(bar.pid)
     assert render(bar) == before
   end
+
+  test "the tray is the session's: a badge survives navigating, and opening the athanor clears it",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Athanors.create_group(alice.user_id, "Tray #{alice.namespace}")
+
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+    Sanctum.Notify.broadcast(group.id, :execution_failed, %{})
+    Sanctum.Notify.broadcast(group.id, :schedule_failed, %{})
+    :sys.get_state(bar.pid)
+    render_click(bar, "toggle_popover", %{"name" => "athanors"})
+    assert render(bar) =~ ~r/bg-blue-500\/80[^>]*>\s*2\s*</
+
+    # Another page — the topbar remounts — and the count is still there.
+    {view, _html} = mount_athanor(conn, "/settings")
+    bar = topbar(view)
+    render_click(bar, "toggle_popover", %{"name" => "athanors"})
+    assert render(bar) =~ ~r/bg-blue-500\/80[^>]*>\s*2\s*</
+
+    # Opening the group reads it.
+    {view, _html} = mount_athanor(conn, "", group)
+    bar = topbar(view)
+    render_click(bar, "toggle_popover", %{"name" => "athanors"})
+    refute render(bar) =~ "bg-blue-500/80"
+
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+    render_click(bar, "toggle_popover", %{"name" => "athanors"})
+    refute render(bar) =~ "bg-blue-500/80"
+  end
+
+  test "an operator sees how many wait at the door; the chip follows the door", %{conn: conn} do
+    ops = test_user()
+    conn = log_in_user(conn, ops)
+    {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+    refute has_element?(bar, "#door-requests")
+
+    email = "carol-#{ops.namespace}@example.com"
+    {:ok, _} = Sanctum.Door.Store.request(email, ops.user_id)
+    Sanctum.Notify.allowlist_request(email)
+    :sys.get_state(bar.pid)
+    assert render(bar) =~ "1 request"
+
+    [%{id: id}] = Sanctum.Door.Store.requests()
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: ops.user_id,
+        athanor_id: Sanctum.Tenancy.Athanors.home!().id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true,
+        platform_admin: true
+      )
+
+    assert {:ok, _} =
+             Emissary.MCP.ToolRegistry.call_external("door", ctx, %{
+               "action" => "resolve",
+               "id" => id,
+               "decision" => "reject"
+             })
+
+    :sys.get_state(bar.pid)
+    refute has_element?(bar, "#door-requests")
+  end
 end
