@@ -287,6 +287,9 @@ defmodule EmissaryWeb.Router do
   # where — the controller focuses it exactly as a LiveView mount does.
   pipeline :attachment do
     plug :fetch_session
+    # GET only, so this never verifies a token — but a pipeline that reads
+    # the session carries the same forgery guard as `:browser`.
+    plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
   end
