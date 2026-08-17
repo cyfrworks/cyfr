@@ -271,6 +271,41 @@ defmodule Opus.ExecutionSemaphoreTest do
       GenServer.stop(pid)
     end
 
+    test "more than the athanor's cap of same-minute schedules all run, none lost" do
+      # 24 schedules of one athanor fire at once under a cap of 16: as
+      # background work they wait for a slot rather than being refused (a
+      # root would be told :tenant_limit), and every one of them completes.
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {64, 16}, name: :test_minute_sem)
+      parent = self()
+
+      for i <- 1..24 do
+        spawn(fn ->
+          result = GenServer.call(:test_minute_sem, {:acquire, :background, "ath_sched"}, 30_000)
+
+          if result == :ok do
+            # hold the slot a moment so the cap is really hit
+            Process.sleep(20)
+            GenServer.cast(:test_minute_sem, {:release, self()})
+          end
+
+          send(parent, {:fired, i, result})
+        end)
+      end
+
+      results =
+        for _ <- 1..24 do
+          receive do
+            {:fired, _i, result} -> result
+          after
+            10_000 -> flunk("a schedule never got its slot")
+          end
+        end
+
+      assert Enum.all?(results, &(&1 == :ok))
+      wait_until(fn -> GenServer.call(:test_minute_sem, :status).active == 0 end)
+      GenServer.stop(pid)
+    end
+
     test "128 roots and 128 children all complete under {128, 16}" do
       {:ok, pid} = GenServer.start(ExecutionSemaphore, {128, 16}, name: :test_load_sem)
       parent = self()
