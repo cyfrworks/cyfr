@@ -460,6 +460,15 @@ or an operator who wants that step in their own hands, set
 bin/cyfr eval "Cyfr.Release.migrate()"
 ```
 
+### Headless nodes
+
+`CYFR_HEADLESS=true` makes a node Codex-only: `/mcp`, `/api` and public
+tinctures under `/t` are served, and every browser page — sign-in, the chat,
+Prism — answers 404. The CLI still signs in through the built-in device flow
+on `/mcp`, so this is for nodes that never show a face (a build worker, a
+relay); it does not combine with an external OIDC provider, which moves
+sign-in to the browser page a headless node refuses.
+
 ### S3-compatible object storage
 
 File storage defaults to the local `./data` volume. For S3 (or MinIO and

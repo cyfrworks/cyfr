@@ -9,6 +9,8 @@ defmodule EmissaryWeb.Router do
   # `PrismWeb.LiveAuth`, because the LiveView socket is handled by the
   # endpoint before the router and never passes through here.
   pipeline :browser do
+    # First: a headless node serves none of this (CYFR_HEADLESS).
+    plug EmissaryWeb.Plugs.Headless
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
@@ -127,7 +129,7 @@ defmodule EmissaryWeb.Router do
   # Personal-namespace claim gate (web flow).
   # Hit automatically by AuthController when post-login probe returns no
   # personal namespace; blocks dashboard access until the user claims a slug.
-  scope "/claim-namespace", EmissaryWeb do
+  scope "/claim-namespace", PrismWeb do
     pipe_through :browser
 
     get "/", ClaimNamespaceController, :show
@@ -144,7 +146,7 @@ defmodule EmissaryWeb.Router do
   # returns 412 POLICY_ACCEPTANCE_REQUIRED on a claim attempt, or
   # proactively from the post-login flow. Renders the bundled policies
   # for read + clickwrap, then POSTs to cyfr.run /v1/legal/accept.
-  scope "/legal/accept", EmissaryWeb do
+  scope "/legal/accept", PrismWeb do
     pipe_through :browser
 
     get "/", LegalAcceptController, :show

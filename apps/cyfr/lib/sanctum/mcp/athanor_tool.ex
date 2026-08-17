@@ -18,7 +18,7 @@ defmodule Sanctum.MCP.AthanorTool do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  @person_only ~w(create rename archive unarchive settings)
+  @person_only ~w(create rename archive unarchive settings provision)
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_only do
@@ -118,6 +118,25 @@ defmodule Sanctum.MCP.AthanorTool do
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] athanor.settings failed: #{inspect(reason)}")
           {:error, "Failed to update settings"}
+      end
+    end
+  end
+
+  # A seeding that failed (the registry was unreachable, a dependency not
+  # public) is retried by any member — idempotent, so a provisioned athanor
+  # answers at once. The outcome is on the row either way.
+  def handle(%Context{} = ctx, %{"action" => "provision"} = args) do
+    with {:ok, athanor} <- resolve(ctx, args) do
+      case Sanctum.Provisioning.provision(athanor, %{ctx | athanor_id: athanor.id}) do
+        {:ok, provisioned} ->
+          {:ok, render(provisioned)}
+
+        {:error, {:provisioning_failed, step, _detail}} ->
+          {:error, "Provisioning failed at #{step} — the error is recorded on the athanor"}
+
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] athanor.provision failed: #{inspect(reason)}")
+          {:error, "Provisioning failed"}
       end
     end
   end

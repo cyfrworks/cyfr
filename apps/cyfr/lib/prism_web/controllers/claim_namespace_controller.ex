@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.ClaimNamespaceController do
+defmodule PrismWeb.ClaimNamespaceController do
   @moduledoc """
   Handles the personal-namespace claim gate for web-browser sessions.
 
@@ -16,7 +16,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
   sliver in spirit but calls Compendium for the post-claim token storage.
   """
 
-  use EmissaryWeb, :controller
+  use PrismWeb, :controller
 
   require Logger
 
@@ -25,10 +25,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
 
   def show(conn, _params) do
     suggested = get_session(conn, :claim_suggested_username) || ""
-
-    conn
-    |> put_resp_content_type("text/html")
-    |> send_resp(200, render_page(suggested, nil))
+    page(conn, 200, suggested, nil)
   end
 
   def submit(conn, %{"username" => raw_username} = params) when is_binary(raw_username) do
@@ -55,7 +52,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
               "response omitted `token`; refusing to mark claim-gate passed"
           )
 
-          send_store_error_page(conn, username, provider)
+          send_store_error_page(conn, username)
 
         true ->
           cred = %{
@@ -86,20 +83,12 @@ defmodule EmissaryWeb.ClaimNamespaceController do
                   "cyfr.run but local credential is missing; user must re-login."
               )
 
-              send_store_error_page(conn, username, provider)
+              send_store_error_page(conn, username)
           end
       end
     else
       {:expired, conn} ->
-        conn
-        |> put_status(:bad_request)
-        |> put_resp_content_type("text/html")
-        |> send_resp(
-          400,
-          render_page(username,
-            error: "Login session expired. Please re-authenticate and try again."
-          )
-        )
+        page(conn, 400, username, "Login session expired. Please re-authenticate and try again.")
 
       {:not_logged_in, conn} ->
         conn
@@ -136,18 +125,11 @@ defmodule EmissaryWeb.ClaimNamespaceController do
             other -> inspect(other)
           end
 
-        conn
-        |> put_resp_content_type("text/html")
-        |> send_resp(200, render_page(username, error: msg))
+        page(conn, 200, username, msg)
     end
   end
 
-  def submit(conn, _params) do
-    conn
-    |> put_status(:bad_request)
-    |> put_resp_content_type("text/html")
-    |> send_resp(400, render_page("", error: "username is required"))
-  end
+  def submit(conn, _params), do: page(conn, 400, "", "username is required")
 
   # ============================================================================
   # Internal
@@ -157,17 +139,26 @@ defmodule EmissaryWeb.ClaimNamespaceController do
   # credential store write failed. Session keys are preserved so the user can
   # retry without losing OAuth-redirect context. UX hint directs them to
   # re-login rather than refresh-loop on the same dead cookie.
-  defp send_store_error_page(conn, username, _provider) do
-    conn
-    |> put_status(:internal_server_error)
-    |> put_resp_content_type("text/html")
-    |> send_resp(
+  defp send_store_error_page(conn, username) do
+    page(
+      conn,
       500,
-      render_page(username,
-        error:
-          "Namespace claimed on cyfr.run but we couldn't save the credential locally. " <>
-            "Please sign out and sign back in to retry."
-      )
+      username,
+      "Namespace claimed on cyfr.run but we couldn't save the credential locally. " <>
+        "Please sign out and sign back in to retry."
+    )
+  end
+
+  # The one page this controller renders — the form, in the Prism root
+  # layout the :browser pipeline set, with or without an error line.
+  defp page(conn, status, suggested, error) do
+    conn
+    |> put_status(status)
+    |> render(:show,
+      suggested: suggested,
+      error: error,
+      csrf_token: Plug.CSRFProtection.get_csrf_token(),
+      pattern: Regex.source(Sanctum.ComponentRef.personal_slug_regex())
     )
   end
 
@@ -216,58 +207,5 @@ defmodule EmissaryWeb.ClaimNamespaceController do
       {:ok, %{provider: p}} when p in ["github", "google"] -> {:ok, p}
       _ -> {:ok, "github"}
     end
-  end
-
-  # Minimal server-rendered HTML. Kept inline to avoid introducing a Phoenix
-  # HTML layout just for this transient page. If the gate grows richer UI,
-  # swap to a LiveView.
-  defp render_page(suggested, opts) do
-    error =
-      case opts do
-        nil -> ""
-        list when is_list(list) -> list[:error] || ""
-        _ -> ""
-      end
-
-    csrf = Plug.CSRFProtection.get_csrf_token()
-    safe_suggested = Plug.HTML.html_escape_to_iodata(suggested) |> IO.iodata_to_binary()
-    safe_error = Plug.HTML.html_escape_to_iodata(error) |> IO.iodata_to_binary()
-
-    """
-    <!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8"/>
-        <title>Claim your cyfr.run namespace</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1"/>
-        <style>
-          body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; }
-          h1 { font-size: 1.5rem; }
-          p { color: #444; line-height: 1.5; }
-          label { display:block; margin-top: 1.5rem; font-weight: 600; }
-          input[type="text"] { width: 100%; padding: 0.5rem 0.75rem; font-size: 1rem; box-sizing: border-box; }
-          button { margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
-          .error { background: #fee; color: #a00; padding: 0.75rem 1rem; border-radius: 4px; margin-top: 1rem; }
-          .hint { font-size: 0.875rem; color: #666; margin-top: 0.5rem; }
-        </style>
-      </head>
-      <body>
-        <h1>Claim your cyfr.run namespace</h1>
-        <p>
-          To publish or pull private components, you need a personal namespace on cyfr.run.
-          Personal namespaces follow GitHub-style rules: lowercase letters, digits, and single hyphens (1–39 chars).
-          This is a one-time choice per identity.
-        </p>
-        #{if safe_error != "", do: "<div class=\"error\">" <> safe_error <> "</div>", else: ""}
-        <form method="POST" action="/claim-namespace/submit">
-          <input type="hidden" name="_csrf_token" value="#{csrf}"/>
-          <label for="username">Namespace slug</label>
-          <input id="username" type="text" name="username" value="#{safe_suggested}" pattern="#{Regex.source(Sanctum.ComponentRef.personal_slug_regex())}" minlength="1" maxlength="39" required autofocus/>
-          <p class="hint">Must be bare (no dot, no '@'). Examples: <code>alice</code>, <code>bob-123</code>.</p>
-          <button type="submit">Claim namespace</button>
-        </form>
-      </body>
-    </html>
-    """
   end
 end

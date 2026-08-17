@@ -83,6 +83,38 @@ defmodule PrismWeb.ConversationLive do
 
   defp answer_mode(_socket), do: "mentioned"
 
+  # The athanor row as it is now — after a settings change or a provisioning retry.
+  defp reload_athanor(socket) do
+    case Sanctum.Tenancy.Athanors.get(socket.assigns.context.athanor_id) do
+      {:ok, athanor} ->
+        socket
+        |> assign(:athanor, athanor)
+        |> assign(:answer_mode, Sanctum.Tenancy.Athanors.answer_mode(athanor))
+
+      _ ->
+        socket
+    end
+  end
+
+  defp provisioning_error(athanor) do
+    case Sanctum.Tenancy.Athanors.settings(athanor)["provisioning_error"] do
+      %{} = error -> error
+      _ -> nil
+    end
+  end
+
+  # `detail` is `inspect/1` of whatever failed — a list of refs, a reason —
+  # shown short; the log has the whole of it.
+  defp provisioning_detail(athanor) do
+    case provisioning_error(athanor) do
+      %{"detail" => detail} when is_binary(detail) ->
+        if String.length(detail) > 120, do: String.slice(detail, 0, 120) <> "…", else: detail
+
+      _ ->
+        ""
+    end
+  end
+
   @impl true
   def handle_params(params, _uri, socket) do
     if connected?(socket) do
@@ -179,6 +211,17 @@ defmodule PrismWeb.ConversationLive do
     if message == "" and not has_uploads,
       do: {:noreply, socket},
       else: send_message(socket, message, consume_attachments(socket))
+  end
+
+  # A seeding that failed is retried by any member; the row says how it went.
+  def handle_event("provision", _params, socket) do
+    case call_tool(socket, "athanor/provision", %{}) do
+      {:ok, _} ->
+        {:noreply, socket |> reload_athanor() |> put_flash(:info, "Set up — AQUA is ready.")}
+
+      {:error, reason} ->
+        {:noreply, socket |> reload_athanor() |> put_flash(:error, "Still not set up: #{reason}")}
+    end
   end
 
   # A group setting: does AQUA answer everything, or only when @-mentioned?
@@ -366,16 +409,7 @@ defmodule PrismWeb.ConversationLive do
   end
 
   def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
-    case Sanctum.Tenancy.Athanors.get(socket.assigns.context.athanor_id) do
-      {:ok, athanor} ->
-        {:noreply,
-         socket
-         |> assign(:athanor, athanor)
-         |> assign(:answer_mode, Sanctum.Tenancy.Athanors.answer_mode(athanor))}
-
-      _ ->
-        {:noreply, socket}
-    end
+    {:noreply, reload_athanor(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -779,6 +813,25 @@ defmodule PrismWeb.ConversationLive do
             </.link>
           </div>
         </header>
+
+        <div
+          :if={is_nil(@athanor.provisioned_at)}
+          class="flex items-center justify-between gap-3 border-b border-amber-900/60 bg-amber-950/40 px-4 py-2 text-xs text-amber-200"
+        >
+          <span class="min-w-0 truncate">
+            This athanor is still being set up
+            <span :if={provisioning_error(@athanor)} class="text-amber-300/80">
+              — last attempt failed at {provisioning_error(@athanor)["step"]}: {provisioning_detail(@athanor)}
+            </span>
+          </span>
+          <button
+            type="button"
+            phx-click="provision"
+            class="shrink-0 rounded px-2 py-1 text-[11px] uppercase tracking-wider bg-amber-800/60 text-amber-100 hover:bg-amber-700/80"
+          >
+            Retry
+          </button>
+        </div>
 
         <div
           id="conversation-thread"

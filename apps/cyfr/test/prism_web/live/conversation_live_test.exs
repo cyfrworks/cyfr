@@ -284,6 +284,24 @@ defmodule PrismWeb.ConversationLiveTest do
     assert get(bob_conn, athanor_path("/attachments/#{msg.id}/nope.txt", group)).status == 404
   end
 
+  test "an athanor still being set up says so, and any member can retry from the chat", %{conn: conn} do
+    alice = test_user()
+    # a bare group row: created, never provisioned (no bundle in this suite)
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Bare #{alice.namespace}")
+    conn = log_in_user(conn, alice, athanor_id: group.id)
+
+    {view, html} = mount_athanor(conn, "", group)
+    assert html =~ "still being set up"
+
+    view |> element("button[phx-click=provision]") |> render_click()
+
+    rendered = render(view)
+    assert rendered =~ "Still not set up"
+    assert rendered =~ "last attempt failed at"
+    {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
+    assert Sanctum.Tenancy.Athanors.settings(row)["provisioning_error"]["step"]
+  end
+
   test "the Agents page mounts with the athanor's orchestrators", %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "/agents")

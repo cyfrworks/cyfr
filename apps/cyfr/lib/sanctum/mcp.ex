@@ -549,7 +549,8 @@ defmodule Sanctum.MCP do
           "rename" => %{kind: :write, planes: [:external]},
           "archive" => %{kind: :destructive, planes: [:external]},
           "unarchive" => %{kind: :write, planes: [:external]},
-          "settings" => %{kind: :write, planes: [:external]}
+          "settings" => %{kind: :write, planes: [:external]},
+          "provision" => %{kind: :write, planes: [:external]}
         }
       },
       input_schema: %{
@@ -557,8 +558,18 @@ defmodule Sanctum.MCP do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "enum" => ["list", "get", "create", "rename", "archive", "unarchive", "settings"],
-            "description" => "Action to perform"
+            "enum" => [
+              "list",
+              "get",
+              "create",
+              "rename",
+              "archive",
+              "unarchive",
+              "settings",
+              "provision"
+            ],
+            "description" =>
+              "Action to perform (provision: retry a seeding that failed — idempotent)"
           },
           "athanor" => @athanor_arg,
           "name" => %{"type" => "string", "description" => "Group name (create, rename)"},

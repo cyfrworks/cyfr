@@ -47,6 +47,12 @@ if config_env() != :test do
   # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
   config :cyfr, :auto_migrate, env!("CYFR_AUTO_MIGRATE", :boolean, true)
 
+  # A headless node (default: false) serves the API, MCP and public tinctures
+  # and no browser surface: every route on the browser pipeline answers 404.
+  # Codex signs in through the session tool on /mcp, so it does not notice.
+  headless? = env!("CYFR_HEADLESS", :boolean, false)
+  config :cyfr, :headless, headless?
+
   # Maximum concurrent WASM executions (default: 128)
   # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions.
   # A quarter of the slots is reserved for chain children (a formula's hops);
@@ -388,6 +394,15 @@ if config_env() != :test do
     end
 
   config :cyfr, :auth_provider, auth_provider
+
+  # A headless node has no browser page, and an external OIDC provider signs
+  # people in through one (the CLI's device flow is the built-in provider's):
+  # together they leave no way in. Refuse the pair rather than boot a box
+  # nobody can log in to.
+  if headless? and auth_provider == Sanctum.Auth.OIDC do
+    raise "CYFR_HEADLESS=true cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
+            "an OIDC provider signs in through the browser page a headless node refuses"
+  end
 
   # Build Ueberauth providers list dynamically
   providers = []

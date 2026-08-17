@@ -102,6 +102,21 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, assign(socket, :open_popover, nil)}
   end
 
+  # The one create the chat list offers: a group, born with its creator as
+  # the only member. The new athanor opens; the topbar remounts with it.
+  def handle_event("create_group", %{"name" => name}, socket) do
+    case call_tool(socket, "athanor/create", %{"name" => String.trim(name)}) do
+      {:ok, %{route: route}} when is_binary(route) ->
+        {:noreply, push_navigate(socket, to: PrismWeb.Focus.path(route, ""))}
+
+      {:ok, _} ->
+        {:noreply, socket |> assign(:open_popover, nil) |> load_athanors(socket.assigns.context)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not create the group: #{inspect(reason)}")}
+    end
+  end
+
   # ============================================================================
   # PubSub fan-in
   # ============================================================================
@@ -405,7 +420,7 @@ defmodule PrismWeb.TopbarLive do
           <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-7 w-7 rounded-md" />
           <span class="text-lg font-bold text-white tracking-tight">CYFR</span>
         </.link>
-        <div :if={@authenticated and length(@athanors) > 1} class="relative">
+        <div :if={@authenticated} class="relative">
           <button
             type="button"
             phx-click="toggle_popover"
@@ -430,7 +445,7 @@ defmodule PrismWeb.TopbarLive do
             phx-click-away="close_popover"
             class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-gray-700 bg-gray-900 shadow-xl p-2 z-40"
           >
-            <ul class="space-y-0.5 text-sm">
+            <ul :if={length(@athanors) > 1} class="space-y-0.5 text-sm">
               <li :for={a <- @athanors}>
                 <.link
                   navigate={PrismWeb.Focus.path(a, "")}
@@ -457,6 +472,27 @@ defmodule PrismWeb.TopbarLive do
                 </.link>
               </li>
             </ul>
+            <form
+              phx-submit="create_group"
+              class={["flex items-center gap-1 px-1", if(length(@athanors) > 1, do: "mt-2 pt-2 border-t border-gray-800", else: "")]}
+            >
+              <input
+                type="text"
+                name="name"
+                required
+                minlength="1"
+                maxlength="80"
+                placeholder="New group…"
+                autocomplete="off"
+                class="flex-1 min-w-0 rounded-md border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                type="submit"
+                class="rounded-md bg-gray-800 px-2 py-1 text-[11px] text-gray-200 hover:bg-gray-700"
+              >
+                Create
+              </button>
+            </form>
           </div>
         </div>
       </div>
