@@ -162,6 +162,39 @@ defmodule Prism.AgentConfig do
     end
   end
 
+  @doc """
+  For each orchestrator's catalyst: the installed release it resolves to and
+  whether its consent is complete — `%{catalyst_ref => {:ready | :needs_key
+  | :missing, resolved_ref}}`.
+
+  A model with no key is the one thing that keeps a fresh athanor's AQUA
+  silent, so both the Agents page and the chat's own empty state ask here.
+  """
+  @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
+  def model_status(nil, _agents), do: %{}
+
+  def model_status(%Context{} = ctx, agents) when is_list(agents) do
+    agents
+    |> Enum.filter(&(&1["type"] == "orchestrator"))
+    |> Enum.map(& &1["catalyst_ref"])
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+    |> Map.new(fn ref -> {ref, catalyst_status(ctx, ref)} end)
+  end
+
+  defp catalyst_status(ctx, ref) do
+    with {:ok, resolved} <- resolve_catalyst(ctx, ref),
+         {:ok, plan} <-
+           Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+             "action" => "setup_plan",
+             "reference" => resolved
+           }) do
+      if plan[:ready] || plan["ready"], do: {:ready, resolved}, else: {:needs_key, resolved}
+    else
+      _ -> {:missing, ref}
+    end
+  end
+
   @doc false
   def resolve_catalyst(%Context{} = ctx, versionless_ref) when is_binary(versionless_ref) do
     result =

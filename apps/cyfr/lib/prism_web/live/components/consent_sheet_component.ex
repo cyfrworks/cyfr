@@ -132,7 +132,11 @@ defmodule PrismWeb.ConsentSheetComponent do
     <div class="consent-sheet" id={"consent-sheet-#{@id}"}>
       <header class="consent-sheet__header">
         <h2>{title(@plan)}</h2>
-        <p :if={@plan} class="consent-sheet__subtitle">{@ref}</p>
+        <!-- Which furnace the grant lands in: a Connection is the athanor's,
+             and binding one in the wrong chat is the easy mistake. -->
+        <p :if={@plan} class="consent-sheet__subtitle">
+          {@ref}{if assigns[:athanor_name], do: " · in #{@athanor_name}"}
+        </p>
       </header>
 
       <p :if={@error} class="consent-sheet__error" role="alert">{@error}</p>

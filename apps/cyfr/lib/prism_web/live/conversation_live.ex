@@ -45,6 +45,7 @@ defmodule PrismWeb.ConversationLive do
       |> assign(:grants, MapSet.new())
       |> assign(:orchestrators, [])
       |> assign(:orchestrator, nil)
+      |> assign(:model_ready, :unknown)
       |> assign(:models_by_provider, %{})
       |> assign(:models_loaded, false)
       |> assign(:model_override, nil)
@@ -67,8 +68,11 @@ defmodule PrismWeb.ConversationLive do
       if connected?(socket) and ctx do
         Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
 
+        orchestrators = Prism.AquaTurn.orchestrators(ctx)
+
         socket
-        |> assign(:orchestrators, Prism.AquaTurn.orchestrators(ctx))
+        |> assign(:orchestrators, orchestrators)
+        |> assign(:model_ready, model_ready(ctx, orchestrators))
         |> assign(:members, member_labels(ctx))
         |> load_models()
       else
@@ -604,6 +608,22 @@ defmodule PrismWeb.ConversationLive do
     Enum.filter(messages, &(&1.kind == "approval" and &1.status == "pending"))
   end
 
+  # Whether this athanor's AQUA can answer at all: an orchestrator, and a
+  # model with a key behind it. A fresh furnace has neither, and the chat is
+  # where someone finds that out — not the drawer.
+  defp model_ready(ctx, orchestrators) do
+    case Prism.AgentConfig.model_status(ctx, orchestrators) do
+      empty when map_size(empty) == 0 -> :no_model
+      statuses -> if Enum.any?(statuses, &match?({_, {:ready, _}}, &1)), do: :ready, else: :no_key
+    end
+  end
+
+  # What to call the athanor in its own chat: a person's is theirs, a group
+  # goes by name.
+  defp athanor_label(%{kind: "person"}), do: "your AQUA"
+  defp athanor_label(%{name: name}), do: name
+  defp athanor_label(_), do: "this athanor"
+
   # What a message would address, and what to call it: the orchestrator in
   # focus, or the shipped default when the athanor has none yet.
   defp orchestrator_handle(%{"name" => name} = o) when is_binary(name) and name != "",
@@ -775,6 +795,10 @@ defmodule PrismWeb.ConversationLive do
               Chats
             </button>
             <span class="text-sm font-medium text-gray-200 shrink-0">A.Q.U.A.</span>
+            <!-- Which furnace this chat is: a key bound here is bound here. -->
+            <span class="text-xs text-gray-500 shrink-0 truncate max-w-[10rem]">
+              in {athanor_label(@athanor)}
+            </span>
             <select
               :if={@orchestrators != []}
               phx-change="select_orchestrator"
@@ -889,9 +913,19 @@ defmodule PrismWeb.ConversationLive do
         >
           <div
             :if={@messages == [] and @streaming_text == ""}
-            class="flex items-center justify-center h-full text-sm text-gray-500"
+            class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
           >
-            Ask anything.
+            <%= if @model_ready in [:no_model, :no_key] do %>
+              <span>{athanor_label(@athanor)} has no model yet.</span>
+              <.link
+                navigate={PrismWeb.Focus.path(@athanor_route, "/agents")}
+                class="text-blue-400 hover:text-blue-300"
+              >
+                Connect a model
+              </.link>
+            <% else %>
+              <span>Ask {elem(orchestrator_handle(@orchestrator), 1)} anything.</span>
+            <% end %>
           </div>
 
           <div
@@ -1004,6 +1038,7 @@ defmodule PrismWeb.ConversationLive do
             ref={@consent_sheet_ref}
             context={@context}
             athanor_route={@athanor_route}
+            athanor_name={@athanor && @athanor.name}
           />
         </div>
 

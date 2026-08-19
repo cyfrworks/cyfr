@@ -380,36 +380,8 @@ defmodule PrismWeb.AgentsLive do
 
     socket
     |> assign(:editor_agents, agents)
-    |> assign(:model_status, model_status(ctx, agents))
+    |> assign(:model_status, Prism.AgentConfig.model_status(ctx, agents))
     |> ensure_tool_actions_loaded()
-  end
-
-  # For each orchestrator's catalyst: the installed release it resolves to
-  # and whether its consent is complete — `%{catalyst_ref => {:ready |
-  # :needs_key | :missing, resolved_ref}}`. A model with no key is the one
-  # thing that keeps a fresh athanor's AQUA silent.
-  defp model_status(nil, _agents), do: %{}
-
-  defp model_status(ctx, agents) do
-    agents
-    |> Enum.filter(&(&1["type"] == "orchestrator"))
-    |> Enum.map(& &1["catalyst_ref"])
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-    |> Map.new(fn ref -> {ref, catalyst_status(ctx, ref)} end)
-  end
-
-  defp catalyst_status(ctx, ref) do
-    with {:ok, resolved} <- Prism.AgentConfig.resolve_catalyst(ctx, ref),
-         {:ok, plan} <-
-           Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-             "action" => "setup_plan",
-             "reference" => resolved
-           }) do
-      if plan[:ready] || plan["ready"], do: {:ready, resolved}, else: {:needs_key, resolved}
-    else
-      _ -> {:missing, ref}
-    end
   end
 
   # Enumerate `(tool, [actions...])` from the live MCP registry — populated
@@ -591,6 +563,7 @@ defmodule PrismWeb.AgentsLive do
             ref={@consent_sheet_ref}
             context={@context}
             athanor_route={@athanor_route}
+            athanor_name={@athanor && @athanor.name}
           />
         </div>
       </div>

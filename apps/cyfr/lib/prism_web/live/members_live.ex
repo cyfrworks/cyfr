@@ -47,7 +47,11 @@ defmodule PrismWeb.MembersLive do
          socket
          |> assign(:new_email, "")
          |> load()
-         |> put_flash(:info, "Added. If they have never signed in here, the seat waits for them.")}
+         |> put_flash(
+           :info,
+           "Added. If they have never signed in here the seat waits for them; if the " <>
+             "operator has not allowed their address yet, it waits for that too."
+         )}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not add: #{inspect(reason)}")}

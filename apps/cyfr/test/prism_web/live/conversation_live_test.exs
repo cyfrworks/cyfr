@@ -44,7 +44,11 @@ defmodule PrismWeb.ConversationLiveTest do
 
     {alice_view, html} = mount_athanor(alice_conn, "")
     assert html =~ "A.Q.U.A."
-    assert html =~ "Ask anything"
+    # The chat says which furnace it is, and whether that furnace can think:
+    # a test athanor has an orchestrator but no key behind its model.
+    assert html =~ "in Home"
+    assert html =~ "has no model yet"
+    assert html =~ "Connect a model"
 
     # Home is a group: AQUA answers when @-mentioned (the composer says so).
     assert html =~ "@aqua to ask AQUA"
