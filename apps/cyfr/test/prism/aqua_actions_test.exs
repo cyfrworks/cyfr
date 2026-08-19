@@ -10,12 +10,14 @@ defmodule Prism.AquaActionsTest do
   # "ask" (request approval) or "auto" (call directly). An absent key means the
   # agent can't perform the action at all. `files.delete` is intentionally
   # absent here so tests can exercise the not-allowlisted path.
+  # Actions a running chain can reach: an approved proposal is executed
+  # in-chain, so those are the only ones worth asking about.
   @policy %{
-    "key.revoke" => "ask",
-    "key.create" => "ask",
-    "webhook.create" => "ask",
-    "webhook.revoke" => "ask",
-    "vault.create" => "ask",
+    "component.pull" => "ask",
+    "component.register" => "ask",
+    "execution.run" => "ask",
+    "execution.cancel" => "ask",
+    "registry.report" => "ask",
     "component.*" => "ask",
     "files.read" => "auto",
     "files.write" => "auto"
@@ -216,12 +218,12 @@ defmodule Prism.AquaActionsTest do
 
     test "proposal for an 'ask' action is accepted; agent's hinted_risk preserved" do
       input = ~S(```aqua-actions
-[{"kind":"ui.request_approval","title":"Revoke key","summary":"oldest","risk":"low","action_description":"key.revoke","proposal":{"tool":"key","action":"revoke","args":{"name":"old"}}}]
+[{"kind":"ui.request_approval","title":"Cancel run","summary":"the stuck one","risk":"low","action_description":"execution.cancel","proposal":{"tool":"execution","action":"cancel","args":{"id":"exec_1"}}}]
 ```)
       result = AquaActions.parse(input, @policy)
 
       assert [intent] = result.intents
-      assert intent.proposal == %{tool: "key", action: "revoke", args: %{"name" => "old"}}
+      assert intent.proposal == %{tool: "execution", action: "cancel", args: %{"id" => "exec_1"}}
       # action_kind comes from the tool registry's annotations when it's
       # populated. In test isolation it may be nil; production paths render
       # via the conversation runner which always has the registry loaded.
@@ -231,7 +233,7 @@ defmodule Prism.AquaActionsTest do
 
     test "proposal matched by a `tool.*` glob in the allowlist is accepted" do
       input = ~S(```aqua-actions
-[{"kind":"ui.request_approval","title":"Push","summary":"ship it","risk":"medium","action_description":"component.push","proposal":{"tool":"component","action":"push","args":{"ref":"catalyst:local.x:1.0.0"}}}]
+[{"kind":"ui.request_approval","title":"Pull","summary":"fetch it","risk":"medium","action_description":"component.pull","proposal":{"tool":"component","action":"pull","args":{"ref":"catalyst:local.x:1.0.0"}}}]
 ```)
       result = AquaActions.parse(input, @policy)
 
@@ -239,9 +241,22 @@ defmodule Prism.AquaActionsTest do
 
       assert intent.proposal == %{
                tool: "component",
-               action: "push",
+               action: "pull",
                args: %{"ref" => "catalyst:local.x:1.0.0"}
              }
+    end
+
+    test "a proposal the chain could not run is refused where the agent can act on it" do
+      # `component.push` is external-only: the harness executes an approved
+      # proposal in-chain, so a card for it would fail on the click.
+      input = ~S(```aqua-actions
+[{"kind":"ui.request_approval","title":"Push","summary":"ship it","risk":"medium","action_description":"component.push","proposal":{"tool":"component","action":"push","args":{}}}]
+```)
+      result = AquaActions.parse(input, %{"component.*" => "ask"})
+
+      assert result.intents == []
+      assert [%{reason: reason}] = result.drops
+      assert reason =~ "cannot be run from a chat"
     end
 
     test "kind_for/2 looks up the right kind for virtual tools" do
@@ -335,13 +350,16 @@ defmodule Prism.AquaActionsTest do
       prelude = AquaActions.system_prelude(@policy)
 
       assert prelude =~ "## Actions that need approval"
-      assert prelude =~ "key.create"
-      assert prelude =~ "key.revoke"
-      assert prelude =~ "webhook.create"
-      assert prelude =~ "webhook.revoke"
-      assert prelude =~ "vault.create"
+      assert prelude =~ "component.pull"
+      assert prelude =~ "component.register"
+      assert prelude =~ "execution.run"
+      assert prelude =~ "execution.cancel"
+      assert prelude =~ "registry.report"
       # `tool.*` globs are listed verbatim
       assert prelude =~ "component.*"
+      # an action the chain cannot reach is not offered: the card would be
+      # refused at the call, so the agent is not told to propose it
+      refute AquaActions.system_prelude(%{"key.create" => "ask"}) =~ "key.create"
       # 'auto' actions are directly callable — they don't appear here
       refute prelude =~ "files.read"
       refute prelude =~ "files.write"
@@ -358,10 +376,10 @@ defmodule Prism.AquaActionsTest do
 
     test "approval list is sorted (deterministic for prompt cache)" do
       prelude = AquaActions.system_prelude(@policy)
-      # key.create should appear before key.revoke alphabetically
-      pos_create = :binary.match(prelude, "key.create") |> elem(0)
-      pos_revoke = :binary.match(prelude, "key.revoke") |> elem(0)
-      assert pos_create < pos_revoke
+      # component.pull should appear before component.register alphabetically
+      pos_pull = :binary.match(prelude, "component.pull") |> elem(0)
+      pos_register = :binary.match(prelude, "component.register") |> elem(0)
+      assert pos_pull < pos_register
     end
   end
 end

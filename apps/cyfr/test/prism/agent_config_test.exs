@@ -42,19 +42,19 @@ defmodule Prism.AgentConfigTest do
   end
 
   test "set_tool_auto / drop_tool edit the athanor's allowlist in place", %{ctx: ctx} do
-    assert policy(ctx, "aqua")["webhook.create"] == "ask"
+    assert policy(ctx, "aqua")["component.pull"] == "ask"
 
-    :ok = AgentConfig.set_tool_auto(ctx, "aqua", "webhook.create")
-    assert policy(ctx, "aqua")["webhook.create"] == "auto"
+    :ok = AgentConfig.set_tool_auto(ctx, "aqua", "component.pull")
+    assert policy(ctx, "aqua")["component.pull"] == "auto"
 
-    :ok = AgentConfig.drop_tool(ctx, "aqua", "webhook.create")
-    refute Map.has_key?(policy(ctx, "aqua"), "webhook.create")
+    :ok = AgentConfig.drop_tool(ctx, "aqua", "component.pull")
+    refute Map.has_key?(policy(ctx, "aqua"), "component.pull")
 
     # The template on disk is untouched — the edit was the athanor's copy.
     template =
       Jason.decode!(File.read!(Path.join(Compendium.AquaTemplate.template_path(), "agent.json")))
 
-    assert template["agents"]["aqua"]["tool_policy"]["webhook.create"] == "ask"
+    assert template["agents"]["aqua"]["tool_policy"]["component.pull"] == "ask"
   end
 
   test "put_formula_tool_surface always attaches the policy, never a tool list" do

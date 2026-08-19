@@ -313,13 +313,13 @@ defmodule Prism.ConversationRunnerTest do
   end
 
   test "an approval is a row any member decides — once", %{alice: alice, bob: bob, conv: conv} do
-    {_eid, runner, _} = start_turn(alice, conv, "make a webhook")
+    {_eid, runner, _} = start_turn(alice, conv, "pull a component")
 
     block = """
     Here is the plan.
 
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Create webhook","summary":"Creates hook X","action_description":"webhook.create","risk":"low","proposal":{"tool":"webhook","action":"create","args":{"name":"x"}}}]
+    [{"kind":"ui.request_approval","title":"Pull component","summary":"Pulls catalyst X","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{"reference":"catalyst:local.x"}}}]
     ```
     """
 
@@ -334,7 +334,7 @@ defmodule Prism.ConversationRunnerTest do
                    5_000
 
     assert_receive {:conversation, _, {:turn_finished}}, 5_000
-    assert Conversations.payload(apr)["intent"]["proposal"]["tool"] == "webhook"
+    assert Conversations.payload(apr)["intent"]["proposal"]["tool"] == "component"
     assert Conversations.payload(apr)["orchestrator"] == "aqua"
 
     # Bob decides it; Alice's later click finds it already taken.
@@ -349,7 +349,11 @@ defmodule Prism.ConversationRunnerTest do
     assert {:error, :already_resolved} = ConversationRunner.decline(alice, conv.id, apr.id, "no")
 
     assert_receive {:fake_run_approved,
-                    %{tool: "webhook", action: "create", args: %{"name" => "x"}}, run_ctx},
+                    %{
+                      tool: "component",
+                      action: "pull",
+                      args: %{"reference" => "catalyst:local.x"}
+                    }, run_ctx},
                    5_000
 
     assert run_ctx.user_id == bob.user_id
@@ -360,14 +364,14 @@ defmodule Prism.ConversationRunnerTest do
 
     # "for this chat" is remembered by the runner and shown to everyone.
     assert_receive {:conversation, _, {:grants, grants}}, 5_000
-    assert MapSet.member?(grants, {"webhook", "create"})
+    assert MapSet.member?(grants, {"component", "pull"})
 
     # The outcome is in the history the next turn will carry.
     {:ok, row} = Conversations.get(alice, conv.id)
 
     assert Enum.any?(
              Conversations.history(row),
-             &(&1["content"] =~ "user approved 'Create webhook'")
+             &(&1["content"] =~ "user approved 'Pull component'")
            )
   end
 
@@ -379,7 +383,7 @@ defmodule Prism.ConversationRunnerTest do
 
     block = """
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Rotate key","summary":"s","action_description":"key.rotate","risk":"low","proposal":{"tool":"key","action":"rotate","args":{}}},
+    [{"kind":"ui.request_approval","title":"Register it","summary":"s","action_description":"component.register","risk":"low","proposal":{"tool":"component","action":"register","args":{}}},
      {"kind":"ui.request_approval","title":"Wipe","summary":"s","action_description":"x","risk":"high","proposal":{"tool":"nonexistent","action":"wipe","args":{}}}]
     ```
     """
@@ -388,7 +392,7 @@ defmodule Prism.ConversationRunnerTest do
     complete(runner)
 
     assert_receive {:conversation, _,
-                    {:message, %{kind: "approval", content: "Rotate key"} = apr}},
+                    {:message, %{kind: "approval", content: "Register it"} = apr}},
                    5_000
 
     assert_receive {:conversation, _, {:message, %{kind: "error", content: tripwire}}}, 5_000
@@ -475,7 +479,7 @@ defmodule Prism.ConversationRunnerTest do
 
     block = """
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Create webhook","summary":"s","action_description":"webhook.create","risk":"low","proposal":{"tool":"webhook","action":"create","args":{}}}]
+    [{"kind":"ui.request_approval","title":"Pull component","summary":"s","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{}}}]
     ```
     """
 
@@ -533,11 +537,11 @@ defmodule Prism.ConversationRunnerTest do
   test "a note written while a turn runs survives the turn's own history snapshot",
        %{alice: alice, bob: bob, conv: conv} do
     # First turn leaves an approval pending.
-    {_eid, runner, _} = start_turn(alice, conv, "make a webhook")
+    {_eid, runner, _} = start_turn(alice, conv, "pull a component")
 
     block = """
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Create webhook","summary":"s","action_description":"webhook.create","risk":"low","proposal":{"tool":"webhook","action":"create","args":{}}}]
+    [{"kind":"ui.request_approval","title":"Pull component","summary":"s","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{}}}]
     ```
     """
 
@@ -566,11 +570,11 @@ defmodule Prism.ConversationRunnerTest do
 
   test "deciding a card tells the tray", %{alice: alice, conv: conv} do
     Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(conv.athanor_id))
-    {_eid, runner, _} = start_turn(alice, conv, "make a webhook")
+    {_eid, runner, _} = start_turn(alice, conv, "pull a component")
 
     block = """
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Create webhook","summary":"s","action_description":"webhook.create","risk":"low","proposal":{"tool":"webhook","action":"create","args":{}}}]
+    [{"kind":"ui.request_approval","title":"Pull component","summary":"s","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{}}}]
     ```
     """
 

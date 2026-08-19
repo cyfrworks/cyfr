@@ -92,7 +92,7 @@ defmodule PrismWeb.ConversationLiveTest do
     {alice_view, _} = mount_athanor(alice_conn, "")
 
     alice_view
-    |> form("form[phx-submit=submit]", %{"message" => "@aqua make a webhook"})
+    |> form("form[phx-submit=submit]", %{"message" => "@aqua pull a component"})
     |> render_submit()
 
     assert_receive {:fake_start, eid, start_ctx, _}, 10_000
@@ -102,7 +102,7 @@ defmodule PrismWeb.ConversationLiveTest do
 
     block = """
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Create webhook","summary":"Creates hook X","action_description":"webhook.create","risk":"low","proposal":{"tool":"webhook","action":"create","args":{"name":"x"}}}]
+    [{"kind":"ui.request_approval","title":"Pull component","summary":"Pulls catalyst X","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{"reference":"catalyst:local.x"}}}]
     ```
     """
 
@@ -111,8 +111,8 @@ defmodule PrismWeb.ConversationLiveTest do
     :sys.get_state(runner)
     Process.sleep(50)
 
-    assert render(alice_view) =~ "Create webhook"
-    assert render(bob_view) =~ "Create webhook"
+    assert render(alice_view) =~ "Pull component"
+    assert render(bob_view) =~ "Pull component"
     [apr] = Conversations.pending_approvals(start_ctx, conv.id)
 
     # Bob approves from his tab.
@@ -120,7 +120,7 @@ defmodule PrismWeb.ConversationLiveTest do
     |> element("#" <> apr.id <> " button[phx-value-scope=once]")
     |> render_click()
 
-    assert_receive {:fake_run_approved, %{tool: "webhook", action: "create"}, run_ctx}, 5_000
+    assert_receive {:fake_run_approved, %{tool: "component", action: "pull"}, run_ctx}, 5_000
     assert run_ctx.user_id == bob.user_id
     Process.sleep(100)
 

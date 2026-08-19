@@ -241,9 +241,41 @@ defmodule Emissary.MCP.ToolRegistry do
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
 
-  # An action reachable in-chain says so in its plane annotation; an action
-  # without one, or without :in_chain, fails closed. Proxied server:tool
-  # names are the :external bucket, in-chain by wiring.
+  @doc """
+  Whether a running chain can reach `tool.action` at all.
+
+  An action reachable in-chain says so in its plane annotation; one without
+  an annotation, or without `:in_chain`, fails closed. Proxied `server:tool`
+  names are the `:external` bucket, in-chain by wiring.
+
+  This is the same predicate `call_in_chain/5` enforces per call, exposed so
+  the surfaces that *offer* actions — the agent capability matrix, the
+  prompt's approval section, proposal validation — offer only what the chain
+  could actually run, instead of handing someone a button that fails.
+  """
+  @spec in_chain_reachable?(String.t(), String.t() | nil) :: boolean()
+  def in_chain_reachable?(name, action) when is_binary(name) do
+    match?(:ok, check_in_chain_reachable(name, %{"action" => action}))
+  end
+
+  @doc """
+  Whether this registry *knows* `tool.action` and says a chain may not reach
+  it — the answer a surface needs before refusing to offer something.
+
+  Distinct from `not in_chain_reachable?/2`: a tool the registry has never
+  heard of (a cold cache, a virtual tool the formula dispatches itself, an
+  external `server:tool`) is not refused here, it is simply not this
+  registry's to judge.
+  """
+  @spec in_chain_refused?(String.t(), String.t() | nil) :: boolean()
+  def in_chain_refused?(name, action) when is_binary(name) do
+    not String.contains?(name, ":") and
+      match?({:ok, _}, Arca.Cache.get({:mcp_tool, name})) and
+      not in_chain_reachable?(name, action)
+  end
+
+  def in_chain_refused?(_name, _action), do: false
+
   defp check_in_chain_reachable(name, args) do
     if String.contains?(name, ":") do
       :ok

@@ -16,6 +16,11 @@ defmodule PrismWeb.AgentsLive.Catalog do
   pairs the user can toggle. native_search is included as a bare key
   (no actions enum) since the formula treats it specially.
 
+  Only actions a running chain can reach are offered: the agent's allowlist
+  is what it may do *during a turn*, and an action outside that plane could
+  be ticked, proposed, approved, and then refused at the call. Those live on
+  their own pages, where a member does them as themselves.
+
   Returns `[{tool, [{action, kind}]}]` merged across MCP tools, AQUA
   virtual tools, and external server tools. Every entry has a kind atom
   (`:read | :write | :execute | :destructive`) sourced from
@@ -30,13 +35,18 @@ defmodule PrismWeb.AgentsLive.Catalog do
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = get_in(t, ["annotations", "actions"]) || %{}
+        # Providers write atom-keyed annotations with string verb keys; a
+        # string `"actions"` here would find nothing and quietly call every
+        # action a write.
+        actions_meta = get_in(t, ["annotations", :actions]) || %{}
         default_meta = actions_meta["_default"] || actions_meta[:_default]
 
         actions =
           case action_enum do
             [_ | _] = enum ->
-              Enum.map(enum, fn a ->
+              enum
+              |> Enum.filter(&reachable?(name, &1))
+              |> Enum.map(fn a ->
                 meta = actions_meta[a] || actions_meta[existing_atom(a)] || default_meta
                 {a, kind_from_meta(meta, name, a)}
               end)
@@ -57,6 +67,7 @@ defmodule PrismWeb.AgentsLive.Catalog do
 
         {name, actions}
       end)
+      |> Enum.reject(fn {_name, actions} -> actions == [] end)
 
     virtual = Prism.AquaVirtualTools.list_for_panel()
 
@@ -66,6 +77,11 @@ defmodule PrismWeb.AgentsLive.Catalog do
     |> Enum.uniq_by(&elem(&1, 0))
     |> Enum.sort_by(&elem(&1, 0))
   end
+
+  defp reachable?(name, action) when is_binary(name),
+    do: Emissary.MCP.ToolRegistry.in_chain_reachable?(name, action)
+
+  defp reachable?(_name, _action), do: false
 
   @doc """
   Classify a tool-action annotation into its kind atom.

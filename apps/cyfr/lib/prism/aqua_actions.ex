@@ -283,7 +283,16 @@ defmodule Prism.AquaActions do
 
     case policy_value(policy, tool, action) do
       "ask" ->
-        :ok
+        # The harness runs an approved proposal inside the chain, so an
+        # action that plane refuses would become a card that fails on the
+        # click. Say so here instead, where the agent can act on it.
+        if refused?(tool, action) do
+          {:error,
+           "ui.request_approval: '#{key}' cannot be run from a chat — tell the person to " <>
+             "open its page"}
+        else
+          :ok
+        end
 
       "auto" ->
         {:error,
@@ -492,7 +501,7 @@ defmodule Prism.AquaActions do
       tool_policy
       |> Enum.flat_map(fn
         {"native_search", _} -> []
-        {key, "ask"} -> [key]
+        {key, "ask"} -> if proposable?(key), do: [key], else: []
         _ -> []
       end)
       |> Enum.sort()
@@ -511,6 +520,29 @@ defmodule Prism.AquaActions do
           "result back as the next user turn (`[System: user approved … Result: …]` /\n" <>
           "`[System: user declined …]`).\n\n" <>
           Enum.join(lines, "\n") <> "\n"
+    end
+  end
+
+  # An approved proposal is executed inside the chain, so an action that
+  # plane refuses is not worth offering — the card would fail on the click.
+  # Only a refusal the registry actually asserts counts: a virtual tool (the
+  # formula dispatches those itself) and a `tool.*` glob stand, and so does
+  # anything the registry has never heard of.
+  defp proposable?(key), do: not refused?(key)
+
+  defp refused?(key) do
+    case String.split(key, ".", parts: 2) do
+      [_tool, "*"] -> false
+      [tool, action] -> refused?(tool, action)
+      _ -> false
+    end
+  end
+
+  defp refused?(tool, action) do
+    if Prism.AquaVirtualTools.virtual_tool?(tool) do
+      is_nil(Prism.AquaVirtualTools.kind_for(tool, action))
+    else
+      Emissary.MCP.ToolRegistry.in_chain_refused?(tool, action)
     end
   end
 end
