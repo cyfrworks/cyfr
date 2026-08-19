@@ -439,7 +439,10 @@ A person's first sign-in on a server asks cyfr.run once for their personal
 namespace — the same on every server, claimed once — and mints their own
 athanor, seeded and baseline-consented (the bundled `catalyst:local.http`
 is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
-private addresses stay behind `CYFR_PRIVATE_EGRESS_TARGETS`). If cyfr.run
+private addresses it cannot reach at all — its manifest declares no
+`egress.private_ips`, which is the only list a running component's private-IP
+check consults, so a LAN device is reachable from a chain as an MCP server on
+`CYFR_PRIVATE_EGRESS_TARGETS` and not as a URL to fetch). If cyfr.run
 cannot be reached at that moment, nothing is set up and the person is told
 to try again; later sign-ins do not need cyfr.run at all — the namespace is
 recorded on their `users` row. `cyfr admin deny <email>` revokes their

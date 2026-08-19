@@ -279,9 +279,15 @@ if config_env() != :test do
   end
 
   # Private egress: the hostnames, IPs or CIDRs on the private network that
-  # outbound requests may reach (a compose-network mcp-bridge, an internal
-  # registry or IdP, the lights). Empty refuses every private target; the
-  # link-local metadata range is refused regardless.
+  # the *server's own* outbound requests may reach — an MCP server on the
+  # compose network, an internal registry or IdP, a vault OAuth token
+  # endpoint. Empty refuses every private target; the link-local metadata
+  # range is refused regardless.
+  #
+  # It does not reach components. A guest's HTTP calls are checked against
+  # its consent's `egress.private_ips` (`Opus.EdgeGuard.allows_private_ip?/2`)
+  # and nothing else, so a LAN device is reachable from a chain only as an
+  # MCP server on this list, never as a URL the bundled http catalyst fetches.
   config :cyfr,
          :private_egress_targets,
          (env!("CYFR_PRIVATE_EGRESS_TARGETS", :string, nil) || "")
