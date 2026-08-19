@@ -9,8 +9,9 @@ defmodule Compendium.AutoIndexer do
   corresponding `.wasm` file, then registers them in the Compendium registry
   with `source: "filesystem"`.
 
-  This module does NOT auto-scan on boot. Registration is triggered manually
-  via `scan/1` or the `component.register` MCP action.
+  This module does NOT auto-scan on boot. A scan is triggered when an
+  athanor is provisioned (`Compendium.AthanorSeeder` registers the copies it
+  just wrote), by `component.register`, and from the Components page.
 
   ## Security
 

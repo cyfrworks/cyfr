@@ -986,7 +986,7 @@ GET /t/home/local/stock-dashboard/app.js       → static asset
 
 | Route | CSP Notable Differences |
 |-------|------------------------|
-| `/t/:athanor/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors *` |
+| `/t/:athanor/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'` |
 | `/t/:athanor/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
 
 Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.

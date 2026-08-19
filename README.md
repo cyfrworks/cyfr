@@ -375,7 +375,9 @@ Prism is served by the same endpoint as everything else: `https://<your-domain>/
 ssh -L 4000:localhost:4000 <user>@<server>
 ```
 
-Then open `http://localhost:4000` locally.
+Then open `http://localhost:4000` locally — with the port, which is what the
+browser origin check trusts (a bare `http://localhost` is port 80, and a page
+served there is not this server).
 
 ## Production Configuration
 
@@ -441,9 +443,29 @@ private addresses stay behind `CYFR_PRIVATE_EGRESS_TARGETS`). If cyfr.run
 cannot be reached at that moment, nothing is set up and the person is told
 to try again; later sign-ins do not need cyfr.run at all — the namespace is
 recorded on their `users` row. `cyfr admin deny <email>` revokes their
-sessions and keys, archives their own athanor and removes them from every
-group; `cyfr admin allow` lets them back in and reopens their own athanor —
-group seats are not restored, a member adds them again.
+sessions and keys, archives their own athanor, removes them from every group
+and withdraws the invitations that address was still holding; `cyfr admin
+allow` lets them back in and reopens their own athanor — group seats are not
+restored, a member adds them again.
+
+### Opening the door to everyone (`*`), and the caps that bound it
+
+`cyfr admin allow '*'` admits any identity your provider authenticates —
+that is the public-hosting configuration, and it is the one where the limits
+matter. They are all optional and **off unless set**; a private box needs
+none of them.
+
+| Variable | Bounds |
+|---|---|
+| `CYFR_MAX_ATHANORS` | athanors on this server, active ones only — an archived furnace frees its place |
+| `CYFR_MINT_PER_HOUR` | personal athanors minted per hour, i.e. how fast strangers can arrive |
+| `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (they may belong to more) |
+| `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
+| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — its data *and* its components, the seeded bundle included |
+
+Every athanor is minted with its own copy of the component bundle, so
+`CYFR_MAX_ATHANORS` and `CYFR_ATHANOR_STORAGE_BYTES` are what bound the disk.
+A specific `cyfr admin deny` always beats `*`.
 
 ### Postgres (bring your own)
 

@@ -9,8 +9,9 @@ defmodule Arca.Retention do
   Retention policy enforcement for CYFR storage.
 
   Implements configurable retention policies for execution records and other
-  user data. The Sanctum defaults to keeping the last 10 executions
-  per user.
+  tenant data. Retention is per athanor — the furnace owns its records, and
+  every member sees the same ones — and defaults to keeping the last 10
+  executions.
 
   ## MCP Tool Interface
 
@@ -39,20 +40,20 @@ defmodule Arca.Retention do
   ## Global Defaults (config.exs)
 
       config :cyfr, Arca.Retention,
-        executions: 10,        # Keep last N executions per user
-        builds: 10             # Keep last N builds per user
+        executions: 10,        # Keep last N executions per athanor
+        builds: 10             # Keep last N builds per athanor
 
   ## Programmatic Usage
 
       ctx = Sanctum.TestContext.local()
 
-      # Get user-specific settings (or defaults)
+      # Get the athanor's settings (or defaults)
       settings = Arca.Retention.get_settings(ctx)
 
-      # Update user settings
+      # Update the athanor's settings
       :ok = Arca.Retention.set_settings(ctx, %{"executions" => 5})
 
-      # Clean up old executions for a user
+      # Clean up old executions in the athanor
       {:ok, deleted_count} = Arca.Retention.cleanup_executions(ctx)
 
       # Preview what would be deleted

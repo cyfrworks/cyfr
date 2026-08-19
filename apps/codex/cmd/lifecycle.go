@@ -188,15 +188,10 @@ components/_bundle/**/node_modules/
 		_ = os.MkdirAll("data", 0755)
 		_ = os.MkdirAll("aqua", 0755)
 
-		// Create component type subdirs
-		componentSubdirs := []string{
-			"components/catalysts/local",
-			"components/reagents/local",
-			"components/formulas/local",
-		}
-		for _, dir := range componentSubdirs {
-			_ = os.MkdirAll(dir, 0755)
-		}
+		// Component storage is athanor-scoped and the server writes it:
+		// components/{athanor_id}/{type}s/{publisher}/. Only the root has to
+		// exist here, because docker-compose bind-mounts it.
+		_ = os.MkdirAll("components", 0755)
 
 		// Add local context
 		cfg, err := config.Load()

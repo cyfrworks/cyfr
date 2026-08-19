@@ -258,7 +258,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
                 },
                 "builds" => %{
                   "type" => "integer",
-                  "description" => "Number of builds to keep per user"
+                  "description" => "Number of builds to keep per athanor"
                 }
               },
               "description" => "Retention settings (for set action)"
