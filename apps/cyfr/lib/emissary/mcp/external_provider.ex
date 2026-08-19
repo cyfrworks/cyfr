@@ -902,7 +902,7 @@ defmodule Emissary.MCP.ExternalProvider do
   defp server_config_map(server) do
     case Map.get(server, :config) do
       config when is_map(config) -> config
-      _ -> decode_config_json(Map.get(server, :config_json))
+      _ -> Arca.McpServerStorage.config(server)
     end
   end
 
@@ -912,15 +912,6 @@ defmodule Emissary.MCP.ExternalProvider do
       {:error, _} -> "{}"
     end
   end
-
-  defp decode_config_json(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, config} when is_map(config) -> config
-      _ -> %{}
-    end
-  end
-
-  defp decode_config_json(_), do: %{}
 
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"

@@ -58,7 +58,7 @@ defmodule Sanctum.ToolServerDigest do
   @doc "The digest for a stored `Arca.Schemas.McpServer` row."
   @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
   def from_server(server) do
-    config = decode_config(Map.get(server, :config_json))
+    config = Arca.McpServerStorage.config(server)
 
     compute(%{
       url: server.url,
@@ -77,7 +77,7 @@ defmodule Sanctum.ToolServerDigest do
   """
   @spec tool_patterns(map()) :: [String.t()]
   def tool_patterns(server) do
-    config = decode_config(Map.get(server, :config_json))
+    config = Arca.McpServerStorage.config(server)
 
     case config["tool_patterns"] do
       list when is_list(list) -> Enum.filter(list, &ToolPattern.valid?/1)
@@ -123,13 +123,4 @@ defmodule Sanctum.ToolServerDigest do
         :unavailable
     end
   end
-
-  defp decode_config(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, %{} = config} -> config
-      _ -> %{}
-    end
-  end
-
-  defp decode_config(_), do: %{}
 end

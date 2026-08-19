@@ -137,4 +137,43 @@ defmodule Arca.McpServerStorageTest do
       assert {:ok, _} = McpServerStorage.get(ctx_b, "isolated")
     end
   end
+
+  describe "config/1" do
+    test "decodes a stored row's config_json" do
+      assert McpServerStorage.config(%{config_json: ~s({"headers":{"X":"1"},"timeout_ms":5})}) ==
+               %{"headers" => %{"X" => "1"}, "timeout_ms" => 5}
+    end
+
+    test "reads as empty rather than raising, for every shape a row can hold" do
+      # The consent digest, the header resolver and the vault reconciler all
+      # decode here; if they disagreed about a malformed row the digest would
+      # describe a server that is not the one being called.
+      for server <- [
+            %{config_json: nil},
+            %{config_json: ""},
+            %{config_json: "not json"},
+            # valid JSON, but not an object
+            %{config_json: "[1,2,3]"},
+            %{config_json: "42"},
+            %{},
+            nil
+          ] do
+        assert McpServerStorage.config(server) == %{}, "expected #{inspect(server)} to read empty"
+      end
+    end
+
+    test "round-trips what put/2 stored", %{ctx: ctx} do
+      config = %{"headers" => %{"Authorization" => "vault:NOTION"}, "tool_patterns" => ["a_*"]}
+
+      {:ok, _} =
+        McpServerStorage.put(ctx, %{
+          name: "roundtrip",
+          url: "https://example.test",
+          config_json: Jason.encode!(config)
+        })
+
+      {:ok, row} = McpServerStorage.get(ctx, "roundtrip")
+      assert McpServerStorage.config(row) == config
+    end
+  end
 end

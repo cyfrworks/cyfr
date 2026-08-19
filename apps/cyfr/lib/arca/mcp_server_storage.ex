@@ -29,6 +29,26 @@ defmodule Arca.McpServerStorage do
   alias Sanctum.Context
 
   @doc """
+  The decoded `config_json` of a stored row — headers, `timeout_ms`,
+  `tool_patterns`.
+
+  `put/2` stores the string verbatim; this is the other half of that, and the
+  one place it is read. A row whose JSON is absent or malformed reads as an
+  empty config rather than raising: the consent digest, the header resolver
+  and the vault reconciler all have to agree about such a row, and they can
+  only agree if they decode it the same way.
+  """
+  @spec config(McpServer.t() | map()) :: map()
+  def config(%{config_json: json}) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{} = config} -> config
+      _ -> %{}
+    end
+  end
+
+  def config(_server), do: %{}
+
+  @doc """
   List all MCP server configs for the given tenant context.
   """
   @spec list(Context.t()) :: {:ok, [McpServer.t()]} | {:error, term()}

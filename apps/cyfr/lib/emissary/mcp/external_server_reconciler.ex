@@ -166,8 +166,8 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
   defp references?(server, ref) do
     headers =
-      case Jason.decode(server.config_json || "{}") do
-        {:ok, %{"headers" => %{} = headers}} -> headers
+      case Arca.McpServerStorage.config(server) do
+        %{"headers" => %{} = headers} -> headers
         _ -> %{}
       end
 
