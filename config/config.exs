@@ -26,13 +26,15 @@ config :cyfr,
     Opus.CronMCP,
     Locus.MCP,
     Compendium.MCP,
-    # External MCP server management
-    Emissary.MCP.ExternalProvider,
+    # External MCP server management. `Emissary.MCP.ExternalProvider` is not
+    # here: it owns no tool of its own — the tools it discovers are the
+    # upstream servers', reached through `ToolRegistry.try_handle/3`.
+    Emissary.MCP.McpServersTool,
     # System/transport (cross-cutting)
     Emissary.MCP.Tools.SystemProvider
   ]
 
-# Consent proofs are durable: the plan → preview → commit walk spans human
+# Consent proofs are durable: the plan â preview â commit walk spans human
 # minutes and must survive a restart. Tests override to the ETS store.
 config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
 
@@ -43,7 +45,7 @@ config :cyfr, :consent_source, Sanctum.Consent.Source.DB
 
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
-# LiveViews all answer on it — one origin, one cookie, one login.
+# LiveViews all answer on it â one origin, one cookie, one login.
 config :cyfr, EmissaryWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
@@ -64,7 +66,7 @@ config :phoenix, :json_library, Jason
 
 # Redact sensitive values from inbound request logs.
 # Note: this only masks inbound request params. Outbound response bodies must be
-# redacted separately — see Compendium.Registry.Client token-redacting wrapper.
+# redacted separately â see Compendium.Registry.Client token-redacting wrapper.
 config :phoenix, :filter_parameters, [
   "password",
   "secret",
@@ -74,7 +76,7 @@ config :phoenix, :filter_parameters, [
   "client_secret"
 ]
 
-# Arca Repo adapter is selected at build time — Ecto can't swap adapters at
+# Arca Repo adapter is selected at build time â Ecto can't swap adapters at
 # runtime. Default is SQLite; set CYFR_DATABASE=postgres to build for
 # Postgres. Adapter-specific Repo defaults are scoped accordingly so
 # SQLite-only keys (journal_mode, busy_timeout) never bleed into the Postgres
@@ -115,12 +117,12 @@ config :cyfr, :aqua_template_path, Path.expand("../aqua", __DIR__)
 # reads these under the `:cyfr` app key (Locus.Builder), not `:locus`.
 config :cyfr, :wit_path, Path.expand("../wit", __DIR__)
 
-# CORS Configuration — wildcard default for fresh installs. The boot guard in
+# CORS Configuration â wildcard default for fresh installs. The boot guard in
 # Cyfr.Application requires an explicit allowlist once authentication is
 # configured. Override via CYFR_CORS_ALLOWED_ORIGINS.
 config :cyfr, :cors_allowed_origins, ["*"]
 
-# Prometheus metrics — off by default because the /metrics endpoint is
+# Prometheus metrics â off by default because the /metrics endpoint is
 # unauthenticated. Opt in via CYFR_PROMETHEUS_METRICS=true (dev.exs enables it
 # for local development).
 config :cyfr, :prometheus_metrics_enabled, false

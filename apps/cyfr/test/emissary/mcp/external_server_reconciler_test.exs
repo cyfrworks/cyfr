@@ -98,7 +98,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
 
     # Unreachable URL: creation should still validate and persist the row.
     result =
-      Emissary.MCP.ExternalProvider.handle("mcp_servers", admin_ctx, %{
+      Emissary.MCP.McpServersTool.handle("mcp_servers", admin_ctx, %{
         "action" => "create",
         "name" => "vaultref",
         "config" => %{

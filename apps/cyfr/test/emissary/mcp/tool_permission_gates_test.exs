@@ -43,7 +43,11 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:ok, %{servers: _}} =
-               Emissary.MCP.ExternalProvider.handle("mcp_servers", ctx, %{"action" => "list"})
+               Emissary.MCP.McpServersTool.handle(
+                 "mcp_servers",
+                 ctx,
+                 %{"action" => "list"}
+               )
     end
   end
 
@@ -83,7 +87,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:error, message} =
-               Emissary.MCP.ExternalProvider.handle(
+               Emissary.MCP.McpServersTool.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{"Authorization" => "Bearer sk-live-plaintext"})
@@ -98,7 +102,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for header <- ["X-Api-Key", "X-Access-Token", "My-Secret"] do
         assert {:error, _} =
-                 Emissary.MCP.ExternalProvider.handle(
+                 Emissary.MCP.McpServersTool.handle(
                    "mcp_servers",
                    ctx,
                    create_args(%{header => "literal-value"})
@@ -110,7 +114,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:ok, _} =
-               Emissary.MCP.ExternalProvider.handle(
+               Emissary.MCP.McpServersTool.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{
@@ -123,7 +127,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       # The secrets plane is retired: a secret: reference is rejected at
       # create with a message naming the vault: replacement.
       assert {:error, msg} =
-               Emissary.MCP.ExternalProvider.handle(
+               Emissary.MCP.McpServersTool.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{"Authorization" => "secret:MY_TOKEN"})
@@ -134,7 +138,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       # Even in a header whose NAME is not credential-shaped — otherwise the
       # row persists and only fails at server boot.
       assert {:error, _} =
-               Emissary.MCP.ExternalProvider.handle(
+               Emissary.MCP.McpServersTool.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{"X-Thing" => "secret:MY_TOKEN"})
