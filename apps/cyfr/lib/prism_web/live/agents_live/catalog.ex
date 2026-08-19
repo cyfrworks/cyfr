@@ -134,28 +134,6 @@ defmodule PrismWeb.AgentsLive.Catalog do
   def decode_model_choice(_), do: :noop
 
   @doc """
-  Detect an explicit `@name` token in the user message and pull it out so
-  the agent can route to the named orchestrator. Mirrors AgentLive's parser.
-  """
-  def parse_orchestrator_mention(message, orchestrators) do
-    if not String.contains?(message, "@") or orchestrators == [] do
-      {message, nil}
-    else
-      names = Enum.map(orchestrators, & &1["name"])
-      sorted = Enum.sort_by(names, &(-String.length(&1)))
-
-      Enum.find_value(sorted, {message, nil}, fn name ->
-        re = Regex.compile!("@#{Regex.escape(name)}(?=\\s|$)", "i")
-
-        if Regex.match?(re, message) do
-          cleaned = Regex.replace(re, message, "") |> String.trim()
-          {if(cleaned == "", do: message, else: cleaned), name}
-        end
-      end)
-    end
-  end
-
-  @doc """
   Catalysts return their list-models response verbatim — typically a list
   of `%{"id" => ...}` objects, sometimes wrapped in a `{"data": [...]}`
   envelope. Reduce to a plain list of model ids.

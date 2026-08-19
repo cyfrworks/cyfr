@@ -844,18 +844,29 @@ defmodule PrismWeb.TopbarLive do
   end
 
   # The athanors the person may work in — their own first, then their
-  # groups — each subscribed on its notify topic for the tray badges.
+  # groups — each subscribed on its notify topic for the tray badges. An
+  # athanor that has dropped off the list is unsubscribed: a seat that was
+  # removed must stop badging, not keep reporting what happens in a furnace
+  # its former member can no longer open.
   defp load_athanors(socket, ctx) do
     athanors = Sanctum.Tenancy.list_athanors(ctx)
 
     if connected?(socket) do
+      ids = MapSet.new(athanors, & &1.id)
+      previous = MapSet.new(socket.assigns[:athanors] || [], & &1.id)
+
+      for gone <- MapSet.difference(previous, ids),
+          do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.Notify.topic(gone))
+
       for a <- athanors do
         Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.Notify.topic(a.id))
         Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(a.id))
       end
     end
 
-    assign(socket, :athanors, athanors)
+    socket
+    |> assign(:athanors, athanors)
+    |> assign(:badges, Map.take(socket.assigns[:badges] || %{}, Enum.map(athanors, & &1.id)))
   end
 
   defp focused_name(athanors, ctx) do

@@ -124,6 +124,21 @@ defmodule Prism.ConversationRunner do
     end
   end
 
+  @doc """
+  Whether a turn is running in this conversation right now — asked of the
+  runner itself, so a viewer looking at another thread gets the truth about
+  this one. No runner means no turn.
+  """
+  @spec turn_running?(String.t()) :: boolean()
+  def turn_running?(conversation_id) do
+    case whereis(conversation_id) do
+      nil -> false
+      pid -> GenServer.call(pid, :state).running == true
+    end
+  catch
+    :exit, _ -> false
+  end
+
   @doc "The PubSub topic a thread's viewers subscribe to."
   @spec topic(String.t()) :: String.t()
   def topic(conversation_id), do: "conversation:#{conversation_id}"
@@ -204,13 +219,19 @@ defmodule Prism.ConversationRunner do
     call(ctx, conversation_id, {:restart_for_consent, ctx, result})
   end
 
-  # The conversation must be the caller's athanor's — checked before a
-  # runner is even started for it.
+  # The conversation must be the caller's athanor's, and that athanor must
+  # still be open — both checked before a runner is even started for it, so
+  # a closed furnace answers with what it is rather than "not found".
   defp call(%Context{} = ctx, conversation_id, request) do
     with {:ok, conv} <- Conversations.get(ctx, conversation_id),
+         :ok <- open?(conv.athanor_id),
          {:ok, pid} <- ensure(conv.id, conv.athanor_id) do
       GenServer.call(pid, request, 30_000)
     end
+  end
+
+  defp open?(athanor_id) do
+    if Athanors.active?(athanor_id), do: :ok, else: {:error, :archived}
   end
 
   # ---------------------------------------------------------------------------
@@ -244,8 +265,11 @@ defmodule Prism.ConversationRunner do
     Process.flag(:trap_exit, true)
     ctx = system_ctx(athanor_id)
 
+    # An archived athanor is a hard stop for a new runner too, not only for a
+    # send into a live one: a tab left open on a chat whose furnace closed
+    # would otherwise start one on its next click.
     with {:ok, conv} <- Conversations.get(ctx, conversation_id),
-         {:ok, athanor} <- Athanors.get(athanor_id) do
+         {:ok, %{status: "active"} = athanor} <- Athanors.get(athanor_id) do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
 
       state = %{
@@ -298,7 +322,8 @@ defmodule Prism.ConversationRunner do
 
       {:ok, touch(state)}
     else
-      {:error, :not_found} -> :ignore
+      # No conversation, no athanor, or a furnace that has closed: no runner.
+      {:ok, %{status: _archived}} -> :ignore
       {:error, _} -> :ignore
     end
   end
@@ -316,11 +341,8 @@ defmodule Prism.ConversationRunner do
       text == "" and attachments == [] ->
         {:reply, {:error, :empty}, state}
 
-      not Athanors.active?(state.athanor_id) ->
-        {:reply, {:error, :archived}, state}
-
-      not may_act?(ctx, state) ->
-        {:reply, {:error, :not_member}, state}
+      standing(ctx, state) != :ok ->
+        {:reply, standing(ctx, state), state}
 
       true ->
         state = refresh_orchestrators(state, ctx)
@@ -349,34 +371,30 @@ defmodule Prism.ConversationRunner do
   # Stop ends the running turn and drops what was waiting behind it — a
   # member who says stop means the conversation, not one reply.
   def handle_call({:stop, ctx}, _from, state) do
-    state = clear_queue(state)
-
-    cond do
-      state.running and state.execution_id ->
-        {:reply, :ok, cancel_turn(state, ctx)}
-
-      state.running ->
-        {:reply, :ok, %{state | cancel_requested: true}}
-
-      true ->
-        {:reply, :ok, state}
+    case standing(ctx, state) do
+      :ok -> do_stop(state, ctx)
+      refusal -> {:reply, refusal, state}
     end
   end
 
   def handle_call({:approve, ctx, message_id, scope}, _from, state) do
-    case Conversations.resolve_approval(ctx, message_id, "pending", "running", %{
-           resolution: %{"scope" => scope}
-         }) do
-      {:ok, msg} ->
-        {:reply, :ok, run_approval(state, ctx, msg, scope)}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+    # Deciding a card runs a tool and can write the athanor's shared
+    # allowlist: the same standing a send is held to, asked again here rather
+    # than trusted from the mount that opened the socket.
+    with :ok <- standing(ctx, state),
+         {:ok, msg} <-
+           Conversations.resolve_approval(ctx, message_id, "pending", "running", %{
+             resolution: %{"scope" => scope}
+           }) do
+      {:reply, :ok, run_approval(state, ctx, msg, scope)}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call({:decline, ctx, message_id, reason, scope}, _from, state) do
-    with {:ok, msg} <- Conversations.get_message(ctx, message_id),
+    with :ok <- standing(ctx, state),
+         {:ok, msg} <- Conversations.get_message(ctx, message_id),
          intent = approval_intent(msg),
          {summary, system_text} =
            AquaTurn.outcome_summary(:declined, %{reason: reason}, intent["title"] || ""),
@@ -436,6 +454,31 @@ defmodule Prism.ConversationRunner do
   # A member of the athanor may act; so may an operator who opened it
   # (`Context.focus/2` audited that). A context minted at mount is not
   # trusted forever: this is re-asked on every send and at every dequeue.
+  defp do_stop(state, ctx) do
+    state = clear_queue(state)
+
+    cond do
+      state.running and state.execution_id ->
+        {:reply, :ok, cancel_turn(state, ctx)}
+
+      state.running ->
+        {:reply, :ok, %{state | cancel_requested: true}}
+
+      true ->
+        {:reply, :ok, state}
+    end
+  end
+
+  # What every act in a live conversation is held to: the furnace is open and
+  # the caller still belongs to it.
+  defp standing(%Context{} = ctx, state) do
+    cond do
+      not Athanors.active?(state.athanor_id) -> {:error, :archived}
+      not may_act?(ctx, state) -> {:error, :not_member}
+      true -> :ok
+    end
+  end
+
   defp may_act?(%Context{platform_admin: true}, _state), do: true
   defp may_act?(%Context{user_id: user_id}, state), do: Members.member?(user_id, state.athanor_id)
 

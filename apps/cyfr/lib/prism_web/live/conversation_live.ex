@@ -271,8 +271,9 @@ defmodule PrismWeb.ConversationLive do
   def handle_event("delete_conversation", %{"id" => id}, socket) do
     ctx = socket.assigns.context
 
-    if (socket.assigns.running and socket.assigns.conversation) &&
-         socket.assigns.conversation.id == id do
+    # The turn may be running in a thread this tab is not looking at: the
+    # runner is the fact, not what this socket happens to be rendering.
+    if Prism.ConversationRunner.turn_running?(id) do
       {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
     else
       Conversations.delete(ctx, id)
@@ -393,7 +394,9 @@ defmodule PrismWeb.ConversationLive do
 
     models_by_provider =
       (decoded["models"] || %{})
-      |> Map.new(fn {provider, value} -> {provider, normalize_models(value)} end)
+      |> Map.new(fn {provider, value} ->
+        {provider, PrismWeb.AgentsLive.Catalog.normalize_provider_models(value)}
+      end)
 
     {:noreply,
      socket
@@ -541,7 +544,8 @@ defmodule PrismWeb.ConversationLive do
       end
     else
       {:error, :busy} ->
-        {:noreply, put_flash(socket, :error, "AQUA is busy — wait for the current answer.")}
+        {:noreply,
+         put_flash(socket, :error, "Too many turns are already waiting — let one finish first.")}
 
       {:error, :not_member} ->
         {:noreply, put_flash(socket, :error, "You are no longer a member here.")}
@@ -600,11 +604,22 @@ defmodule PrismWeb.ConversationLive do
     Enum.filter(messages, &(&1.kind == "approval" and &1.status == "pending"))
   end
 
-  defp composer_placeholder(%{kind: "group"}, "mentioned"),
-    do: "Talk to the group · @aqua to ask AQUA  (Enter to send · Shift+Enter for newline)"
+  # What a message would address, and what to call it: the orchestrator in
+  # focus, or the shipped default when the athanor has none yet.
+  defp orchestrator_handle(%{"name" => name} = o) when is_binary(name) and name != "",
+    do: {name, o["title"] || name}
 
-  defp composer_placeholder(_athanor, _mode),
-    do: "Ask AQUA…  (Enter to send · Shift+Enter for newline)"
+  defp orchestrator_handle(_), do: {"aqua", "AQUA"}
+
+  # A group's orchestrator can be renamed or replaced from Agents, so the
+  # incantation the placeholder teaches has to be the one that works here.
+  defp composer_placeholder(%{kind: "group"}, "mentioned", {handle, label}),
+    do:
+      "Talk to the group · @#{handle} to ask #{label}" <>
+        "  (Enter to send · Shift+Enter for newline)"
+
+  defp composer_placeholder(_athanor, _mode, {_handle, label}),
+    do: "Ask #{label}…  (Enter to send · Shift+Enter for newline)"
 
   # The route a second device reads an attachment's bytes from.
   defp attachment_path(athanor_route, message_id, filename) do
@@ -664,18 +679,6 @@ defmodule PrismWeb.ConversationLive do
 
   defp elem_or_empty({:ok, %{} = m}), do: m
   defp elem_or_empty(_), do: %{}
-
-  defp normalize_models(value) when is_list(value) do
-    value
-    |> Enum.map(fn
-      m when is_binary(m) -> m
-      %{"id" => id} when is_binary(id) -> id
-      _ -> nil
-    end)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp normalize_models(_), do: []
 
   defp member_labels(ctx) do
     Sanctum.Tenancy.Members.list_by_athanor(ctx.athanor_id)
@@ -951,6 +954,7 @@ defmodule PrismWeb.ConversationLive do
                 scope={scope_atom(resolution["scope"])}
                 resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
                 agent_label={@orchestrator && @orchestrator["title"]}
+                shared_with={@athanor.kind == "group" && @athanor.name}
               />
             <% else %>
               <.message_bubble
@@ -999,6 +1003,7 @@ defmodule PrismWeb.ConversationLive do
             id={"consent-#{@consent_sheet_ref}"}
             ref={@consent_sheet_ref}
             context={@context}
+            athanor_route={@athanor_route}
           />
         </div>
 
@@ -1062,7 +1067,9 @@ defmodule PrismWeb.ConversationLive do
               name="message"
               phx-change="update_input"
               rows="1"
-              placeholder={composer_placeholder(@athanor, @answer_mode)}
+              placeholder={
+                composer_placeholder(@athanor, @answer_mode, orchestrator_handle(@orchestrator))
+              }
               class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
               autofocus
               disabled={@orchestrators == []}

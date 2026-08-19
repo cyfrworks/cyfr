@@ -425,6 +425,13 @@ defmodule PrismWeb.AgentsLive do
     end
   end
 
+  # The allowlist is the athanor's, not the person's: in a group, a member
+  # editing it is editing what the agent may do for everyone in it.
+  defp allowlist_owner(%{kind: "group", name: name}),
+    do: "This allowlist is #{name}'s — it applies to every member."
+
+  defp allowlist_owner(_athanor), do: ""
+
   defp agent_provider_for_select(agent) do
     detect_provider_from_ref(agent["catalyst_ref"])
   end
@@ -518,6 +525,7 @@ defmodule PrismWeb.AgentsLive do
           tool_actions={@tool_actions || []}
           is_orchestrator={true}
           model_status={Map.get(@model_status, orch["catalyst_ref"])}
+          athanor={@athanor}
         />
         <div :if={sub_agents != []} class="ml-6 space-y-3 border-l border-gray-800 pl-4">
           <.agent_card
@@ -526,6 +534,7 @@ defmodule PrismWeb.AgentsLive do
             models_by_provider={@models_by_provider}
             tool_actions={@tool_actions || []}
             is_orchestrator={false}
+            athanor={@athanor}
           />
         </div>
 
@@ -642,6 +651,7 @@ defmodule PrismWeb.AgentsLive do
   attr :tool_actions, :list, required: true
   attr :is_orchestrator, :boolean, default: false
   attr :model_status, :any, default: nil
+  attr :athanor, :any, default: nil
 
   defp agent_card(assigns) do
     assigns =
@@ -768,7 +778,9 @@ defmodule PrismWeb.AgentsLive do
           <label class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
             <span class="normal-case text-gray-600">
-              — reads run without asking; everything else asks unless you mark it "auto"
+              — reads run without asking; everything else asks unless you mark it "auto". {allowlist_owner(
+                @athanor
+              )}
             </span>
           </label>
           <% auto_count = count_auto(@tool_policy, @tool_actions) %>

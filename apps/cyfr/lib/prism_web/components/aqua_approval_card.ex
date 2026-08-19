@@ -18,7 +18,9 @@ defmodule PrismWeb.AquaApprovalCard do
       rest of this conversation (ephemeral; gone on reload / new conversation)
     - `:always`       — run it, and write `"auto"` for that `tool.action` into
       the agent's `tool_policy` allowlist so it never asks again (not offered
-      for `:destructive` / `:external` actions)
+      for `:destructive` / `:external` actions). The allowlist belongs to the
+      athanor, not to whoever clicks: in a group the control says so, because
+      one member is deciding for everyone.
 
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
@@ -173,10 +175,11 @@ defmodule PrismWeb.AquaApprovalCard do
                 phx-click="approval:approve"
                 phx-value-scope="always"
                 phx-target={@myself}
+                data-confirm={@shared_with && always_confirm(@shared_with)}
                 class="rounded px-2 py-0.5 bg-gray-800 text-gray-300 hover:bg-gray-700"
-                title="Stop asking — adds this action to the agent's allowlist as auto-approved"
+                title={always_title(@shared_with)}
               >
-                always
+                always{if @shared_with, do: " — for everyone here"}
               </button>
             </div>
           <% end %>
@@ -187,7 +190,9 @@ defmodule PrismWeb.AquaApprovalCard do
             <span :if={@scope == :conversation} class="text-gray-500">
               — auto-approved for this chat
             </span>
-            <span :if={@scope == :always} class="text-gray-500">— won't ask again</span>
+            <span :if={@scope == :always} class="text-gray-500">
+              — won't ask again{if @shared_with, do: ", for anyone here"}
+            </span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span :if={@result_summary} class="text-gray-400 ml-2 truncate">— {@result_summary}</span>
           </div>
@@ -224,6 +229,7 @@ defmodule PrismWeb.AquaApprovalCard do
      |> assign(assigns)
      |> assign_new(:decline_reason_open, fn -> false end)
      |> assign_new(:agent_label, fn -> nil end)
+     |> assign_new(:shared_with, fn -> nil end)
      |> assign_new(:result_summary, fn -> nil end)
      |> assign_new(:reason, fn -> nil end)
      |> assign_new(:scope, fn -> nil end)
@@ -254,6 +260,18 @@ defmodule PrismWeb.AquaApprovalCard do
   def handle_event("approval:cancel_decline", _params, socket) do
     {:noreply, assign(socket, :decline_reason_open, false)}
   end
+
+  # The allowlist an "always" writes is the athanor's own — in a group that
+  # is a decision taken on behalf of everyone in it, and the control should
+  # not read as a personal preference.
+  defp always_title(nil),
+    do: "Stop asking — adds this action to the agent's allowlist as auto-approved"
+
+  defp always_title(name),
+    do: "Stop asking — adds this action to #{name}'s agent allowlist, for every member"
+
+  defp always_confirm(name),
+    do: "Stop asking for this action in #{name}? It applies to every member, not just you."
 
   defp parse_scope("conversation"), do: :conversation
   defp parse_scope("always"), do: :always

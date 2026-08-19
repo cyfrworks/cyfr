@@ -75,7 +75,7 @@ defmodule Prism.AquaTurn do
       sorted = Enum.sort_by(names, &(-String.length(&1)))
 
       Enum.find_value(sorted, {message, nil}, fn name ->
-        re = Regex.compile!("@#{Regex.escape(name)}(?=\\s|$)", "i")
+        re = Regex.compile!("(?<![\\w@])@#{Regex.escape(name)}(?![\\w-])", "i")
 
         if Regex.match?(re, message) do
           cleaned = Regex.replace(re, message, "") |> String.trim()

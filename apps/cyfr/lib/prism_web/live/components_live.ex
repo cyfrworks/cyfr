@@ -1538,6 +1538,7 @@ defmodule PrismWeb.ComponentsLive do
             id={"consent-#{@consent_sheet_ref}"}
             ref={@consent_sheet_ref}
             context={@context}
+            athanor_route={@athanor_route}
           />
         </div>
       </div>

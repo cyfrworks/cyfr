@@ -534,6 +534,44 @@ defmodule Prism.ConversationRunnerTest do
     assert {:error, :archived} = ConversationRunner.send_message(alice, conv.id, "hello?")
   end
 
+  test "deciding a card asks the same standing a send does", %{
+    alice: alice,
+    bob: bob,
+    conv: conv,
+    group: group
+  } do
+    {_eid, runner, _} = start_turn(alice, conv, "pull a component")
+
+    block = approval_block()
+
+    emit(runner, "text_delta", %{"content" => block})
+    complete(runner)
+    assert_receive {:conversation, _, {:message, %{kind: "approval"} = apr}}, 5_000
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+
+    # Bob loses his seat with the card still on screen: approving would run a
+    # tool in a furnace he is no longer in, and "always" would write its
+    # shared allowlist.
+    :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
+
+    assert {:error, :not_member} = ConversationRunner.approve(bob, conv.id, apr.id, :always)
+    assert {:error, :not_member} = ConversationRunner.decline(bob, conv.id, apr.id, "no")
+    assert {:error, :not_member} = ConversationRunner.stop_turn(bob, conv.id)
+    refute_receive {:fake_run_approved, _, _}, 200
+
+    # Alice is still a member, so the card is still hers to decide.
+    :ok = ConversationRunner.approve(alice, conv.id, apr.id, :once)
+    assert_receive {:fake_run_approved, _, _}, 5_000
+  end
+
+  defp approval_block do
+    """
+    ```aqua-actions
+    [{"kind":"ui.request_approval","title":"Pull component","summary":"s","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{}}}]
+    ```
+    """
+  end
+
   test "a note written while a turn runs survives the turn's own history snapshot",
        %{alice: alice, bob: bob, conv: conv} do
     # First turn leaves an approval pending.
