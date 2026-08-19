@@ -96,7 +96,7 @@ defmodule Sanctum.MCP.AthanorTool do
 
   # A person's own athanor is closed by the door (deny) and reopened by the
   # door (allow); restoring it here while its owner is still denied would
-  # reopen a furnace nobody may enter.
+  # reopen a furnace nobody may enter. A retired Home never reopens at all.
   def handle(%Context{} = ctx, %{"action" => "unarchive"} = args) do
     with {:ok, athanor} <- resolve(ctx, args, include_archived: true),
          :ok <- owner_admitted(athanor) do
@@ -104,6 +104,10 @@ defmodule Sanctum.MCP.AthanorTool do
         {:ok, restored} ->
           broadcast_athanors_changed(ctx, restored)
           {:ok, render(restored)}
+
+        {:error, :home_is_final} ->
+          {:error,
+           "That Home is archived for the record; the server has already started a new one"}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] athanor.unarchive failed: #{inspect(reason)}")

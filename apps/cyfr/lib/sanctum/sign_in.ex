@@ -355,8 +355,10 @@ defmodule Sanctum.SignIn do
   end
 
   # A sign-in must not 500 on a broken install: no Home means no seat, loudly.
+  # When the last Home was retired by its final member leaving, the operator's
+  # sign-in mints its successor — the server always has one to seat them in.
   defp seat_in_home(user_id) do
-    with {:ok, home} <- Athanors.home(),
+    with {:ok, home} <- Athanors.ensure_home(),
          {:ok, _} <-
            Members.ensure(user_id, scope: "athanor", athanor_id: home.id, added_by: "system") do
       # Home is provisioned at boot; an operator's sign-in retries a boot

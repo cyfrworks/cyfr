@@ -128,6 +128,28 @@ defmodule PrismWeb.MembersLive do
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
+  # What leaving actually does, said before it happens: the last member out
+  # archives the group, and Home is retired for the record — the server
+  # starts a new one rather than reopening it.
+  defp leave_confirm(%{home: true}, members) do
+    if last_active?(members),
+      do:
+        "You are the last member. Leaving retires Home for the record — " <>
+          "the server starts a new one. Continue?",
+      else: "Leave Home? The others keep it."
+  end
+
+  defp leave_confirm(_athanor, members) do
+    if last_active?(members),
+      do: "You are the last member. Leaving archives this group. Continue?",
+      else: "Leave this group? The others keep it."
+  end
+
+  defp last_active?(members) when is_list(members),
+    do: Enum.count(members, &(&1[:status] == "active")) <= 1
+
+  defp last_active?(_), do: false
+
   defp load(socket) do
     ctx = socket.assigns.context
 
@@ -165,7 +187,7 @@ defmodule PrismWeb.MembersLive do
             :if={@athanor && @athanor.kind == "group"}
             variant="ghost"
             phx-click="leave"
-            data-confirm="Leave this group? The others keep it."
+            data-confirm={leave_confirm(@athanor, @members)}
           >
             Leave group
           </.button>

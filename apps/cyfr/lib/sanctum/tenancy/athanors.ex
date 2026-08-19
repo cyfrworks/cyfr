@@ -12,9 +12,11 @@ defmodule Sanctum.Tenancy.Athanors do
   job (`Compendium.AthanorSeeder`), not this module's: a row is a name,
   provisioning is what fills it.
 
-  Home (`home: true`) and person athanors are archived only through
-  `Sanctum.Tenancy.Users.deny/1` (`force: true`); a group is archived by its
-  members or by its last member leaving.
+  A person's athanor is archived only through `Sanctum.Tenancy.Users.deny/1`
+  (`force: true`); a group is archived by its members or by its last member
+  leaving. Home is archived by that last leave alone (never by hand, never
+  by a verb) and never comes back: the row stays as the record, its slug is
+  released, and `ensure_home/0` mints its successor.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -41,10 +43,16 @@ defmodule Sanctum.Tenancy.Athanors do
       |> Map.put_new(:updated_at, now)
 
     with :ok <- Caps.check(:max_athanors, count()) do
-      %Athanor{}
-      |> Athanor.create_changeset(attrs)
-      |> Arca.Repo.insert()
+      insert_row(attrs)
     end
+  end
+
+  # The insert without the server cap: the caller decides whether the row is
+  # a tenant mint (capped) or the server's own Home (not).
+  defp insert_row(attrs) do
+    %Athanor{}
+    |> Athanor.create_changeset(attrs)
+    |> Arca.Repo.insert()
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Athanors: create failed (#{Exception.message(e)})")
@@ -126,12 +134,15 @@ defmodule Sanctum.Tenancy.Athanors do
   def route_slug(%Athanor{slug: slug}), do: slug
 
   @doc """
-  The server's Home athanor — the seeded group every server has. Found by
-  its flag, never by a fixed id.
+  The server's Home athanor — the group every server has. Found by its flag,
+  never by a fixed id, and only while it is active: a retired Home keeps the
+  flag as its record but is nobody's Home any more.
   """
   @spec home() :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
   def home do
-    case Arca.Repo.one(from(a in Athanor, where: a.home == true, limit: 1)) do
+    case Arca.Repo.one(
+           from(a in Athanor, where: a.home == true and a.status == "active", limit: 1)
+         ) do
       nil -> {:error, :not_found}
       athanor -> {:ok, athanor}
     end
@@ -139,6 +150,37 @@ defmodule Sanctum.Tenancy.Athanors do
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Athanors: home failed (#{Exception.message(e)})")
       {:error, :database_error}
+  end
+
+  @doc """
+  The server's Home, minting one when the last was retired by its final
+  member leaving. The row only — filling it (seed + consents) is the
+  caller's job, as for every other athanor. Home is the server's own
+  furnace, not somebody's mint, so the per-server cap does not bind it.
+  """
+  @spec ensure_home() :: {:ok, Athanor.t()} | {:error, term()}
+  def ensure_home do
+    case home() do
+      {:ok, athanor} ->
+        {:ok, athanor}
+
+      {:error, :not_found} ->
+        with {:ok, slug} <- resolve_slug(nil, "Home") do
+          insert_row(%{
+            id: generate_id(),
+            kind: "group",
+            name: "Home",
+            slug: slug,
+            home: true,
+            created_by: "system",
+            created_at: DateTime.utc_now(),
+            updated_at: DateTime.utc_now()
+          })
+        end
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   @doc "Like `home/0`, raising when the seed is missing — a broken install."
@@ -180,8 +222,12 @@ defmodule Sanctum.Tenancy.Athanors do
   `athanor.archive`, the last member leaving, a person being denied), so no
   path leaves work running in a furnace nobody may enter.
 
-  Home and person athanors refuse unless `force: true` — the arm
-  `Sanctum.Tenancy.Users.deny/1` uses when it ejects a person.
+  A person's athanor refuses unless `force: true` — the arm
+  `Sanctum.Tenancy.Users.deny/1` uses when it ejects a person. Home refuses
+  everything but `reason: :empty`, the last member leaving: no verb and no
+  operator retires the server's own furnace by hand. A retired Home also
+  releases its slug, so its successor is reachable where Home has always
+  been.
   """
   @spec archive(Athanor.t(), keyword()) :: {:ok, Athanor.t()} | {:error, term()}
   def archive(%Athanor{} = athanor, opts \\ []) do
@@ -195,21 +241,37 @@ defmodule Sanctum.Tenancy.Athanors do
           close(current)
           {:ok, current}
 
-        current.home and not Keyword.get(opts, :force, false) ->
+        current.home and Keyword.get(opts, :reason) != :empty ->
           {:error, :home_cannot_be_archived}
 
         current.kind == "person" and not Keyword.get(opts, :force, false) ->
           {:error, :person_athanor_cannot_be_archived}
 
         true ->
-          with {:ok, archived} <-
-                 update(current, %{status: "archived", archived_at: DateTime.utc_now()}) do
+          with {:ok, archived} <- update(current, archived_attrs(current)) do
             close(archived)
             Sanctum.Notify.broadcast(archived.id, :athanor_changed, %{name: archived.name})
             {:ok, archived}
           end
       end
     end
+  end
+
+  defp archived_attrs(%Athanor{home: true} = current) do
+    %{status: "archived", archived_at: DateTime.utc_now(), slug: retired_slug(current.slug)}
+  end
+
+  defp archived_attrs(%Athanor{}), do: %{status: "archived", archived_at: DateTime.utc_now()}
+
+  # A retired Home hands its address to its successor: the row keeps the flag
+  # and the name for the record, under the next free `<slug>-N`.
+  defp retired_slug(slug) do
+    base = String.slice(slug, 0, 36)
+
+    Enum.find_value(2..50, slug, fn n ->
+      candidate = "#{base}-#{n}"
+      if slug_free?(candidate), do: candidate
+    end)
   end
 
   # What archiving closes: standing credentials and in-flight work. Runs as
@@ -245,10 +307,18 @@ defmodule Sanctum.Tenancy.Athanors do
       :ok
   end
 
+  @doc """
+  Reopen an archived athanor. A retired Home never reopens — it is the
+  record of a furnace that ended; `ensure_home/0` mints its successor.
+  """
   @spec unarchive(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
   def unarchive(%Athanor{} = athanor) do
     with {:ok, current} <- get(athanor.id) do
-      update(current, %{status: "active", archived_at: nil})
+      if current.home do
+        {:error, :home_is_final}
+      else
+        update(current, %{status: "active", archived_at: nil})
+      end
     end
   end
 

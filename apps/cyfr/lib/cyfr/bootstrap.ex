@@ -7,9 +7,10 @@ defmodule Cyfr.Bootstrap do
 
   Home is seeded by the baseline migration as a bare row; this task fills it
   (`Sanctum.Provisioning.provision/2`, as the server — the registry pull is
-  anonymous) the first time the server boots. A failure is logged, never
-  fatal — the app keeps serving, the operator's first sign-in retries, and
-  so does the next boot.
+  anonymous) the first time the server boots. When the last Home was retired
+  by its final member leaving, `ensure_home/0` mints its successor here. A
+  failure is logged, never fatal — the app keeps serving, the operator's
+  first sign-in retries, and so does the next boot.
 
   Disabled by `config :cyfr, provisioning_boot_enabled: false` (the test
   environment, where a boot-time write would precede any sandbox checkout).
@@ -34,7 +35,7 @@ defmodule Cyfr.Bootstrap do
   end
 
   defp ensure_home_seeded do
-    home = Athanors.home!()
+    {:ok, home} = Athanors.ensure_home()
 
     if is_nil(home.provisioned_at) do
       case Sanctum.Provisioning.provision(home, nil) do

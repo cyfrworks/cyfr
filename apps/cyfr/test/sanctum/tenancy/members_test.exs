@@ -251,7 +251,9 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   describe "remove_member/2" do
-    test "the last active member leaving a group archives it; Home never", %{athanor: athanor} do
+    test "the last active member leaving a group archives it — Home too, for good", %{
+      athanor: athanor
+    } do
       n = System.unique_integer([:positive])
       user = person(n)
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
@@ -259,10 +261,19 @@ defmodule Sanctum.Tenancy.MembersTest do
       :ok = Members.remove_member(athanor, user_id: user.id)
       assert {:ok, %{status: "archived"}} = Athanors.get(athanor.id)
 
+      # Home ends the same way, and never comes back: the row stays as the
+      # record with its flag, its slug is released, and the next `ensure_home`
+      # mints a successor at the address Home has always had.
       home = Athanors.home!()
       {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: home.id)
       :ok = Members.remove_member(home, user_id: user.id)
-      assert {:ok, %{status: "active"}} = Athanors.get(home.id)
+      assert {:ok, %{status: "archived", home: true, slug: retired}} = Athanors.get(home.id)
+      assert retired != home.slug
+
+      assert {:ok, successor} = Athanors.ensure_home()
+      assert successor.id != home.id
+      assert successor.slug == home.slug
+      assert {:error, :home_is_final} = Athanors.unarchive(%{home | status: "archived"})
     end
   end
 

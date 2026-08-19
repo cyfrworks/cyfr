@@ -51,8 +51,13 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:athanors, [:kind, :slug])
-    # Exactly one Home per server.
-    create unique_index(:athanors, [:home], where: "home", name: :athanors_home_index)
+    # Exactly one *active* Home per server. A retired Home keeps the flag as
+    # its record; its successor takes the place.
+    create unique_index(:athanors, [:home],
+             where: "home AND status = 'active'",
+             name: :athanors_home_index
+           )
+
     # One personal athanor per person. Default index name on purpose: SQLite
     # reports a violation by column, and ecto_sqlite3 derives the constraint
     # name from it, so only the derived name matches the changeset on both

@@ -284,9 +284,11 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert Athanors.route_slug(person) == "@alice#{n}"
       assert Athanors.route_slug(group) == group.slug
 
-      # a person's athanor and Home refuse archive unless forced
+      # a person's athanor refuses archive unless forced; Home refuses every
+      # arm but the last member leaving (`reason: :empty`)
       assert {:error, :person_athanor_cannot_be_archived} = Athanors.archive(person)
       assert {:error, :home_cannot_be_archived} = Athanors.archive(Athanors.home!())
+      assert {:error, :home_cannot_be_archived} = Athanors.archive(Athanors.home!(), force: true)
       assert {:ok, %{status: "archived"}} = Athanors.archive(person, force: true)
       assert {:error, :not_found} = Athanors.by_route_slug("@alice#{n}")
 

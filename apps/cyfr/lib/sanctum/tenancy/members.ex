@@ -312,8 +312,9 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Remove a person from an athanor (or a pending invite by email). The last
-  active member leaving a group archives it; Home is never archived. The
-  owner of a person's athanor is that athanor's one member and is never
+  active member leaving a group archives it — Home included, and Home never
+  comes back (`Sanctum.Tenancy.Athanors.ensure_home/0` mints its successor).
+  The owner of a person's athanor is that athanor's one member and is never
   removed — deny at the door is the only way out of one's own furnace.
   """
   @spec remove_member(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()]) ::
@@ -465,12 +466,10 @@ defmodule Sanctum.Tenancy.Members do
 
   # ---- internal --------------------------------------------------------------
 
-  defp archive_when_empty(%{home: true}), do: :ok
-
   defp archive_when_empty(%{id: id, kind: "group"} = athanor) do
     if count_by_athanor(id) == 0 do
       case Athanors.get(id) do
-        {:ok, current} -> Athanors.archive(current)
+        {:ok, current} -> Athanors.archive(current, reason: :empty)
         _ -> {:ok, athanor}
       end
     end
