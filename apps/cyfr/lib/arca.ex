@@ -111,7 +111,7 @@ defmodule Arca do
 
   """
   def put(%Context{} = ctx, path, content),
-    do: guarded(ctx, path, fn -> adapter().put(ctx, path, content) end)
+    do: mutating(ctx, path, fn -> adapter().put(ctx, path, content) end)
 
   @doc """
   Encode and write JSON content to storage.
@@ -165,7 +165,7 @@ defmodule Arca do
 
   """
   def delete(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter().delete(ctx, path) end)
+    do: mutating(ctx, path, fn -> adapter().delete(ctx, path) end)
 
   @doc """
   List contents at path.
@@ -224,7 +224,7 @@ defmodule Arca do
 
   """
   def delete_tree(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter().delete_tree(ctx, path) end)
+    do: mutating(ctx, path, fn -> adapter().delete_tree(ctx, path) end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -281,6 +281,23 @@ defmodule Arca do
       {:error, :forbidden} = err -> err
     end
   end
+
+  # A write anywhere under `components/<athanor>` changes what the storage
+  # cap measures, and that total is cached because walking the tree on every
+  # guest write is the cost the cap was written to avoid. Invalidating here
+  # rather than in each writer means a new writer cannot forget — every
+  # mutation already passes through. Unconditional: a failed write may still
+  # have left bytes behind.
+  defp mutating(ctx, path, fun) do
+    result = guarded(ctx, path, fun)
+    invalidate_components_usage(path)
+    result
+  end
+
+  defp invalidate_components_usage(["components", athanor_id | _]) when is_binary(athanor_id),
+    do: Arca.Cache.invalidate(Arca.Cache.Keys.components_usage(athanor_id))
+
+  defp invalidate_components_usage(_path), do: :ok
 
   @doc """
   Whether the configured storage adapter is the local filesystem.

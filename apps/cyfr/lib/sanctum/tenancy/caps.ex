@@ -11,6 +11,10 @@ defmodule Sanctum.Tenancy.Caps do
   `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`,
   `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off.
   A private box needs none of them; a `*` server sets them.
+
+  The byte cap counts both of an athanor's roots — its data and its
+  components, the seeded bundle included — on every write, which is what
+  `CYFR_ATHANOR_STORAGE_BYTES` claims to bound.
   """
 
   @type key ::
@@ -47,6 +51,12 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
+  # The component tree changes only when something writes to it, and
+  # `Arca` invalidates this on every such write, so the walk happens once
+  # per change rather than once per guest write. The TTL is a backstop for
+  # bytes that arrive without passing through Arca at all.
+  @components_usage_ttl_ms :timer.minutes(5)
+
   @doc """
   `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
   `:athanor_storage_bytes` cap (or the cap is off). The one place the cap is
@@ -54,34 +64,42 @@ defmodule Sanctum.Tenancy.Caps do
   component bytes all come here.
 
   An athanor's bytes live under two roots — `data/{athanor}` and
-  `components/{athanor}` — and `roots:` says which to measure. The default
-  `[:data]` is the writing hot path, where a second directory walk per write
-  would be felt; publishing a component (rare, and the larger sink) measures
-  `[:data, :components]`, so the cap bounds the whole athanor where it
-  matters. The seeded bundle counts toward it.
+  `components/{athanor}` — and both are counted, the seeded bundle included,
+  because a cap that bounds one root is not a cap on the athanor. `data` is
+  walked live; `components` is read from a cache Arca invalidates on write,
+  so the hot path pays for one walk, not two.
   """
-  @spec check_storage(Sanctum.Context.t(), non_neg_integer(), keyword()) ::
+  @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
           :ok | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}
-  def check_storage(%Sanctum.Context{} = ctx, incoming, opts \\ []) when is_integer(incoming) do
+  def check_storage(%Sanctum.Context{} = ctx, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
       nil ->
         :ok
 
       cap ->
-        used = opts |> Keyword.get(:roots, [:data]) |> Enum.map(&used(ctx, &1)) |> Enum.sum()
-
-        if used + incoming > cap,
+        if data_bytes(ctx) + components_bytes(ctx) + incoming > cap,
           do: {:error, {:limit_reached, :athanor_storage_bytes, cap}},
           else: :ok
     end
   end
 
-  defp used(ctx, :data), do: bytes_under(ctx, [])
+  defp data_bytes(ctx), do: bytes_under(ctx, [])
 
-  defp used(%{athanor_id: id} = ctx, :components) when is_binary(id) and id != "",
-    do: bytes_under(ctx, ["components", id])
+  defp components_bytes(%{athanor_id: id} = ctx) when is_binary(id) and id != "" do
+    key = Arca.Cache.Keys.components_usage(id)
 
-  defp used(_ctx, _root), do: 0
+    case Arca.Cache.get(key) do
+      {:ok, bytes} when is_integer(bytes) ->
+        bytes
+
+      _ ->
+        bytes = bytes_under(ctx, ["components", id])
+        Arca.Cache.put(key, bytes, @components_usage_ttl_ms)
+        bytes
+    end
+  end
+
+  defp components_bytes(_ctx), do: 0
 
   defp bytes_under(ctx, segments) do
     case Arca.usage(ctx, segments) do

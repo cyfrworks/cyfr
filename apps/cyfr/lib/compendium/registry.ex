@@ -175,13 +175,7 @@ defmodule Compendium.Registry do
              publisher,
              component_type
            ),
-         # The component tree is the athanor's other root, and on a public
-         # door it is the larger sink — a stranger's pushes are bounded by
-         # the same per-athanor cap as their data.
-         :ok <-
-           Sanctum.Tenancy.Caps.check_storage(ctx, byte_size(wasm_bytes),
-             roots: [:data, :components]
-           ),
+         :ok <- Sanctum.Tenancy.Caps.check_storage(ctx, byte_size(wasm_bytes)),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,

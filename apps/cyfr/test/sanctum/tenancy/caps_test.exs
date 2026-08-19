@@ -134,19 +134,43 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert :ok = Caps.check_storage(ctx, 1_000_000_000)
   end
 
-  test "athanor_storage_bytes counts the component tree when publishing" do
+  test "athanor_storage_bytes counts the component tree on every write, not only a publish" do
     ctx = Sanctum.TestContext.local()
 
-    # The writing hot path measures the data root alone...
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000_000)
     assert :ok = Caps.check_storage(ctx, 10)
 
-    # ...and a publish measures both, so a cap set below what the athanor's
-    # components already hold refuses the next one.
+    # A cap below what this athanor's components already hold refuses the
+    # next write of any kind — a chat attachment and a guest storage write
+    # come through the same function a publish does.
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
 
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
-             Caps.check_storage(ctx, 10, roots: [:data, :components])
+             Caps.check_storage(ctx, 10)
+  end
+
+  test "the component total is cached, and a write to the tree drops it" do
+    ctx = Sanctum.TestContext.local()
+    key = Arca.Cache.Keys.components_usage(ctx.athanor_id)
+
+    Arca.Cache.invalidate(key)
+    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000_000)
+
+    # The first check walks the tree and remembers what it found.
+    assert :ok = Caps.check_storage(ctx, 1)
+    assert {:ok, cached} = Arca.Cache.get(key)
+    assert is_integer(cached)
+
+    # Any write under the athanor's component root drops it, so the cap
+    # cannot go on measuring a tree that has changed underneath it.
+    :ok = Arca.put(ctx, ["components", ctx.athanor_id, "cap-probe.txt"], "bytes")
+    assert Arca.Cache.get(key) == :miss
+
+    # A write elsewhere is not that tree and leaves it alone.
+    assert :ok = Caps.check_storage(ctx, 1)
+    assert {:ok, _} = Arca.Cache.get(key)
+    :ok = Arca.put(ctx, ["cap-probe.txt"], "bytes")
+    assert {:ok, _} = Arca.Cache.get(key)
   end
 
   test "max_members_per_group counts seats — active and invited" do
