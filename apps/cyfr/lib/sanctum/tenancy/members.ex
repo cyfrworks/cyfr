@@ -160,7 +160,7 @@ defmodule Sanctum.Tenancy.Members do
   known one so it cannot be used to learn who is on the server; the two
   addresses it cannot seat — one that two identities here sign in with
   (`:ambiguous_email`: add by user id), and one a known person's provider
-  has not verified (`:email_unverified`: a permanent invite would be the
+  positively refuses (`:email_unverified`: a permanent invite would be the
   alternative) — are refused with the reason. The per-group member cap
   applies. A person's own athanor has exactly one member — its owner — on
   every path, not only in the UI.
@@ -208,7 +208,7 @@ defmodule Sanctum.Tenancy.Members do
           {:error, :ambiguous_email}
 
         [] ->
-          if Enum.any?(known, &(&1.status == "active" and not &1.email_verified)) do
+          if Enum.any?(known, &(&1.status == "active" and &1.email_verified == false)) do
             {:error, :email_unverified}
           else
             with {:ok, _} <- invite(athanor_id, email, added_by) do
@@ -232,7 +232,12 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(_athanor, _target, _added_by), do: {:error, :athanor_archived}
 
-  defp known_and_active?(%User{} = user), do: user.email_verified and user.status == "active"
+  # The door decided who may be here; what a member's invitation needs is
+  # that the provider did not *deny* the address. An issuer that never
+  # claims verification (many enterprise IdPs) must not make invitations
+  # impossible; one that says `false` still refuses.
+  defp known_and_active?(%User{} = user),
+    do: user.email_verified != false and user.status == "active"
 
   defp invite(athanor_id, email, added_by) do
     case find_invited(email, athanor_id) do
@@ -251,16 +256,17 @@ defmodule Sanctum.Tenancy.Members do
   end
 
   @doc """
-  Turn every `invited` row for the person's verified email into their active
-  membership — two set-based statements in one transaction, so two
+  Turn every `invited` row for the person's email into their active
+  membership — unless their provider positively says the address is not
+  theirs, which is the one answer that refuses — two set-based statements in one transaction, so two
   first sign-ins of the same identity cannot both claim a row: invitations
   for athanors where the person is already active are dropped, the rest are
   activated with the email consumed (the assignment index then admits no
   second row for the person and athanor). Returns how many activated.
   """
   @spec activate_invited(User.t()) :: {:ok, non_neg_integer()}
-  def activate_invited(%User{email: email, email_verified: true, id: user_id})
-      when is_binary(email) do
+  def activate_invited(%User{email: email, email_verified: verified, id: user_id})
+      when is_binary(email) and verified != false do
     now = DateTime.utc_now()
 
     invited =

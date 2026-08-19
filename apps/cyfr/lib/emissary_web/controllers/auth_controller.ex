@@ -408,11 +408,11 @@ defmodule EmissaryWeb.AuthController do
     ArgumentError -> conn
   end
 
-  # The door, then what sign-in records, then the person's athanor and
-  # capabilities — before any session exists and before cyfr.run hears of the
-  # identity. It runs here, at the one place the web flow mints a session,
-  # so no auth provider (built-in or a deployment's own) can step around it.
-  # What the provider proved about the email decides how the door reads it.
+  # The door, then what sign-in records — before any session exists and
+  # before cyfr.run hears of the identity. It runs here, at the one place the
+  # web flow mints a session, so no auth provider (built-in or a deployment's
+  # own) can step around it. What the provider proved about the email decides
+  # how the door reads it.
   defp admit(%Sanctum.Context{} = ctx, auth) do
     email = ctx.email
     extra = Map.get(auth, :extra) || %{}
@@ -434,7 +434,13 @@ defmodule EmissaryWeb.AuthController do
 
     with {:ok, verdict} <- Sanctum.Door.admit_identity(ctx.user_id, user_info),
          {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
-      {:ok, Sanctum.Tenancy.resolve_into(ctx, force: true), user}
+      # No re-resolve here. An operator's first sign-in seats them in Home a
+      # moment before their own athanor exists, and an athanor pinned to the
+      # context now is the one every later resolve keeps — they would land in
+      # Home rather than their own chat. The proceed arm resolves once the
+      # mint has happened; the legal and claim arms mint a session with no
+      # athanor at all, which `Sanctum.Session.create/1` re-resolves on load.
+      {:ok, ctx, user}
     end
   end
 

@@ -152,9 +152,21 @@ defmodule Sanctum.SignIn do
           {:ok, user}
 
         is_binary(user.namespace) ->
+          # The namespace is meant to be the same person everywhere. When the
+          # registry names another one, this server keeps what it recorded —
+          # its athanor slug, its paths and its push attribution are all built
+          # on it — and says so loudly enough to be noticed, because the
+          # divergence is permanent until someone reconciles it at cyfr.run.
           Logger.warning(
             "[Sanctum.SignIn] cyfr.run names #{user_id} #{inspect(slug)} but this server " <>
-              "recorded #{inspect(user.namespace)} — keeping the recorded one"
+              "recorded #{inspect(user.namespace)} — keeping the recorded one; reconcile at " <>
+              "cyfr.run if the registry is right"
+          )
+
+          :telemetry.execute(
+            [:cyfr, :sanctum, :identity, :namespace_divergence],
+            %{count: 1},
+            %{user_id: user_id, recorded: user.namespace, registry: slug}
           )
 
           {:ok, user}
@@ -299,8 +311,14 @@ defmodule Sanctum.SignIn do
   defp token_of(%{} = m), do: m["token"] || m[:token]
   defp role_of(%{} = m), do: m["role"] || m[:role] || "member"
 
-  defp suggested_slug(%User{email: email}, provider) do
-    Context.suggest_slug(email) || Context.suggest_slug("user-#{provider}")
+  # What to put in the claim box. The provider's own screen name is the
+  # closest thing to what the person calls themselves — an
+  # `alice.smith+work@` address suggests `alice-smith-work` when the GitHub
+  # login next to it is simply `alice`. The address is the fallback, and the
+  # provider name the last resort.
+  defp suggested_slug(%User{display_name: name, email: email}, provider) do
+    Sanctum.Slug.from_name(name) || Context.suggest_slug(email) ||
+      Context.suggest_slug("user-#{provider}")
   end
 
   # The API client wraps the 412 detail once more (`operation` +

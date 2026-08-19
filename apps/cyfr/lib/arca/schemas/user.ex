@@ -25,7 +25,7 @@ defmodule Arca.Schemas.User do
 
   schema "users" do
     field :email, :string
-    field :email_verified, :boolean, default: false
+    field :email_verified, :boolean
     field :provider, :string
     field :display_name, :string
     field :namespace, :string

@@ -94,13 +94,25 @@ defmodule Sanctum.SignInTest do
     refute Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
   end
 
-  test "an unverified email activates nothing" do
+  test "an address the provider never claimed activates its invitations; one it refuses does not" do
     {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Other Team")
     {:ok, :invited} = Members.add(group, [email: "user5@example.com"], "creator2")
 
-    assert {:ok, _} = SignIn.admitted(info(5, %{verified: :unknown}), :allowed)
-    refute Members.member?(info(5).id, group.id)
-    assert Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
+    # An issuer that emits no `email_verified` (many enterprise IdPs) must not
+    # read as one that denied the address: the door already admitted them.
+    assert {:ok, %{email_verified: nil}} =
+             SignIn.admitted(info(5, %{verified: :unknown}), :allowed)
+
+    assert Members.member?(info(5).id, group.id)
+
+    {:ok, group2} = Athanors.create_group("github|https://github.com|creator2", "Refused Team")
+    {:ok, :invited} = Members.add(group2, [email: "user9@example.com"], "creator2")
+
+    assert {:ok, %{email_verified: false}} =
+             SignIn.admitted(info(9, %{verified: false}), :allowed)
+
+    refute Members.member?(info(9).id, group2.id)
+    assert Enum.any?(Members.list_by_athanor(group2.id), &(&1.status == "invited"))
   end
 
   test "record_namespace/2 lands the claim on the users row, mints the athanor, and refuses a slug another identity holds" do

@@ -118,13 +118,35 @@ defmodule Sanctum.SignInCompleteTest do
       assert :not_found = CredentialStore.get(user.id, "registry.test", ns)
     end
 
-    test "with no personal namespace: claim, with a suggestion", %{bypass: bypass} do
+    test "with no personal namespace: claim, suggesting the provider's own screen name",
+         %{bypass: bypass} do
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Users.upsert_from_provider(%{
+          id: "github|https://github.com|sug-#{n}",
+          provider: "github",
+          email: "alice.smith+work#{n}@example.com",
+          verified: true,
+          name: "Alice#{n}"
+        })
+
+      probe_answers(bypass, 200, %{"personal_namespace" => nil, "memberships" => []})
+
+      # The screen name is what the person calls themselves; the address's
+      # local part is the fallback, not the first answer.
+      expected = "alice#{n}"
+      assert {:needs_claim, ^expected} = SignIn.complete(user, "github", "gho_access")
+      assert {:ok, %{namespace: nil}} = Users.get(user.id)
+    end
+
+    test "with no screen name, the address's local part is the suggestion", %{bypass: bypass} do
       user = person()
       probe_answers(bypass, 200, %{"personal_namespace" => nil, "memberships" => []})
 
       assert {:needs_claim, suggested} = SignIn.complete(user, "github", "gho_access")
       assert is_binary(suggested)
-      assert {:ok, %{namespace: nil}} = Users.get(user.id)
+      assert suggested =~ "c"
     end
 
     test "412: legal acceptance first", %{bypass: bypass} do

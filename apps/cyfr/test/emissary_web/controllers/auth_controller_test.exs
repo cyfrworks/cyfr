@@ -308,9 +308,50 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
                CredentialStore.get(user_id, "registry.test", ns)
 
-      # The session is a working one: the person is authenticated at once.
-      assert {:ok, %{authenticated: true, namespace: ^ns}} =
+      # The session is a working one: the person is authenticated at once...
+      assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
                Sanctum.Session.load(session_of(conn), surface: :console)
+
+      # ...and it names the athanor that was just minted for them, not the
+      # Home seat a platform admin picks up a moment earlier.
+      assert {:ok, %{id: personal_id, kind: "person"}} =
+               Sanctum.Tenancy.Athanors.get_by_slug("person", ns)
+
+      assert loaded.athanor_id == personal_id
+    end
+
+    test "an operator's first sign-in lands in their own athanor, not the Home seat",
+         %{conn: conn, bypass: bypass} do
+      n = System.unique_integer([:positive])
+      uid = "auth_cb_ops_#{n}"
+      email = "ops#{n}@example.com"
+      prev = Application.get_env(:cyfr, :platform_admin_emails, [])
+      Application.put_env(:cyfr, :platform_admin_emails, [email])
+      on_exit(fn -> Application.put_env(:cyfr, :platform_admin_emails, prev) end)
+
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 200, %{
+          "personal_namespace" => %{"slug" => "ops#{n}", "token" => "cyfr_pt_personal"},
+          "memberships" => []
+        })
+      end)
+
+      conn = callback(conn, verified_github_auth(uid, email: email))
+
+      assert redirected_to(conn) == "/"
+
+      # The Home seat is minted before the namespace is known, so it is the
+      # only membership at that moment; the session must still name the
+      # athanor the sign-in went on to mint.
+      assert {:ok, %{id: personal_id}} = Sanctum.Tenancy.Athanors.get_by_slug("person", "ops#{n}")
+
+      assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
+               Sanctum.Session.load(session_of(conn), surface: :console)
+
+      assert Sanctum.Tenancy.Members.member?(
+               "github|https://github.com|#{uid}",
+               Sanctum.Tenancy.Athanors.home!().id
+             )
     end
 
     test "unclaimed path: no personal → session, IdP token stashed, redirect to /claim-namespace",
@@ -327,8 +368,10 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert redirected_to(conn) == "/claim-namespace"
       assert is_binary(session_of(conn))
       assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
-      # A session ahead of its claim is not a working one yet.
-      assert {:ok, %{authenticated: false, namespace: nil}} =
+      # A session ahead of its claim is not a working one yet, and it names no
+      # athanor: the person's own does not exist until the claim mints it, and
+      # a session pinned to something else now would outlast that.
+      assert {:ok, %{authenticated: false, namespace: nil, athanor_id: nil}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
       assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")

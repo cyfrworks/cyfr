@@ -75,7 +75,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     create table(:users, primary_key: false) do
       add :id, :string, primary_key: true
       add :email, :string
-      add :email_verified, :boolean, null: false, default: false
+      # Tri-state on purpose: true when the provider proved the address,
+      # false when it said the opposite, NULL when it said nothing (many
+      # enterprise OIDC issuers never emit the claim). Only an explicit
+      # false refuses an invitation.
+      add :email_verified, :boolean
       add :provider, :string, null: false
       add :display_name, :string
       # Durable copy of the cyfr.run personal namespace once it is known.

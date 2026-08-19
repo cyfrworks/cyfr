@@ -147,7 +147,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
              Sanctum.Door.admit("github|https://github.com|p#{n}", stranger, true)
   end
 
-  test "an address two identities sign in with, or one a provider has not verified, is refused with the reason — never a dead invite",
+  test "an address two identities sign in with, or one a provider refuses, is refused with the reason — never a dead invite",
        %{alice: alice, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Careful #{n}"})
@@ -169,6 +169,8 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     assert msg =~ "More than one person"
 
+    # An address the provider positively refuses cannot be seated by email:
+    # a permanent invitation nobody could ever claim is the alternative.
     unverified = "unverified#{n}@example.com"
 
     {:ok, _} =
@@ -176,7 +178,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
         id: "oidc|https://idp.example|unv-#{n}",
         provider: "oidc",
         email: unverified,
-        verified: :unknown
+        verified: false
       })
 
     assert {:error, msg} =
@@ -185,13 +187,30 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert msg =~ "not verified"
     refute Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
 
-    # By user id both are seatable — the id is the person.
+    # By user id they are seatable — the id is the person.
     assert {:ok, %{state: "added"}} =
              call(a, "member", %{
                "action" => "add",
                "athanor" => group.id,
                "user_id" => "oidc|https://idp.example|unv-#{n}"
              })
+
+    # An issuer that simply never claims verification is not a refusal: the
+    # door admitted them, and a member's invitation seats them by address.
+    silent = "silent#{n}@example.com"
+
+    {:ok, _} =
+      Users.upsert_from_provider(%{
+        id: "oidc|https://idp.example|silent-#{n}",
+        provider: "oidc",
+        email: silent,
+        verified: :unknown
+      })
+
+    assert {:ok, %{state: "added"}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => silent})
+
+    assert Members.member?("oidc|https://idp.example|silent-#{n}", group.id)
   end
 
   test "an API key cannot create groups or add members", %{alice: alice, ctx: ctx} do

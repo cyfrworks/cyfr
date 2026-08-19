@@ -34,7 +34,9 @@ defmodule Sanctum.Tenancy.Users do
   Insert or refresh the row for an identity the door just admitted.
 
   `first_seen_at` is set once; `last_seen_at`, `email`, `email_verified`
-  and `display_name` follow what the provider asserted this time.
+  and `display_name` follow what the provider asserted this time —
+  `email_verified` as the provider's own three answers, so "it never said"
+  is not recorded as "it said no".
   """
   @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
   def upsert_from_provider(%{id: id, provider: provider} = info) when is_binary(id) do
@@ -42,7 +44,7 @@ defmodule Sanctum.Tenancy.Users do
 
     seen = %{
       email: Map.get(info, :email),
-      email_verified: Map.get(info, :verified) == true,
+      email_verified: verified_claim(Map.get(info, :verified)),
       provider: to_string(provider),
       display_name: Map.get(info, :name),
       last_seen_at: now,
@@ -268,6 +270,13 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   defp reseat_personal(_), do: :ok
+
+  # What the provider asserted about the address, kept as asserted: `true`
+  # proved, `false` refused, `nil` never claimed. An issuer that does not
+  # emit `email_verified` must not read as one that denied it.
+  defp verified_claim(true), do: true
+  defp verified_claim(false), do: false
+  defp verified_claim(_), do: nil
 
   defp update(%User{} = user, attrs) do
     attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())
