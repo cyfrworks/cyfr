@@ -10,7 +10,9 @@ defmodule Sanctum.MCP.DoorTool do
   exclusion, ejects the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
   address was holding either way; `remove` deletes an entry — and, when it was
-  an allow, ends the sessions it admitted, so the door is asked again;
+  an allow, ejects everyone the door would now refuse
+  (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered, since
+  it names nobody;
   `list` shows the door; `requests` the pending invites members asked for; `resolve`
   approves or drops one.
   """
@@ -18,6 +20,7 @@ defmodule Sanctum.MCP.DoorTool do
   require Logger
 
   alias Sanctum.Context
+  alias Sanctum.Door
   alias Sanctum.Door.Store
   alias Sanctum.Tenancy.Users
 
@@ -106,17 +109,18 @@ defmodule Sanctum.MCP.DoorTool do
 
       Enum.each(restored, &Users.allow/1)
 
-      # Removing an allow is closing the door on whoever it admitted. Their
-      # standing is not denied — nothing is archived, no key is revoked —
-      # but the session they are holding was issued by that entry, and it
-      # would outlive it by up to its whole TTL. They pass the door again.
-      shut_out = if entry.effect == "allow", do: known_users(entry.kind, entry.value), else: []
-      Enum.each(shut_out, &Sanctum.Session.revoke_all_for_user(&1.id))
+      # Removing an allow is closing the door on whoever it admitted, and the
+      # credentials it issued would otherwise outlive it by their whole TTL.
+      # `Door.reconcile/0` re-asks the door about everyone rather than guess
+      # which entry admitted whom — the only way `*` is covered, since it
+      # names nobody. Standing is untouched: this closes a door, it does not
+      # deny a person.
+      {:ok, ejected} = if entry.effect == "allow", do: Door.reconcile(), else: {:ok, 0}
 
       Sanctum.Notify.allowlist_changed()
 
       {:ok,
-       %{id: id, removed: true, sessions_revoked: length(shut_out)}
+       %{id: id, removed: true, ejected: ejected}
        |> with_restore_note(restored)}
     else
       {:error, :not_found} -> {:error, "Entry not found"}

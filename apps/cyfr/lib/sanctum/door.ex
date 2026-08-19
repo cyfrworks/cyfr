@@ -23,7 +23,12 @@ defmodule Sanctum.Door do
   detail a stranger could use to enumerate the list.
   """
 
+  require Logger
+
   alias Sanctum.Door.Store
+
+  # The page the users walk takes; `Users.list/1` caps at 500 either way.
+  @page 500
 
   @type verdict :: {:ok, :admin | :allowed} | {:error, :denied | :not_allowed}
 
@@ -70,6 +75,66 @@ defmodule Sanctum.Door do
         {:error, {:door, reason}}
     end
   end
+
+  @doc """
+  Ask the door about everyone it has already let in, and eject whoever it
+  would refuse now.
+
+  Removing an allow entry — `*` most of all — closes the door, but the
+  sessions and keys it issued outlive it by up to their whole TTL. Rather
+  than work out which entry admitted whom, this re-asks `admit/3` for every
+  person the server knows: it is the same decision, made by the same
+  function, so the door cannot mean one thing at sign-in and another here.
+
+  What it takes is what the door issued: sessions and API keys. What it
+  leaves is standing — nothing is archived and no membership is touched.
+  That is the difference between closing a door and denying a person
+  (`Sanctum.Tenancy.Users.deny/1`, which does both).
+
+  Returns the number of people ejected. Rare and operator-triggered, so the
+  full walk is affordable; it is called from a task so a door verb answers
+  without waiting.
+  """
+  @spec reconcile() :: {:ok, non_neg_integer()}
+  def reconcile do
+    {:ok, eject_refused(0, 0)}
+  end
+
+  defp eject_refused(offset, ejected) do
+    case Sanctum.Tenancy.Users.list(limit: @page, offset: offset) do
+      [] ->
+        ejected
+
+      users ->
+        ejected = ejected + Enum.count(users, &eject_if_refused/1)
+
+        # A page short of the limit is the last one; anything else and the
+        # walk continues, because ejecting does not remove the rows.
+        if length(users) < @page,
+          do: ejected,
+          else: eject_refused(offset + @page, ejected)
+    end
+  end
+
+  defp eject_if_refused(user) do
+    case admit(user.id, user.email, verified_claim(user)) do
+      {:ok, _} ->
+        false
+
+      {:error, reason} ->
+        Logger.info("[Sanctum.Door] #{user.id} no longer admitted (#{reason}) — ejecting")
+        Sanctum.Session.revoke_all_for_user(user.id)
+        Sanctum.ApiKey.revoke_all_created_by(user.id)
+        true
+    end
+  end
+
+  # `users.email_verified` is a nullable boolean: NULL is the provider that
+  # said nothing, which is `admit/3`'s `:unknown`, not `false`. Reading it as
+  # `false` here would eject everyone whose issuer omits the claim.
+  defp verified_claim(%{email_verified: true}), do: true
+  defp verified_claim(%{email_verified: false}), do: false
+  defp verified_claim(_user), do: :unknown
 
   @doc "Is this email one of the operators named in `CYFR_PLATFORM_ADMIN_EMAILS`?"
   @spec platform_admin_email?(String.t() | nil) :: boolean()

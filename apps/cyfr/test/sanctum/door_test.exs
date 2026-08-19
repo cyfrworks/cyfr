@@ -130,4 +130,101 @@ defmodule Sanctum.DoorTest do
       assert {:ok, :admin} = Door.admit_identity(uid(1), %{email: "ops@example.com"})
     end
   end
+
+  describe "reconcile/0 — the door outlives nothing" do
+    defp known_person(n, opts \\ []) do
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: uid(n),
+          provider: "github",
+          email: Keyword.get(opts, :email, "person#{n}@example.com"),
+          verified: Keyword.get(opts, :verified, true),
+          name: nil
+        })
+
+      user
+    end
+
+    defp session_for(user) do
+      {:ok, session} =
+        Sanctum.Session.create(
+          Sanctum.Context.build(
+            user_id: user.id,
+            email: user.email,
+            provider: "github",
+            authenticated: true,
+            permissions: [:read]
+          )
+        )
+
+      session
+    end
+
+    test "closing * ejects the strangers it admitted, and nobody else" do
+      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
+      stranger = known_person(20)
+      operator = known_person(21, email: "ops@example.com")
+
+      stranger_session = session_for(stranger)
+      operator_session = session_for(operator)
+
+      assert {:ok, _} = Sanctum.Session.get(stranger_session.token)
+      assert {:ok, _} = Sanctum.Session.get(operator_session.token)
+
+      :ok = Store.remove(wildcard.id)
+
+      # `*` names nobody, so there is no entry to read the ejected off —
+      # the door is re-asked about everyone instead.
+      assert {:ok, 1} = Door.reconcile()
+
+      assert {:error, :invalid_session} = Sanctum.Session.get(stranger_session.token)
+      assert {:ok, _} = Sanctum.Session.get(operator_session.token)
+    end
+
+    test "the keys the door issued go with the sessions" do
+      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
+      stranger = known_person(24)
+
+      tenant = Sanctum.TestContext.local()
+      ctx = %{tenant | user_id: stranger.id, email: stranger.email}
+      {:ok, key} = Sanctum.ApiKey.create(ctx, %{name: "stranger-key"})
+
+      assert Enum.any?(elem(Sanctum.ApiKey.list(ctx), 1), &(&1.name == "stranger-key"))
+
+      :ok = Store.remove(wildcard.id)
+      assert {:ok, 1} = Door.reconcile()
+
+      # A key minted while the door was open is a credential the door issued;
+      # it must not outlive the entry that admitted its holder.
+      assert {:error, _} = Sanctum.ApiKey.validate(key.api_key)
+    end
+
+    test "an issuer that proves nothing about the email keeps its user_id seat" do
+      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
+      {:ok, _} = Store.allow("user_id", uid(22), "ops")
+
+      # `users.email_verified` is NULL when the issuer omitted the claim.
+      # Reading that as `false` rather than `:unknown` would eject them here.
+      silent = known_person(22, verified: nil)
+      assert silent.email_verified == nil
+
+      session = session_for(silent)
+      :ok = Store.remove(wildcard.id)
+
+      assert {:ok, 0} = Door.reconcile()
+      assert {:ok, _} = Sanctum.Session.get(session.token)
+    end
+
+    test "ejecting is not denying: standing survives" do
+      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
+      stranger = known_person(23)
+      :ok = Store.remove(wildcard.id)
+
+      assert {:ok, 1} = Door.reconcile()
+
+      {:ok, after_eject} = Sanctum.Tenancy.Users.get(stranger.id)
+      assert after_eject.status == "active"
+      assert after_eject.denied_at == nil
+    end
+  end
 end

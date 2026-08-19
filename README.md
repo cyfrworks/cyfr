@@ -467,6 +467,14 @@ Every athanor is minted with its own copy of the component bundle, so
 `CYFR_MAX_ATHANORS` and `CYFR_ATHANOR_STORAGE_BYTES` are what bound the disk.
 A specific `cyfr admin deny` always beats `*`.
 
+Closing the door again — `cyfr admin remove` on the `*` entry — ejects
+everyone it was the only reason for: their sessions end and the API keys they
+created are revoked. Their standing is untouched (nothing is archived, no
+group seat is lost); that is what `deny` is for. The eject happens when the
+entry is removed, so an allowlist row edited directly in the database, or a
+`*` removed while the server is down, leaves live credentials behind — remove
+it through `cyfr admin` on a running server.
+
 ### Postgres (bring your own)
 
 The default database is embedded SQLite (`./data/cyfr.db`). Postgres is
