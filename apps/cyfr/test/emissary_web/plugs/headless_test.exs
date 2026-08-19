@@ -15,7 +15,17 @@ defmodule EmissaryWeb.Plugs.HeadlessTest do
   end
 
   test "browser routes are gone; the machine surfaces stay", %{conn: conn} do
-    for path <- ["/", "/login", "/a", "/auth/github", "/claim-namespace", "/legal/accept"] do
+    for path <- [
+          "/",
+          "/login",
+          "/a",
+          "/auth/github",
+          "/claim-namespace",
+          "/legal/accept",
+          # a chat attachment is a page surface too: its bytes are for a
+          # member reading the thread in a browser
+          "/a/home/attachments/msg_1/file.png"
+        ] do
       resp = get(build_conn(), path)
       assert resp.status == 404, "#{path} answered #{resp.status} on a headless node"
       assert resp.resp_body =~ "headless"

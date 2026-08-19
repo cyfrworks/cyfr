@@ -147,15 +147,18 @@ if config_env() != :test do
       "http://#{host}:#{port}"
     ]
 
+    # Loopback, but only on the port this server actually listens on: an
+    # `http://localhost` with no port is port 80, which is a page on the
+    # victim's own machine — a trusted origin for their LiveView socket, with
+    # their cookie. Every local flow (the SSH forward the README documents,
+    # dev, the host-bound CLI) names the port.
     localhost_origins = [
-      "http://localhost",
-      "https://localhost",
       "http://localhost:#{port}",
       "https://localhost:#{port}",
-      "http://127.0.0.1",
-      "https://127.0.0.1",
-      "http://[::1]",
-      "https://[::1]"
+      "http://127.0.0.1:#{port}",
+      "https://127.0.0.1:#{port}",
+      "http://[::1]:#{port}",
+      "https://[::1]:#{port}"
     ]
 
     config :cyfr, EmissaryWeb.Endpoint,

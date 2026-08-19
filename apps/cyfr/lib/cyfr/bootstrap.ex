@@ -19,7 +19,7 @@ defmodule Cyfr.Bootstrap do
   use Task, restart: :temporary
   require Logger
 
-  alias Sanctum.Tenancy.Athanors
+  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   def start_link(_opts) do
     Task.start_link(__MODULE__, :run, [])
@@ -28,10 +28,42 @@ defmodule Cyfr.Bootstrap do
   @doc false
   def run do
     if Application.get_env(:cyfr, :provisioning_boot_enabled, true) do
+      reconcile_platform_admins()
       ensure_home_seeded()
     end
 
     :ok
+  end
+
+  # `CYFR_PLATFORM_ADMIN_EMAILS` is the operator list, and a sign-in is what
+  # normally reconciles a row against it. That only reaches people the door
+  # still admits: drop an operator's email from the env *and* from the
+  # allowlist and their row — and the session holding its capability —
+  # survived until it expired. Boot is the other moment the env is read.
+  defp reconcile_platform_admins do
+    for %{user_id: user_id} <- Members.list_platform(), is_binary(user_id) do
+      case Users.get(user_id) do
+        {:ok, %{email: email}} ->
+          unless Sanctum.Door.platform_admin_email?(email) do
+            Logger.warning(
+              "[Cyfr.Bootstrap] #{user_id} is no longer in CYFR_PLATFORM_ADMIN_EMAILS — " <>
+                "revoking platform scope and its sessions"
+            )
+
+            Members.revoke_platform(user_id)
+            Sanctum.Session.revoke_all_for_user(user_id)
+          end
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.error("[Cyfr.Bootstrap] platform reconcile raised: #{Exception.message(e)}")
+      :ok
   end
 
   defp ensure_home_seeded do

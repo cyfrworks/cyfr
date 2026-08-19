@@ -13,10 +13,34 @@ defmodule Sanctum.S7TinctureTokenTest do
   alias Sanctum.Context
   alias Sanctum.TinctureAuth
 
+  # A person is an IdP composite; the tincture token names one.
+  @person "github|https://github.com|u1"
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, ctx: Sanctum.TestContext.local()}
+
+    # The token names a person and an athanor; what it can still open is a
+    # standing question, so the rows have to be there to answer it.
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: @person,
+        provider: "github",
+        email: "u1@example.com",
+        verified: true
+      })
+
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(@person, scope: "athanor", athanor_id: "ath_acme")
+
+    # A second member, so removing the first does not archive the athanor
+    # out from under the test.
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure("github|https://github.com|u2",
+        scope: "athanor",
+        athanor_id: "ath_acme"
+      )
+
+    {:ok, ctx: Sanctum.TestContext.local(), user: user}
   end
 
   defp conn(query_string, headers \\ []) do
@@ -25,7 +49,7 @@ defmodule Sanctum.S7TinctureTokenTest do
 
   defp authed_ctx do
     Context.build(
-      user_id: "u-1",
+      user_id: @person,
       namespace: "ns-1",
       athanor_id: "ath_acme",
       permissions: [:read, :write],
@@ -40,13 +64,33 @@ defmodule Sanctum.S7TinctureTokenTest do
       token = TinctureAuth.issue_access_token(authed_ctx())
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(conn("_t=#{token}"))
-      assert out.user_id == "u-1"
+      assert out.user_id == @person
       assert out.namespace == "ns-1"
       assert out.athanor_id == "ath_acme"
       assert out.scope == :athanor
       assert out.auth_method == :tincture
       assert out.authenticated == true
       assert MapSet.to_list(out.permissions) == [:execute]
+    end
+
+    test "a token stops opening the athanor its holder has left, or been denied at the door" do
+      token = TinctureAuth.issue_access_token(authed_ctx())
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(conn("_t=#{token}"))
+
+      # The seat goes: the signature is still valid, the standing is not.
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_acme")
+      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: @person)
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == :unauthenticated
+
+      # Back in, and the same token works again — the check is standing, not
+      # a revocation list.
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(@person, scope: "athanor", athanor_id: "ath_acme")
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(conn("_t=#{token}"))
+
+      # ...and a person the door has denied opens nothing at all.
+      {:ok, user} = Sanctum.Tenancy.Users.get(@person)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == :unauthenticated
     end
 
     test "a tampered/garbage ?_t= is rejected" do

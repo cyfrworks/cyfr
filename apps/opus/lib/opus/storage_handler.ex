@@ -541,9 +541,16 @@ defmodule Opus.StorageHandler do
   # can never read or write another athanor's component bytes, regardless of
   # its declared `allowed_paths`. `data/` and other roots are tenant-scoped
   # by Arca and pass through unchanged.
-  defp pin_tenant(["components" | rest], ctx) do
-    ["components", ctx.athanor_id | rest]
+  defp pin_tenant(["components" | rest], %{athanor_id: athanor_id})
+       when is_binary(athanor_id) and athanor_id != "" do
+    ["components", athanor_id | rest]
   end
+
+  # A context with no athanor cannot name a component path at all. Leaving
+  # the root unpinned is what `Arca.Storage.authorize_path/2` refuses, which
+  # is a clean `:forbidden` — where splicing a nil in raised from inside the
+  # path validator instead.
+  defp pin_tenant(["components" | rest], _ctx), do: ["components" | rest]
 
   defp pin_tenant(segments, _ctx), do: segments
 

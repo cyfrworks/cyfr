@@ -367,13 +367,22 @@ defmodule EmissaryWeb.TinctureControllerTest do
   end
 
   describe "assets — private tinctures (signed token)" do
-    test "serves private tincture assets with valid token", %{conn: conn} do
-      token =
-        Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
-          "tincture_access",
-          {"test", "local", "auth-dash"}
+    setup do
+      # The prefix names the person it was minted for; a private app's own
+      # assets are theirs to read, not anyone's who has the URL.
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id,
+          scope: "athanor",
+          athanor_id: ctx.athanor_id
         )
+
+      {:ok, reader: ctx.user_id}
+    end
+
+    test "serves private tincture assets with valid token", %{conn: conn, reader: reader} do
+      token = asset_token(reader)
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 200
@@ -382,6 +391,19 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
       # Cache stays private — token-bearing URLs shouldn't be proxy-cached
       assert get_resp_header(conn, "cache-control") == ["private, max-age=3600"]
+    end
+
+    test "a prefix minted for someone else opens nothing", %{conn: conn} do
+      # The URL is the whole credential a sandboxed iframe has, so a shared
+      # one must not be a shared key: it names its reader.
+      stranger =
+        Phoenix.Token.sign(
+          EmissaryWeb.Endpoint,
+          "tincture_asset_v2",
+          {"test", "local", "auth-dash", "github|https://github.com|stranger"}
+        )
+
+      assert get(conn, "/t/test/local/auth-dash/_s/#{stranger}/app.js").status == 404
     end
 
     test "returns 404 for invalid token", %{conn: conn} do
@@ -393,8 +415,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
-          "tincture_access",
-          {"test", "local", "pub-dash"}
+          "tincture_asset_v2",
+          {"test", "local", "pub-dash", Sanctum.TestContext.local().user_id}
         )
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
@@ -405,8 +427,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
-          "tincture_access",
-          {"test", "evil", "auth-dash"}
+          "tincture_asset_v2",
+          {"test", "evil", "auth-dash", Sanctum.TestContext.local().user_id}
         )
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
@@ -417,8 +439,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
-          "tincture_access",
-          {"test", "local", "auth-dash"}
+          "tincture_asset_v2",
+          {"test", "local", "auth-dash", Sanctum.TestContext.local().user_id}
         )
 
       conn = get(conn, "/t/other/local/auth-dash/_s/#{token}/app.js")
@@ -429,8 +451,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
-          "tincture_access",
-          {"test", "local", "auth-dash"}
+          "tincture_asset_v2",
+          {"test", "local", "auth-dash", Sanctum.TestContext.local().user_id}
         )
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/data.db")
@@ -438,14 +460,19 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
   end
 
+  defp asset_token(reader) do
+    Phoenix.Token.sign(
+      EmissaryWeb.Endpoint,
+      "tincture_asset_v2",
+      {"test", "local", "auth-dash", reader}
+    )
+  end
+
   describe "assets — signed token expiry" do
     test "returns 404 for expired signed token", %{conn: conn} do
-      # Sign a token, then verify with max_age: 0 to simulate expiry.
-      # The controller uses max_age: 86_400 (24h). We can't wait 24h,
-      # so we forge a token with a known-past timestamp by sleeping briefly
-      # and using max_age: 0 on verify — but the controller verifies
-      # internally. Instead, use an invalid salt to produce a token that
-      # will fail verification as a proxy for expiry (same code path).
+      # The controller verifies internally, so expiry cannot be waited out
+      # here: a token under the wrong salt fails the same verification the
+      # same way, which is the path under test.
       expired_token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,

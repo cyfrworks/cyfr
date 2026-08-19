@@ -29,8 +29,13 @@ defmodule EmissaryWeb.TinctureController do
   alias Emissary.MCP.RequestLog
   alias Sanctum.TinctureAccess
 
-  @token_salt "tincture_access"
-  @token_max_age 86_400
+  # The signed prefix a private tincture's own assets are fetched under: the
+  # iframe is sandboxed without `allow-same-origin`, so it carries no cookie
+  # and the URL is the only credential it has. It therefore names the person
+  # it was minted for and lives as long as the `?_t=` token, not a day: a
+  # URL that reached anyone else is a URL that opens nothing.
+  @token_salt "tincture_asset_v2"
+  @token_max_age 3_600
 
   # Base CSP — connect-src is extended dynamically from manifest tincture.connect
   @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
@@ -117,7 +122,7 @@ defmodule EmissaryWeb.TinctureController do
               Phoenix.Token.sign(
                 EmissaryWeb.Endpoint,
                 @token_salt,
-                {athanor, publisher, tincture_name}
+                {athanor, publisher, tincture_name, ctx.user_id}
               )
 
             base_href =
@@ -231,9 +236,10 @@ defmodule EmissaryWeb.TinctureController do
   end
 
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
-    with {:ok, {^athanor, ^publisher, ^tincture_name}} <-
+    with {:ok, {^athanor, ^publisher, ^tincture_name, user_id}} <-
            Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token, max_age: @token_max_age),
          {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
+         :ok <- asset_reader_standing(user_id, public_ctx.athanor_id),
          {:ok, tincture} <- TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
       Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,
         public: false
@@ -241,6 +247,24 @@ defmodule EmissaryWeb.TinctureController do
     else
       _ ->
         send_resp(conn, 404, "Not Found")
+    end
+  end
+
+  # The token names a person; the athanor says whether they are still one of
+  # its own. The bytes are then served through the public context (path
+  # resolution only) exactly as before.
+  defp asset_reader_standing(user_id, athanor_id) when is_binary(user_id) do
+    if Sanctum.Tenancy.Members.member?(user_id, athanor_id) or platform_admin?(user_id),
+      do: :ok,
+      else: {:error, :not_member}
+  end
+
+  defp asset_reader_standing(_user_id, _athanor_id), do: {:error, :no_user}
+
+  defp platform_admin?(user_id) do
+    case Sanctum.Tenancy.Members.list_by_user(user_id) do
+      rows when is_list(rows) -> Enum.any?(rows, &(&1.scope == "platform"))
+      _ -> false
     end
   end
 

@@ -142,11 +142,23 @@ defmodule Sanctum.Tenancy do
   # opened it deliberately), the person's own, the first membership grants,
   # and — for a platform admin with none of those — Home.
   defp working_athanor(%Context{} = ctx, memberships, admin?, user) do
-    current =
-      if is_binary(ctx.athanor_id) and ctx.athanor_id != "" and
-           (admin? or membership_grants?(memberships, ctx.athanor_id)),
-         do: [ctx.athanor_id],
-         else: []
+    named? = is_binary(ctx.athanor_id) and ctx.athanor_id != ""
+    granted? = named? and membership_grants?(memberships, ctx.athanor_id)
+
+    # An operator keeps an athanor no membership grants them — that is how
+    # `session.use` and an opened URL stay put across requests. `focus/2`
+    # audits the moment they open one; this audits every request that keeps
+    # it, so the record covers the session and not just its first act.
+    if named? and admin? and not granted? do
+      Sanctum.Telemetry.platform_context_event(%{
+        caller: :session_athanor,
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        auth_method: ctx.auth_method
+      })
+    end
+
+    current = if named? and (admin? or granted?), do: [ctx.athanor_id], else: []
 
     personal =
       case user do

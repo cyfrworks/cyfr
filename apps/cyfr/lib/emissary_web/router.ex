@@ -286,6 +286,8 @@ defmodule EmissaryWeb.Router do
   # a PDF, not html), the session cookie for who, the URL's athanor for
   # where — the controller focuses it exactly as a LiveView mount does.
   pipeline :attachment do
+    # A headless node serves no page surface, and a chat attachment is one.
+    plug EmissaryWeb.Plugs.Headless
     plug :fetch_session
     # GET only, so this never verifies a token — but a pipeline that reads
     # the session carries the same forgery guard as `:browser`.

@@ -32,8 +32,8 @@ defmodule Sanctum.TinctureAuth do
 
   alias Sanctum.Context
 
-  # Distinct from the 24h `/_s/` asset token (tincture_controller.ex,
-  # @token_salt "tincture_access"): a single-purpose, minimal-payload,
+  # Distinct from the `/_s/` asset token (tincture_controller.ex,
+  # @token_salt "tincture_asset_v2"): a single-purpose, minimal-payload,
   # athanor-scoped :execute token. The Prism picker bakes the URL at
   # render time and the user may click a tincture minutes later, so the
   # lifetime must comfortably outlast an open picker session. 1h is still a
@@ -60,9 +60,16 @@ defmodule Sanctum.TinctureAuth do
     Phoenix.Token.sign(EmissaryWeb.Endpoint, @access_token_salt, %{
       u: ctx.user_id,
       a: ctx.athanor_id,
-      n: ctx.namespace
+      n: ctx.namespace,
+      # What was exchanged for it, so the standing it is held to is the
+      # standing of the credential behind it — a person's session or an
+      # athanor-owned key are not the same thing.
+      m: mint_kind(ctx.auth_method)
     })
   end
+
+  defp mint_kind(:api_key), do: :api_key
+  defp mint_kind(_), do: :person
 
   @spec authenticate(Plug.Conn.t()) :: {:ok, Context.t()} | :unauthenticated
   def authenticate(conn) do
@@ -119,21 +126,39 @@ defmodule Sanctum.TinctureAuth do
     # namespace is identity-only (may be nil); the tenant gate in authenticate/1
     # (tenant_resolved?) is the real control, so no namespace guard here.
     with token when is_binary(token) and token != "" <- query_param(conn, "_t"),
-         {:ok, %{u: user_id, a: athanor_id, n: namespace}} <-
+         {:ok, %{u: user_id, a: athanor_id, n: namespace} = payload} <-
            Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
              max_age: @access_token_max_age
            ) do
-      {:ok,
-       Context.build(
-         user_id: user_id,
-         namespace: namespace,
-         athanor_id: athanor_id,
-         permissions: [:execute],
-         scope: :athanor,
-         auth_method: :tincture,
-         authenticated: true
-       )}
+      Context.build(
+        user_id: user_id,
+        namespace: namespace,
+        athanor_id: athanor_id,
+        permissions: [:execute],
+        scope: :athanor,
+        auth_method: :tincture,
+        authenticated: true
+      )
+      |> still_standing(athanor_id, Map.get(payload, :m, :person))
     else
+      _ -> :skip
+    end
+  end
+
+  # A signature says who minted the token, not what they may still do. A
+  # token exchanged for a person's session is held to that person's standing
+  # — the door and their seat here — exactly as a session load is, so a deny
+  # or a removal stops it rather than being outlived by the hour. One
+  # exchanged for an API key is held to the key's own rule (D15): the
+  # athanor is open and the creator is not denied, but a key outlives its
+  # creator's membership on purpose.
+  defp still_standing(%Context{} = ctx, athanor_id, :api_key) do
+    if Sanctum.Tenancy.channel_active?(athanor_id, ctx.user_id), do: {:ok, ctx}, else: :skip
+  end
+
+  defp still_standing(%Context{} = ctx, athanor_id, _person) do
+    case Sanctum.Tenancy.revalidate(ctx) do
+      %Context{authenticated: true, athanor_id: ^athanor_id} = current -> {:ok, current}
       _ -> :skip
     end
   end

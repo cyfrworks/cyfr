@@ -114,6 +114,16 @@ defmodule Sanctum.Tenancy.Members do
   @spec ensure_platform(String.t()) :: {:ok, Membership.t()} | {:error, term()}
   def ensure_platform(user_id), do: ensure(user_id, scope: "platform")
 
+  @doc "Every platform-admin row — the server's operators, as the rows say."
+  @spec list_platform() :: [Membership.t()]
+  def list_platform do
+    Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("Sanctum.Tenancy.Members: list_platform failed (#{Exception.message(e)})")
+      []
+  end
+
   @doc """
   Remove the platform-admin row for `user_id`, if any. A failure is
   reported, not swallowed: the caller is taking a capability away, and
