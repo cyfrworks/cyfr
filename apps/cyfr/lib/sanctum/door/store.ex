@@ -97,28 +97,37 @@ defmodule Sanctum.Door.Store do
   end
 
   @doc """
-  Record that a member wants `email` let in. Idempotent, and it says which
-  it was: a real entry for the address (allow or deny) is left untouched and
-  answers `:existing`, so the caller does not tell the operator someone is
-  waiting at a door that already has its answer.
-  """
-  @spec request(String.t(), String.t()) ::
-          {:ok, :created | :existing, Entry.t()} | {:error, term()}
-  def request(email, requested_by) when is_binary(email) do
-    value = String.downcase(email)
+  Record that someone wants `value` let in — an address a member invited, or
+  the IdP subject of a sign-in the door refused.
 
-    case find("email", value) do
+  Idempotent, and it says which it was: a real entry for that value (allow or
+  deny) is left untouched and answers `:existing`, so the caller does not tell
+  the operator someone is waiting at a door that already has its answer. That
+  also bounds it — one row per address or identity, ever, however many times
+  it is asked.
+
+  A request is not an allow: `allowed?/2` needs `status: "allowed"`, which
+  only `resolve/3` writes.
+  """
+  @spec request(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, :created | :existing, Entry.t()} | {:error, term()}
+  def request(kind, value, requested_by, note \\ nil)
+      when kind in ["email", "user_id"] and is_binary(value) do
+    value = if kind == "email", do: String.downcase(value), else: value
+
+    case find(kind, value) do
       {:ok, entry} ->
         {:ok, :existing, entry}
 
       {:error, :not_found} ->
         with {:ok, entry} <-
                insert(%{
-                 kind: "email",
+                 kind: kind,
                  value: value,
                  effect: "allow",
                  status: "requested",
-                 requested_by: requested_by
+                 requested_by: requested_by,
+                 note: note
                }) do
           {:ok, :created, entry}
         end

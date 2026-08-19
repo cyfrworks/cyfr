@@ -101,7 +101,7 @@ defmodule PrismWeb.TopbarLiveTest do
     refute has_element?(bar, "#door-requests")
 
     email = "carol-#{ops.namespace}@example.com"
-    {:ok, :created, _} = Sanctum.Door.Store.request(email, ops.user_id)
+    {:ok, :created, _} = Sanctum.Door.Store.request("email", email, ops.user_id)
     Sanctum.Notify.allowlist_request(email)
     :sys.get_state(bar.pid)
     assert render(bar) =~ "1 request"

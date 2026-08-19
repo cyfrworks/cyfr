@@ -21,6 +21,11 @@ defmodule Sanctum.Door do
   typed — an absent claim admits (audited by `Sanctum.SignIn`), a provider
   that positively says the address is unverified does not. Refusals carry no
   detail a stranger could use to enumerate the list.
+
+  A refusal the operator can undo leaves a trace: `admit_identity/2` records
+  the IdP subject as a pending request, so an issuer that never asserts
+  `email_verified` — which no email entry can match — can be admitted by
+  `user_id` without the operator having to find that subject some other way.
   """
 
   require Logger
@@ -72,6 +77,7 @@ defmodule Sanctum.Door do
           reason: reason
         })
 
+        record_request(reason, user_id, email)
         {:error, {:door, reason}}
     end
   end
@@ -135,6 +141,26 @@ defmodule Sanctum.Door do
   defp verified_claim(%{email_verified: true}), do: true
   defp verified_claim(%{email_verified: false}), do: false
   defp verified_claim(_user), do: :unknown
+
+  # A refusal the operator can act on. An email entry admits only a proved
+  # address, so an issuer that omits `email_verified` is refused even when
+  # the operator typed that exact address — and the operator has no way to
+  # learn the IdP subject to allow instead, because the sign-in left no
+  # trace. It leaves one now, keyed by the subject, which `door.requests`
+  # lists and `door.resolve` turns into a real entry.
+  #
+  # Only `:not_allowed`. A `:denied` refusal already has its answer, and
+  # writing a request for it would offer to undo a deny by approving it.
+  defp record_request(:not_allowed, user_id, email) do
+    note = if email, do: "refused at sign-in (#{email})", else: "refused at sign-in"
+
+    case Store.request("user_id", user_id, user_id, note) do
+      {:ok, :created, _} -> Sanctum.Notify.allowlist_request(email || user_id)
+      _ -> :ok
+    end
+  end
+
+  defp record_request(_reason, _user_id, _email), do: :ok
 
   @doc "Is this email one of the operators named in `CYFR_PLATFORM_ADMIN_EMAILS`?"
   @spec platform_admin_email?(String.t() | nil) :: boolean()

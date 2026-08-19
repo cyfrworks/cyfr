@@ -13,8 +13,9 @@ defmodule Sanctum.MCP.DoorTool do
   an allow, ejects everyone the door would now refuse
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered, since
   it names nobody;
-  `list` shows the door; `requests` the pending invites members asked for; `resolve`
-  approves or drops one.
+  `list` shows the door; `requests` what is waiting on the operator — an
+  address a member invited, or the subject of a sign-in the door refused;
+  `resolve` approves or drops one.
   """
 
   require Logger

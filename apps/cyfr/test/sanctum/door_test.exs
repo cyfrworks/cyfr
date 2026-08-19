@@ -85,7 +85,7 @@ defmodule Sanctum.DoorTest do
     end
 
     test "a request admits nobody until resolved" do
-      {:ok, :created, req} = Store.request("grace@example.com", uid(1))
+      {:ok, :created, req} = Store.request("email", "grace@example.com", uid(1))
       assert req.status == "requested"
       assert {:error, :not_allowed} = Door.admit(uid(7), "grace@example.com", true)
       refute Door.email_admitted?("grace@example.com")
@@ -97,12 +97,12 @@ defmodule Sanctum.DoorTest do
 
       # requesting again for an address that already has its answer changes
       # nothing, and says so — nobody new is waiting at the door
-      {:ok, :existing, same} = Store.request("grace@example.com", uid(1))
+      {:ok, :existing, same} = Store.request("email", "grace@example.com", uid(1))
       assert same.id == entry.id
     end
 
     test "rejecting a request removes it" do
-      {:ok, :created, req} = Store.request("heidi@example.com", uid(1))
+      {:ok, :created, req} = Store.request("email", "heidi@example.com", uid(1))
       assert :ok = Store.resolve(req.id, :reject, uid(1))
       assert Store.requests() == []
     end
@@ -225,6 +225,51 @@ defmodule Sanctum.DoorTest do
       {:ok, after_eject} = Sanctum.Tenancy.Users.get(stranger.id)
       assert after_eject.status == "active"
       assert after_eject.denied_at == nil
+    end
+  end
+
+  describe "admit_identity/2 — a refusal the operator can act on" do
+    test "records the subject of an unallowed sign-in, once, and resolve admits it" do
+      # The Okta case: the operator typed the address, but the issuer never
+      # asserts `email_verified`, so no email entry can match it.
+      {:ok, _} = Store.allow("email", "bob@company.com", "ops")
+      info = %{email: "bob@company.com", verified: :unknown}
+
+      assert {:error, {:door, :not_allowed}} = Door.admit_identity(uid(30), info)
+
+      [request] = Store.requests()
+      assert request.kind == "user_id"
+      assert request.value == uid(30)
+      assert request.status == "requested"
+      assert request.note =~ "bob@company.com"
+
+      # A request is not an allow.
+      assert {:error, :not_allowed} = Door.admit(uid(30), "bob@company.com", :unknown)
+
+      # And retrying does not pile up rows.
+      assert {:error, {:door, :not_allowed}} = Door.admit_identity(uid(30), info)
+      assert length(Store.requests()) == 1
+
+      {:ok, _} = Store.resolve(request.id, :allow, "ops")
+      assert {:ok, :allowed} = Door.admit(uid(30), "bob@company.com", :unknown)
+    end
+
+    test "a denied identity gets no request — that door has its answer" do
+      {:ok, _} = Store.deny("user_id", uid(31), "ops")
+
+      assert {:error, {:door, :denied}} =
+               Door.admit_identity(uid(31), %{email: "eve@example.com", verified: true})
+
+      assert Store.requests() == []
+    end
+
+    test "an admitted sign-in writes nothing" do
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+
+      assert {:ok, :allowed} =
+               Door.admit_identity(uid(32), %{email: "ok@example.com", verified: true})
+
+      assert Store.requests() == []
     end
   end
 end

@@ -226,7 +226,7 @@ defmodule Sanctum.Tenancy.Members do
                 # Only a request that was actually written puts someone at the
                 # operator's door; an address that already has an entry (a
                 # standing deny, say) has its answer already.
-                case Door.Store.request(email, added_by) do
+                case Door.Store.request("email", email, added_by) do
                   {:ok, :created, _} -> Sanctum.Notify.allowlist_request(email)
                   _ -> :ok
                 end
