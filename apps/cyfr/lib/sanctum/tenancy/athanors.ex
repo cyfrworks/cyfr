@@ -442,17 +442,29 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   When the group's AQUA answers: `"mentioned"` (a message that `@`-names an
-  orchestrator) or `"all"` (every message) — `settings["aqua"]["answer_mode"]`,
-  `"mentioned"` unless set. A person's own athanor always answers; the
-  runner reads the kind first.
+  orchestrator) or `"all"` (every message) — `settings["aqua"]["answer_mode"]`
+  when set, otherwise the default for that kind of athanor. A person's own
+  athanor always answers; the runner reads the kind first.
+
+  Home defaults to `"all"` and every other group to `"mentioned"`. Home is
+  the server's own furnace, not a group of colleagues: someone who opens it
+  and types has nobody else in mind, where in a group the other members are
+  the point. Derived from the `home` flag rather than written into the row at
+  birth, because Home is born in two places — the baseline migration seeds
+  one, and `ensure_home/0` mints its successor when the last member leaves —
+  and a default copied into both is a default that can differ. Either way
+  `put_settings/2` still moves it.
   """
   @spec answer_mode(Athanor.t()) :: String.t()
   def answer_mode(%Athanor{} = athanor) do
     case get_in(settings(athanor), ["aqua", "answer_mode"]) do
       mode when mode in @answer_modes -> mode
-      _ -> "mentioned"
+      _ -> default_answer_mode(athanor)
     end
   end
+
+  defp default_answer_mode(%Athanor{home: true}), do: "all"
+  defp default_answer_mode(%Athanor{}), do: "mentioned"
 
   @doc "The recognised answer modes."
   @spec answer_modes() :: [String.t()]

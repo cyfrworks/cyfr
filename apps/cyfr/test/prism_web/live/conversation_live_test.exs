@@ -50,8 +50,11 @@ defmodule PrismWeb.ConversationLiveTest do
     assert html =~ "has no model yet"
     assert html =~ "Connect a model"
 
-    # Home is a group: AQUA answers when @-mentioned (the composer says so).
-    assert html =~ "@aqua to ask AQUA"
+    # Home is the household furnace: AQUA answers a bare message, and the
+    # composer says so rather than teaching `@aqua`. Every other group is
+    # the other way round.
+    assert html =~ "Ask AQUA…"
+    refute html =~ "@aqua to ask AQUA"
 
     alice_view
     |> form("form[phx-submit=submit]", %{"message" => "@aqua hello from alice"})

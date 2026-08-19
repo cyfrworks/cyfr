@@ -140,6 +140,28 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       assert %{home: [_ | _]} = errors_on(changeset)
     end
+
+    test "Home answers a bare message; every other group waits to be named" do
+      # The household furnace: someone who opens Home and types has nobody
+      # else in mind. `@aqua` is what a group of colleagues needs.
+      assert Athanors.answer_mode(Athanors.home!()) == "all"
+      assert Athanors.answer_mode(group!()) == "mentioned"
+    end
+
+    test "the default follows the flag, not the row: no settings written, toggle still moves it" do
+      home = Athanors.home!()
+
+      # Derived, so a Home seeded by the baseline migration and a Home minted
+      # by `ensure_home/0` cannot disagree — neither writes the setting.
+      assert Athanors.settings(home) == %{}
+      assert Athanors.answer_mode(home) == "all"
+
+      {:ok, home} = Athanors.put_settings(home, %{"aqua" => %{"answer_mode" => "mentioned"}})
+      assert Athanors.answer_mode(home) == "mentioned"
+
+      {:ok, home} = Athanors.put_settings(home, %{"aqua" => %{"answer_mode" => nil}})
+      assert Athanors.answer_mode(home) == "all"
+    end
   end
 
   describe "get/1 and get_by_slug/2" do
