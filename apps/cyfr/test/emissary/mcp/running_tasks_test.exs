@@ -7,24 +7,27 @@ defmodule Emissary.MCP.RunningTasksTest do
   alias Emissary.MCP.RunningTasks
 
   setup do
-    # Ensure RunningTasks GenServer is running and healthy.
-    # The terminate test stops and restarts it, but if tests run in an
-    # unexpected order we need to handle a missing GenServer/ETS table.
-    case GenServer.whereis(RunningTasks) do
-      nil ->
-        RunningTasks.start_link([])
-
-      pid ->
-        if Process.alive?(pid) do
-          # Drain mailbox to ensure clean state
-          :sys.get_state(RunningTasks)
-        else
-          Process.sleep(50)
-          RunningTasks.start_link([])
-        end
-    end
-
+    # `RunningTasks` is a child of the infra tier, so the supervisor owns its
+    # lifecycle. The terminate test below stops it; this waits for the
+    # restart rather than starting one here. Starting it from a test races
+    # the supervisor for the registered name, and the race the supervisor
+    # loses is the expensive one: its child start fails with
+    # `{:already_started, _}`, it retries, and at ten failures inside a
+    # minute the whole tier goes down — `Emissary.TaskSupervisor`, the Finch
+    # pools, the registries — failing whichever tests happen to be running.
+    pid = await_running()
+    # Drain the mailbox so each test starts from a settled state.
+    :sys.get_state(pid)
     :ok
+  end
+
+  defp await_running(replacing \\ nil) do
+    Enum.reduce_while(1..200, nil, fn _, _ ->
+      case GenServer.whereis(RunningTasks) do
+        pid when is_pid(pid) and pid != replacing -> {:halt, pid}
+        _ -> Process.sleep(10) && {:cont, nil}
+      end
+    end) || flunk("RunningTasks was not (re)started by its supervisor")
   end
 
   # Cancellation kills the tracked process outright, so a *linked* task would
@@ -140,7 +143,9 @@ defmodule Emissary.MCP.RunningTasksTest do
       :ok = RunningTasks.register("term_req_2", struct!(Task, task2))
 
       # Stop the GenServer cleanly — this triggers terminate/2 internally,
-      # which demonitors all processes and deletes the ETS table.
+      # which demonitors all processes and deletes the ETS table. Its
+      # supervisor restarts it; that is the one restart this test spends.
+      was = GenServer.whereis(RunningTasks)
       GenServer.stop(RunningTasks, :shutdown)
 
       # The ETS table should have been deleted by terminate/2.
@@ -156,10 +161,9 @@ defmodule Emissary.MCP.RunningTasksTest do
       Process.exit(pid1, :kill)
       Process.exit(pid2, :kill)
 
-      # Restart the GenServer so subsequent tests have a working RunningTasks.
-      # The supervisor will restart it eventually, but we do it explicitly
-      # to avoid race conditions with tests that run immediately after.
-      RunningTasks.start_link([])
+      # Wait for the supervisor's own restart before handing the name back to
+      # the next test — never start a second one here (see `setup`).
+      await_running(was)
     end
   end
 end

@@ -254,6 +254,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       assert decoded["status"] == "completed"
     end
 
+    @tag :requires_locus
     test "routes build.toolchains through ToolRegistry", %{ctx: ctx, execution_id: eid} do
       request = Jason.encode!(%{"tool" => "build", "action" => "toolchains", "args" => %{}})
       result = execute(request, ctx, eid, authority(tools: ["build.toolchains"]))
