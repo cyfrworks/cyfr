@@ -75,7 +75,15 @@ defmodule Sanctum.Door.Store do
         {:error, :platform_admin}
 
       true ->
-        upsert(kind, value, %{effect: "deny", status: "allowed", added_by: added_by, note: note})
+        # A deny answers whatever request produced the row: the member who
+        # asked is no longer who this entry is about.
+        upsert(kind, value, %{
+          effect: "deny",
+          status: "allowed",
+          added_by: added_by,
+          note: note,
+          requested_by: nil
+        })
     end
   end
 
@@ -89,25 +97,31 @@ defmodule Sanctum.Door.Store do
   end
 
   @doc """
-  Record that a member wants `email` let in. Idempotent; a real entry for the
-  address (allow or deny) is left untouched.
+  Record that a member wants `email` let in. Idempotent, and it says which
+  it was: a real entry for the address (allow or deny) is left untouched and
+  answers `:existing`, so the caller does not tell the operator someone is
+  waiting at a door that already has its answer.
   """
-  @spec request(String.t(), String.t()) :: {:ok, Entry.t()} | {:error, term()}
+  @spec request(String.t(), String.t()) ::
+          {:ok, :created | :existing, Entry.t()} | {:error, term()}
   def request(email, requested_by) when is_binary(email) do
     value = String.downcase(email)
 
     case find("email", value) do
       {:ok, entry} ->
-        {:ok, entry}
+        {:ok, :existing, entry}
 
       {:error, :not_found} ->
-        insert(%{
-          kind: "email",
-          value: value,
-          effect: "allow",
-          status: "requested",
-          requested_by: requested_by
-        })
+        with {:ok, entry} <-
+               insert(%{
+                 kind: "email",
+                 value: value,
+                 effect: "allow",
+                 status: "requested",
+                 requested_by: requested_by
+               }) do
+          {:ok, :created, entry}
+        end
     end
   end
 

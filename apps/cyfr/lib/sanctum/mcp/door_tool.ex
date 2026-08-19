@@ -7,8 +7,9 @@ defmodule Sanctum.MCP.DoorTool do
   admins only (`scope: :platform` on every action).
 
   `allow` writes an entry (email, user_id, or `*`); `deny` writes a sticky
-  exclusion and, when the person is already known, ejects them
-  (`Sanctum.Tenancy.Users.deny/1`); `remove` deletes an entry; `list` shows
+  exclusion, ejects the person when they are already known
+  (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
+  address was holding either way; `remove` deletes an entry; `list` shows
   the door; `requests` the pending invites members asked for; `resolve`
   approves or drops one.
   """
@@ -57,7 +58,15 @@ defmodule Sanctum.MCP.DoorTool do
           denied = known_users(kind, value)
           results = Enum.map(denied, &Users.deny/1)
           ejected = Enum.count(results, &match?({:ok, _}, &1))
-          rendered = Map.put(render(entry), :ejected, ejected)
+
+          # An address nobody has signed in with can still be holding group
+          # seats. `Users.deny/1` withdraws them for a person it knows; for
+          # an address it does not, this is the whole eject.
+          withdrawn = withdraw_pending(kind, value)
+
+          rendered =
+            render(entry) |> Map.put(:ejected, ejected) |> Map.put(:invites_withdrawn, withdrawn)
+
           Sanctum.Notify.allowlist_changed()
 
           if ejected == length(denied) do
@@ -139,6 +148,14 @@ defmodule Sanctum.MCP.DoorTool do
       note: "Their own athanor is reopened; group seats removed by the deny are not restored"
     })
   end
+
+  # Every invitation the address still holds, dropped once. `Users.deny/1`
+  # already did this for each identity that has signed in with it, and the
+  # sweep is idempotent, so the count is what a *pending* seat cost.
+  defp withdraw_pending("email", value),
+    do: Sanctum.Tenancy.Members.withdraw_invites_for_email(value)
+
+  defp withdraw_pending(_kind, _value), do: 0
 
   defp known_users("email", value), do: Users.list_by_email(value)
 

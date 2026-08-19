@@ -122,6 +122,31 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
              Sanctum.Door.admit("github|https://github.com|s", stranger, true)
   end
 
+  test "door.deny of an address nobody has signed in with withdraws the seats it was holding",
+       %{alice: alice, ops: ops, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Pending #{n}"})
+
+    stranger = "pending#{n}@example.com"
+    {:ok, _} = call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => stranger})
+
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    # Nobody has signed in with the address, so there is no account to eject —
+    # the seat is the whole of what the deny has to reach.
+    assert {:ok, %{ejected: 0, invites_withdrawn: 1}} =
+             call(admin, "door", %{"action" => "deny", "value" => stranger})
+
+    refute Enum.any?(Members.list_by_athanor(group.id), &(&1.email == stranger))
+
+    # the request the invite queued is now the deny itself, and it names no
+    # requester any more
+    assert Sanctum.Door.Store.requests() == []
+
+    assert {:error, :denied} =
+             Sanctum.Door.admit("github|https://github.com|p#{n}", stranger, true)
+  end
+
   test "an address two identities sign in with, or one a provider has not verified, is refused with the reason — never a dead invite",
        %{alice: alice, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])

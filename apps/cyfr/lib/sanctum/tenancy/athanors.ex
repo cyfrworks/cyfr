@@ -308,16 +308,27 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
-  Reopen an archived athanor. A retired Home never reopens — it is the
-  record of a furnace that ended; `ensure_home/0` mints its successor.
+  Reopen an archived athanor, if the server still has room for it. A retired
+  Home never reopens — it is the record of a furnace that ended;
+  `ensure_home/0` mints its successor.
   """
   @spec unarchive(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
   def unarchive(%Athanor{} = athanor) do
     with {:ok, current} <- get(athanor.id) do
-      if current.home do
-        {:error, :home_is_final}
-      else
-        update(current, %{status: "active", archived_at: nil})
+      cond do
+        current.home ->
+          {:error, :home_is_final}
+
+        current.status == "active" ->
+          {:ok, current}
+
+        true ->
+          # An archived athanor freed its place against the server cap when it
+          # closed; taking the place back has to ask for it, or archiving and
+          # reopening would be the way past `CYFR_MAX_ATHANORS`.
+          with :ok <- Caps.check(:max_athanors, count()) do
+            update(current, %{status: "active", archived_at: nil})
+          end
       end
     end
   end

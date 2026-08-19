@@ -13,9 +13,10 @@ defmodule Sanctum.Tenancy.Members do
 
   An `invited` row names an email instead of a person: someone was added to
   a group before they ever signed in here. It activates on their first
-  admitted sign-in (`activate_invited/1`). Adding an email the door does not
-  admit also queues a request for the platform admin — an invite never
-  opens the door by itself.
+  admitted sign-in (`activate_invited/1`) and is withdrawn when the door
+  denies that address (`withdraw_invites_for_email/1`) — a seat must not
+  outlive the eject. Adding an email the door does not admit also queues a
+  request for the platform admin — an invite never opens the door by itself.
 
   Every change broadcasts `{:membership_changed, %{user_id, athanor_id,
   change}}` on `"sanctum:memberships:<user_id>"` so a mounted LiveView can
@@ -212,8 +213,13 @@ defmodule Sanctum.Tenancy.Members do
           else
             with {:ok, _} <- invite(athanor_id, email, added_by) do
               unless Door.email_admitted?(email) do
-                Door.Store.request(email, added_by)
-                Sanctum.Notify.allowlist_request(email)
+                # Only a request that was actually written puts someone at the
+                # operator's door; an address that already has an entry (a
+                # standing deny, say) has its answer already.
+                case Door.Store.request(email, added_by) do
+                  {:ok, :created, _} -> Sanctum.Notify.allowlist_request(email)
+                  _ -> :ok
+                end
               end
 
               Sanctum.Notify.member_changed(athanor.id)
@@ -301,6 +307,40 @@ defmodule Sanctum.Tenancy.Members do
   end
 
   def activate_invited(_user), do: {:ok, 0}
+
+  @doc """
+  Drop every pending invitation for an address — what a deny at the door
+  owes the groups that were holding a seat for it. Invited rows name an
+  email and no person, so the deny's sweep by `user_id` cannot see them;
+  without this a seat survives the eject and the next allow would seat
+  someone the operator threw out. Returns how many were withdrawn.
+  """
+  @spec withdraw_invites_for_email(String.t() | nil) :: non_neg_integer()
+  def withdraw_invites_for_email(email) when is_binary(email) and email != "" do
+    email = String.downcase(String.trim(email))
+
+    query =
+      from(m in Membership,
+        where: m.email == ^email and m.status == "invited" and m.scope == "athanor",
+        select: m.athanor_id
+      )
+
+    {_n, athanor_ids} = Arca.Repo.delete_all(query)
+    athanor_ids = athanor_ids || []
+
+    for athanor_id <- athanor_ids, is_binary(athanor_id) do
+      Sanctum.Notify.member_changed(athanor_id)
+    end
+
+    length(athanor_ids)
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("Sanctum.Tenancy.Members: withdraw_invites failed (#{Exception.message(e)})")
+
+      0
+  end
+
+  def withdraw_invites_for_email(_), do: 0
 
   def remove(%Membership{} = membership) do
     Arca.Repo.delete(membership)

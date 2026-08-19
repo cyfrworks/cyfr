@@ -108,11 +108,45 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
     refute Members.member?(u.id, group.id)
 
-    # allow reverses the standing and reopens the athanor; the credentials stay revoked
+    # allow reverses the standing, reopens the athanor and seats its owner in
+    # it again; the credentials stay revoked and the group seat stays gone
     assert {:ok, %{status: "active"}} = Users.allow(denied)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
+    assert Members.member?(u.id, personal.id)
+    refute Members.member?(u.id, group.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
+
+  test "deny withdraws the group seats the address was still holding" do
+    u = person(41)
+    {:ok, group} = Athanors.create_group("github|https://github.com|owner41", "G41")
+
+    # An invitation names an email and no person: the deny's sweep by user id
+    # cannot see it, so it has to be withdrawn by address.
+    {:ok, :invited} = Members.add(group, [email: "invitee41@example.com"], "owner41")
+    assert [_] = invited_rows(group.id)
+
+    assert 1 == Members.withdraw_invites_for_email("INVITEE41@example.com")
+    assert invited_rows(group.id) == []
+
+    # and a seat left over for a person's own address goes with their deny
+    {:ok, group2} = Athanors.create_group("github|https://github.com|owner41", "G41b")
+
+    {:ok, _} =
+      Members.create(%{
+        email: String.downcase(u.email),
+        scope: "athanor",
+        status: "invited",
+        athanor_id: group2.id,
+        added_by: "owner41"
+      })
+
+    assert {:ok, _} = Users.deny(u)
+    assert invited_rows(group2.id) == []
+  end
+
+  defp invited_rows(athanor_id),
+    do: athanor_id |> Members.list_by_athanor() |> Enum.filter(&(&1.status == "invited"))
 
   test "revalidate drops a denied person's session context to unauthenticated" do
     u = person(5)

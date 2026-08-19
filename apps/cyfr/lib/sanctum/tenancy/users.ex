@@ -7,11 +7,12 @@ defmodule Sanctum.Tenancy.Users do
 
   A row is written on the first admitted sign-in and touched on every later
   one; the door, invited memberships and per-person preferences key off it.
-  `deny/2` and `allow/2` are the operator's eject and re-admit: a denied
+  `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
-  (nothing deleted) and their group rows are removed; allowing them again
-  reopens the door and the athanor, and leaves the revoked credentials
-  revoked.
+  (nothing deleted), their group rows are removed and the invitations their
+  address was still holding are withdrawn; allowing them again reopens the
+  door and the athanor, re-seats them in it, and leaves the revoked
+  credentials revoked.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -199,6 +200,9 @@ defmodule Sanctum.Tenancy.Users do
       Sanctum.Session.revoke_all_for_user(user.id)
       Sanctum.ApiKey.revoke_all_created_by(user.id)
       archive_personal(user)
+      # Seats held for the address, not yet for the person: the sweep below
+      # goes by `user_id` and cannot see them.
+      Members.withdraw_invites_for_email(user.email)
 
       # The status is written (the person is out at the door either way);
       # what fails here is reported so the operator can retry, not hidden.
@@ -214,15 +218,19 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc """
-  Reverse `deny/1` at the door: the person may sign in again and their own
-  athanor is reopened. Revoked sessions and keys stay revoked, and the group
-  seats the deny removed are not restored — eject is permanent for groups;
-  a member adds them again.
+  Reverse `deny/1` at the door: the person may sign in again, their own
+  athanor is reopened and they are seated in it again. Revoked sessions and
+  keys stay revoked, and the group seats the deny removed are not restored —
+  eject is permanent for groups; a member adds them again.
   """
   @spec allow(User.t()) :: {:ok, User.t()} | {:error, term()}
   def allow(%User{} = user) do
-    with {:ok, user} <- update(user, %{status: "active", denied_at: nil}) do
-      unarchive_personal(user)
+    with {:ok, user} <- update(user, %{status: "active", denied_at: nil}),
+         :ok <- unarchive_personal(user) do
+      # The deny swept every membership by user id, their own seat included.
+      # Reopening the furnace without re-seating its owner would leave them
+      # locked out of it until their next sign-in re-provisioned the row.
+      reseat_personal(user)
       {:ok, user}
     end
   end
@@ -238,12 +246,28 @@ defmodule Sanctum.Tenancy.Users do
 
   defp unarchive_personal(%User{personal_athanor_id: id}) when is_binary(id) do
     case Athanors.get(id) do
-      {:ok, %{status: "archived"} = athanor} -> Athanors.unarchive(athanor)
-      _ -> :ok
+      {:ok, %{status: "archived"} = athanor} ->
+        case Athanors.unarchive(athanor) do
+          {:ok, _} -> :ok
+          # The server is full: say so rather than report a person restored
+          # to a furnace that is still shut.
+          {:error, {:limit_reached, _key, _cap}} = err -> err
+          {:error, _} = err -> err
+        end
+
+      _ ->
+        :ok
     end
   end
 
   defp unarchive_personal(_), do: :ok
+
+  defp reseat_personal(%User{id: user_id, personal_athanor_id: id}) when is_binary(id) do
+    Members.ensure(user_id, scope: "athanor", athanor_id: id, added_by: "system")
+    :ok
+  end
+
+  defp reseat_personal(_), do: :ok
 
   defp update(%User{} = user, attrs) do
     attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())

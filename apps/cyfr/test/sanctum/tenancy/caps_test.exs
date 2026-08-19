@@ -57,6 +57,13 @@ defmodule Sanctum.Tenancy.CapsTest do
     Application.put_env(:cyfr, :caps, max_athanors: Athanors.count() + 1)
     assert {:ok, _} = Athanors.create_group(uid0, "Fits")
 
+    # ...and taking the place back has to ask for it, or archive-then-reopen
+    # would be the way past the cap.
+    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count())
+    assert {:error, {:limit_reached, :max_athanors, _}} = Athanors.unarchive(doomed)
+    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count() + 1)
+    assert {:ok, %{status: "active"}} = Athanors.unarchive(doomed)
+
     Application.put_env(:cyfr, :caps, max_groups_per_person: 1)
     uid = "github|https://github.com|capped-#{System.unique_integer([:positive])}"
     assert {:ok, _} = Athanors.create_group(uid, "First")

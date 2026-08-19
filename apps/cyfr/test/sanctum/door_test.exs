@@ -85,7 +85,7 @@ defmodule Sanctum.DoorTest do
     end
 
     test "a request admits nobody until resolved" do
-      {:ok, req} = Store.request("grace@example.com", uid(1))
+      {:ok, :created, req} = Store.request("grace@example.com", uid(1))
       assert req.status == "requested"
       assert {:error, :not_allowed} = Door.admit(uid(7), "grace@example.com", true)
       refute Door.email_admitted?("grace@example.com")
@@ -95,13 +95,14 @@ defmodule Sanctum.DoorTest do
       assert {:ok, :allowed} = Door.admit(uid(7), "grace@example.com", true)
       assert Door.email_admitted?("grace@example.com")
 
-      # requesting again for an allowed address changes nothing
-      {:ok, same} = Store.request("grace@example.com", uid(1))
+      # requesting again for an address that already has its answer changes
+      # nothing, and says so — nobody new is waiting at the door
+      {:ok, :existing, same} = Store.request("grace@example.com", uid(1))
       assert same.id == entry.id
     end
 
     test "rejecting a request removes it" do
-      {:ok, req} = Store.request("heidi@example.com", uid(1))
+      {:ok, :created, req} = Store.request("heidi@example.com", uid(1))
       assert :ok = Store.resolve(req.id, :reject, uid(1))
       assert Store.requests() == []
     end
