@@ -134,6 +134,21 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert :ok = Caps.check_storage(ctx, 1_000_000_000)
   end
 
+  test "athanor_storage_bytes counts the component tree when publishing" do
+    ctx = Sanctum.TestContext.local()
+
+    # The writing hot path measures the data root alone...
+    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000_000)
+    assert :ok = Caps.check_storage(ctx, 10)
+
+    # ...and a publish measures both, so a cap set below what the athanor's
+    # components already hold refuses the next one.
+    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
+
+    assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
+             Caps.check_storage(ctx, 10, roots: [:data, :components])
+  end
+
   test "max_members_per_group counts seats — active and invited" do
     Application.put_env(:cyfr, :caps, max_members_per_group: 2)
     uid = "github|https://github.com|seat-#{System.unique_integer([:positive])}"

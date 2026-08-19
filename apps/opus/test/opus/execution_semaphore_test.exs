@@ -271,6 +271,31 @@ defmodule Opus.ExecutionSemaphoreTest do
       GenServer.stop(pid)
     end
 
+    test "schedules cannot fill the athanor's cap and refuse the next chat turn" do
+      # 8 background holders against a cap of 8: they stop at half, so the
+      # member's turn still finds a slot instead of :tenant_limit.
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {64, 8}, name: :test_share_sem)
+      parent = self()
+
+      for _ <- 1..8 do
+        spawn(fn ->
+          result = GenServer.call(:test_share_sem, {:acquire, :background, "ath_share"}, 5_000)
+          send(parent, {:bg, result})
+
+          receive do
+            :release -> GenServer.cast(:test_share_sem, {:release, self()})
+          end
+        end)
+      end
+
+      # Four are admitted (half of 8); the rest queue.
+      for _ <- 1..4, do: assert_receive({:bg, :ok}, 2_000)
+      refute_receive {:bg, _}, 300
+
+      assert :ok = GenServer.call(:test_share_sem, {:acquire, :root, "ath_share"}, 2_000)
+      GenServer.stop(pid)
+    end
+
     test "more than the athanor's cap of same-minute schedules all run, none lost" do
       # 24 schedules of one athanor fire at once under a cap of 16: as
       # background work they wait for a slot rather than being refused (a

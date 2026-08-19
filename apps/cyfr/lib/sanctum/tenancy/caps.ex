@@ -49,27 +49,44 @@ defmodule Sanctum.Tenancy.Caps do
 
   @doc """
   `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
-  `:athanor_storage_bytes` cap (or the cap is off). Measured over the whole
-  athanor root — every write lands somewhere beneath it, and a per-scope
-  measure would let one tenant fill the disk one scope at a time. The one
-  place the cap is computed: authenticated WASM writes and chat attachments
-  both come here.
+  `:athanor_storage_bytes` cap (or the cap is off). The one place the cap is
+  computed: authenticated WASM writes, chat attachments and published
+  component bytes all come here.
+
+  An athanor's bytes live under two roots — `data/{athanor}` and
+  `components/{athanor}` — and `roots:` says which to measure. The default
+  `[:data]` is the writing hot path, where a second directory walk per write
+  would be felt; publishing a component (rare, and the larger sink) measures
+  `[:data, :components]`, so the cap bounds the whole athanor where it
+  matters. The seeded bundle counts toward it.
   """
-  @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
+  @spec check_storage(Sanctum.Context.t(), non_neg_integer(), keyword()) ::
           :ok | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}
-  def check_storage(%Sanctum.Context{} = ctx, incoming) when is_integer(incoming) do
+  def check_storage(%Sanctum.Context{} = ctx, incoming, opts \\ []) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
       nil ->
         :ok
 
       cap ->
-        case Arca.usage(ctx, []) do
-          {:ok, %{bytes: used}} when used + incoming > cap ->
-            {:error, {:limit_reached, :athanor_storage_bytes, cap}}
+        used = opts |> Keyword.get(:roots, [:data]) |> Enum.map(&used(ctx, &1)) |> Enum.sum()
 
-          _ ->
-            :ok
-        end
+        if used + incoming > cap,
+          do: {:error, {:limit_reached, :athanor_storage_bytes, cap}},
+          else: :ok
+    end
+  end
+
+  defp used(ctx, :data), do: bytes_under(ctx, [])
+
+  defp used(%{athanor_id: id} = ctx, :components) when is_binary(id) and id != "",
+    do: bytes_under(ctx, ["components", id])
+
+  defp used(_ctx, _root), do: 0
+
+  defp bytes_under(ctx, segments) do
+    case Arca.usage(ctx, segments) do
+      {:ok, %{bytes: bytes}} when is_integer(bytes) -> bytes
+      _ -> 0
     end
   end
 

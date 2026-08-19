@@ -34,7 +34,10 @@ defmodule Opus.ExecutionSemaphore do
   slots (children run under a root's cap; background waits). A root at the
   cap is **rejected** with `{:error, :tenant_limit}` rather than queued —
   the person is waiting, and queuing per athanor would let one athanor's
-  backlog interleave with everyone's queue. This bounds the blast radius
+  backlog interleave with everyone's queue. Background work counts against
+  the same cap but stops at **half** of it: it waits rather than being
+  refused, so a flock of same-minute schedules can never turn the next
+  message in the chat into a refusal. This bounds the blast radius
   of one athanor submitting many long-running (or non-preemptable
   tight-loop) executions: it can exhaust its own slots, never the node's.
 
@@ -221,6 +224,13 @@ defmodule Opus.ExecutionSemaphore do
         if state.count < state.max,
           do: {:reply, :ok, grant(state, caller_pid, tenant, :child)},
           else: enqueue_waiter(state, from, :child, tenant)
+
+      # Background work counts against the athanor's cap, so a flock of
+      # same-minute schedules could fill it and turn the next chat turn into
+      # a refusal. It stops at half: what is left is for whoever is waiting
+      # at the glass.
+      class == :background and tenant_at_background_cap?(state, tenant) ->
+        enqueue_waiter(state, from, :background, tenant)
 
       class == :root and tenant_at_cap?(state, tenant) ->
         Logger.warning(
@@ -613,6 +623,16 @@ defmodule Opus.ExecutionSemaphore do
   defp tenant_at_cap?(state, tenant) do
     Map.get(state.tenant_roots, tenant, 0) >= state.tenant_max
   end
+
+  defp tenant_at_background_cap?(_state, nil), do: false
+
+  defp tenant_at_background_cap?(state, tenant) do
+    Map.get(state.tenant_roots, tenant, 0) >= background_ceiling(state)
+  end
+
+  # Half an athanor's slots, and never less than one — a server with a cap
+  # of one still runs its schedules, just never alongside a turn.
+  defp background_ceiling(state), do: max(1, div(state.tenant_max, 2))
 
   # Only roots and background work count against the athanor; children run
   # inside a root's allowance.
