@@ -32,6 +32,23 @@ defmodule Sanctum.Slug do
 
   def from_name(_), do: nil
 
+  @doc """
+  Derive a slug from an email address: the local part, in the same grammar.
+  A string with no `@` is taken whole, so a bare handle works too.
+
+      iex> Sanctum.Slug.from_email("alice.smith+tag@example.com")
+      "alice-smith-tag"
+  """
+  @spec from_email(String.t() | nil) :: String.t() | nil
+  def from_email(email) when is_binary(email) do
+    case String.split(email, "@", parts: 2) do
+      [local, _domain] -> from_name(local)
+      [local] -> from_name(local)
+    end
+  end
+
+  def from_email(_), do: nil
+
   @doc "Whether the string is a well-formed slug."
   @spec valid?(String.t() | nil) :: boolean()
   def valid?(slug), do: Sanctum.ComponentRef.valid_personal_slug?(slug)

@@ -34,7 +34,7 @@ defmodule Sanctum.SignIn do
 
   alias Arca.Schemas.User
   alias Compendium.Registry.CredentialStore
-  alias Sanctum.Context
+  alias Sanctum.Slug
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   @typedoc """
@@ -317,8 +317,7 @@ defmodule Sanctum.SignIn do
   # login next to it is simply `alice`. The address is the fallback, and the
   # provider name the last resort.
   defp suggested_slug(%User{display_name: name, email: email}, provider) do
-    Sanctum.Slug.from_name(name) || Context.suggest_slug(email) ||
-      Context.suggest_slug("user-#{provider}")
+    Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
   end
 
   # The API client wraps the 412 detail once more (`operation` +

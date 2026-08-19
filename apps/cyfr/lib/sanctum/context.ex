@@ -386,51 +386,6 @@ defmodule Sanctum.Context do
     raise ArgumentError, "no canonical issuer registered for provider #{inspect(other)}"
   end
 
-  @doc """
-  Construct a Context from OIDC claims (without permissions/membership —
-  callers fill those in via subsequent resolver calls).
-
-  The `id` is `"<provider>|<iss>|<subject>"` — pipe-delimited, scheme-prefixed
-  issuer. Deterministic for a given IdP identity, so the same human via the
-  same IdP always resolves to the same id regardless of deployment
-  configuration.
-
-  ## Examples
-
-      iex> claims = %{"sub" => "12345", "email" => "alice@example.com", "iss" => "https://github.com"}
-      iex> ctx = Sanctum.Context.from_oidc_claims(claims)
-      iex> ctx.email
-      "alice@example.com"
-      iex> ctx.user_id
-      "github|https://github.com|12345"
-
-  """
-  @spec from_oidc_claims(map()) :: t()
-  def from_oidc_claims(claims) do
-    iss = claims["iss"]
-    sub = claims["sub"]
-    provider = claims["provider"] || derive_provider(iss)
-
-    build(
-      user_id: build_id(provider, iss, sub),
-      email: claims["email"],
-      provider: iss
-    )
-  end
-
-  defp derive_provider(iss) when is_binary(iss) do
-    # Match on the normalized HOST, not a substring. `String.contains?` would
-    # also match a look-alike like `https://github.com.attacker.example/` or
-    # `https://evil-github.com/`.
-    case normalized_issuer_host(iss) do
-      "github.com" -> "github"
-      "accounts.google.com" -> "google"
-      _ -> "oidc"
-    end
-  end
-
-  defp derive_provider(_), do: "oidc"
-
   @doc false
   # Lowercased host of an issuer string, tolerant of a missing scheme and a
   # trailing slash/port. Returns "" when no host can be determined.
@@ -445,61 +400,6 @@ defmodule Sanctum.Context do
   end
 
   def normalized_issuer_host(_), do: ""
-
-  @doc """
-  Normalize a free-text handle (email local-part, provider login) into a
-  cyfr.run personal-slug candidate.
-
-  Personal slugs must match `^[a-z0-9]+(-[a-z0-9]+)*$` (1–39 chars; GitHub-style).
-  Email local-parts routinely contain `.`, `+`, uppercase, underscores — all of
-  which the server rejects with 400 `INVALID_USERNAME`. This helper applies the
-  same normalization the server expects so a pre-filled suggestion doesn't
-  doom-submit.
-
-  Returns `nil` when no non-empty valid slug can be derived (e.g. input is
-  `nil`, empty, or all punctuation).
-
-  ## Examples
-
-      iex> Sanctum.Context.suggest_slug("alice@example.com")
-      "alice"
-
-      iex> Sanctum.Context.suggest_slug("alice.smith+tag@example.com")
-      "alice-smith-tag"
-
-      iex> Sanctum.Context.suggest_slug("ALICE@example.com")
-      "alice"
-
-      iex> Sanctum.Context.suggest_slug(nil)
-      nil
-
-      iex> Sanctum.Context.suggest_slug("@@@")
-      nil
-
-  """
-  @spec suggest_slug(String.t() | nil) :: String.t() | nil
-  def suggest_slug(nil), do: nil
-
-  def suggest_slug(raw) when is_binary(raw) do
-    local =
-      case String.split(raw, "@", parts: 2) do
-        [local, _domain] -> local
-        [local] -> local
-      end
-
-    slug =
-      local
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9-]+/, "-")
-      |> String.replace(~r/-+/, "-")
-      |> String.trim("-")
-      |> String.slice(0, 39)
-      |> String.trim_trailing("-")
-
-    if Sanctum.ComponentRef.valid_personal_slug?(slug), do: slug, else: nil
-  end
-
-  def suggest_slug(_), do: nil
 
   @doc """
   Check if context has a specific permission.
