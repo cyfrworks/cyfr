@@ -132,7 +132,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
   defp oauth_shaped_context do
     Context.build(
-      user_id: Context.build_id(:github, Context.provider_iss(:github), "12345"),
+      user_id: Sanctum.Auth.Identity.builtin_user_id(:github, "12345"),
       email: "tester@example.com",
       provider: "github",
       namespace: "testns",

@@ -36,6 +36,7 @@ defmodule Sanctum.Auth.OIDC do
 
   @behaviour Sanctum.Auth
 
+  alias Sanctum.Auth.Identity
   alias Sanctum.Context
   alias Sanctum.Session
 
@@ -72,7 +73,7 @@ defmodule Sanctum.Auth.OIDC do
 
     case Sanctum.Auth.EmailVerification.verify(provider, email, extra) do
       :ok ->
-        user_id = Context.build_id(provider, iss, to_string(auth.uid))
+        user_id = Identity.user_id(provider, iss, to_string(auth.uid))
 
         ctx =
           Context.build(
@@ -194,7 +195,7 @@ defmodule Sanctum.Auth.OIDC do
   # The generic-OIDC path (`ueberauth_oidcc`) pulls `iss` from the id_token
   # or the strategy's `urls.oidc_issuer` field.
   defp resolve_issuer(_auth, provider) when provider in [:github, :google] do
-    Context.provider_iss(provider)
+    Identity.issuer(provider)
   end
 
   defp resolve_issuer(_auth, _provider) do
@@ -213,13 +214,10 @@ defmodule Sanctum.Auth.OIDC do
                   "(CYFR_OIDC_ISSUER was absent at boot)."
       end
 
-    # The canonical id format is "<provider>|<iss>|<sub>"; wiring ueberauth_oidcc
-    # against a direct-provider host (github.com / accounts.google.com) would
-    # produce "oidc|https://github.com|..." instead of the "github|..." form,
-    # silently splitting one human into two ids across deployments. Compare on
-    # the normalized host so a trailing slash, port, or scheme variant cannot
-    # slip past.
-    if Sanctum.Context.normalized_issuer_host(iss) in ["github.com", "accounts.google.com"] do
+    # A reserved issuer here is a live request, so it raises rather than
+    # returning: the deployment is already wired wrong and every id it mints
+    # would be the split one. Boot refuses the same value more gently.
+    if Identity.reserved_issuer?(iss) do
       raise "OIDC issuer policy violation: ueberauth_oidcc wired against a reserved issuer " <>
               "(#{iss}); use ueberauth_github or ueberauth_google directly."
     end

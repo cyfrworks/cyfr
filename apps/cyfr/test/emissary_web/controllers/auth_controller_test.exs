@@ -104,7 +104,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert conn.status == 403
       assert conn.resp_body =~ "not allowed on this server"
       refute get_session(conn, :sanctum_session_token)
-      user_id = Sanctum.Context.build_id(:github, Sanctum.Context.provider_iss(:github), "99999")
+      user_id = Sanctum.Auth.Identity.builtin_user_id(:github, "99999")
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get(user_id)
     end
 

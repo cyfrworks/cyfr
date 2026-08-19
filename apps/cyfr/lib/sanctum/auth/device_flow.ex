@@ -34,6 +34,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   require Logger
 
+  alias Sanctum.Auth.Identity
   alias Sanctum.{Context, Session}
 
   # Device-flow endpoints — per-provider URLs and scopes.
@@ -434,7 +435,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   # The door runs before the session exists and before cyfr.run hears of the
   # identity: a refused sign-in leaves no row and makes no call.
   defp admit(user_info, provider) do
-    user_id = Context.build_id(provider, Context.provider_iss(provider), user_info.id)
+    user_id = Identity.builtin_user_id(provider, user_info.id)
     user_info = Map.merge(user_info, %{id: user_id, provider: provider})
 
     with {:ok, verdict} <- Sanctum.Door.admit_identity(user_id, user_info),

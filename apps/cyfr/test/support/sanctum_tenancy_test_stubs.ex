@@ -43,8 +43,8 @@ defmodule Sanctum.Test.AltAuthProvider do
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider
     email = auth.info && Map.get(auth.info, :email)
-    iss = Context.provider_iss(provider)
-    user_id = Context.build_id(provider, iss, to_string(auth.uid))
+    iss = Sanctum.Auth.Identity.issuer(provider)
+    user_id = Sanctum.Auth.Identity.user_id(provider, iss, to_string(auth.uid))
 
     ctx =
       Context.build(

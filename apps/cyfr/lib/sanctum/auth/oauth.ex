@@ -33,6 +33,7 @@ defmodule Sanctum.Auth.OAuth do
 
   @behaviour Sanctum.Auth
 
+  alias Sanctum.Auth.Identity
   alias Sanctum.Context
   alias Sanctum.Session
   alias Sanctum.Telemetry
@@ -45,7 +46,7 @@ defmodule Sanctum.Auth.OAuth do
          {:ok, user_info} <- extract_user_info(params) do
       ctx =
         Context.build(
-          user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
+          user_id: Identity.builtin_user_id(provider, user_info.id),
           email: user_info.email,
           provider: to_string(provider),
           # Start athanor-less; resolve_into/2 fills the athanor from memberships.

@@ -406,7 +406,7 @@ defmodule Cyfr.Application do
   # assertion in Sanctum.Auth.OIDC.resolve_issuer/2.
   @spec check_oidc_issuer(term()) :: :ok | {:error, String.t()}
   def check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "" do
-    if Sanctum.Context.normalized_issuer_host(issuer) in ["github.com", "accounts.google.com"] do
+    if Sanctum.Auth.Identity.reserved_issuer?(issuer) do
       {:error,
        "CYFR_OIDC_ISSUER (#{issuer}) is a reserved direct-provider host. " <>
          "ueberauth_oidcc against github.com/accounts.google.com produces " <>
