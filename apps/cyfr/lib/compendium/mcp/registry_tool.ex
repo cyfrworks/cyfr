@@ -25,6 +25,210 @@ defmodule Compendium.MCP.RegistryTool do
   # identity, so it never wields one.
   @person_only @identity_mutations ++ ~w(report legal_accept appeal)
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Compendium.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "registry",
+      title: "Registry",
+      description:
+        "cyfr.run registry identity and namespace operations: probe for tokens, claim a personal " <>
+          "or publisher namespace, verify DNS ownership, manage additional push tokens and members, " <>
+          "and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: false,
+        actions: %{
+          # Bootstrap/spec reads stay open (they run before a session
+          # exists per the cyfr.run spec); identity mutations mirror
+          # RegistryTool's gate.
+          # The bootstrap a first sign-in still has ahead of it: a session
+          # exists but the claim gate is not passed — these serve it.
+          "probe" => %{kind: :execute, planes: [:external, :in_chain], auth: :signed_in},
+          "claim_personal" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            auth: :signed_in
+          },
+          "claim_publisher" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :component_manage
+          },
+          "verify_publisher" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "tokens_list" => %{kind: :read, planes: [:external, :in_chain]},
+          "tokens_issue" => %{kind: :write, planes: [:external], permission: :component_manage},
+          "tokens_revoke" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "members_list" => %{kind: :read, planes: [:external, :in_chain]},
+          "members_add" => %{kind: :write, planes: [:external], permission: :component_manage},
+          "members_update" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :component_manage
+          },
+          "members_remove" => %{
+            kind: :write,
+            planes: [:external],
+            permission: :component_manage
+          },
+          "whoami" => %{kind: :read, planes: [:external, :in_chain]},
+          "get_namespace" => %{kind: :read, planes: [:external, :in_chain]},
+          "report" => %{kind: :write, planes: [:external, :in_chain]},
+          "list_my_reports" => %{kind: :read, planes: [:external, :in_chain]},
+          "legal_page" => %{kind: :read, planes: [:external, :in_chain], auth: :signed_in},
+          "legal_version" => %{kind: :read, planes: [:external, :in_chain], auth: :signed_in},
+          "legal_accept" => %{kind: :write, planes: [:external, :in_chain], auth: :signed_in},
+          "appeal" => %{kind: :write, planes: [:external, :in_chain]}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "probe",
+              "claim_personal",
+              "claim_publisher",
+              "verify_publisher",
+              "tokens_list",
+              "tokens_issue",
+              "tokens_revoke",
+              "members_list",
+              "members_add",
+              "members_update",
+              "members_remove",
+              "whoami",
+              "get_namespace",
+              "report",
+              "list_my_reports",
+              "legal_page",
+              "legal_version",
+              "legal_accept",
+              "appeal"
+            ],
+            "description" => "Registry action to perform"
+          },
+          "provider" => %{
+            "type" => "string",
+            "enum" => ["github", "google"],
+            "description" => "OAuth provider (for probe / claim_personal)"
+          },
+          "access_token" => %{
+            "type" => "string",
+            "description" =>
+              "IdP access token (for probe / claim_personal). Used once to prove provider identity."
+          },
+          "label" => %{
+            "type" => "string",
+            "description" => "Human-readable label for the issued push token"
+          },
+          "username" => %{
+            "type" => "string",
+            "description" => "Desired personal-namespace slug (for claim_personal)"
+          },
+          "slug" => %{
+            "type" => "string",
+            "description" => "Namespace slug (publisher or personal)"
+          },
+          "token_id" => %{
+            "type" => "string",
+            "description" => "Token id (for tokens_revoke)"
+          },
+          "target_personal_slug" => %{
+            "type" => "string",
+            "description" => "Target user's personal namespace slug (for members_*)"
+          },
+          "role" => %{
+            "type" => "string",
+            "enum" => ["admin", "member"],
+            "description" => "Member role (for members_add / members_update)"
+          },
+          # report action params
+          "category" => %{
+            "type" => "string",
+            "enum" => [
+              "impersonation",
+              "malware",
+              "dmca",
+              "spam",
+              "other",
+              "csam",
+              "objectionable",
+              "ip_infringement",
+              "security",
+              "policy_violation",
+              "ncii"
+            ],
+            "description" => "Abuse category (for report action)"
+          },
+          "target_namespace" => %{
+            "type" => "string",
+            "description" =>
+              "Namespace being reported (for report action; required if no target_component_ref)"
+          },
+          "target_component_ref" => %{
+            "type" => "string",
+            "description" =>
+              "Component reference being reported (for report action; required if no target_namespace)"
+          },
+          "details" => %{
+            "type" => "string",
+            "description" => "Report details (for report action; max 4096 chars)"
+          },
+          # list_my_reports pagination
+          "limit" => %{
+            "type" => "integer",
+            "description" => "Max rows to return (list_my_reports; default 50, max 200)"
+          },
+          "offset" => %{
+            "type" => "integer",
+            "description" => "Starting row offset (list_my_reports; default 0)"
+          },
+          # legal_page / legal_accept
+          "name" => %{
+            "type" => "string",
+            "description" =>
+              "Policy name (for legal_page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
+          },
+          "policy_version" => %{
+            "type" => "string",
+            "description" =>
+              "Policy version string (for legal_accept; obtained via legal_version)"
+          },
+          "id_token" => %{
+            "type" => "string",
+            "description" => "OIDC id_token (for legal_accept / appeal when provider=oidcc)"
+          },
+          "action_type" => %{
+            "type" => "string",
+            "enum" => ["takedown", "ban"],
+            "description" => "Appeal action_type (for appeal action)"
+          },
+          "action_ref" => %{
+            "type" => "string",
+            "description" =>
+              "Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)"
+          },
+          "argument" => %{
+            "type" => "string",
+            "description" => "Appeal argument, ≤4000 chars (for appeal action)"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_only do
     {:error, "registry.#{action} is a person's act — sign in; an API key cannot do it"}

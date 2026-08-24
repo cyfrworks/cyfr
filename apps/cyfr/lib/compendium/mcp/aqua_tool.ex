@@ -34,6 +34,89 @@ defmodule Compendium.MCP.AquaTool do
 
   # --- list ---
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Compendium.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "aqua",
+      title: "AQUA Agent System",
+      description:
+        "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only).",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          # Agent definitions are the athanor's own. Reading them is open
+          # to any authenticated caller, a running chain included; editing
+          # them — the roster, the prompts, the `tool_policy` that decides
+          # what a chain may call — is a member's act from outside, never
+          # something a chain can do to itself.
+          "list" => %{kind: :read, planes: [:external, :in_chain]},
+          "get" => %{kind: :read, planes: [:external, :in_chain]},
+          "create" => %{kind: :write, planes: [:external], permission: :component_manage},
+          "update" => %{kind: :write, planes: [:external], permission: :component_manage},
+          "delete" => %{
+            kind: :destructive,
+            planes: [:external],
+            permission: :component_manage
+          }
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["list", "get", "create", "update", "delete"],
+            "description" =>
+              "Action: list/get agents and guides, or create/update/delete to manage agents. For create, pass type=orchestrator|sub-agent to choose the agent kind (docs are read-only)."
+          },
+          "name" => %{
+            "type" => "string",
+            "description" => "Agent or guide name (for get/update/delete actions)"
+          },
+          "type" => %{
+            "type" => "string",
+            "enum" => ["orchestrator", "sub-agent"],
+            "description" => "Filter by type (for list action)"
+          },
+          "parent" => %{
+            "type" => "string",
+            "description" => "Parent orchestrator name (for create sub-agent action)"
+          },
+          "title" => %{
+            "type" => "string",
+            "description" => "Human-readable title (for create/update actions)"
+          },
+          "description" => %{
+            "type" => "string",
+            "description" => "Agent description shown to LLM (for create/update actions)"
+          },
+          "content" => %{
+            "type" => "string",
+            "description" => "Prompt content in markdown (for create/update actions)"
+          },
+          "tool_policy" => %{
+            "type" => "object",
+            "additionalProperties" => %{"type" => "string", "enum" => ["ask", "auto"]},
+            "description" =>
+              "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
+          },
+          "catalyst_ref" => %{
+            "type" => "string",
+            "description" => "Versionless catalyst reference (for create/update actions)"
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "Model identifier (for create/update actions)"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
     type_filter = Map.get(args, "type")
 

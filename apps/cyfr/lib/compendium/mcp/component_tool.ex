@@ -24,6 +24,193 @@ defmodule Compendium.MCP.ComponentTool do
   # Search action - search for components. Searches the local registry and,
   # unless the caller restricts to source: "local", augments with the
   # configured registry's REST API (cyfr.run by default), merging results.
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Compendium.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "component",
+      title: "Component",
+      description:
+        "Component discovery and registry operations. Search/list results include a component_ref field (format: type:publisher.name:version, e.g. catalyst:moonmoon69.airtable:0.1.0) usable directly as the reference argument for pull, inspect, setup_plan, and request_setup.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          "search" => %{kind: :read, planes: [:external, :in_chain]},
+          "inspect" => %{kind: :read, planes: [:external, :in_chain]},
+          "pull" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "push" => %{kind: :write, planes: [:external], permission: :component_manage},
+          "register" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "categories" => %{kind: :read, planes: [:external, :in_chain]},
+          "get_blob" => %{
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :component_read
+          },
+          "discover" => %{
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :component_read
+          },
+          "setup_plan" => %{kind: :read, planes: [:external, :in_chain]},
+          "list" => %{kind: :read, planes: [:external, :in_chain]},
+          "delete" => %{kind: :destructive, planes: [:external], permission: :component_manage},
+          "create" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "fork" => %{
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          # deprecate/yank were the one write pair with no permission gate —
+          # discovery already advertised :component_manage, and every
+          # sibling mutation carries it; the handlers' namespace-bearer
+          # check remains as the registry-identity residual.
+          "deprecate" => %{
+            kind: :destructive,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          },
+          "yank" => %{
+            kind: :destructive,
+            planes: [:external, :in_chain],
+            permission: :component_manage
+          }
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "search",
+              "inspect",
+              "pull",
+              "push",
+              "register",
+              "categories",
+              "get_blob",
+              "discover",
+              "setup_plan",
+              "list",
+              "delete",
+              "create",
+              "fork",
+              "deprecate",
+              "yank"
+            ],
+            "description" => "Action to perform"
+          },
+          # deprecate/yank action params
+          "reason" => %{
+            "type" => "string",
+            "description" =>
+              "Human-readable explanation surfaced to pullers (deprecate/yank). Required for deprecate; optional for yank. Max 256 chars."
+          },
+          # search action params
+          "query" => %{
+            "type" => "string",
+            "description" => "Search query (search action)"
+          },
+          "type" => %{
+            "type" => "string",
+            "enum" => Sanctum.ComponentRef.valid_types(),
+            "description" =>
+              "Component type (required for create action, optional filter for search/list)"
+          },
+          "category" => %{
+            "type" => "string",
+            "description" => "Filter by category (search action)"
+          },
+          "tags" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Filter by tags, AND logic (search action)"
+          },
+          "has_source" => %{
+            "type" => "boolean",
+            "description" => "Only show components with source available (search action)"
+          },
+          "source" => %{
+            "type" => "string",
+            "enum" => ["local", "remote", "all"],
+            "description" =>
+              "Search scope: 'local' (skip remote), 'remote' (remote only), 'all' (default, both)"
+          },
+          "license" => %{
+            "type" => "string",
+            "description" => "Filter by license, SPDX identifier (search action)"
+          },
+          "limit" => %{
+            "type" => "integer",
+            "default" => 20,
+            "description" => "Maximum results to return (search action)"
+          },
+          # inspect/pull action params
+          "reference" => %{
+            "type" => "string",
+            "description" =>
+              "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results."
+          },
+          # inspect action params
+          "include_readme" => %{
+            "type" => "boolean",
+            "description" => "Include README.md content in inspect result (default false)"
+          },
+          # pull action params
+          "verify" => %{
+            "type" => "boolean",
+            "default" => true,
+            "description" => "Verify signature before pulling (pull action)"
+          },
+          "digest" => %{
+            "type" => "string",
+            "description" => "Component digest (get_blob action)"
+          },
+          "registry" => %{
+            "type" => "string",
+            "description" => "OCI registry hostname for push/discover (e.g., ghcr.io)"
+          },
+          "namespace" => %{
+            "type" => "string",
+            "description" => "Publisher namespace filter (discover action)"
+          },
+          # create/fork action params
+          "name" => %{
+            "type" => "string",
+            "description" =>
+              "Component name, lowercase alphanumeric with hyphens (create/fork action)"
+          },
+          "version" => %{
+            "type" => "string",
+            "default" => "0.1.0",
+            "description" => "Semver version (create/fork action)"
+          },
+          "template" => %{
+            "type" => "string",
+            "enum" => ["react"],
+            "description" => "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS."
+          }
+          # register action: no additional params (scans all component directories)
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{} = ctx, %{"action" => "search"} = args) do
     filters = %{
       query: args["query"],
