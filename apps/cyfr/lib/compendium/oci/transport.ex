@@ -7,18 +7,22 @@ defmodule Compendium.OCI.Transport do
 
   Issues requests via `Cyfr.Network.pinned_request/5` (SSRF + DNS-rebinding
   protection) and adds:
-  - Automatic auth header injection via `OCI.Auth`
-  - Automatic 401 challenge handling (token exchange + retry)
-  - Retry with exponential backoff for 5xx and timeouts (3 attempts)
+  - Automatic auth header injection via `OCI.Auth`, recomputed per attempt
+    so a retry picks up a rotated token
+  - Retry with backoff, idempotency-gated for ambiguous failures — the
+    policy is `Compendium.Transport.Retry`, shared with the REST transport
   - Consistent return format: `{:ok, status, headers, body}` or `{:error, reason}`
+
+  A 401 is surfaced, never negotiated: push tokens do no realm exchange,
+  so the caller prompts re-login (`OCI.Auth` says why at length).
   """
 
   require Logger
 
   alias Compendium.OCI.{Auth, Errors, Reference}
+  alias Compendium.Transport.Retry
 
   @max_retries 3
-  @base_delay_ms 500
   @receive_timeout 120_000
 
   @type response :: {:ok, integer(), [{String.t(), String.t()}], binary()}
@@ -111,63 +115,36 @@ defmodule Compendium.OCI.Transport do
         {:error, Errors.from_response(401, resp_body, registry)}
 
       {:ok, 429, resp_headers, _resp_body} ->
-        if attempt + 1 < @max_retries do
-          retry_after = extract_retry_after(resp_headers)
-          delay = max(retry_after, (@base_delay_ms * :math.pow(2, attempt)) |> round())
-
-          Logger.warning(
-            "[Compendium.OCI.Transport] #{registry} returned 429, " <>
-              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-
-          do_request_with_retry(
-            method,
-            url,
-            registry,
-            repository,
-            extra_headers,
-            body,
-            ctx,
-            attempt + 1
-          )
-        else
-          Logger.error(
-            "[Compendium.OCI.Transport] #{registry} returned 429 on final attempt — giving up"
-          )
-
-          {:error, Errors.from_response(429, "Rate limited", registry)}
-        end
+        retry_or_give_up(
+          method,
+          url,
+          registry,
+          repository,
+          extra_headers,
+          body,
+          ctx,
+          attempt,
+          Retry.classify({:status, 429}),
+          "429",
+          max(Retry.retry_after_ms(resp_headers), Retry.backoff(attempt)),
+          fn -> {:error, Errors.from_response(429, "Rate limited", registry)} end
+        )
 
       {:ok, status, _resp_headers, resp_body} when status >= 500 ->
-        if attempt + 1 < @max_retries do
-          delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
-
-          Logger.warning(
-            "[Compendium.OCI.Transport] #{registry} returned #{status}, " <>
-              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-
-          do_request_with_retry(
-            method,
-            url,
-            registry,
-            repository,
-            extra_headers,
-            body,
-            ctx,
-            attempt + 1
-          )
-        else
-          Logger.error(
-            "[Compendium.OCI.Transport] #{registry} returned #{status} on final attempt — giving up"
-          )
-
-          {:error, Errors.from_response(status, resp_body, registry)}
-        end
+        retry_or_give_up(
+          method,
+          url,
+          registry,
+          repository,
+          extra_headers,
+          body,
+          ctx,
+          attempt,
+          Retry.classify({:status, status}),
+          "#{status}",
+          Retry.backoff(attempt),
+          fn -> {:error, Errors.from_response(status, resp_body, registry)} end
+        )
 
       {:ok, status, resp_headers, resp_body} ->
         {:ok, status, resp_headers, resp_body}
@@ -178,46 +155,75 @@ defmodule Compendium.OCI.Transport do
         {:error, Errors.connection_error(registry, reason)}
 
       {:error, reason} ->
-        if attempt + 1 < @max_retries do
-          delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
-
-          Logger.warning(
-            "[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)}, " <>
-              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-
-          do_request_with_retry(
-            method,
-            url,
-            registry,
-            repository,
-            extra_headers,
-            body,
-            ctx,
-            attempt + 1
-          )
-        else
-          Logger.error(
-            "[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)} — giving up after #{@max_retries} attempts"
-          )
-
-          {:error, Errors.connection_error(registry, reason)}
-        end
+        retry_or_give_up(
+          method,
+          url,
+          registry,
+          repository,
+          extra_headers,
+          body,
+          ctx,
+          attempt,
+          Retry.classify({:error, reason}),
+          inspect(reason),
+          Retry.backoff(attempt),
+          fn -> {:error, Errors.connection_error(registry, reason)} end
+        )
     end
   end
 
-  defp extract_retry_after(headers) do
-    case List.keyfind(headers, "retry-after", 0) do
-      {_, value} ->
-        case Integer.parse(value) do
-          {seconds, _} -> seconds * 1000
-          :error -> 0
-        end
+  # The loop's shared tail; the decision is `Compendium.Transport.Retry`'s.
+  # An ambiguous failure on a non-idempotent method is not replayed — the
+  # server may have acted, and even the zero-byte upload-session POST gains
+  # nothing from a duplicate session.
+  defp retry_or_give_up(
+         method,
+         url,
+         registry,
+         repository,
+         extra_headers,
+         body,
+         ctx,
+         attempt,
+         disposition,
+         why,
+         delay,
+         give_up
+       ) do
+    cond do
+      attempt + 1 >= @max_retries ->
+        Logger.error(
+          "[Compendium.OCI.Transport] #{registry}: #{why} on final attempt — giving up"
+        )
 
-      nil ->
-        0
+        give_up.()
+
+      disposition == :retry_if_idempotent and not Retry.idempotent?(method) ->
+        Logger.error(
+          "[Compendium.OCI.Transport] #{registry}: #{why} for #{method} — not retrying: " <>
+            "the server may have acted on it"
+        )
+
+        give_up.()
+
+      true ->
+        Logger.warning(
+          "[Compendium.OCI.Transport] #{registry}: #{why}, retrying in #{delay}ms " <>
+            "(attempt #{attempt + 1}/#{@max_retries})"
+        )
+
+        Process.sleep(delay)
+
+        do_request_with_retry(
+          method,
+          url,
+          registry,
+          repository,
+          extra_headers,
+          body,
+          ctx,
+          attempt + 1
+        )
     end
   end
 
