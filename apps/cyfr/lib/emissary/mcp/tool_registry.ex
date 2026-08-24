@@ -80,12 +80,15 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   @doc """
-  Prune a tools/list payload to what a component running in a chain can
-  reach: actions whose plane annotation includes `:in_chain`. Proxied
-  `server:tool` entries are in-chain by wiring and pass through whole;
-  anything without an annotation fails closed, mirroring `call_in_chain/5`.
-  This is a discovery view — per-call enforcement stays with the chain
-  authority's transition relation.
+  Prune a tools/list payload to the in-chain *plane*: actions whose plane
+  annotation includes `:in_chain`. Proxied `server:tool` entries are
+  in-chain by wiring and pass through whole; anything without an
+  annotation fails closed, mirroring `call_in_chain/5`.
+
+  This is the authority-less plane view, for surfaces where no chain
+  authority applies (the `tools.list component_ref` preview). The in-chain
+  catalogue a running chain sees is additionally grant-filtered in
+  `prune_in_chain_discovery/5`.
   """
   def in_chain_view(tool_defs) when is_list(tool_defs) do
     tool_defs
@@ -320,25 +323,68 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   # Discovery pruning for in-chain callers: `tools.list` shows a chain only
-  # what it can reach — internal tools through the same :in_chain plane
-  # annotations `call_in_chain/5` enforces per call, and external
-  # `server:tool` entries only when the chain authority's tool_servers
-  # grants cover them. Per-call enforcement stays with the transition
-  # relation; this keeps the discovery view (and the untrusted upstream
-  # descriptions it carries) from reaching an agent that holds no grant.
+  # what it can reach — internal actions through the same two questions
+  # `call_in_chain/5` asks per call (the :in_chain plane and the chain
+  # authority's tool grants), and external `server:tool` entries only when
+  # the authority's tool_servers grants cover them. Per-call enforcement
+  # stays with the transition relation; this keeps the catalogue from
+  # advertising what a call would be denied, and the untrusted upstream
+  # descriptions from reaching an agent that holds no grant.
   defp prune_in_chain_discovery({:ok, %{tools: tools}}, "tools", args, ctx, authority)
        when is_list(tools) do
     if (args["action"] || args[:action]) == "list" do
       {internal, external} =
         Enum.split_with(tools, fn t -> not String.contains?(t["name"] || "", ":") end)
 
-      {:ok, %{tools: in_chain_view(internal) ++ granted_external_tools(ctx, authority, external)}}
+      {:ok,
+       %{
+         tools:
+           granted_internal_tools(internal, authority) ++
+             granted_external_tools(ctx, authority, external)
+       }}
     else
       {:ok, %{tools: tools}}
     end
   end
 
   defp prune_in_chain_discovery(result, _name, _args, _ctx, _authority), do: result
+
+  # The internal half of the same pruning: the plane question in_chain_view
+  # asks, conjoined with the authority's tool grants — mirroring dispatch,
+  # where check_in_chain_reachable runs before the transition's tool_bound.
+  # No resources, no catalogue: fail closed like the external arm.
+  defp granted_internal_tools(_internal, %{resources: :none}), do: []
+
+  defp granted_internal_tools(internal, authority) do
+    internal
+    |> Enum.map(&prune_to_granted(&1, authority))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp prune_to_granted(%{"name" => name} = tool_def, authority) do
+    actions = ActionAnnotations.actions_of(tool_def)
+
+    reachable =
+      for {action, %{planes: planes}} <- actions,
+          :in_chain in planes,
+          Sanctum.Authority.Transition.tool_granted?(authority, name, action),
+          do: action
+
+    case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
+      {[], _} ->
+        nil
+
+      {_, listed} when is_list(listed) ->
+        case Enum.filter(listed, &(&1 in reachable)) do
+          [] -> nil
+          ^listed -> tool_def
+          pruned -> put_in(tool_def, ["inputSchema", "properties", "action", "enum"], pruned)
+        end
+
+      {_, _} ->
+        tool_def
+    end
+  end
 
   defp granted_external_tools(_ctx, _authority, []), do: []
 

@@ -118,8 +118,56 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     refute "ghserver:repo_get" in names
     refute "othersrv:anything" in names
 
-    # Internal tools survive, pruned to their in-chain view.
-    assert Enum.any?(names, &(not String.contains?(&1, ":")))
+    # Internal tools survive only where the authority grants them: this
+    # edge grants tools.list alone, so the catalogue holds `tools` pruned
+    # to ["list"] and no other internal tool.
+    internal = Enum.reject(tools, &String.contains?(&1["name"], ":"))
+    assert Enum.map(internal, & &1["name"]) == ["tools"]
+
+    assert [%{"inputSchema" => %{"properties" => %{"action" => %{"enum" => ["list"]}}}}] =
+             internal
+  end
+
+  test "the internal catalogue advertises exactly what the transition allows",
+       %{ctx: ctx, digest: digest} do
+    auth = authority_with_server(digest)
+
+    {:ok, %{tools: tools}} =
+      ToolRegistry.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
+
+    internal = Enum.reject(tools, &String.contains?(&1["name"], ":"))
+
+    advertised =
+      for t <- internal,
+          a <- get_in(t, ["inputSchema", "properties", "action", "enum"]) || [],
+          do: {t["name"], a}
+
+    # Everything advertised is allowed at call time.
+    for {name, action} <- advertised do
+      assert {:allow_tool, _} =
+               Sanctum.Authority.Transition.step(
+                 auth,
+                 :call,
+                 {:tool, %{tool: name, action: action}}
+               ),
+             "#{name}.#{action} advertised but denied at call time"
+    end
+
+    # Everything in-chain-planed but ungranted was pruned, and a call
+    # would be denied — the catalogue and the verdict are one fact.
+    for tool_def <- ToolRegistry.list_tools(),
+        name = tool_def["name"],
+        not String.contains?(name, ":"),
+        action <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
+        :in_chain in Emissary.MCP.ActionAnnotations.planes(tool_def, action),
+        {name, action} not in advertised do
+      assert {:deny, :tool_not_granted} =
+               Sanctum.Authority.Transition.step(
+                 auth,
+                 :call,
+                 {:tool, %{tool: name, action: action}}
+               )
+    end
   end
 
   test "a granted server's matching tool passes the transition", %{ctx: ctx, digest: digest} do
