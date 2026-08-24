@@ -61,32 +61,39 @@ defmodule Arca.Execution do
     field :lease_until, :utc_datetime_usec
   end
 
+  # Every column a start writes — the write path's half of the row shape,
+  # exposed so the engine's record layer can pin its attrs against it.
+  @start_fields [
+    :id,
+    :reference,
+    :input_hash,
+    :user_id,
+    :athanor_id,
+    :request_id,
+    :component_type,
+    :component_digest,
+    :started_at,
+    :status,
+    :input,
+    :host_policy,
+    :parent_execution_id,
+    :root_execution_id,
+    :resolver_digest,
+    :activation_digest,
+    :activation_graph,
+    :runner_id,
+    :lease_until
+  ]
+
+  @doc "The columns `start_changeset/1` casts, for the write path to pin against."
+  def start_fields, do: @start_fields
+
   @doc """
   Creates a changeset for inserting a new execution record when starting.
   """
   def start_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [
-      :id,
-      :reference,
-      :input_hash,
-      :user_id,
-      :athanor_id,
-      :request_id,
-      :component_type,
-      :component_digest,
-      :started_at,
-      :status,
-      :input,
-      :host_policy,
-      :parent_execution_id,
-      :root_execution_id,
-      :resolver_digest,
-      :activation_digest,
-      :activation_graph,
-      :runner_id,
-      :lease_until
-    ])
+    |> cast(attrs, @start_fields)
     |> validate_required([
       :id,
       :reference,

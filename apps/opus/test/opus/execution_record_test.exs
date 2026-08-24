@@ -271,6 +271,36 @@ defmodule Opus.ExecutionRecordTest do
     end
   end
 
+  describe "the read round-trip" do
+    test "get/2 restores the stamped activation graph; list/2 omits payloads by design",
+         %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      graph = ~s({"canonical":"jcs-1","nodes":{}})
+      record = %{record | activation_graph: graph}
+
+      :ok = ExecutionRecord.write_started(record)
+
+      # The declared struct field survives a read — it used to be silently
+      # nil on every get, though the row carried it.
+      assert {:ok, read} = ExecutionRecord.get(ctx, record.id)
+      assert read.activation_graph == graph
+
+      # The list select omits payload columns (input, output, host_policy,
+      # the graph) — list rows are summaries, get/2 is the full read.
+      assert {:ok, [row]} = ExecutionRecord.list(ctx, limit: 5)
+      assert row.activation_graph == nil
+    end
+  end
+
+  describe "the row shape has one owner" do
+    test "write_started's attrs are exactly the schema's start fields" do
+      # The schema owns the shape; the engine's write attrs must not
+      # drift from what start_changeset/1 casts.
+      assert Enum.sort(Arca.Execution.start_fields()) ==
+               Enum.sort(Arca.Execution.__schema__(:fields) -- [:completed_at, :duration_ms, :error_message, :output])
+    end
+  end
+
   describe "write_completed/1" do
     test "updates record with completion data", %{ctx: ctx} do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})

@@ -393,7 +393,10 @@ defmodule Opus.ExecutionRecord do
       parent_execution_id: result[:parent_execution_id],
       root_execution_id: result[:root_execution_id],
       resolver_digest: result[:resolver_digest],
-      activation_digest: result[:activation_digest]
+      activation_digest: result[:activation_digest],
+      # The canonically-encoded graph string, exactly as stamped — never
+      # decoded and re-encoded, which could break its canonical form.
+      activation_graph: result[:activation_graph]
     }
   end
 
@@ -470,29 +473,18 @@ defmodule Opus.ExecutionRecord do
     end
   end
 
+  # The row's shape has one owner: the Ecto schema. The read map carries
+  # every schema column except the lease mechanics, which belong to the
+  # write path and the sweeper alone — `write_started` stamps them fresh
+  # and nothing read back through here may act on them. A new column
+  # flows into the map on its own; only `from_mcp_result/1` (the parser
+  # layer) needs a decision about it.
+  @row_only_fields [:runner_id, :lease_until]
+
   defp execution_to_map(record) when is_struct(record) or is_map(record) do
-    %{
-      id: Map.get(record, :id),
-      request_id: Map.get(record, :request_id),
-      reference: Map.get(record, :reference),
-      input_hash: Map.get(record, :input_hash),
-      user_id: Map.get(record, :user_id),
-      athanor_id: Map.get(record, :athanor_id),
-      component_type: Map.get(record, :component_type),
-      component_digest: Map.get(record, :component_digest),
-      started_at: Map.get(record, :started_at),
-      completed_at: Map.get(record, :completed_at),
-      duration_ms: Map.get(record, :duration_ms),
-      status: Map.get(record, :status),
-      error_message: Map.get(record, :error_message),
-      input: Map.get(record, :input),
-      output: Map.get(record, :output),
-      host_policy: Map.get(record, :host_policy),
-      parent_execution_id: Map.get(record, :parent_execution_id),
-      root_execution_id: Map.get(record, :root_execution_id),
-      resolver_digest: Map.get(record, :resolver_digest),
-      activation_digest: Map.get(record, :activation_digest)
-    }
+    Map.new(Arca.Execution.__schema__(:fields) -- @row_only_fields, fn field ->
+      {field, Map.get(record, field)}
+    end)
   end
 
   defp parse_component_type(nil), do: :reagent
