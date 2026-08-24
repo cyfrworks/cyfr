@@ -103,7 +103,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid tincture_visibility action. Use: get"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("tincture_visibility", action_enum())}
   end
 
   # The finished public URL, so no client composes the route shape itself.
@@ -128,4 +128,6 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
       {:error, :missing_tenant} -> {:error, "Unauthorized: no resolved tenant"}
     end
   end
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

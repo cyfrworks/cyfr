@@ -166,6 +166,9 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "list", "ref" => ref}) do
+    # The registry gate already applies the annotation's consent class —
+    # this arm and revoke's are deliberate defense in depth for direct
+    # callers of the handler.
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
          {:ok, source_ref} <- Plan.name_ref(ref),
          {:ok, profiles} <- Source.impl().profiles(ctx, source_ref) do
@@ -204,7 +207,7 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid profile action. Use: plan, preview, commit, publish, list, revoke"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("profile", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -344,4 +347,6 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:component_not_found, _reason}), do: "component_not_found"
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
   defp fmt(reason), do: inspect(reason)
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

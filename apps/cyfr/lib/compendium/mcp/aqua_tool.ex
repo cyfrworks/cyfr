@@ -305,7 +305,7 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid aqua action. Use: list, get, create, update, or delete"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("aqua", action_enum())}
   end
 
   # --- aqua create helpers ---
@@ -565,4 +565,6 @@ defmodule Compendium.MCP.AquaTool do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

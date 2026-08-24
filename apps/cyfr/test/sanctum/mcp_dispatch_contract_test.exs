@@ -50,10 +50,10 @@ defmodule Sanctum.MCPDispatchContractTest do
     "oauth" => "Invalid oauth action. Use: set_client, list, or delete_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
-    "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
+    "webhook" => "Invalid webhook action. Use: create, list, get, update, revoke, or rotate",
     "vault" =>
-      "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, delete",
-    "profile" => "Invalid profile action. Use: plan, preview, commit, publish, list, revoke"
+      "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, or delete",
+    "profile" => "Invalid profile action. Use: plan, preview, commit, publish, list, or revoke"
   }
 
   describe "tools/0 — frozen surface" do

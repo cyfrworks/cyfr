@@ -104,7 +104,9 @@ defmodule Sanctum.MCP.VaultTool do
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     # Enumeration is operator data: the same surfaces that can walk the
-    # consent flow may see connection names, nothing else.
+    # consent flow may see connection names, nothing else. The registry
+    # gate already applies consent: :staging from the annotation — this
+    # arm is deliberate defense in depth for direct callers of the handler.
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
          {:ok, entries} <- Vault.list(ctx) do
       {:ok, %{entries: entries}}
@@ -231,8 +233,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, _args) do
-    {:error,
-     "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, delete"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("vault", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -260,4 +261,6 @@ defmodule Sanctum.MCP.VaultTool do
 
   defp fmt(:not_found), do: "not_found"
   defp fmt(reason), do: inspect(reason)
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

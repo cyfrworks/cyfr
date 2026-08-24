@@ -242,4 +242,21 @@ defmodule Emissary.MCP.ToolProvider do
   @callback health() :: :ok | {:error, term()}
 
   @optional_callbacks health: 0
+
+  @doc """
+  The canonical invalid-action refusal, derived from the tool's action
+  enum so the prose can never drift from the schema it restates.
+  """
+  @spec invalid_action(String.t(), [String.t()]) :: String.t()
+  def invalid_action(tool, enum) when is_list(enum) and enum != [] do
+    "Invalid #{tool} action. Use: #{humanize_enum(enum)}"
+  end
+
+  defp humanize_enum([one]), do: one
+  defp humanize_enum([a, b]), do: "#{a} or #{b}"
+
+  defp humanize_enum(enum) do
+    {init, [last]} = Enum.split(enum, -1)
+    Enum.join(init, ", ") <> ", or " <> last
+  end
 end

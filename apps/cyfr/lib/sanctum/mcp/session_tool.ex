@@ -246,8 +246,7 @@ defmodule Sanctum.MCP.SessionTool do
   end
 
   def handle(_ctx, _args) do
-    {:error,
-     "Invalid session action. Use: login, logout, whoami, device_init, device_poll, or use"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("session", action_enum())}
   end
 
   # session.whoami helpers: derive display fields from the Context without
@@ -299,4 +298,6 @@ defmodule Sanctum.MCP.SessionTool do
       "This deployment is configured with a different auth provider; " <>
       "use the web flow at `/auth/<provider>` instead."
   end
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

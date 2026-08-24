@@ -230,7 +230,7 @@ defmodule Sanctum.MCP.WebhookTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid webhook action. Use: create, get, list, update, revoke, rotate"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("webhook", action_enum())}
   end
 
   # --- helpers ---
@@ -264,4 +264,6 @@ defmodule Sanctum.MCP.WebhookTool do
       end
     )
   end
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

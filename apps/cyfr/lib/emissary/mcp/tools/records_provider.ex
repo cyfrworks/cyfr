@@ -324,7 +324,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", _ctx, _args) do
-    {:error, "Invalid record action. Use: get or list"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("record", action_enum("record"))}
   end
 
   # ============================================================================
@@ -476,7 +476,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", _ctx, _args) do
-    {:error, "Invalid mcp_log action. Use: list, get, correlate, fan_outs, or stats"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("mcp_log", action_enum("mcp_log"))}
   end
 
   # ============================================================================
@@ -544,7 +544,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", _ctx, _args) do
-    {:error, "Invalid policy_log action. Use: list, get, or correlate"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
   # ============================================================================
@@ -618,7 +618,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("retention", _ctx, _args) do
-    {:error, "Invalid retention action. Use: get, set, or cleanup"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("retention", action_enum("retention"))}
   end
 
   def handle(tool, _ctx, _args) do
@@ -733,5 +733,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       :ok -> :ok
       {:error, :missing_tenant} -> {:error, "Unauthorized: no resolved tenant"}
     end
+  end
+
+  defp action_enum(tool) do
+    [tool_def] = for t <- tools(), t.name == tool, do: t
+    get_in(tool_def, [:input_schema, "properties", "action", "enum"])
   end
 end

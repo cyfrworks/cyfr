@@ -111,6 +111,8 @@ defmodule Sanctum.MCP.OAuthTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid oauth action. Use: set_client, list, or delete_client"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("oauth", action_enum())}
   end
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

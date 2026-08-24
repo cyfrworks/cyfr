@@ -184,7 +184,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid key action. Use: create, get, list, revoke, or rotate"}
+    {:error, Emissary.MCP.ToolProvider.invalid_action("key", action_enum())}
   end
 
   # --- helpers ---
@@ -200,4 +200,6 @@ defmodule Sanctum.MCP.KeyTool do
     topic = Prism.Topics.api_keys(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
   end
+
+  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end
