@@ -257,65 +257,18 @@ defmodule Compendium.Registry do
   end
 
   @doc """
-  Register a component from a directory containing a `cyfr-manifest.json` and WASM binary.
-
-  This is a lighter operation than `publish_bytes/3` — intended for auto-indexing
-  `local/` components from the filesystem. Components registered this
-  way get `source: "filesystem"` in their metadata.
-
-  ## Security
-
-  Only components under the `local/` publisher namespace can be registered.
-  Other publisher namespaces (e.g., `cyfr/`, `stripe/`) are rejected — those must
-  go through `publish_bytes/3` with proper identity verification.
-
-  ## Parameters
-
-  - `ctx` - User context
-  - `directory_path` - Absolute path to the component version directory
-    (e.g., `components/catalysts/local/my-tool/0.1.0/`)
-  - `opts` - Options:
-    - `:force` - Re-register even if digest matches (default: false)
-
-  ## Returns
-
-  - `{:ok, component}` - Registered component metadata
-  - `{:ok, :unchanged}` - Skipped because digest matches existing entry
-  - `{:error, reason}` - Registration failed
-  """
-  def register_from_directory(%Context{} = ctx, directory_path, opts \\ []) do
-    # Group D: explicit user-supplied filesystem path (CLI / manual register).
-    # Reads manifest + validates artifact via local FS. The Arca-based variant
-    # (`register_from_arca/3`) is used by the auto-indexer and works with any
-    # storage adapter.
-    with {:ok, manifest} <- read_manifest(directory_path),
-         {:ok, publisher, component_type, dir_name, dir_version} <-
-           infer_path_metadata(directory_path),
-         :ok <- validate_register_namespace(publisher),
-         name = manifest["name"] || dir_name,
-         version = manifest["version"] || dir_version,
-         :ok <- validate_name(name),
-         :ok <- validate_version(version),
-         :ok <- validate_manifest_capability_blocks(manifest),
-         {:ok, validation} <- validate_artifact(directory_path, component_type) do
-      do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
-    end
-  end
-
-  @doc """
   Register a component from Arca segments (storage-adapter-agnostic).
 
   Used by `Compendium.AutoIndexer` after an `Arca.list_recursive/2` scan.
-  Equivalent to `register_from_directory/3` but reads manifest + WASM via
-  `Arca` so it works on the Local FS adapter and any configured object-store
-  adapter without code changes.
+  Reads manifest + WASM via `Arca`, so it works on the Local FS adapter and
+  any configured object-store adapter without code changes.
 
   ## Parameters
 
   - `ctx` - User context (used by Arca for tenant scoping)
   - `segments` - Path segments for the component version directory, e.g.
     `["components", "<athanor_id>", "catalysts", "local", "my-tool", "0.1.0"]`
-  - `opts` - Same as `register_from_directory/3` (`:force`)
+  - `opts` - `:force` re-registers an unchanged component
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
     with {:ok, manifest} <- read_manifest_arca(ctx, segments),
@@ -1174,89 +1127,8 @@ defmodule Compendium.Registry do
     {:error, {:namespace_rejected, "only local/ namespace can be registered, got: #{publisher}"}}
   end
 
-  # arca:bypass-ok=D — filesystem read for the user-CLI `register_from_directory`
-  # flow. The Arca-routed equivalent (`read_manifest_arca/2`) is below.
-  defp read_manifest(directory_path) do
-    manifest_path = Path.join(directory_path, "cyfr-manifest.json")
-
-    case File.read(manifest_path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, manifest} -> {:ok, manifest}
-          {:error, _} -> {:error, {:invalid_manifest, "cyfr-manifest.json is not valid JSON"}}
-        end
-
-      {:error, :enoent} ->
-        {:error, {:missing_manifest, "cyfr-manifest.json not found in #{directory_path}"}}
-
-      {:error, reason} ->
-        {:error, {:manifest_read_error, reason}}
-    end
-  end
-
-  defp infer_path_metadata(directory_path) do
-    # Expected path: .../components/{athanor_id}/{type}s/{publisher}/{name}/{version}/
-    # (or the seed bundle's .../components/_bundle/{type}s/...)
-    parts = Path.split(directory_path)
-
-    # Find "components" in the path and extract relative segments
-    case find_components_segments(parts) do
-      {:ok, [type_plural, publisher, name, version]} ->
-        component_type = String.trim_trailing(type_plural, "s")
-        {:ok, publisher, component_type, name, version}
-
-      :error ->
-        {:error,
-         {:invalid_path,
-          "expected components/{athanor_id}/{type}s/{publisher}/{name}/{version}/, " <>
-            "got #{directory_path}"}}
-    end
-  end
-
-  # The on-disk layout is a single fixed shape; the athanor segment is not
-  # returned here because the canonical tenant flows through `ctx` into
-  # `do_register/8`.
-  defp find_components_segments(parts) do
-    case Enum.split_while(parts, &(&1 != "components")) do
-      {_before, ["components", _athanor, type_plural, publisher, name, version | _]}
-      when type_plural in @type_plurals ->
-        {:ok, [type_plural, publisher, name, version]}
-
-      _ ->
-        :error
-    end
-  end
-
-  # arca:bypass-ok=D — filesystem read for the user-CLI `register_from_directory`
-  # flow. Arca-routed equivalent: `read_wasm_binary_arca/3`.
-  defp read_wasm_binary(directory_path, component_type) do
-    wasm_path = Path.join(directory_path, "#{component_type}.wasm")
-
-    case File.read(wasm_path) do
-      {:ok, bytes} ->
-        {:ok, bytes}
-
-      {:error, :enoent} ->
-        {:error, {:missing_wasm, "#{component_type}.wasm not found in #{directory_path}"}}
-
-      {:error, reason} ->
-        {:error, {:wasm_read_error, reason}}
-    end
-  end
-
-  defp validate_artifact(directory_path, "tincture") do
-    Compendium.TinctureValidator.validate(directory_path)
-  end
-
-  defp validate_artifact(directory_path, component_type) do
-    with {:ok, wasm_bytes} <- read_wasm_binary(directory_path, component_type),
-         {:ok, validation} <- Validator.validate(wasm_bytes) do
-      {:ok, validation}
-    end
-  end
-
   # ---------------------------------------------------------------------------
-  # Arca-based variants (used by `register_from_arca/3`)
+  # Arca-based readers (used by `register_from_arca/3`)
   # ---------------------------------------------------------------------------
 
   defp read_manifest_arca(ctx, segments) do
@@ -1302,8 +1174,7 @@ defmodule Compendium.Registry do
     end
   end
 
-  # Infer metadata from Arca segments. Mirrors `infer_path_metadata/1` but
-  # operates on segment lists (no Path.split, no filesystem lookup).
+  # Infer metadata from Arca segments — no Path.split, no filesystem lookup.
   #
   # Layout: ["components", athanor_id, "{type}s", publisher, name, version]
   # The athanor segment is informational here; the canonical tenant flows
@@ -1329,8 +1200,7 @@ defmodule Compendium.Registry do
   end
 
   defp reject_tincture_publish_bytes("tincture") do
-    {:error,
-     "Tinctures cannot be published via publish_bytes. Use register_from_directory or scaffold."}
+    {:error, "Tinctures cannot be published via publish_bytes. Use scaffold."}
   end
 
   defp reject_tincture_publish_bytes(_type), do: :ok
