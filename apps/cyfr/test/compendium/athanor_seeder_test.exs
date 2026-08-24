@@ -14,24 +14,29 @@ defmodule Compendium.AthanorSeederTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_seeder_#{:rand.uniform(100_000)}")
     components_dir = Path.join(test_dir, "components")
+    bundle_dir = Path.join(test_dir, "bundle")
     File.mkdir_p!(components_dir)
+    File.mkdir_p!(bundle_dir)
     prev_base = Application.get_env(:cyfr, :base_path)
     prev_components = Application.get_env(:cyfr, :components_path)
+    prev_bundle = Application.get_env(:cyfr, :bundle_path)
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, components_dir)
+    Application.put_env(:cyfr, :bundle_path, bundle_dir)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
       Application.put_env(:cyfr, :components_path, prev_components)
+      Application.put_env(:cyfr, :bundle_path, prev_bundle)
       File.rm_rf!(test_dir)
     end)
 
-    {:ok, components_dir: components_dir}
+    {:ok, components_dir: components_dir, bundle_dir: bundle_dir}
   end
 
-  # A bundled catalyst under the seed source components/_bundle.
-  defp write_bundle!(components_dir) do
-    src = Path.join([components_dir, "_bundle", "catalysts", "local", "foo", "1.0.0"])
+  # A bundled catalyst under the seed source (`:bundle_path`).
+  defp write_bundle!(bundle_dir) do
+    src = Path.join([bundle_dir, "catalysts", "local", "foo", "1.0.0"])
     File.mkdir_p!(src)
     File.write!(Path.join(src, "catalyst.wasm"), @valid_wasm)
 
@@ -51,9 +56,10 @@ defmodule Compendium.AthanorSeederTest do
   end
 
   test "copies the bundle into the athanor and registers a DB row", %{
-    components_dir: components_dir
+    components_dir: components_dir,
+    bundle_dir: bundle_dir
   } do
-    write_bundle!(components_dir)
+    write_bundle!(bundle_dir)
 
     assert :ok = AthanorSeeder.seed("ath_acme")
 
@@ -86,8 +92,8 @@ defmodule Compendium.AthanorSeederTest do
              Arca.ComponentStorage.get_component(other, "foo", "1.0.0", "local", "catalyst")
   end
 
-  test "accepts an athanor row", %{components_dir: components_dir} do
-    write_bundle!(components_dir)
+  test "accepts an athanor row", %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
 
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{
@@ -109,8 +115,8 @@ defmodule Compendium.AthanorSeederTest do
              )
   end
 
-  test "is idempotent", %{components_dir: components_dir} do
-    write_bundle!(components_dir)
+  test "is idempotent", %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
 
     assert :ok = AthanorSeeder.seed("ath_acme")
     assert :ok = AthanorSeeder.seed("ath_acme")
@@ -130,9 +136,9 @@ defmodule Compendium.AthanorSeederTest do
   end
 
   test "the bundle itself is never indexed as the athanor's rows", %{
-    components_dir: components_dir
+    bundle_dir: bundle_dir
   } do
-    write_bundle!(components_dir)
+    write_bundle!(bundle_dir)
     assert :ok = AthanorSeeder.seed("ath_acme")
 
     # The seeded athanor's scan lists only its own tree — the bundle is not a

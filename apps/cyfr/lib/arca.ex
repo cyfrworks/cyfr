@@ -77,7 +77,7 @@ defmodule Arca do
       {:ok, "hello"}
 
   """
-  def get(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().get(ctx, path) end)
+  def get(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter(path).get(ctx, path) end)
 
   @doc """
   Read and decode JSON content from storage.
@@ -111,7 +111,7 @@ defmodule Arca do
 
   """
   def put(%Context{} = ctx, path, content),
-    do: mutating(ctx, path, fn -> adapter().put(ctx, path, content) end)
+    do: mutating(ctx, path, fn -> adapter(path).put(ctx, path, content) end)
 
   @doc """
   Encode and write JSON content to storage.
@@ -148,7 +148,7 @@ defmodule Arca do
 
   """
   def append(%Context{} = ctx, path, content),
-    do: guarded(ctx, path, fn -> adapter().append(ctx, path, content) end)
+    do: guarded(ctx, path, fn -> adapter(path).append(ctx, path, content) end)
 
   @doc """
   Delete content from storage.
@@ -165,7 +165,7 @@ defmodule Arca do
 
   """
   def delete(%Context{} = ctx, path),
-    do: mutating(ctx, path, fn -> adapter().delete(ctx, path) end)
+    do: mutating(ctx, path, fn -> adapter(path).delete(ctx, path) end)
 
   @doc """
   List contents at path.
@@ -185,7 +185,7 @@ defmodule Arca do
       ["a.txt", "b.txt"]
 
   """
-  def list(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().list(ctx, path) end)
+  def list(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter(path).list(ctx, path) end)
 
   @doc """
   List the entries directly under a path, each tagged `:file` or `:dir`.
@@ -195,14 +195,14 @@ defmodule Arca do
   itself a file answers `{:error, :enotdir}`.
   """
   def list_typed(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter().list_typed(ctx, path) end)
+    do: guarded(ctx, path, fn -> adapter(path).list_typed(ctx, path) end)
 
   @doc """
   Recursive file count and byte total under a path prefix.
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
-  def usage(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().usage(ctx, path) end)
+  def usage(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter(path).usage(ctx, path) end)
 
   @doc """
   Check if path exists.
@@ -216,7 +216,7 @@ defmodule Arca do
   """
   def exists?(%Context{} = ctx, path) do
     case Arca.Storage.authorize_path(ctx, path) do
-      :ok -> adapter().exists?(ctx, path)
+      :ok -> adapter(path).exists?(ctx, path)
       {:error, :forbidden} -> false
     end
   end
@@ -234,7 +234,7 @@ defmodule Arca do
 
   """
   def delete_tree(%Context{} = ctx, path),
-    do: mutating(ctx, path, fn -> adapter().delete_tree(ctx, path) end)
+    do: mutating(ctx, path, fn -> adapter(path).delete_tree(ctx, path) end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -243,7 +243,7 @@ defmodule Arca do
   Order is unspecified.
   """
   def list_recursive(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter().list_recursive(ctx, path) end)
+    do: guarded(ctx, path, fn -> adapter(path).list_recursive(ctx, path) end)
 
   @doc """
   Read a whole subtree as `{relative_path, binary}` pairs.
@@ -251,7 +251,7 @@ defmodule Arca do
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
   def read_subtree(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter().read_subtree(ctx, path) end)
+    do: guarded(ctx, path, fn -> adapter(path).read_subtree(ctx, path) end)
 
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
@@ -280,7 +280,7 @@ defmodule Arca do
   the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
   """
   def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []),
-    do: guarded(ctx, path, fn -> adapter().serve_to_conn(conn, ctx, path, opts) end)
+    do: guarded(ctx, path, fn -> adapter(path).serve_to_conn(conn, ctx, path, opts) end)
 
   # Every entry point runs the component-path pin before touching the
   # adapter, so no adapter — and no future one — can hand one athanor
@@ -309,7 +309,11 @@ defmodule Arca do
 
   defp invalidate_components_usage(_path), do: :ok
 
-  defp adapter do
-    Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
-  end
+  # The seed bundle is server install media read straight from local disk
+  # (`:cyfr, :bundle_path`), whatever storage adapter is configured — an
+  # object-store deployment provisions athanors from the shipped bundle
+  # without the bucket ever holding a copy. Everything else goes to the
+  # configured adapter.
+  defp adapter(["components", "_bundle" | _]), do: Arca.Adapters.Local
+  defp adapter(_path), do: Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
 end

@@ -120,7 +120,8 @@ test_root = Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millis
 
 config :cyfr,
   base_path: test_root,
-  components_path: Path.join(test_root, "components")
+  components_path: Path.join(test_root, "components"),
+  bundle_path: Path.join(test_root, "bundle")
 
 # Sanctum test configuration
 config :cyfr,

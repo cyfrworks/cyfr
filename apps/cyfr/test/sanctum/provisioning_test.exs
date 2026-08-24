@@ -20,11 +20,15 @@ defmodule Sanctum.ProvisioningTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_provisioning_#{:rand.uniform(100_000)}")
     components_dir = Path.join(test_dir, "components")
+    bundle_dir = Path.join(test_dir, "bundle")
     File.mkdir_p!(components_dir)
+    File.mkdir_p!(bundle_dir)
     prev_base = Application.get_env(:cyfr, :base_path)
     prev_components = Application.get_env(:cyfr, :components_path)
+    prev_bundle = Application.get_env(:cyfr, :bundle_path)
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, components_dir)
+    Application.put_env(:cyfr, :bundle_path, bundle_dir)
 
     # The registry is unreachable in this suite: a bundle that needs a pull
     # cannot be provisioned, which is the failure path under test.
@@ -34,6 +38,7 @@ defmodule Sanctum.ProvisioningTest do
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
       Application.put_env(:cyfr, :components_path, prev_components)
+      Application.put_env(:cyfr, :bundle_path, prev_bundle)
 
       if prev_registry,
         do: Application.put_env(:cyfr, :registry_url, prev_registry),
@@ -42,12 +47,12 @@ defmodule Sanctum.ProvisioningTest do
       File.rm_rf!(test_dir)
     end)
 
-    {:ok, components_dir: components_dir}
+    {:ok, bundle_dir: bundle_dir}
   end
 
   # A bundled catalyst with no published dependencies.
-  defp write_bundle!(components_dir, opts \\ []) do
-    src = Path.join([components_dir, "_bundle", "catalysts", "local", "foo", "1.0.0"])
+  defp write_bundle!(bundle_dir, opts \\ []) do
+    src = Path.join([bundle_dir, "catalysts", "local", "foo", "1.0.0"])
     File.mkdir_p!(src)
     File.write!(Path.join(src, "catalyst.wasm"), @valid_wasm)
 
@@ -81,8 +86,8 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "a group is provisioned when created: seeded, registered, consented, marked",
-       %{components_dir: components_dir} do
-    write_bundle!(components_dir)
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 
@@ -107,8 +112,8 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "a person's own athanor is minted once, from their namespace, and recorded",
-       %{components_dir: components_dir} do
-    write_bundle!(components_dir)
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
     user = person(n)
     {:ok, user} = Users.set_namespace(user, "prov#{n}")
@@ -136,8 +141,8 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   test "a bundle whose closure cannot be pulled leaves the athanor unprovisioned, loudly, and retries",
-       %{components_dir: components_dir} do
-    write_bundle!(components_dir, deps: ["catalyst:someone.elsewhere"])
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
 

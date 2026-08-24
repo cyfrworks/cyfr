@@ -286,10 +286,14 @@ defmodule Arca.Adapters.Local do
     base = base_path()
 
     case segments do
+      ["components", "_bundle" | rest] ->
+        # The seed bundle is read in place from its source (`:bundle_path`) —
+        # install media, never tenant storage.
+        Path.join([bundle_path() | rest])
+
       ["components" | rest] ->
         # Component path - routed to components_path:
-        # ["components", athanor_id, "catalysts", ...] or the seed bundle
-        # ["components", "_bundle", "catalysts", ...].
+        # ["components", athanor_id, "catalysts", ...].
         Path.join([components_path() | rest])
 
       [prefix | _rest] ->
@@ -316,6 +320,12 @@ defmodule Arca.Adapters.Local do
   @doc "Get the expanded components path for component storage."
   def components_path do
     Application.fetch_env!(:cyfr, :components_path)
+    |> Path.expand()
+  end
+
+  @doc "Get the expanded seed-bundle source path."
+  def bundle_path do
+    Application.fetch_env!(:cyfr, :bundle_path)
     |> Path.expand()
   end
 end

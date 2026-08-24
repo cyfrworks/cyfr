@@ -69,7 +69,8 @@ defmodule Sanctum.ProvisioningClosureTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{:rand.uniform(1_000_000)}")
     components_dir = Path.join(test_dir, "components")
-    copy_bundle!(components_dir)
+    bundle_dir = Path.join(test_dir, "bundle")
+    copy_bundle!(bundle_dir)
 
     {:ok, server} = Bandit.start_link(plug: {Registry, fixtures()}, ip: {127, 0, 0, 1}, port: 0)
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
@@ -77,6 +78,7 @@ defmodule Sanctum.ProvisioningClosureTest do
     prev = %{
       base_path: Application.get_env(:cyfr, :base_path),
       components_path: Application.get_env(:cyfr, :components_path),
+      bundle_path: Application.get_env(:cyfr, :bundle_path),
       oci: Application.get_env(:cyfr, :oci_registry_url),
       registry: Application.get_env(:cyfr, :registry_url),
       egress: Application.get_env(:cyfr, :private_egress_targets),
@@ -85,6 +87,7 @@ defmodule Sanctum.ProvisioningClosureTest do
 
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, components_dir)
+    Application.put_env(:cyfr, :bundle_path, bundle_dir)
     # `localhost:` is the one host the OCI reference layer maps to http.
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
@@ -96,6 +99,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       for {key, value} <- [
             base_path: prev.base_path,
             components_path: prev.components_path,
+            bundle_path: prev.bundle_path,
             oci_registry_url: prev.oci,
             registry_url: prev.registry,
             private_egress_targets: prev.egress,
@@ -188,9 +192,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   end
 
   # The tracked bundle, minus Rust build output that may sit beside a source tree.
-  defp copy_bundle!(components_dir) do
-    dest = Path.join(components_dir, "_bundle")
-
+  defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
     |> Path.wildcard(match_dot: false)

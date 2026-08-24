@@ -44,18 +44,17 @@ defmodule Cyfr.StackShapeTest do
     refute compose =~ ~r/porta|4001|8080/
   end
 
-  test "the image carries the seed bundle and seeds it on first start" do
+  test "the image carries the seed bundle and reads it in place" do
     # A bare image boot (no host bind mount) must still be able to provision
-    # Home: the bundle rides in the image at a defaults path, and the
-    # entrypoint copies it into place when the components dir has none —
-    # the same shape as the AQUA template.
+    # Home: the bundle rides in the image at a defaults path and the release
+    # reads it there directly (CYFR_BUNDLE_PATH) — no first-boot copy.
     dockerfile = read!("Dockerfile")
     entrypoint = read!("docker-entrypoint.sh")
     dockerignore = read!(".dockerignore")
 
     assert dockerfile =~ ~r/^COPY components\/_bundle\/ \/app\/components-defaults\/_bundle\/$/m
-    assert entrypoint =~ "/app/components-defaults/_bundle"
-    assert entrypoint =~ ~r/\[ ! -d \/app\/components\/_bundle \]/
+    assert dockerfile =~ ~r/^ENV CYFR_BUNDLE_PATH=\/app\/components-defaults\/_bundle$/m
+    refute entrypoint =~ "components-defaults"
     assert dockerignore =~ ~r/^!components\/_bundle\/$/m
     refute dockerignore =~ ~r/^components\/$/m
   end

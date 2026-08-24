@@ -230,6 +230,11 @@ if config_env() != :test do
     components_path = env!("CYFR_COMPONENTS_PATH", :string, "components") |> Path.expand()
     config :cyfr, :components_path, components_path
 
+    # The seed bundle is read in place: the repo/scaffold checkout by default,
+    # the baked image copy in Docker (the Dockerfile sets CYFR_BUNDLE_PATH).
+    bundle_path = env!("CYFR_BUNDLE_PATH", :string, "components/_bundle") |> Path.expand()
+    config :cyfr, :bundle_path, bundle_path
+
     # Warn if plain HTTP in production without a reverse proxy declaration
     unless env!("CYFR_BEHIND_PROXY", :string, nil) do
       IO.puts(
