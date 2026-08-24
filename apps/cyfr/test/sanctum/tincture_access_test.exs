@@ -20,13 +20,14 @@ defmodule Sanctum.TinctureAccessTest do
         else: Application.delete_env(:cyfr, :consent_source)
     end)
 
-    # Create temp tincture structure with one public and one private tincture
+    # Create temp tincture structure with one public and one private tincture,
+    # under an isolated storage root.
     base = Path.join(System.tmp_dir!(), "tincture_access_test_#{:rand.uniform(1_000_000)}")
-    components_dir = Path.join(base, "components")
+    original_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, base)
 
     # Public tincture
-    pub_dir =
-      Path.join([components_dir, "ath_test", "tinctures", "local", "public-dash", "1.0.0"])
+    pub_dir = tincture_dir("public-dash")
 
     File.mkdir_p!(pub_dir)
 
@@ -57,8 +58,7 @@ defmodule Sanctum.TinctureAccessTest do
     File.write!(Path.join(pub_dir, "index.html"), "<html></html>")
 
     # Private tincture
-    priv_dir =
-      Path.join([components_dir, "ath_test", "tinctures", "local", "private-dash", "1.0.0"])
+    priv_dir = tincture_dir("private-dash")
 
     File.mkdir_p!(priv_dir)
 
@@ -81,10 +81,6 @@ defmodule Sanctum.TinctureAccessTest do
 
     File.write!(Path.join(priv_dir, "cyfr-manifest.json"), Jason.encode!(priv_manifest))
     File.write!(Path.join(priv_dir, "index.html"), "<html></html>")
-
-    # Point components_path to temp dir so Arca.Adapters.Local.components_path() resolves there
-    original_path = Application.get_env(:cyfr, :components_path)
-    Application.put_env(:cyfr, :components_path, components_dir)
 
     ctx = Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -146,15 +142,22 @@ defmodule Sanctum.TinctureAccessTest do
 
     on_exit(fn ->
       if original_path do
-        Application.put_env(:cyfr, :components_path, original_path)
+        Application.put_env(:cyfr, :base_path, original_path)
       else
-        Application.delete_env(:cyfr, :components_path)
+        Application.delete_env(:cyfr, :base_path)
       end
 
       File.rm_rf!(base)
     end)
 
-    %{components_dir: components_dir}
+    :ok
+  end
+
+  defp tincture_dir(name) do
+    Arca.Adapters.Local.build_path(
+      Sanctum.TestContext.local(),
+      ["components", "ath_test", "tinctures", "local", name, "1.0.0"]
+    )
   end
 
   describe "get_private/3" do

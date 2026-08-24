@@ -33,7 +33,6 @@ defmodule Opus.BootstrapFirstRunTest do
     test_path = Path.join(System.tmp_dir!(), "first_run_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     original_source = Application.get_env(:cyfr, :consent_source)
     Application.put_env(:cyfr, :consent_source, Source.DB)
@@ -58,7 +57,7 @@ defmodule Opus.BootstrapFirstRunTest do
   # (a real install copies the bundle in and scans it).
   defp stage_and_register(ctx, rel) do
     segments = ["components", Sanctum.TestContext.athanor_id() | String.split(rel, "/")]
-    dest = Path.join([Application.get_env(:cyfr, :base_path) | segments])
+    dest = Arca.Adapters.Local.build_path(ctx, segments)
     File.mkdir_p!(Path.dirname(dest))
     File.cp_r!(Path.join(@bundle_root, rel), dest)
     Compendium.Registry.register_from_arca(ctx, segments)

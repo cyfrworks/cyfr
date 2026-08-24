@@ -19,7 +19,6 @@ defmodule Compendium.ConsentSetupPlanTest do
     test_path = Path.join(System.tmp_dir!(), "consent_setup_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     original_source = Application.get_env(:cyfr, :consent_source)
     Application.put_env(:cyfr, :consent_source, Source.DB)

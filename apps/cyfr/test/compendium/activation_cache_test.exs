@@ -16,7 +16,6 @@ defmodule Compendium.ActivationCacheTest do
     test_path = Path.join(System.tmp_dir!(), "activation_cache_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})

@@ -122,24 +122,23 @@ your-project/
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/             # {athanor}/{type}s/{publisher}/{name}/{version}/
-│   ├── _bundle/            # The seed bundle every athanor starts from (never a tenant)
-│   └── <athanor id>/       # One tree per athanor — Home, then each person's and group's
-│       ├── catalysts/
-│       │   ├── local/      # Generic catalysts: files, http
-│       │   └── moonmoon69/ # Pulled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase
-│       ├── reagents/
-│       │   └── local/      # Your local reagents
-│       ├── formulas/
-│       │   └── local/      # Bundled formulas: list-models, aqua
-│       └── tinctures/
-│           └── local/      # Bundled example tinctures + your own
+├── components/
+│   └── _bundle/            # The tracked seed-bundle source every athanor starts from
 ├── aqua/                   # AQUA agent template (agent.json + role prompts) every athanor is given
-└── data/
-    └── cyfr.db             # Connections, consents, execution records (.gitignored)
+└── data/                   # ALL runtime state — one directory, .gitignored
+    ├── cyfr.db             # Connections, consents, execution records
+    ├── cache/              # Immutable cached artifacts (OCI blobs)
+    └── athanors/           # One tree per athanor — Home, then each person's and group's
+        └── <athanor id>/
+            ├── components/ # {type}s/{publisher}/{name}/{version}/
+            │   ├── catalysts/   # local: files, http · moonmoon69: claude, openai, gemini, …
+            │   ├── reagents/    # Your local reagents
+            │   ├── formulas/    # Bundled formulas: list-models, aqua
+            │   └── tinctures/   # Bundled example tinctures + your own
+            └── data/       # The athanor's files: builds, config, conversations
 ```
 
-> The `components/` directory contains working reference implementations and your own local components. Tinctures live in the same tree as catalysts, reagents, and formulas.
+> `components/_bundle/` holds the working reference implementations every athanor is seeded from; it is read in place at runtime. Your own components live inside your athanor's tree under `data/`.
 
 ## Using Components
 
@@ -196,7 +195,7 @@ CYFR supports both WASM components and tinctures. The fastest path is to scaffol
 ```bash
 # Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
 cyfr new catalyst my-api
-# Creates scaffold in components/<athanor>/<type>s/local/my-api/<version>
+# Creates the scaffold inside your athanor's storage: data/athanors/<athanor>/components/catalysts/local/my-api/<version>
 # Also: cyfr new reagent my-transform, cyfr new formula my-workflow
 
 # Compile (auto-registers the component and auto-pulls any dependencies)
@@ -546,7 +545,7 @@ What to back up depends on the backends you configured:
 
 | Backend | What holds state | Backup |
 |---|---|---|
-| SQLite (default) | `./data` (database, encrypted secrets, registry blobs, mcp-bridge config) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
+| SQLite (default) | `./data` (database, encrypted secrets, every athanor's components and files, caches, mcp-bridge config) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
 | Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
 | S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
 

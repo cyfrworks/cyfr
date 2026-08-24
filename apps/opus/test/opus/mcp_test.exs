@@ -15,7 +15,6 @@ defmodule Opus.MCPTest do
     test_path = Path.join(System.tmp_dir!(), "opus_mcp_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     # Every execution roots under a profile's consent: bootstrap mints one
     # through the production DB source, and the loader reads it back.

@@ -68,7 +68,6 @@ defmodule Sanctum.ProvisioningClosureTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{:rand.uniform(1_000_000)}")
-    components_dir = Path.join(test_dir, "components")
     bundle_dir = Path.join(test_dir, "bundle")
     copy_bundle!(bundle_dir)
 
@@ -77,7 +76,6 @@ defmodule Sanctum.ProvisioningClosureTest do
 
     prev = %{
       base_path: Application.get_env(:cyfr, :base_path),
-      components_path: Application.get_env(:cyfr, :components_path),
       bundle_path: Application.get_env(:cyfr, :bundle_path),
       oci: Application.get_env(:cyfr, :oci_registry_url),
       registry: Application.get_env(:cyfr, :registry_url),
@@ -86,7 +84,6 @@ defmodule Sanctum.ProvisioningClosureTest do
     }
 
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, components_dir)
     Application.put_env(:cyfr, :bundle_path, bundle_dir)
     # `localhost:` is the one host the OCI reference layer maps to http.
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
@@ -98,7 +95,6 @@ defmodule Sanctum.ProvisioningClosureTest do
     on_exit(fn ->
       for {key, value} <- [
             base_path: prev.base_path,
-            components_path: prev.components_path,
             bundle_path: prev.bundle_path,
             oci_registry_url: prev.oci,
             registry_url: prev.registry,

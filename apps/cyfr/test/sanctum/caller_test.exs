@@ -16,7 +16,12 @@ defmodule Sanctum.CallerTest do
 
   defp new_user do
     n = System.unique_integer([:positive])
-    %{user_id: "github|https://github.com|caller-#{n}", email: "caller#{n}@example.com", slug: "callerns#{n}"}
+
+    %{
+      user_id: "github|https://github.com|caller-#{n}",
+      email: "caller#{n}@example.com",
+      slug: "callerns#{n}"
+    }
   end
 
   defp claim!(user) do

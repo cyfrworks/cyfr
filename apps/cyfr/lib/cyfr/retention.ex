@@ -21,7 +21,7 @@ defmodule Cyfr.Retention do
 
   An athanor's settings are persisted to `config/retention.json` under the
   tenant-scoped path that `Arca.Storage.tenant_segments/1` builds —
-  `data/{athanor_id}/config/retention.json`. Settings are shared by all
+  `the athanor's config/retention.json`. Settings are shared by all
   members of the athanor. If no settings exist, global defaults from
   application config are used.
 

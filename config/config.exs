@@ -107,7 +107,6 @@ config :cyfr, ecto_repos: [Arca.Repo]
 config :cyfr,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
-  components_path: Path.expand("./components"),
   bundle_path: Path.expand("./components/_bundle")
 
 # The AQUA agent template every new athanor is given (`Compendium.AquaTemplate`).

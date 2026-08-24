@@ -99,8 +99,9 @@ defmodule Arca.Adapters.LocalTest do
       path = ["isolation", "test.txt"]
       Local.put(ctx, path, "content")
 
-      # namespace is identity-only; the path is {athanor_id}/...
-      expected_path = Path.join([@test_base_path, ctx.athanor_id, "isolation", "test.txt"])
+      # namespace is identity-only; the path is athanors/{athanor_id}/data/...
+      expected_path =
+        Path.join([@test_base_path, "athanors", ctx.athanor_id, "data", "isolation", "test.txt"])
 
       assert File.exists?(expected_path)
     end
@@ -165,17 +166,49 @@ defmodule Arca.Adapters.LocalTest do
       assert path == Path.join([@test_base_path, "cache", "oci", "sha256"])
     end
 
-    test "tenant paths go under {athanor_id} (no namespace segment)", %{ctx: ctx} do
+    test "tenant paths go under athanors/{athanor_id}/data (no namespace segment)", %{ctx: ctx} do
       path = Local.build_path(ctx, ["executions", "exec_123", "started.json"])
 
       assert path ==
                Path.join([
                  @test_base_path,
+                 "athanors",
                  ctx.athanor_id,
+                 "data",
                  "executions",
                  "exec_123",
                  "started.json"
                ])
+    end
+
+    test "component paths go under athanors/{athanor_id}/components", %{ctx: ctx} do
+      path = Local.build_path(ctx, ["components", "ath_x", "catalysts", "local", "t", "1.0.0"])
+
+      assert path ==
+               Path.join([
+                 @test_base_path,
+                 "athanors",
+                 "ath_x",
+                 "components",
+                 "catalysts",
+                 "local",
+                 "t",
+                 "1.0.0"
+               ])
+    end
+
+    test "the seed bundle resolves to :bundle_path, never the storage root", %{ctx: ctx} do
+      path = Local.build_path(ctx, ["components", "_bundle", "catalysts", "local"])
+      bundle = Application.fetch_env!(:cyfr, :bundle_path) |> Path.expand()
+
+      assert path == Path.join([bundle, "catalysts", "local"])
+      refute String.starts_with?(path, @test_base_path)
+    end
+
+    test "the bare components root has no physical location", %{ctx: ctx} do
+      assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
+        Local.build_path(ctx, ["components"])
+      end
     end
   end
 

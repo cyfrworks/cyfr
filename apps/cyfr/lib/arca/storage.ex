@@ -35,44 +35,47 @@ defmodule Arca.Storage do
 
   Paths are automatically scoped based on the first segment:
 
-  - **Component paths**: `["components" | rest]` → routed to `components_path`.
-    The athanor lives *inside* the segment list — `Compendium.ComponentPath`
-    builds `components/{athanor_id}/{type}s/...` — so component paths are not
-    run through `tenant_segments/1` (which is for the `data/` root). Adapters
-    pin them: a context may only reach `components/{its own athanor}/...`
-    (a platform context reaches every athanor), and the seed bundle
-    `components/_bundle/...` is readable only by system contexts.
+  - **Component paths**: `["components", athanor_id | rest]` — the athanor
+    lives *inside* the segment list (`Compendium.ComponentPath` builds it),
+    so component paths are not run through `tenant_segments/1`. Adapters pin
+    them: a context may only reach its own athanor's components (a platform
+    context reaches every athanor's), and the seed bundle
+    `["components", "_bundle" | rest]` is readable only by system contexts —
+    `Arca` routes it to the local `:bundle_path`, never to a storage adapter.
   - **Global paths**: `cache`, `system` → stored at root level
-  - **Tenant-scoped paths**: everything else → stored under
-    `{athanor_id}/...` (see `tenant_segments/1`)
+  - **Tenant-scoped paths**: everything else → stored under the athanor
+    (see `tenant_segments/1`)
 
   `namespace` is a user-identity field and is NOT part of the path.
 
-  This enables:
-  - Components to be isolated per athanor under the `components/` root,
-    matching the `data/` tenant layout (publishing in one athanor never
-    overwrites another's blobs); a new athanor is given the bundled baseline
-    by `Compendium.AthanorSeeder`
-  - Services to store data isolated per athanor (the tenant boundary);
-    members of an athanor share its storage
+  `physical_segments/2` is the single translation from this logical
+  vocabulary to the stored layout; every adapter joins its output under one
+  storage root, so publishing in one athanor never overwrites another's
+  blobs and members of an athanor share its storage. A new athanor is given
+  the bundled baseline by `Compendium.AthanorSeeder`.
 
   ## Storage Structure
 
-      components/                        # Component artifacts (separate root)
-      ├── _bundle/{type}s/local/{name}/{version}/   # the seed source, never a tenant
-      └── {athanor_id}/{type}s/{publisher}/{name}/{version}/
+  One runtime root (`:base_path`, default `data/`; an object-store adapter
+  mirrors the same key shape under its configured prefix):
 
       data/
-      ├── {env}.db                       # SQLite database (all structured data)
+      ├── cyfr.db                        # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       ├── system/                        # Global: server-internal scratch (health probe)
-      └── {athanor_id}/                  # Tenant-scoped
-          ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── builds/                    # Locus build lifecycle
-          ├── data/                      # Athanor data (agent conversations, etc.)
-          ├── config/                    # Athanor config (retention settings, etc.)
-          └── audit/                     # Audit events (append-only JSONL, opt-in)
+      └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
+          ├── components/{type}s/{publisher}/{name}/{version}/
+          └── data/
+              ├── aqua/                  # the athanor's AQUA agent definitions
+              ├── builds/                # Locus build lifecycle
+              ├── data/                  # Athanor data (agent conversations, etc.)
+              ├── config/                # Athanor config (retention settings, etc.)
+              └── audit/                 # Audit events (append-only JSONL, opt-in)
+
+  The seed bundle every athanor is provisioned from is not stored state —
+  it is read in place from `:bundle_path` (the repo/scaffold checkout, or
+  the baked image copy in Docker).
 
   ## Structured Logs (database only)
 
@@ -171,6 +174,40 @@ defmodule Arca.Storage do
           "Arca.Storage.tenant_segments/1: a resolved athanor_id is required " <>
             "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
             "auth_method=#{inspect(ctx.auth_method)})"
+  end
+
+  @doc """
+  Map logical segments to the physical segments every adapter stores under
+  its one root — the single place the stored layout is written down.
+
+  Everything an athanor owns lives under `athanors/{athanor_id}/`: its
+  components subtree and its data subtree. Globals (`cache/`, `system/`)
+  stay at the root. The seed bundle never reaches an adapter (`Arca` routes
+  it to `:bundle_path`), and the bare `components` root has no single
+  physical location — roster-driven code enumerates athanors instead.
+  """
+  @spec physical_segments(Context.t(), path()) :: path()
+  def physical_segments(ctx, segments) do
+    case segments do
+      ["components", "_bundle" | _] ->
+        raise ArgumentError,
+              "the seed bundle is not tenant storage; Arca routes it to :bundle_path"
+
+      ["components", athanor_id | rest] when is_binary(athanor_id) and athanor_id != "" ->
+        ["athanors", athanor_id, "components" | rest]
+
+      ["components" | _] ->
+        raise ArgumentError,
+              "the components root has no single physical location; enumerate athanors"
+
+      [prefix | _] = segs ->
+        if prefix in @global_prefixes,
+          do: segs,
+          else: ["athanors" | tenant_segments(ctx)] ++ ["data" | segs]
+
+      [] ->
+        ["athanors" | tenant_segments(ctx)] ++ ["data"]
+    end
   end
 
   @doc """

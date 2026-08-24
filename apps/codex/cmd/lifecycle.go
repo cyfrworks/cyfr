@@ -41,7 +41,7 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + mcp-bridge, plus optional caddy) with "cyfr up".
 
-Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, example components, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/components/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, example components, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml, .env, and .env.example are kept if they already exist. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml (--force never touches .env / .env.example).`,
 	Example: `  cyfr init
@@ -160,17 +160,14 @@ database_path: ./data/cyfr.db
 
 		// Generate .gitignore if it doesn't already exist (idempotent)
 		gitignoreCreated := false
-		gitignoreContent := `# CYFR project
+		gitignoreContent := `# CYFR project — all runtime state (every athanor's data and
+# components, the database, caches) lives under data/.
 /data/
 .env
 .env.local
 .env.*.local
 
-# Component storage is athanor-scoped: components/{athanor_id}/{type}s/{publisher}/.
-# Every athanor's tree is runtime state; only the seed bundle every athanor is
-# provisioned from (components/_bundle/) is tracked, minus its build output.
-components/*
-!components/_bundle/
+# Build output inside the scaffolded seed-bundle sources.
 components/_bundle/**/target/
 components/_bundle/**/node_modules/
 `
@@ -187,11 +184,6 @@ components/_bundle/**/node_modules/
 		// from /app/aqua-defaults on first start if it's empty.
 		_ = os.MkdirAll("data", 0755)
 		_ = os.MkdirAll("aqua", 0755)
-
-		// Component storage is athanor-scoped and the server writes it:
-		// components/{athanor_id}/{type}s/{publisher}/. Only the root has to
-		// exist here, because docker-compose bind-mounts it.
-		_ = os.MkdirAll("components", 0755)
 
 		// Add local context
 		cfg, err := config.Load()
@@ -235,7 +227,7 @@ components/_bundle/**/node_modules/
 		} else {
 			fmt.Println("  .gitignore already exists (skipped).")
 		}
-		fmt.Println("  data/, aqua/, components/{catalysts,reagents,formulas}/local/ created")
+		fmt.Println("  data/, aqua/ created")
 
 		if !releaseBuild {
 			fmt.Println("")

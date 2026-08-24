@@ -12,11 +12,15 @@ defmodule Cyfr.TinctureHelpersTest do
 
     root = Path.join(System.tmp_dir!(), "tincture_helpers_test_#{:rand.uniform(1_000_000)}")
 
-    # Tinctures are routed via the `components/` Arca prefix, which the Local
-    # adapter resolves against `:components_path`. Pointing it at a tmp dir
-    # gives us an isolated sandbox. Component reads are pinned per athanor, so
-    # the fixture files live under the test context's athanor.
-    base = Path.join(root, Sanctum.TestContext.athanor_id())
+    # Tinctures are routed via the `components/` Arca prefix. Pointing the
+    # storage root (`:base_path`) at a tmp dir gives us an isolated sandbox.
+    # Component reads are pinned per athanor, so the fixture files live in
+    # the test context's athanor's components subtree.
+    prev = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, root)
+
+    ctx = Sanctum.TestContext.local()
+    base = Arca.Adapters.Local.build_path(ctx, ["components", ctx.athanor_id])
     File.mkdir_p!(base)
     File.write!(Path.join(base, "index.html"), "<html></html>")
     File.write!(Path.join(base, "app.js"), "console.log('hi')")
@@ -32,19 +36,15 @@ defmodule Cyfr.TinctureHelpersTest do
     File.write!(Path.join(sub, "icon.svg"), "<svg/>")
     File.write!(Path.join(sub, ".hidden"), "hidden")
 
-    prev = Application.get_env(:cyfr, :components_path)
-    Application.put_env(:cyfr, :components_path, root)
-
     on_exit(fn ->
       File.rm_rf!(root)
-      if prev, do: Application.put_env(:cyfr, :components_path, prev), else: :ok
+      if prev, do: Application.put_env(:cyfr, :base_path, prev), else: :ok
     end)
 
-    # Asset routing: `["components", athanor_id | rest]` resolves to
-    # `components_path/athanor_id ++ rest`. We use an empty rest so files
-    # written directly at `base/foo.js` are reachable via
+    # Asset routing: `["components", athanor_id | rest]` resolves inside the
+    # athanor's components subtree. We use an empty rest so files written
+    # directly at `base/foo.js` are reachable via
     # `serve_asset(conn, ctx, ["components", athanor_id], ["foo.js"])`.
-    ctx = Sanctum.TestContext.local()
     %{base: base, ctx: ctx, version_segs: ["components", ctx.athanor_id]}
   end
 

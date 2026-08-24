@@ -28,8 +28,6 @@ docker-compose*.yml
 tmp/
 .env
 .env.*
-components/*
-!components/_bundle/
 components/_bundle/**/target/
 components/_bundle/**/node_modules/
 apps/*/test/

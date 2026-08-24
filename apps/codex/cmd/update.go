@@ -107,7 +107,6 @@ func warnMissingStackServices(path string) {
 // must appear in the cyfr service's volumes list.
 var requiredVolumes = []string{
 	"./data:/app/data",
-	"./components:/app/components",
 	"./aqua:/app/aqua",
 }
 

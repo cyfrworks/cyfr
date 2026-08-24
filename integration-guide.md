@@ -1032,7 +1032,8 @@ A typical live-data pipeline:
 | `CYFR_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the MCP endpoint |
 | `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
 | `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
-| `CYFR_COMPONENTS_PATH` | `components` | Directory for component sources |
+| `CYFR_DATA_PATH` | `data` | The one runtime storage root (athanor data and components, caches) |
+| `CYFR_BUNDLE_PATH` | `components/_bundle` | Seed-bundle source, read in place |
 | `CYFR_BEHIND_PROXY` | — | Set to `true` when behind a TLS-terminating reverse proxy |
 
 ### Authentication

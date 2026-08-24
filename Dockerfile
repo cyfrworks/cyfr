@@ -85,8 +85,8 @@ RUN set -eux; \
     chmod +x /usr/local/bin/gosu; \
     gosu nobody true
 
-RUN mkdir -p /app/data /app/components \
-    && chown -R app:app /app /app/data /app/components
+RUN mkdir -p /app/data \
+    && chown -R app:app /app /app/data
 
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh

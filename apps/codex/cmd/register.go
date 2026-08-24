@@ -45,9 +45,9 @@ afterwards to consent a component's declared needs before it can run.`,
 		if total == 0 {
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "No components found. Check that:")
-			fmt.Fprintln(os.Stderr, "  - components/ is volume-mounted into the Docker container")
+			fmt.Fprintln(os.Stderr, "  - the server can reach your athanor's component storage (under data/)")
 			fmt.Fprintln(os.Stderr, "  - Each version dir has cyfr-manifest.json and {type}.wasm")
-			fmt.Fprintln(os.Stderr, "  - Structure: components/{type}s/{local|agent}/{name}/{version}/")
+			fmt.Fprintln(os.Stderr, "  - Structure: {type}s/{publisher}/{name}/{version}/ inside the athanor's components")
 			if dirs, ok := result["scanned_dirs"]; ok {
 				fmt.Fprintf(os.Stderr, "  - Server scanned: %v\n", dirs)
 			}

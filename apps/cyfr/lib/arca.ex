@@ -16,12 +16,17 @@ defmodule Arca do
 
   Paths are automatically scoped based on the first segment:
 
-  - `["components" | rest]` → component artifacts root (`:components_path`);
-    `Compendium.ComponentPath` puts the tenant inside the segments, so the
-    on-disk layout is `components/{athanor_id}/{type}s/...`
-  - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix), under `:base_path`
-  - everything else → tenant-scoped under `{athanor_id}/...`
+  - `["components", athanor_id | rest]` → the athanor's component artifacts;
+    `Compendium.ComponentPath` puts the tenant inside the segments
+  - `["components", "_bundle" | rest]` → the seed bundle, read in place from
+    the local `:bundle_path` whatever storage adapter is configured
+  - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix)
+  - everything else → tenant-scoped under the athanor
     (`namespace` is identity-only and not part of the path)
+
+  `Arca.Storage.physical_segments/2` is the one place the stored layout
+  (`athanors/{athanor_id}/data|components/...` under a single root) is
+  written down.
 
   See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
   list, `authorize_path/2` (the component-tree pin) and `tenant_segments/1`
@@ -185,7 +190,8 @@ defmodule Arca do
       ["a.txt", "b.txt"]
 
   """
-  def list(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter(path).list(ctx, path) end)
+  def list(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter(path).list(ctx, path) end)
 
   @doc """
   List the entries directly under a path, each tagged `:file` or `:dir`.
@@ -202,7 +208,8 @@ defmodule Arca do
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
-  def usage(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter(path).usage(ctx, path) end)
+  def usage(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter(path).usage(ctx, path) end)
 
   @doc """
   Check if path exists.

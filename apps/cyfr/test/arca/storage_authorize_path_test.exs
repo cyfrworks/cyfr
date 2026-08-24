@@ -14,17 +14,13 @@ defmodule Arca.StorageAuthorizePathTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "arca_authz_#{System.unique_integer([:positive])}")
-    components = Path.join(base, "components")
-    File.mkdir_p!(components)
+    File.mkdir_p!(base)
 
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_components = Application.get_env(:cyfr, :components_path)
     Application.put_env(:cyfr, :base_path, base)
-    Application.put_env(:cyfr, :components_path, components)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :components_path, prev_components)
       File.rm_rf!(base)
     end)
 
@@ -58,12 +54,21 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:ok, "{}"} = Arca.get(seed, path)
   end
 
-  test "a bare components listing is platform-only", %{a: a} do
+  test "a bare components listing authorizes platform-only, but has no physical root", %{a: a} do
     platform =
       Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
 
+    # The tenant pin refuses a member outright.
     assert {:error, :forbidden} = Arca.list_recursive(a, ["components"])
-    assert {:ok, _} = Arca.list_recursive(platform, ["components"])
+    assert {:error, :forbidden} = Arca.Storage.authorize_path(a, ["components"])
+
+    # A platform context passes the pin, but the unified layout has no single
+    # components root — roster-driven code enumerates athanors instead.
+    assert :ok = Arca.Storage.authorize_path(platform, ["components"])
+
+    assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
+      Arca.list_recursive(platform, ["components"])
+    end
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do

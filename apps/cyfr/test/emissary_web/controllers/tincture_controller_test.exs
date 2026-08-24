@@ -4,13 +4,20 @@
 defmodule EmissaryWeb.TinctureControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
+  defp tincture_dir(name) do
+    Arca.Adapters.Local.build_path(
+      Sanctum.TestContext.local(),
+      ["components", "ath_test", "tinctures", "local", name, "1.0.0"]
+    )
+  end
+
   setup do
     base = Path.join(System.tmp_dir!(), "tincture_ctrl_#{:rand.uniform(1_000_000)}")
-    components_dir = Path.join(base, "components")
+    original = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, base)
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
-    private_dir =
-      Path.join([components_dir, "ath_test", "tinctures", "local", "auth-dash", "1.0.0"])
+    private_dir = tincture_dir("auth-dash")
 
     File.mkdir_p!(private_dir)
 
@@ -37,8 +44,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     File.write!(Path.join(private_dir, "data.db"), "secret db")
 
     # ── Public tincture (pub-dash) ───────────────────────────────────
-    public_dir =
-      Path.join([components_dir, "ath_test", "tinctures", "local", "pub-dash", "1.0.0"])
+    public_dir = tincture_dir("pub-dash")
 
     File.mkdir_p!(public_dir)
 
@@ -68,9 +74,6 @@ defmodule EmissaryWeb.TinctureControllerTest do
     File.write!(Path.join(public_dir, "style.css"), "body { margin: 0; }")
 
     # ── Register components ──────────────────────────────────────────
-    original = Application.get_env(:cyfr, :components_path)
-    Application.put_env(:cyfr, :components_path, components_dir)
-
     # The athanor behind the test context must exist as an active row: the
     # `/t/<athanor>/…` route resolves it by slug ("test") before any lookup.
     ctx = Sanctum.TestContext.local()
@@ -109,8 +112,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     # Dedicated fixture for the fail-closed test: its policy carries a rate
     # limit from the start, so no mid-test policy swap / cache invalidation
     # is needed (which proved environment-sensitive in CI).
-    rl_dir =
-      Path.join([components_dir, "ath_test", "tinctures", "local", "rl-dash", "1.0.0"])
+    rl_dir = tincture_dir("rl-dash")
 
     File.mkdir_p!(rl_dir)
     File.write!(Path.join(rl_dir, "cyfr-manifest.json"), Jason.encode!(rl_manifest))
@@ -140,9 +142,9 @@ defmodule EmissaryWeb.TinctureControllerTest do
         else: Application.delete_env(:cyfr, :consent_source)
 
       if original do
-        Application.put_env(:cyfr, :components_path, original)
+        Application.put_env(:cyfr, :base_path, original)
       else
-        Application.delete_env(:cyfr, :components_path)
+        Application.delete_env(:cyfr, :base_path)
       end
 
       File.rm_rf!(base)

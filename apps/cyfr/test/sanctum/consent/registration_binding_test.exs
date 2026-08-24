@@ -120,7 +120,6 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       test_path = Path.join(System.tmp_dir!(), "reg_bind_#{:rand.uniform(1_000_000)}")
       original_base_path = Application.get_env(:cyfr, :base_path)
       Application.put_env(:cyfr, :base_path, test_path)
-      Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
       admin_ctx = Sanctum.TestContext.local()
 

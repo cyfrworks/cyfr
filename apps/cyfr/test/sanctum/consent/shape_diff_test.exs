@@ -16,7 +16,6 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     test_path = Path.join(System.tmp_dir!(), "shape_diff_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     on_exit(fn ->
       File.rm_rf!(test_path)

@@ -24,14 +24,8 @@ defmodule Compendium.AutoIndexerTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_autoindexer_test_#{:rand.uniform(100_000)}")
-    comp_dir = Path.join(test_dir, "components")
-    File.mkdir_p!(comp_dir)
-
-    # Set arca base_path for general storage and components_path for component storage
-    arca_dir = Path.join(test_dir, "arca_data")
-    File.mkdir_p!(arca_dir)
-    Application.put_env(:cyfr, :base_path, arca_dir)
-    Application.put_env(:cyfr, :components_path, comp_dir)
+    File.mkdir_p!(test_dir)
+    Application.put_env(:cyfr, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
 
@@ -39,12 +33,18 @@ defmodule Compendium.AutoIndexerTest do
       File.rm_rf!(test_dir)
     end)
 
-    {:ok, test_dir: test_dir, comp_dir: comp_dir, ctx: ctx}
+    {:ok, test_dir: test_dir, ctx: ctx}
   end
 
-  defp create_component(comp_dir, type, publisher, name, version, opts \\ []) do
+  defp create_component(type, publisher, name, version, opts \\ []) do
     athanor = Keyword.get(opts, :athanor, Sanctum.TestContext.athanor_id())
-    dir = Path.join([comp_dir, athanor, "#{type}s", publisher, name, version])
+
+    dir =
+      Arca.Adapters.Local.build_path(
+        Sanctum.TestContext.local(),
+        ["components", athanor, "#{type}s", publisher, name, version]
+      )
+
     File.mkdir_p!(dir)
 
     manifest = %{
@@ -67,9 +67,9 @@ defmodule Compendium.AutoIndexerTest do
   end
 
   describe "scan/1" do
-    test "discovers and registers local components", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "catalyst", "local", "openai", "0.1.0")
-      create_component(comp_dir, "reagent", "local", "json-tool", "1.0.0")
+    test "discovers and registers local components", %{ctx: ctx} do
+      create_component("catalyst", "local", "openai", "0.1.0")
+      create_component("reagent", "local", "json-tool", "1.0.0")
 
       result = AutoIndexer.scan(ctx: ctx)
 
@@ -84,9 +84,9 @@ defmodule Compendium.AutoIndexerTest do
       assert search2.total == 1
     end
 
-    test "ignores non-local publisher directories", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "catalyst", "stripe", "payment", "1.0.0")
-      create_component(comp_dir, "catalyst", "cyfr", "internal", "1.0.0")
+    test "ignores non-local publisher directories", %{ctx: ctx} do
+      create_component("catalyst", "stripe", "payment", "1.0.0")
+      create_component("catalyst", "cyfr", "internal", "1.0.0")
 
       result = AutoIndexer.scan(ctx: ctx)
 
@@ -96,8 +96,8 @@ defmodule Compendium.AutoIndexerTest do
       assert search.total == 0
     end
 
-    test "skips unchanged components on rescan", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "reagent", "local", "stable-tool", "1.0.0")
+    test "skips unchanged components on rescan", %{ctx: ctx} do
+      create_component("reagent", "local", "stable-tool", "1.0.0")
 
       result1 = AutoIndexer.scan(ctx: ctx)
       assert result1.registered == 1
@@ -107,8 +107,8 @@ defmodule Compendium.AutoIndexerTest do
       assert result2.registered == 0
     end
 
-    test "prunes stale entries", %{comp_dir: comp_dir, ctx: ctx} do
-      dir = create_component(comp_dir, "reagent", "local", "temp-tool", "0.1.0")
+    test "prunes stale entries", %{ctx: ctx} do
+      dir = create_component("reagent", "local", "temp-tool", "0.1.0")
 
       result1 = AutoIndexer.scan(ctx: ctx)
       assert result1.registered == 1
@@ -128,8 +128,8 @@ defmodule Compendium.AutoIndexerTest do
     end
 
     test "handles missing component directories gracefully", %{ctx: ctx} do
-      # Point components_path at a directory that doesn't exist.
-      Application.put_env(:cyfr, :components_path, "/nonexistent/scan/path")
+      # Point the storage root at a directory that doesn't exist.
+      Application.put_env(:cyfr, :base_path, "/nonexistent/scan/path")
 
       result = AutoIndexer.scan(ctx: ctx)
 
@@ -138,8 +138,8 @@ defmodule Compendium.AutoIndexerTest do
       assert [%{via: "Arca.list_recursive"}] = result.scanned_dirs
     end
 
-    test "includes scanned_dirs in result", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "catalyst", "local", "test-tool", "0.1.0")
+    test "includes scanned_dirs in result", %{ctx: ctx} do
+      create_component("catalyst", "local", "test-tool", "0.1.0")
 
       result = AutoIndexer.scan(ctx: ctx)
 
@@ -148,10 +148,10 @@ defmodule Compendium.AutoIndexerTest do
       assert [%{path: ^expected_path, via: "Arca.list_recursive"}] = result.scanned_dirs
     end
 
-    test "scans multiple component types", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "catalyst", "local", "api-tool", "0.1.0")
-      create_component(comp_dir, "reagent", "local", "data-tool", "0.1.0")
-      create_component(comp_dir, "formula", "local", "workflow", "0.1.0")
+    test "scans multiple component types", %{ctx: ctx} do
+      create_component("catalyst", "local", "api-tool", "0.1.0")
+      create_component("reagent", "local", "data-tool", "0.1.0")
+      create_component("formula", "local", "workflow", "0.1.0")
 
       result = AutoIndexer.scan(ctx: ctx)
 
@@ -159,9 +159,9 @@ defmodule Compendium.AutoIndexerTest do
       assert result.total == 3
     end
 
-    test "discovers the components of the context's own athanor", %{comp_dir: comp_dir, ctx: ctx} do
+    test "discovers the components of the context's own athanor", %{ctx: ctx} do
       ctx_other = %{ctx | athanor_id: "ath_other"}
-      create_component(comp_dir, "catalyst", "local", "other-tool", "0.1.0", athanor: "ath_other")
+      create_component("catalyst", "local", "other-tool", "0.1.0", athanor: "ath_other")
 
       result = AutoIndexer.scan(ctx: ctx_other)
 
@@ -169,16 +169,21 @@ defmodule Compendium.AutoIndexerTest do
       assert result.total == 1
     end
 
-    test "never sees another athanor's tree", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "catalyst", "local", "other-only", "0.1.0", athanor: "ath_other")
+    test "never sees another athanor's tree", %{ctx: ctx} do
+      create_component("catalyst", "local", "other-only", "0.1.0", athanor: "ath_other")
 
       result = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 0
       assert result.total == 0
     end
 
-    test "never indexes the seed bundle", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "catalyst", "local", "bundled", "0.1.0", athanor: "_bundle")
+    test "never indexes the seed bundle", %{ctx: ctx, test_dir: test_dir} do
+      # A bundle fixture of this test's own — never the suite-shared bundle dir.
+      prev_bundle = Application.get_env(:cyfr, :bundle_path)
+      Application.put_env(:cyfr, :bundle_path, Path.join(test_dir, "bundle_fixture"))
+      on_exit(fn -> Application.put_env(:cyfr, :bundle_path, prev_bundle) end)
+
+      create_component("catalyst", "local", "bundled", "0.1.0", athanor: "_bundle")
 
       result = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 0

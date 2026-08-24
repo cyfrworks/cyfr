@@ -87,10 +87,10 @@ defmodule Arca.Adapters.ListTypedContractTest do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>false</IsTruncated>
-        <Contents><Key>data/ath_test/tree/a.txt</Key></Contents>
-        <Contents><Key>data/ath_test/tree/b.txt</Key></Contents>
-        <Contents><Key>data/ath_test/tree/sub/c.txt</Key></Contents>
-        <Contents><Key>data/ath_test/tree/marker/</Key></Contents>
+        <Contents><Key>athanors/ath_test/data/tree/a.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/data/tree/b.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/data/tree/sub/c.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/data/tree/marker/</Key></Contents>
       </ListBucketResult>
       """
 
@@ -104,7 +104,7 @@ defmodule Arca.Adapters.ListTypedContractTest do
 
         cond do
           # A listing under the tree prefix.
-          conn.method == "GET" and prefix == "data/ath_test/tree/" ->
+          conn.method == "GET" and prefix == "athanors/ath_test/data/tree/" ->
             Plug.Conn.send_resp(conn, 200, listing)
 
           # Any other listing is empty.
@@ -112,7 +112,8 @@ defmodule Arca.Adapters.ListTypedContractTest do
             Plug.Conn.send_resp(conn, 200, empty)
 
           # `a.txt` is a real object; nothing else is.
-          conn.method == "HEAD" and conn.request_path == "/test-bucket/data/ath_test/tree/a.txt" ->
+          conn.method == "HEAD" and
+              conn.request_path == "/test-bucket/athanors/ath_test/data/tree/a.txt" ->
             Plug.Conn.send_resp(conn, 200, "")
 
           true ->

@@ -53,7 +53,6 @@ defmodule Compendium.RegistryTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_registry_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
     ctx = Sanctum.TestContext.local()
 
@@ -488,10 +487,10 @@ defmodule Compendium.RegistryTest do
   end
 
   describe "register_from_arca/3" do
-    setup %{test_dir: test_dir} do
+    setup do
       # Create a component directory with manifest and WASM
       segments = ["components", "ath_test", "reagents", "local", "test-tool", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -556,9 +555,9 @@ defmodule Compendium.RegistryTest do
       assert component.name == "test-tool"
     end
 
-    test "infers name and version from the segment path", %{ctx: ctx, test_dir: test_dir} do
+    test "infers name and version from the segment path", %{ctx: ctx} do
       segments = ["components", "ath_test", "catalysts", "local", "my-catalyst", "2.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -574,9 +573,9 @@ defmodule Compendium.RegistryTest do
       assert component.component_type == "catalyst"
     end
 
-    test "rejects non-local publisher namespaces", %{ctx: ctx, test_dir: test_dir} do
+    test "rejects non-local publisher namespaces", %{ctx: ctx} do
       segments = ["components", "ath_test", "catalysts", "stripe", "payment", "1.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -590,9 +589,9 @@ defmodule Compendium.RegistryTest do
       assert msg =~ "stripe"
     end
 
-    test "returns error for missing manifest", %{ctx: ctx, test_dir: test_dir} do
+    test "returns error for missing manifest", %{ctx: ctx} do
       segments = ["components", "ath_test", "reagents", "local", "no-manifest", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
@@ -600,9 +599,9 @@ defmodule Compendium.RegistryTest do
       assert {:error, {:missing_manifest, _}} = Registry.register_from_arca(ctx, segments)
     end
 
-    test "returns error for malformed manifest JSON", %{ctx: ctx, test_dir: test_dir} do
+    test "returns error for malformed manifest JSON", %{ctx: ctx} do
       segments = ["components", "ath_test", "reagents", "local", "bad-json", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), "{not json")
@@ -611,9 +610,9 @@ defmodule Compendium.RegistryTest do
       assert {:error, {:invalid_manifest, _}} = Registry.register_from_arca(ctx, segments)
     end
 
-    test "returns error for missing WASM", %{ctx: ctx, test_dir: test_dir} do
+    test "returns error for missing WASM", %{ctx: ctx} do
       segments = ["components", "ath_test", "reagents", "local", "no-wasm", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -626,10 +625,8 @@ defmodule Compendium.RegistryTest do
 
   describe "prune_stale_entries/2" do
     test "removes filesystem entries not in discovered set", %{ctx: ctx} do
-      test_dir = Application.get_env(:cyfr, :base_path)
-
       segments = ["components", "ath_test", "reagents", "local", "stale-tool", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -662,10 +659,8 @@ defmodule Compendium.RegistryTest do
     end
 
     test "preserves entries in discovered set", %{ctx: ctx} do
-      test_dir = Application.get_env(:cyfr, :base_path)
-
       segments = ["components", "ath_test", "reagents", "local", "keep-tool", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -689,10 +684,8 @@ defmodule Compendium.RegistryTest do
     end
 
     test "prune deletes entire version directory from storage", %{ctx: ctx} do
-      test_dir = Application.get_env(:cyfr, :base_path)
-
       segments = ["components", "ath_test", "catalysts", "local", "tree-test", "1.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -934,15 +927,12 @@ defmodule Compendium.RegistryTest do
       assert {:error, _} = Arca.get(ctx_other, storage_path)
     end
 
-    test "register_from_arca infers segment metadata under the athanor", %{
-      ctx: ctx,
-      test_dir: test_dir
-    } do
+    test "register_from_arca infers segment metadata under the athanor", %{ctx: ctx} do
       ctx_other = %{ctx | athanor_id: "ath_reg"}
 
       # Create a component directory under the athanor-scoped path
       segments = ["components", "ath_reg", "reagents", "local", "other-reg-test", "0.1.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 

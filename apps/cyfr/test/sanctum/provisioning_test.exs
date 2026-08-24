@@ -19,15 +19,11 @@ defmodule Sanctum.ProvisioningTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_provisioning_#{:rand.uniform(100_000)}")
-    components_dir = Path.join(test_dir, "components")
     bundle_dir = Path.join(test_dir, "bundle")
-    File.mkdir_p!(components_dir)
     File.mkdir_p!(bundle_dir)
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_components = Application.get_env(:cyfr, :components_path)
     prev_bundle = Application.get_env(:cyfr, :bundle_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, components_dir)
     Application.put_env(:cyfr, :bundle_path, bundle_dir)
 
     # The registry is unreachable in this suite: a bundle that needs a pull
@@ -37,7 +33,6 @@ defmodule Sanctum.ProvisioningTest do
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :components_path, prev_components)
       Application.put_env(:cyfr, :bundle_path, prev_bundle)
 
       if prev_registry,

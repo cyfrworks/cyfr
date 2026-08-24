@@ -16,7 +16,6 @@ defmodule OpusTest do
     test_path = Path.join(System.tmp_dir!(), "opus_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

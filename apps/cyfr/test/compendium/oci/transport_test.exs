@@ -97,7 +97,13 @@ defmodule Compendium.OCI.TransportTest do
     stub(fn conn -> Plug.Conn.send_resp(conn, 200, "never reached") end)
 
     assert {:error, %Errors{}} =
-             Transport.request_url(nil, :get, "http://169.254.169.254/v2/x", @registry, @repository)
+             Transport.request_url(
+               nil,
+               :get,
+               "http://169.254.169.254/v2/x",
+               @registry,
+               @repository
+             )
 
     assert attempts() == 0
   end

@@ -23,10 +23,16 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     conn = log_in_user(conn, user)
     home = Sanctum.Tenancy.Athanors.home!()
 
-    components_dir =
-      Path.join(System.tmp_dir!(), "shell_throttle_#{System.unique_integer([:positive])}")
+    base = Path.join(System.tmp_dir!(), "shell_throttle_#{System.unique_integer([:positive])}")
+    original_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, base)
 
-    dir = Path.join([components_dir, home.id, "tinctures", "local", @tincture, "1.0.0"])
+    dir =
+      Arca.Adapters.Local.build_path(
+        Sanctum.TestContext.local(),
+        ["components", home.id, "tinctures", "local", @tincture, "1.0.0"]
+      )
+
     File.mkdir_p!(dir)
 
     File.write!(
@@ -42,19 +48,17 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
 
     File.write!(Path.join(dir, "index.html"), "<html><body>throttle</body></html>")
 
-    original_path = Application.get_env(:cyfr, :components_path)
     original_max = Application.get_env(:cyfr, :tincture_rate_limit_max)
-    Application.put_env(:cyfr, :components_path, components_dir)
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :components_path, original_path)
+      Application.put_env(:cyfr, :base_path, original_path)
 
       if original_max,
         do: Application.put_env(:cyfr, :tincture_rate_limit_max, original_max),
         else: Application.delete_env(:cyfr, :tincture_rate_limit_max)
 
-      File.rm_rf(components_dir)
+      File.rm_rf(base)
       # The registry is a single server-wide GenServer; leave it holding the
       # real components root rather than this test's tmp one.
       Prism.TinctureRegistry.reload()

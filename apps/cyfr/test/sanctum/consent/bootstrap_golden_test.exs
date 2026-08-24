@@ -27,20 +27,16 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_golden_#{:rand.uniform(1_000_000)}")
-    components_dir = Path.join(test_dir, "components")
     bundle_dir = Path.join(test_dir, "bundle")
     copy_bundle!(bundle_dir)
 
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_components = Application.get_env(:cyfr, :components_path)
     prev_bundle = Application.get_env(:cyfr, :bundle_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, components_dir)
     Application.put_env(:cyfr, :bundle_path, bundle_dir)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :components_path, prev_components)
       Application.put_env(:cyfr, :bundle_path, prev_bundle)
       File.rm_rf!(test_dir)
     end)

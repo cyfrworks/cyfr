@@ -13,7 +13,6 @@ defmodule Compendium.ScaffoldTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_scaffold_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
     ctx = Sanctum.TestContext.local()
 
@@ -21,7 +20,7 @@ defmodule Compendium.ScaffoldTest do
       File.rm_rf!(test_dir)
     end)
 
-    {:ok, ctx: ctx, test_dir: test_dir}
+    {:ok, ctx: ctx}
   end
 
   # ============================================================================
@@ -111,7 +110,7 @@ defmodule Compendium.ScaffoldTest do
   # ============================================================================
 
   describe "scaffold for catalyst" do
-    test "creates all expected files", %{ctx: ctx, test_dir: test_dir} do
+    test "creates all expected files", %{ctx: ctx} do
       assert {:ok, result} = Scaffold.create(ctx, "weather-api", "catalyst", "0.1.0")
       assert result.status == "created"
       assert result.reference == "catalyst:local.weather-api:0.1.0"
@@ -119,15 +118,10 @@ defmodule Compendium.ScaffoldTest do
       assert is_list(result.next_steps)
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "weather-api",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "catalysts", "local", "weather-api", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
@@ -157,20 +151,15 @@ defmodule Compendium.ScaffoldTest do
   end
 
   describe "scaffold for formula" do
-    test "creates all expected files", %{ctx: ctx, test_dir: test_dir} do
+    test "creates all expected files", %{ctx: ctx} do
       assert {:ok, result} = Scaffold.create(ctx, "my-workflow", "formula", "0.1.0")
       assert result.reference == "formula:local.my-workflow:0.1.0"
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "formulas",
-          "local",
-          "my-workflow",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "formulas", "local", "my-workflow", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
@@ -190,20 +179,15 @@ defmodule Compendium.ScaffoldTest do
   end
 
   describe "scaffold for reagent" do
-    test "creates all expected files", %{ctx: ctx, test_dir: test_dir} do
+    test "creates all expected files", %{ctx: ctx} do
       assert {:ok, result} = Scaffold.create(ctx, "my-transform", "reagent", "0.1.0")
       assert result.reference == "reagent:local.my-transform:0.1.0"
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "my-transform",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "reagents", "local", "my-transform", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
@@ -226,7 +210,7 @@ defmodule Compendium.ScaffoldTest do
   # ============================================================================
 
   describe "scaffold for tincture with react template" do
-    test "creates React project files", %{ctx: ctx, test_dir: test_dir} do
+    test "creates React project files", %{ctx: ctx} do
       assert {:ok, result} =
                Scaffold.create(ctx, "test-dash", "tincture", "0.1.0", template: "react")
 
@@ -234,15 +218,10 @@ defmodule Compendium.ScaffoldTest do
       assert result.reference == "tincture:local.test-dash:0.1.0"
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "tinctures",
-          "local",
-          "test-dash",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "tinctures", "local", "test-dash", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join(base, "package.json"))
@@ -258,20 +237,15 @@ defmodule Compendium.ScaffoldTest do
       refute File.exists?(Path.join(base, "style.css"))
     end
 
-    test "react manifest includes build field", %{ctx: ctx, test_dir: test_dir} do
+    test "react manifest includes build field", %{ctx: ctx} do
       assert {:ok, _} =
                Scaffold.create(ctx, "build-dash", "tincture", "0.1.0", template: "react")
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "tinctures",
-          "local",
-          "build-dash",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "tinctures", "local", "build-dash", "0.1.0"]
+        )
 
       {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(raw)
@@ -281,20 +255,15 @@ defmodule Compendium.ScaffoldTest do
       assert get_in(manifest, ["tincture", "entry"]) == "index.html"
     end
 
-    test "package.json has correct dependencies", %{ctx: ctx, test_dir: test_dir} do
+    test "package.json has correct dependencies", %{ctx: ctx} do
       assert {:ok, _} =
                Scaffold.create(ctx, "pkg-dash", "tincture", "0.1.0", template: "react")
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "tinctures",
-          "local",
-          "pkg-dash",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "tinctures", "local", "pkg-dash", "0.1.0"]
+        )
 
       {:ok, raw} = File.read(Path.join(base, "package.json"))
       {:ok, pkg} = Jason.decode(raw)
@@ -306,20 +275,15 @@ defmodule Compendium.ScaffoldTest do
       assert pkg["scripts"]["build"] =~ "tsc"
     end
 
-    test "vite config uses relative base path", %{ctx: ctx, test_dir: test_dir} do
+    test "vite config uses relative base path", %{ctx: ctx} do
       assert {:ok, _} =
                Scaffold.create(ctx, "vite-dash", "tincture", "0.1.0", template: "react")
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "tinctures",
-          "local",
-          "vite-dash",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "tinctures", "local", "vite-dash", "0.1.0"]
+        )
 
       {:ok, config} = File.read(Path.join(base, "vite.config.ts"))
       assert config =~ ~s(base: "./")
@@ -335,20 +299,15 @@ defmodule Compendium.ScaffoldTest do
   end
 
   describe "scaffold for vanilla tincture (no template)" do
-    test "unchanged - creates vanilla files", %{ctx: ctx, test_dir: test_dir} do
+    test "unchanged - creates vanilla files", %{ctx: ctx} do
       assert {:ok, result} = Scaffold.create(ctx, "vanilla", "tincture", "0.1.0")
       assert result.status == "created"
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "tinctures",
-          "local",
-          "vanilla",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "tinctures", "local", "vanilla", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "app.js"))
       assert File.exists?(Path.join(base, "style.css"))
@@ -367,42 +326,32 @@ defmodule Compendium.ScaffoldTest do
   end
 
   describe "athanor-scoped scaffold" do
-    test "creates scaffold under the context's athanor", %{ctx: ctx, test_dir: test_dir} do
+    test "creates scaffold under the context's athanor", %{ctx: ctx} do
       ctx_other = %{ctx | athanor_id: "ath_scaffold"}
 
       assert {:ok, result} = Scaffold.create(ctx_other, "other-tool", "catalyst", "0.1.0")
       assert result.status == "created"
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_scaffold",
-          "catalysts",
-          "local",
-          "other-tool",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_scaffold", "catalysts", "local", "other-tool", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
     end
 
-    test "the test context scaffolds under its own athanor", %{ctx: ctx, test_dir: test_dir} do
+    test "the test context scaffolds under its own athanor", %{ctx: ctx} do
       assert ctx.athanor_id == Sanctum.TestContext.athanor_id()
 
       assert {:ok, _} = Scaffold.create(ctx, "flat-tool", "reagent", "0.1.0")
 
       base =
-        Path.join([
-          test_dir,
-          "components",
-          ctx.athanor_id,
-          "reagents",
-          "local",
-          "flat-tool",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", ctx.athanor_id, "reagents", "local", "flat-tool", "0.1.0"]
+        )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
     end

@@ -15,7 +15,6 @@ defmodule Compendium.ActivationTest do
     test_path = Path.join(System.tmp_dir!(), "activation_test_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -55,7 +54,7 @@ defmodule Compendium.ActivationTest do
   defp rebuild_locally(ctx, name) do
     segments = ["components", ctx.athanor_id, "reagents", "local", name, "1.0.0"]
 
-    base = Path.join([Application.get_env(:cyfr, :base_path) | segments])
+    base = Arca.Adapters.Local.build_path(ctx, segments)
     File.mkdir_p!(base)
     File.write!(Path.join(base, "reagent.wasm"), @wasm_variant)
 

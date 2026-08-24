@@ -12,8 +12,8 @@ defmodule Sanctum.Tenancy.Caps do
   `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off.
   A private box needs none of them; a `*` server sets them.
 
-  The byte cap counts both of an athanor's roots — its data and its
-  components, the seeded bundle included — on every write, which is what
+  The byte cap counts both of an athanor's subtrees — its data and its
+  components, the seeded copies included — on every write, which is what
   `CYFR_ATHANOR_STORAGE_BYTES` claims to bound.
   """
 
@@ -63,11 +63,11 @@ defmodule Sanctum.Tenancy.Caps do
   computed: authenticated WASM writes, chat attachments and published
   component bytes all come here.
 
-  An athanor's bytes live under two roots — `data/{athanor}` and
-  `components/{athanor}` — and both are counted, the seeded bundle included,
-  because a cap that bounds one root is not a cap on the athanor. `data` is
-  walked live; `components` is read from a cache Arca invalidates on write,
-  so the hot path pays for one walk, not two.
+  An athanor's bytes live in two subtrees — its data and its components —
+  and both are counted, the seeded copies included, because a cap that
+  bounds one subtree is not a cap on the athanor. Data is walked live;
+  components are read from a cache Arca invalidates on write, so the hot
+  path pays for one walk, not two.
   """
   @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
           :ok | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}

@@ -231,10 +231,10 @@ defmodule Cyfr.RetentionTest do
       assert settings["builds"] == 100
     end
 
-    test "handles corrupt settings file gracefully", %{ctx: ctx, test_path: test_path} do
+    test "handles corrupt settings file gracefully", %{ctx: ctx} do
       # Write corrupt JSON directly
       user_config_path =
-        Path.join([test_path, ctx.athanor_id, "config", "retention.json"])
+        Arca.Adapters.Local.build_path(ctx, ["config", "retention.json"])
 
       File.mkdir_p!(Path.dirname(user_config_path))
       File.write!(user_config_path, "not valid json {{{")

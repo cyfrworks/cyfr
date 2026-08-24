@@ -20,10 +20,16 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     conn = log_in_user(conn, user)
     home = Sanctum.Tenancy.Athanors.home!()
 
-    components_dir =
-      Path.join(System.tmp_dir!(), "shell_log_#{System.unique_integer([:positive])}")
+    base = Path.join(System.tmp_dir!(), "shell_log_#{System.unique_integer([:positive])}")
+    original_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, base)
 
-    dir = Path.join([components_dir, home.id, "tinctures", "local", @tincture, "1.0.0"])
+    dir =
+      Arca.Adapters.Local.build_path(
+        Sanctum.TestContext.local(),
+        ["components", home.id, "tinctures", "local", @tincture, "1.0.0"]
+      )
+
     File.mkdir_p!(dir)
 
     File.write!(
@@ -39,12 +45,9 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     File.write!(Path.join(dir, "index.html"), "<html><body>log</body></html>")
 
-    original_path = Application.get_env(:cyfr, :components_path)
-    Application.put_env(:cyfr, :components_path, components_dir)
-
     on_exit(fn ->
-      Application.put_env(:cyfr, :components_path, original_path)
-      File.rm_rf(components_dir)
+      Application.put_env(:cyfr, :base_path, original_path)
+      File.rm_rf(base)
       Prism.TinctureRegistry.reload()
     end)
 

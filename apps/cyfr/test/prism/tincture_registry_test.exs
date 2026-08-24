@@ -14,13 +14,12 @@ defmodule Prism.TinctureRegistryTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     athanor = Sanctum.TestContext.athanor!()
 
-    # Create a temp tincture structure
+    # Create a temp tincture structure under an isolated storage root
     base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{:rand.uniform(1_000_000)}")
-    components_dir = Path.join(base, "components")
+    original_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, base)
 
-    tincture_dir =
-      Path.join([components_dir, athanor.id, "tinctures", "local", "test-dash", "1.0.0"])
-
+    tincture_dir = fixture_dir(athanor.id, "local", "test-dash", "1.0.0")
     File.mkdir_p!(tincture_dir)
 
     manifest = %{
@@ -44,21 +43,24 @@ defmodule Prism.TinctureRegistryTest do
     File.write!(Path.join(tincture_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
     File.write!(Path.join(tincture_dir, "index.html"), "<html><body>Test</body></html>")
 
-    # Set components_path to our temp dir
-    original_path = Application.get_env(:cyfr, :components_path)
-    Application.put_env(:cyfr, :components_path, components_dir)
-
     on_exit(fn ->
       if original_path do
-        Application.put_env(:cyfr, :components_path, original_path)
+        Application.put_env(:cyfr, :base_path, original_path)
       else
-        Application.delete_env(:cyfr, :components_path)
+        Application.delete_env(:cyfr, :base_path)
       end
 
       File.rm_rf!(base)
     end)
 
-    %{base: base, components_dir: components_dir, tincture_dir: tincture_dir, athanor: athanor}
+    %{base: base, tincture_dir: tincture_dir, athanor: athanor}
+  end
+
+  defp fixture_dir(athanor_id, publisher, name, version) do
+    Arca.Adapters.Local.build_path(
+      Sanctum.TestContext.local(),
+      ["components", athanor_id, "tinctures", publisher, name, version]
+    )
   end
 
   describe "GenServer lifecycle" do
@@ -108,18 +110,9 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "version resolution" do
-    test "picks latest version when multiple exist", %{components_dir: components_dir} do
+    test "picks latest version when multiple exist" do
       # Add a newer version
-      v2_dir =
-        Path.join([
-          components_dir,
-          "ath_test",
-          "tinctures",
-          "local",
-          "test-dash",
-          "2.0.0"
-        ])
-
+      v2_dir = fixture_dir("ath_test", "local", "test-dash", "2.0.0")
       File.mkdir_p!(v2_dir)
 
       manifest = %{
@@ -145,23 +138,14 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "reload/0" do
-    test "rescans filesystem", %{components_dir: components_dir} do
+    test "rescans filesystem" do
       name = :test_reload
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       assert length(TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})) == 1
 
       # Add a new tincture
-      new_dir =
-        Path.join([
-          components_dir,
-          "ath_test",
-          "tinctures",
-          "local",
-          "new-tincture",
-          "0.1.0"
-        ])
-
+      new_dir = fixture_dir("ath_test", "local", "new-tincture", "0.1.0")
       File.mkdir_p!(new_dir)
 
       manifest = %{
@@ -184,9 +168,7 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "athanor-scoped tincture loading" do
-    test "discovers another athanor's tinctures under its own id", %{
-      components_dir: components_dir
-    } do
+    test "discovers another athanor's tinctures under its own id" do
       {:ok, other} =
         Sanctum.Tenancy.Athanors.create(%{
           kind: "group",
@@ -195,8 +177,8 @@ defmodule Prism.TinctureRegistryTest do
           created_by: "test"
         })
 
-      # Layout: components/{athanor_id}/tinctures/{publisher}/{name}/{version}/
-      other_dir = Path.join([components_dir, other.id, "tinctures", "acme", "acme-dash", "0.1.0"])
+      # Logical layout: components/{athanor_id}/tinctures/{publisher}/{name}/{version}/
+      other_dir = fixture_dir(other.id, "acme", "acme-dash", "0.1.0")
       File.mkdir_p!(other_dir)
 
       manifest = %{
@@ -227,9 +209,7 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "a tincture whose athanor row is missing or archived has no route", %{
-      components_dir: components_dir
-    } do
+    test "a tincture whose athanor row is missing or archived has no route" do
       {:ok, archived} =
         Sanctum.Tenancy.Athanors.create(%{
           kind: "group",
@@ -241,7 +221,7 @@ defmodule Prism.TinctureRegistryTest do
       {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
 
       for athanor_id <- [archived.id, "ath_ghost"] do
-        dir = Path.join([components_dir, athanor_id, "tinctures", "local", "orphan", "0.1.0"])
+        dir = fixture_dir(athanor_id, "local", "orphan", "0.1.0")
         File.mkdir_p!(dir)
 
         manifest = %{
@@ -264,8 +244,15 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "the seed bundle is never a tincture source", %{components_dir: components_dir} do
-      dir = Path.join([components_dir, "_bundle", "tinctures", "local", "bundled", "0.1.0"])
+    test "the seed bundle is never a tincture source", %{base: base} do
+      # A tincture-shaped manifest inside the bundle source must never be
+      # scanned: the roster walk only enumerates athanor rows.
+      bundle_dir = Path.join(base, "bundle_fixture")
+      prev_bundle = Application.get_env(:cyfr, :bundle_path)
+      Application.put_env(:cyfr, :bundle_path, bundle_dir)
+      on_exit(fn -> Application.put_env(:cyfr, :bundle_path, prev_bundle) end)
+
+      dir = Path.join([bundle_dir, "tinctures", "local", "bundled", "0.1.0"])
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -286,7 +273,7 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "still discovers the test athanor's tinctures", %{components_dir: _components_dir} do
+    test "still discovers the test athanor's tinctures" do
       name = :test_ext_core
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
@@ -299,17 +286,8 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "skips non-tincture manifests" do
-    test "ignores type=app manifests", %{components_dir: components_dir} do
-      app_dir =
-        Path.join([
-          components_dir,
-          "ath_test",
-          "tinctures",
-          "local",
-          "legacy-app",
-          "1.0.0"
-        ])
-
+    test "ignores type=app manifests" do
+      app_dir = fixture_dir("ath_test", "local", "legacy-app", "1.0.0")
       File.mkdir_p!(app_dir)
 
       manifest = %{
@@ -336,17 +314,8 @@ defmodule Prism.TinctureRegistryTest do
   # CSAM hash matching ships. Blocks .png/.jpg/.jpeg/.gif/.webp in manifest
   # `tincture.media.icon` or `tincture.media.previews`. SVG is allowed.
   describe "raster image-asset reject — launch constraint" do
-    test "rejects tincture with manifest-declared PNG icon", %{components_dir: components_dir} do
-      dir =
-        Path.join([
-          components_dir,
-          "ath_test",
-          "tinctures",
-          "local",
-          "has-png-icon",
-          "1.0.0"
-        ])
-
+    test "rejects tincture with manifest-declared PNG icon" do
+      dir = fixture_dir("ath_test", "local", "has-png-icon", "1.0.0")
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -373,17 +342,8 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "rejects tincture with JPEG preview", %{components_dir: components_dir} do
-      dir =
-        Path.join([
-          components_dir,
-          "ath_test",
-          "tinctures",
-          "local",
-          "has-jpg-preview",
-          "1.0.0"
-        ])
-
+    test "rejects tincture with JPEG preview" do
+      dir = fixture_dir("ath_test", "local", "has-jpg-preview", "1.0.0")
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -410,9 +370,8 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "rejects tincture with convention-discovered PNG icon", %{components_dir: components_dir} do
-      dir =
-        Path.join([components_dir, "ath_test", "tinctures", "local", "conv-png", "1.0.0"])
+    test "rejects tincture with convention-discovered PNG icon" do
+      dir = fixture_dir("ath_test", "local", "conv-png", "1.0.0")
 
       File.mkdir_p!(Path.join(dir, "public/media"))
 
@@ -440,10 +399,8 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "allows SVG icon", %{components_dir: components_dir} do
-      dir =
-        Path.join([components_dir, "ath_test", "tinctures", "local", "svg-ok", "1.0.0"])
-
+    test "allows SVG icon" do
+      dir = fixture_dir("ath_test", "local", "svg-ok", "1.0.0")
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -470,17 +427,8 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "extension check is case-insensitive", %{components_dir: components_dir} do
-      dir =
-        Path.join([
-          components_dir,
-          "ath_test",
-          "tinctures",
-          "local",
-          "upper-png",
-          "1.0.0"
-        ])
-
+    test "extension check is case-insensitive" do
+      dir = fixture_dir("ath_test", "local", "upper-png", "1.0.0")
       File.mkdir_p!(dir)
 
       manifest = %{

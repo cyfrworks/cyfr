@@ -297,7 +297,10 @@ defmodule Opus.ExecutionRecordTest do
       # The schema owns the shape; the engine's write attrs must not
       # drift from what start_changeset/1 casts.
       assert Enum.sort(Arca.Execution.start_fields()) ==
-               Enum.sort(Arca.Execution.__schema__(:fields) -- [:completed_at, :duration_ms, :error_message, :output])
+               Enum.sort(
+                 Arca.Execution.__schema__(:fields) --
+                   [:completed_at, :duration_ms, :error_message, :output]
+               )
     end
   end
 

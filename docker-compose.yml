@@ -28,8 +28,10 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./data:/app/data
-      - ./components:/app/components
       - ./aqua:/app/aqua
+      # The seed bundle is baked into the image. To serve a custom bundle,
+      # mount one and point CYFR_BUNDLE_PATH at it:
+      #   - ./my-bundle:/app/bundle:ro   (with CYFR_BUNDLE_PATH=/app/bundle)
     env_file:
       - .env
     environment:

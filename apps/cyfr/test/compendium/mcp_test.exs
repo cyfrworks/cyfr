@@ -15,8 +15,8 @@ defmodule Compendium.MCPTest do
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
   # The athanor's own AQUA definitions live under its tenant storage.
-  defp setup_aqua_dir(test_dir) do
-    aqua_dir = Path.join([test_dir, Sanctum.TestContext.athanor_id(), "aqua"])
+  defp setup_aqua_dir do
+    aqua_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), ["aqua"])
     File.mkdir_p!(aqua_dir)
 
     manifest = %{
@@ -96,12 +96,10 @@ defmodule Compendium.MCPTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     original_base_path = Application.fetch_env!(:cyfr, :base_path)
-    original_components_path = Application.fetch_env!(:cyfr, :components_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
     # Set up the athanor's aqua/ directory with agent manifest and test prompts
-    setup_aqua_dir(test_dir)
+    setup_aqua_dir()
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
     # don't hit the real API or timeout waiting.
@@ -114,7 +112,6 @@ defmodule Compendium.MCPTest do
     on_exit(fn ->
       File.rm_rf!(test_dir)
       Application.put_env(:cyfr, :base_path, original_base_path)
-      Application.put_env(:cyfr, :components_path, original_components_path)
 
       if original_registry_url,
         do: Application.put_env(:cyfr, :registry_url, original_registry_url),
@@ -202,7 +199,7 @@ defmodule Compendium.MCPTest do
                MCP.read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
     end
 
-    test "reads asset from component directory", %{ctx: ctx, test_dir: test_dir} do
+    test "reads asset from component directory", %{ctx: ctx} do
       {:ok, _component} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
           name: "asset-test",
@@ -212,15 +209,10 @@ defmodule Compendium.MCPTest do
 
       # Write an asset file into the component's storage directory
       asset_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "asset-test",
-          "1.0.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "ath_test", "reagents", "local", "asset-test", "1.0.0"]
+        )
 
       File.mkdir_p!(asset_dir)
       asset_content = ~s({"key": "value"})
@@ -680,9 +672,9 @@ defmodule Compendium.MCPTest do
                      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-    defp setup_dep_test_dir(test_dir, type, name, version, manifest) do
+    defp setup_dep_test_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "ath_test", "#{type}s", "local", name, version]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -878,9 +870,9 @@ defmodule Compendium.MCPTest do
                        <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                        <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-    defp setup_plan_component(test_dir, type, name, version, manifest) do
+    defp setup_plan_component(_test_dir, type, name, version, manifest) do
       segments = ["components", "ath_test", "#{type}s", "local", name, version]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -1156,9 +1148,9 @@ defmodule Compendium.MCPTest do
       assert msg =~ "not found"
     end
 
-    test "removes a filesystem component", %{ctx: ctx, test_dir: test_dir} do
+    test "removes a filesystem component", %{ctx: ctx} do
       segments = ["components", "ath_test", "catalysts", "local", "remove-fs-test", "1.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1436,9 +1428,9 @@ defmodule Compendium.MCPTest do
   end
 
   describe "component inspect - include_readme" do
-    test "inspect with include_readme returns readme content", %{ctx: ctx, test_dir: test_dir} do
+    test "inspect with include_readme returns readme content", %{ctx: ctx} do
       segments = ["components", "ath_test", "catalysts", "local", "readme-test", "1.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1460,9 +1452,9 @@ defmodule Compendium.MCPTest do
       assert result["readme"] == readme_content
     end
 
-    test "inspect without include_readme omits readme", %{ctx: ctx, test_dir: test_dir} do
+    test "inspect without include_readme omits readme", %{ctx: ctx} do
       segments = ["components", "ath_test", "catalysts", "local", "no-readme-flag", "1.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1482,9 +1474,9 @@ defmodule Compendium.MCPTest do
       refute Map.has_key?(result, "readme")
     end
 
-    test "inspect with include_readme returns nil when no README", %{ctx: ctx, test_dir: test_dir} do
+    test "inspect with include_readme returns nil when no README", %{ctx: ctx} do
       segments = ["components", "ath_test", "reagents", "local", "no-readme-file", "1.0.0"]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1573,9 +1565,9 @@ defmodule Compendium.MCPTest do
                       <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                       <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-    defp setup_component_dir(test_dir, type, name, version, manifest) do
+    defp setup_component_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "ath_test", "#{type}s", "local", name, version]
-      comp_dir = Path.join([test_dir | segments])
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
 

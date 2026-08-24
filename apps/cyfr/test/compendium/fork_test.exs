@@ -14,7 +14,6 @@ defmodule Compendium.ForkTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_fork_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
     ctx = Sanctum.TestContext.local()
 
@@ -29,17 +28,12 @@ defmodule Compendium.ForkTest do
   # Helpers — create a fake "published" component at a non-local namespace
   # ============================================================================
 
-  defp create_source_component(test_dir, type, publisher, name, version, opts \\ []) do
+  defp create_source_component(_test_dir, type, publisher, name, version, opts \\ []) do
     base =
-      Path.join([
-        test_dir,
-        "components",
-        Sanctum.TestContext.athanor_id(),
-        "#{type}s",
-        publisher,
-        name,
-        version
-      ])
+      Arca.Adapters.Local.build_path(
+        Sanctum.TestContext.local(),
+        ["components", Sanctum.TestContext.athanor_id(), "#{type}s", publisher, name, version]
+      )
 
     manifest = %{
       "name" => name,
@@ -70,17 +64,12 @@ defmodule Compendium.ForkTest do
     base
   end
 
-  defp create_tincture_component(test_dir, publisher, name, version, opts \\ []) do
+  defp create_tincture_component(_test_dir, publisher, name, version, opts \\ []) do
     base =
-      Path.join([
-        test_dir,
-        "components",
-        Sanctum.TestContext.athanor_id(),
-        "tinctures",
-        publisher,
-        name,
-        version
-      ])
+      Arca.Adapters.Local.build_path(
+        Sanctum.TestContext.local(),
+        ["components", Sanctum.TestContext.athanor_id(), "tinctures", publisher, name, version]
+      )
 
     manifest = %{
       "name" => name,
@@ -137,15 +126,17 @@ defmodule Compendium.ForkTest do
 
       # Verify files at target path
       target_base =
-        Path.join([
-          test_dir,
-          "components",
-          Sanctum.TestContext.athanor_id(),
-          "catalysts",
-          "local",
-          "my-tool",
-          "1.0.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          Sanctum.TestContext.local(),
+          [
+            "components",
+            Sanctum.TestContext.athanor_id(),
+            "catalysts",
+            "local",
+            "my-tool",
+            "1.0.0"
+          ]
+        )
 
       assert File.exists?(Path.join(target_base, "cyfr-manifest.json"))
       assert File.exists?(Path.join(target_base, "catalyst.wasm"))
@@ -174,15 +165,17 @@ defmodule Compendium.ForkTest do
       assert result.reference == "tincture:local.my-dash:1.0.0"
 
       target_base =
-        Path.join([
-          test_dir,
-          "components",
-          Sanctum.TestContext.athanor_id(),
-          "tinctures",
-          "local",
-          "my-dash",
-          "1.0.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          Sanctum.TestContext.local(),
+          [
+            "components",
+            Sanctum.TestContext.athanor_id(),
+            "tinctures",
+            "local",
+            "my-dash",
+            "1.0.0"
+          ]
+        )
 
       assert File.exists?(Path.join(target_base, "index.html"))
       assert File.exists?(Path.join(target_base, "app.js"))
@@ -242,15 +235,17 @@ defmodule Compendium.ForkTest do
       assert result.forked_from == "reagent:acme.original:1.0.0"
 
       target_base =
-        Path.join([
-          test_dir,
-          "components",
-          Sanctum.TestContext.athanor_id(),
-          "reagents",
-          "local",
-          "my-fork",
-          "1.0.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          Sanctum.TestContext.local(),
+          [
+            "components",
+            Sanctum.TestContext.athanor_id(),
+            "reagents",
+            "local",
+            "my-fork",
+            "1.0.0"
+          ]
+        )
 
       {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
@@ -269,15 +264,17 @@ defmodule Compendium.ForkTest do
       assert result.reference == "formula:local.my-flow:0.1.0"
 
       target_base =
-        Path.join([
-          test_dir,
-          "components",
-          Sanctum.TestContext.athanor_id(),
-          "formulas",
-          "local",
-          "my-flow",
-          "0.1.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          Sanctum.TestContext.local(),
+          [
+            "components",
+            Sanctum.TestContext.athanor_id(),
+            "formulas",
+            "local",
+            "my-flow",
+            "0.1.0"
+          ]
+        )
 
       {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
@@ -295,15 +292,17 @@ defmodule Compendium.ForkTest do
       create_tincture_component(test_dir, "acme", "db-dash", "1.0.0", with_data_db: true)
 
       source_base =
-        Path.join([
-          test_dir,
-          "components",
-          Sanctum.TestContext.athanor_id(),
-          "tinctures",
-          "acme",
-          "db-dash",
-          "1.0.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          Sanctum.TestContext.local(),
+          [
+            "components",
+            Sanctum.TestContext.athanor_id(),
+            "tinctures",
+            "acme",
+            "db-dash",
+            "1.0.0"
+          ]
+        )
 
       assert File.exists?(Path.join(source_base, "data.db"))
 
@@ -311,15 +310,17 @@ defmodule Compendium.ForkTest do
       assert {:ok, _result} = Fork.fork(ctx, source_ref)
 
       target_base =
-        Path.join([
-          test_dir,
-          "components",
-          Sanctum.TestContext.athanor_id(),
-          "tinctures",
-          "local",
-          "db-dash",
-          "1.0.0"
-        ])
+        Arca.Adapters.Local.build_path(
+          Sanctum.TestContext.local(),
+          [
+            "components",
+            Sanctum.TestContext.athanor_id(),
+            "tinctures",
+            "local",
+            "db-dash",
+            "1.0.0"
+          ]
+        )
 
       assert File.exists?(Path.join(target_base, "data.db"))
       assert File.exists?(Path.join(target_base, "index.html"))

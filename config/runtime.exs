@@ -227,8 +227,10 @@ if config_env() != :test do
         end
     end
 
-    components_path = env!("CYFR_COMPONENTS_PATH", :string, "components") |> Path.expand()
-    config :cyfr, :components_path, components_path
+    # The one runtime storage root: every athanor's data and components,
+    # plus the cache/ and system/ globals.
+    base_path = env!("CYFR_DATA_PATH", :string, "data") |> Path.expand()
+    config :cyfr, :base_path, base_path
 
     # The seed bundle is read in place: the repo/scaffold checkout by default,
     # the baked image copy in Docker (the Dockerfile sets CYFR_BUNDLE_PATH).

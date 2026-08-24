@@ -26,7 +26,6 @@ defmodule Opus.ChainTest do
     test_path = Path.join(System.tmp_dir!(), "opus_chain_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     ctx = %Context{
       user_id: "chain_test_user_#{:rand.uniform(100_000)}",

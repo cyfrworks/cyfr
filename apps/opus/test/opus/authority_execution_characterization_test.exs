@@ -25,7 +25,6 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     test_path = Path.join(System.tmp_dir!(), "authority_char_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     # The production source, not the Memory fixture: bootstrap writes real
     # rows and the loader reads them back.

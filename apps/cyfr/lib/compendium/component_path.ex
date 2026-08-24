@@ -5,15 +5,17 @@ defmodule Compendium.ComponentPath do
   @moduledoc """
   Centralized path segment construction for component storage.
 
-  Produces Arca path segments (a list of strings) that are tenant-scoped, in
-  lock-step with the `data/{athanor_id}/...` layout used for runtime data:
+  Produces Arca path segments (a list of strings) that are tenant-scoped:
 
       components/{athanor_id}/{type}s/{publisher}/{name}/{version}/
+
+  These are logical segments — `Arca.Storage.physical_segments/2` maps them
+  under the athanor's own root (`athanors/{athanor_id}/components/...`).
 
   Every function takes a `tenant` — a `%Sanctum.Context{}`, a component
   row/map (anything exposing `:athanor_id`), or a bare athanor id. The tenant
   must be resolved: an absent athanor raises, exactly like
-  `Arca.Storage.tenant_segments/1` for the `data/` tree, so an unresolved
+  `Arca.Storage.tenant_segments/1` for the data tree, so an unresolved
   context can never land in another athanor's tree. The `publisher` segment
   is normalized through `normalize_publisher/1` (`nil`/`""` collapse to the
   `local` namespace). So this module is the single chokepoint for

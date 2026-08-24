@@ -13,25 +13,20 @@ defmodule Compendium.AthanorSeederTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_seeder_#{:rand.uniform(100_000)}")
-    components_dir = Path.join(test_dir, "components")
     bundle_dir = Path.join(test_dir, "bundle")
-    File.mkdir_p!(components_dir)
     File.mkdir_p!(bundle_dir)
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_components = Application.get_env(:cyfr, :components_path)
     prev_bundle = Application.get_env(:cyfr, :bundle_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, components_dir)
     Application.put_env(:cyfr, :bundle_path, bundle_dir)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :components_path, prev_components)
       Application.put_env(:cyfr, :bundle_path, prev_bundle)
       File.rm_rf!(test_dir)
     end)
 
-    {:ok, components_dir: components_dir, bundle_dir: bundle_dir}
+    {:ok, bundle_dir: bundle_dir}
   end
 
   # A bundled catalyst under the seed source (`:bundle_path`).
@@ -56,7 +51,6 @@ defmodule Compendium.AthanorSeederTest do
   end
 
   test "copies the bundle into the athanor and registers a DB row", %{
-    components_dir: components_dir,
     bundle_dir: bundle_dir
   } do
     write_bundle!(bundle_dir)
@@ -65,15 +59,10 @@ defmodule Compendium.AthanorSeederTest do
 
     # Blob copied under the athanor.
     copied =
-      Path.join([
-        components_dir,
-        "ath_acme",
-        "catalysts",
-        "local",
-        "foo",
-        "1.0.0",
-        "catalyst.wasm"
-      ])
+      Arca.Adapters.Local.build_path(
+        athanor_ctx("ath_acme"),
+        ["components", "ath_acme", "catalysts", "local", "foo", "1.0.0", "catalyst.wasm"]
+      )
 
     assert File.exists?(copied)
 

@@ -12,19 +12,17 @@ defmodule Arca.Adapters.S3 do
 
   ## Path Scoping
 
-  Mirrors `Arca.Adapters.Local` — same `Arca.Storage.tenant_segments/1`
-  shape feeds both adapters so a path generated against one decodes
-  identically against the other:
+  Mirrors `Arca.Adapters.Local` exactly: both adapters join
+  `Arca.Storage.physical_segments/2` under one root, so a key generated
+  against one decodes identically against the other —
+  `<prefix>/athanors/{athanor_id}/data/<rest>`,
+  `<prefix>/athanors/{athanor_id}/components/<rest>`, and the globals
+  `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
 
-  - **Component paths** (`["components" | rest]`) → `<prefix>/components/<rest>`
-  - **Global paths** (`["cache" | rest]`, `["system" | rest]`) → `<prefix>/cache/<rest>`,
-    `<prefix>/system/<rest>` (not tenant-scoped)
-  - **Tenant-scoped paths** (everything else) → `<prefix>/data/{athanor_id}/<rest>`
-
-  The `data/` root keeps tenant storage in its own top-level namespace —
-  mirroring the Local adapter's `data/` base directory and keeping it disjoint
-  from the `components/`/`cache/` roots, so an athanor id that happens
-  to equal a reserved root name can never collide with it inside the bucket.
+  The `athanors/` root keeps every tenant key disjoint from the global
+  roots, so an athanor id that happens to equal a reserved root name can
+  never collide with it inside the bucket. The seed bundle never reaches
+  the bucket — `Arca` reads it from local disk (`:bundle_path`).
   `namespace` is identity-only and is not part of the path.
 
   ## Append semantics
@@ -302,26 +300,8 @@ defmodule Arca.Adapters.S3 do
   # ============================================================================
 
   defp build_key(%Context{} = ctx, segments) do
-    base =
-      case segments do
-        ["components" | _rest] ->
-          # Component paths flow as-is — like Local, components/ is a separate
-          # logical root inside the bucket.
-          segments
-
-        [prefix | _rest] ->
-          if prefix in Arca.Storage.global_prefixes() do
-            segments
-          else
-            # Tenant storage lives under its own `data/` root, disjoint from the
-            # components/cache roots (so an athanor named after a reserved root
-            # can't collide) and aligned with the Local adapter's data/ base dir.
-            ["data" | Arca.Storage.tenant_segments(ctx) ++ segments]
-          end
-
-        _ ->
-          ["data" | Arca.Storage.tenant_segments(ctx)]
-      end
+    Arca.Storage.validate_path!(segments)
+    base = Arca.Storage.physical_segments(ctx, segments)
 
     case prefix() do
       nil -> Enum.join(base, "/")

@@ -287,12 +287,14 @@ jobs:
           if [ "$(grep -c 'COALESCE(athanor_id' "$m")" -ne 1 ]; then
             echo "::error::expected exactly one COALESCE(athanor_id (the membership assignment index)"; fail=1
           fi
-          if ! grep -q '^!components/_bundle/$' .gitignore || grep -q 'components/\*/\*/' .gitignore; then
-            echo "::error::.gitignore must keep components/_bundle/ and no two-segment components glob"; fail=1
+          # Runtime storage is one root: data/. The old components/* allowlist
+          # gymnastics must never come back.
+          if ! grep -q '^/data/$' .gitignore || grep -qE '^(components/\*|!components/_bundle/)$' .gitignore; then
+            echo "::error::.gitignore must ignore /data/ and carry no components/* allowlist pair"; fail=1
           fi
           # The template `cyfr init` writes must agree with the repo's own.
-          if ! grep -q '!components/_bundle/' apps/codex/cmd/lifecycle.go || grep -q 'components/\*/\*/' apps/codex/cmd/lifecycle.go; then
-            echo "::error::lifecycle.go .gitignore template must keep components/_bundle/ and no two-segment glob"; fail=1
+          if ! grep -q '/data/' apps/codex/cmd/lifecycle.go || grep -qE 'components/\*$|!components/_bundle/' apps/codex/cmd/lifecycle.go; then
+            echo "::error::lifecycle.go .gitignore template must ignore /data/ and carry no components/* allowlist pair"; fail=1
           fi
           # Operator-facing docs describe the athanor layout, not the old two-segment one.
           docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/' -- README.md component-guide.md integration-guide.md tincture-guide.md .env.example || true)"

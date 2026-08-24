@@ -25,7 +25,6 @@ defmodule Opus.AuthorityPlumbingTest do
     test_path = Path.join(System.tmp_dir!(), "opus_auth_plumb_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     ctx = %Context{
       user_id: "auth_plumb_user_#{:rand.uniform(100_000)}",

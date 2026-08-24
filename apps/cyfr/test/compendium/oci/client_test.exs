@@ -158,7 +158,6 @@ defmodule Compendium.OCI.ClientTest do
       test_dir = Path.join(System.tmp_dir!(), "cyfr_client_test_#{:rand.uniform(100_000)}")
       File.mkdir_p!(test_dir)
       Application.put_env(:cyfr, :base_path, test_dir)
-      Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
       ctx = Sanctum.TestContext.local()
 
@@ -236,7 +235,6 @@ defmodule Compendium.OCI.ClientTest do
       original_auth = Application.get_env(:cyfr, :auth_provider)
 
       Application.put_env(:cyfr, :base_path, test_dir)
-      Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
       # No auth provider → localhost registries are reachable (allow_private).
       Application.delete_env(:cyfr, :auth_provider)
 

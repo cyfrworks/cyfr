@@ -42,6 +42,9 @@ defmodule Cyfr.StackShapeTest do
 
     assert services == ["caddy", "cyfr", "mcp-bridge"]
     refute compose =~ ~r/porta|4001|8080/
+
+    # One runtime root: the old components bind mount must not come back.
+    refute compose =~ ~r/^\s*- \.\/components:/m
   end
 
   test "the image carries the seed bundle and reads it in place" do
@@ -55,8 +58,12 @@ defmodule Cyfr.StackShapeTest do
     assert dockerfile =~ ~r/^COPY components\/_bundle\/ \/app\/components-defaults\/_bundle\/$/m
     assert dockerfile =~ ~r/^ENV CYFR_BUNDLE_PATH=\/app\/components-defaults\/_bundle$/m
     refute entrypoint =~ "components-defaults"
-    assert dockerignore =~ ~r/^!components\/_bundle\/$/m
-    refute dockerignore =~ ~r/^components\/$/m
+
+    # The bundle source ships in the build context; the old components/*
+    # allowlist pair is gone for good.
+    refute dockerignore =~ ~r/^components\/\*$/m
+    refute dockerignore =~ ~r/^!components\/_bundle\/$/m
+    assert dockerignore =~ ~r/^data\/$/m
   end
 
   test "the env template names no retired knobs" do

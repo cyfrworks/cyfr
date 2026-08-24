@@ -20,7 +20,6 @@ defmodule Compendium.ReleaseImmutabilityTest do
     test_path = Path.join(System.tmp_dir!(), "release_immutability_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -128,10 +127,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
   # ============================================================================
 
   describe "directory register exemption" do
-    test "a local rebuild re-registers with new bytes at an unchanged version", %{
-      ctx: ctx,
-      test_path: test_path
-    } do
+    test "a local rebuild re-registers with new bytes at an unchanged version", %{ctx: ctx} do
       manifest = %{
         "name" => "rebuilt",
         "version" => "1.0.0",
@@ -142,7 +138,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
       segments = ["components", ctx.athanor_id, "reagents", "local", "rebuilt", "1.0.0"]
 
       write_component = fn bytes ->
-        base = Path.join([test_path | segments])
+        base = Arca.Adapters.Local.build_path(ctx, segments)
         File.mkdir_p!(base)
         File.write!(Path.join(base, "reagent.wasm"), bytes)
         File.write!(Path.join(base, "cyfr-manifest.json"), Jason.encode!(manifest))

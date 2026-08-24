@@ -7,38 +7,31 @@ defmodule Arca.Adapters.Local do
 
   ## Path Scoping
 
-  Paths are automatically scoped based on the first segment:
-
-  - **Component paths**: `["components" | rest]` → `components_path/{rest}`
-  - **Global paths**: `cache`, `system` → `data/cache/{path}`, `data/system/{path}`
-  - **Tenant-scoped paths**: everything else → `data/{athanor_id}/{path}`
-
-  Tenant segments are produced by `Arca.Storage.tenant_segments/1`; the
-  athanor id validated by the tenant policy names the directory.
-  `namespace` is identity-only and is not part of the path.
+  The logical→physical mapping is `Arca.Storage.physical_segments/2` — the
+  one place the layout is written down. This adapter joins its output under
+  `:base_path`; the seed bundle (`["components", "_bundle" | rest]`) is the
+  sole exception, read in place from `:bundle_path`.
 
   ## Directory Structure
 
-      components/                        # Component artifacts (separate root)
-      ├── _bundle/{type}s/local/{name}/{version}/   # seed source, never a tenant
-      └── {athanor_id}/{type}s/{publisher}/{name}/{version}/
-          ├── {type}.wasm
-          ├── cyfr-manifest.json
-          └── src/
-
-      data/
-      ├── {env}.db                       # SQLite database (all structured data)
+      data/                              # :base_path — the one runtime root
+      ├── cyfr.db                        # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       ├── system/                        # Global: server-internal scratch
-      └── {athanor_id}/                  # Tenant-scoped
+      └── athanors/{athanor_id}/         # Tenant-scoped
+          ├── components/{type}s/{publisher}/{name}/{version}/
+          │   ├── {type}.wasm
+          │   ├── cyfr-manifest.json
+          │   └── src/
+          └── data/
               ├── builds/                # Locus build lifecycle
               │   └── {build_id}/
               │       ├── started.json
               │       ├── completed.json
               │       └── build.log
               ├── data/                  # Athanor data (agent conversations, etc.)
-              ├── config/                # Project config (retention settings, etc.)
+              ├── config/                # Athanor config (retention settings, etc.)
               └── audit/                 # Audit events (append-only JSONL, opt-in)
                   └── {date}.jsonl
 
@@ -53,7 +46,7 @@ defmodule Arca.Adapters.Local do
       config :cyfr,
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data",
-        components_path: "./components"
+        bundle_path: "./components/_bundle"
 
   """
 
@@ -271,55 +264,28 @@ defmodule Arca.Adapters.Local do
   end
 
   @doc """
-  Build the full filesystem path, respecting component, global, and tenant-scoped paths.
+  Build the full filesystem path for logical segments.
 
-  - `["components" | rest]` → `components_path/{rest}`
-  - `["cache" | rest]` → `base_path/cache/{rest}` (global, root-level)
-  - everything else → `base_path/{athanor_id}/{rest}` (tenant-scoped)
-
-  Tenant-scoped paths are derived from `Arca.Storage.tenant_segments/1`:
-  `{athanor_id}/...`. Component access is pinned per athanor by
+  The seed bundle (`["components", "_bundle" | rest]`) is read in place from
+  `:bundle_path`; every other path joins `Arca.Storage.physical_segments/2`
+  under `:base_path`. Component access is pinned per athanor by
   `Arca.Storage.authorize_path/2` before any adapter call.
   """
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
-    base = base_path()
 
     case segments do
       ["components", "_bundle" | rest] ->
-        # The seed bundle is read in place from its source (`:bundle_path`) —
-        # install media, never tenant storage.
         Path.join([bundle_path() | rest])
 
-      ["components" | rest] ->
-        # Component path - routed to components_path:
-        # ["components", athanor_id, "catalysts", ...].
-        Path.join([components_path() | rest])
-
-      [prefix | _rest] ->
-        if prefix in Arca.Storage.global_prefixes() do
-          # Global path - no tenant prefix (e.g. cache/)
-          Path.join([base | segments])
-        else
-          # Tenant-scoped path: {athanor_id}/...
-          Path.join([base | Arca.Storage.tenant_segments(ctx) ++ segments])
-        end
-
       _ ->
-        # Empty segments - tenant-scoped root
-        Path.join([base | Arca.Storage.tenant_segments(ctx)])
+        Path.join([base_path() | Arca.Storage.physical_segments(ctx, segments)])
     end
   end
 
   @doc "Get the expanded base path for storage."
   def base_path do
     Application.fetch_env!(:cyfr, :base_path)
-    |> Path.expand()
-  end
-
-  @doc "Get the expanded components path for component storage."
-  def components_path do
-    Application.fetch_env!(:cyfr, :components_path)
     |> Path.expand()
   end
 

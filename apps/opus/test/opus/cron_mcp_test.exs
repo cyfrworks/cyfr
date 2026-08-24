@@ -26,7 +26,6 @@ defmodule Opus.CronMCPTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_cron_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
     ctx = Sanctum.TestContext.local()
 

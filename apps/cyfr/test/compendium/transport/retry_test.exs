@@ -22,6 +22,7 @@ defmodule Compendium.Transport.RetryTest do
       end
 
       assert Retry.classify({:error, :timeout}) == :retry_if_idempotent
+
       assert Retry.classify({:error, %Mint.TransportError{reason: :closed}}) ==
                :retry_if_idempotent
     end
@@ -49,6 +50,7 @@ defmodule Compendium.Transport.RetryTest do
         DateTime.utc_now()
         |> DateTime.add(5)
         |> Calendar.strftime("%a, %d %b %Y %H:%M:%S GMT")
+
       ms = Retry.retry_after_ms([{"retry-after", header}])
       assert ms > 0 and ms <= 5_000
 
