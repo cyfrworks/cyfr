@@ -47,10 +47,58 @@ defmodule Arca.StorageTest do
     end
   end
 
+  describe "physical_segments/2" do
+    defp ath_ctx do
+      Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
+    end
+
+    test "everything an athanor owns lives under athanors/{id}" do
+      assert Storage.physical_segments(ath_ctx(), ["components", "ath_y", "tinctures"]) ==
+               ["athanors", "ath_y", "components", "tinctures"]
+
+      assert Storage.physical_segments(ath_ctx(), ["notes", "a.txt"]) ==
+               ["athanors", "ath_x", "data", "notes", "a.txt"]
+    end
+
+    test "the guest data scope nests under the athanor's data root" do
+      # ["data" | rest] is a tenant-relative prefix like any other, so it
+      # lands at athanors/{id}/data/data/… — collapsing that nesting would
+      # alias the guest scope onto the whole data root (aqua/, config/, …).
+      assert Storage.physical_segments(ath_ctx(), ["data", "notes.txt"]) ==
+               ["athanors", "ath_x", "data", "data", "notes.txt"]
+    end
+
+    test "the empty path is the athanor's data root, disjoint from components" do
+      # Caps.data_bytes/1 walks []; the trailing "data" keeps that walk from
+      # double-counting the components subtree.
+      assert Storage.physical_segments(ath_ctx(), []) == ["athanors", "ath_x", "data"]
+    end
+
+    test "globals stay at the storage root" do
+      assert Storage.physical_segments(ath_ctx(), ["cache", "oci", "d"]) == ["cache", "oci", "d"]
+
+      assert Storage.physical_segments(ath_ctx(), ["system", "health", ".write_probe"]) ==
+               ["system", "health", ".write_probe"]
+    end
+
+    test "the seed bundle is not tenant storage" do
+      assert_raise ArgumentError, ~r/bundle/, fn ->
+        Storage.physical_segments(ath_ctx(), ["components", "_bundle", "x"])
+      end
+    end
+
+    test "the bare components root has no physical location" do
+      assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
+        Storage.physical_segments(ath_ctx(), ["components"])
+      end
+    end
+  end
+
   describe "global_prefixes/0" do
     test "returns expected prefixes" do
       prefixes = Storage.global_prefixes()
       assert "cache" in prefixes
+      assert "system" in prefixes
       refute "mcp_logs" in prefixes
     end
 
@@ -135,14 +183,16 @@ defmodule Arca.StorageTest do
                Storage.authorize_path(ctx, ["components", "ath_b", "catalysts", "local"])
     end
 
-    test "a bare components listing is platform-only" do
+    test "a bare components listing is refused for everyone" do
+      # The unified layout has no single components root; refusing here keeps
+      # the physical_segments raise from leaking to a platform caller.
       member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
 
       platform =
         Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
 
       assert {:error, :forbidden} = Storage.authorize_path(member, ["components"])
-      assert :ok = Storage.authorize_path(platform, ["components"])
+      assert {:error, :forbidden} = Storage.authorize_path(platform, ["components"])
       assert :ok = Storage.authorize_path(platform, ["components", "ath_b", "tinctures"])
     end
 

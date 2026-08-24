@@ -5,7 +5,7 @@ defmodule Arca.Storage do
   @moduledoc """
   Behaviour for storage adapters.
 
-  All paths are lists of segments, e.g. `["builds", "build_1", "started.json"]`.
+  All paths are lists of segments, e.g. `["builds", "build_1.json"]`.
   The adapter handles joining to the actual storage location.
 
   ## Single seam policy
@@ -40,7 +40,7 @@ defmodule Arca.Storage do
     so component paths are not run through `tenant_segments/1`. Adapters pin
     them: a context may only reach its own athanor's components (a platform
     context reaches every athanor's), and the seed bundle
-    `["components", "_bundle" | rest]` is readable only by system contexts —
+    `["components", "_bundle" | rest]` is reachable only by system contexts —
     `Arca` routes it to the local `:bundle_path`, never to a storage adapter.
   - **Global paths**: `cache`, `system` → stored at root level
   - **Tenant-scoped paths**: everything else → stored under the athanor
@@ -114,7 +114,7 @@ defmodule Arca.Storage do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped (auto-prefixed with {athanor_id}/)
-      Arca.put(ctx, ["builds", "build_1", "started.json"], json_content)
+      Arca.put(ctx, ["builds", "build_1.json"], json_content)
 
       # Global (no tenant prefix)
       Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
@@ -216,7 +216,9 @@ defmodule Arca.Storage do
   The `components/` root is shared by every athanor, so its second segment
   is the tenant: a context reaches only `components/{its own athanor}/…`
   (a platform context reaches every athanor), a bare `components` listing
-  is platform-only, and the seed bundle `components/_bundle/…` is readable
+  is refused for everyone — the unified layout has no single components
+  root, so roster-driven code enumerates athanors instead — and the seed
+  bundle `components/_bundle/…` is reachable
   only by server-internal contexts (`auth_method: :system`). The global
   roots `cache/` (OCI blobs) and `system/` (health probes) are the server's
   own and likewise system-only. Every other path is tenant-prefixed by
@@ -232,6 +234,11 @@ defmodule Arca.Storage do
 
   def authorize_path(%Context{}, [root | _]) when root in ["cache", "system"],
     do: {:error, :forbidden}
+
+  # The bare components root has no single physical location
+  # (`physical_segments/2` raises) — refusing it here keeps the API
+  # contract typed instead of leaking that raise to a platform caller.
+  def authorize_path(%Context{}, ["components"]), do: {:error, :forbidden}
 
   def authorize_path(%Context{scope: :platform}, ["components" | _]), do: :ok
 
@@ -251,7 +258,7 @@ defmodule Arca.Storage do
 
   ## Examples
 
-      iex> Arca.Storage.validate_path!(["builds", "build_1", "started.json"])
+      iex> Arca.Storage.validate_path!(["builds", "build_1.json"])
       :ok
 
       iex> Arca.Storage.validate_path!(["builds", "..", "..", "etc", "passwd"])

@@ -968,5 +968,52 @@ defmodule Opus.StorageHandlerTest do
       quota = %{max_bytes: 100, max_files: 50}
       assert %{"written" => true} = quota_write(ctx, ref, "data/exact.txt", 90, quota)
     end
+
+    defp components_quota_write(ctx, ref, path, bytes, quota) do
+      content = Base.encode64(String.duplicate("z", bytes))
+      request = ~s({"action": "write", "path": "#{path}", "content": "#{content}"})
+
+      edge = EdgeFixtures.edge(paths: ["data/", "components/"], actions: ["read", "write"])
+
+      StorageHandler.execute(request, edge, nil, ctx, ref,
+        public?: true,
+        public_quota: quota
+      )
+      |> Jason.decode!()
+    end
+
+    test "the components scope is counted too — the quota is not data-only", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      quota = %{max_bytes: 100, max_files: 50}
+
+      assert %{"written" => true} =
+               components_quota_write(
+                 ctx,
+                 ref,
+                 "components/catalysts/test/0.1.0/a.txt",
+                 60,
+                 quota
+               )
+
+      decoded =
+        components_quota_write(ctx, ref, "components/catalysts/test/0.1.0/b.txt", 60, quota)
+
+      assert decoded["error"]["type"] == "storage_quota_exceeded"
+    end
+
+    test "an athanor-less context gets a typed refusal, never a raise", %{component_ref: ref} do
+      # No athanor: the quota walk cannot pin the components root, so it is
+      # skipped as unreadable, and the write itself is refused downstream.
+      anon = Sanctum.Context.build(user_id: "anon", athanor_id: nil, authenticated: false)
+
+      quota = %{max_bytes: 100, max_files: 50}
+
+      decoded =
+        components_quota_write(anon, ref, "components/catalysts/test/0.1.0/a.txt", 10, quota)
+
+      assert %{"error" => %{"type" => _}} = decoded
+    end
   end
 end

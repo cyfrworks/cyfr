@@ -19,8 +19,16 @@ defmodule Arca.StorageAuthorizePathTest do
     prev_base = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, base)
 
+    # The bundle test writes through the bundle branch of build_path/2;
+    # keep those bytes out of the suite-shared bundle root.
+    bundle = Path.join(base, "bundle")
+    File.mkdir_p!(bundle)
+    prev_bundle = Application.get_env(:cyfr, :bundle_path)
+    Application.put_env(:cyfr, :bundle_path, bundle)
+
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:cyfr, :bundle_path, prev_bundle)
       File.rm_rf!(base)
     end)
 
@@ -54,7 +62,7 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:ok, "{}"} = Arca.get(seed, path)
   end
 
-  test "a bare components listing authorizes platform-only, but has no physical root", %{a: a} do
+  test "a bare components listing is refused for everyone — it has no physical root", %{a: a} do
     platform =
       Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
 
@@ -62,13 +70,12 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:error, :forbidden} = Arca.list_recursive(a, ["components"])
     assert {:error, :forbidden} = Arca.Storage.authorize_path(a, ["components"])
 
-    # A platform context passes the pin, but the unified layout has no single
-    # components root — roster-driven code enumerates athanors instead.
-    assert :ok = Arca.Storage.authorize_path(platform, ["components"])
-
-    assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
-      Arca.list_recursive(platform, ["components"])
-    end
+    # A platform context reaches every athanor's subtree, but the unified
+    # layout has no single components root — roster-driven code enumerates
+    # athanors instead, so even platform gets a typed refusal, not a raise.
+    assert {:error, :forbidden} = Arca.Storage.authorize_path(platform, ["components"])
+    assert {:error, :forbidden} = Arca.list_recursive(platform, ["components"])
+    assert :ok = Arca.Storage.authorize_path(platform, ["components", "ath_a"])
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do

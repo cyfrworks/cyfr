@@ -267,7 +267,10 @@ defmodule Opus.StorageHandler do
         :error -> byte_size(content || "")
       end
 
-    case Arca.usage(ctx, [storage_root(path)]) do
+    # The components scope bypasses Arca's automatic tenant prefixing, so
+    # the usage walk needs the same athanor pin every other component path
+    # gets — unpinned, the bare root is refused and the quota never counts.
+    case Arca.usage(ctx, pin_tenant([storage_root(path)], ctx)) do
       {:ok, %{files: files, bytes: used}} ->
         cond do
           files >= quota.max_files ->
