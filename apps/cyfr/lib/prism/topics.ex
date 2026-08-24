@@ -23,7 +23,7 @@ defmodule Prism.Topics do
 
   ## Global topics
 
-  Six topics are deliberately unscoped, and each is listed in `global/0` with
+  Five topics are deliberately unscoped, and each is listed in `global/0` with
   the reason. They carry no tenant payload, or they are the signal that a
   tenant boundary just moved — `sanctum:vault_changed` exists precisely so a
   reconciler outside any one athanor learns that a credential changed.
@@ -188,6 +188,16 @@ defmodule Prism.Topics do
   @spec execution_events(String.t(), athanor()) :: String.t()
   def execution_events(execution_id, athanor),
     do: PubSub.topic("execution:events:#{execution_id}", athanor)
+
+  @doc """
+  One conversation's live events, fanned out by `Prism.ConversationRunner`.
+
+  Messages: `{:conversation, conversation_id, event}` — the event shapes
+  are documented on the runner, which owns a turn's vocabulary.
+  """
+  @spec conversation(String.t(), athanor()) :: String.t()
+  def conversation(conversation_id, athanor),
+    do: PubSub.topic("conversation:#{conversation_id}", athanor)
 
   # ---------------------------------------------------------------------------
   # Global — unscoped on purpose

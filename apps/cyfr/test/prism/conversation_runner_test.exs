@@ -54,7 +54,7 @@ defmodule Prism.ConversationRunnerTest do
       Sanctum.Tenancy.Athanors.put_settings(group, %{"aqua" => %{"answer_mode" => "all"}})
 
     {:ok, conv} = Conversations.create(alice)
-    ConversationRunner.subscribe(conv.id)
+    ConversationRunner.subscribe(conv.id, conv.athanor_id)
     {:ok, alice: alice, bob: bob, conv: conv, group: group}
   end
 
@@ -289,7 +289,7 @@ defmodule Prism.ConversationRunnerTest do
     {:ok, _} = Sanctum.Tenancy.Members.ensure(owner, scope: "athanor", athanor_id: personal.id)
     ctx = %{user_ctx(owner) | athanor_id: personal.id}
     {:ok, conv} = Conversations.create(ctx)
-    ConversationRunner.subscribe(conv.id)
+    ConversationRunner.subscribe(conv.id, conv.athanor_id)
 
     :ok = ConversationRunner.send_message(ctx, conv.id, "hello me")
     assert_receive {:fake_start, _eid, _ctx, input}, 10_000

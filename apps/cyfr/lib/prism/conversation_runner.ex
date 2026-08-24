@@ -139,14 +139,15 @@ defmodule Prism.ConversationRunner do
     :exit, _ -> false
   end
 
-  @doc "The PubSub topic a thread's viewers subscribe to."
-  @spec topic(String.t()) :: String.t()
-  def topic(conversation_id), do: "conversation:#{conversation_id}"
+  @doc "The PubSub topic a thread's viewers subscribe to, tenant-prefixed."
+  @spec topic(String.t(), String.t()) :: String.t()
+  def topic(conversation_id, athanor_id),
+    do: Prism.Topics.conversation(conversation_id, athanor_id)
 
   @doc "Subscribe the calling process to a conversation's broadcasts."
-  @spec subscribe(String.t()) :: :ok
-  def subscribe(conversation_id) do
-    Phoenix.PubSub.subscribe(Emissary.PubSub, topic(conversation_id))
+  @spec subscribe(String.t(), String.t()) :: :ok
+  def subscribe(conversation_id, athanor_id) do
+    Phoenix.PubSub.subscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
   end
 
   # ---------------------------------------------------------------------------
@@ -1383,7 +1384,12 @@ defmodule Prism.ConversationRunner do
   defp turn_user(_), do: nil
 
   defp broadcast(state, event) do
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic(state.id), {:conversation, state.id, event})
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      topic(state.id, state.athanor_id),
+      {:conversation, state.id, event}
+    )
+
     state
   end
 

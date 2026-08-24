@@ -22,7 +22,7 @@ defmodule Prism.TopicsTest do
     :vault_changed
   ]
 
-  @scoped_2 [:build, :register, :progress, :execution_events]
+  @scoped_2 [:build, :register, :progress, :execution_events, :conversation]
 
   defp ctx(athanor_id), do: %Context{user_id: "u1", athanor_id: athanor_id}
 

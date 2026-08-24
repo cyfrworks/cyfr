@@ -155,7 +155,7 @@ defmodule PrismWeb.ConversationLive do
     ctx = socket.assigns.context
 
     socket = unsubscribe_current(socket)
-    ConversationRunner.subscribe(conv.id)
+    ConversationRunner.subscribe(conv.id, conv.athanor_id)
     live = ConversationRunner.state(conv.id, conv.athanor_id)
 
     socket
@@ -165,8 +165,10 @@ defmodule PrismWeb.ConversationLive do
     |> apply_live(live)
   end
 
-  defp unsubscribe_current(%{assigns: %{conversation: %{id: id}}} = socket) do
-    Phoenix.PubSub.unsubscribe(Emissary.PubSub, ConversationRunner.topic(id))
+  defp unsubscribe_current(
+         %{assigns: %{conversation: %{id: id, athanor_id: athanor_id}}} = socket
+       ) do
+    Phoenix.PubSub.unsubscribe(Emissary.PubSub, ConversationRunner.topic(id, athanor_id))
     socket
   end
 
