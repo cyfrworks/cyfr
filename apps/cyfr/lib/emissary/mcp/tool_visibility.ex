@@ -31,6 +31,7 @@ defmodule Emissary.MCP.ToolVisibility do
   callers pass them through unchanged.
   """
 
+  alias Emissary.MCP.ActionAnnotations
   alias Sanctum.Context
 
   @doc """
@@ -43,7 +44,7 @@ defmodule Emissary.MCP.ToolVisibility do
   def anonymous_action?(name, action) do
     case Arca.Cache.get({:mcp_tool, name}) do
       {:ok, {_module, meta}} ->
-        get_in(meta, [:annotations, :actions, action, :auth]) == :anonymous
+        ActionAnnotations.auth(meta, action) == :anonymous
 
       :miss ->
         false
@@ -70,7 +71,7 @@ defmodule Emissary.MCP.ToolVisibility do
   def admits_action?(name, action, %Context{} = ctx) do
     case Arca.Cache.get({:mcp_tool, name}) do
       {:ok, {_module, meta}} ->
-        admits?(get_in(meta, [:annotations, :actions, action]) || %{}, ctx)
+        admits?(ActionAnnotations.annotation(meta, action) || %{}, ctx)
 
       :miss ->
         false
@@ -98,7 +99,7 @@ defmodule Emissary.MCP.ToolVisibility do
         if ctx.authenticated, do: tool_def, else: nil
 
       actions when is_list(actions) ->
-        annotations = get_in(tool_def, ["annotations", :actions]) || %{}
+        annotations = ActionAnnotations.actions_of(tool_def)
         visible = Enum.filter(actions, &visible_action?(Map.get(annotations, &1), ctx))
 
         case visible do

@@ -38,6 +38,7 @@ defmodule Emissary.MCP.ToolRegistry do
   use GenServer
   require Logger
 
+  alias Emissary.MCP.ActionAnnotations
   alias Sanctum.Context
 
   # 24 hours
@@ -96,7 +97,7 @@ defmodule Emissary.MCP.ToolRegistry do
     if String.contains?(name, ":") do
       tool_def
     else
-      actions = get_in(tool_def, ["annotations", :actions]) || %{}
+      actions = ActionAnnotations.actions_of(tool_def)
 
       reachable =
         for {action, %{planes: planes}} <- actions, :in_chain in planes, do: action
@@ -284,7 +285,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
       case Arca.Cache.get({:mcp_tool, name}) do
         {:ok, {_module, meta}} ->
-          planes = get_in(meta, [:annotations, :actions, action, :planes]) || []
+          planes = ActionAnnotations.planes(meta, action)
 
           if :in_chain in planes do
             :ok
@@ -440,7 +441,7 @@ defmodule Emissary.MCP.ToolRegistry do
           :ok | {:error, String.t()}
   def authorize_annotated_action(name, meta, ctx, args) do
     action = args["action"] || args[:action]
-    annotation = action && get_in(meta, [:annotations, :actions, action])
+    annotation = ActionAnnotations.annotation(meta, action)
 
     cond do
       is_nil(action) ->
@@ -723,9 +724,9 @@ defmodule Emissary.MCP.ToolRegistry do
     enum =
       get_in(tool, [Access.key(:input_schema, %{}), "properties", "action", "enum"]) || []
 
-    # Every provider writes atom-keyed annotations with string verb keys;
-    # there is deliberately no second accepted spelling.
-    actions_meta = get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{}
+    # Strict read on purpose: the audit must reject exactly the spelling
+    # the registry load would break on, not tolerate it.
+    actions_meta = ActionAnnotations.declared_actions(tool)
 
     Enum.flat_map(enum, fn verb ->
       case audit_action(Map.get(actions_meta, verb)) do

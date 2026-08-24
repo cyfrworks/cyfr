@@ -35,11 +35,8 @@ defmodule PrismWeb.AgentsLive.Catalog do
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        # Providers write atom-keyed annotations with string verb keys; a
-        # string `"actions"` here would find nothing and quietly call every
-        # action a write.
-        actions_meta = get_in(t, ["annotations", :actions]) || %{}
-        default_meta = actions_meta["_default"] || actions_meta[:_default]
+        actions_meta = Emissary.MCP.ActionAnnotations.actions_of(t)
+        default_meta = actions_meta["_default"]
 
         actions =
           case action_enum do
@@ -47,7 +44,7 @@ defmodule PrismWeb.AgentsLive.Catalog do
               enum
               |> Enum.filter(&reachable?(name, &1))
               |> Enum.map(fn a ->
-                meta = actions_meta[a] || actions_meta[existing_atom(a)] || default_meta
+                meta = actions_meta[a] || default_meta
                 {a, kind_from_meta(meta, name, a)}
               end)
 

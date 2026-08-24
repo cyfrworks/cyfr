@@ -114,7 +114,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
     # shape derived here can only name actions the registry can serve.
     for module <- Emissary.MCP.ToolRegistry.available_providers(),
         tool <- module.tools(),
-        {action, _annotation} <- get_in(tool, [:annotations, :actions]) || %{},
+        {action, _annotation} <- Emissary.MCP.ActionAnnotations.actions_of(tool),
         do: "#{tool.name}.#{action}"
   end
 

@@ -340,17 +340,9 @@ defmodule Prism.AquaActions do
 
   def kind_for(_, _), do: nil
 
-  # Registry tool_defs carry annotations under the string key "annotations"
-  # with the provider's atom-keyed map inside — the inner key is :actions,
-  # not "actions". Reading the wrong spelling here made every internal tool
-  # classify as nil, silently.
   defp lookup_internal_kind(tool, action) do
-    with {:ok, tool_def} <- Emissary.MCP.ToolRegistry.get_tool(tool),
-         actions_meta when is_map(actions_meta) <-
-           get_in(tool_def, ["annotations", :actions]) || %{},
-         %{kind: kind} when is_atom(kind) <- actions_meta[action] do
-      kind
-    else
+    case Emissary.MCP.ToolRegistry.get_tool(tool) do
+      {:ok, tool_def} -> Emissary.MCP.ActionAnnotations.kind(tool_def, action)
       _ -> nil
     end
   end

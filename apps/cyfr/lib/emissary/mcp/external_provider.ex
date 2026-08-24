@@ -199,15 +199,14 @@ defmodule Emissary.MCP.ExternalProvider do
                 # needed. Users still override per-action in their
                 # tool_policy if they want to auto-allow trusted reads.
                 #
-                # Planes come from `default_planes/0` rather than a
-                # per-action annotation: an upstream catalogue is unbounded
-                # and changes without us, so it cannot be annotated at
-                # compile time. The whole bucket is `:in_chain`.
+                # No planes entry: an upstream catalogue is unbounded and
+                # changes without us, so the whole bucket is `:in_chain`
+                # (`default_planes/0`), answered by the dispatch checks from
+                # the name shape rather than carried on the definition.
                 "annotations" => %{
                   "readOnlyHint" => upstream_ann["readOnlyHint"],
                   "destructiveHint" => upstream_ann["destructiveHint"],
-                  "openWorldHint" => upstream_ann["openWorldHint"],
-                  "planes" => default_planes()
+                  "openWorldHint" => upstream_ann["openWorldHint"]
                 }
               }
             end)
