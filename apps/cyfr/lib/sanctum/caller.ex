@@ -21,8 +21,9 @@ defmodule Sanctum.Caller do
     * `{:claim_pending, ctx}` — a valid session whose person has not
       claimed a namespace yet. The pre-claim context rides along because
       the claim flow needs its fields; nothing tenant-gated may act on it.
-    * `:denied` — a namespace-holding session whose person the door no
-      longer admits.
+    * `{:denied, ctx}` — a namespace-holding session whose person the
+      door no longer admits. The context rides along for surfaces that
+      forward it to the anonymous surface rather than halting.
     * `:no_athanor` — authenticated, but no athanor resolved.
     * `:not_member` / `:archived` / `:not_found` — the requested focus
       refused.
@@ -39,7 +40,7 @@ defmodule Sanctum.Caller do
   @type refusal ::
           :unauthenticated
           | {:claim_pending, Context.t()}
-          | :denied
+          | {:denied, Context.t()}
           | :no_athanor
           | :not_member
           | :archived
@@ -87,8 +88,8 @@ defmodule Sanctum.Caller do
 
   A pre-claim context (`authenticated: false`, no namespace) comes back
   as `{:error, {:claim_pending, ctx}}` with its namespace refreshed; an
-  unauthenticated context that holds a namespace is `:denied` — the door
-  stopped admitting its person after the session was minted.
+  unauthenticated context that holds a namespace is `{:denied, ctx}` —
+  the door stopped admitting its person after the session was minted.
   """
   @spec establish_context(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, refusal()}
   def establish_context(ctx, opts \\ [])
@@ -96,7 +97,7 @@ defmodule Sanctum.Caller do
   def establish_context(%Context{authenticated: false} = ctx, _opts) do
     case ensure_namespace(ctx) do
       %Context{namespace: nil} = ctx -> {:error, {:claim_pending, ctx}}
-      %Context{} -> {:error, :denied}
+      %Context{} = ctx -> {:error, {:denied, ctx}}
     end
   end
 

@@ -40,7 +40,8 @@ defmodule PrismWeb.AttachmentController do
       |> serve(ctx, ref["path"])
     else
       {:error, :unauthenticated} -> redirect(conn, to: "/login")
-      {:error, :namespace_unavailable} -> send_resp(conn, 503, "Try again shortly")
+      {:error, :unavailable} -> send_resp(conn, 503, "Try again shortly")
+      # A pre-claim or denied session has no attachments to see.
       _ -> send_resp(conn, 404, "Not found")
     end
   end

@@ -25,16 +25,16 @@ defmodule PrismWeb.LiveAuth do
     token = session["sanctum_session_token"]
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
-      # A valid session whose person has not claimed a namespace yet loads
-      # unauthenticated: the claim gate comes first. The HTTP plug sends the
-      # first GET there; the LiveView socket never passes the router, so the
-      # connected mount is gated here.
-      {:ok, %{authenticated: false, namespace: nil}} ->
+      # A valid session whose person has not claimed a namespace yet: the
+      # claim gate comes first. The HTTP plug sends the first GET there;
+      # the LiveView socket never passes the router, so the connected
+      # mount is gated here.
+      {:error, {:claim_pending, _ctx}} ->
         {:halt, redirect(socket, to: "/claim-namespace")}
 
       # A namespace but no standing: denied at the door since the session
       # was minted.
-      {:ok, %{authenticated: false}} ->
+      {:error, {:denied, _ctx}} ->
         {:halt, redirect(socket, to: "/login")}
 
       {:ok, ctx} ->
@@ -54,12 +54,12 @@ defmodule PrismWeb.LiveAuth do
          |> assign(:ui_mode, ui_mode(ctx))
          |> attach_hook(:sanctum_standing, :handle_info, &standing_changed/2)}
 
-      {:error, :no_athanor} ->
+      {:error, reason} when reason in [:no_athanor, :not_member, :archived, :not_found] ->
         {:halt, redirect(socket, to: "/login?error=no_athanor")}
 
       # A transient failure reading who the person is: say so, never bounce
       # them into a claim they have already made.
-      {:error, :namespace_unavailable} ->
+      {:error, :unavailable} ->
         {:halt, redirect(socket, to: "/login?error=unavailable")}
 
       {:error, :unauthenticated} ->

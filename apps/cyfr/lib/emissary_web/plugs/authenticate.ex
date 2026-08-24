@@ -159,38 +159,29 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     )
   end
 
-  # A pre-claim / unauthenticated context (valid session, namespace not yet
-  # claimed) legitimately carries no resolved athanor — it is forwarded to the
-  # namespace-claim flow downstream, not tenant-gated here.
-  defp context_from_session(%Context{authenticated: false} = ctx), do: ensure_namespace(ctx)
-
+  # `Sanctum.Caller` owns the establish recipe; this surface's mapping: a
+  # pre-claim or door-denied context is forwarded rather than halted — it
+  # reaches only the anonymous surface, and the claim flow downstream
+  # needs its fields.
   defp context_from_session(%Context{} = ctx) do
-    ctx =
-      ctx
-      |> Sanctum.Tenancy.resolve_into()
-      |> ensure_namespace()
+    case Sanctum.Caller.establish_context(ctx) do
+      {:ok, established} ->
+        established
 
-    case Context.tenant_ok(ctx) do
-      {:error, :missing_tenant} ->
+      {:error, {:claim_pending, pre_claim}} ->
+        pre_claim
+
+      {:error, {:denied, denied}} ->
+        denied
+
+      {:error, :no_athanor} ->
         Logger.warning(
           "[Authenticate] Authenticated user #{ctx.user_id} has no resolved athanor — rejecting"
         )
 
         {:error, :missing_tenant}
-
-      :ok ->
-        ctx
     end
   end
-
-  # Belt-and-suspenders: Session.load/row_to_context already populates
-  # ctx.namespace via Sanctum.Namespace.lookup/1, but if a Context arrives
-  # here from a path that didn't go through Session.load (e.g. auth_provider
-  # synthesizing a fresh Context), refresh from the users row.
-  defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
-
-  defp ensure_namespace(%Context{} = ctx),
-    do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
   # ============================================================================
   # Bearer credentials
@@ -221,25 +212,28 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # reads the row, so a revoked or expired session is rejected on the very next
   # request rather than surviving in a cache.
   defp validate_session_token(token) do
-    case Sanctum.Session.load(token, surface: :console) do
+    # This surface never slides the session — the console hooks do.
+    case Sanctum.Caller.establish(token, refresh: false) do
       {:ok, ctx} ->
-        case context_from_session(ctx) do
-          {:error, :missing_tenant} ->
-            {:error, :missing_tenant}
+        {:ok, stamp_token_hash(ctx, token), :session_token}
 
-          %Context{} = resolved ->
-            # The row key, not the token: enough for the caller to retire its
-            # own session, useless for authenticating as it.
-            resolved = %{resolved | session_token_hash: Sanctum.Session.token_hash(token)}
-            {:ok, resolved, :session_token}
-        end
+      {:error, {:claim_pending, pre_claim}} ->
+        # Forwarded to the claim flow downstream, not tenant-gated here.
+        {:ok, stamp_token_hash(pre_claim, token), :session_token}
 
-      {:error, :namespace_unavailable} ->
+      {:error, {:denied, denied}} ->
+        # No standing at the door: only the anonymous surface answers.
+        {:ok, stamp_token_hash(denied, token), :session_token}
+
+      {:error, :no_athanor} ->
+        {:error, :missing_tenant}
+
+      {:error, :unavailable} ->
         # Transient store failure during session→context resolution, distinct
         # from an unknown session. Retryable, so it must not read as "expired".
         {:error, :auth_provider_error}
 
-      {:error, _reason} ->
+      {:error, :unauthenticated} ->
         # Not a session token this server issued — but not necessarily invalid.
         # A configured auth provider may accept bearer tokens of its own (an
         # OIDC access token, say), and it reads the header itself. So this falls
@@ -248,6 +242,11 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         :unclaimed_bearer
     end
   end
+
+  # The row key, not the token: enough for the caller to retire its own
+  # session, useless for authenticating as it.
+  defp stamp_token_hash(%Context{} = ctx, token),
+    do: %{ctx | session_token_hash: Sanctum.Session.token_hash(token)}
 
   # Validate an API key and build an athanor-scoped context from the key row.
   #

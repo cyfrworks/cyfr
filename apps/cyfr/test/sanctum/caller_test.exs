@@ -135,7 +135,7 @@ defmodule Sanctum.CallerTest do
           authenticated: false
         )
 
-      assert {:error, :denied} = Caller.establish_context(ctx)
+      assert {:error, {:denied, %Context{}}} = Caller.establish_context(ctx)
     end
 
     test "an unclaimed unauthenticated context is claim_pending" do
