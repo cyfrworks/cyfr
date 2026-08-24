@@ -117,14 +117,21 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       end
     end
 
-    test "the whole surface is covered when every provider is loaded" do
-      # Guards the standalone-run hole: if this runs with the full provider
-      # set it must see the whole taxonomy.
-      if length(loaded_providers()) == 8 do
-        assert length(annotated_actions()) == 135
-      else
-        assert length(loaded_providers()) >= 5
-      end
+    test "the walked surface equals the registry's served surface" do
+      # Guards the standalone-run hole: a run must audit exactly what the
+      # registry serves — a cross-source check in place of a hand-kept
+      # count that broke on every added action.
+      walked = MapSet.new(annotated_actions(), fn {tool, verb, _ann} -> {tool, verb} end)
+
+      served =
+        MapSet.new(
+          for tool_def <- ToolRegistry.list_tools(),
+              verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
+              do: {tool_def["name"], verb}
+        )
+
+      assert MapSet.equal?(walked, served)
+      assert length(loaded_providers()) >= 5
     end
   end
 
@@ -146,20 +153,31 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # Public actions
   # ============================================================================
 
-  describe "public actions" do
-    test "every unauthenticated action is annotated external" do
-      # The public maps name the unauthenticated HTTP surface, so every
-      # entry is by definition external-plane. A drifted entry here would
-      # mean an action is publicly reachable without the taxonomy saying so.
-      by_tool =
-        annotated_actions()
-        |> Enum.group_by(fn {tool, _, _} -> tool end, fn {_, verb, ann} -> {verb, ann} end)
+  describe "the anonymous surface" do
+    test "every auth: :anonymous action is external-plane, and the set is pinned" do
+      anonymous =
+        MapSet.new(
+          for {tool, verb, %{auth: :anonymous} = annotation} <- annotated_actions() do
+            assert :external in annotation.planes,
+                   "anonymous action #{tool}.#{verb} is not external-plane"
 
-      for {tool, verbs} <- public_tool_actions(),
-          {verb, %{planes: planes}} <- Map.get(by_tool, tool, []),
-          verbs == :all or verb in verbs do
-        assert :external in planes, "public action #{tool}.#{verb} is not external-plane"
-      end
+            {tool, verb}
+          end
+        )
+
+      # The pin is the point: widening the unauthenticated surface must
+      # fail a test loudly, never slip through as a derived fact.
+      assert MapSet.equal?(
+               anonymous,
+               MapSet.new([
+                 {"session", "login"},
+                 {"session", "logout"},
+                 {"session", "whoami"},
+                 {"session", "device_init"},
+                 {"session", "device_poll"},
+                 {"system", "status"}
+               ])
+             )
     end
   end
 
@@ -210,17 +228,4 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
   # Helpers
   # ============================================================================
-
-  # The router keeps its public maps private; mirrored here rather than
-  # reached into. These are the actions documented as reachable without
-  # authentication — every one must be external-plane.
-  defp public_tool_actions do
-    %{
-      "session" => :all,
-      "aqua" => ~w(list get),
-      "component" => ~w(search inspect categories setup_plan list),
-      "registry" => ~w(probe claim_personal get_namespace),
-      "system" => ~w(status)
-    }
-  end
 end
