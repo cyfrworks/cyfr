@@ -53,10 +53,20 @@ defmodule Opus.BootstrapFirstRunTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  # Stage a tracked bundle tree into the athanor's component storage and
+  # register it the way the auto-indexer does — the production-true path
+  # (a real install copies the bundle in and scans it).
+  defp stage_and_register(ctx, rel) do
+    segments = ["components", Sanctum.TestContext.athanor_id() | String.split(rel, "/")]
+    dest = Path.join([Application.get_env(:cyfr, :base_path) | segments])
+    File.mkdir_p!(Path.dirname(dest))
+    File.cp_r!(Path.join(@bundle_root, rel), dest)
+    Compendium.Registry.register_from_arca(ctx, segments)
+  end
+
   test "the tracked bundle registers, bootstraps and loads from its caps blocks", %{ctx: ctx} do
     for rel <- @bundled do
-      dir = Path.join(@bundle_root, rel)
-      assert {:ok, _} = Compendium.Registry.register_from_directory(ctx, dir), rel
+      assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
     # AQUA's and list-models' static deps are name-level moonmoon69 refs
@@ -65,9 +75,7 @@ defmodule Opus.BootstrapFirstRunTest do
     # the rows land — but with the deps absent their activation cannot
     # resolve, so bootstrap mints nothing for them: the fail-closed CI truth.
     for rel <- @pull_gated do
-      assert {:ok, _} =
-               Compendium.Registry.register_from_directory(ctx, Path.join(@bundle_root, rel)),
-             rel
+      assert {:ok, _} = stage_and_register(ctx, rel), rel
     end
 
     {:ok, %{minted: minted} = outcome} = Bootstrap.run(ctx)

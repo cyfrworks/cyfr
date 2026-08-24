@@ -681,21 +681,13 @@ defmodule Compendium.MCPTest do
                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_dep_test_dir(test_dir, type, name, version, manifest) do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "#{type}s",
-          "local",
-          name,
-          version
-        ])
+      segments = ["components", "ath_test", "#{type}s", "local", name, version]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "#{type}.wasm"), @dep_test_wasm)
-      comp_dir
+      segments
     end
 
     test "inspect component with no deps has no dependency fields", %{ctx: ctx} do
@@ -728,7 +720,7 @@ defmodule Compendium.MCPTest do
           "description" => "A dependency catalyst"
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, cat_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, cat_dir)
 
       # Register a formula that depends on the catalyst
       formula_dir =
@@ -747,7 +739,7 @@ defmodule Compendium.MCPTest do
           }
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, formula_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -778,7 +770,7 @@ defmodule Compendium.MCPTest do
           }
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, formula_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -805,7 +797,7 @@ defmodule Compendium.MCPTest do
           }
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, formula_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -887,21 +879,13 @@ defmodule Compendium.MCPTest do
                        <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_plan_component(test_dir, type, name, version, manifest) do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "#{type}s",
-          "local",
-          name,
-          version
-        ])
+      segments = ["components", "ath_test", "#{type}s", "local", name, version]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "#{type}.wasm"), @setup_plan_wasm)
-      comp_dir
+      segments
     end
 
     test "returns setup plan for a catalyst with declared needs", %{ctx: ctx, test_dir: test_dir} do
@@ -920,7 +904,7 @@ defmodule Compendium.MCPTest do
           }
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, comp_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -952,7 +936,7 @@ defmodule Compendium.MCPTest do
           "description" => "Web catalyst with no needs block"
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, comp_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -975,7 +959,7 @@ defmodule Compendium.MCPTest do
           "description" => "Dependency catalyst"
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, cat_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, cat_dir)
 
       formula_dir =
         setup_plan_component(test_dir, "formula", "setup-formula", "0.2.0", %{
@@ -993,7 +977,7 @@ defmodule Compendium.MCPTest do
           }
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, formula_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -1021,7 +1005,7 @@ defmodule Compendium.MCPTest do
           }
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, comp_dir)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -1173,16 +1157,8 @@ defmodule Compendium.MCPTest do
     end
 
     test "removes a filesystem component", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "remove-fs-test",
-          "1.0.0"
-        ])
+      segments = ["components", "ath_test", "catalysts", "local", "remove-fs-test", "1.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -1195,7 +1171,7 @@ defmodule Compendium.MCPTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -1461,16 +1437,8 @@ defmodule Compendium.MCPTest do
 
   describe "component inspect - include_readme" do
     test "inspect with include_readme returns readme content", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "readme-test",
-          "1.0.0"
-        ])
+      segments = ["components", "ath_test", "catalysts", "local", "readme-test", "1.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -1480,7 +1448,7 @@ defmodule Compendium.MCPTest do
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
       File.write!(Path.join(comp_dir, "README.md"), readme_content)
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -1493,16 +1461,8 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect without include_readme omits readme", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "no-readme-flag",
-          "1.0.0"
-        ])
+      segments = ["components", "ath_test", "catalysts", "local", "no-readme-flag", "1.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -1511,7 +1471,7 @@ defmodule Compendium.MCPTest do
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
       File.write!(Path.join(comp_dir, "README.md"), "# Has README")
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -1523,16 +1483,8 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect with include_readme returns nil when no README", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "no-readme-file",
-          "1.0.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "no-readme-file", "1.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -1540,7 +1492,7 @@ defmodule Compendium.MCPTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
@@ -1622,16 +1574,8 @@ defmodule Compendium.MCPTest do
                       <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_component_dir(test_dir, type, name, version, manifest) do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "#{type}s",
-          "local",
-          name,
-          version
-        ])
+      segments = ["components", "ath_test", "#{type}s", "local", name, version]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -1640,7 +1584,7 @@ defmodule Compendium.MCPTest do
       wasm_filename = "#{type}.wasm"
       File.write!(Path.join(comp_dir, wasm_filename), @auto_pull_wasm)
 
-      comp_dir
+      segments
     end
 
     test "rejects pull of local formula", %{ctx: ctx, test_dir: test_dir} do
@@ -1651,7 +1595,7 @@ defmodule Compendium.MCPTest do
           "description" => "A test formula"
         })
 
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, formula_dir)
 
       {:error, msg} =
         MCP.handle("component", ctx, %{

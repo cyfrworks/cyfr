@@ -487,19 +487,11 @@ defmodule Compendium.RegistryTest do
     end
   end
 
-  describe "register_from_directory/3" do
+  describe "register_from_arca/3" do
     setup %{test_dir: test_dir} do
       # Create a component directory with manifest and WASM
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "test-tool",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "test-tool", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -514,11 +506,11 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      {:ok, comp_dir: comp_dir}
+      {:ok, comp_dir: comp_dir, segments: segments}
     end
 
-    test "registers a component from directory", %{ctx: ctx, comp_dir: comp_dir} do
-      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
+    test "registers a component from its stored tree", %{ctx: ctx, segments: segments} do
+      {:ok, component} = Registry.register_from_arca(ctx, segments)
 
       assert component.name == "test-tool"
       assert component.version == "0.1.0"
@@ -529,23 +521,23 @@ defmodule Compendium.RegistryTest do
       assert String.starts_with?(component.digest, "sha256:")
     end
 
-    test "registered component is searchable", %{ctx: ctx, comp_dir: comp_dir} do
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+    test "registered component is searchable", %{ctx: ctx, segments: segments} do
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       {:ok, result} = Registry.search(ctx, %{query: "test-tool"})
       assert result.total == 1
       assert hd(result.components).name == "test-tool"
     end
 
-    test "skips unchanged component", %{ctx: ctx, comp_dir: comp_dir} do
-      {:ok, _component} = Registry.register_from_directory(ctx, comp_dir)
+    test "skips unchanged component", %{ctx: ctx, segments: segments} do
+      {:ok, _component} = Registry.register_from_arca(ctx, segments)
 
       # Second registration should return :unchanged
-      assert {:ok, :unchanged} = Registry.register_from_directory(ctx, comp_dir)
+      assert {:ok, :unchanged} = Registry.register_from_arca(ctx, segments)
     end
 
-    test "re-registers when manifest changes", %{ctx: ctx, comp_dir: comp_dir} do
-      {:ok, _component} = Registry.register_from_directory(ctx, comp_dir)
+    test "re-registers when manifest changes", %{ctx: ctx, comp_dir: comp_dir, segments: segments} do
+      {:ok, _component} = Registry.register_from_arca(ctx, segments)
 
       # Update manifest without changing WASM
       manifest_path = Path.join(comp_dir, "cyfr-manifest.json")
@@ -554,27 +546,19 @@ defmodule Compendium.RegistryTest do
       File.write!(manifest_path, Jason.encode!(updated))
 
       # Should re-register, not return :unchanged
-      assert {:ok, %{name: _}} = Registry.register_from_directory(ctx, comp_dir)
+      assert {:ok, %{name: _}} = Registry.register_from_arca(ctx, segments)
     end
 
-    test "re-registers when force option is set", %{ctx: ctx, comp_dir: comp_dir} do
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+    test "re-registers when force option is set", %{ctx: ctx, segments: segments} do
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
-      {:ok, component} = Registry.register_from_directory(ctx, comp_dir, force: true)
+      {:ok, component} = Registry.register_from_arca(ctx, segments, force: true)
       assert component.name == "test-tool"
     end
 
-    test "infers name and version from directory path", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "my-catalyst",
-          "2.0.0"
-        ])
+    test "infers name and version from the segment path", %{ctx: ctx, test_dir: test_dir} do
+      segments = ["components", "ath_test", "catalysts", "local", "my-catalyst", "2.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -583,7 +567,7 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
 
-      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, component} = Registry.register_from_arca(ctx, segments)
 
       assert component.name == "my-catalyst"
       assert component.version == "2.0.0"
@@ -591,16 +575,8 @@ defmodule Compendium.RegistryTest do
     end
 
     test "rejects non-local publisher namespaces", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "stripe",
-          "payment",
-          "1.0.0"
-        ])
+      segments = ["components", "ath_test", "catalysts", "stripe", "payment", "1.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -609,66 +585,42 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
 
       assert {:error, {:namespace_rejected, msg}} =
-               Registry.register_from_directory(ctx, comp_dir)
+               Registry.register_from_arca(ctx, segments)
 
       assert msg =~ "stripe"
     end
 
     test "returns error for missing manifest", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "no-manifest",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "no-manifest", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      assert {:error, {:missing_manifest, _}} = Registry.register_from_directory(ctx, comp_dir)
+      assert {:error, {:missing_manifest, _}} = Registry.register_from_arca(ctx, segments)
     end
 
     test "returns error for malformed manifest JSON", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "bad-json",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "bad-json", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), "{not json")
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      assert {:error, {:invalid_manifest, _}} = Registry.register_from_directory(ctx, comp_dir)
+      assert {:error, {:invalid_manifest, _}} = Registry.register_from_arca(ctx, segments)
     end
 
     test "returns error for missing WASM", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "no-wasm",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "no-wasm", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
       manifest = %{"type" => "reagent", "version" => "0.1.0"}
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      assert {:error, {:missing_wasm, _}} = Registry.register_from_directory(ctx, comp_dir)
+      assert {:error, {:missing_wasm, _}} = Registry.register_from_arca(ctx, segments)
     end
   end
 
@@ -676,16 +628,8 @@ defmodule Compendium.RegistryTest do
     test "removes filesystem entries not in discovered set", %{ctx: ctx} do
       test_dir = Application.get_env(:cyfr, :base_path)
 
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "stale-tool",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "stale-tool", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -693,7 +637,7 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       # Verify it exists
       {:ok, result} = Registry.search(ctx, %{query: "stale-tool"})
@@ -720,16 +664,8 @@ defmodule Compendium.RegistryTest do
     test "preserves entries in discovered set", %{ctx: ctx} do
       test_dir = Application.get_env(:cyfr, :base_path)
 
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "keep-tool",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_test", "reagents", "local", "keep-tool", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -737,7 +673,7 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       # Include ALL filesystem entries in the discovered set
       {:ok, all_fs} = Arca.ComponentStorage.list_components(ctx, source: "filesystem")
@@ -755,16 +691,8 @@ defmodule Compendium.RegistryTest do
     test "prune deletes entire version directory from storage", %{ctx: ctx} do
       test_dir = Application.get_env(:cyfr, :base_path)
 
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "tree-test",
-          "1.0.0"
-        ])
+      segments = ["components", "ath_test", "catalysts", "local", "tree-test", "1.0.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -778,7 +706,7 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(src_dir, "Cargo.toml"), "[package]\nname = \"tree-test\"")
       File.write!(Path.join([src_dir, "src", "lib.rs"]), "fn main() {}")
 
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       # Verify files were stored
       base = ["components", "ath_test", "catalysts", "local", "tree-test", "1.0.0"]
@@ -1006,23 +934,15 @@ defmodule Compendium.RegistryTest do
       assert {:error, _} = Arca.get(ctx_other, storage_path)
     end
 
-    test "register_from_directory infers path metadata under the athanor", %{
+    test "register_from_arca infers segment metadata under the athanor", %{
       ctx: ctx,
       test_dir: test_dir
     } do
       ctx_other = %{ctx | athanor_id: "ath_reg"}
 
       # Create a component directory under the athanor-scoped path
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_reg",
-          "reagents",
-          "local",
-          "other-reg-test",
-          "0.1.0"
-        ])
+      segments = ["components", "ath_reg", "reagents", "local", "other-reg-test", "0.1.0"]
+      comp_dir = Path.join([test_dir | segments])
 
       File.mkdir_p!(comp_dir)
 
@@ -1030,7 +950,7 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      {:ok, component} = Registry.register_from_directory(ctx_other, comp_dir)
+      {:ok, component} = Registry.register_from_arca(ctx_other, segments)
 
       assert component.name == "other-reg-test"
       assert component.version == "0.1.0"
@@ -1052,197 +972,6 @@ defmodule Compendium.RegistryTest do
 
       {:ok, search_result} = Registry.search(ctx, %{query: "seq-tool"})
       assert search_result.total == 3
-    end
-  end
-
-  describe "register_from_directory/3 copies supplementary files" do
-    test "copies cyfr-manifest.json to Arca", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "copy-test",
-          "1.0.0"
-        ])
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{
-        "name" => "copy-test",
-        "version" => "1.0.0",
-        "type" => "catalyst",
-        "description" => "test copy",
-        "schema" => %{"input" => %{}}
-      }
-
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
-
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
-
-      # Verify manifest was stored in Arca
-      path = [
-        "components",
-        "ath_test",
-        "catalysts",
-        "local",
-        "copy-test",
-        "1.0.0",
-        "cyfr-manifest.json"
-      ]
-
-      {:ok, content} = Arca.get(ctx, path)
-      {:ok, stored} = Jason.decode(content)
-      assert stored["schema"] == %{"input" => %{}}
-      assert stored["name"] == "copy-test"
-    end
-
-    test "copies README.md to Arca", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "readme-test",
-          "0.1.0"
-        ])
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "reagent", "version" => "0.1.0"}
-      readme_content = "# My Component\n\nThis is the README."
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
-      File.write!(Path.join(comp_dir, "README.md"), readme_content)
-
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
-
-      # Verify README was stored in Arca
-      path = [
-        "components",
-        "ath_test",
-        "reagents",
-        "local",
-        "readme-test",
-        "0.1.0",
-        "README.md"
-      ]
-
-      {:ok, content} = Arca.get(ctx, path)
-      assert content == readme_content
-    end
-
-    test "copies src/ directory recursively to Arca", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "src-test",
-          "1.0.0"
-        ])
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "catalyst", "version" => "1.0.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
-
-      # Create src/ with nested structure
-      src_dir = Path.join(comp_dir, "src")
-      File.mkdir_p!(Path.join(src_dir, "src"))
-      File.write!(Path.join(src_dir, "Cargo.toml"), "[package]\nname = \"src-test\"")
-      File.write!(Path.join([src_dir, "src", "lib.rs"]), "fn main() {}")
-
-      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
-
-      # Verify src files stored in Arca
-      base = ["components", "ath_test", "catalysts", "local", "src-test", "1.0.0", "src"]
-
-      {:ok, cargo_content} = Arca.get(ctx, base ++ ["Cargo.toml"])
-      assert cargo_content =~ "src-test"
-
-      {:ok, lib_content} = Arca.get(ctx, base ++ ["src", "lib.rs"])
-      assert lib_content =~ "fn main()"
-    end
-
-    test "succeeds when no README or src/ exist", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "reagents",
-          "local",
-          "minimal",
-          "1.0.0"
-        ])
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "reagent", "version" => "1.0.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
-
-      # Should succeed — README and src are optional
-      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
-      assert component.name == "minimal"
-
-      # Manifest should still be stored
-      path = [
-        "components",
-        "ath_test",
-        "reagents",
-        "local",
-        "minimal",
-        "1.0.0",
-        "cyfr-manifest.json"
-      ]
-
-      assert {:ok, _} = Arca.get(ctx, path)
-
-      # README should not exist
-      readme_path = [
-        "components",
-        "ath_test",
-        "reagents",
-        "local",
-        "minimal",
-        "1.0.0",
-        "README.md"
-      ]
-
-      assert {:error, _} = Arca.get(ctx, readme_path)
-    end
-
-    test "handles empty src/ directory gracefully", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir =
-        Path.join([
-          test_dir,
-          "components",
-          "ath_test",
-          "catalysts",
-          "local",
-          "empty-src",
-          "1.0.0"
-        ])
-
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "catalyst", "version" => "1.0.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
-      File.mkdir_p!(Path.join(comp_dir, "src"))
-
-      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
-      assert component.name == "empty-src"
     end
   end
 
