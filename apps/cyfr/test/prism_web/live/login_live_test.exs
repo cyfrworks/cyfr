@@ -118,7 +118,11 @@ defmodule PrismWeb.LoginLiveTest do
         :cyfr,
         :device_flow_poll_result,
         {:ok,
-         %{status: "complete", session_token: session.token, needs_personal_namespace: false}}
+         %{
+           status: "complete",
+           session_token: session.token,
+           outcome: {:proceed, %{unsynced: [], probe: :ok}}
+         }}
       )
 
       {:ok, view, _} = live(conn, ~p"/login")

@@ -207,7 +207,7 @@ defmodule Sanctum.MCP.SessionTool do
 
       case Sanctum.Auth.DeviceFlow.poll_for_session(provider, device_code) do
         {:ok, result} ->
-          {:ok, result}
+          {:ok, Sanctum.Auth.DeviceFlow.wire(result)}
 
         {:error, {:client_id_not_configured, provider}} ->
           {:error,

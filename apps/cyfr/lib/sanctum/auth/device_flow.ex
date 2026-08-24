@@ -454,9 +454,11 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  # What follows the door, as the CLI sees it. A session is minted only for
-  # an outcome the person can act on with one; the IdP token travels only
-  # for the claim or the policy acceptance it is needed for.
+  # What follows the door. The sign-in outcome travels intact on the
+  # result — surfaces branch on it, never on a re-derived flag; `wire/1`
+  # flattens it for the CLI. A session is minted only for an outcome the
+  # person can act on with one; the IdP token travels only for the claim
+  # or the policy acceptance it is needed for.
   defp complete(user, ctx, user_info, provider, access_token) do
     base = %{
       status: "complete",
@@ -465,28 +467,65 @@ defmodule Sanctum.Auth.DeviceFlow do
 
     case Sanctum.SignIn.complete(user, provider, access_token) do
       {:proceed, user, report} ->
-        with_session(base, %{ctx | namespace: user.namespace}, fn ->
-          %{needs_personal_namespace: false} |> put_report(report)
-        end)
+        with_session(base, %{ctx | namespace: user.namespace}, %{outcome: {:proceed, report}})
 
       {:needs_legal, version} ->
-        with_session(base, ctx, fn ->
-          %{
-            needs_policy_acceptance: true,
-            required_policy_version: version,
-            needs_personal_namespace: false,
-            access_token: access_token
-          }
-        end)
+        with_session(base, ctx, %{
+          outcome: {:needs_legal, version},
+          access_token: access_token
+        })
 
       {:needs_claim, suggested} ->
-        with_session(base, ctx, fn ->
-          %{
-            needs_personal_namespace: true,
-            suggested_username: suggested,
-            access_token: access_token
-          }
-        end)
+        with_session(base, ctx, %{
+          outcome: {:needs_claim, suggested},
+          access_token: access_token
+        })
+
+      {:reauthenticate, reason} ->
+        Map.put(base, :outcome, {:reauthenticate, reason})
+
+      {:unavailable, reason} ->
+        Map.put(base, :outcome, {:unavailable, reason})
+    end
+  end
+
+  @doc """
+  The CLI poll response, field for field.
+
+  `cyfr login` reads these exact keys (`apps/codex/cmd/login.go`), so this
+  flattening is a wire contract: one adapter, byte-stable, exercised by
+  its own test. The browser page consumes the rich result directly; only
+  the MCP session tool's `device_poll` flattens through here. Total over
+  every poll status — a result without an outcome passes through.
+  """
+  @spec wire(map()) :: map()
+  def wire(%{outcome: outcome} = result) do
+    base = %{status: "complete", user: result.user}
+
+    base =
+      case result do
+        %{session_token: token} -> Map.put(base, :session_token, token)
+        _ -> base
+      end
+
+    case outcome do
+      {:proceed, report} ->
+        base |> Map.put(:needs_personal_namespace, false) |> put_report(report)
+
+      {:needs_legal, version} ->
+        Map.merge(base, %{
+          needs_policy_acceptance: true,
+          required_policy_version: version,
+          needs_personal_namespace: false,
+          access_token: result[:access_token]
+        })
+
+      {:needs_claim, suggested} ->
+        Map.merge(base, %{
+          needs_personal_namespace: true,
+          suggested_username: suggested,
+          access_token: result[:access_token]
+        })
 
       {:reauthenticate, _reason} ->
         Map.merge(base, %{
@@ -500,6 +539,8 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
+  def wire(result), do: result
+
   defp with_session(base, ctx, extras) do
     ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
 
@@ -507,7 +548,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {:ok, session} ->
         base
         |> Map.put(:session_token, session.token)
-        |> Map.merge(extras.())
+        |> Map.merge(extras)
 
       {:error, reason} ->
         Logger.error("[Sanctum.Auth.DeviceFlow] session create failed: #{inspect(reason)}")

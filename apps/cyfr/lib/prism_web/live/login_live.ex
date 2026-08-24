@@ -110,12 +110,16 @@ defmodule PrismWeb.LoginLive do
     {:noreply, socket}
   end
 
-  defp finish_poll(socket, {:ok, %{status: "complete", reauthenticate: true}}) do
+  defp finish_poll(socket, {:ok, %{status: "complete", outcome: {:reauthenticate, _}}}) do
     {:noreply,
      assign_idle(
        socket,
        "Your login session expired during setup. Please try again."
      )}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "complete", outcome: {:unavailable, reason}}}) do
+    {:noreply, assign_idle(socket, browser_unavailable(reason))}
   end
 
   defp finish_poll(socket, {:ok, %{status: "complete", session_token: token} = result})
@@ -134,10 +138,6 @@ defmodule PrismWeb.LoginLive do
 
   defp finish_poll(socket, {:ok, %{status: "expired"}}) do
     {:noreply, assign_idle(socket, "Code expired. Please try again.")}
-  end
-
-  defp finish_poll(socket, {:ok, %{status: "registry_unavailable", message: message}}) do
-    {:noreply, assign_idle(socket, message)}
   end
 
   defp finish_poll(socket, {:ok, %{status: "error", message: message}}) do
@@ -163,17 +163,38 @@ defmodule PrismWeb.LoginLive do
     payload = %{
       session_token: result.session_token,
       access_token: Map.get(result, :access_token),
-      next: next_from(result),
-      suggested_username: Map.get(result, :suggested_username)
+      next: next_from(result.outcome),
+      suggested_username:
+        case result.outcome do
+          {:needs_claim, suggested} -> suggested
+          _ -> nil
+        end
     }
 
     Arca.Cache.put({:login_device_ticket, ticket}, payload, @ticket_ttl_ms)
     ticket
   end
 
-  defp next_from(%{needs_policy_acceptance: true}), do: :legal
-  defp next_from(%{needs_personal_namespace: true}), do: :claim
-  defp next_from(_), do: :home
+  defp next_from({:needs_legal, _version}), do: :legal
+  defp next_from({:needs_claim, _suggested}), do: :claim
+  defp next_from(_outcome), do: :home
+
+  # Browser copy for a registry outage — the CLI's version of these
+  # sentences says to run `cyfr login`, which is not this surface.
+  defp browser_unavailable(:namespace_conflict),
+    do:
+      "cyfr.run names you by a namespace another identity on this server already holds. " <>
+        "Ask the operator to sort it out."
+
+  defp browser_unavailable(:no_access_token),
+    do:
+      "Your identity provider returned no access token, so cyfr.run could not be asked " <>
+        "for your namespace. Nothing was set up. Sign in again."
+
+  defp browser_unavailable(_reason),
+    do:
+      "cyfr.run could not be reached to find or claim your namespace. Nothing was set up. " <>
+        "Try again in a moment."
 
   defp assign_idle(socket, error) do
     socket
