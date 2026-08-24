@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.RetentionSchedulerTest do
+defmodule Cyfr.RetentionSchedulerTest do
   use ExUnit.Case, async: false
 
-  alias Arca.RetentionScheduler
+  alias Cyfr.RetentionScheduler
 
   setup do
     # Ensure no lingering scheduler

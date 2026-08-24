@@ -1,33 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.Retention do
+defmodule Cyfr.Retention do
   require Logger
   require Arca.Repo.Errors
 
   @moduledoc """
-  Retention policy enforcement for CYFR storage.
+  Retention policy for tenant data — which records an athanor keeps, and
+  for how long.
 
-  Implements configurable retention policies for execution records and other
-  tenant data. Retention is per athanor — the furnace owns its records, and
-  every member sees the same ones — and defaults to keeping the last 10
-  executions.
-
-  ## MCP Tool Interface
-
-  Retention settings can be managed via the `storage` MCP tool:
-
-      # Get current settings
-      {"action": "retention", "retention_action": "get"}
-
-      # Update settings (admin only)
-      {"action": "retention", "retention_action": "set", "settings": {"executions": 5}}
-
-      # Run cleanup (admin only)
-      {"action": "retention", "retention_action": "cleanup", "cleanup_type": "executions"}
-
-      # Preview cleanup without deleting
-      {"action": "retention", "retention_action": "cleanup", "dry_run": true}
+  Retention is per athanor — the furnace owns its records, and every
+  member sees the same ones. This module owns the policy: the settings
+  file, the defaults, and which setting governs which entity. The row
+  mechanics live with each entity's storage (`Arca.Execution`,
+  `Arca.McpLog`, `Arca.PolicyLog`, `Arca.ConversationStorage`); the MCP
+  surface lives with its dispatcher
+  (`Emissary.MCP.Tools.RecordsProvider`).
 
   ## Storage
 
@@ -39,7 +27,7 @@ defmodule Arca.Retention do
 
   ## Global Defaults (config.exs)
 
-      config :cyfr, Arca.Retention,
+      config :cyfr, Cyfr.Retention,
         executions: 10,        # Keep last N executions per athanor
         builds: 10             # Keep last N builds per athanor
 
@@ -48,16 +36,16 @@ defmodule Arca.Retention do
       ctx = Sanctum.TestContext.local()
 
       # Get the athanor's settings (or defaults)
-      settings = Arca.Retention.get_settings(ctx)
+      settings = Cyfr.Retention.get_settings(ctx)
 
       # Update the athanor's settings
-      :ok = Arca.Retention.set_settings(ctx, %{"executions" => 5})
+      :ok = Cyfr.Retention.set_settings(ctx, %{"executions" => 5})
 
       # Clean up old executions in the athanor
-      {:ok, deleted_count} = Arca.Retention.cleanup_executions(ctx)
+      {:ok, deleted_count} = Cyfr.Retention.cleanup_executions(ctx)
 
       # Preview what would be deleted
-      {:ok, %{would_delete: ids}} = Arca.Retention.cleanup_executions(ctx, dry_run: true)
+      {:ok, %{would_delete: ids}} = Cyfr.Retention.cleanup_executions(ctx, dry_run: true)
 
   """
 
@@ -86,7 +74,11 @@ defmodule Arca.Retention do
           messages_days: non_neg_integer()
         }
   def settings do
-    config = Application.get_env(:cyfr, __MODULE__, [])
+    # The module moved out of Arca; the old config key keeps working for
+    # one release so an operator's config does not silently reset.
+    config =
+      Application.get_env(:cyfr, __MODULE__) ||
+        Application.get_env(:cyfr, Arca.Retention, [])
 
     %{
       executions: Keyword.get(config, :executions, @default_execution_retention),
@@ -363,26 +355,18 @@ defmodule Arca.Retention do
   @spec cleanup_mcp_logs(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
-    import Ecto.Query
-
     user_settings = get_settings(ctx)
     days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
     dry_run = Keyword.get(opts, :dry_run, false)
 
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-
-    athanor_id = ctx.athanor_id
-    tenant_opts = [athanor_id: athanor_id]
+    tenant_opts = [athanor_id: ctx.athanor_id]
 
     if dry_run do
-      query =
-        from(l in Arca.McpLog,
-          where: l.timestamp < ^cutoff,
-          where: l.athanor_id == ^athanor_id
-        )
-
-      count = Arca.Repo.aggregate(query, :count)
-      {:ok, %{would_delete: count}}
+      case Arca.McpLog.count_before(cutoff, tenant_opts) do
+        {:error, _} = err -> err
+        count -> {:ok, %{would_delete: count}}
+      end
     else
       case Arca.McpLog.delete_before(cutoff, tenant_opts) do
         {:error, _} = err -> err
@@ -409,26 +393,18 @@ defmodule Arca.Retention do
   @spec cleanup_policy_logs(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_policy_logs(%Context{} = ctx, opts \\ []) do
-    import Ecto.Query
-
     user_settings = get_settings(ctx)
     days = Keyword.get(opts, :days, user_settings["policy_log_days"])
     dry_run = Keyword.get(opts, :dry_run, false)
 
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-
-    athanor_id = ctx.athanor_id
-    tenant_opts = [athanor_id: athanor_id]
+    tenant_opts = [athanor_id: ctx.athanor_id]
 
     if dry_run do
-      query =
-        from(l in Arca.PolicyLog,
-          where: l.timestamp < ^cutoff,
-          where: l.athanor_id == ^athanor_id
-        )
-
-      count = Arca.Repo.aggregate(query, :count)
-      {:ok, %{would_delete: count}}
+      case Arca.PolicyLog.count_before(cutoff, tenant_opts) do
+        {:error, _} = err -> err
+        count -> {:ok, %{would_delete: count}}
+      end
     else
       case Arca.PolicyLog.delete_before(cutoff, tenant_opts) do
         {:error, _} = err -> err
@@ -454,30 +430,19 @@ defmodule Arca.Retention do
   @spec cleanup_conversations(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_conversations(%Context{} = ctx, opts \\ []) do
-    import Ecto.Query
-
     days = Keyword.get(opts, :days, get_settings(ctx)["messages_days"])
     dry_run = Keyword.get(opts, :dry_run, false)
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-    athanor_id = ctx.athanor_id
 
     if dry_run do
-      count =
-        from(c in Arca.Schemas.Conversation,
-          where:
-            c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
-              coalesce(c.last_message_at, c.inserted_at) < ^cutoff
-        )
-        |> Arca.Repo.aggregate(:count)
-
-      {:ok, %{would_delete: count}}
+      {:ok, %{would_delete: Arca.ConversationStorage.count_before(ctx, cutoff)}}
     else
       {count, _} = Arca.ConversationStorage.delete_before(ctx, cutoff)
       {:ok, count}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.Retention] cleanup_conversations failed: #{Exception.message(e)}")
+      Logger.error("[Cyfr.Retention] cleanup_conversations failed: #{Exception.message(e)}")
       {:error, :database_error}
   end
 

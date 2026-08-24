@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.RetentionTest do
+defmodule Cyfr.RetentionTest do
   use ExUnit.Case, async: false
 
-  alias Arca.Retention
+  alias Cyfr.Retention
   alias Sanctum.Context
 
   setup do
@@ -55,13 +55,13 @@ defmodule Arca.RetentionTest do
     end
 
     test "respects config overrides" do
-      Application.put_env(:cyfr, Arca.Retention, executions: 5, builds: 3)
+      Application.put_env(:cyfr, Cyfr.Retention, executions: 5, builds: 3)
 
       settings = Retention.settings()
       assert settings.executions == 5
       assert settings.builds == 3
 
-      Application.delete_env(:cyfr, Arca.Retention)
+      Application.delete_env(:cyfr, Cyfr.Retention)
     end
   end
 

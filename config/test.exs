@@ -77,7 +77,7 @@ config :cyfr, allow_tenancy_resolver_override: true
 
 # Don't run the background retention sweeper in the test supervision tree —
 # its periodic DB cleanup conflicts with the Ecto sandbox connection lifecycle.
-# Retention logic is exercised directly in Arca.RetentionTest / scheduler unit tests.
+# Retention logic is exercised directly in Cyfr.RetentionTest / scheduler unit tests.
 config :cyfr, retention_scheduler_enabled: false
 
 # The reconciler reacts to vault broadcasts with DB reads from its own

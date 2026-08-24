@@ -15,7 +15,7 @@ defmodule Arca.IntegrationTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.Tools.RecordsProvider, as: MCP
-  alias Arca.Retention
+  alias Cyfr.Retention
   alias Sanctum.Context
 
   setup do

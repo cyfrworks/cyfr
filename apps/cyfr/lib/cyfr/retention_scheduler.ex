@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.RetentionScheduler do
+defmodule Cyfr.RetentionScheduler do
   @moduledoc """
   Periodic retention cleanup, enabled when retention is configured.
 
   When retention is disabled, this GenServer returns `:ignore` and never
-  starts. When enabled, it runs `Arca.Retention.cleanup_all_executions/2`
-  and `Arca.Retention.cleanup_mcp_logs/2` on a configurable interval
+  starts. When enabled, it runs `Cyfr.Retention.cleanup_all_executions/2`
+  and `Cyfr.Retention.cleanup_mcp_logs/2` on a configurable interval
   (default 6 hours) to prevent unbounded storage growth.
   """
 
@@ -60,7 +60,7 @@ defmodule Arca.RetentionScheduler do
     ctx = Sanctum.system_context()
 
     try do
-      case Arca.Retention.cleanup_all_executions(ctx) do
+      case Cyfr.Retention.cleanup_all_executions(ctx) do
         {:ok, %{tenants: tenants, deleted: deleted, errors: []}} ->
           if deleted > 0,
             do:
@@ -89,7 +89,7 @@ defmodule Arca.RetentionScheduler do
     end
 
     try do
-      case Arca.Retention.cleanup_all_logs() do
+      case Cyfr.Retention.cleanup_all_logs() do
         {:ok,
          %{
            mcp_logs_deleted: mcp,

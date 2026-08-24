@@ -413,7 +413,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # Cleanup for tenant A with 1-day retention
-      {:ok, count} = Arca.Retention.cleanup_mcp_logs(ctx_a, days: 1)
+      {:ok, count} = Cyfr.Retention.cleanup_mcp_logs(ctx_a, days: 1)
       assert count == 1
 
       # Tenant A's log is gone
@@ -447,12 +447,12 @@ defmodule Arca.TenantIsolationTest do
         })
 
       {:ok, %{would_delete: count_a}} =
-        Arca.Retention.cleanup_mcp_logs(ctx_a, days: 1, dry_run: true)
+        Cyfr.Retention.cleanup_mcp_logs(ctx_a, days: 1, dry_run: true)
 
       assert count_a == 1
 
       {:ok, %{would_delete: count_b}} =
-        Arca.Retention.cleanup_mcp_logs(ctx_b, days: 1, dry_run: true)
+        Cyfr.Retention.cleanup_mcp_logs(ctx_b, days: 1, dry_run: true)
 
       assert count_b == 1
     end
@@ -492,7 +492,7 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup tenant A, keeping 2
-      {:ok, count} = Arca.Retention.cleanup_executions(ctx_a, keep: 2)
+      {:ok, count} = Cyfr.Retention.cleanup_executions(ctx_a, keep: 2)
       assert count == 3
 
       # Tenant A has 2
@@ -536,7 +536,7 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup all executions scoped to tenant A
-      {:ok, result} = Arca.Retention.cleanup_all_executions(ctx_a, keep: 1)
+      {:ok, result} = Cyfr.Retention.cleanup_all_executions(ctx_a, keep: 1)
       assert result.deleted == 3
 
       # Tenant B unaffected
@@ -573,7 +573,7 @@ defmodule Arca.TenantIsolationTest do
           })
       end
 
-      {:ok, result} = Arca.Retention.cleanup_executions(ctx_a, keep: 1, dry_run: true)
+      {:ok, result} = Cyfr.Retention.cleanup_executions(ctx_a, keep: 1, dry_run: true)
       assert length(result.would_delete) == 2
       assert result.would_keep == 1
 

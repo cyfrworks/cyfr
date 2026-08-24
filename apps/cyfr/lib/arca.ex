@@ -47,7 +47,7 @@ defmodule Arca do
 
   ## Retention
 
-  See `Arca.Retention` for managing data retention policies. Retention
+  See `Cyfr.Retention` for managing data retention policies. Retention
   settings can also be managed via the MCP `retention` tool.
 
   ## Configuration
@@ -57,7 +57,7 @@ defmodule Arca do
         base_path: "./data"
 
       # Retention defaults
-      config :cyfr, Arca.Retention,
+      config :cyfr, Cyfr.Retention,
         executions: 10,
         builds: 10
 

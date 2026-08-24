@@ -70,7 +70,7 @@ defmodule Cyfr.Application do
       # before the repo goes down.
       Cyfr.RecordSink,
       Arca.Cache.Sweeper,
-      Arca.RetentionScheduler,
+      Cyfr.RetentionScheduler,
       Arca.AuditHandler,
       # Request rate-limit counters — own table, isolated from Arca.Cache so an
       # attacker-cardinality flood cannot evict sessions or OAuth state.

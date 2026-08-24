@@ -10,7 +10,7 @@ defmodule Arca.WebhookDeliveryStorage do
   inserts safe — the second one fails with a unique-constraint violation
   and the caller treats it as a duplicate.
 
-  Rows are swept on the `Arca.RetentionScheduler` cadence when retention
+  Rows are swept on the `Cyfr.RetentionScheduler` cadence when retention
   is enabled; otherwise the table grows (single-user volumes are negligible).
   """
 

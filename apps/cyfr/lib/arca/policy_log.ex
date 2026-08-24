@@ -196,6 +196,22 @@ defmodule Arca.PolicyLog do
       {:error, :database_error}
   end
 
+  @doc "How many rows `delete_before/2` would remove — the dry-run count."
+  @spec count_before(DateTime.t(), keyword()) :: non_neg_integer() | {:error, term()}
+  def count_before(%DateTime{} = datetime, opts) do
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
+
+    from(l in __MODULE__,
+      where: l.timestamp < ^datetime,
+      where: l.athanor_id == ^athanor_id
+    )
+    |> Arca.Repo.aggregate(:count)
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.PolicyLog] Database error in count_before: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
   @doc """
   Gets a policy log by ID, scoped to the given tenant context.
 

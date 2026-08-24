@@ -99,8 +99,8 @@ defmodule Sanctum.Policy.EnforcementTest do
         set: [timestamp: old_ts]
       )
 
-      assert {:ok, %{would_delete: 1}} = Arca.Retention.cleanup_policy_logs(ctx, dry_run: true)
-      assert {:ok, 1} = Arca.Retention.cleanup_policy_logs(ctx)
+      assert {:ok, %{would_delete: 1}} = Cyfr.Retention.cleanup_policy_logs(ctx, dry_run: true)
+      assert {:ok, 1} = Cyfr.Retention.cleanup_policy_logs(ctx)
       assert rows_for(ctx, "catalyst:local.old") == []
     end
   end

@@ -553,7 +553,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
     with :ok <- tenant_gate(ctx) do
-      settings = Arca.Retention.get_settings(ctx)
+      settings = Cyfr.Retention.get_settings(ctx)
       {:ok, %{action: "get", settings: settings}}
     end
   end
@@ -561,9 +561,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
     with :ok <- tenant_gate(ctx) do
-      case Arca.Retention.set_settings(ctx, settings) do
+      case Cyfr.Retention.set_settings(ctx, settings) do
         :ok ->
-          new_settings = Arca.Retention.get_settings(ctx)
+          new_settings = Cyfr.Retention.get_settings(ctx)
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, reason} ->
@@ -583,9 +583,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
       result =
         case cleanup_type do
-          "executions" -> Arca.Retention.cleanup_executions(ctx, dry_run: dry_run)
-          "builds" -> Arca.Retention.cleanup_builds(ctx, dry_run: dry_run)
-          "mcp_logs" -> Arca.Retention.cleanup_mcp_logs(ctx, dry_run: dry_run)
+          "executions" -> Cyfr.Retention.cleanup_executions(ctx, dry_run: dry_run)
+          "builds" -> Cyfr.Retention.cleanup_builds(ctx, dry_run: dry_run)
+          "mcp_logs" -> Cyfr.Retention.cleanup_mcp_logs(ctx, dry_run: dry_run)
           _ -> {:error, "Unknown cleanup_type: #{cleanup_type}"}
         end
 

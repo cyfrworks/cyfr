@@ -418,6 +418,23 @@ defmodule Arca.ConversationStorage do
     end
   end
 
+  @doc """
+  How many conversations `delete_before/2` would remove — the dry-run
+  count, sharing its rule: a conversation with a running turn is never
+  touched.
+  """
+  @spec count_before(Context.t(), DateTime.t()) :: non_neg_integer()
+  def count_before(%Context{} = ctx, %DateTime{} = cutoff) do
+    athanor_id = Context.athanor!(ctx)
+
+    from(c in Conversation,
+      where:
+        c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
+          coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+    )
+    |> Repo.aggregate(:count)
+  end
+
   # ---------------------------------------------------------------------------
   # JSON
   # ---------------------------------------------------------------------------
