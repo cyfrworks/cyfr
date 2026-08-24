@@ -11,6 +11,7 @@ defmodule Arca.Repo.Errors do
   Postgrex.
   """
 
+  # config:compile-runtime-ok — must match what `Arca.Repo` compiled against.
   @adapter Application.compile_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3)
 
   @doc """

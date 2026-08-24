@@ -29,19 +29,14 @@ defmodule Arca.Adapters.S3 do
 
   ## Append semantics
 
-  S3 has no native append. `append/3` writes a new immutable object per call
-  under the path as a prefix, with a monotonic timestamp-derived suffix:
-
-      append(ctx, ["audit", "2026-05-05.jsonl"], event)
-        → PUT <prefix>/data/{athanor_id}/audit/2026-05-05.jsonl/00001736102400000123-a1b2c3
-
-  `list/2` of the same path returns the appended objects in lexicographic
-  order; readers concatenate. `get/2` of an append-path returns
-  `{:error, :not_found}` by design — callers must enumerate via `list/2`.
-
-  Each append is one S3 PUT. High-volume callers (per-event audit logs)
-  should batch writes rather than rely on this adapter for fan-out
-  append traffic.
+  S3 has no atomic append. `append/3` reads the object, extends it and writes
+  it back, so one path stays one object and `get/2`, `exists?/2`, `delete/2`
+  and `usage/2` all see what was appended — the same shape the Local adapter
+  has. Two consequences follow from the read-modify-write, and neither applies
+  to Local's `O_APPEND` write: concurrent appends to one path are
+  last-writer-wins, and an append is refused once the object would pass 5 MiB
+  (the default node `max_response_size`, above which a guest cannot read the
+  object back anyway).
 
   ## Configuration
 
@@ -65,6 +60,12 @@ defmodule Arca.Adapters.S3 do
   alias Sanctum.Context
 
   @service "s3"
+
+  # An append here is a read-modify-write, so repeated appends to one path cost
+  # O(size) each. The ceiling is the default node `max_response_size` — the size
+  # past which the guest `read` action already declines to return the object —
+  # so refusing here takes away nothing a caller could otherwise read back.
+  @max_append_bytes 5_242_880
 
   @impl true
   def get(%Context{} = ctx, segments) do
@@ -95,20 +96,24 @@ defmodule Arca.Adapters.S3 do
   def append(%Context{} = ctx, segments, content) do
     Arca.Storage.validate_path!(segments)
 
-    parent_key = build_key(ctx, segments)
-    # Suffix is derived from the wall-clock + 6 random hex chars to avoid
-    # collisions when concurrent appenders fire within the same nanosecond.
-    suffix =
-      :erlang.system_time(:nanosecond)
-      |> Integer.to_string()
-      |> String.pad_leading(20, "0")
-      |> Kernel.<>("-")
-      |> Kernel.<>(:crypto.strong_rand_bytes(3) |> Base.encode16(case: :lower))
+    with {:ok, existing} <- read_for_append(ctx, segments) do
+      merged = existing <> content
 
-    case request(:put, "#{parent_key}/#{suffix}", content) do
-      {:ok, %{status: status}} when status in 200..299 -> :ok
-      {:ok, %{status: status, body: body}} -> log_and_error("append", status, body)
-      {:error, reason} -> log_and_error("append", reason)
+      if byte_size(merged) > @max_append_bytes do
+        {:error, :object_too_large}
+      else
+        put(ctx, segments, merged)
+      end
+    end
+  end
+
+  # A missing object is an empty one: appending to a path that does not exist
+  # yet creates it, matching the local filesystem's `File.write(:append)`.
+  defp read_for_append(ctx, segments) do
+    case get(ctx, segments) do
+      {:ok, body} -> {:ok, body}
+      {:error, :not_found} -> {:ok, ""}
+      {:error, _reason} = err -> err
     end
   end
 
@@ -131,27 +136,26 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def list(%Context{} = ctx, segments) do
+    with {:ok, entries} <- list_typed(ctx, segments) do
+      {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
+    end
+  end
+
+  @impl true
+  def list_typed(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
     prefix = build_key(ctx, segments)
 
     case list_keys(prefix) do
+      {:ok, []} ->
+        # Nothing below the prefix. Either the path does not exist, or it is an
+        # object itself — the local adapter's `File.ls` says `:enotdir` for the
+        # latter, and one HEAD on an already-empty listing keeps the two
+        # adapters answering the same thing.
+        if exists?(ctx, segments), do: {:error, :enotdir}, else: {:ok, []}
+
       {:ok, keys} ->
-        # Return basenames (final segment of each S3 key relative to the prefix)
-        # to match Arca.Adapters.Local.list/2 which returns File.ls!/1 entries.
-        prefix_with_slash = prefix <> "/"
-
-        names =
-          keys
-          |> Enum.map(fn key ->
-            case String.split(key, prefix_with_slash, parts: 2) do
-              [_, rest] -> rest |> String.split("/", parts: 2) |> List.first()
-              _ -> nil
-            end
-          end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.uniq()
-
-        {:ok, names}
+        {:ok, entries_under(prefix, keys)}
 
       {:error, reason} ->
         log_and_error("list", reason)
@@ -444,6 +448,47 @@ defmodule Arca.Adapters.S3 do
       {:ok, %{status: status, body: body}} -> {:error, {:s3_list, status, body}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # The one level directly under `prefix`, with each name's kind. A key that
+  # still has a `/` after the prefix names a directory; one that does not names
+  # a file. This is also how the zero-byte `foo/` directory markers some
+  # consoles write are read as directories rather than as empty files.
+  #
+  # A name that is both — an object at `prefix/foo` with objects under
+  # `prefix/foo/` — is a directory: it has children, and that is what a caller
+  # walking the tree needs to know.
+  defp entries_under(prefix, keys) do
+    prefix_with_slash = prefix <> "/"
+
+    pairs =
+      Enum.flat_map(keys, fn key ->
+        case String.split(key, prefix_with_slash, parts: 2) do
+          [_, rest] ->
+            case String.split(rest, "/", parts: 2) do
+              [""] -> []
+              [name] -> [{name, :file}]
+              [name, _below] -> [{name, :dir}]
+            end
+
+          _ ->
+            []
+        end
+      end)
+
+    kinds =
+      Enum.reduce(pairs, %{}, fn {name, kind}, acc ->
+        Map.update(acc, name, kind, fn
+          :dir -> :dir
+          _ -> kind
+        end)
+      end)
+
+    # Keys arrive lexicographically; keep that order rather than a map's.
+    pairs
+    |> Enum.map(fn {name, _kind} -> name end)
+    |> Enum.uniq()
+    |> Enum.map(&{&1, Map.fetch!(kinds, &1)})
   end
 
   # Minimal XML extraction — full XML parsing isn't needed for ListObjectsV2.

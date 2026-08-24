@@ -161,4 +161,44 @@ defmodule Compendium.Registry.CredentialStoreTest do
       assert :not_found = CredentialStore.get(@user2, @reg, "alice")
     end
   end
+
+  describe "device_label/0" do
+    setup do
+      original_app = Application.get_env(:cyfr, :device_label)
+      original_env = System.get_env("CYFR_DEVICE_LABEL")
+
+      on_exit(fn ->
+        if original_app,
+          do: Application.put_env(:cyfr, :device_label, original_app),
+          else: Application.delete_env(:cyfr, :device_label)
+
+        if original_env,
+          do: System.put_env("CYFR_DEVICE_LABEL", original_env),
+          else: System.delete_env("CYFR_DEVICE_LABEL")
+      end)
+
+      :ok
+    end
+
+    test "prefers :cyfr, :device_label app env over CYFR_DEVICE_LABEL env" do
+      Application.put_env(:cyfr, :device_label, "app-env-value")
+      System.put_env("CYFR_DEVICE_LABEL", "os-env-value")
+      assert CredentialStore.device_label() == "app-env-value"
+    end
+
+    test "falls back to CYFR_DEVICE_LABEL when no app env" do
+      Application.delete_env(:cyfr, :device_label)
+      System.put_env("CYFR_DEVICE_LABEL", "os-env-value")
+      assert CredentialStore.device_label() == "os-env-value"
+    end
+
+    test "falls back to machine hostname when neither env set" do
+      Application.delete_env(:cyfr, :device_label)
+      System.delete_env("CYFR_DEVICE_LABEL")
+
+      label = CredentialStore.device_label()
+      assert is_binary(label)
+      assert label != ""
+    end
+  end
 end

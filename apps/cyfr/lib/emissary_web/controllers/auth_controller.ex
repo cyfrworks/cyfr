@@ -5,35 +5,28 @@ defmodule EmissaryWeb.AuthController do
   @moduledoc """
   OAuth authentication controller for CYFR.
 
-  Handles OAuth/OIDC authentication flows using Ueberauth.
+  Handles OAuth/OIDC authentication flows.
+
+  GitHub and Google browser sign-in is device flow on `/login`
+  (`PrismWeb.LoginLive`). This controller finishes that flow
+  (`GET /auth/device/complete/:ticket`) and still runs the Ueberauth
+  web-callback path for a configured OIDC issuer (`GET /auth/oidcc`).
 
   ## Routes
 
-  - `GET /auth/:provider` - Redirects to OAuth provider
+  - `GET /auth/:provider` - OIDC (and leftover web OAuth) kickoff
   - `GET /auth/:provider/callback` - Handles OAuth callback (redirects; the
     session token lives in the cookie, never in a body)
+  - `GET /auth/device/complete/:ticket` - Sets the cookie after device flow
   - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
   - `DELETE /auth/logout` - Destroys session
-
-  ## Usage
-
-  Configure providers via environment variables:
-
-      # GitHub
-      export CYFR_GITHUB_CLIENT_ID=xxx
-      export CYFR_GITHUB_CLIENT_SECRET=xxx
-
-  Then visit:
-
-      GET /auth/github
-
   """
 
   use EmissaryWeb, :controller
 
   require Logger
 
-  plug Ueberauth
+  plug EmissaryWeb.Plugs.ConfiguredUeberauth
 
   alias Sanctum.Session
 
@@ -55,6 +48,63 @@ defmodule EmissaryWeb.AuthController do
   end
 
   @doc """
+  Finishes GitHub/Google device-flow sign-in: the LiveView minted a
+  one-time ticket after `DeviceFlow.poll_for_session/2` created the
+  Sanctum session; this sets the cookie and routes the same way the
+  Ueberauth callback does (home, claim, or legal-accept).
+  """
+  def device_complete(conn, %{"ticket" => ticket})
+      when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
+    key = {:login_device_ticket, ticket}
+
+    case Arca.Cache.get(key) do
+      {:ok, payload} ->
+        Arca.Cache.invalidate(key)
+        apply_device_ticket(conn, payload)
+
+      :miss ->
+        conn
+        |> put_flash_if_available(:error, "That sign-in expired. Please try again.")
+        |> redirect(to: "/login")
+    end
+  end
+
+  def device_complete(conn, _params) do
+    conn
+    |> put_flash_if_available(:error, "That sign-in expired. Please try again.")
+    |> redirect(to: "/login")
+  end
+
+  defp apply_device_ticket(conn, %{session_token: token} = payload) when is_binary(token) do
+    conn = put_session(conn, :sanctum_session_token, token)
+
+    conn =
+      case payload[:access_token] do
+        access when is_binary(access) and access != "" -> stash_pending_probe(conn, access)
+        _ -> conn
+      end
+
+    case payload[:next] do
+      :legal ->
+        redirect(conn, to: "/legal/accept")
+
+      :claim ->
+        conn
+        |> put_session(:claim_suggested_username, payload[:suggested_username] || "")
+        |> redirect(to: "/claim-namespace")
+
+      _ ->
+        EmissaryWeb.SafeRedirect.post_login(conn)
+    end
+  end
+
+  defp apply_device_ticket(conn, _payload) do
+    conn
+    |> put_flash_if_available(:error, "That sign-in expired. Please try again.")
+    |> redirect(to: "/login")
+  end
+
+  @doc """
   Handles the OAuth callback from the provider — the browser sign-in.
 
   Door → what sign-in records → the one decision (`Sanctum.SignIn.complete/3`)
@@ -65,7 +115,7 @@ defmodule EmissaryWeb.AuthController do
   - policy acceptance required → session, cookie, `/legal/accept`
   - claim required → session (loads unauthenticated until the claim), cookie,
     `/claim-namespace`
-  - IdP token refused → no session, back through `/auth/:provider`
+  - IdP token refused → no session, back through `/login`
   - a first-time person and no registry answer → no session, a page saying so
   - refused at the door → 403 page, no session, no cyfr.run call
   """
@@ -111,7 +161,7 @@ defmodule EmissaryWeb.AuthController do
           conn
           |> safe_drop_session()
           |> put_flash_if_available(:error, reauth_flash_message(reason))
-          |> redirect(to: "/auth/#{provider}")
+          |> redirect(to: "/login")
 
         {:unavailable, reason} ->
           # Nothing was set up and no session exists: the person tries again.
@@ -174,13 +224,13 @@ defmodule EmissaryWeb.AuthController do
         # Cookie expired (10 min TTL) or never set. Force fresh OAuth.
         Logger.info(
           "[EmissaryWeb.AuthController] post_legal_accept: missing _cyfr_pending_probe; " <>
-            "redirecting to OAuth"
+            "redirecting to login"
         )
 
-        conn |> redirect(to: "/auth/github")
+        conn |> redirect(to: "/login")
 
       not is_binary(session_token) or session_token == "" ->
-        conn |> redirect(to: "/auth/github")
+        conn |> redirect(to: "/login")
 
       true ->
         with {:ok, ctx} <- Sanctum.Session.load(session_token, surface: :console),
@@ -209,7 +259,7 @@ defmodule EmissaryWeb.AuthController do
               conn
               |> delete_resp_cookie("_cyfr_pending_probe")
               |> safe_drop_session()
-              |> redirect(to: "/auth/#{provider}")
+              |> redirect(to: "/login")
 
             {:unavailable, reason} ->
               conn
@@ -218,7 +268,7 @@ defmodule EmissaryWeb.AuthController do
               |> send_resp(503, unavailable_page(reason, "/auth/post-legal-accept"))
           end
         else
-          _ -> conn |> redirect(to: "/auth/github")
+          _ -> conn |> redirect(to: "/login")
         end
     end
   end

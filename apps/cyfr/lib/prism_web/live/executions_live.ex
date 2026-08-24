@@ -48,7 +48,7 @@ defmodule PrismWeb.ExecutionsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:executions", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.executions(ctx))
     end
 
     {:ok,

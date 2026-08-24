@@ -93,14 +93,11 @@ defmodule Cyfr.Application do
       Emissary.MCP.Progress,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       Emissary.MCP.RunningTasks,
-      # Compendium registry — Finch pool for cyfr.run REST + OCI HTTP.
-      {Finch, name: Compendium.Finch},
-      # Sanctum auth sliver — separate Finch pool for IdP OAuth Device-Flow
-      # HTTP calls (GitHub / Google). The auth sliver's only permitted edge
-      # into Compendium is the post-Session.create probe + CredentialStore.put
-      # handoff; a distinct Finch pool keeps OAuth userinfo HTTP from riding
-      # the Compendium pool and reinforces that boundary at the supervision
-      # level.
+      # Sanctum auth sliver — its own Finch pool for IdP OAuth Device-Flow
+      # HTTP calls (GitHub / Google). Compendium's registry and OCI traffic
+      # goes through `Cyfr.Network.pinned_request/5`, which owns its own
+      # connections; this pool keeps OAuth userinfo HTTP off that path and
+      # reinforces the sliver boundary at the supervision level.
       {Finch, name: Sanctum.Auth.Finch},
       # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock)
       {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
@@ -208,10 +205,11 @@ defmodule Cyfr.Application do
   # migration DDL statements on first startup. `CYFR_AUTO_MIGRATE=false`
   # leaves the step to the operator (`Cyfr.Release.migrate/0`).
   #
-  # A database created before the baseline migration has the older versions
-  # recorded in `schema_migrations`, so this runs nothing and the schema
-  # stays whatever it was. There is no upgrade path across the baseline:
-  # drop the database (or the volume) and let it be created fresh.
+  # A database created before the baseline has older versions in
+  # `schema_migrations` but not this file's version, so Ecto would try to
+  # apply the baseline on top of the old schema. Baseline.up refuses that.
+  # There is no upgrade path: drop the database (or the volume) and let it
+  # be created fresh.
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
@@ -326,10 +324,12 @@ defmodule Cyfr.Application do
     cors = Cyfr.RuntimeConfig.cors_allowed_origins()
 
     # "Customized" asks whether the operator SET the key, not what it
-    # resolves to — so the MCP side reads key presence, not the accessor's
-    # localhost default.
+    # resolves to — so the MCP side reads key presence. Asking that as a
+    # presence check rather than a second default keeps
+    # `Cyfr.RuntimeConfig.mcp_allowed_origins/0` the only place the localhost
+    # default is spelled, and stops an explicit empty list reading as unset.
     cors_customized? = "*" not in cors
-    mcp_customized? = Application.get_env(:cyfr, :mcp_allowed_origins, []) != []
+    mcp_customized? = Application.get_env(:cyfr, :mcp_allowed_origins) != nil
 
     if cors_customized? and not mcp_customized? do
       Logger.warning(

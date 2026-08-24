@@ -106,9 +106,15 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # OAuth/OIDC authentication routes (browser-based OAuth flow)
+  # OAuth/OIDC authentication routes. GitHub/Google browser sign-in is
+  # device flow on `/login`; `/auth/:provider` is the OIDC kickoff (and
+  # leftover web OAuth if a client secret is configured). Static paths
+  # sit above `/:provider` so they cannot be captured as a provider name.
   scope "/auth", EmissaryWeb do
     pipe_through :browser
+
+    get "/post-legal-accept", AuthController, :post_legal_accept
+    get "/device/complete/:ticket", AuthController, :device_complete
 
     # Throttle only the kickoff endpoint; the callback path is reached by
     # the IdP, not the client, and must not be throttled.
@@ -119,11 +125,6 @@ defmodule EmissaryWeb.Router do
     end
 
     get "/:provider/callback", AuthController, :callback
-
-    # Re-probe landing after a successful /legal/accept submit. Reads the
-    # _cyfr_pending_probe cookie to recover the IdP access_token, re-runs
-    # probe_and_store, and routes to /claim-namespace or the dashboard.
-    get "/post-legal-accept", AuthController, :post_legal_accept
   end
 
   # Personal-namespace claim gate (web flow).
@@ -269,9 +270,9 @@ defmodule EmissaryWeb.Router do
   # Prism — the LiveView face, on this origin
   # ==========================================================================
 
-  # Sign in and out from the browser. `/login` is the page with the provider
-  # buttons (they lead to `GET /auth/:provider` above); `/auth/logout` drops
-  # the cookie session and retires the Sanctum session behind it.
+  # Sign in and out from the browser. `/login` starts GitHub/Google device
+  # flow (or links to `/auth/oidcc`); `/auth/logout` drops the cookie
+  # session and retires the Sanctum session behind it.
   scope "/", PrismWeb do
     pipe_through :browser
 

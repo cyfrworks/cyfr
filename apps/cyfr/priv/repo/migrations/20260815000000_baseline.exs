@@ -19,6 +19,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   use Ecto.Migration
 
   def up do
+    refuse_pre_baseline!()
     tenancy()
     identity()
     components()
@@ -27,6 +28,40 @@ defmodule Arca.Repo.Migrations.Baseline do
     registrations()
     conversations()
     seed_home()
+  end
+
+  # A file created under the previous schema still has `memberships` (and
+  # the retired tenant tables) but no `athanors`. Ecto sees this baseline's
+  # new version as pending and would otherwise CREATE TABLE on top of it.
+  # There is no upgrade path: drop the database (or the volume) and boot
+  # onto an empty one.
+  defp refuse_pre_baseline! do
+    tables = existing_tables()
+
+    if "memberships" in tables and "athanors" not in tables do
+      db = repo().config()[:database] || "the database"
+
+      raise """
+      [Arca] #{db} was created before the current baseline schema.
+
+      There is no upgrade path. Delete the database (the SQLite file and any
+      -wal/-shm siblings, or DROP DATABASE on Postgres) and restart so it
+      can be created fresh.
+      """
+    end
+  end
+
+  defp existing_tables do
+    sql =
+      case repo().__adapter__() do
+        Ecto.Adapters.SQLite3 ->
+          "SELECT name FROM sqlite_master WHERE type = 'table'"
+
+        _ ->
+          "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+      end
+
+    repo().query!(sql).rows |> List.flatten()
   end
 
   # ==========================================================================

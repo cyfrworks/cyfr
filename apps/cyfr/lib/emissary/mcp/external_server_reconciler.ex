@@ -23,7 +23,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
   require Logger
 
-  @topic "sanctum:vault_changed"
+  @topic Prism.Topics.vault_changed_global()
   @relevant_verbs [:rotate, :rebind, :revoke, :delete]
 
   # A reconcile that raises or hits a transient storage error is retried

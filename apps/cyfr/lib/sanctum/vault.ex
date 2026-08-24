@@ -357,7 +357,7 @@ defmodule Sanctum.Vault do
   defp broadcast(ctx, entry_id, verb) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Sanctum.PubSub.topic("vault:changed", ctx),
+      Prism.Topics.vault_changed(ctx),
       {:vault_entry_changed, entry_id, verb}
     )
 
@@ -366,7 +366,7 @@ defmodule Sanctum.Vault do
     # the external-MCP reconciler — still see every mutation.
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      "sanctum:vault_changed",
+      Prism.Topics.vault_changed_global(),
       {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb}
     )
   end

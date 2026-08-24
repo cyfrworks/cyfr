@@ -10,7 +10,7 @@ defmodule PrismWeb.SettingsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:requests", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.requests(ctx))
     end
 
     if connected?(socket) and socket.assigns.context.platform_admin do

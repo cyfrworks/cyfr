@@ -70,10 +70,10 @@ defmodule PrismWeb.LegalAcceptController do
           error_page(conn, 400, "Login session expired. Please re-authenticate and try again.")
 
         {:not_logged_in, conn} ->
-          conn |> redirect(to: "/auth/github")
+          conn |> redirect(to: "/login")
 
         {:error, %Compendium.OCI.Errors{reason: :policy_version_mismatch} = err} ->
-          required = err.detail[:required_version] || err.detail["required_version"]
+          required = Compendium.OCI.Errors.required_version(err)
           # Server bumped between page-load and submit — redirect back to
           # /legal/accept so the user re-reads the new version. Pass
           # required version in query so log shows the divergence.
@@ -94,15 +94,9 @@ defmodule PrismWeb.LegalAcceptController do
 
         {:error, :invalid_access_token} ->
           # IdP token expired between OAuth callback and accept submit.
-          provider_for_redirect =
-            case params["provider"] do
-              p when p in ["github", "google"] -> p
-              _ -> "github"
-            end
-
           conn
           |> clear_pending_probe()
-          |> redirect(to: "/auth/#{provider_for_redirect}")
+          |> redirect(to: "/login")
 
         {:error, err} ->
           msg =

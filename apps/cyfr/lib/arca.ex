@@ -188,6 +188,16 @@ defmodule Arca do
   def list(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter().list(ctx, path) end)
 
   @doc """
+  List the entries directly under a path, each tagged `:file` or `:dir`.
+
+  The kind comes from the adapter, so a caller that needs it does not have to
+  know which adapter is configured or how it lays paths out. A path that is
+  itself a file answers `{:error, :enotdir}`.
+  """
+  def list_typed(%Context{} = ctx, path),
+    do: guarded(ctx, path, fn -> adapter().list_typed(ctx, path) end)
+
+  @doc """
   Recursive file count and byte total under a path prefix.
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
@@ -298,16 +308,6 @@ defmodule Arca do
     do: Arca.Cache.invalidate(Arca.Cache.Keys.components_usage(athanor_id))
 
   defp invalidate_components_usage(_path), do: :ok
-
-  @doc """
-  Whether the configured storage adapter is the local filesystem.
-
-  The adapter choice is Arca's own knowledge — callers branch on this
-  predicate instead of re-reading the config key and comparing against an
-  Arca-internal module name.
-  """
-  @spec local_adapter?() :: boolean()
-  def local_adapter?, do: adapter() == Arca.Adapters.Local
 
   defp adapter do
     Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)

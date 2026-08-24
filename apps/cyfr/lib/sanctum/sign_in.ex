@@ -113,7 +113,7 @@ defmodule Sanctum.SignIn do
         {:reauthenticate, :idp_expired}
 
       {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
-        {:needs_legal, required_version(err)}
+        {:needs_legal, Compendium.OCI.Errors.required_version(err)}
 
       {:error, reason} when returning? ->
         Logger.warning(
@@ -319,15 +319,6 @@ defmodule Sanctum.SignIn do
   defp suggested_slug(%User{display_name: name, email: email}, provider) do
     Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
   end
-
-  # The API client wraps the 412 detail once more (`operation` +
-  # `original_detail`); the version sits at either depth.
-  defp required_version(%Compendium.OCI.Errors{detail: detail}), do: version_in(detail)
-
-  defp version_in(%{required_version: v}) when is_binary(v), do: v
-  defp version_in(%{"required_version" => v}) when is_binary(v), do: v
-  defp version_in(%{original_detail: inner}), do: version_in(inner)
-  defp version_in(_), do: nil
 
   defp or_user({:ok, user}, _fallback), do: {:ok, user}
   defp or_user(_, fallback), do: {:ok, fallback}

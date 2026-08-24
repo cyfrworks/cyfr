@@ -26,7 +26,7 @@ defmodule Sanctum.Notify do
   @doc "The topic for one athanor."
   @spec topic(String.t()) :: String.t()
   def topic(athanor_id) when is_binary(athanor_id) and athanor_id != "",
-    do: "tenant:#{athanor_id}:notify"
+    do: Sanctum.PubSub.topic("notify", athanor_id)
 
   @doc "The topic platform admins subscribe to for server-level events."
   @spec platform_topic() :: String.t()

@@ -739,7 +739,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Sanctum.PubSub.topic("register:#{register_id}", ctx),
+           Prism.Topics.register(register_id, ctx),
            {:register_progress, payload}
          ) do
       :ok ->
@@ -799,7 +799,7 @@ defmodule Compendium.MCP.ComponentTool do
   # Broadcast to all Prism LiveViews subscribed to prism:components.
   # Fires after any state-changing component operation (pull, register, delete, new, publish).
   defp broadcast_components_changed(ctx) do
-    topic = Sanctum.PubSub.topic("prism:components", ctx)
+    topic = Prism.Topics.components(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
   end
 
@@ -812,7 +812,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Sanctum.PubSub.topic("progress:#{progress_id}", ctx),
+           Prism.Topics.progress(progress_id, ctx),
            {:progress, payload}
          ) do
       :ok ->

@@ -38,6 +38,7 @@ defmodule Compendium.Registry.Identity do
   require Logger
 
   alias Compendium.Registry.CredentialStore
+  alias Compendium.Registry.Transport
 
   @whoami_timeout_ms 3_000
 
@@ -116,20 +117,24 @@ defmodule Compendium.Registry.Identity do
 
   # Best-effort per-token probe. Transient errors keep the entry with nil
   # `last_used_at`; 401/403 drops it (token revoked or namespace ownership
-  # lost). Uses Finch (shared pool) for consistency with Registry.Client.
+  # lost). Goes through `Registry.Transport` for the same SSRF and
+  # DNS-rebinding protection every other outbound call gets — with retry off,
+  # because the caller already bounds this at `@whoami_timeout_ms` and a
+  # best-effort probe that retries would blow that budget.
   defp confirm_namespace(rest_host, %{token: token, namespace: slug})
        when is_binary(token) and is_binary(slug) do
-    url = "https://#{rest_host}/v1/namespaces/#{URI.encode(slug)}"
+    url = "https://#{rest_host}/v1/namespaces/#{Transport.path_segment(slug)}"
 
     headers = [
       {"authorization", "Bearer #{token}"},
       {"accept", "application/json"}
     ]
 
-    req = Finch.build(:get, url, headers)
-
-    case Finch.request(req, Compendium.Finch, receive_timeout: @whoami_timeout_ms) do
-      {:ok, %Finch.Response{status: 200, body: body}} ->
+    case Transport.request(:get, url, headers, nil,
+           receive_timeout: @whoami_timeout_ms,
+           retry: false
+         ) do
+      {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, data} when is_map(data) ->
             %{
@@ -143,7 +148,7 @@ defmodule Compendium.Registry.Identity do
             %{slug: slug, role: "member", last_used_at: nil, kind: classify(slug)}
         end
 
-      {:ok, %Finch.Response{status: status}} when status in 401..403 ->
+      {:ok, status, _headers, _body} when status in 401..403 ->
         # Token revoked or namespace ownership lost — drop this entry.
         nil
 

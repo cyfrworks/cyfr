@@ -6,14 +6,8 @@ defmodule Compendium.OCI.CacheTest do
 
   alias Compendium.OCI.Cache
 
-  setup do
-    # Cache.cache_dir/0 derives its path from the Arca-local base path (a
-    # per-run tmp dir in tests); there is no separate cache-dir setting.
-    %{cache_dir: Cache.cache_dir()}
-  end
-
   describe "blob operations" do
-    test "put and get blob", %{cache_dir: _dir} do
+    test "put and get blob" do
       content = :crypto.strong_rand_bytes(256)
       digest = Compendium.OCI.Blob.compute_digest(content)
 
@@ -33,21 +27,21 @@ defmodule Compendium.OCI.CacheTest do
     end
 
     test "detects corrupted cache entries" do
-      # Store a blob, then corrupt the file
       content = "test content"
       digest = Compendium.OCI.Blob.compute_digest(content)
       Cache.put_blob(digest, content)
 
-      # Corrupt the file
-      "sha256:" <> hex = digest
-      blob_path = Path.join([Cache.cache_dir(), "blobs", "sha256", hex])
-      File.write!(blob_path, "corrupted data")
+      # `put_blob/2` writes whatever bytes it is given at the path the digest
+      # names — it does not verify them — so storing the wrong content under a
+      # digest IS the corruption, without reaching around Arca for a real path.
+      Cache.put_blob(digest, "corrupted data")
 
-      # Should detect corruption and return :miss
       assert :miss = Cache.get_blob(digest)
-      # Corrupt file should be removed
-      refute File.exists?(blob_path)
+      # The corrupt entry is removed on detection, not left to be re-read.
+      refute Arca.exists?(Sanctum.system_context(), blob_segments(digest))
     end
+
+    defp blob_segments("sha256:" <> hex), do: ["cache", "oci", "blobs", "sha256", hex]
   end
 
   describe "manifest operations" do

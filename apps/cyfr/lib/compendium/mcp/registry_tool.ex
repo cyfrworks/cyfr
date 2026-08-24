@@ -64,7 +64,7 @@ defmodule Compendium.MCP.RegistryTool do
         {:ok,
          %{
            "needs_policy_acceptance" => true,
-           "required_policy_version" => required_policy_version(err),
+           "required_policy_version" => Compendium.OCI.Errors.required_version(err),
            "needs_personal_namespace" => false
          }}
 
@@ -416,21 +416,6 @@ defmodule Compendium.MCP.RegistryTool do
   end
 
   defp maybe_store_probe_credentials(_ctx, body), do: body
-
-  # Lifts `required_version` out of an Errors struct's detail. The detail
-  # shape depends on which builder produced the error:
-  #   - Errors.from_response/3 puts {required_version: v} directly into detail
-  #   - Errors.from_api_response/3 wraps it: %{operation: op, original_detail: %{required_version: v}}
-  # Both keying styles (atom + string) are checked. Mirrors the extraction
-  # logic in Sanctum.Auth.DeviceFlow.probe_after_session/3.
-  defp required_policy_version(%Compendium.OCI.Errors{detail: detail}),
-    do: dig_required_version(detail)
-
-  defp dig_required_version(%{required_version: v}) when is_binary(v), do: v
-  defp dig_required_version(%{"required_version" => v}) when is_binary(v), do: v
-  defp dig_required_version(%{original_detail: inner}), do: dig_required_version(inner)
-  defp dig_required_version(%{"original_detail" => inner}), do: dig_required_version(inner)
-  defp dig_required_version(_), do: nil
 
   # ============================================================================
   # Abuse-report + admin helpers

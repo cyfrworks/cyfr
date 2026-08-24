@@ -20,6 +20,11 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert json_response(conn, 404)["error"] == "unknown_provider"
       assert json_response(conn, 404)["message"] =~ "OAuth provider not configured"
     end
+
+    test "GET /auth/github without web-callback credentials is 404, not 500", %{conn: conn} do
+      conn = get(conn, ~p"/auth/github")
+      assert json_response(conn, 404)["error"] == "unknown_provider"
+    end
   end
 
   describe "callback/2" do
@@ -391,7 +396,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
     end
 
-    test "probe 401 for a first-time person: no session, bounce to /auth/<provider>",
+    test "probe 401 for a first-time person: no session, bounce to /login",
          %{conn: conn, bypass: bypass} do
       uid = "auth_cb_401_#{System.unique_integer([:positive])}"
       user_id = "github|https://github.com|#{uid}"
@@ -402,7 +407,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       conn = callback(conn, verified_github_auth(uid, token: "expired_token"))
 
-      assert redirected_to(conn) =~ ~r{^/auth/github}
+      assert redirected_to(conn) == "/login"
       refute session_of(conn)
       assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
     end

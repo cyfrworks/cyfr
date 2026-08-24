@@ -577,10 +577,9 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
   #
   # Uses the `Sanctum.Auth.Finch` pool (started in `Cyfr.Application`) for
-  # outbound GitHub / Google OAuth calls. The pool is distinct from
-  # `Compendium.Finch` so the auth sliver's only permitted edge into
-  # Compendium stays the post-`Session.create/1` probe + CredentialStore.put
-  # handoff — OAuth userinfo HTTP rides its own pool, not Compendium's.
+  # outbound GitHub / Google OAuth calls, so the auth sliver's only permitted
+  # edge into Compendium stays the post-`Session.create/1` probe +
+  # CredentialStore.put handoff.
   #
   # Success responses are parsed as JSON. Non-2xx responses are also parsed
   # as JSON when possible because OAuth surfaces structured errors

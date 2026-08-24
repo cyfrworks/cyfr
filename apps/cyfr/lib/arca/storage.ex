@@ -16,13 +16,6 @@ defmodule Arca.Storage do
   behaves identically on the local filesystem and on a configured object-store
   adapter.
 
-  Known divergence: `append/3` + `get/2` do not round-trip identically. Local
-  appends into one file that `get/2` returns whole; S3 writes an immutable
-  child object per append under the path-as-prefix, and `get/2` on that path
-  returns `{:error, :not_found}` (enumerate via `list/2` instead). The only
-  append caller today is the audit log, which never reads back through
-  `get/2` — a future append-then-get caller must go through `list/2`.
-
   The `arca-seam` CI job (`.github/workflows/test.yml`) greps for direct
   filesystem calls and fails when a file makes one without carrying an
   `# arca:bypass-ok=<group>` tag. To intentionally bypass, mark the call with a
@@ -236,14 +229,35 @@ defmodule Arca.Storage do
   @doc "Write content to storage (overwrites existing)"
   @callback put(Context.t(), path(), binary()) :: :ok | error()
 
-  @doc "Append content to storage (for append-only logs like audit/*.jsonl)"
+  @doc """
+  Append content to storage, creating the path when it does not exist.
+
+  `get/2` returns the whole object afterwards, on every adapter. An adapter
+  with no atomic append implements this as a read-modify-write, where
+  concurrent appends to one path are last-writer-wins and an oversized object
+  is refused; the local filesystem's `O_APPEND` write has neither limit.
+  """
   @callback append(Context.t(), path(), binary()) :: :ok | error()
 
   @doc "Delete content from storage"
   @callback delete(Context.t(), path()) :: :ok | error()
 
-  @doc "List contents at path prefix"
+  @doc "List the names directly under a path prefix"
   @callback list(Context.t(), path()) :: {:ok, [String.t()]} | error()
+
+  @doc """
+  List the entries directly under a path prefix, each with its kind.
+
+  The kind is the adapter's to know: on a filesystem it is a stat, on an
+  object store it is whether the key has anything below it. A caller that
+  needs to tell a directory from a file asks here rather than reaching for a
+  particular adapter's path layout.
+
+  A path that is itself a file answers `{:error, :enotdir}` on every adapter;
+  a path with nothing under it answers `{:ok, []}`.
+  """
+  @callback list_typed(Context.t(), path()) ::
+              {:ok, [{String.t(), :file | :dir}]} | error()
 
   @doc "Check if path exists"
   @callback exists?(Context.t(), path()) :: boolean()

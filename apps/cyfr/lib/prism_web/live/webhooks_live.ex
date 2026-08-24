@@ -51,7 +51,7 @@ defmodule PrismWeb.WebhooksLive do
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:webhooks", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.webhooks(ctx))
       send(self(), :load_data)
       {:noreply, assign(socket, :loading, true)}
     else

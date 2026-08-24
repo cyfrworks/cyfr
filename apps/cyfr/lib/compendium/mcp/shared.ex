@@ -87,6 +87,12 @@ defmodule Compendium.MCP.Shared do
     if hint != "", do: "#{msg}. #{hint}", else: msg
   end
 
+  # The access-token endpoints answer a 401 with this bare atom rather than an
+  # `Errors` struct: the IdP token is spent, and only a fresh OAuth round-trip
+  # helps — a re-probe with the same token never will.
+  def to_error_string(:invalid_access_token),
+    do: "the provider access token expired or was revoked — sign in again"
+
   def to_error_string(err) when is_binary(err), do: err
   def to_error_string(err), do: inspect(err)
 

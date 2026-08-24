@@ -134,14 +134,30 @@ defmodule Arca.Adapters.Local do
 
   @impl true
   def list(%Context{} = ctx, path) do
+    with {:ok, entries} <- list_typed(ctx, path) do
+      {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
+    end
+  end
+
+  @impl true
+  def list_typed(%Context{} = ctx, path) do
     full_path = build_path(ctx, path)
 
     case File.ls(full_path) do
-      {:ok, files} -> {:ok, files}
-      {:error, :enoent} -> {:ok, []}
-      {:error, reason} -> {:error, reason}
+      {:ok, names} ->
+        # On a filesystem the kind is a stat, and the adapter is the only layer
+        # entitled to make one — which is the point of the callback.
+        {:ok, Enum.map(names, &{&1, kind(Path.join(full_path, &1))})}
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp kind(path), do: if(File.dir?(path), do: :dir, else: :file)
 
   @impl true
   def exists?(%Context{} = ctx, path) do

@@ -34,6 +34,8 @@ defmodule PrismWeb.TopbarLive do
 
   use PrismWeb, :live_view
 
+  alias Prism.Topics
+
   require Logger
 
   @recent_requests_limit 5
@@ -101,13 +103,13 @@ defmodule PrismWeb.TopbarLive do
   # The live indicators are dev's: their fan-in is subscribed only there.
   defp subscribe_indicators(ctx) do
     for topic <- [
-          "prism:requests",
-          "prism:executions",
-          "prism:schedules",
-          "prism:builds",
-          "prism:tinctures"
+          Topics.requests(ctx),
+          Topics.executions(ctx),
+          Topics.schedule_runs(ctx),
+          Topics.builds(ctx),
+          Topics.tinctures(ctx)
         ] do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic(topic, ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
     end
   end
 

@@ -104,4 +104,31 @@ defmodule Compendium.OCI.ErrorsTest do
                "Component taken down on registry.cyfr.run (HTTP 410, taken_down)"
     end
   end
+
+  describe "required_version/1" do
+    @mismatch Jason.encode!(%{
+                "errors" => [%{"code" => "POLICY_VERSION_MISMATCH"}],
+                "required_version" => "2026-08-01"
+              })
+
+    test "reads the version a 412 names" do
+      err = Errors.from_response(412, @mismatch, "cyfr.run")
+
+      assert err.reason == :policy_version_mismatch
+      assert Errors.required_version(err) == "2026-08-01"
+    end
+
+    test "reads it through the wrapper from_api_response/3 adds" do
+      # The API builder replaces `detail` with %{operation:, original_detail:},
+      # so a flat read of detail[:required_version] finds nothing here.
+      err = Errors.from_api_response(412, @mismatch, "accept_policies")
+
+      refute err.detail[:required_version]
+      assert Errors.required_version(err) == "2026-08-01"
+    end
+
+    test "is nil when the error names no version" do
+      assert Errors.required_version(Errors.from_response(500, "", "cyfr.run")) == nil
+    end
+  end
 end

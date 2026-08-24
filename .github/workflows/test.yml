@@ -177,6 +177,52 @@ jobs:
             exit 1
           fi
 
+  config-seam:
+    name: Config keys (no compile-time/runtime split)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # A key read with `Application.compile_env` is frozen when the module is
+      # compiled; the same key read or written at runtime elsewhere silently
+      # disagrees with it. That is invisible until something behaves one way in
+      # one place and another way somewhere else — the shape that had a test
+      # asserting against a registry host the code under test never used.
+      #
+      # A key that genuinely needs both — Ecto cannot swap adapters at runtime;
+      # a test that generates its cases from a roster must read that roster at
+      # compile time — says so with `# config:compile-runtime-ok` on every one
+      # of its compile_env lines.
+      - name: Keys read at compile time must not also be read at runtime
+        run: |
+          set -uo pipefail
+          keys="$(mktemp)"
+          failures="$(mktemp)"
+          git grep -hoE 'compile_env\(:cyfr, *:[a-z_0-9]+' -- 'apps/**/*.ex' 'apps/**/*.exs' \
+            | sed 's/.*:cyfr, *://' | sort -u > "$keys"
+
+          while IFS= read -r key; do
+            [ -n "$key" ] || continue
+            # Exempt when every file that compile_env's this key carries the
+            # tag, the same file-level shape the arca-seam job uses.
+            untagged=$(git grep -lE "compile_env\(:cyfr, *:${key}[^a-z_0-9]" -- 'apps/**/*.ex' 'apps/**/*.exs' \
+              | while IFS= read -r f; do
+                  grep -q 'config:compile-runtime-ok' "$f" || echo "$f"
+                done)
+            [ -z "$untagged" ] && continue
+
+            runtime=$(git grep -nE "Application\.(get_env|fetch_env!?|put_env)\(:cyfr, *:${key}[^a-z_0-9]" -- 'apps/**/*.ex' 'apps/**/*.exs' || true)
+            if [ -n "$runtime" ]; then
+              echo "::error::config key :${key} is read with compile_env AND at runtime — one of them will be stale" >> "$failures"
+              echo "$runtime" >> "$failures"
+            fi
+          done < "$keys"
+
+          if [ -s "$failures" ]; then
+            cat "$failures"
+            echo "Read the key one way, or tag every compile_env line for it # config:compile-runtime-ok with the reason."
+            exit 1
+          fi
+
   vocabulary-gate:
     name: No org/project fossils (one tenancy vocabulary)
     runs-on: ubuntu-latest

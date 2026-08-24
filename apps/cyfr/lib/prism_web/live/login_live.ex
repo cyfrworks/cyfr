@@ -3,14 +3,23 @@
 
 defmodule PrismWeb.LoginLive do
   @moduledoc """
-  The sign-in page: one button per configured provider, each leading to
-  the web OAuth flow (`GET /auth/:provider`) whose callback sets the one
-  cookie session this origin has. A refused sign-in never reaches here — the
-  door answers 403 on the callback; a signed-in person who has no athanor
-  yet is told so.
+  The sign-in page. GitHub and Google use device flow on this page
+  (`Sanctum.Auth.DeviceFlow`); a configured OIDC issuer still kicks off
+  through `GET /auth/oidcc`. A completed device flow hands a one-time
+  ticket to `GET /auth/device/complete/:ticket`, which sets the cookie
+  session this origin has.
+
+  A refused sign-in never reaches a session — the door answers on the
+  poll; a signed-in person who has no athanor yet is told so.
   """
 
   use PrismWeb, :live_view
+
+  alias Sanctum.Auth.DeviceFlow
+  require Logger
+
+  @ticket_ttl_ms 60_000
+  @default_poll_interval_s 5
 
   @impl true
   def mount(params, _session, socket) do
@@ -18,11 +27,180 @@ defmodule PrismWeb.LoginLive do
      socket
      |> assign(:page_title, "Sign in")
      |> assign(:providers, available_providers())
+     |> assign(:login_state, :idle)
+     |> assign(:provider, nil)
+     |> assign(:user_code, nil)
+     |> assign(:verification_uri, nil)
+     |> assign(:device_code, nil)
+     |> assign(:poll_interval, @default_poll_interval_s)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
-  # The built-in provider offers GitHub and Google; a deployment with its own
-  # OIDC issuer authenticates through `/auth/oidcc`.
+  @impl true
+  def handle_event("start", %{"provider" => provider}, socket)
+      when provider in ["github", "google"] do
+    if socket.assigns.login_state == :waiting do
+      {:noreply, socket}
+    else
+      provider_atom = String.to_existing_atom(provider)
+
+      case device_flow().init_device_flow(provider_atom) do
+        {:ok, info} ->
+          if connected?(socket), do: schedule_poll(info.interval)
+
+          {:noreply,
+           socket
+           |> assign(:login_state, :waiting)
+           |> assign(:provider, provider_atom)
+           |> assign(:user_code, info.user_code)
+           |> assign(:verification_uri, info.verification_uri)
+           |> assign(:device_code, info.device_code)
+           |> assign(:poll_interval, info.interval || @default_poll_interval_s)
+           |> assign(:error, nil)}
+
+        {:error, {:client_id_not_configured, p}} ->
+          {:noreply, assign(socket, :error, "#{p} is not configured on this server.")}
+
+        {:error, {:device_code_error, code}} ->
+          Logger.warning("[LoginLive] device-flow init rejected: #{inspect(code)}")
+
+          {:noreply,
+           assign(
+             socket,
+             :error,
+             "Device flow was rejected (#{code}). For Google, the OAuth client must be type \"TV and Limited Input devices\"."
+           )}
+
+        {:error, reason} ->
+          Logger.warning("[LoginLive] device-flow init failed: #{inspect(reason)}")
+          {:noreply, assign(socket, :error, "Couldn't start sign-in. Try again in a moment.")}
+      end
+    end
+  end
+
+  def handle_event("start", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel", _params, socket) do
+    {:noreply, assign_idle(socket, nil)}
+  end
+
+  @impl true
+  def handle_info(:login_poll, socket) do
+    case socket.assigns.login_state do
+      :waiting ->
+        finish_poll(
+          socket,
+          device_flow().poll_for_session(socket.assigns.provider, socket.assigns.device_code)
+        )
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  defp finish_poll(socket, {:ok, %{status: "pending"} = result}) do
+    interval =
+      if result[:slow_down],
+        do: max(socket.assigns.poll_interval, @default_poll_interval_s) + 5,
+        else: socket.assigns.poll_interval
+
+    schedule_poll(interval)
+    {:noreply, socket}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "complete", reauthenticate: true}}) do
+    {:noreply,
+     assign_idle(
+       socket,
+       "Your login session expired during setup. Please try again."
+     )}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "complete", session_token: token} = result})
+       when is_binary(token) do
+    ticket = mint_ticket(result)
+    {:noreply, redirect(socket, to: ~p"/auth/device/complete/#{ticket}")}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "complete"}}) do
+    {:noreply, assign_idle(socket, "Sign-in could not create a session. Please try again.")}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "denied"}}) do
+    {:noreply, assign_idle(socket, Sanctum.Door.refusal_message())}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "expired"}}) do
+    {:noreply, assign_idle(socket, "Code expired. Please try again.")}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "registry_unavailable", message: message}}) do
+    {:noreply, assign_idle(socket, message)}
+  end
+
+  defp finish_poll(socket, {:ok, %{status: "error", message: message}}) do
+    {:noreply, assign_idle(socket, message)}
+  end
+
+  defp finish_poll(socket, {:error, {:client_id_not_configured, provider}}) do
+    {:noreply, assign_idle(socket, "#{provider} is not configured on this server.")}
+  end
+
+  defp finish_poll(socket, {:error, {:door, _reason}}) do
+    {:noreply, assign_idle(socket, Sanctum.Door.refusal_message())}
+  end
+
+  defp finish_poll(socket, {:error, reason}) do
+    Logger.warning("[LoginLive] device-flow poll failed: #{inspect(reason)}")
+    {:noreply, assign_idle(socket, "Couldn't complete sign-in. Try again in a moment.")}
+  end
+
+  defp mint_ticket(result) do
+    ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    payload = %{
+      session_token: result.session_token,
+      access_token: Map.get(result, :access_token),
+      next: next_from(result),
+      suggested_username: Map.get(result, :suggested_username)
+    }
+
+    Arca.Cache.put({:login_device_ticket, ticket}, payload, @ticket_ttl_ms)
+    ticket
+  end
+
+  defp next_from(%{needs_policy_acceptance: true}), do: :legal
+  defp next_from(%{needs_personal_namespace: true}), do: :claim
+  defp next_from(_), do: :home
+
+  defp assign_idle(socket, error) do
+    socket
+    |> assign(:login_state, :idle)
+    |> assign(:provider, nil)
+    |> assign(:user_code, nil)
+    |> assign(:verification_uri, nil)
+    |> assign(:device_code, nil)
+    |> assign(:error, error)
+  end
+
+  defp schedule_poll(interval_s) do
+    ms =
+      cond do
+        is_integer(interval_s) and interval_s >= 0 -> interval_s * 1_000
+        true -> @default_poll_interval_s * 1_000
+      end
+
+    Process.send_after(self(), :login_poll, ms)
+  end
+
+  defp device_flow do
+    Application.get_env(:cyfr, :device_flow, DeviceFlow)
+  end
+
+  # The built-in provider offers GitHub and Google device flow; a deployment
+  # with its own OIDC issuer authenticates through `/auth/oidcc`.
   defp available_providers do
     case Application.get_env(:cyfr, :auth_provider) do
       Sanctum.Auth.OIDC ->
@@ -35,8 +213,15 @@ defmodule PrismWeb.LoginLive do
 
   # App-env only: runtime.exs resolves CYFR_* through Dotenvy's merged .env
   # sources, which are not exported to the OS environment.
-  defp provider_configured?(:github), do: !!Application.get_env(:cyfr, :github_client_id)
-  defp provider_configured?(:google), do: !!Application.get_env(:cyfr, :google_client_id)
+  defp provider_configured?(:github), do: present?(Application.get_env(:cyfr, :github_client_id))
+
+  defp provider_configured?(:google) do
+    present?(Application.get_env(:cyfr, :google_client_id)) and
+      present?(Application.get_env(:cyfr, :google_client_secret))
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_), do: false
 
   # Map an auth redirect (`/login?error=<code>`) to a user-facing banner.
   defp error_from_params(%{"error" => "no_athanor"}),
@@ -94,11 +279,40 @@ defmodule PrismWeb.LoginLive do
 
           <h2 class="text-lg font-medium text-white text-center mb-4">Sign in to continue</h2>
 
-          <div :if={@providers == []} class="text-center text-gray-400 text-sm py-4">
+          <div :if={@login_state == :waiting} class="space-y-4">
+            <p class="text-sm text-gray-300 text-center">
+              Open
+              <a
+                href={@verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-indigo-400 hover:text-indigo-300"
+              >
+                {@verification_uri}
+              </a>
+              and enter:
+            </p>
+            <div class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-center">
+              <span class="font-mono text-2xl tracking-widest text-white">{@user_code}</span>
+            </div>
+            <.live_loading message="Waiting for authorization…" />
+            <button
+              type="button"
+              phx-click="cancel"
+              class="w-full px-4 py-2 text-sm text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div
+            :if={@login_state == :idle && @providers == []}
+            class="text-center text-gray-400 text-sm py-4"
+          >
             No providers configured. Set CYFR_GITHUB_CLIENT_ID or CYFR_GOOGLE_CLIENT_ID.
           </div>
 
-          <div class="flex flex-col gap-3">
+          <div :if={@login_state == :idle} class="flex flex-col gap-3">
             <.provider_button :for={provider <- @providers} provider={provider} />
           </div>
         </div>
@@ -109,8 +323,10 @@ defmodule PrismWeb.LoginLive do
 
   defp provider_button(%{provider: :github} = assigns) do
     ~H"""
-    <a
-      href={~p"/auth/github"}
+    <button
+      type="button"
+      phx-click="start"
+      phx-value-provider="github"
       class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition-colors cursor-pointer"
     >
       <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -121,14 +337,16 @@ defmodule PrismWeb.LoginLive do
         />
       </svg>
       <span>Sign in with GitHub</span>
-    </a>
+    </button>
     """
   end
 
   defp provider_button(%{provider: :google} = assigns) do
     ~H"""
-    <a
-      href={~p"/auth/google"}
+    <button
+      type="button"
+      phx-click="start"
+      phx-value-provider="google"
       class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-white hover:bg-gray-100 text-gray-800 rounded-lg border border-gray-300 transition-colors cursor-pointer"
     >
       <svg class="w-5 h-5" viewBox="0 0 24 24">
@@ -150,7 +368,7 @@ defmodule PrismWeb.LoginLive do
         />
       </svg>
       <span>Sign in with Google</span>
-    </a>
+    </button>
     """
   end
 

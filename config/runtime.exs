@@ -296,8 +296,9 @@ if config_env() != :test do
          |> Enum.reject(&(&1 == ""))
 
   # GitHub OAuth
-  # Device Flow (CLI) only needs client ID - no secret required
-  # Server-side OAuth (web login) requires both client ID and secret
+  # Device flow (CLI and Prism) only needs client ID — no secret.
+  # Ueberauth's leftover web-callback strategy is registered only when a
+  # secret is also set (otherwise GET /auth/github 500s inside the strategy).
   github_id = env!("CYFR_GITHUB_CLIENT_ID", :string, nil)
   github_secret = env!("CYFR_GITHUB_CLIENT_SECRET", :string, nil)
 
@@ -308,9 +309,10 @@ if config_env() != :test do
   end
 
   # Google OAuth
-  # Device Flow (CLI) and server-side OAuth (web login) BOTH require client
-  # ID + secret. Unlike GitHub, Google's device-flow token endpoint rejects
-  # exchanges that omit client_secret with {"error": "invalid_request"}.
+  # Device flow (CLI and Prism) requires client ID + secret: Google's
+  # device-flow token endpoint rejects exchanges that omit client_secret
+  # with {"error": "invalid_request"}. The leftover Ueberauth web-callback
+  # strategy uses the same pair.
   google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil)
   google_secret = env!("CYFR_GOOGLE_CLIENT_SECRET", :string, nil)
 
@@ -390,9 +392,6 @@ if config_env() != :test do
   # config setting `:cyfr, :auth_provider` to its own module. A deployment with
   # no credentials runs without sign-in: requests reach the public read-only
   # surface as an unauthenticated context (tenant-scoped routes are rejected).
-  github_configured? = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) != nil
-  google_configured? = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil) != nil
-
   # Set-or-default: an unset CYFR_AUTH_PROVIDER auto-detects from credentials;
   # an explicit value must be satisfiable or the boot fails — it never silently
   # degrades to no authentication.
@@ -417,14 +416,14 @@ if config_env() != :test do
   providers = []
 
   providers =
-    if github_configured? do
+    if github_id && github_secret do
       [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
     else
       providers
     end
 
   providers =
-    if google_configured? do
+    if google_id && google_secret do
       [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
     else
       providers

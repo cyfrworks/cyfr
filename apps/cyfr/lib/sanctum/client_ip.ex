@@ -38,6 +38,11 @@ defmodule Sanctum.ClientIp do
 
   import Plug.Conn, only: [get_req_header: 2]
 
+  # The shipped single-Caddy topology. Spelled once: the config default and
+  # the fallback a malformed `:trusted_proxy_hops` lands on are the same
+  # decision, and a deployment that changes one must change both.
+  @default_trusted_proxy_hops 1
+
   @spec resolve(Plug.Conn.t()) :: String.t()
   def resolve(%Plug.Conn{} = conn) do
     if trust_forwarded_header?() do
@@ -97,7 +102,7 @@ defmodule Sanctum.ClientIp do
     chain |> Enum.drop(-count) |> List.last()
   end
 
-  defp strip_hops(chain, _bad_config), do: strip_hops(chain, 1)
+  defp strip_hops(chain, _bad_config), do: strip_hops(chain, @default_trusted_proxy_hops)
 
   # Drop trailing hops that match a trusted IP/CIDR entry; the first
   # non-matching hop from the right is the client. If every hop is a trusted
@@ -110,7 +115,7 @@ defmodule Sanctum.ClientIp do
   end
 
   defp trusted_proxy_hops do
-    Application.get_env(:cyfr, :trusted_proxy_hops, 1)
+    Application.get_env(:cyfr, :trusted_proxy_hops, @default_trusted_proxy_hops)
   end
 
   defp trusted_proxy_cidrs do

@@ -6,14 +6,18 @@ defmodule Compendium.RegistryTest.FailingPutAdapter do
   # Delegates to the Local adapter but refuses to write `boom.txt` —
   # simulates an object-store write failing partway through a multi-file
   # tincture store.
+  @behaviour Arca.Storage
+
   defdelegate get(ctx, path), to: Arca.Adapters.Local
   defdelegate append(ctx, path, content), to: Arca.Adapters.Local
   defdelegate delete(ctx, path), to: Arca.Adapters.Local
   defdelegate list(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
   defdelegate exists?(ctx, path), to: Arca.Adapters.Local
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
   defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
   defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
+  defdelegate usage(ctx, path), to: Arca.Adapters.Local
   defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
   def put(ctx, path, content) do

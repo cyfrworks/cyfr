@@ -8,22 +8,15 @@ defmodule Prism.TelemetryBridge do
   Attaches to existing telemetry events and broadcasts to PubSub topics
   that LiveViews can subscribe to for real-time updates.
 
-  Topics are scoped per athanor via `Sanctum.PubSub.topic/2`, so a server
-  with many athanors isolates broadcasts to each athanor's subscribers.
-
-  ## Topics
-
-  - `prism:executions` — Execution lifecycle events
-  - `prism:requests` — MCP request events
-  - `prism:components` — Component install/remove events
-  - `prism:builds` — Locus build lifecycle events
-  - `prism:schedules` — Cron schedule firing events
-  - `prism:tinctures` — Tincture invoke lifecycle events
-  - `prism:enforcement` — Policy enforcement decisions (allow/deny audit trail)
+  The topics and the messages each one carries are named in `Prism.Topics`;
+  each is scoped to the athanor the event's metadata names, so a server with
+  many athanors isolates broadcasts to each athanor's subscribers.
   """
 
   use GenServer
   require Logger
+
+  alias Prism.Topics
 
   @pubsub Emissary.PubSub
 
@@ -66,47 +59,47 @@ defmodule Prism.TelemetryBridge do
   end
 
   def handle_event([:cyfr, :opus, :execute, :start], measurements, metadata, _config) do
-    safe_broadcast("prism:executions", metadata, {:execution_started, metadata, measurements})
+    safe_broadcast(&Topics.executions/1, metadata, {:execution_started, metadata, measurements})
   end
 
   def handle_event([:cyfr, :opus, :execute, :stop], measurements, metadata, _config) do
-    safe_broadcast("prism:executions", metadata, {:execution_completed, metadata, measurements})
+    safe_broadcast(&Topics.executions/1, metadata, {:execution_completed, metadata, measurements})
     safe_notify(metadata, :execution_finished)
   end
 
   def handle_event([:cyfr, :opus, :execute, :exception], measurements, metadata, _config) do
-    safe_broadcast("prism:executions", metadata, {:execution_failed, metadata, measurements})
+    safe_broadcast(&Topics.executions/1, metadata, {:execution_failed, metadata, measurements})
     safe_notify(metadata, :execution_failed)
   end
 
   def handle_event([:cyfr, :emissary, :request], measurements, metadata, _config) do
-    safe_broadcast("prism:requests", metadata, {:request, metadata, measurements})
+    safe_broadcast(&Topics.requests/1, metadata, {:request, metadata, measurements})
   end
 
   def handle_event([:cyfr, :sanctum, :policy, :decision], measurements, metadata, _config) do
-    safe_broadcast("prism:enforcement", metadata, {:policy_decision, metadata, measurements})
+    safe_broadcast(&Topics.enforcement/1, metadata, {:policy_decision, metadata, measurements})
   end
 
   def handle_event([:cyfr, :locus, :build, :start], measurements, metadata, _config) do
-    safe_broadcast("prism:builds", metadata, {:build_started, metadata, measurements})
+    safe_broadcast(&Topics.builds/1, metadata, {:build_started, metadata, measurements})
   end
 
   def handle_event([:cyfr, :locus, :build, :progress], measurements, metadata, _config) do
-    safe_broadcast("prism:builds", metadata, {:build_progress, metadata, measurements})
+    safe_broadcast(&Topics.builds/1, metadata, {:build_progress, metadata, measurements})
   end
 
   def handle_event([:cyfr, :locus, :build, :stop], measurements, metadata, _config) do
-    safe_broadcast("prism:builds", metadata, {:build_stopped, metadata, measurements})
+    safe_broadcast(&Topics.builds/1, metadata, {:build_stopped, metadata, measurements})
   end
 
   def handle_event([:cyfr, :opus, :schedule, :fired], measurements, metadata, _config) do
-    safe_broadcast("prism:schedules", metadata, {:schedule_fired, metadata, measurements})
+    safe_broadcast(&Topics.schedule_runs/1, metadata, {:schedule_fired, metadata, measurements})
   end
 
   # A schedule that could not run, or ran and failed — the one silent loss
   # the tray must show. The event always names the athanor.
   def handle_event([:cyfr, :opus, :schedule, :failed], measurements, metadata, _config) do
-    safe_broadcast("prism:schedules", metadata, {:schedule_failed, metadata, measurements})
+    safe_broadcast(&Topics.schedule_runs/1, metadata, {:schedule_failed, metadata, measurements})
 
     with athanor_id when is_binary(athanor_id) and athanor_id != "" <- metadata[:athanor_id] do
       Sanctum.Notify.broadcast(athanor_id, :schedule_failed, %{
@@ -120,11 +113,11 @@ defmodule Prism.TelemetryBridge do
   end
 
   def handle_event([:cyfr, :compendium, :component, :install], measurements, metadata, _config) do
-    safe_broadcast("prism:components", metadata, {:component_installed, metadata, measurements})
+    safe_broadcast(&Topics.components/1, metadata, {:component_installed, metadata, measurements})
   end
 
   def handle_event([:cyfr, :compendium, :component, :remove], measurements, metadata, _config) do
-    safe_broadcast("prism:components", metadata, {:component_removed, metadata, measurements})
+    safe_broadcast(&Topics.components/1, metadata, {:component_removed, metadata, measurements})
   end
 
   def handle_event(
@@ -134,7 +127,7 @@ defmodule Prism.TelemetryBridge do
         _config
       ) do
     safe_broadcast(
-      "prism:tinctures",
+      &Topics.tinctures/1,
       metadata,
       {:tincture_invoke_started, metadata, measurements}
     )
@@ -142,7 +135,7 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :emissary, :tincture, :invoke, :stop], measurements, metadata, _config) do
     safe_broadcast(
-      "prism:tinctures",
+      &Topics.tinctures/1,
       metadata,
       {:tincture_invoke_stopped, metadata, measurements}
     )
@@ -160,8 +153,8 @@ defmodule Prism.TelemetryBridge do
   # This is critical inside :telemetry handler callbacks — if the handler
   # raises, the telemetry library permanently detaches it and all Prism
   # dashboard live updates silently stop.
-  defp safe_broadcast(base_topic, metadata, message) do
-    case scoped_topic(base_topic, metadata) do
+  defp safe_broadcast(topic_fun, metadata, message) do
+    case scoped_topic(topic_fun, metadata) do
       {:ok, topic} ->
         case Phoenix.PubSub.broadcast(@pubsub, topic, message) do
           :ok ->
@@ -199,18 +192,12 @@ defmodule Prism.TelemetryBridge do
       :ok
   end
 
-  # Build a tenant-scoped topic from telemetry metadata.
-  #
-  # Produces a `tenant:<athanor_id>:<base>` topic so it matches the topics
-  # dashboard LiveViews subscribe to. An event whose metadata carries no
-  # athanor has no subscribers to reach and is dropped — there is no
-  # default athanor to route it to.
-  defp scoped_topic(base, metadata) do
+  # An event whose metadata carries no athanor has no subscribers to reach and
+  # is dropped — there is no default athanor to route it to.
+  defp scoped_topic(topic_fun, metadata) do
     case metadata[:athanor_id] do
       athanor_id when is_binary(athanor_id) and athanor_id != "" ->
-        # Topic-only, unauthenticated context — never reaches authz/storage.
-        ctx = Sanctum.Context.build(scope: :athanor, athanor_id: athanor_id, authenticated: false)
-        {:ok, Sanctum.PubSub.topic(base, ctx)}
+        {:ok, topic_fun.(athanor_id)}
 
       _ ->
         :skip

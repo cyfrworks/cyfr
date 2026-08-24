@@ -38,6 +38,32 @@ defmodule Compendium.Registry.CredentialStore do
   @valid_keys ~w(type token namespace issued_at label role)a
 
   @doc """
+  Human-readable label for the device this credential was issued to.
+
+  Precedence (first non-nil wins):
+
+  1. `:cyfr, :device_label` application env (test seam + ops override).
+  2. `CYFR_DEVICE_LABEL` OS env var (runtime override).
+  3. `:inet.gethostname/0` (the machine's configured hostname).
+  4. Literal `"cyfr-host"` fallback.
+
+  It rides along on every stored credential and on the token-minting requests
+  that produce them, so it is named here rather than at either call site.
+  Labels are NOT unique — two devices with the same hostname produce
+  duplicate-labeled tokens; distinguish by token id + `last_used_at` via
+  `cyfr registry tokens list <ns>`.
+  """
+  @spec device_label() :: String.t()
+  def device_label do
+    Application.get_env(:cyfr, :device_label) ||
+      System.get_env("CYFR_DEVICE_LABEL") ||
+      case :inet.gethostname() do
+        {:ok, host} -> to_string(host)
+        _ -> "cyfr-host"
+      end
+  end
+
+  @doc """
   Store a credential for a user, registry, and namespace.
 
       CredentialStore.put(
@@ -85,7 +111,7 @@ defmodule Compendium.Registry.CredentialStore do
       namespace: slug,
       role: role,
       issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      label: Compendium.Registry.Client.device_label()
+      label: device_label()
     }
 
     case put(user_id, registry, slug, cred) do

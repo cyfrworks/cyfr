@@ -22,11 +22,9 @@ defmodule Compendium.Registry.Client do
 
   alias Compendium.Registry, as: CompendiumRegistry
   alias Compendium.OCI.Errors
+  alias Compendium.Registry.CredentialStore
+  alias Compendium.Registry.Transport
   alias Sanctum.Context
-
-  @max_retries 3
-  @base_delay_ms 500
-  @receive_timeout 30_000
 
   # -- Public API --
 
@@ -109,9 +107,9 @@ defmodule Compendium.Registry.Client do
   def get_component(%Context{} = ctx, type, publisher, name, version \\ nil) do
     path =
       if version do
-        "/v1/components/#{URI.encode(type)}/#{URI.encode(publisher)}/#{URI.encode(name)}/#{URI.encode(version)}"
+        "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
       else
-        "/v1/components/#{URI.encode(type)}/#{URI.encode(publisher)}/#{URI.encode(name)}"
+        "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}"
       end
 
     case request(:get, path, [], nil, ctx) do
@@ -147,9 +145,9 @@ defmodule Compendium.Registry.Client do
   header — probe is a bootstrap call for users who don't have a push token yet.
   """
   @spec probe_identity(atom() | String.t(), String.t(), String.t() | nil) ::
-          {:ok, map()} | {:error, Errors.t()}
+          {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
   def probe_identity(provider, access_token, label \\ nil) do
-    label = label || device_label()
+    label = label || CredentialStore.device_label()
 
     body =
       Jason.encode!(%{
@@ -158,10 +156,10 @@ defmodule Compendium.Registry.Client do
         label: label
       })
 
-    headers = [{"content-type", "application/json"}]
-    url = api_base_url() <> "/v1/identity/probe"
+    headers = json_headers()
+    url = url("/v1/identity/probe")
 
-    case do_request(:post, url, headers, body, 0) do
+    case Transport.request(:post, url, headers, body) do
       {:ok, 200, _h, resp_body} ->
         parse_json_body(resp_body, "probe_identity")
 
@@ -191,9 +189,9 @@ defmodule Compendium.Registry.Client do
           atom() | String.t(),
           String.t(),
           String.t() | nil
-        ) :: {:ok, map()} | {:error, Errors.t()}
+        ) :: {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
   def claim_personal_namespace(username, provider, access_token, label \\ nil) do
-    label = label || device_label()
+    label = label || CredentialStore.device_label()
 
     body =
       Jason.encode!(%{
@@ -203,10 +201,10 @@ defmodule Compendium.Registry.Client do
         label: label
       })
 
-    headers = [{"content-type", "application/json"}]
-    url = api_base_url() <> "/v1/namespaces/personal/claim"
+    headers = json_headers()
+    url = url("/v1/namespaces/personal/claim")
 
-    do_request(:post, url, headers, body, 0)
+    Transport.request(:post, url, headers, body)
     |> interpret_access_token_response("claim_personal_namespace")
     |> tap(&log_token_returning_result("claim_personal_namespace", &1))
   end
@@ -223,13 +221,12 @@ defmodule Compendium.Registry.Client do
     body =
       Jason.encode!(%{slug: slug})
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url = api_base_url() <> "/v1/namespaces/publisher/claim"
-    do_request(:post, url, headers, body, 0) |> interpret_response("claim_publisher_namespace")
+    url = url("/v1/namespaces/publisher/claim")
+
+    Transport.request(:post, url, headers, body)
+    |> interpret_response("claim_publisher_namespace")
   end
 
   @doc """
@@ -243,14 +240,11 @@ defmodule Compendium.Registry.Client do
   def verify_publisher_namespace(slug, bearer_token) do
     body = Jason.encode!(%{slug: slug})
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url = api_base_url() <> "/v1/namespaces/publisher/verify"
+    url = url("/v1/namespaces/publisher/verify")
 
-    do_request(:post, url, headers, body, 0)
+    Transport.request(:post, url, headers, body)
     |> interpret_response("verify_publisher_namespace")
     |> tap(&log_token_returning_result("verify_publisher_namespace", &1))
   end
@@ -260,8 +254,8 @@ defmodule Compendium.Registry.Client do
   """
   @spec get_namespace(String.t()) :: {:ok, map()} | {:error, Errors.t()}
   def get_namespace(slug) do
-    url = api_base_url() <> "/v1/namespaces/#{URI.encode(slug)}"
-    do_request(:get, url, [], nil, 0) |> interpret_response("get_namespace")
+    url = url("/v1/namespaces/#{seg(slug)}")
+    Transport.request(:get, url, [], nil) |> interpret_response("get_namespace")
   end
 
   @doc """
@@ -275,9 +269,9 @@ defmodule Compendium.Registry.Client do
   """
   @spec list_tokens(String.t(), String.t()) :: {:ok, map()} | {:error, Errors.t()}
   def list_tokens(slug, bearer_token) do
-    headers = [{"authorization", "Bearer #{bearer_token}"}]
-    url = api_base_url() <> "/v1/namespaces/#{URI.encode(slug)}/tokens"
-    do_request(:get, url, headers, nil, 0) |> interpret_response("list_tokens")
+    headers = bearer(bearer_token)
+    url = url("/v1/namespaces/#{seg(slug)}/tokens")
+    Transport.request(:get, url, headers, nil) |> interpret_response("list_tokens")
   end
 
   @doc """
@@ -286,17 +280,14 @@ defmodule Compendium.Registry.Client do
   @spec issue_additional_token(String.t(), String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, Errors.t()}
   def issue_additional_token(slug, bearer_token, label \\ nil) do
-    label = label || device_label()
+    label = label || CredentialStore.device_label()
     body = Jason.encode!(%{label: label})
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url = api_base_url() <> "/v1/namespaces/#{URI.encode(slug)}/tokens"
+    url = url("/v1/namespaces/#{seg(slug)}/tokens")
 
-    do_request(:post, url, headers, body, 0)
+    Transport.request(:post, url, headers, body)
     |> interpret_response("issue_additional_token")
     |> tap(&log_token_returning_result("issue_additional_token", &1))
   end
@@ -306,10 +297,10 @@ defmodule Compendium.Registry.Client do
   """
   @spec revoke_token(String.t(), String.t(), String.t()) :: :ok | {:error, Errors.t()}
   def revoke_token(slug, token_id, bearer_token) do
-    headers = [{"authorization", "Bearer #{bearer_token}"}]
-    url = api_base_url() <> "/v1/namespaces/#{URI.encode(slug)}/tokens/#{URI.encode(token_id)}"
+    headers = bearer(bearer_token)
+    url = url("/v1/namespaces/#{seg(slug)}/tokens/#{seg(token_id)}")
 
-    case do_request(:delete, url, headers, nil, 0) do
+    case Transport.request(:delete, url, headers, nil) do
       {:ok, status, _h, _body} when status in 200..299 -> :ok
       {:ok, status, _h, body} -> {:error, Errors.from_api_response(status, body, "revoke_token")}
       {:error, %Errors{} = err} -> {:error, err}
@@ -324,13 +315,10 @@ defmodule Compendium.Registry.Client do
   def add_member(slug, target_personal_slug, role, bearer_token) do
     body = Jason.encode!(%{target_personal_slug: target_personal_slug, role: role})
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url = api_base_url() <> "/v1/namespaces/#{URI.encode(slug)}/members"
-    do_request(:post, url, headers, body, 0) |> interpret_response("add_member")
+    url = url("/v1/namespaces/#{seg(slug)}/members")
+    Transport.request(:post, url, headers, body) |> interpret_response("add_member")
   end
 
   @doc """
@@ -341,16 +329,11 @@ defmodule Compendium.Registry.Client do
   def update_member(slug, target_personal_slug, role, bearer_token) do
     body = Jason.encode!(%{role: role})
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url =
-      api_base_url() <>
-        "/v1/namespaces/#{URI.encode(slug)}/members/#{URI.encode(target_personal_slug)}"
+    url = url("/v1/namespaces/#{seg(slug)}/members/#{seg(target_personal_slug)}")
 
-    do_request(:patch, url, headers, body, 0) |> interpret_response("update_member")
+    Transport.request(:patch, url, headers, body) |> interpret_response("update_member")
   end
 
   @doc """
@@ -360,13 +343,11 @@ defmodule Compendium.Registry.Client do
   """
   @spec remove_member(String.t(), String.t(), String.t()) :: :ok | {:error, Errors.t()}
   def remove_member(slug, target_personal_slug, bearer_token) do
-    headers = [{"authorization", "Bearer #{bearer_token}"}]
+    headers = bearer(bearer_token)
 
-    url =
-      api_base_url() <>
-        "/v1/namespaces/#{URI.encode(slug)}/members/#{URI.encode(target_personal_slug)}"
+    url = url("/v1/namespaces/#{seg(slug)}/members/#{seg(target_personal_slug)}")
 
-    case do_request(:delete, url, headers, nil, 0) do
+    case Transport.request(:delete, url, headers, nil) do
       {:ok, status, _h, _body} when status in 200..299 -> :ok
       {:ok, status, _h, body} -> {:error, Errors.from_api_response(status, body, "remove_member")}
       {:error, %Errors{} = err} -> {:error, err}
@@ -379,9 +360,9 @@ defmodule Compendium.Registry.Client do
   """
   @spec list_members(String.t(), String.t()) :: {:ok, map()} | {:error, Errors.t()}
   def list_members(slug, bearer_token) do
-    headers = [{"authorization", "Bearer #{bearer_token}"}]
-    url = api_base_url() <> "/v1/namespaces/#{URI.encode(slug)}/members"
-    do_request(:get, url, headers, nil, 0) |> interpret_response("list_members")
+    headers = bearer(bearer_token)
+    url = url("/v1/namespaces/#{seg(slug)}/members")
+    Transport.request(:get, url, headers, nil) |> interpret_response("list_members")
   end
 
   # -- Component status moderation (deprecate / yank) --
@@ -430,16 +411,11 @@ defmodule Compendium.Registry.Client do
   defp transition_component_status(slug, type, name, version, action, reason, bearer_token) do
     body = Jason.encode!(%{reason: reason})
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url =
-      api_base_url() <>
-        "/v1/components/#{URI.encode(slug)}/#{URI.encode(type)}/#{URI.encode(name)}/#{URI.encode(version)}/#{action}"
+    url = url("/v1/components/#{seg(slug)}/#{seg(type)}/#{seg(name)}/#{seg(version)}/#{action}")
 
-    do_request(:post, url, headers, body, 0)
+    Transport.request(:post, url, headers, body)
     |> interpret_response("#{action}_component")
   end
 
@@ -468,13 +444,10 @@ defmodule Compendium.Registry.Client do
         details: details
       })
 
-    headers = [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = json_headers() ++ bearer(bearer_token)
 
-    url = api_base_url() <> "/v1/abuse-reports"
-    do_request(:post, url, headers, body, 0) |> interpret_response("create_abuse_report")
+    url = url("/v1/abuse-reports")
+    Transport.request(:post, url, headers, body) |> interpret_response("create_abuse_report")
   end
 
   @doc """
@@ -497,12 +470,10 @@ defmodule Compendium.Registry.Client do
         "offset" => Integer.to_string(offset)
       })
 
-    headers = [
-      {"authorization", "Bearer #{bearer_token}"}
-    ]
+    headers = bearer(bearer_token)
 
-    url = api_base_url() <> "/v1/abuse-reports/mine?" <> query
-    do_request(:get, url, headers, "", 0) |> interpret_response("list_my_reports")
+    url = url("/v1/abuse-reports/mine?" <> query)
+    Transport.request(:get, url, headers, "") |> interpret_response("list_my_reports")
   end
 
   @doc """
@@ -514,8 +485,8 @@ defmodule Compendium.Registry.Client do
   """
   @spec get_legal_page(String.t()) :: {:ok, map()} | {:error, Errors.t()}
   def get_legal_page(name) when is_binary(name) do
-    url = api_base_url() <> "/v1/legal/" <> URI.encode(name)
-    do_request(:get, url, [], "", 0) |> interpret_response("get_legal_page")
+    url = url("/v1/legal/" <> seg(name))
+    Transport.request(:get, url, [], "") |> interpret_response("get_legal_page")
   end
 
   @doc """
@@ -525,8 +496,8 @@ defmodule Compendium.Registry.Client do
   """
   @spec get_legal_version() :: {:ok, map()} | {:error, Errors.t()}
   def get_legal_version do
-    url = api_base_url() <> "/v1/legal/version"
-    do_request(:get, url, [], "", 0) |> interpret_response("get_legal_version")
+    url = url("/v1/legal/version")
+    Transport.request(:get, url, [], "") |> interpret_response("get_legal_version")
   end
 
   @doc """
@@ -551,7 +522,7 @@ defmodule Compendium.Registry.Client do
           String.t() | nil,
           String.t() | nil,
           String.t()
-        ) :: {:ok, map()} | {:error, Errors.t()}
+        ) :: {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
   def accept_policies(provider, access_token, id_token, policy_version) do
     body =
       Jason.encode!(%{
@@ -561,9 +532,11 @@ defmodule Compendium.Registry.Client do
         policy_version: policy_version
       })
 
-    headers = [{"content-type", "application/json"}]
-    url = api_base_url() <> "/v1/legal/accept"
-    do_request(:post, url, headers, body, 0) |> interpret_access_token_response("accept_policies")
+    headers = json_headers()
+    url = url("/v1/legal/accept")
+
+    Transport.request(:post, url, headers, body)
+    |> interpret_access_token_response("accept_policies")
   end
 
   @doc """
@@ -571,6 +544,10 @@ defmodule Compendium.Registry.Client do
   drives the OAuth round-trip (DeviceFlow) itself and posts the
   resulting access_token here. cyfr.run verifies via provider userinfo
   and binds to the action's rightful appellant.
+
+  Like the other endpoints that carry an IdP token in the body, a 401 here
+  means that token is spent, not that the appeal was refused — it surfaces as
+  `{:error, :invalid_access_token}` so the caller re-authenticates.
   """
   @spec create_appeal(
           String.t(),
@@ -579,7 +556,7 @@ defmodule Compendium.Registry.Client do
           String.t(),
           String.t(),
           String.t()
-        ) :: {:ok, map()} | {:error, Errors.t()}
+        ) :: {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
   def create_appeal(provider, access_token, id_token, action_type, action_ref, argument) do
     body =
       Jason.encode!(%{
@@ -591,17 +568,28 @@ defmodule Compendium.Registry.Client do
         argument: argument
       })
 
-    headers = [{"content-type", "application/json"}]
-    url = api_base_url() <> "/v1/appeals"
-    do_request(:post, url, headers, body, 0) |> interpret_response("create_appeal")
+    headers = json_headers()
+    url = url("/v1/appeals")
+
+    Transport.request(:post, url, headers, body)
+    |> interpret_access_token_response("create_appeal")
   end
 
   # -- Transport --
 
+  defp seg(value), do: Transport.path_segment(value)
+
+  # The three shapes every endpoint builds. Spelled once so a new endpoint
+  # cannot reach a different host, or send a bearer the log redaction and the
+  # `auth_headers/1` lookup do not know about.
+  defp url(path), do: api_base_url() <> path
+  defp bearer(token), do: [{"authorization", "Bearer #{token}"}]
+  defp json_headers, do: [{"content-type", "application/json"}]
+
   defp request(method, path, extra_headers, body, ctx) do
-    url = api_base_url() <> path
+    url = url(path)
     headers = auth_headers(ctx) ++ extra_headers
-    do_request(method, url, headers, body, 0)
+    Transport.request(method, url, headers, body)
   end
 
   defp interpret_response({:ok, status, _h, body}, op) when status in 200..299 do
@@ -642,31 +630,6 @@ defmodule Compendium.Registry.Client do
     end
   end
 
-  @doc """
-  Human-readable label for the device issuing this probe / token request.
-
-  Precedence (first non-nil wins):
-
-  1. `:cyfr, :device_label` application env (test seam + ops override).
-  2. `CYFR_DEVICE_LABEL` OS env var (runtime override).
-  3. `:inet.gethostname/0` (the machine's configured hostname).
-  4. Literal `"cyfr-host"` fallback.
-
-  Shared single source of truth across `DeviceFlow`, `AuthController`, and
-  `ClaimNamespaceController`. Labels are NOT unique — two devices with the
-  same hostname produce duplicate-labeled tokens; distinguish by token id +
-  `last_used_at` via `cyfr registry tokens list <ns>`.
-  """
-  @spec device_label() :: String.t()
-  def device_label do
-    Application.get_env(:cyfr, :device_label) ||
-      System.get_env("CYFR_DEVICE_LABEL") ||
-      case :inet.gethostname() do
-        {:ok, host} -> to_string(host)
-        _ -> "cyfr-host"
-      end
-  end
-
   # Wraps calls to token-returning endpoints so we never log raw tokens.
   # Phoenix's :filter_parameters only covers inbound request params; outbound
   # response bodies must be redacted explicitly.
@@ -698,79 +661,6 @@ defmodule Compendium.Registry.Client do
 
   defp redact(list) when is_list(list), do: Enum.map(list, &redact/1)
   defp redact(other), do: other
-
-  defp do_request(_method, _url, _headers, _body, attempt) when attempt >= @max_retries do
-    Logger.error(
-      "[Compendium.Registry.Client] All #{@max_retries} retries exhausted for cyfr.run API"
-    )
-
-    {:error, Errors.api_connection_error(:max_retries_exceeded)}
-  end
-
-  defp do_request(method, url, headers, body, attempt) do
-    req =
-      Finch.build(method, url, headers, body)
-
-    case Finch.request(req, Compendium.Finch, receive_timeout: @receive_timeout) do
-      {:ok, %Finch.Response{status: status, headers: _resp_headers, body: resp_body}}
-      when status >= 500 ->
-        if attempt + 1 < @max_retries do
-          delay = @base_delay_ms * Integer.pow(2, attempt)
-
-          Logger.warning(
-            "[Compendium.Registry.Client] #{status} from cyfr.run, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-          do_request(method, url, headers, body, attempt + 1)
-        else
-          Logger.error(
-            "[Compendium.Registry.Client] #{status} from cyfr.run on final attempt — giving up"
-          )
-
-          {:error, Errors.from_api_response(status, resp_body, "request")}
-        end
-
-      {:ok, %Finch.Response{status: status, headers: resp_headers, body: resp_body}} ->
-        {:ok, status, resp_headers, resp_body}
-
-      {:error, %Mint.TransportError{reason: reason}} ->
-        if attempt + 1 < @max_retries do
-          delay = @base_delay_ms * Integer.pow(2, attempt)
-
-          Logger.warning(
-            "[Compendium.Registry.Client] Connection error: #{inspect(reason)}, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-          do_request(method, url, headers, body, attempt + 1)
-        else
-          Logger.error(
-            "[Compendium.Registry.Client] Connection error: #{inspect(reason)} — giving up after #{@max_retries} attempts"
-          )
-
-          {:error, Errors.api_connection_error(reason)}
-        end
-
-      {:error, reason} ->
-        if attempt + 1 < @max_retries do
-          delay = @base_delay_ms * Integer.pow(2, attempt)
-
-          Logger.warning(
-            "[Compendium.Registry.Client] Error: #{inspect(reason)}, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-          do_request(method, url, headers, body, attempt + 1)
-        else
-          Logger.error(
-            "[Compendium.Registry.Client] Error: #{inspect(reason)} — giving up after #{@max_retries} attempts"
-          )
-
-          {:error, Errors.api_connection_error(reason)}
-        end
-    end
-  end
 
   defp api_base_url do
     # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable

@@ -503,7 +503,7 @@ defmodule Locus.MCP do
       if build_id do
         Phoenix.PubSub.broadcast(
           Emissary.PubSub,
-          Sanctum.PubSub.topic("build:#{build_id}", ctx),
+          Prism.Topics.build(build_id, ctx),
           {:build_progress,
            %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
         )

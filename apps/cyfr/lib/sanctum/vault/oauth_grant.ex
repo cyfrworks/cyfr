@@ -447,17 +447,15 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp broadcast(pending, entry_id, verb) do
-    ctx = struct(Context, athanor_id: pending.athanor_id)
-
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Sanctum.PubSub.topic("vault:changed", ctx),
+      Prism.Topics.vault_changed(pending.athanor_id),
       {:vault_entry_changed, entry_id, verb}
     )
 
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      "sanctum:vault_changed",
+      Prism.Topics.vault_changed_global(),
       {:vault_entry_changed_global, pending.athanor_id, entry_id, verb}
     )
   end

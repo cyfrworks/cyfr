@@ -16,6 +16,8 @@ defmodule PrismWeb.ActivitiesLive do
 
   use PrismWeb, :live_view
 
+  alias Prism.Topics
+
   alias Phoenix.LiveView.JS
 
   require Logger
@@ -27,8 +29,8 @@ defmodule PrismWeb.ActivitiesLive do
     if connected?(socket) do
       ctx = socket.assigns[:context]
 
-      for topic <- ["prism:requests", "prism:tinctures", "prism:schedules"] do
-        Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic(topic, ctx))
+      for topic <- [Topics.requests(ctx), Topics.tinctures(ctx), Topics.schedule_runs(ctx)] do
+        Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
       end
     end
 

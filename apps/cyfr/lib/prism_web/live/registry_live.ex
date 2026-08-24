@@ -33,7 +33,7 @@ defmodule PrismWeb.RegistryLive do
     # flips `:loading` to false and fills `:components`.
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:components", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.components(ctx))
       send(self(), :load_registry)
     end
 

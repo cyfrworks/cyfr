@@ -191,6 +191,23 @@ defmodule Compendium.OCI.Errors do
     connection_error("cyfr.run", reason)
   end
 
+  @doc """
+  The `required_version` a `:policy_version_mismatch` (412) names, or `nil`.
+
+  It sits at one of two depths and under either key style: `from_response/3`
+  puts it straight into `detail`, while `from_api_response/3` wraps that under
+  `original_detail`. Reading `detail[:required_version]` flat therefore always
+  misses the wrapped form, so every caller asks here instead.
+  """
+  @spec required_version(t()) :: String.t() | nil
+  def required_version(%__MODULE__{detail: detail}), do: dig_required_version(detail)
+
+  defp dig_required_version(%{required_version: v}) when is_binary(v), do: v
+  defp dig_required_version(%{"required_version" => v}) when is_binary(v), do: v
+  defp dig_required_version(%{original_detail: inner}), do: dig_required_version(inner)
+  defp dig_required_version(%{"original_detail" => inner}), do: dig_required_version(inner)
+  defp dig_required_version(_), do: nil
+
   @doc "Build a parse error for unexpected response formats."
   @spec parse_error(String.t(), term()) :: t()
   def parse_error(operation, detail) do

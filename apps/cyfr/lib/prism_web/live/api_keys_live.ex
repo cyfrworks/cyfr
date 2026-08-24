@@ -164,7 +164,7 @@ defmodule PrismWeb.ApiKeysLive do
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:api_keys", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.api_keys(ctx))
       {:noreply, socket |> fetch_keys() |> assign(:loading, false)}
     else
       {:noreply, socket}

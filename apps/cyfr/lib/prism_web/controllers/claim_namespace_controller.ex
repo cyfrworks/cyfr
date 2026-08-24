@@ -92,21 +92,15 @@ defmodule PrismWeb.ClaimNamespaceController do
       {:not_logged_in, conn} ->
         conn
         |> put_status(:unauthorized)
-        |> redirect(to: "/auth/github")
+        |> redirect(to: "/login")
 
       {:error, :invalid_access_token} ->
         # IdP access_token expired between the callback-side cookie stash and
-        # the claim submission. Can't recover; bounce back through OAuth.
+        # the claim submission. Can't recover; bounce back through login.
         # Clear the dead cookie so the fresh auth round starts clean.
-        provider_for_redirect =
-          case params["provider"] do
-            p when p in ["github", "google"] -> p
-            _ -> "github"
-          end
-
         conn
         |> clear_pending_probe()
-        |> redirect(to: "/auth/#{provider_for_redirect}")
+        |> redirect(to: "/login")
 
       {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
         # cyfr.run wants the user to clickwrap-accept the current bundled

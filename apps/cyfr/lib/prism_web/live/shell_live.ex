@@ -538,10 +538,11 @@ defmodule PrismWeb.ShellLive do
 
   defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
 
-  # The HTTP invoke route carries TinctureRateLimit (120/min per IP and
-  # tincture); the shell's postMessage path is the same capability from a
-  # LiveView socket, so it gets the same budget keyed by user. Same config
-  # override, same bucket vocabulary, same limiter table.
+  # The HTTP invoke route carries TinctureRateLimit at 120/min keyed by IP;
+  # this is the same capability reached from a LiveView socket, keyed by
+  # person instead. The two are deliberately separate budgets, not one shared
+  # one — the keys differ, so a signed-in person has 120 here and 120 there.
+  # Same limiter table, same bucket vocabulary, same config override.
   defp invoke_throttled?(ctx, tincture) do
     max = Application.get_env(:cyfr, :tincture_rate_limit_max) || 120
     key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}

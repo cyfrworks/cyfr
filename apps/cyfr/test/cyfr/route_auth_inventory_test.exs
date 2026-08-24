@@ -49,6 +49,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/auth/oauth/callback"} => :public_oauth_state,
     {:get, "/auth/:provider"} => :browser_oauth_start,
     {:get, "/auth/:provider/callback"} => :browser_oauth_callback,
+    {:get, "/auth/device/complete/:ticket"} => :browser_oauth_flow,
     {:get, "/auth/post-legal-accept"} => :browser_oauth_flow,
     {:get, "/claim-namespace"} => :browser_claim_gate,
     {:post, "/claim-namespace/submit"} => :browser_claim_gate,

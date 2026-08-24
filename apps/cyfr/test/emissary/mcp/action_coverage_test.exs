@@ -17,6 +17,8 @@ defmodule Emissary.MCP.ActionCoverageTest do
   # ExternalProvider and SystemProvider were registered but absent from this
   # test, so the audit that exists to catch an action with no handler clause
   # silently skipped two providers.
+  # config:compile-runtime-ok — this roster generates the test cases below, so
+  # it has to exist at compile time; the runtime readers are the live registry.
   @all_providers Application.compile_env(:cyfr, :tool_providers, [])
 
   # Filter to only providers available in this app's compilation context.

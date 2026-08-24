@@ -129,7 +129,7 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   defp broadcast(execution_id, athanor_id, event) do
-    topic = Sanctum.PubSub.topic("execution:events:#{execution_id}", topic_ctx(athanor_id))
+    topic = Prism.Topics.execution_events(execution_id, athanor_id)
 
     case Phoenix.PubSub.broadcast(pubsub(), topic, {:execution_event, event}) do
       :ok ->
@@ -205,7 +205,7 @@ defmodule Opus.ExecutionEventBuffer do
   def topic(execution_id, ctx) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
-        Sanctum.PubSub.topic("execution:events:#{execution_id}", topic_ctx(athanor_id))
+        Prism.Topics.execution_events(execution_id, athanor_id)
 
       :error ->
         raise ArgumentError,
@@ -213,9 +213,6 @@ defmodule Opus.ExecutionEventBuffer do
                 "for #{execution_id}, got #{inspect(ctx)}"
     end
   end
-
-  # The minimal context `Sanctum.PubSub.topic/2` needs: the athanor alone.
-  defp topic_ctx(athanor_id), do: %Sanctum.Context{athanor_id: athanor_id}
 
   # ============================================================================
   # GenServer - Per-execution buffer serialization

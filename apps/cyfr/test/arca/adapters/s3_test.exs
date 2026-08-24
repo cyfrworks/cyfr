@@ -148,17 +148,31 @@ defmodule Arca.Adapters.S3Test do
   end
 
   describe "append/3" do
-    test "writes a new immutable object per call (multi-object pattern)", %{ctx: ctx} do
+    test "extends the object in place, so get/2 returns the whole file", %{ctx: ctx} do
+      assert :ok = S3.append(ctx, ["exists.txt"], "-more")
+
+      # One path stays one object: the existing body is read and written back
+      # extended, rather than a child object appearing under the path.
+      assert_received {:req, "GET", "/test-bucket/data/ath_test/exists.txt", _, _}
+      assert_received {:req, "PUT", "/test-bucket/data/ath_test/exists.txt", _, "hi-more"}
+    end
+
+    test "creates the object when the path does not exist yet", %{ctx: ctx} do
       assert :ok = S3.append(ctx, ["audit", "2026-05-05.jsonl"], "event-1\n")
-      assert :ok = S3.append(ctx, ["audit", "2026-05-05.jsonl"], "event-2\n")
 
-      assert_received {:req, "PUT", path1, _, "event-1\n"}
-      assert_received {:req, "PUT", path2, _, "event-2\n"}
+      assert_received {:req, "GET", "/test-bucket/data/ath_test/audit/2026-05-05.jsonl", _, _}
 
-      # Both writes go under the same prefix with monotonic suffixes.
-      assert String.starts_with?(path1, "/test-bucket/data/ath_test/audit/2026-05-05.jsonl/")
-      assert String.starts_with?(path2, "/test-bucket/data/ath_test/audit/2026-05-05.jsonl/")
-      assert path1 != path2
+      assert_received {:req, "PUT", "/test-bucket/data/ath_test/audit/2026-05-05.jsonl", _,
+                       "event-1\n"}
+    end
+
+    test "refuses an object that would grow past the read ceiling", %{ctx: ctx} do
+      oversized = :binary.copy("x", 5_242_881)
+
+      assert {:error, :object_too_large} =
+               S3.append(ctx, ["audit", "2026-05-05.jsonl"], oversized)
+
+      refute_received {:req, "PUT", _, _, _}
     end
   end
 

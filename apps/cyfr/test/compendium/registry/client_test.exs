@@ -343,8 +343,8 @@ defmodule Compendium.Registry.ClientTest do
   describe "happy-path wire tests (Bypass)" do
     # Boots a real (but ephemeral) HTTP server per test via Bypass; points the
     # Client at it via :registry_url + :registry_scheme overrides. Confirms
-    # method + path + Authorization-header plumbing for the 12 Registry.Client
-    # endpoints. Error paths are covered above via the non-routable-host
+    # method + path + Authorization-header plumbing for every Registry.Client
+    # endpoint. Error paths are covered above via the non-routable-host
     # pattern; these tests exercise the 200-response decode path that
     # connection-refused can never reach.
 
@@ -592,6 +592,109 @@ defmodule Compendium.Registry.ClientTest do
       assert {:ok, %{"members" => [%{"role" => "admin"}, %{"role" => "member"}]}} =
                Client.list_members("stripe.com", "cyfr_pt_stripe_admin")
     end
+
+    test "list_my_reports/2 — GET /v1/abuse-reports/mine with paging and Bearer", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "GET", "/v1/abuse-reports/mine", fn conn ->
+        assert auth_header(conn) == "Bearer cyfr_pt_alice"
+        params = Plug.Conn.fetch_query_params(conn).query_params
+        assert params["limit"] == "10"
+        assert params["offset"] == "20"
+
+        json_resp(conn, 200, %{"reports" => [%{"id" => "rep_1"}], "total" => 1})
+      end)
+
+      assert {:ok, %{"reports" => [%{"id" => "rep_1"}], "total" => 1}} =
+               Client.list_my_reports("cyfr_pt_alice", limit: 10, offset: 20)
+    end
+
+    test "get_legal_page/1 — GET /v1/legal/{name}, no bearer", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "GET", "/v1/legal/terms", fn conn ->
+        assert auth_header(conn) == nil
+
+        json_resp(conn, 200, %{
+          "name" => "terms",
+          "title" => "Terms of Service",
+          "content_markdown" => "# Terms"
+        })
+      end)
+
+      assert {:ok, %{"name" => "terms", "content_markdown" => "# Terms"}} =
+               Client.get_legal_page("terms")
+    end
+
+    test "get_legal_version/0 — GET /v1/legal/version, no bearer", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "GET", "/v1/legal/version", fn conn ->
+        assert auth_header(conn) == nil
+
+        json_resp(conn, 200, %{
+          "policy_version" => "2026-08-01",
+          "policies" => [%{"name" => "terms", "title" => "Terms", "sha256" => "abc"}]
+        })
+      end)
+
+      assert {:ok, %{"policy_version" => "2026-08-01"}} = Client.get_legal_version()
+    end
+
+    test "accept_policies/4 — POST /v1/legal/accept with access_token in body", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        assert body["provider"] == "github"
+        assert body["access_token"] == "gho_access"
+        assert body["policy_version"] == "2026-08-01"
+        # An access-token endpoint never carries a push-token bearer.
+        assert auth_header(conn) == nil
+
+        json_resp(conn, 201, %{"id" => "acc_1", "policy_version" => "2026-08-01"})
+      end)
+
+      assert {:ok, %{"id" => "acc_1"}} =
+               Client.accept_policies("github", "gho_access", nil, "2026-08-01")
+    end
+
+    test "create_appeal/6 — POST /v1/appeals with access_token in body", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/appeals", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        assert body["provider"] == "github"
+        assert body["access_token"] == "gho_access"
+        assert body["action_type"] == "yank"
+        assert body["action_ref"] == "c:alice.foo:1.0.0"
+        assert body["argument"] == "this was a mistake"
+        assert auth_header(conn) == nil
+
+        json_resp(conn, 201, %{"id" => "app_1", "status" => "open"})
+      end)
+
+      assert {:ok, %{"id" => "app_1", "status" => "open"}} =
+               Client.create_appeal(
+                 "github",
+                 "gho_access",
+                 nil,
+                 "yank",
+                 "c:alice.foo:1.0.0",
+                 "this was a mistake"
+               )
+    end
+
+    test "a slug carrying path separators stays one segment", %{bypass: bypass} do
+      parent = self()
+
+      Bypass.expect(bypass, fn conn ->
+        send(parent, {:segments, conn.path_info})
+        json_resp(conn, 404, %{"error" => "not found"})
+      end)
+
+      {:error, %Errors{}} = Client.get_namespace("../v1/legal/version")
+
+      # Three segments, the slug escaped into the third — not six segments
+      # addressing a different endpoint.
+      assert_received {:segments, ["v1", "namespaces", "..%2Fv1%2Flegal%2Fversion"]}
+    end
   end
 
   describe "happy-path log redaction" do
@@ -715,46 +818,6 @@ defmodule Compendium.Registry.ClientTest do
     end
   end
 
-  describe "device_label/0" do
-    setup do
-      original_app = Application.get_env(:cyfr, :device_label)
-      original_env = System.get_env("CYFR_DEVICE_LABEL")
-
-      on_exit(fn ->
-        if original_app,
-          do: Application.put_env(:cyfr, :device_label, original_app),
-          else: Application.delete_env(:cyfr, :device_label)
-
-        if original_env,
-          do: System.put_env("CYFR_DEVICE_LABEL", original_env),
-          else: System.delete_env("CYFR_DEVICE_LABEL")
-      end)
-
-      :ok
-    end
-
-    test "prefers :cyfr, :device_label app env over CYFR_DEVICE_LABEL env" do
-      Application.put_env(:cyfr, :device_label, "app-env-value")
-      System.put_env("CYFR_DEVICE_LABEL", "os-env-value")
-      assert Client.device_label() == "app-env-value"
-    end
-
-    test "falls back to CYFR_DEVICE_LABEL when no app env" do
-      Application.delete_env(:cyfr, :device_label)
-      System.put_env("CYFR_DEVICE_LABEL", "os-env-value")
-      assert Client.device_label() == "os-env-value"
-    end
-
-    test "falls back to machine hostname when neither env set" do
-      Application.delete_env(:cyfr, :device_label)
-      System.delete_env("CYFR_DEVICE_LABEL")
-
-      label = Client.device_label()
-      assert is_binary(label)
-      assert label != ""
-    end
-  end
-
   # ============================================================================
   # MCP Pull — Stale cache warning surfacing
   # ============================================================================
@@ -773,9 +836,9 @@ defmodule Compendium.Registry.ClientTest do
       assert err.reason == :registry_unavailable
     end
 
-    test "passes through URL-unsafe chars in slug + name + version", %{ctx: _ctx} do
-      # Server rejects these anyway; the client must pass through verbatim
-      # (no silent mangling). Verifies URI.encode covers the input.
+    test "leaves a legitimate slug, name and version untouched", %{ctx: _ctx} do
+      # `+` in a semver build tag is reserved, so it escapes; everything a real
+      # slug/name/version uses is unreserved and must survive verbatim.
       {:error, %Errors{}} =
         Client.deprecate_component(
           "stripe.com",

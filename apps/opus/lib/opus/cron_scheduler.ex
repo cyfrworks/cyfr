@@ -24,7 +24,6 @@ defmodule Opus.CronScheduler do
   @claim_ttl_seconds 900
 
   @max_timer_ms 60 * 60 * 1_000
-  @pubsub_topic "schedules"
 
   def start_link(opts \\ []) do
     # The scheduler is a long-lived process that queries on boot and on
@@ -720,7 +719,7 @@ defmodule Opus.CronScheduler do
   end
 
   defp broadcast_update(ctx) do
-    topic = Sanctum.PubSub.topic(@pubsub_topic, ctx)
+    topic = Prism.Topics.schedules(ctx)
 
     case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :schedules_updated) do
       :ok ->

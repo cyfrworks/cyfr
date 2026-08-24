@@ -11,7 +11,7 @@ defmodule PrismWeb.ComponentsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:components", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.components(ctx))
     end
 
     socket =
@@ -90,7 +90,7 @@ defmodule PrismWeb.ComponentsLive do
 
     Phoenix.PubSub.subscribe(
       Emissary.PubSub,
-      Sanctum.PubSub.topic("progress:#{progress_id}", socket.assigns[:context])
+      Prism.Topics.progress(progress_id, socket.assigns[:context])
     )
 
     socket =
@@ -142,7 +142,7 @@ defmodule PrismWeb.ComponentsLive do
 
     Phoenix.PubSub.subscribe(
       Emissary.PubSub,
-      Sanctum.PubSub.topic("register:#{register_id}", socket.assigns[:context])
+      Prism.Topics.register(register_id, socket.assigns[:context])
     )
 
     socket =
@@ -235,7 +235,7 @@ defmodule PrismWeb.ComponentsLive do
 
     Phoenix.PubSub.subscribe(
       Emissary.PubSub,
-      Sanctum.PubSub.topic("progress:#{progress_id}", socket.assigns[:context])
+      Prism.Topics.progress(progress_id, socket.assigns[:context])
     )
 
     socket =
@@ -333,7 +333,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Sanctum.PubSub.topic("register:#{socket.assigns.register_id}", socket.assigns[:context])
+        Prism.Topics.register(socket.assigns.register_id, socket.assigns[:context])
       )
     end
 
@@ -353,7 +353,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Sanctum.PubSub.topic("register:#{socket.assigns.register_id}", socket.assigns[:context])
+        Prism.Topics.register(socket.assigns.register_id, socket.assigns[:context])
       )
     end
 
@@ -548,7 +548,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.progress_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Sanctum.PubSub.topic("progress:#{socket.assigns.progress_id}", socket.assigns[:context])
+        Prism.Topics.progress(socket.assigns.progress_id, socket.assigns[:context])
       )
     end
   end

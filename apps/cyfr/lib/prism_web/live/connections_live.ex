@@ -38,7 +38,7 @@ defmodule PrismWeb.ConnectionsLive do
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("vault:changed", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.vault_changed(ctx))
 
       {:noreply,
        socket |> fetch_entries() |> fetch_used_by() |> fetch_clients() |> assign(:loading, false)}

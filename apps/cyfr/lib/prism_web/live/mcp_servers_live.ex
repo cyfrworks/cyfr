@@ -262,7 +262,7 @@ defmodule PrismWeb.McpServersLive do
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("mcp_servers", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.mcp_servers(ctx))
       {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
     else
       {:noreply, socket}

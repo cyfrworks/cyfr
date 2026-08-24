@@ -8,14 +8,18 @@ defmodule Compendium.Registry.IdentityTest do
   alias Sanctum.Context
 
   @user "identity_test_user"
-  @registry Application.compile_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
+
+  # Read through the same accessor the code under test uses, at runtime: seven
+  # other suites `put_env` this key, and a value frozen into a module attribute
+  # at compile time cannot see any of them.
+  defp registry, do: Compendium.Registry.canonical_host()
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     for slug <- ["alice", "stripe.com"] do
-      CredentialStore.delete(@user, @registry, slug)
+      CredentialStore.delete(@user, registry(), slug)
     end
 
     ctx =
@@ -65,7 +69,7 @@ defmodule Compendium.Registry.IdentityTest do
       # unreachable in tests, so each confirm_namespace call times out. Our
       # impl keeps entries on transient errors (timeout) with `last_used_at: nil`,
       # so we'll observe a map with personal_namespace set to {slug: "alice", ...}.
-      :ok = CredentialStore.put(@user, @registry, "alice", push_token("alice"))
+      :ok = CredentialStore.put(@user, registry(), "alice", push_token("alice"))
 
       result = Identity.identity(ctx)
       assert is_map(result)

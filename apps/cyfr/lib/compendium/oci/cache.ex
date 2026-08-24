@@ -25,19 +25,6 @@ defmodule Compendium.OCI.Cache do
   defp ctx, do: Sanctum.system_context()
 
   @doc """
-  Returns the cache root directory.
-
-  Only meaningful when `Arca.Adapters.Local` is the configured storage
-  adapter — used by tests that tamper with on-disk entries to verify
-  integrity checks. For non-filesystem adapters, returns the conceptual
-  Local path; callers must not rely on it pointing at real bytes.
-  """
-  @spec cache_dir() :: String.t()
-  def cache_dir do
-    Arca.Adapters.Local.build_path(ctx(), ["cache", "oci"])
-  end
-
-  @doc """
   Get a cached blob by digest.
 
   Returns `{:ok, bytes}` if cached, `:miss` if not.
