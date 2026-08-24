@@ -195,9 +195,9 @@ defmodule EmissaryWeb.AuthController do
         conn |> redirect(to: "/login")
 
       true ->
-        with {:ok, ctx} <- Sanctum.Session.load(session_token, surface: :console),
-             {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
-          provider = ctx.provider || "github"
+        with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
+             {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do
+          provider = peeked.provider || "github"
 
           case Sanctum.SignIn.complete(user, provider, access_token) do
             {:proceed, _user, report} ->

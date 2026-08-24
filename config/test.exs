@@ -3,6 +3,10 @@
 import Config
 
 # We don't run a server during test
+# The establish memo is a per-request convenience; tests assert on the
+# uncached pipeline.
+config :cyfr, :establish_cache_ms, 0
+
 config :cyfr, EmissaryWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",

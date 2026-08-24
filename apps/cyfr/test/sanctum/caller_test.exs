@@ -152,4 +152,59 @@ defmodule Sanctum.CallerTest do
       assert {:error, {:claim_pending, _ctx}} = Caller.establish_context(ctx)
     end
   end
+
+  describe "peek/1" do
+    test "answers the identity fields without establishing" do
+      user = new_user()
+      session = session_for(user, namespace: nil)
+
+      assert {:ok, %{user_id: user_id, provider: "github", claim_pending?: true}} =
+               Caller.peek(session.token)
+
+      assert user_id == user.user_id
+      assert {:error, :unauthenticated} = Caller.peek(nil)
+      assert {:error, :unauthenticated} = Caller.peek("cyfr_sess_bogus")
+    end
+  end
+
+  describe "the establish memo" do
+    setup do
+      original = Application.get_env(:cyfr, :establish_cache_ms)
+      Application.put_env(:cyfr, :establish_cache_ms, 60_000)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match({:established, :_, :_, :_})
+
+        if original,
+          do: Application.put_env(:cyfr, :establish_cache_ms, original),
+          else: Application.delete_env(:cyfr, :establish_cache_ms)
+      end)
+
+      :ok
+    end
+
+    test "a hit inside the TTL serves the established context; expiry re-reads the row" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+
+      assert {:ok, ctx} = Caller.establish(session.token)
+
+      # Within the TTL the memo answers — even after the row is retired;
+      # revocation is bounded by the TTL plus the revoked-sessions
+      # broadcast that ends mounted views.
+      :ok = Sanctum.Session.destroy(session.token)
+      assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
+      assert user_id == ctx.user_id
+
+      # Once the memo is gone, the refusal is back.
+      Arca.Cache.delete_match({:established, :_, :_, :_})
+      assert {:error, :unauthenticated} = Caller.establish(session.token)
+    end
+
+    test "refusals are never cached" do
+      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
+      assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
+      assert Arca.Cache.match({:established, :_, :_, :_}) == []
+    end
+  end
 end

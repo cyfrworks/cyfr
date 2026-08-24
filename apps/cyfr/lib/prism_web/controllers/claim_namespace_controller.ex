@@ -183,22 +183,16 @@ defmodule PrismWeb.ClaimNamespaceController do
   end
 
   defp current_user_id(conn) do
-    case get_session(conn, :sanctum_session_token) do
-      token when is_binary(token) and token != "" ->
-        case Sanctum.Session.load(token, surface: :console) do
-          {:ok, %{user_id: id}} -> {:ok, id}
-          _ -> {:not_logged_in, conn}
-        end
-
-      _ ->
-        {:not_logged_in, conn}
+    case Sanctum.Caller.peek(get_session(conn, :sanctum_session_token)) do
+      {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
+      _ -> {:not_logged_in, conn}
     end
   end
 
   defp current_provider(_conn, %{"provider" => p}) when p in ["github", "google"], do: {:ok, p}
 
   defp current_provider(conn, _params) do
-    case Sanctum.Session.load(get_session(conn, :sanctum_session_token) || "", surface: :console) do
+    case Sanctum.Caller.peek(get_session(conn, :sanctum_session_token)) do
       {:ok, %{provider: p}} when p in ["github", "google"] -> {:ok, p}
       _ -> {:ok, "github"}
     end

@@ -66,6 +66,32 @@ defmodule Sanctum.Caller do
   def establish(token, _opts) when token in [nil, ""], do: {:error, :unauthenticated}
 
   def establish(token, opts) when is_binary(token) do
+    ttl = Application.get_env(:cyfr, :establish_cache_ms, 2_000)
+
+    if ttl > 0 do
+      # A cold page load establishes the same caller several times inside
+      # a second (the plug, the dead render, the connected mount, the
+      # nested topbar). The short memo collapses those to one pipeline
+      # run. Only successes are cached; revocation is bounded by the TTL
+      # plus the sessions_revoked broadcast that ends mounted views.
+      key = memo_key(token, opts)
+
+      case Arca.Cache.get(key) do
+        {:ok, %Context{} = ctx} ->
+          {:ok, ctx}
+
+        :miss ->
+          result = do_establish(token, opts)
+
+          with {:ok, ctx} <- result, do: Arca.Cache.put(key, ctx, ttl)
+          result
+      end
+    else
+      do_establish(token, opts)
+    end
+  end
+
+  defp do_establish(token, opts) do
     case Session.load(token, surface: Keyword.get(opts, :surface, :console)) do
       {:ok, %Context{} = ctx} ->
         with {:ok, established} <- establish_context(ctx, opts) do
@@ -112,6 +138,50 @@ defmodule Sanctum.Caller do
       {:ok, ctx}
     end
   end
+
+  @doc """
+  A light look at who a session belongs to — the identity fields and
+  whether the claim is still pending — with none of the establish work.
+  For surfaces that need only the person (the claim and legal flows),
+  not a working Context.
+  """
+  @spec peek(String.t() | nil) ::
+          {:ok,
+           %{
+             user_id: String.t() | nil,
+             provider: String.t() | nil,
+             email: String.t() | nil,
+             claim_pending?: boolean()
+           }}
+          | {:error, :unauthenticated | :unavailable}
+  def peek(token) when token in [nil, ""], do: {:error, :unauthenticated}
+
+  def peek(token) when is_binary(token) do
+    case Session.load(token, surface: :console) do
+      {:ok, %Context{} = ctx} ->
+        {:ok,
+         %{
+           user_id: ctx.user_id,
+           provider: ctx.provider,
+           email: ctx.email,
+           claim_pending?: not ctx.authenticated and is_nil(ctx.namespace)
+         }}
+
+      {:error, reason} when reason in [:namespace_unavailable, :database_error] ->
+        {:error, :unavailable}
+
+      {:error, _reason} ->
+        {:error, :unauthenticated}
+    end
+  end
+
+  defp memo_key(token, opts) do
+    {:established, Session.token_hash(token), Keyword.get(opts, :surface, :console),
+     memo_coord(Keyword.get(opts, :focus))}
+  end
+
+  defp memo_coord(%{id: id}), do: id
+  defp memo_coord(other), do: other
 
   defp tenant_ok(ctx) do
     case Context.tenant_ok(ctx) do
