@@ -704,10 +704,10 @@ defmodule Emissary.MCP.ToolRegistry do
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
   each entry is `%{provider: module, tool: name, action: verb, reason: r}`.
   """
-  @spec audit_action_kinds() :: :ok | {:error, [map()]}
-  def audit_action_kinds do
+  @spec audit_action_kinds([module()]) :: :ok | {:error, [map()]}
+  def audit_action_kinds(providers \\ available_providers()) do
     missing =
-      available_providers()
+      providers
       |> Enum.flat_map(fn module ->
         Enum.flat_map(module.tools(), fn tool ->
           audit_tool(module, tool)

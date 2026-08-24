@@ -20,19 +20,32 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   def invalid_plane, do: [tool(%{kind: :read, planes: [:sideways]})]
   def empty_planes, do: [tool(%{kind: :read, planes: []})]
   def unannotated, do: [tool(nil)]
-end
 
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 CYFR Works Inc.
-defmodule Emissary.MCP.PlaneTaxonomyTest.ProbeProvider do
-  @moduledoc false
-  # A provider whose tool list is whichever malformed probe the test asked
-  # for — the audit reads providers from config, so this is the seam.
+  # One provider module per probe: the audit takes its roster as an
+  # argument, so no test touches global provider config.
+  defmodule KindOnly do
+    @moduledoc false
+    def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.kind_only()
+  end
 
-  alias Emissary.MCP.PlaneTaxonomyTest.Probes
+  defmodule PlanesOnly do
+    @moduledoc false
+    def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.planes_only()
+  end
 
-  def tools do
-    apply(Probes, Application.get_env(:cyfr, :plane_taxonomy_probe, :unannotated), [])
+  defmodule InvalidPlane do
+    @moduledoc false
+    def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.invalid_plane()
+  end
+
+  defmodule EmptyPlanes do
+    @moduledoc false
+    def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.empty_planes()
+  end
+
+  defmodule Unannotated do
+    @moduledoc false
+    def tools, do: Emissary.MCP.PlaneTaxonomyTest.Probes.unannotated()
   end
 end
 
@@ -43,6 +56,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   use ExUnit.Case, async: true
 
   alias Emissary.MCP.ExternalProvider
+  alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Emissary.MCP.ToolRegistry
   alias Prism.AquaVirtualTools
 
@@ -92,14 +106,14 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       # A missing plane must be as loud as a missing kind — otherwise a
       # half-annotated action passes the gate it exists to fail.
       for {probe, reason} <- [
-            {:kind_only, :missing_planes},
-            {:planes_only, :missing_kind},
-            {:invalid_plane, :invalid_planes},
-            {:empty_planes, :missing_planes},
-            {:unannotated, :missing_annotation}
+            {Probes.KindOnly, :missing_planes},
+            {Probes.PlanesOnly, :missing_kind},
+            {Probes.InvalidPlane, :invalid_planes},
+            {Probes.EmptyPlanes, :missing_planes},
+            {Probes.Unannotated, :missing_annotation}
           ] do
-        assert {:error, [%{reason: ^reason}]} = audit_probe(probe),
-               "#{probe} was not reported as #{reason}"
+        assert {:error, [%{reason: ^reason}]} = ToolRegistry.audit_action_kinds([probe]),
+               "#{inspect(probe)} was not reported as #{reason}"
       end
     end
 
@@ -196,22 +210,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
   # Helpers
   # ============================================================================
-
-  # Run the audit over a single deliberately-malformed probe tool.
-  defp audit_probe(fun) do
-    module = Emissary.MCP.PlaneTaxonomyTest.ProbeProvider
-
-    original = Application.get_env(:cyfr, :tool_providers)
-    Application.put_env(:cyfr, :tool_providers, [module])
-    Application.put_env(:cyfr, :plane_taxonomy_probe, fun)
-
-    try do
-      ToolRegistry.audit_action_kinds()
-    after
-      Application.put_env(:cyfr, :tool_providers, original)
-      Application.delete_env(:cyfr, :plane_taxonomy_probe)
-    end
-  end
 
   # The router keeps its public maps private; mirrored here rather than
   # reached into. These are the actions documented as reachable without
