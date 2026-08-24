@@ -176,8 +176,7 @@ defmodule Emissary.MCP.Router do
               if not ToolVisibility.admits_action?(name, action, ctx) do
                 {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
               else
-                has_output_schema =
-                  match?({:ok, %{"outputSchema" => _}}, ToolRegistry.get_tool(name))
+                has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
                 case ToolRegistry.call_external(name, ctx, arguments) do
                   {:ok, result} ->
