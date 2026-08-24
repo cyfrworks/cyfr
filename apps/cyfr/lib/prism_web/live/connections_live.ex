@@ -264,13 +264,7 @@ defmodule PrismWeb.ConnectionsLive do
           []
       end
 
-    socket
-    |> assign(:entries, entries)
-    |> PrismWeb.ActiveContext.set_snapshot(%{
-      type: "connections",
-      items: Enum.map(entries, &%{name: &1.name, kind: &1.kind, status: &1.status}),
-      total: length(entries)
-    })
+    assign(socket, :entries, entries)
   end
 
   # Which MCP servers draw on each Connection (`vault:<name>` headers) —

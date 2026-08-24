@@ -38,18 +38,10 @@ defmodule PrismWeb.ActiveContext do
           | {:schedule, String.t()}
           | nil
 
-  @type snapshot :: %{
-          required(:type) => String.t(),
-          optional(:items) => [map()],
-          optional(:selected_id) => String.t() | nil,
-          optional(:total) => non_neg_integer()
-        }
-
   @type t :: %{
           route: String.t() | nil,
           focused_resource: focused_resource(),
-          params: map(),
-          snapshot: snapshot() | nil
+          params: map()
         }
 
   # ============================================================================
@@ -84,33 +76,6 @@ defmodule PrismWeb.ActiveContext do
     {:cont, socket}
   end
 
-  @doc """
-  Attach a page snapshot to the active context. A snapshot describes "what
-  is currently on screen" — a small list of items the user is looking at,
-  so a consumer can reason about the page without making read tool calls.
-
-  Pages opt in from their LiveView after loading data:
-
-      {:noreply, PrismWeb.ActiveContext.set_snapshot(socket,
-        %{type: "api_keys", items: keys, total: length(keys)})}
-
-  Caps `items` at 20 entries to keep the agent input small.
-  """
-  @spec set_snapshot(Phoenix.LiveView.Socket.t(), snapshot()) :: Phoenix.LiveView.Socket.t()
-  def set_snapshot(%Phoenix.LiveView.Socket{} = socket, %{} = snap) do
-    capped =
-      case snap[:items] || snap["items"] do
-        items when is_list(items) -> Map.put(snap, :items, Enum.take(items, 20))
-        _ -> snap
-      end
-
-    current =
-      socket.assigns[:active_context] ||
-        %{route: nil, focused_resource: nil, params: %{}, snapshot: nil}
-
-    assign(socket, :active_context, Map.put(current, :snapshot, capped))
-  end
-
   defp handle_params_hook(params, uri, socket) do
     {:cont, assign(socket, :active_context, derive(params, uri))}
   end
@@ -140,13 +105,12 @@ defmodule PrismWeb.ActiveContext do
     %{
       route: route_from_uri(uri),
       focused_resource: focused_resource_from_params(params),
-      params: params,
-      snapshot: nil
+      params: params
     }
   end
 
   def derive(_params, _uri),
-    do: %{route: nil, focused_resource: nil, params: %{}, snapshot: nil}
+    do: %{route: nil, focused_resource: nil, params: %{}}
 
   defp route_from_uri(nil), do: nil
 

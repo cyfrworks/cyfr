@@ -352,22 +352,7 @@ defmodule PrismWeb.ApiKeysLive do
           []
       end
 
-    socket
-    |> assign(:keys, keys)
-    |> PrismWeb.ActiveContext.set_snapshot(%{
-      type: "api_keys",
-      items:
-        Enum.map(keys, fn k ->
-          %{
-            id: k[:name] || k[:id],
-            type: k[:type],
-            prefix: k[:prefix],
-            scope: k[:scope],
-            created_at: k[:created_at]
-          }
-        end),
-      total: length(keys)
-    })
+    assign(socket, :keys, keys)
   end
 
   defp normalize_key_list(list) when is_list(list), do: Enum.map(list, &normalize_keys/1)
