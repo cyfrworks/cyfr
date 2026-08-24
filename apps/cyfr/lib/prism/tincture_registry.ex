@@ -96,29 +96,37 @@ defmodule Prism.TinctureRegistry do
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
-  # object-store adapter. The scanner uses a synthetic platform context with
-  # `:storage_read` permission only — a read-only walk of the whole
-  # `components/` prefix, which only a platform context may list. Athanor
-  # route segments are resolved once per scan.
+  # object-store adapter. The walk is roster-driven: every active athanor
+  # row, then that athanor's own tinctures prefix — never a whole-root
+  # filesystem walk, so nothing outside a registered athanor is ever read
+  # and an archived athanor drops out by not being enumerated. The scanner
+  # uses a synthetic platform context with `:storage_read` permission only.
   defp scan_tinctures do
     ctx = scan_context()
 
-    case Arca.list_recursive(ctx, ["components"]) do
+    Sanctum.Tenancy.Athanors.list_active()
+    |> Enum.flat_map(&scan_athanor(ctx, &1))
+    |> pick_latest_versions()
+  end
+
+  # One athanor's tinctures, each carrying its route segment. An unreadable
+  # tree logs and contributes nothing — one bad athanor must not empty the
+  # registry.
+  defp scan_athanor(ctx, athanor) do
+    case Arca.list_recursive(ctx, ["components", athanor.id, @tincture_type_plural]) do
       {:ok, leaves} ->
-        segments_by_athanor = %{}
+        segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
 
-        {tinctures, _} =
-          leaves
-          |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
-          |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs) end)
-          |> Enum.map_reduce(segments_by_athanor, &attach_athanor_segment/2)
-
-        tinctures
-        |> Enum.reject(&is_nil/1)
-        |> pick_latest_versions()
+        leaves
+        |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
+        |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs) end)
+        |> Enum.map(&put_segment(&1, segment))
 
       {:error, reason} ->
-        Logger.warning("TinctureRegistry: cannot list components/: #{inspect(reason)}")
+        Logger.warning(
+          "TinctureRegistry: cannot list #{athanor.id}/#{@tincture_type_plural}: #{inspect(reason)}"
+        )
+
         []
     end
   end
@@ -132,26 +140,6 @@ defmodule Prism.TinctureRegistry do
       scope: :platform
     )
   end
-
-  # Look each tincture's athanor up once per scan; a tincture whose athanor
-  # is missing or archived has no public URL and is dropped.
-  defp attach_athanor_segment(tincture, cache) do
-    case Map.fetch(cache, tincture.athanor_id) do
-      {:ok, segment} ->
-        {put_segment(tincture, segment), cache}
-
-      :error ->
-        segment =
-          case Sanctum.Tenancy.Athanors.get(tincture.athanor_id) do
-            {:ok, %{status: "active"} = athanor} -> Cyfr.TinctureHelpers.athanor_segment(athanor)
-            _ -> nil
-          end
-
-        {put_segment(tincture, segment), Map.put(cache, tincture.athanor_id, segment)}
-    end
-  end
-
-  defp put_segment(_tincture, nil), do: nil
 
   defp put_segment(tincture, segment) do
     entry_url = Cyfr.TinctureHelpers.tincture_path(segment, tincture.publisher, tincture.name)
@@ -235,7 +223,7 @@ defmodule Prism.TinctureRegistry do
               publisher: publisher,
               version: version,
               athanor_id: athanor_id,
-              # Filled once the athanor is resolved (attach_athanor_segment/2).
+              # Filled by the enumerating scan (scan_athanor/2).
               athanor_segment: nil,
               entry_url: nil,
               title: manifest["description"] || name,

@@ -359,6 +359,20 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
+  Every active athanor on the server, oldest first — the roster server-side
+  scans walk (the tincture registry rebuilds itself from it). Uncapped: this
+  is the server's own tenant roster, not a user page.
+  """
+  @spec list_active() :: [Athanor.t()]
+  def list_active do
+    Arca.Repo.all(from(a in Athanor, where: a.status == "active", order_by: [asc: a.created_at]))
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("Sanctum.Tenancy.Athanors: list_active failed (#{Exception.message(e)})")
+      []
+  end
+
+  @doc """
   The active athanors a person may work in: their own, then every group an
   active membership grants, oldest first. Uncapped — a person's memberships
   are few, and a truncated list would hide a chat.
