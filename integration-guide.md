@@ -662,7 +662,7 @@ If you're coming from a Next.js or Express backend, here's how your code maps to
 - **Reagents** — name by function: `user-validator`, `price-calculator`, `markdown-renderer`
 
 ```
-components/
+data/athanors/{athanor_id}/components/
 ├── formulas/local/
 │   ├── users-api/0.1.0/
 │   └── orders-api/0.1.0/
@@ -1128,7 +1128,7 @@ cyfr profile grant c:moonmoon69.claude
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
-#     Edit components/{athanor_id}/catalysts/local/my-api/0.1.0/src/src/lib.rs
+#     Edit data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/src/src/lib.rs
 cyfr build compile catalyst:local.my-api:0.1.0
 cyfr profile grant catalyst:local.my-api
 
@@ -1154,7 +1154,7 @@ edit source → cyfr build compile <ref> → cyfr run <ref>
 - `cyfr new <type> <name>` scaffolds a new component project (run once)
 - `cyfr build compile` compiles, saves the `.wasm` binary, and auto-registers in one step
 - `cyfr register` is only needed if you build components manually outside of `cyfr build compile`
-- Components installed via `cyfr pull` are written to `components/` and indexed automatically
+- Components installed via `cyfr pull` are written into the athanor's component tree (`data/athanors/{athanor_id}/components/`) and indexed automatically
 
 **Tinctures** — vanilla (no compile step) or React (requires build):
 

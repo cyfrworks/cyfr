@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` orchestrator prompts, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -508,10 +508,22 @@ on `/mcp`, so this is for nodes that never show a face (a build worker, a
 relay); it does not combine with an external OIDC provider, which moves
 sign-in to the browser page a headless node refuses.
 
+### Storage paths
+
+File storage defaults to the local `./data` volume — the one root holding
+every athanor's data and components, the caches, and (on SQLite) the
+database itself. Two release-only variables move the pieces:
+
+```bash
+CYFR_DATA_PATH=data                     # the one storage root; the SQLite
+                                        # database defaults to cyfr.db inside it
+CYFR_BUNDLE_PATH=components/_bundle     # the seed bundle, read in place
+                                        # (the container image sets its own)
+```
+
 ### S3-compatible object storage
 
-File storage defaults to the local `./data` volume. For S3 (or MinIO and
-other S3-compatible stores):
+For S3 (or MinIO and other S3-compatible stores):
 
 ```bash
 CYFR_STORAGE=s3

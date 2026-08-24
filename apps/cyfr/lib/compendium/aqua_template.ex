@@ -8,7 +8,8 @@ defmodule Compendium.AquaTemplate do
   `aqua/agent.json` plus the prompt files it names are the template — a
   directory in the release (`:cyfr, :aqua_template_path`, the repo's
   `aqua/`). Every athanor owns a copy under its tenant storage
-  (`data/{athanor_id}/aqua/`), written when the athanor is provisioned;
+  (`data/athanors/{athanor_id}/data/aqua/`), written when the athanor is
+  provisioned;
   the Agents page and the `aqua` tool then edit that copy, so a group's
   members shape their own agent without touching anyone else's.
 

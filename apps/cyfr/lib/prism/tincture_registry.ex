@@ -91,7 +91,8 @@ defmodule Prism.TinctureRegistry do
 
   # -- Scanning --
 
-  # Derive tincture subdirectory name from ComponentPath (single source of truth)
+  # The tincture subtree name under each athanor's component tree — one of
+  # the canonical type plurals (`Sanctum.ComponentRef.valid_types/0` + "s").
   @tincture_type_plural "tinctures"
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
@@ -132,8 +133,8 @@ defmodule Prism.TinctureRegistry do
   end
 
   defp scan_context do
-    # Server-built filesystem scan of components/ (not cron). Routed through
-    # the single server-internal builder (auth_method: :system).
+    # Server-built roster scan of each athanor's component tree (not cron).
+    # Routed through the single server-internal builder (auth_method: :system).
     Sanctum.internal_context(
       user_id: "_system_scan",
       permissions: [:storage_read],
@@ -170,8 +171,6 @@ defmodule Prism.TinctureRegistry do
   end
 
   # Layout: ["components", athanor_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  # `_bundle` is the seed source, never an athanor.
-  defp tincture_path?(["components", "_bundle" | _]), do: false
   defp tincture_path?(["components", _athanor, @tincture_type_plural | _]), do: true
   defp tincture_path?(_), do: false
 

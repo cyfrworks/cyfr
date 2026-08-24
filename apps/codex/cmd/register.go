@@ -17,7 +17,7 @@ var registerCmd = &cobra.Command{
 	Use:     "register",
 	Short:   "Scan and register all local components",
 	GroupID: "component",
-	Long: `Scan the components/ directory for local components (catalysts, reagents,
+	Long: `Scan the athanor's component storage for local components (catalysts, reagents,
 formulas, and tinctures) and register them in the Compendium registry, making
 them available for search and execution. Run 'cyfr profile grant <ref>'
 afterwards to consent a component's declared needs before it can run.`,
@@ -81,7 +81,7 @@ func printRegisterDependencyInfo(result map[string]any) {
 			for _, r := range refs {
 				fmt.Fprintf(os.Stderr, "  - %s\n", r)
 			}
-			fmt.Fprintln(os.Stderr, "Create these in components/ and re-run 'cyfr register'.")
+			fmt.Fprintln(os.Stderr, "Create these in the athanor's component storage (under data/) and re-run 'cyfr register'.")
 		}
 	}
 

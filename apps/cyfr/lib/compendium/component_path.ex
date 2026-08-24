@@ -23,9 +23,10 @@ defmodule Compendium.ComponentPath do
   on-disk layout, no flat fallback, and the segment can never diverge from
   the id minted by `Compendium.ComponentId`.
 
-  The seed bundle every athanor is provisioned from lives beside the athanor
-  trees at `components/_bundle/{type}s/local/...` (`Compendium.Bundle`); it
-  is bytes only and never a tenant.
+  The seed bundle every athanor is provisioned from keeps the logical prefix
+  `components/_bundle/{type}s/local/...` (`Compendium.Bundle`) but is read in
+  place from `:bundle_path`, outside the storage root; it is bytes only and
+  never a tenant.
   """
 
   @type_plurals Enum.map(Sanctum.ComponentRef.valid_types(), &(&1 <> "s"))

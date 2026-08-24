@@ -28,7 +28,7 @@ The `tincture.public` field in the manifest is a **metadata hint only** — actu
 **Vanilla tincture** (no build step):
 
 ```
-components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
+data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
 ├── cyfr-manifest.json    ← type: "tincture"
 ├── index.html            ← entry point
 ├── app.js                ← application JavaScript
@@ -43,7 +43,7 @@ components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
 **React tincture** (after `cyfr build compile`):
 
 ```
-components/{athanor_id}/tinctures/local/stock-dashboard/1.0.0/
+data/athanors/{athanor_id}/components/tinctures/local/stock-dashboard/1.0.0/
 ├── cyfr-manifest.json    ← type: "tincture", tincture.build.tool: "vite"
 ├── package.json          ← React + Vite + TypeScript dependencies
 ├── tsconfig.json         ← TypeScript config (strict mode)
@@ -143,7 +143,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 CYFR auto-discovers tincture media from a fixed `public/media/` layout. **No manifest fields needed** — drop the files in the right slots and the Prism picker finds them.
 
 ```
-components/{athanor_id}/tinctures/local/{name}/{version}/
+data/athanors/{athanor_id}/components/tinctures/local/{name}/{version}/
 └── public/
     └── media/
         ├── icon.svg          ← OR icon.png  (svg preferred)

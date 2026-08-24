@@ -5,9 +5,10 @@ defmodule Compendium.Bundle do
   @moduledoc """
   The seed bundle: the components every athanor starts with.
 
-  It lives at `components/_bundle/{type}s/local/{name}/{version}/…` — beside
-  the athanor trees, but never a tenant: nothing indexes it as rows and only
-  server-internal contexts may read it (`Arca.Storage.authorize_path/2`).
+  Its logical prefix is `components/_bundle/{type}s/local/{name}/{version}/…`,
+  but it is install media, not tenant storage: `Arca` reads it in place from
+  `:bundle_path` (outside the storage root), nothing indexes it as rows, and
+  only server-internal contexts may touch it (`Arca.Storage.authorize_path/2`).
   `Compendium.AthanorSeeder` copies it into a new athanor, whose own scan then
   registers the copies.
   """
