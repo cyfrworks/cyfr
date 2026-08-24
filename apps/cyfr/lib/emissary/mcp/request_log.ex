@@ -139,8 +139,66 @@ defmodule Emissary.MCP.RequestLog do
   # ============================================================================
 
   # Logging must never raise, never block, and never fail the underlying
-  # operation. Callers (MCPController, TinctureController, CronScheduler)
-  # all want the same contract; centralize it here.
+  # operation. Every logging ingress — MCPController, TinctureController,
+  # WebhookController, CronScheduler, and the tool dispatch through
+  # `around/5` — wants the same contract; centralize it here.
+
+  @doc """
+  Record one call around the work that is the call.
+
+  Logs the started row, runs `fun`, and logs the completed or failed row
+  with the measured duration — through the `safe_log_*` wrappers, so a
+  logging fault never fails the call. `fun` returns `{result, meta}`:
+  `meta[:routed_to]` labels the row when present, `meta[:code]` overrides
+  the default `-32_603` failure code, and `meta[:error_text]` supplies an
+  already-formatted error string in place of the sanitized `inspect`.
+  Returns `result`. With `log?` false, runs `fun` and only returns.
+  """
+  @spec around(boolean(), Context.t(), String.t() | nil, map(), (-> {result, map()})) :: result
+        when result: {:ok, term()} | {:error, term()}
+  def around(log?, ctx, call_id, started, fun)
+
+  def around(false, _ctx, _call_id, _started, fun) do
+    {result, _meta} = fun.()
+    result
+  end
+
+  def around(true, %Context{} = ctx, call_id, started, fun) do
+    safe_log_started(ctx, call_id, started)
+    start_time = System.monotonic_time()
+    {result, meta} = fun.()
+
+    duration_ms =
+      System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
+    case result do
+      {:ok, output} ->
+        safe_log_completed(
+          ctx,
+          call_id,
+          put_routed(%{output: output, duration_ms: duration_ms}, meta)
+        )
+
+      {:error, reason} ->
+        error_text = Map.get(meta, :error_text) || inspect(sanitize_input(reason))
+
+        safe_log_failed(
+          ctx,
+          call_id,
+          put_routed(
+            %{error: error_text, code: Map.get(meta, :code, -32_603), duration_ms: duration_ms},
+            meta
+          )
+        )
+    end
+
+    result
+  end
+
+  defp put_routed(data, %{routed_to: routed}) when not is_nil(routed),
+    do: Map.put(data, :routed_to, routed)
+
+  defp put_routed(data, _meta), do: data
 
   @doc """
   Best-effort wrapper around `log_started/3`. Always returns `:ok`.

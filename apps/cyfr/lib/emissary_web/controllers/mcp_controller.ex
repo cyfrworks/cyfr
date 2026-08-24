@@ -618,58 +618,26 @@ defmodule EmissaryWeb.MCPController do
     |> System.convert_time_unit(:native, :millisecond)
   end
 
-  # Logging - failures must not break requests
-  defp log_request_started(context, request_id, data) do
-    try do
-      result = RequestLog.log_started(context, request_id, data)
-
-      if result != :ok do
-        require Logger
-        Logger.error("Request log_started returned: #{inspect(result)}")
-      end
-
-      result
-    rescue
-      e ->
-        require Logger
-        Logger.error("Request log failed: #{inspect(e)}")
-        :ok
-    end
-  end
+  # Logging is best-effort by contract — the `safe_log_*` wrappers never
+  # raise; these keep only the positional-to-map shaping.
+  defp log_request_started(context, request_id, data),
+    do: RequestLog.safe_log_started(context, request_id, data)
 
   defp log_request_completed(ctx, request_id, output, duration_ms, routed_to) do
-    try do
-      RequestLog.log_completed(ctx, request_id, %{
-        output: output,
-        duration_ms: duration_ms,
-        routed_to: routed_to
-      })
-    rescue
-      e ->
-        require Logger
-
-        Logger.error(
-          "[MCPController] log_request_completed failed for #{request_id}: #{inspect(e)}"
-        )
-
-        :ok
-    end
+    RequestLog.safe_log_completed(ctx, request_id, %{
+      output: output,
+      duration_ms: duration_ms,
+      routed_to: routed_to
+    })
   end
 
   defp log_request_failed(ctx, request_id, error, code, duration_ms, routed_to) do
-    try do
-      RequestLog.log_failed(ctx, request_id, %{
-        error: error,
-        code: code,
-        duration_ms: duration_ms,
-        routed_to: routed_to
-      })
-    rescue
-      e ->
-        require Logger
-        Logger.error("[MCPController] log_request_failed failed for #{request_id}: #{inspect(e)}")
-        :ok
-    end
+    RequestLog.safe_log_failed(ctx, request_id, %{
+      error: error,
+      code: code,
+      duration_ms: duration_ms,
+      routed_to: routed_to
+    })
   end
 
   defp emit_telemetry(start_time, %Sanctum.Context{} = context, metadata) do

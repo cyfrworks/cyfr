@@ -566,121 +566,55 @@ defmodule Emissary.MCP.ToolRegistry do
         true -> ctx.request_id
       end
 
-    if should_log? do
-      action = args["action"] || args[:action]
+    started = %{
+      tool: name,
+      action: args["action"] || args[:action],
+      method: "tools/call",
+      input: args
+    }
 
-      Emissary.MCP.RequestLog.log_started(ctx, call_id, %{
-        tool: name,
-        action: action,
-        method: "tools/call",
-        input: args
-      })
-    end
+    Emissary.MCP.RequestLog.around(should_log?, ctx, call_id, started, fn ->
+      case lookup(name) do
+        {:ok, {module, meta}} ->
+          result =
+            case authorize_annotated_action(name, meta, ctx, args) do
+              :ok ->
+                execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
 
-    start_time = System.monotonic_time()
-
-    case lookup(name) do
-      {:ok, {module, meta}} ->
-        result =
-          case authorize_annotated_action(name, meta, ctx, args) do
-            :ok ->
-              execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
-
-            {:error, _} = refusal ->
-              refusal
-          end
-
-        if should_log? do
-          duration_ms =
-            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
-          case result do
-            {:ok, output} ->
-              Emissary.MCP.RequestLog.log_completed(ctx, call_id, %{
-                output: output,
-                duration_ms: duration_ms,
-                routed_to: inspect(module)
-              })
-
-            {:error, reason} ->
-              Emissary.MCP.RequestLog.log_failed(ctx, call_id, %{
-                error: inspect(Sanctum.Sanitizer.sanitize(reason)),
-                code: -32_603,
-                duration_ms: duration_ms,
-                routed_to: inspect(module)
-              })
-          end
-        end
-
-        result
-
-      :miss ->
-        # Try external provider for namespaced tools (e.g., "notion:create_page")
-        external_result =
-          cond do
-            String.contains?(name, ":") and not ctx.authenticated ->
-              # External tools carry no per-tool requires_auth metadata; all
-              # of them require authentication. The HTTP router never routes
-              # unknown names here, so this guards the in-process callers
-              # (FormulaHandler, LiveViews). Bare unknown names fall through
-              # so they still produce "Unknown tool".
-              {:error, "Unauthorized: tool '#{name}' requires authentication"}
-
-            true ->
-              execute_tool_call(name, ctx, opts, fn ->
-                Emissary.MCP.ExternalProvider.try_handle(name, ctx, args)
-              end)
-          end
-
-        case external_result do
-          {:error, :not_external} ->
-            if should_log? do
-              duration_ms =
-                System.convert_time_unit(
-                  System.monotonic_time() - start_time,
-                  :native,
-                  :millisecond
-                )
-
-              Emissary.MCP.RequestLog.log_failed(ctx, call_id, %{
-                error: "Unknown tool: #{name}",
-                code: -32_601,
-                duration_ms: duration_ms
-              })
+              {:error, _} = refusal ->
+                refusal
             end
 
-            {:error, "Unknown tool: #{name}"}
+          {result, %{routed_to: inspect(module)}}
 
-          result ->
-            if should_log? do
-              duration_ms =
-                System.convert_time_unit(
-                  System.monotonic_time() - start_time,
-                  :native,
-                  :millisecond
-                )
+        :miss ->
+          # Try external provider for namespaced tools (e.g., "notion:create_page")
+          external_result =
+            cond do
+              String.contains?(name, ":") and not ctx.authenticated ->
+                # External tools carry no per-tool requires_auth metadata; all
+                # of them require authentication. The HTTP router never routes
+                # unknown names here, so this guards the in-process callers
+                # (FormulaHandler, LiveViews). Bare unknown names fall through
+                # so they still produce "Unknown tool".
+                {:error, "Unauthorized: tool '#{name}' requires authentication"}
 
-              case result do
-                {:ok, output} ->
-                  Emissary.MCP.RequestLog.log_completed(ctx, call_id, %{
-                    output: output,
-                    duration_ms: duration_ms,
-                    routed_to: "external:#{name}"
-                  })
-
-                {:error, reason} ->
-                  Emissary.MCP.RequestLog.log_failed(ctx, call_id, %{
-                    error: inspect(Sanctum.Sanitizer.sanitize(reason)),
-                    code: -32_603,
-                    duration_ms: duration_ms,
-                    routed_to: "external:#{name}"
-                  })
-              end
+              true ->
+                execute_tool_call(name, ctx, opts, fn ->
+                  Emissary.MCP.ExternalProvider.try_handle(name, ctx, args)
+                end)
             end
 
-            result
-        end
-    end
+          case external_result do
+            {:error, :not_external} ->
+              error = "Unknown tool: #{name}"
+              {{:error, error}, %{code: -32_601, error_text: error}}
+
+            result ->
+              {result, %{routed_to: "external:#{name}"}}
+          end
+      end
+    end)
   end
 
   @doc """
