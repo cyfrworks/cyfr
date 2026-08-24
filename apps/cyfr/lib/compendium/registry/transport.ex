@@ -27,23 +27,18 @@ defmodule Compendium.Registry.Transport do
       caller never sees, or 409 a person against their own success.
 
   There is no `Idempotency-Key` on this API; until there is, not replaying is
-  the only thing that keeps those endpoints honest.
+  the only thing that keeps those endpoints honest. The decision itself —
+  classification, `Retry-After`, backoff — is `Compendium.Transport.Retry`,
+  shared with the OCI transport.
   """
 
   require Logger
 
   alias Compendium.OCI.Errors
+  alias Compendium.Transport.Retry
 
   @max_retries 3
-  @base_delay_ms 500
   @receive_timeout 30_000
-
-  # A retry of these cannot create a second effect, so an ambiguous failure is
-  # safe to repeat. `:post` and `:patch` are deliberately absent.
-  @idempotent_methods [:get, :head, :put, :delete, :options]
-
-  # The request never left this host, so nothing can have acted on it.
-  @unreached_reasons [:econnrefused, :nxdomain, :ehostunreach, :enetunreach, :ehostdown]
 
   @type response ::
           {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, Errors.t()}
@@ -109,9 +104,9 @@ defmodule Compendium.Registry.Transport do
           attempt,
           limits,
           # A 429 says the request was refused, not performed.
-          :always,
+          Retry.classify({:status, 429}),
           "429",
-          max(retry_after_ms(resp_headers), backoff(attempt)),
+          max(Retry.retry_after_ms(resp_headers), Retry.backoff(attempt)),
           fn -> {:error, Errors.from_api_response(429, resp_body, "request")} end
         )
 
@@ -123,9 +118,9 @@ defmodule Compendium.Registry.Transport do
           body,
           attempt,
           limits,
-          :if_idempotent,
+          Retry.classify({:status, status}),
           "#{status}",
-          backoff(attempt),
+          Retry.backoff(attempt),
           fn -> {:error, Errors.from_api_response(status, resp_body, "request")} end
         )
 
@@ -145,9 +140,9 @@ defmodule Compendium.Registry.Transport do
           body,
           attempt,
           limits,
-          if(unreached?(reason), do: :always, else: :if_idempotent),
+          Retry.classify({:error, reason}),
           inspect(reason),
-          backoff(attempt),
+          Retry.backoff(attempt),
           fn -> {:error, Errors.api_connection_error(reason)} end
         )
     end
@@ -159,7 +154,7 @@ defmodule Compendium.Registry.Transport do
         Logger.error("[Compendium.Registry.Transport] #{why} on final attempt — giving up")
         give_up.()
 
-      when_to == :if_idempotent and method not in @idempotent_methods ->
+      when_to == :retry_if_idempotent and not Retry.idempotent?(method) ->
         Logger.error(
           "[Compendium.Registry.Transport] #{why} for #{method_string(method)} — not retrying: " <>
             "the server may have acted on it and this API has no idempotency key"
@@ -175,25 +170,6 @@ defmodule Compendium.Registry.Transport do
 
         Process.sleep(delay)
         do_request(method, url, headers, body, attempt + 1, limits)
-    end
-  end
-
-  defp backoff(attempt), do: @base_delay_ms * Integer.pow(2, attempt)
-
-  defp unreached?(%{reason: reason}), do: unreached?(reason)
-  defp unreached?(reason) when reason in @unreached_reasons, do: true
-  defp unreached?(_), do: false
-
-  defp retry_after_ms(headers) do
-    case List.keyfind(headers, "retry-after", 0) do
-      {_, value} ->
-        case Integer.parse(value) do
-          {seconds, _} -> seconds * 1000
-          :error -> 0
-        end
-
-      _ ->
-        0
     end
   end
 
