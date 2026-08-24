@@ -231,19 +231,6 @@ defmodule Emissary.MCP.ToolProvider do
               handle_result()
 
   @doc """
-  Report whether the provider is answering.
-
-  `system.status` asks this. It used to ask by calling `handle/3` with an
-  undeclared `"ping"` action — a verb absent from every `input_schema`
-  enum, so no client could call it and no audit could see it, which made
-  four providers carry a second, invisible entry point. A provider that
-  does not implement this is simply reported as loaded or not.
-  """
-  @callback health() :: :ok | {:error, term()}
-
-  @optional_callbacks health: 0
-
-  @doc """
   The canonical invalid-action refusal, derived from the tool's action
   enum so the prose can never drift from the schema it restates.
   """

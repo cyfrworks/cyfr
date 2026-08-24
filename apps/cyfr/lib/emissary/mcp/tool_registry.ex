@@ -934,15 +934,23 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   @doc """
-  The configured tool providers that are actually loadable, warning about
-  any that aren't (an app-scoped test run without the sibling apps).
+  Every provider named in config, loaded or not. The status roster reads
+  this set, so a configured provider that failed to load is reported as
+  such rather than silently absent.
 
   The single reader of `:cyfr, :tool_providers` — config always sets the
   key, so the default is an empty list, never a hidden second roster.
   """
+  @spec configured_providers() :: [module()]
+  def configured_providers, do: Application.get_env(:cyfr, :tool_providers, [])
+
+  @doc """
+  The configured tool providers that are actually loadable, warning about
+  any that aren't (an app-scoped test run without the sibling apps).
+  """
   @spec available_providers() :: [module()]
   def available_providers do
-    Application.get_env(:cyfr, :tool_providers, [])
+    configured_providers()
     |> Enum.filter(fn module ->
       if Code.ensure_loaded?(module) and function_exported?(module, :tools, 0) do
         true

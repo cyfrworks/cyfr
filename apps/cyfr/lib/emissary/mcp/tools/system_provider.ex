@@ -17,7 +17,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   alias Sanctum.Context
   require Logger
 
-  @valid_scopes ["all", "opus", "sanctum", "compendium", "emissary", "arca", "registry"]
+  # The status scopes are derived from the provider roster — "all" and the
+  # registry (an HTTP peer, not a provider) are the two extras.
+  defp scope_enum, do: ["all"] ++ service_scopes()
+  defp service_scopes, do: Emissary.MCP.Services.service_names() ++ ["registry"]
 
   # ============================================================================
   # ToolProvider Callbacks
@@ -50,7 +53,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
             },
             "scope" => %{
               "type" => "string",
-              "enum" => @valid_scopes,
+              "enum" => scope_enum(),
               "description" => "For status: which service(s) to check. Default: all"
             },
             "event" => %{
@@ -180,30 +183,35 @@ defmodule Emissary.MCP.Tools.SystemProvider do
      }}
   end
 
-  defp handle_status(ctx, scope) when scope in @valid_scopes do
-    service_status = check_service_by_scope(ctx, scope)
+  defp handle_status(ctx, scope) do
+    if scope in service_scopes() do
+      service_status = check_service_by_scope(ctx, scope)
 
-    {:ok,
-     %{
-       status: if(service_status in ["ok", "stub"], do: "ok", else: "degraded"),
-       version: Cyfr.Version.current(),
-       uptime_seconds: uptime(),
-       services: %{String.to_existing_atom(scope) => service_status}
-     }}
+      {:ok,
+       %{
+         status: if(service_status in ["ok", "stub"], do: "ok", else: "degraded"),
+         version: Cyfr.Version.current(),
+         uptime_seconds: uptime(),
+         # `scope` was just checked against the closed derived set, so the
+         # atom table stays bounded.
+         services: %{String.to_atom(scope) => service_status}
+       }}
+    else
+      {:error, "Invalid scope: #{scope}. Valid scopes: #{Enum.join(scope_enum(), ", ")}"}
+    end
   end
-
-  defp handle_status(_ctx, scope) do
-    {:error, "Invalid scope: #{scope}. Valid scopes: #{Enum.join(@valid_scopes, ", ")}"}
-  end
-
-  defp check_service_by_scope(_ctx, "emissary"), do: "ok"
-
-  defp check_service_by_scope(_ctx, "sanctum"), do: check_service(Sanctum.MCP)
-  defp check_service_by_scope(_ctx, "arca"), do: check_service(Emissary.MCP.Tools.RecordsProvider)
-  defp check_service_by_scope(_ctx, "opus"), do: check_service(Opus.MCP)
-  defp check_service_by_scope(_ctx, "compendium"), do: check_service(Compendium.MCP)
 
   defp check_service_by_scope(_ctx, "registry"), do: check_registry_health()
+  defp check_service_by_scope(_ctx, scope), do: check_service_named(scope)
+
+  # A service is answering when every configured provider it owns is; the
+  # first provider that is not carries the answer.
+  defp check_service_named(service) do
+    service
+    |> Emissary.MCP.Services.providers_for()
+    |> Enum.map(&check_service/1)
+    |> Enum.find("ok", &(&1 != "ok"))
+  end
 
   # ============================================================================
   # Notify Action
@@ -278,14 +286,9 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
 
   defp check_all_services(_ctx) do
-    %{
-      emissary: "ok",
-      sanctum: check_service(Sanctum.MCP),
-      arca: check_service(Emissary.MCP.Tools.RecordsProvider),
-      opus: check_service(Opus.MCP),
-      compendium: check_service(Compendium.MCP),
-      registry: check_registry_health()
-    }
+    Emissary.MCP.Services.service_names()
+    |> Map.new(fn service -> {String.to_atom(service), check_service_named(service)} end)
+    |> Map.put(:registry, check_registry_health())
   end
 
   defp check_registry_health do
@@ -314,27 +317,16 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       "error"
   end
 
-  # Providers answer health on a declared callback. This used to call
-  # `handle/3` with an undeclared "ping" action, which meant four providers
-  # carried an entry point absent from their own schemas — invisible to the
-  # action audit and unreachable from the wire.
+  # "ok" means the provider module is loaded and answers the provider
+  # contract — nothing deeper. (An optional health/0 callback once offered
+  # more; nothing ever implemented it, so status reported loadedness while
+  # reading as health. Before that, this called `handle/3` with an
+  # undeclared "ping" action — an entry point absent from every schema,
+  # invisible to the action audit and unreachable from the wire.)
   defp check_service(module) do
     cond do
       not Code.ensure_loaded?(module) ->
         "not_loaded"
-
-      function_exported?(module, :health, 0) ->
-        case module.health() do
-          :ok ->
-            "ok"
-
-          {:error, reason} ->
-            Logger.warning(
-              "[SystemProvider] Service #{inspect(module)} reported #{inspect(reason)}"
-            )
-
-            "error"
-        end
 
       function_exported?(module, :handle, 3) ->
         "ok"

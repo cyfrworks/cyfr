@@ -212,6 +212,22 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
       assert is_integer(result.uptime_seconds)
     end
 
+    test "scope locus is a valid scope and reports its provider" do
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "locus"})
+
+      assert Map.keys(result.services) == [:locus]
+    end
+
+    test "the scope enum is the derived roster" do
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
+
+      assert tool.input_schema["properties"]["scope"]["enum"] ==
+               ["all"] ++ Emissary.MCP.Services.service_names() ++ ["registry"]
+    end
+
     test "invalid scope returns error" do
       ctx = Sanctum.TestContext.local()
 
