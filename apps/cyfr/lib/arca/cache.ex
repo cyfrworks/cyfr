@@ -20,7 +20,8 @@ defmodule Arca.Cache do
   `Arca.Cache.Keys`, e.g.:
   - `{:component_meta, "ath_…", "catalyst:local.demo:0.1.0"}`
   - `{:wasm_bytes, "sha256:…"}`
-  - `{:mcp_tool, "execution"}`
+  - `{:mcp_tool, "execution"}` (private to `Emissary.MCP.ToolRegistry` —
+    read and written only through its `lookup/1` / `register_tool/4`)
   """
 
   require Logger

@@ -590,7 +590,7 @@ defmodule EmissaryWeb.MCPController do
   defp determine_routed_to(nil, _action), do: "emissary"
 
   defp determine_routed_to(tool, _action) do
-    case Arca.Cache.get({:mcp_tool, tool}) do
+    case Emissary.MCP.ToolRegistry.lookup(tool) do
       {:ok, {module, _meta}} -> module_to_service(module)
       :miss -> "emissary"
     end

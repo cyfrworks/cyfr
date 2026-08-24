@@ -275,7 +275,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
 
       for tool_def <- live_tools(),
           name = tool_def["name"],
-          {:ok, {_module, meta}} = Arca.Cache.get({:mcp_tool, name}),
+          {:ok, {_module, meta}} = ToolRegistry.lookup(name),
           action <- action_enum(tool_def) || [],
           ctx <- probes do
         visible = action in visible_actions(name, ctx)
@@ -296,7 +296,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       for tool_def <- live_tools(),
           name = tool_def["name"],
           action <- action_enum(tool_def) || [] do
-        {:ok, {_module, meta}} = Arca.Cache.get({:mcp_tool, name})
+        {:ok, {_module, meta}} = ToolRegistry.lookup(name)
         declared = get_in(meta, [:annotations, :actions, action, :auth]) == :anonymous
 
         assert ToolVisibility.anonymous_action?(name, action) == declared,

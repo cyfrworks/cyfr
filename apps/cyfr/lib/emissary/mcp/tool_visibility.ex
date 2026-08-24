@@ -42,7 +42,7 @@ defmodule Emissary.MCP.ToolVisibility do
   """
   @spec anonymous_action?(String.t(), String.t()) :: boolean()
   def anonymous_action?(name, action) do
-    case Arca.Cache.get({:mcp_tool, name}) do
+    case Emissary.MCP.ToolRegistry.lookup(name) do
       {:ok, {_module, meta}} ->
         ActionAnnotations.auth(meta, action) == :anonymous
 
@@ -69,7 +69,7 @@ defmodule Emissary.MCP.ToolVisibility do
   @doc "`admits?/2` by tool and action name, for the Router's invocation gate."
   @spec admits_action?(String.t(), String.t(), Context.t()) :: boolean()
   def admits_action?(name, action, %Context{} = ctx) do
-    case Arca.Cache.get({:mcp_tool, name}) do
+    case Emissary.MCP.ToolRegistry.lookup(name) do
       {:ok, {_module, meta}} ->
         admits?(ActionAnnotations.annotation(meta, action) || %{}, ctx)
 

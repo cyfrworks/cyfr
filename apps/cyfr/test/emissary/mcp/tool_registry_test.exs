@@ -251,13 +251,14 @@ defmodule Emissary.MCP.ToolRegistryTest do
         }
       }
 
-      Arca.Cache.put(
-        {:mcp_tool, @crash_tool},
-        {Emissary.MCP.ToolRegistryTest.CrashingProvider, %{annotations: annotations}},
+      ToolRegistry.register_tool(
+        @crash_tool,
+        Emissary.MCP.ToolRegistryTest.CrashingProvider,
+        %{annotations: annotations},
         :timer.minutes(1)
       )
 
-      on_exit(fn -> Arca.Cache.invalidate({:mcp_tool, @crash_tool}) end)
+      on_exit(fn -> ToolRegistry.unregister_tool(@crash_tool) end)
     end
 
     test "a raising handler yields a typed error and the caller survives" do
@@ -391,13 +392,14 @@ defmodule Emissary.MCP.ToolRegistryTest do
     defp register_blocking_tool do
       annotations = %{actions: %{"block" => %{kind: :execute, planes: [:external]}}}
 
-      Arca.Cache.put(
-        {:mcp_tool, @blocking_tool},
-        {Emissary.MCP.ToolRegistryTest.BlockingProvider, %{annotations: annotations}},
+      ToolRegistry.register_tool(
+        @blocking_tool,
+        Emissary.MCP.ToolRegistryTest.BlockingProvider,
+        %{annotations: annotations},
         :timer.minutes(1)
       )
 
-      on_exit(fn -> Arca.Cache.invalidate({:mcp_tool, @blocking_tool}) end)
+      on_exit(fn -> ToolRegistry.unregister_tool(@blocking_tool) end)
     end
 
     # The transport cancels a request by request id when its caller closes the

@@ -125,12 +125,32 @@ defmodule Emissary.MCP.ToolRegistry do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   @doc """
+  Look up a registered tool's provider module and cached meta.
+
+  The one reader of the registry's cache representation — everything
+  outside this module asks here, never the cache key.
+  """
+  @spec lookup(String.t()) :: {:ok, {module(), map()}} | :miss
+  def lookup(name), do: Arca.Cache.get({:mcp_tool, name})
+
+  @doc false
+  # Install one tool under a provider module, exactly as `load_providers/0`
+  # does. Tests plant probe providers through here instead of writing the
+  # cache key, which is this module's private representation.
+  def register_tool(name, module, meta, ttl \\ @cache_ttl) do
+    Arca.Cache.put({:mcp_tool, name}, {module, meta}, ttl)
+  end
+
+  @doc false
+  def unregister_tool(name), do: Arca.Cache.invalidate({:mcp_tool, name})
+
+  @doc """
   Get a specific tool's definition.
 
   Returns `{:ok, tool_def}` or `{:error, :not_found}`.
   """
   def get_tool(name) do
-    case Arca.Cache.get({:mcp_tool, name}) do
+    case lookup(name) do
       {:ok, {_module, meta}} ->
         tool_def =
           %{
@@ -271,7 +291,7 @@ defmodule Emissary.MCP.ToolRegistry do
   @spec in_chain_refused?(String.t(), String.t() | nil) :: boolean()
   def in_chain_refused?(name, action) when is_binary(name) do
     not String.contains?(name, ":") and
-      match?({:ok, _}, Arca.Cache.get({:mcp_tool, name})) and
+      match?({:ok, _}, lookup(name)) and
       not in_chain_reachable?(name, action)
   end
 
@@ -283,7 +303,7 @@ defmodule Emissary.MCP.ToolRegistry do
     else
       action = args["action"] || args[:action]
 
-      case Arca.Cache.get({:mcp_tool, name}) do
+      case lookup(name) do
         {:ok, {_module, meta}} ->
           planes = ActionAnnotations.planes(meta, action)
 
@@ -559,7 +579,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
     start_time = System.monotonic_time()
 
-    case Arca.Cache.get({:mcp_tool, name}) do
+    case lookup(name) do
       {:ok, {module, meta}} ->
         result =
           case authorize_annotated_action(name, meta, ctx, args) do
@@ -667,7 +687,7 @@ defmodule Emissary.MCP.ToolRegistry do
   Check if a tool exists.
   """
   def exists?(name) do
-    case Arca.Cache.get({:mcp_tool, name}) do
+    case lookup(name) do
       {:ok, _} -> true
       :miss -> false
     end
@@ -830,7 +850,7 @@ defmodule Emissary.MCP.ToolRegistry do
       Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
 
     stale = old_tools -- new_tools
-    for name <- stale, do: Arca.Cache.invalidate({:mcp_tool, name})
+    for name <- stale, do: unregister_tool(name)
     {:reply, {:ok, count}, state}
   end
 
@@ -924,7 +944,7 @@ defmodule Emissary.MCP.ToolRegistry do
             annotations: Map.get(tool, :annotations)
           }
 
-          Arca.Cache.put({:mcp_tool, tool.name}, {module, meta}, @cache_ttl)
+          register_tool(tool.name, module, meta)
           tool.name
         end)
       end)
