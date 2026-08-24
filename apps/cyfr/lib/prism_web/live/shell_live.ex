@@ -575,7 +575,25 @@ defmodule PrismWeb.ShellLive do
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
       true ->
-        tincture_ctx = Sanctum.build_tincture_context(socket.assigns.context, tincture)
+        tincture_ctx_base = Sanctum.build_tincture_context(socket.assigns.context, tincture)
+        request_id = Emissary.UUID7.request_id()
+        tincture_ctx = %{tincture_ctx_base | request_id: request_id}
+
+        # The console invoke is a run ingress like the HTTP one, so it files
+        # the same request-log rows; the method names this surface.
+        Emissary.MCP.RequestLog.safe_log_started(tincture_ctx, request_id, %{
+          tool: "tincture",
+          action: "invoke",
+          method: "LIVE /shell/invoke",
+          input: %{
+            publisher: tincture.publisher,
+            tincture_name: tincture.name,
+            reference: reference,
+            input: input
+          }
+        })
+
+        start_time = System.monotonic_time()
 
         # The console shell is an owner surface: a protected-route profile
         # roots the invocation, and a tincture without one does not run —
@@ -585,8 +603,17 @@ defmodule PrismWeb.ShellLive do
             route: :protected
           )
 
+        duration_ms =
+          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
         case run_result do
           {:ok, result} ->
+            Emissary.MCP.RequestLog.safe_log_completed(tincture_ctx, request_id, %{
+              output: result.output,
+              duration_ms: duration_ms,
+              routed_to: "opus"
+            })
+
             response = %{
               type: "cyfr:response",
               id: msg["id"],
@@ -601,6 +628,12 @@ defmodule PrismWeb.ShellLive do
             {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
           {:error, no_profile} when no_profile in [:no_profile, :no_public_profile] ->
+            Emissary.MCP.RequestLog.safe_log_failed(tincture_ctx, request_id, %{
+              error: to_string(no_profile),
+              duration_ms: duration_ms,
+              routed_to: "opus"
+            })
+
             response = %{
               type: "cyfr:response",
               id: msg["id"],
@@ -610,6 +643,16 @@ defmodule PrismWeb.ShellLive do
             {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
           {:error, reason} ->
+            Emissary.MCP.RequestLog.safe_log_failed(tincture_ctx, request_id, %{
+              error:
+                if(is_binary(reason),
+                  do: reason,
+                  else: inspect(Sanctum.Sanitizer.sanitize(reason))
+                ),
+              duration_ms: duration_ms,
+              routed_to: "opus"
+            })
+
             Logger.warning("[ShellLive] invoke error for #{tincture.name}: #{inspect(reason)}")
             # Chain errors are tuples; executor errors are strings. Neither
             # leaks internal structure to the client.
