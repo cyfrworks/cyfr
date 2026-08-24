@@ -62,25 +62,28 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   end
 
   defp gate(conn, token) do
-    case Sanctum.Session.load(token, surface: :console) do
-      {:ok, %{authenticated: true}} ->
+    # This plug decides only the claim gate; an unknown session, or a
+    # person with nowhere to work yet, falls through to the page's own
+    # auth. It never slides the session — the console hooks do.
+    case Sanctum.Caller.establish(token, refresh: false) do
+      {:ok, _ctx} ->
         conn
 
-      {:ok, %{authenticated: false, namespace: nil, user_id: user_id}} when is_binary(user_id) ->
+      {:error, {:claim_pending, _ctx}} ->
         conn
         |> Phoenix.Controller.redirect(to: "/claim-namespace")
         |> halt()
 
-      {:ok, %{authenticated: false, user_id: user_id}} when is_binary(user_id) ->
+      {:error, {:denied, _ctx}} ->
         conn
         |> configure_session(drop: true)
         |> Phoenix.Controller.redirect(to: "/login")
         |> halt()
 
-      {:error, reason} when reason in [:namespace_unavailable, :database_error] ->
+      {:error, :unavailable} ->
         Logger.warning(
-          "[RequirePersonalNamespace] could not read who the session belongs to " <>
-            "(#{inspect(reason)}) — answering 503, not the claim gate"
+          "[RequirePersonalNamespace] could not read who the session belongs to — " <>
+            "answering 503, not the claim gate"
         )
 
         conn
@@ -88,7 +91,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
         |> send_resp(503, "Try again shortly.")
         |> halt()
 
-      _ ->
+      {:error, _other} ->
         conn
     end
   end
