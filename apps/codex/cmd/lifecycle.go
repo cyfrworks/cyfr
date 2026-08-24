@@ -41,7 +41,7 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + mcp-bridge, plus optional caddy) with "cyfr up".
 
-Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, example components, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml, .env, and .env.example are kept if they already exist. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml (--force never touches .env / .env.example).`,
 	Example: `  cyfr init
@@ -63,8 +63,8 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			_ = os.Remove("cyfr.yaml")
 		}
 
-		// Download scaffold files (non-fatal): guides, wit/, components/, aqua/,
-		// and the deploy files (docker-compose.yml, Caddyfile, .env.example,
+		// Download scaffold files (non-fatal): guides, wit/, aqua/, and the
+		// deploy files (docker-compose.yml, Caddyfile, .env.example,
 		// Dockerfile.node). Idempotent — existing files kept. No-op for dev
 		// builds (Version=="dev"/"").
 		if err := scaffold.Download(Version); err != nil {
@@ -166,10 +166,6 @@ database_path: ./data/cyfr.db
 .env
 .env.local
 .env.*.local
-
-# Build output inside the scaffolded seed-bundle sources.
-components/_bundle/**/target/
-components/_bundle/**/node_modules/
 `
 		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
 			if err := os.WriteFile(".gitignore", []byte(gitignoreContent), 0644); err != nil {
@@ -207,7 +203,7 @@ components/_bundle/**/node_modules/
 			}
 			fmt.Println("  component-guide.md / tincture-guide.md / integration-guide.md downloaded")
 			fmt.Println("  wit/ interface definitions downloaded")
-			fmt.Println("  components/ examples + aqua/ orchestrator prompts downloaded")
+			fmt.Println("  aqua/ orchestrator prompts downloaded")
 		}
 		if configCreated {
 			fmt.Println("  cyfr.yaml created")
@@ -232,7 +228,7 @@ components/_bundle/**/node_modules/
 		if !releaseBuild {
 			fmt.Println("")
 			fmt.Println("⚠  dev build — docker-compose.yml, Caddyfile, .env.example and the bundled")
-			fmt.Println("   scaffold (guides, wit/, components/, aqua/) are only fetched for released")
+			fmt.Println("   scaffold (guides, wit/, aqua/) are only fetched for released")
 			fmt.Println("   versions. Run the server from source with `mix phx.server`, or copy those")
 			fmt.Println("   files from a repo checkout.")
 		}

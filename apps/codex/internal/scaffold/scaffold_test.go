@@ -34,7 +34,6 @@ func TestIsManaged(t *testing.T) {
 		"cyfr.yaml",
 		"aqua/agent.json",
 		"aqua/aqua_custom.md", // user-created prompt
-		"components/catalysts/local/foo/cyfr-manifest.json",
 	}
 	for _, p := range notManaged {
 		if isManaged(p) {
