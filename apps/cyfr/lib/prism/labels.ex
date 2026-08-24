@@ -13,19 +13,15 @@ defmodule Prism.Labels do
 
   @modes ~w(lite dev)
 
+  # Lite renames only the nouns lite pages render — today, tinctures.
+  # Everything else in lite's page list already speaks plain words, and a
+  # noun added here without a page rendering it is a mistranslation
+  # waiting for its page (the runtime vocabulary lives in `@dev`).
+  # `Map.fetch!` fails loudly if a lite page starts using a noun this map
+  # does not carry.
   @lite %{
     tincture: "App",
-    tinctures: "Apps",
-    execution: "Task run",
-    executions: "Task runs",
-    formula: "Workflow",
-    formulas: "Workflows",
-    reagent: "Integration",
-    reagents: "Integrations",
-    catalyst: "AI model",
-    catalysts: "AI models",
-    component: "Building block",
-    components: "Building blocks"
+    tinctures: "Apps"
   }
 
   @dev %{
