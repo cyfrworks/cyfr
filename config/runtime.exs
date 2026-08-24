@@ -204,6 +204,12 @@ if config_env() != :test do
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
 
+    # The one runtime storage root: every athanor's data and components,
+    # plus the cache/ and system/ globals — and the SQLite database below,
+    # unless CYFR_DATABASE_PATH points it elsewhere.
+    base_path = env!("CYFR_DATA_PATH", :string, "data") |> Path.expand()
+    config :cyfr, :base_path, base_path
+
     # Database connection config. The adapter is selected at compile time in
     # config.exs from CYFR_DATABASE; here we supply connection parameters for
     # whichever adapter was built — gated so SQLite-only keys (journal_mode,
@@ -211,7 +217,7 @@ if config_env() != :test do
     case Cyfr.RuntimeConfig.repo_adapter() do
       Ecto.Adapters.SQLite3 ->
         config :cyfr, Arca.Repo,
-          database: env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db"),
+          database: env!("CYFR_DATABASE_PATH", :string, nil) || Path.join(base_path, "cyfr.db"),
           pool_size:
             parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
           journal_mode: :wal,
@@ -226,11 +232,6 @@ if config_env() != :test do
           {:error, message} -> raise message
         end
     end
-
-    # The one runtime storage root: every athanor's data and components,
-    # plus the cache/ and system/ globals.
-    base_path = env!("CYFR_DATA_PATH", :string, "data") |> Path.expand()
-    config :cyfr, :base_path, base_path
 
     # The seed bundle is read in place: the repo/scaffold checkout by default,
     # the baked image copy in Docker (the Dockerfile sets CYFR_BUNDLE_PATH).
