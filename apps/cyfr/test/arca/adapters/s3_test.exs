@@ -284,6 +284,69 @@ defmodule Arca.Adapters.S3Test do
     end
   end
 
+  describe "component-prefix walks" do
+    test "list_recursive returns logical leaves for an athanor's components subtree", %{ctx: ctx} do
+      # The roster-driven tincture scan and the auto-indexer walk exactly
+      # this prefix on an object-store deployment.
+      parent = self()
+
+      listing = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <ListBucketResult>
+        <IsTruncated>false</IsTruncated>
+        <Contents><Key>athanors/ath_test/components/tinctures/local/dash/1.0.0/cyfr-manifest.json</Key></Contents>
+        <Contents><Key>athanors/ath_test/components/tinctures/local/dash/1.0.0/index.html</Key></Contents>
+      </ListBucketResult>
+      """
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.query_string})
+        Plug.Conn.send_resp(conn, 200, listing)
+      end)
+
+      assert {:ok, leaves} = S3.list_recursive(ctx, ["components", "ath_test", "tinctures"])
+
+      assert Enum.sort(leaves) == [
+               [
+                 "components",
+                 "ath_test",
+                 "tinctures",
+                 "local",
+                 "dash",
+                 "1.0.0",
+                 "cyfr-manifest.json"
+               ],
+               ["components", "ath_test", "tinctures", "local", "dash", "1.0.0", "index.html"]
+             ]
+
+      assert_received {:req, "GET", _, query}
+      assert URI.decode_query(query)["prefix"] =~ "athanors/ath_test/components/tinctures"
+    end
+
+    test "usage sums sizes under the athanor's components subtree", %{ctx: ctx} do
+      parent = self()
+
+      listing = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <ListBucketResult>
+        <IsTruncated>false</IsTruncated>
+        <Contents><Key>athanors/ath_test/components/catalysts/local/x/1.0.0/catalyst.wasm</Key><Size>7</Size></Contents>
+        <Contents><Key>athanors/ath_test/components/catalysts/local/x/1.0.0/cyfr-manifest.json</Key><Size>5</Size></Contents>
+      </ListBucketResult>
+      """
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.query_string})
+        Plug.Conn.send_resp(conn, 200, listing)
+      end)
+
+      assert {:ok, %{files: 2, bytes: 12}} = S3.usage(ctx, ["components", "ath_test"])
+
+      assert_received {:req, "GET", _, query}
+      assert URI.decode_query(query)["prefix"] =~ "athanors/ath_test/components"
+    end
+  end
+
   describe "path traversal" do
     test "rejects '..' segments", %{ctx: ctx} do
       assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->

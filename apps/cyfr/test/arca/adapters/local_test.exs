@@ -10,9 +10,11 @@ defmodule Arca.Adapters.LocalTest do
 
   setup do
     # Use a unique temp directory for each test run
+    prev_base = Application.fetch_env!(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, @test_base_path)
 
     on_exit(fn ->
+      Application.put_env(:cyfr, :base_path, prev_base)
       File.rm_rf!(@test_base_path)
     end)
 
@@ -209,6 +211,29 @@ defmodule Arca.Adapters.LocalTest do
       assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
         Local.build_path(ctx, ["components"])
       end
+    end
+  end
+
+  describe "usage/2" do
+    test "the data walk and the components walk are disjoint", %{ctx: ctx} do
+      # Caps.data_bytes/1 walks []; the components cap walks the athanor's
+      # components prefix. Neither may see the other's bytes.
+      athanor = Sanctum.TestContext.athanor_id()
+      :ok = Local.put(ctx, ["notes", "a.txt"], "12345")
+
+      :ok =
+        Local.put(
+          ctx,
+          ["components", athanor, "reagents", "local", "x", "1.0.0", "reagent.wasm"],
+          "123"
+        )
+
+      assert {:ok, %{files: 1, bytes: 5}} = Local.usage(ctx, [])
+      assert {:ok, %{files: 1, bytes: 3}} = Local.usage(ctx, ["components", athanor])
+    end
+
+    test "a missing prefix is empty usage", %{ctx: ctx} do
+      assert {:ok, %{files: 0, bytes: 0}} = Local.usage(ctx, ["never-written"])
     end
   end
 

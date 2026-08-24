@@ -13,22 +13,24 @@ defmodule Compendium.ForkTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_fork_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
+    prev_base = Application.fetch_env!(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
+      Application.put_env(:cyfr, :base_path, prev_base)
       File.rm_rf!(test_dir)
     end)
 
-    {:ok, ctx: ctx, test_dir: test_dir}
+    {:ok, ctx: ctx}
   end
 
   # ============================================================================
   # Helpers — create a fake "published" component at a non-local namespace
   # ============================================================================
 
-  defp create_source_component(_test_dir, type, publisher, name, version, opts \\ []) do
+  defp create_source_component(type, publisher, name, version, opts \\ []) do
     base =
       Arca.Adapters.Local.build_path(
         Sanctum.TestContext.local(),
@@ -64,7 +66,7 @@ defmodule Compendium.ForkTest do
     base
   end
 
-  defp create_tincture_component(_test_dir, publisher, name, version, opts \\ []) do
+  defp create_tincture_component(publisher, name, version, opts \\ []) do
     base =
       Arca.Adapters.Local.build_path(
         Sanctum.TestContext.local(),
@@ -109,8 +111,8 @@ defmodule Compendium.ForkTest do
   # ============================================================================
 
   describe "fork happy path (WASM)" do
-    test "forks a catalyst to local namespace", %{ctx: ctx, test_dir: test_dir} do
-      create_source_component(test_dir, "catalyst", "acme", "my-tool", "1.0.0",
+    test "forks a catalyst to local namespace", %{ctx: ctx} do
+      create_source_component("catalyst", "acme", "my-tool", "1.0.0",
         with_wasm: true,
         with_readme: true
       )
@@ -155,8 +157,8 @@ defmodule Compendium.ForkTest do
   end
 
   describe "fork happy path (tincture)" do
-    test "forks a tincture to local namespace", %{ctx: ctx, test_dir: test_dir} do
-      create_tincture_component(test_dir, "acme", "my-dash", "1.0.0")
+    test "forks a tincture to local namespace", %{ctx: ctx} do
+      create_tincture_component("acme", "my-dash", "1.0.0")
 
       source_ref = parse_ref!("t:acme.my-dash:1.0.0")
       assert {:ok, result} = Fork.fork(ctx, source_ref)
@@ -189,8 +191,8 @@ defmodule Compendium.ForkTest do
   # ============================================================================
 
   describe "no source error" do
-    test "errors when component has no src/ directory", %{ctx: ctx, test_dir: test_dir} do
-      create_source_component(test_dir, "catalyst", "acme", "no-src", "1.0.0", with_source: false)
+    test "errors when component has no src/ directory", %{ctx: ctx} do
+      create_source_component("catalyst", "acme", "no-src", "1.0.0", with_source: false)
 
       source_ref = parse_ref!("c:acme.no-src:1.0.0")
       assert {:error, msg} = Fork.fork(ctx, source_ref)
@@ -209,10 +211,10 @@ defmodule Compendium.ForkTest do
   end
 
   describe "target already exists" do
-    test "errors when target component already exists", %{ctx: ctx, test_dir: test_dir} do
-      create_source_component(test_dir, "catalyst", "acme", "my-tool", "1.0.0")
+    test "errors when target component already exists", %{ctx: ctx} do
+      create_source_component("catalyst", "acme", "my-tool", "1.0.0")
       # Create the target too
-      create_source_component(test_dir, "catalyst", "local", "my-tool", "1.0.0")
+      create_source_component("catalyst", "local", "my-tool", "1.0.0")
 
       source_ref = parse_ref!("c:acme.my-tool:1.0.0")
       assert {:error, msg} = Fork.fork(ctx, source_ref)
@@ -225,8 +227,8 @@ defmodule Compendium.ForkTest do
   # ============================================================================
 
   describe "custom name" do
-    test "forks with a different name", %{ctx: ctx, test_dir: test_dir} do
-      create_source_component(test_dir, "reagent", "acme", "original", "1.0.0")
+    test "forks with a different name", %{ctx: ctx} do
+      create_source_component("reagent", "acme", "original", "1.0.0")
 
       source_ref = parse_ref!("r:acme.original:1.0.0")
       assert {:ok, result} = Fork.fork(ctx, source_ref, name: "my-fork")
@@ -255,8 +257,8 @@ defmodule Compendium.ForkTest do
   end
 
   describe "custom version" do
-    test "forks with a different version", %{ctx: ctx, test_dir: test_dir} do
-      create_source_component(test_dir, "formula", "acme", "my-flow", "2.0.0")
+    test "forks with a different version", %{ctx: ctx} do
+      create_source_component("formula", "acme", "my-flow", "2.0.0")
 
       source_ref = parse_ref!("f:acme.my-flow:2.0.0")
       assert {:ok, result} = Fork.fork(ctx, source_ref, version: "0.1.0")
@@ -288,8 +290,8 @@ defmodule Compendium.ForkTest do
   # ============================================================================
 
   describe "data.db included" do
-    test "copies data.db when forking a tincture", %{ctx: ctx, test_dir: test_dir} do
-      create_tincture_component(test_dir, "acme", "db-dash", "1.0.0", with_data_db: true)
+    test "copies data.db when forking a tincture", %{ctx: ctx} do
+      create_tincture_component("acme", "db-dash", "1.0.0", with_data_db: true)
 
       source_base =
         Arca.Adapters.Local.build_path(

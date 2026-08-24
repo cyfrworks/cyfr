@@ -28,28 +28,28 @@ end
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()
 
-# The suite must never write into the repo's own component trees: every
-# storage root is under tmp (config/test.exs), and the only thing tracked
-# under `components/` is the seed bundle. A stray write here would mean a
-# test reached the real filesystem around the tmp roots.
+# The suite must never write into the repo's own storage tree: every storage
+# root is under tmp (config/test.exs), so an entry appearing under the repo's
+# data/athanors/ means a test reached the real filesystem around the tmp
+# roots. (Bare data/ is legitimate — the suite DB lives at data/test.db.)
 #
-# The check is on what the run ADDS, not on what is there. A developer who has
-# run the server locally has their own athanor tree under `components/`, and
-# failing the run for it would make the exit code useless on exactly the
-# machine that most needs it — green and red would look the same. On a fresh
-# checkout the snapshot holds only `_bundle`, so any stray write still fails.
+# The check is on what the run ADDS, not on what is there. A developer who
+# has run the server locally has real athanor trees under data/athanors/,
+# and failing the run for them would make the exit code useless on exactly
+# the machine that most needs it — green and red would look the same. On a
+# fresh checkout the snapshot is empty, so any stray write still fails.
 repo_root = Path.expand("../../..", __DIR__)
-component_dirs = ["components", "apps/cyfr/components", "apps/opus/components"]
+watched_dirs = ["data/athanors"]
 
 entries_under = fn dir ->
   path = Path.join(repo_root, dir)
   if File.dir?(path), do: MapSet.new(File.ls!(path)), else: MapSet.new()
 end
 
-before_suite = Map.new(component_dirs, &{&1, entries_under.(&1)})
+before_suite = Map.new(watched_dirs, &{&1, entries_under.(&1)})
 
 ExUnit.after_suite(fn _ ->
-  for dir <- component_dirs do
+  for dir <- watched_dirs do
     added = MapSet.difference(entries_under.(dir), Map.fetch!(before_suite, dir))
 
     if MapSet.size(added) > 0 do

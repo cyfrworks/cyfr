@@ -70,6 +70,6 @@ defmodule Cyfr.StackShapeTest do
     env = read!(".env.example")
     # Spelled with the underscore split so the vocabulary gate itself does
     # not trip on this file.
-    refute env =~ ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|4001/
+    refute env =~ ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001/
   end
 end

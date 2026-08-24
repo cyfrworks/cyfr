@@ -296,10 +296,12 @@ jobs:
           if ! grep -q '/data/' apps/codex/cmd/lifecycle.go || grep -qE 'components/\*$|!components/_bundle/' apps/codex/cmd/lifecycle.go; then
             echo "::error::lifecycle.go .gitignore template must ignore /data/ and carry no components/* allowlist pair"; fail=1
           fi
-          # Operator-facing docs describe the athanor layout, not the old two-segment one.
-          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/' -- README.md component-guide.md integration-guide.md tincture-guide.md .env.example || true)"
+          # Operator-facing docs describe the unified athanor layout — not the
+          # old two-segment one, not the split components/{athanor} roots, and
+          # not a bare components/ tree at the project root.
+          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/|components/\{athanor|^components/$' -- README.md component-guide.md integration-guide.md tincture-guide.md .env.example || true)"
           if [ -n "$docs_hits" ]; then
-            echo "::error::guides still describe the pre-athanor layout"; echo "$docs_hits"; fail=1
+            echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
           if git ls-files 'components/*' | grep -v '^components/_bundle/'; then
             echo "::error::tracked components outside components/_bundle/"; fail=1
