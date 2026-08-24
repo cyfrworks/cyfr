@@ -56,7 +56,7 @@ defmodule PrismWeb.AquaApprovalCard do
           {kind_label(@kind)}
         </span>
         <span class="text-[11px] text-gray-500">
-          {@agent_label || "Aqua"} wants to
+          {@agent_label || "AQUA"} wants to
         </span>
         <%= if status(@status) == :pending do %>
           <span class="text-[10px] text-gray-600 ml-auto">awaiting confirmation</span>
