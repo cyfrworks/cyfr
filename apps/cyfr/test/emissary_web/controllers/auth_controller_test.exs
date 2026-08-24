@@ -586,4 +586,64 @@ defmodule EmissaryWeb.AuthControllerTest do
       Sanctum.Session.destroy(session.token)
     end
   end
+
+  describe "device_complete/2 — the ticket carries the outcome" do
+    defp mint_session do
+      ctx =
+        Sanctum.Context.build(
+          user_id: "github|https://github.com|ticket_#{System.unique_integer([:positive])}",
+          email: "ticket@example.com",
+          provider: "github",
+          permissions: [:*],
+          namespace: "testns",
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.Session.create(ctx)
+      session
+    end
+
+    defp mint_ticket(payload) do
+      ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      Arca.Cache.put({:login_device_ticket, ticket}, payload, 60_000)
+      ticket
+    end
+
+    test "a proceed ticket flashes the report's warnings", %{conn: conn} do
+      # The device path once decoded the ticket's :next flag and dropped
+      # the report entirely — unsynced-token warnings the Ueberauth
+      # callback flashed were silently lost on device sign-in.
+      session = mint_session()
+
+      ticket =
+        mint_ticket(%{
+          session_token: session.token,
+          access_token: nil,
+          outcome: {:proceed, %{unsynced: ["ns1"], probe: :ok}}
+        })
+
+      conn = get(conn, "/auth/device/complete/#{ticket}")
+
+      assert redirected_to(conn) == "/"
+      assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
+    end
+
+    test "a needs_claim ticket lands on the claim page with the suggestion", %{conn: conn} do
+      session = mint_session()
+
+      ticket =
+        mint_ticket(%{
+          session_token: session.token,
+          access_token: "idp-token",
+          outcome: {:needs_claim, "alice"}
+        })
+
+      conn = get(conn, "/auth/device/complete/#{ticket}")
+
+      assert redirected_to(conn) == "/claim-namespace"
+      assert Plug.Conn.get_session(conn, :claim_suggested_username) == "alice"
+      assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
+    end
+  end
 end

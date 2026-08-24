@@ -163,38 +163,17 @@ defmodule PrismWeb.LoginLive do
     payload = %{
       session_token: result.session_token,
       access_token: Map.get(result, :access_token),
-      next: next_from(result.outcome),
-      suggested_username:
-        case result.outcome do
-          {:needs_claim, suggested} -> suggested
-          _ -> nil
-        end
+      outcome: result.outcome
     }
 
     Arca.Cache.put({:login_device_ticket, ticket}, payload, @ticket_ttl_ms)
     ticket
   end
 
-  defp next_from({:needs_legal, _version}), do: :legal
-  defp next_from({:needs_claim, _suggested}), do: :claim
-  defp next_from(_outcome), do: :home
-
-  # Browser copy for a registry outage — the CLI's version of these
-  # sentences says to run `cyfr login`, which is not this surface.
-  defp browser_unavailable(:namespace_conflict),
-    do:
-      "cyfr.run names you by a namespace another identity on this server already holds. " <>
-        "Ask the operator to sort it out."
-
-  defp browser_unavailable(:no_access_token),
-    do:
-      "Your identity provider returned no access token, so cyfr.run could not be asked " <>
-        "for your namespace. Nothing was set up. Sign in again."
-
-  defp browser_unavailable(_reason),
-    do:
-      "cyfr.run could not be reached to find or claim your namespace. Nothing was set up. " <>
-        "Try again in a moment."
+  # Browser copy for a registry outage — the CLI's sentences say to run
+  # `cyfr login`, which is not this surface. One owner for the words.
+  defp browser_unavailable(reason),
+    do: EmissaryWeb.SignInResponse.unavailable_copy(reason) |> elem(1)
 
   defp assign_idle(socket, error) do
     socket

@@ -28,6 +28,7 @@ defmodule EmissaryWeb.AuthController do
 
   plug EmissaryWeb.Plugs.ConfiguredUeberauth
 
+  alias EmissaryWeb.SignInResponse
   alias Sanctum.Session
 
   @doc """
@@ -64,43 +65,34 @@ defmodule EmissaryWeb.AuthController do
 
       :miss ->
         conn
-        |> put_flash_if_available(:error, "That sign-in expired. Please try again.")
+        |> SignInResponse.put_flash_if_available(
+          :error,
+          "That sign-in expired. Please try again."
+        )
         |> redirect(to: "/login")
     end
   end
 
   def device_complete(conn, _params) do
     conn
-    |> put_flash_if_available(:error, "That sign-in expired. Please try again.")
+    |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
     |> redirect(to: "/login")
   end
 
-  defp apply_device_ticket(conn, %{session_token: token} = payload) when is_binary(token) do
-    conn = put_session(conn, :sanctum_session_token, token)
-
-    conn =
-      case payload[:access_token] do
-        access when is_binary(access) and access != "" -> stash_pending_probe(conn, access)
-        _ -> conn
-      end
-
-    case payload[:next] do
-      :legal ->
-        redirect(conn, to: "/legal/accept")
-
-      :claim ->
-        conn
-        |> put_session(:claim_suggested_username, payload[:suggested_username] || "")
-        |> redirect(to: "/claim-namespace")
-
-      _ ->
-        EmissaryWeb.SafeRedirect.post_login(conn)
-    end
+  defp apply_device_ticket(conn, %{session_token: token, outcome: outcome} = payload)
+       when is_binary(token) do
+    # The one outcome→response mapping the callback uses — so the device
+    # path's proceed report flashes its warnings here too, instead of
+    # silently dropping them as the ticket's :next flag once did.
+    SignInResponse.respond(conn, outcome,
+      session: {:token, token},
+      access_token: payload[:access_token]
+    )
   end
 
   defp apply_device_ticket(conn, _payload) do
     conn
-    |> put_flash_if_available(:error, "That sign-in expired. Please try again.")
+    |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
     |> redirect(to: "/login")
   end
 
@@ -130,46 +122,16 @@ defmodule EmissaryWeb.AuthController do
           # The athanor may have been minted a moment ago: resolve again so
           # the session names it.
           ctx = Sanctum.Tenancy.resolve_into(%{ctx | namespace: user.namespace}, force: true)
+          SignInResponse.respond(conn, {:proceed, report}, session: {:mint, ctx})
 
-          with_session(conn, ctx, fn conn, _session ->
-            conn
-            |> flash_report(report)
-            |> EmissaryWeb.SafeRedirect.post_login()
-          end)
-
-        {:needs_legal, _required_version} ->
-          # cyfr.run requires acceptance of the current policy before any
-          # token mint. The IdP token is stashed for /auth/post-legal-accept
-          # to re-probe once the person has accepted.
-          with_session(conn, ctx, fn conn, _session ->
-            conn
-            |> stash_pending_probe(access_token)
-            |> redirect(to: "/legal/accept")
-          end)
-
-        {:needs_claim, suggested} ->
-          # No personal namespace yet: the session loads unauthenticated
-          # until the claim, and the console is gated until then.
-          with_session(conn, ctx, fn conn, _session ->
-            conn
-            |> stash_pending_probe(access_token)
-            |> put_session(:claim_suggested_username, suggested || "")
-            |> redirect(to: "/claim-namespace")
-          end)
-
-        {:reauthenticate, reason} ->
-          conn
-          |> safe_drop_session()
-          |> put_flash_if_available(:error, reauth_flash_message(reason))
-          |> redirect(to: "/login")
-
-        {:unavailable, reason} ->
-          # Nothing was set up and no session exists: the person tries again.
-          conn
-          |> safe_drop_session()
-          |> put_status(:service_unavailable)
-          |> put_resp_content_type("text/html")
-          |> send_resp(503, unavailable_page(reason))
+        outcome ->
+          # The IdP token travels for the claim or the policy acceptance
+          # that still needs it; the responder stashes it only on those arms.
+          SignInResponse.respond(conn, outcome,
+            session: {:mint, ctx},
+            access_token: access_token,
+            reauth_flash: true
+          )
       end
     else
       {:error, {:door, _reason}} ->
@@ -239,33 +201,22 @@ defmodule EmissaryWeb.AuthController do
 
           case Sanctum.SignIn.complete(user, provider, access_token) do
             {:proceed, _user, report} ->
-              conn
-              |> delete_resp_cookie("_cyfr_pending_probe")
-              |> flash_report(report)
-              |> EmissaryWeb.SafeRedirect.post_login()
+              SignInResponse.respond(conn, {:proceed, report}, session: :existing)
 
-            {:needs_legal, _v} ->
-              # Server bumped between accept and re-probe. Loop back.
-              conn |> redirect(to: "/legal/accept")
+            {:reauthenticate, _reason} = outcome ->
+              SignInResponse.respond(conn, outcome,
+                session: :existing,
+                teardown: {:destroy_and_drop, session_token}
+              )
 
-            {:needs_claim, suggested} ->
-              conn
-              |> put_session(:claim_suggested_username, suggested || "")
-              |> redirect(to: "/claim-namespace")
-
-            {:reauthenticate, _reason} ->
-              _ = Session.destroy(session_token)
-
-              conn
-              |> delete_resp_cookie("_cyfr_pending_probe")
-              |> safe_drop_session()
-              |> redirect(to: "/login")
-
-            {:unavailable, reason} ->
-              conn
-              |> put_status(:service_unavailable)
-              |> put_resp_content_type("text/html")
-              |> send_resp(503, unavailable_page(reason, "/auth/post-legal-accept"))
+            outcome ->
+              # needs_legal loops back to /legal/accept (a version bump
+              # between accept and re-probe); no token travels — the probe
+              # cookie already holds it.
+              SignInResponse.respond(conn, outcome,
+                session: :existing,
+                retry_path: "/auth/post-legal-accept"
+              )
           end
         else
           _ -> conn |> redirect(to: "/login")
@@ -278,101 +229,6 @@ defmodule EmissaryWeb.AuthController do
   # provider (ueberauth_oidcc) also populates it. Nil when absent.
   defp extract_access_token(%{credentials: %{token: token}}) when is_binary(token), do: token
   defp extract_access_token(_), do: nil
-
-  # The session, then the cookie, then whatever the outcome renders. A
-  # session that cannot be written is a 500 — the only non-redirect answer a
-  # browser sees on an admitted sign-in.
-  defp with_session(conn, ctx, fun) do
-    case Session.create(ctx) do
-      {:ok, session} ->
-        conn
-        |> put_session(:sanctum_session_token, session.token)
-        |> fun.(session)
-
-      {:error, reason} ->
-        conn
-        |> put_status(:internal_server_error)
-        |> json(%{error: "session_error", message: friendly_error_message(reason)})
-    end
-  end
-
-  # 10-min encrypted cookie holding the IdP access_token for the one thing
-  # that still needs it: the claim submission, or the re-probe after legal
-  # acceptance. Not stored in the session DB (secret sprawl). Guarded
-  # against a missing secret_key_base (some test-only conn paths) — the
-  # cookie is what makes the claim possible, and its absence is logged.
-  defp stash_pending_probe(conn, access_token) when is_binary(access_token) do
-    try do
-      put_resp_cookie(conn, "_cyfr_pending_probe", access_token,
-        # Encrypted, not merely signed: a signed cookie's value is plaintext
-        # to anyone who can read it, and this one holds a live IdP access
-        # token.
-        encrypt: true,
-        max_age: 600,
-        http_only: true,
-        same_site: "Lax",
-        secure: Cyfr.RuntimeConfig.cookie_secure?()
-      )
-    rescue
-      e ->
-        Logger.warning(
-          "[EmissaryWeb.AuthController] failed to stash pending_probe cookie: #{Exception.message(e)}"
-        )
-
-        conn
-    end
-  end
-
-  # What the registry said, when it matters to the person: push tokens that
-  # didn't land locally (`cyfr registry probe` re-mints and re-stores), or a
-  # probe that could not run at all — the sign-in stands either way.
-  defp flash_report(conn, %{unsynced: unsynced, probe: probe}) do
-    conn =
-      case unsynced do
-        [] ->
-          conn
-
-        slugs ->
-          put_flash_if_available(
-            conn,
-            :error,
-            "Some cyfr.run tokens didn't fully sync: " <>
-              Enum.join(slugs, ", ") <> ". Run `cyfr registry probe` to retry."
-          )
-      end
-
-    case probe do
-      :failed ->
-        put_flash_if_available(
-          conn,
-          :error,
-          "cyfr.run couldn't be reached — you're signed in; push credentials refresh next time."
-        )
-
-      :invalid_token ->
-        put_flash_if_available(
-          conn,
-          :error,
-          "cyfr.run refused the sign-in token — you're signed in; sign in again before pushing."
-        )
-
-      _ ->
-        conn
-    end
-  end
-
-  defp reauth_flash_message(:idp_expired) do
-    "Your login session expired during credential setup. Please sign in again."
-  end
-
-  # Put a flash message only if flash is available on the conn. OAuth callback
-  # routes are under the `:browser` pipeline so flash is normally set up, but
-  # some test paths exercise the controller without the full plug stack.
-  defp put_flash_if_available(conn, kind, msg) do
-    Phoenix.Controller.put_flash(conn, kind, msg)
-  rescue
-    _ -> conn
-  end
 
   @doc """
   Logout - destroys the session.
@@ -390,7 +246,7 @@ defmodule EmissaryWeb.AuthController do
       case Session.destroy(token) do
         :ok ->
           conn
-          |> safe_drop_session()
+          |> SignInResponse.safe_drop_session()
           |> json(%{ok: true, message: "Logged out successfully"})
 
         {:error, reason} ->
@@ -451,13 +307,6 @@ defmodule EmissaryWeb.AuthController do
     end
   end
 
-  # Safe session drop - no-op if session not fetched (e.g., API routes)
-  defp safe_drop_session(conn) do
-    configure_session(conn, drop: true)
-  rescue
-    ArgumentError -> conn
-  end
-
   # The door, then what sign-in records — before any session exists and
   # before cyfr.run hears of the identity. It runs here, at the one place the
   # web flow mints a session, so no auth provider (built-in or a deployment's
@@ -515,41 +364,6 @@ defmodule EmissaryWeb.AuthController do
     <body><h1>Not allowed on this server</h1><p>#{message}</p></body>
     </html>
     """
-  end
-
-  # A first-time person whom the registry could not place: nothing was set
-  # up and there is no session — a plain page and a way to try again.
-  defp unavailable_page(reason, retry_path \\ "/login") do
-    {title, message} = unavailable_copy(reason)
-    href = Plug.HTML.html_escape(retry_path)
-
-    """
-    <!doctype html>
-    <html lang="en">
-    <head><meta charset="utf-8"><title>#{title}</title>
-    <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}</style>
-    </head>
-    <body><h1>#{title}</h1><p>#{message}</p><p><a href="#{href}">Try again</a></p></body>
-    </html>
-    """
-  end
-
-  defp unavailable_copy(:registry_unreachable) do
-    {"cyfr.run could not be reached",
-     "Your namespace on cyfr.run is your identity on every server, and this server " <>
-       "could not reach it to find or claim yours. Nothing was set up. Try again in a moment."}
-  end
-
-  defp unavailable_copy(:no_access_token) do
-    {"Sign-in incomplete",
-     "Your identity provider returned no access token, so cyfr.run could not be asked " <>
-       "for your namespace. Nothing was set up. Sign in again."}
-  end
-
-  defp unavailable_copy(:namespace_conflict) do
-    {"Namespace already in use here",
-     "cyfr.run names you by a namespace another identity on this server already holds. " <>
-       "Ask the operator to sort it out."}
   end
 
   defp authenticate_with_provider(auth) do
