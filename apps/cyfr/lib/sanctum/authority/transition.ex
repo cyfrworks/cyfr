@@ -359,27 +359,50 @@ defmodule Sanctum.Authority.Transition do
   # Tool plane — current node's own edge resources only
   # ============================================================================
 
-  defp tool_bound(auth, %{tool: tool, action: action}) do
-    tool_action = tool <> "." <> action
+  @doc """
+  Is this internal tool action among the authority's edge tool grants?
 
-    if tool_action in auth.resources.tools do
-      {:allow_tool, {:tools, tool_action}}
+  The membership half of the tool-plane verdict, public so the in-chain
+  discovery view and the per-call step read the same grant. `:none`
+  resources grant nothing.
+  """
+  @spec tool_granted?(Authority.t(), String.t(), String.t()) :: boolean()
+  def tool_granted?(%Authority{resources: %{tools: tools}}, tool, action) when is_list(tools),
+    do: (tool <> "." <> action) in tools
+
+  def tool_granted?(%Authority{}, _tool, _action), do: false
+
+  @doc """
+  Does the authority's edge grant this remote tool on this server digest?
+
+  The membership half of the external-tool verdict, public for the same
+  reason as `tool_granted?/3`. Patterns match the remote tool name — the
+  edge names the server by digest, never by prefix.
+  """
+  @spec external_tool_granted?(Authority.t(), String.t() | nil, String.t()) :: boolean()
+  def external_tool_granted?(%Authority{resources: %{tool_servers: servers}}, digest, tool)
+      when is_list(servers) do
+    case Enum.find(servers, &(&1.server_digest == digest)) do
+      %{tool_patterns: patterns} -> Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool))
+      nil -> false
+    end
+  end
+
+  def external_tool_granted?(%Authority{}, _digest, _tool), do: false
+
+  defp tool_bound(auth, %{tool: tool, action: action}) do
+    if tool_granted?(auth, tool, action) do
+      {:allow_tool, {:tools, tool <> "." <> action}}
     else
       {:deny, :tool_not_granted}
     end
   end
 
   defp external_bound(auth, %{server_digest: digest, tool: tool}) do
-    case Enum.find(auth.resources.tool_servers, &(&1.server_digest == digest)) do
-      nil ->
-        {:deny, :tool_server_not_granted}
-
-      %{tool_patterns: patterns} ->
-        if Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool)) do
-          {:allow_tool, {:tool_server, digest}}
-        else
-          {:deny, :tool_server_not_granted}
-        end
+    if external_tool_granted?(auth, digest, tool) do
+      {:allow_tool, {:tool_server, digest}}
+    else
+      {:deny, :tool_server_not_granted}
     end
   end
 

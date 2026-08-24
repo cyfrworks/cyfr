@@ -344,24 +344,21 @@ defmodule Emissary.MCP.ToolRegistry do
 
   defp granted_external_tools(ctx, authority, external) do
     case authority.resources do
-      %{tool_servers: servers} when is_list(servers) and servers != [] ->
+      %{tool_servers: [_ | _]} ->
         external
         |> Enum.group_by(fn t -> t["name"] |> String.split(":", parts: 2) |> hd() end)
         |> Enum.flat_map(fn {server_name, tools} ->
           digest = resolve_server_digest(ctx, server_name)
 
-          case Enum.find(servers, &(&1.server_digest == digest)) do
-            nil ->
-              []
+          Enum.filter(tools, fn t ->
+            case String.split(t["name"], ":", parts: 2) do
+              [_, remote] ->
+                Sanctum.Authority.Transition.external_tool_granted?(authority, digest, remote)
 
-            %{tool_patterns: patterns} ->
-              Enum.filter(tools, fn t ->
-                case String.split(t["name"], ":", parts: 2) do
-                  [_, remote] -> Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, remote))
-                  _ -> false
-                end
-              end)
-          end
+              _ ->
+                false
+            end
+          end)
         end)
         |> Enum.sort_by(& &1["name"])
 

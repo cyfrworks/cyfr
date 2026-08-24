@@ -134,4 +134,35 @@ defmodule Sanctum.Authority.TransitionToolTest do
       assert Authority.budget(auth).in_flight == 0
     end
   end
+
+  # ============================================================================
+  # Grant predicates — the membership halves, shared with discovery
+  # ============================================================================
+
+  describe "tool_granted?/3 and external_tool_granted?/3" do
+    test "agree with the step verdicts on the same edge" do
+      auth = Fixtures.root!()
+
+      assert Transition.tool_granted?(auth, "storage", "read")
+      refute Transition.tool_granted?(auth, "storage", "write")
+      refute Transition.tool_granted?(auth, "component", "search")
+      # Exact membership — no prefix semantics.
+      refute Transition.tool_granted?(auth, "storage", "rea")
+
+      assert Transition.external_tool_granted?(auth, Fixtures.server_digest(), "repo_get") ==
+               match?(
+                 {:allow_tool, _},
+                 Transition.step(auth, :call, external(Fixtures.server_digest(), "repo_get"))
+               )
+
+      refute Transition.external_tool_granted?(auth, "sha256:unknown", "repo_get")
+    end
+
+    test ":none resources grant nothing" do
+      auth = %{Fixtures.root!() | resources: :none}
+
+      refute Transition.tool_granted?(auth, "storage", "read")
+      refute Transition.external_tool_granted?(auth, Fixtures.server_digest(), "repo_get")
+    end
+  end
 end
