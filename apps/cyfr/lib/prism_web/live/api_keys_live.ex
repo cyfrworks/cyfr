@@ -106,22 +106,19 @@ defmodule PrismWeb.ApiKeysLive do
     case call_tool(socket, "key/create", %{"name" => name, "type" => type, "scope" => scope}) do
       {:ok, key} ->
         keys =
-          case call_tool(socket, "key/list", %{}) do
-            {:ok, %{keys: list}} ->
-              normalize_key_list(list)
+          case fetch_list(socket, "key/list", :keys) do
+            {:ok, list} ->
+              list
 
-            {:ok, list} when is_list(list) ->
-              normalize_key_list(list)
-
-            other ->
-              Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
+            {:error, message} ->
+              Logger.warning("[ApiKeysLive] key/list failed: #{message}")
               socket.assigns.keys
           end
 
         {:noreply,
          socket
          |> assign(:keys, keys)
-         |> assign(:new_key, normalize_keys(key))
+         |> assign(:new_key, key)
          |> put_flash(:info, "API key created. Copy it now — it won't be shown again.")}
 
       {:error, reason} ->
@@ -152,7 +149,7 @@ defmodule PrismWeb.ApiKeysLive do
       {:ok, key} ->
         {:noreply,
          socket
-         |> assign(:new_key, normalize_keys(key))
+         |> assign(:new_key, key)
          |> put_flash(:info, "API key rotated. Copy the new key now.")}
 
       {:error, reason} ->
@@ -320,43 +317,16 @@ defmodule PrismWeb.ApiKeysLive do
     """
   end
 
-  @known_key_keys %{
-    "name" => :name,
-    "type" => :type,
-    "scope" => :scope,
-    "created_at" => :created_at,
-    "api_key" => :api_key,
-    "id" => :id
-  }
-
-  defp normalize_keys(%{} = map) do
-    Map.new(map, fn
-      {k, v} when is_binary(k) -> {Map.get(@known_key_keys, k, k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  defp normalize_keys(other), do: other
-
   defp fetch_keys(socket) do
-    keys =
-      case call_tool(socket, "key/list", %{}) do
-        {:ok, %{keys: list}} ->
-          normalize_key_list(list)
+    case fetch_list(socket, "key/list", :keys) do
+      {:ok, list} ->
+        assign(socket, :keys, list)
 
-        {:ok, list} when is_list(list) ->
-          normalize_key_list(list)
-
-        other ->
-          Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
-          []
-      end
-
-    assign(socket, :keys, keys)
+      {:error, message} ->
+        Logger.warning("[ApiKeysLive] key/list failed: #{message}")
+        assign(socket, :keys, [])
+    end
   end
-
-  defp normalize_key_list(list) when is_list(list), do: Enum.map(list, &normalize_keys/1)
-  defp normalize_key_list(other), do: other
 
   defp key_type_color("admin"), do: "red"
   defp key_type_color(:admin), do: "red"

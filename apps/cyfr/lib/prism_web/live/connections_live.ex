@@ -251,20 +251,14 @@ defmodule PrismWeb.ConnectionsLive do
   end
 
   defp fetch_entries(socket) do
-    entries =
-      case call_tool(socket, "vault/list", %{}) do
-        {:ok, %{entries: list}} when is_list(list) ->
-          Enum.map(list, &normalize_entry/1)
+    case fetch_list(socket, "vault/list", :entries) do
+      {:ok, list} ->
+        assign(socket, :entries, Enum.map(list, &normalize_entry/1))
 
-        {:ok, %{"entries" => list}} when is_list(list) ->
-          Enum.map(list, &normalize_entry/1)
-
-        other ->
-          Logger.warning("[ConnectionsLive] vault/list failed: #{inspect(other)}")
-          []
-      end
-
-    assign(socket, :entries, entries)
+      {:error, message} ->
+        Logger.warning("[ConnectionsLive] vault/list failed: #{message}")
+        assign(socket, :entries, [])
+    end
   end
 
   # Which MCP servers draw on each Connection (`vault:<name>` headers) —
@@ -302,9 +296,7 @@ defmodule PrismWeb.ConnectionsLive do
   @entry_keys ~w(id name kind provider_hint status provenance field_names oauth_scopes payload_rev last_used_at)a
 
   defp normalize_entry(entry) do
-    Map.new(@entry_keys, fn key ->
-      {key, entry[key] || entry[Atom.to_string(key)]}
-    end)
+    Map.new(@entry_keys, fn key -> {key, entry[key]} end)
   end
 
   defp parse_fields(text) when is_binary(text) do

@@ -243,14 +243,14 @@ defmodule PrismWeb.TopbarLive do
   end
 
   defp load_system_status(socket) do
-    case mcp_call(socket, "system/status", %{}) do
+    case call_tool(socket, "system/status", %{}) do
       {:ok, status} -> assign(socket, :system_status, status)
       _ -> assign(socket, :system_status, %{})
     end
   end
 
   defp load_running_requests(socket) do
-    case mcp_call(socket, "mcp_log", %{
+    case call_tool(socket, "mcp_log", %{
            "action" => "list",
            "limit" => @recent_requests_limit,
            "status" => "pending"
@@ -261,7 +261,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   defp load_running_executions(socket) do
-    case mcp_call(socket, "execution", %{
+    case call_tool(socket, "execution", %{
            "action" => "list",
            "status" => "running",
            "limit" => 20
@@ -272,7 +272,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   defp load_log_stats(socket) do
-    case mcp_call(socket, "mcp_log", %{"action" => "stats"}) do
+    case call_tool(socket, "mcp_log", %{"action" => "stats"}) do
       {:ok, stats} ->
         assign(socket, :log_stats, %{
           total: stats[:total] || stats["total"] || 0,
@@ -287,7 +287,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   defp load_upcoming_schedules(socket) do
-    case mcp_call(socket, "schedule", %{"action" => "list"}) do
+    case call_tool(socket, "schedule", %{"action" => "list"}) do
       {:ok, %{schedules: list}} when is_list(list) ->
         upcoming =
           list
@@ -299,22 +299,6 @@ defmodule PrismWeb.TopbarLive do
 
       _ ->
         assign(socket, :upcoming_schedules, [])
-    end
-  end
-
-  defp mcp_call(socket, tool_name, args) do
-    case socket.assigns[:context] do
-      %Sanctum.Context{} = ctx ->
-        {name, merged} =
-          case String.split(tool_name, "/", parts: 2) do
-            [n, action] -> {n, Map.put(args, "action", action)}
-            [n] -> {n, args}
-          end
-
-        Emissary.MCP.ToolRegistry.call_external(name, ctx, merged)
-
-      _ ->
-        {:error, :no_context}
     end
   end
 
