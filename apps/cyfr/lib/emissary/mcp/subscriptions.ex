@@ -35,7 +35,6 @@ defmodule Emissary.MCP.Subscriptions do
   """
 
   alias Sanctum.Context
-  alias Sanctum.PubSub, as: Topics
 
   @pubsub Emissary.PubSub
 
@@ -59,7 +58,7 @@ defmodule Emissary.MCP.Subscriptions do
   def listen(%Context{} = ctx, filter) when is_map(filter) do
     acknowledged =
       if truthy?(filter["toolsListChanged"]) do
-        Phoenix.PubSub.subscribe(@pubsub, Topics.topic("mcp_servers", ctx))
+        Phoenix.PubSub.subscribe(@pubsub, Prism.Topics.mcp_servers(ctx))
         %{"toolsListChanged" => true}
       else
         %{}
