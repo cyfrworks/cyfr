@@ -20,10 +20,10 @@ defmodule Cyfr.Retention do
   ## Storage
 
   An athanor's settings are persisted to `config/retention.json` under the
-  tenant-scoped path that `Arca.Storage.tenant_segments/1` builds —
-  `the athanor's config/retention.json`. Settings are shared by all
-  members of the athanor. If no settings exist, global defaults from
-  application config are used.
+  tenant-scoped path that `Arca.Storage.tenant_segments/1` builds, so each
+  athanor carries its own copy. Settings are shared by all members of the
+  athanor. If no settings exist, global defaults from application config
+  are used.
 
   ## Global Defaults (config.exs)
 
@@ -301,8 +301,10 @@ defmodule Cyfr.Retention do
   @doc """
   Clean up old build records for a user.
 
-  Builds are file-based artifacts (WASM binaries), so this still uses
-  file-based cleanup via the Arca storage adapter.
+  Build records are flat `builds/{id}.json` status files written by
+  `Locus.MCP`, so this still uses file-based cleanup via the Arca
+  storage adapter. The newest `keep` records survive, ordered by their
+  `started_at` timestamp.
   """
   @spec cleanup_builds(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
@@ -450,12 +452,15 @@ defmodule Cyfr.Retention do
   # Private Helpers
   # ============================================================================
 
+  # Build records are flat `builds/{id}.json` files (Locus.MCP's
+  # build_record_path/1); an entry without a readable `started_at` is
+  # kept, never deleted.
   defp list_builds_with_timestamps(ctx) do
     case Arca.list(ctx, ["builds"]) do
-      {:ok, build_ids} ->
+      {:ok, entries} ->
         builds =
-          build_ids
-          |> Enum.map(fn id -> {id, get_build_timestamp(ctx, id)} end)
+          entries
+          |> Enum.map(fn entry -> {Path.rootname(entry), get_build_timestamp(ctx, entry)} end)
           |> Enum.reject(fn {_id, ts} -> is_nil(ts) end)
 
         {:ok, builds}
@@ -468,14 +473,14 @@ defmodule Cyfr.Retention do
     end
   end
 
-  defp get_build_timestamp(ctx, id) do
-    case Arca.get_json(ctx, ["builds", id, "started.json"]) do
+  defp get_build_timestamp(ctx, entry) do
+    case Arca.get_json(ctx, ["builds", entry]) do
       {:ok, data} -> data["started_at"]
       _ -> nil
     end
   end
 
   defp delete_build(ctx, id) do
-    Arca.delete_tree(ctx, ["builds", id])
+    Arca.delete(ctx, ["builds", id <> ".json"])
   end
 end

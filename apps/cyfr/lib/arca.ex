@@ -37,8 +37,8 @@ defmodule Arca do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
-      :ok = Arca.put(ctx, ["builds", "build_1", "started.json"], json)
-      {:ok, content} = Arca.get(ctx, ["builds", "build_1", "started.json"])
+      :ok = Arca.put(ctx, ["builds", "build_1.json"], json)
+      {:ok, content} = Arca.get(ctx, ["builds", "build_1.json"])
 
       # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
@@ -234,9 +234,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["builds", "build_1", "started.json"], "{}")
+      iex> Arca.put(ctx, ["conversations", "conv_1", "msg_1.json"], "{}")
       :ok
-      iex> Arca.delete_tree(ctx, ["builds", "build_1"])
+      iex> Arca.delete_tree(ctx, ["conversations", "conv_1"])
       :ok
 
   """

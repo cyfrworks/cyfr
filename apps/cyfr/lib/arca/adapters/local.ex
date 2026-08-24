@@ -25,11 +25,8 @@ defmodule Arca.Adapters.Local do
           │   ├── cyfr-manifest.json
           │   └── src/
           └── data/
-              ├── builds/                # Locus build lifecycle
-              │   └── {build_id}/
-              │       ├── started.json
-              │       ├── completed.json
-              │       └── build.log
+              ├── builds/                # Locus build records (flat JSON)
+              │   └── {build_id}.json
               ├── data/                  # Athanor data (agent conversations, etc.)
               ├── config/                # Athanor config (retention settings, etc.)
               └── audit/                 # Audit events (append-only JSONL, opt-in)

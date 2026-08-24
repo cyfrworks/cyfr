@@ -152,7 +152,19 @@ defmodule Cyfr.RetentionTest do
       assert count == 2
 
       {:ok, remaining} = Arca.list(ctx, ["builds"])
-      assert length(remaining) == 3
+      assert Enum.sort(remaining) == ["build_3.json", "build_4.json", "build_5.json"]
+    end
+
+    test "dry_run names the oldest builds without deleting", %{ctx: ctx} do
+      for i <- 1..4 do
+        create_build_with_timestamp(ctx, "build_#{i}", "2025-01-0#{i}T10:00:00Z")
+      end
+
+      {:ok, result} = Retention.cleanup_builds(ctx, keep: 2, dry_run: true)
+      assert Enum.sort(result.would_delete) == ["build_1", "build_2"]
+
+      {:ok, remaining} = Arca.list(ctx, ["builds"])
+      assert length(remaining) == 4
     end
   end
 
@@ -384,13 +396,15 @@ defmodule Cyfr.RetentionTest do
     })
   end
 
+  # Writes the record exactly as Locus.MCP's build_record_path/1 does:
+  # one flat builds/{id}.json with started_at inside.
   defp create_build_with_timestamp(ctx, id, timestamp) do
     :ok =
-      Arca.put_json(ctx, ["builds", id, "started.json"], %{
+      Arca.put_json(ctx, ["builds", id <> ".json"], %{
         "build_id" => id,
-        "started_at" => timestamp,
-        "source" => %{"local" => "./src"},
-        "target" => "reagent"
+        "reference" => "reagent:local.test:0.1.0",
+        "status" => "started",
+        "started_at" => timestamp
       })
   end
 
