@@ -20,6 +20,74 @@ defmodule Sanctum.MCP.AthanorTool do
 
   @person_only ~w(create rename archive unarchive settings provision)
 
+  # An `athanor` argument names the athanor an action works on: an id, a
+  # group slug, or `@<namespace>`; absent, the caller's focused athanor.
+  @athanor_arg %{
+    "type" => "string",
+    "description" =>
+      "The athanor to act on — an id, a group slug, or @<namespace>. " <>
+        "Defaults to the athanor in focus."
+  }
+
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Sanctum.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "athanor",
+      title: "Athanors",
+      description:
+        "The athanors you belong to — your own and your groups. Create a group " <>
+          "(you are its first member), rename it, archive it, patch its settings. " <>
+          "A person's own athanor is minted at sign-in; a group is archived, never deleted.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          "list" => %{kind: :read, planes: [:external]},
+          "get" => %{kind: :read, planes: [:external]},
+          "create" => %{kind: :write, planes: [:external]},
+          "rename" => %{kind: :write, planes: [:external]},
+          "archive" => %{kind: :destructive, planes: [:external]},
+          "unarchive" => %{kind: :write, planes: [:external]},
+          "settings" => %{kind: :write, planes: [:external]},
+          "provision" => %{kind: :write, planes: [:external]}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "list",
+              "get",
+              "create",
+              "rename",
+              "archive",
+              "unarchive",
+              "settings",
+              "provision"
+            ],
+            "description" =>
+              "Action to perform (provision: retry a seeding that failed — idempotent)"
+          },
+          "athanor" => @athanor_arg,
+          "name" => %{"type" => "string", "description" => "Group name (create, rename)"},
+          "slug" => %{
+            "type" => "string",
+            "description" => "Optional slug for create; derived from the name when absent"
+          },
+          "settings" => %{
+            "type" => "object",
+            "description" => "For settings: keys to merge into the athanor's settings"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_only do
     {:error, "athanor.#{action} is a person's act — sign in; an API key cannot do it"}

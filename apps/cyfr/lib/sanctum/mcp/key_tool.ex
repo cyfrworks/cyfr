@@ -13,6 +13,66 @@ defmodule Sanctum.MCP.KeyTool do
 
   alias Sanctum.Context
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Sanctum.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "key",
+      title: "API Key Management",
+      description: "Manage API keys - create, get, list, revoke, or rotate keys",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: false,
+        actions: %{
+          "create" => %{kind: :write, planes: [:external], permission: :admin},
+          "get" => %{kind: :read, planes: [:external], permission: :admin},
+          "list" => %{kind: :read, planes: [:external], permission: :admin},
+          "revoke" => %{kind: :write, planes: [:external], permission: :admin},
+          "rotate" => %{kind: :write, planes: [:external], permission: :admin}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["create", "get", "list", "revoke", "rotate"],
+            "description" => "Action to perform"
+          },
+          "name" => %{
+            "type" => "string",
+            "description" => "Human-readable name for the key"
+          },
+          "key" => %{
+            "type" => "string",
+            "description" => "API key value (for validation)"
+          },
+          "type" => %{
+            "type" => "string",
+            "enum" => ["application", "service", "admin"],
+            "description" => "Key type: application (frontend), service (backend), admin (CI/CD)"
+          },
+          "scope" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Permissions scope for the key"
+          },
+          "rate_limit" => %{
+            "type" => "string",
+            "description" => "Rate limit (e.g., '100/1m')"
+          },
+          "ip_allowlist" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     case Sanctum.ApiKey.list(ctx) do
       {:ok, keys} ->

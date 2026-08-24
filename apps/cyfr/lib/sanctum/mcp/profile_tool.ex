@@ -17,6 +17,82 @@ defmodule Sanctum.MCP.ProfileTool do
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Sanctum.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "profile",
+      title: "Profiles & Consent",
+      description:
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and " <>
+          "candidates, preview renders exactly what would be granted and mints the proof, " <>
+          "commit verifies the proof against a live recomputation and writes an immutable " <>
+          "revision. Nothing is granted outside this walk.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          # Dispatch applies the coarse consent class; the domain applies
+          # the exact one (commit's digest-pinned key-capability arm lives
+          # in Sanctum.Consent.Commit and stays there).
+          "plan" => %{kind: :write, planes: [:external], consent: :staging},
+          "preview" => %{kind: :write, planes: [:external], consent: :staging},
+          "commit" => %{kind: :write, planes: [:external], consent: :staging},
+          "publish" => %{kind: :write, planes: [:external], consent: :staging},
+          "list" => %{kind: :read, planes: [:external], consent: :staging},
+          "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["plan", "preview", "commit", "publish", "list", "revoke"],
+            "description" => "Action to perform"
+          },
+          "need_ids" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" =>
+              "publish only: edge keys whose credentials the public profile keeps " <>
+                "(default none — expose without credentials)"
+          },
+          "durable_storage" => %{
+            "type" => "boolean",
+            "description" =>
+              "publish only: allow durable writes (default false — read-only storage)"
+          },
+          "ref" => %{
+            "type" => "string",
+            "description" => "Component reference to grant (name-level or versioned)"
+          },
+          "label" => %{"type" => "string", "description" => "Profile label (default 'default')"},
+          "kind" => %{"type" => "string", "enum" => ["owner", "public"]},
+          "profile_id" => %{"type" => "string", "description" => "Profile id (list/revoke)"},
+          "decisions" => %{
+            "type" => "object",
+            "description" =>
+              "The operator's choices: ref, scope, invoke_mode, bindings " <>
+                "[{need:'@ingress', entry_id, fields, scopes}], override, limits"
+          },
+          "plan_token" => %{"type" => "string", "description" => "From plan"},
+          "proof" => %{"type" => "string", "description" => "From preview"},
+          "commit_digest" => %{
+            "type" => "string",
+            "description" => "The digest preview rendered — what is being approved"
+          },
+          "expected_consent_revision" => %{
+            "type" => "integer",
+            "description" => "The revision plan reported"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{} = ctx, %{"action" => "plan", "ref" => ref} = args) do
     with {:ok, kind} <- kind(args) do
       params =

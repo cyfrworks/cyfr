@@ -14,6 +14,94 @@ defmodule Sanctum.MCP.VaultTool do
   alias Sanctum.Context
   alias Sanctum.Vault
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Sanctum.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "vault",
+      title: "Vault Connections",
+      description:
+        "Manage vault entries (Connections) — the operator's credentials, shared across " <>
+          "profiles through consent edges. Material is sealed at rest and never read back; " <>
+          "rotate replaces material without re-consent, rebind changes what the credential " <>
+          "talks to and blocks affected profiles until re-consented.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: true,
+        actions: %{
+          # Mutations are interactive-consent surfaces (OIDC sessions only,
+          # by owner decision — no permission conjunct); list admits the
+          # staging class so keys can enumerate entries.
+          "list" => %{kind: :read, planes: [:external], consent: :staging},
+          "create" => %{kind: :write, planes: [:external], consent: :interactive},
+          "rename" => %{kind: :write, planes: [:external], consent: :interactive},
+          "rotate" => %{kind: :write, planes: [:external], consent: :interactive},
+          "rebind" => %{kind: :write, planes: [:external], consent: :interactive},
+          "authorize" => %{kind: :write, planes: [:external], consent: :interactive},
+          "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive},
+          "delete" => %{kind: :destructive, planes: [:external], consent: :interactive}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "list",
+              "create",
+              "rename",
+              "rotate",
+              "rebind",
+              "authorize",
+              "revoke",
+              "delete"
+            ],
+            "description" => "Action to perform"
+          },
+          "id" => %{"type" => "string", "description" => "Vault entry id (vlt_…)"},
+          "name" => %{
+            "type" => "string",
+            "description" => "Connection label — unique among living entries in the tenant"
+          },
+          "kind" => %{
+            "type" => "string",
+            "enum" => ["api_key", "oauth", "bundle"],
+            "description" => "What the entry holds"
+          },
+          "provider_hint" => %{
+            "type" => "string",
+            "description" => "Immutable provider tag (e.g. 'google'); set at create only"
+          },
+          "fields" => %{
+            "type" => "object",
+            "description" => "Secret material as name → value; names mirror field_names"
+          },
+          "expected_payload_rev" => %{
+            "type" => "integer",
+            "description" => "CAS token for rotate — the revision the caller last saw"
+          },
+          "oauth_endpoints" => %{
+            "type" => "object",
+            "description" => "Binding field: token endpoint etc. Changing it is a rebind."
+          },
+          "oauth_scopes" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Binding field: scopes this credential was authorized for"
+          },
+          "field_names" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Binding field: the material's field schema (rebind only)"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     # Enumeration is operator data: the same surfaces that can walk the
     # consent flow may see connection names, nothing else.

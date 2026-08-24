@@ -13,6 +13,74 @@ defmodule Sanctum.MCP.SessionTool do
 
   alias Sanctum.Context
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Sanctum.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "session",
+      title: "Session Management",
+      description:
+        "Manage user sessions — login, logout, get local identity, or run device-flow OAuth. " <>
+          "Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+      annotations: %{
+        readOnlyHint: false,
+        destructiveHint: false,
+        # Anonymous-allowed: `whoami` and the device-flow login actions need
+        # to work before a credential exists, and `logout` only ever
+        # destroys the caller's own session.
+        actions: %{
+          "login" => %{kind: :write, planes: [:external], auth: :anonymous},
+          "logout" => %{kind: :write, planes: [:external], auth: :anonymous},
+          "whoami" => %{kind: :read, planes: [:external], auth: :anonymous},
+          "device_init" => %{kind: :write, planes: [:external], auth: :anonymous},
+          "device_poll" => %{kind: :write, planes: [:external], auth: :anonymous},
+          # Point the session at another athanor the caller may work in.
+          "use" => %{kind: :write, planes: [:external]}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => [
+              "login",
+              "logout",
+              "whoami",
+              "device_init",
+              "device_poll",
+              "use"
+            ],
+            "description" =>
+              "Action to perform. `device_init`/`device_poll` require the " <>
+                "default OAuth provider (`auth_provider = Sanctum.Auth.OAuth`); " <>
+                "deployments with a configured OIDC auth provider authenticate " <>
+                "via the web OIDC flow at " <>
+                "`/auth/<provider>`. Push-token identity (cyfr.run) lives on the " <>
+                "separate `registry` tool under Compendium — see its " <>
+                "`probe` and `claim_personal` actions."
+          },
+          "provider" => %{
+            "type" => "string",
+            "enum" => ["github", "google"],
+            "description" => "OAuth provider for device flow"
+          },
+          "device_code" => %{
+            "type" => "string",
+            "description" => "Device code from device_init (for device_poll action)"
+          },
+          "athanor" => %{
+            "type" => "string",
+            "description" =>
+              "For `use`: the athanor to work in — an id, a group slug, or @<namespace>"
+          }
+        },
+        "required" => ["action"]
+      }
+    }
+  end
+
   def handle(%Context{authenticated: false}, %{"action" => "whoami"}) do
     {:error, "Not authenticated. Run 'cyfr login' to sign in."}
   end

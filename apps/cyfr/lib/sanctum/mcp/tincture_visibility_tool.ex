@@ -14,6 +14,46 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
+  @doc false
+  # The tool's wire definition — schema and access annotations beside the
+  # handler they gate; Sanctum.MCP assembles its roster from these.
+  def definition do
+    %{
+      name: "tincture_visibility",
+      title: "Tincture Visibility",
+      description:
+        "Report whether a tincture has an active public profile. Public-ness is a " <>
+          "published profile, not a policy bit — publish with profile.publish, " <>
+          "unpublish with profile.revoke.",
+      annotations: %{
+        readOnlyHint: true,
+        destructiveHint: false,
+        actions: %{
+          "get" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read}
+        }
+      },
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "enum" => ["get"],
+            "description" => "Action to perform"
+          },
+          "publisher" => %{
+            "type" => "string",
+            "description" => "Tincture publisher (e.g. 'local', 'moonmoon69')"
+          },
+          "name" => %{
+            "type" => "string",
+            "description" => "Tincture name"
+          }
+        },
+        "required" => ["action", "publisher", "name"]
+      }
+    }
+  end
+
   def handle(%Context{} = ctx, %{
         "action" => "get",
         "publisher" => publisher,
