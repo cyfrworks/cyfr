@@ -7,9 +7,10 @@ defmodule Sanctum.Cipher do
   bundles, webhook HMAC secrets, identity-link tokens): versioned, AAD-bound,
   keyring-rotatable AES-256-GCM.
 
-  The keyring (`:crypto_keyring`) is set at boot in `config/runtime.exs` —
-  explicit via `CYFR_CRYPTO_KEYRING`, or derived from `:secret_key_base` when
-  that env var is absent (single-operator installs work zero-config).
+  The keyring (`:crypto_keyring`) is resolved at boot by `Cyfr.Application`
+  (`resolve_crypto_keyring!/0`) — explicit via `CYFR_CRYPTO_KEYRING`, or
+  derived from `:secret_key_base` when that env var is absent
+  (single-operator installs work zero-config).
 
   ## Envelope (big-endian)
 

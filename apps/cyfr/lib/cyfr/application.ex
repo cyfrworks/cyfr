@@ -450,6 +450,18 @@ defmodule Cyfr.Application do
   defp derive_keyring_from_secret_key_base! do
     case Application.get_env(:cyfr, :secret_key_base) do
       key when is_binary(key) and byte_size(key) >= 32 ->
+        # A supported zero-config posture — but in a release the operator
+        # should know their ciphertexts are keyed to the Phoenix secret:
+        # rotating CYFR_SECRET_KEY_BASE orphans every sealed blob. The
+        # neighbouring boot checks warn; so does this one.
+        if System.get_env("RELEASE_ROOT") != nil do
+          Logger.warning(
+            "[Cyfr] No CYFR_CRYPTO_KEYRING set — deriving the crypto keyring from " <>
+              "CYFR_SECRET_KEY_BASE. Rotating that secret will orphan everything " <>
+              "sealed under it; set an explicit CYFR_CRYPTO_KEYRING to decouple them."
+          )
+        end
+
         master = :crypto.hash(:sha256, "cyfr-cipher-keyring|" <> key)
         %{primary: "default", keys: %{"default" => master}}
 
