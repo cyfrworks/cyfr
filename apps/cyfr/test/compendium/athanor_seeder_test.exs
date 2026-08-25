@@ -124,6 +124,27 @@ defmodule Compendium.AthanorSeederTest do
     assert {:error, :bundle_missing} = AthanorSeeder.seed("ath_acme")
   end
 
+  test "build droppings in the bundle are not copied or counted", %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+
+    # A checked-out bundle where someone ran cargo/npm inside a component.
+    src = Path.join([bundle_dir, "catalysts", "local", "foo", "1.0.0", "src"])
+    File.mkdir_p!(Path.join([src, "target", "debug"]))
+    File.write!(Path.join([src, "target", "debug", "foo.o"]), String.duplicate("x", 1024))
+    File.mkdir_p!(Path.join(src, "node_modules"))
+    File.write!(Path.join([src, "node_modules", "pkg.js"]), "js")
+    File.write!(Path.join(src, "lib.rs"), "fn main() {}")
+
+    assert :ok = AthanorSeeder.seed("ath_acme")
+
+    ctx = athanor_ctx("ath_acme")
+    prefix = ["components", "ath_acme", "catalysts", "local", "foo", "1.0.0", "src"]
+
+    assert {:ok, "fn main() {}"} = Arca.get(ctx, prefix ++ ["lib.rs"])
+    refute Arca.exists?(ctx, prefix ++ ["target", "debug", "foo.o"])
+    refute Arca.exists?(ctx, prefix ++ ["node_modules", "pkg.js"])
+  end
+
   test "the bundle itself is never indexed as the athanor's rows", %{
     bundle_dir: bundle_dir
   } do

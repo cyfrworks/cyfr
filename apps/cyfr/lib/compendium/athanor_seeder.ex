@@ -58,6 +58,13 @@ defmodule Compendium.AthanorSeeder do
     end
   end
 
+  # Build droppings a checked-out bundle may carry (someone ran cargo or npm
+  # inside a component's src/). Never part of a component; copying them would
+  # bloat every athanor and count against its storage cap.
+  @excluded_dirs ~w(target node_modules .git)
+
+  defp excluded?(relative), do: Enum.any?(relative, &(&1 in @excluded_dirs))
+
   # A type the bundle does not carry (no reagents shipped, say) lists empty
   # and copies nothing.
   defp copy_bundle(ctx, athanor_id) do
@@ -65,7 +72,7 @@ defmodule Compendium.AthanorSeeder do
       src = Bundle.bundle_prefix() ++ [type_plural, Bundle.publisher()]
       dest = ComponentPath.base_prefix(athanor_id) ++ [type_plural, Bundle.publisher()]
 
-      case Arca.copy_tree(ctx, src, dest) do
+      case Arca.copy_tree(ctx, src, dest, exclude: &excluded?/1) do
         :ok ->
           {:cont, :ok}
 

@@ -66,6 +66,18 @@ defmodule Arca.CopyTreeTest do
     assert {:ok, "A"} = Arca.get(ctx, ["seed", "src", "a.txt"])
   end
 
+  test "exclude: skips matching files before their content is read" do
+    ctx = Sanctum.TestContext.local()
+    :ok = Arca.put(ctx, ["seed", "src", "a.txt"], "A")
+    :ok = Arca.put(ctx, ["seed", "src", "target", "debug", "junk.o"], "JUNK")
+
+    exclude = fn relative -> "target" in relative end
+    assert :ok = Arca.copy_tree(ctx, ["seed", "src"], ["seed", "dest"], exclude: exclude)
+
+    assert {:ok, "A"} = Arca.get(ctx, ["seed", "dest", "a.txt"])
+    assert {:error, :not_found} = Arca.get(ctx, ["seed", "dest", "target", "debug", "junk.o"])
+  end
+
   test "seeds the bundle through the configured adapter, reading it in place", %{bundle: bundle} do
     # The AthanorSeeder contract on an object-store deployment: the bundle
     # is read from local disk and only the copies reach the adapter.

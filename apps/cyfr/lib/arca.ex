@@ -43,8 +43,8 @@ defmodule Arca do
       # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
 
-      # Append-only storage (for audit logs)
-      :ok = Arca.append(ctx, ["audit", "2025-01-15.jsonl"], log_line <> "\\n")
+      # Append-only storage (JSONL-style logs)
+      :ok = Arca.append(ctx, ["logs", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
       :ok = Arca.put_json(ctx, ["config", "settings.json"], %{...})
@@ -61,10 +61,10 @@ defmodule Arca do
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data"
 
-      # Retention defaults
+      # Retention overrides (defaults live in Cyfr.Retention)
       config :cyfr, Cyfr.Retention,
-        executions: 10,
-        builds: 10
+        executions: 10_000,
+        builds: 100
 
   """
 
@@ -141,19 +141,19 @@ defmodule Arca do
   Creates parent directories automatically. Content is appended to the
   end of the file without overwriting existing content.
 
-  Useful for audit logs stored as JSONL (JSON Lines) format.
+  Useful for logs stored as JSONL (JSON Lines) format.
 
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.append(ctx, ["audit", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
+      iex> Arca.append(ctx, ["logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
-      iex> Arca.append(ctx, ["audit", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
+      iex> Arca.append(ctx, ["logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
 
   """
   def append(%Context{} = ctx, path, content),
-    do: guarded(ctx, path, fn -> adapter(path).append(ctx, path, content) end)
+    do: mutating(ctx, path, fn -> adapter(path).append(ctx, path, content) end)
 
   @doc """
   Delete content from storage.
@@ -263,18 +263,38 @@ defmodule Arca do
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
 
-  Reads `src` via `read_subtree/2` and `put/3`s each file under `dest`,
-  preserving relative layout. Adapter-agnostic (Local FS or object store).
-  Content-only — the source is left untouched, so a *move* is a successful
-  `copy_tree/3` followed by `delete_tree/2`. Returns `:ok` or the first
-  `{:error, reason}`.
+  Lists `src` via `list_recursive/2`, then streams each file with `get/2` +
+  `put/3` under `dest`, preserving relative layout — one file in memory at a
+  time. Adapter-agnostic (Local FS or object store). Content-only — the
+  source is left untouched, so a *move* is a successful `copy_tree/3`
+  followed by `delete_tree/2`. Returns `:ok` or the first `{:error, reason}`.
+
+  `exclude: fn relative_segments -> boolean end` skips matching files before
+  their content is ever read — how the seeder keeps build droppings
+  (`target/`, `node_modules/`) out of athanor trees.
   """
-  def copy_tree(%Context{} = ctx, src, dest) do
-    with {:ok, pairs} <- read_subtree(ctx, src) do
-      Enum.reduce_while(pairs, :ok, fn {relative, content}, :ok ->
-        case put(ctx, dest ++ relative, content) do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, reason}}
+  def copy_tree(%Context{} = ctx, src, dest, opts \\ []) do
+    exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
+
+    with {:ok, leaves} <- list_recursive(ctx, src) do
+      leaves
+      |> Enum.map(&Enum.drop(&1, length(src)))
+      |> Enum.reject(exclude)
+      |> Enum.reduce_while(:ok, fn relative, :ok ->
+        case get(ctx, src ++ relative) do
+          {:ok, content} ->
+            case put(ctx, dest ++ relative, content) do
+              :ok -> {:cont, :ok}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+
+          # File vanished between list and read — skip; concurrent delete is
+          # unusual but not an error condition for a tree copy.
+          {:error, :not_found} ->
+            {:cont, :ok}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
         end
       end)
     end
