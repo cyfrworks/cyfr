@@ -91,6 +91,45 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, ~s({"agents": {}})} = Arca.get(ctx, ["aqua", "agent.json"])
   end
 
+  test "reset produces exactly the shipped set — member-created agents go too", %{
+    ctx: ctx,
+    template: template
+  } do
+    assert :ok = AquaTemplate.copy_into(ctx)
+
+    # A member-created agent: its own prompt file, referenced nowhere in the
+    # shipped manifest. Before exact-set reset this survived forever, so
+    # every refresh against a new template read :modified.
+    :ok = Arca.put(ctx, ["aqua", "my_agent.md"], "member's own agent")
+
+    write_template!(template, "v2")
+    assert {:ok, :modified} = AquaTemplate.refresh(ctx)
+    assert :ok = AquaTemplate.reset(ctx)
+
+    assert {:error, :not_found} = Arca.get(ctx, ["aqua", "my_agent.md"])
+    assert {:ok, raw} = Arca.get(ctx, ["aqua", "agent.json"])
+    assert raw =~ "v2"
+    assert {:ok, :current} = AquaTemplate.refresh(ctx)
+  end
+
+  test "reset refuses before deleting anything when no template ships", %{
+    ctx: ctx,
+    template: template
+  } do
+    assert :ok = AquaTemplate.copy_into(ctx)
+    :ok = Arca.put(ctx, ["aqua", "my_agent.md"], "member's own agent")
+
+    # The install loses its template (empty seed tree): reset must refuse
+    # and leave the athanor's copy intact — deleting first would destroy
+    # the only agents left in existence.
+    File.rm_rf!(template)
+    File.mkdir_p!(template)
+
+    assert {:error, :template_missing} = AquaTemplate.reset(ctx)
+    assert {:ok, _} = Arca.get(ctx, ["aqua", "agent.json"])
+    assert {:ok, "member's own agent"} = Arca.get(ctx, ["aqua", "my_agent.md"])
+  end
+
   test "the stamp never surfaces in the template's file listing", %{ctx: ctx} do
     assert :ok = AquaTemplate.copy_into(ctx)
     assert AquaTemplate.files() == ["agent.json", "aqua.md"]

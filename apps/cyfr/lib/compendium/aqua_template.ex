@@ -157,11 +157,28 @@ defmodule Compendium.AquaTemplate do
   end
 
   @doc """
-  Replace the athanor's copy with the shipped template — the explicit
-  "reset to shipped" a modified copy upgrades through.
+  Replace the athanor's copy with EXACTLY the shipped template — the
+  explicit "reset to shipped" a modified copy upgrades through. The
+  athanor's `aqua/` tree is deleted first, so member-created agents go
+  with it; anything less leaves orphaned prompts that read as `:modified`
+  forever. The template's presence is checked before anything is deleted —
+  a template-less install refuses rather than destroys — but the
+  delete-then-copy is not atomic: a failure mid-copy leaves a partial
+  tree, which `ensure/1` or a second reset repairs.
   """
   @spec reset(Context.t()) :: :ok | {:error, term()}
-  def reset(%Context{} = ctx), do: copy_into(ctx)
+  def reset(%Context{} = ctx) do
+    Context.require_tenant!(ctx)
+    names = files()
+
+    if names == [] or @manifest not in names do
+      {:error, :template_missing}
+    else
+      with :ok <- Arca.delete_tree(ctx, ["aqua"]) do
+        copy_into(ctx)
+      end
+    end
+  end
 
   # The digest of the shipped file set — what a pristine copy hashes to.
   defp shipped_digest do
