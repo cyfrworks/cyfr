@@ -56,20 +56,30 @@ defmodule Arca.Adapters.Local do
   def get(%Context{} = ctx, path) do
     full_path = build_path(ctx, path)
 
-    case File.read(full_path) do
-      {:ok, content} ->
-        {:ok, content}
+    # `File.read` follows symlinks; nothing tenant-reachable can create one
+    # (the tar ingests refuse them), so a link here is host tampering or a
+    # bug — refuse rather than read bytes from outside the storage root.
+    # The walks (`walk_files/1`) lstat for the same reason.
+    case lstat_type(full_path) do
+      :symlink ->
+        Logger.warning("[Arca.Local.get] refusing symlink at #{full_path}")
+        {:error, :symlink_denied}
 
-      {:error, :enoent} ->
-        Logger.warning(
-          "[Arca.Local.get] :enoent for full_path=#{full_path}, segments=#{inspect(path)}, exists?=#{File.exists?(full_path)}"
-        )
+      _ ->
+        case File.read(full_path) do
+          {:ok, content} ->
+            {:ok, content}
 
-        {:error, :not_found}
+          {:error, :enoent} ->
+            # An expected miss (read-probe patterns everywhere) — debug, not
+            # warning: a boot-time stamp probe must not read like a fault.
+            Logger.debug("[Arca.Local.get] :enoent for #{full_path}")
+            {:error, :not_found}
 
-      {:error, reason} ->
-        Logger.warning("[Arca.Local.get] error=#{inspect(reason)} for full_path=#{full_path}")
-        {:error, reason}
+          {:error, reason} ->
+            Logger.warning("[Arca.Local.get] error=#{inspect(reason)} for full_path=#{full_path}")
+            {:error, reason}
+        end
     end
   end
 
@@ -136,10 +146,13 @@ defmodule Arca.Adapters.Local do
     case File.ls(full_path) do
       {:ok, names} ->
         # On a filesystem the kind is a stat, and the adapter is the only layer
-        # entitled to make one — which is the point of the callback.
+        # entitled to make one — which is the point of the callback. Symlinks
+        # are skipped like temp names: nothing legitimate creates them, and
+        # reporting one would invite a follow-up read through it.
         {:ok,
          names
          |> Enum.reject(&tmp_name?/1)
+         |> Enum.reject(&(lstat_type(Path.join(full_path, &1)) == :symlink))
          |> Enum.map(&{&1, kind(Path.join(full_path, &1))})}
 
       {:error, :enoent} ->
@@ -163,8 +176,9 @@ defmodule Arca.Adapters.Local do
     # Files only, matching the S3 adapter's HEAD probe: a directory "exists"
     # on a filesystem but has no object-store counterpart, and the two
     # adapters must answer the same question the same way. Directories are
-    # asked about with `list_typed/2`.
-    File.regular?(full_path)
+    # asked about with `list_typed/2`. lstat, so a symlink is not a file —
+    # the same rule `get/2` and the walks apply.
+    lstat_type(full_path) == :regular
   end
 
   @impl true
@@ -258,7 +272,8 @@ defmodule Arca.Adapters.Local do
     full_path = build_path(ctx, path)
     status = Keyword.get(opts, :status, 200)
 
-    if File.regular?(full_path) do
+    # lstat, same rule as get/2: a symlink is not servable content.
+    if lstat_type(full_path) == :regular do
       {:ok, Plug.Conn.send_file(conn, status, full_path)}
     else
       {:error, :not_found}

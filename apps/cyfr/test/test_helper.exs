@@ -12,13 +12,16 @@
 # actions. Those run whenever the opus code is loadable (a fresh umbrella
 # compile leaves it loaded) and are excluded when it isn't (a cached
 # app-scoped run), instead of crashing on an UndefinedFunctionError.
+# `:s3_integration` needs a live MinIO — the `s3-minio` CI job (and a local
+# `mix test --only s3_integration`) opts in; ordinary runs skip it.
 excludes =
-  Enum.concat(
-    if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
-    if(Code.ensure_loaded?(Opus.MCP), do: [], else: [:requires_opus_modules])
-  )
+  [:s3_integration] ++
+    Enum.concat(
+      if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
+      if(Code.ensure_loaded?(Opus.MCP), do: [], else: [:requires_opus_modules])
+    )
 
-if excludes != [], do: ExUnit.configure(exclude: excludes)
+ExUnit.configure(exclude: excludes)
 
 # The tmp storage roots configured in config/test.exs: the tenant root, and
 # the seed tree with an empty bundle plus a copy of the shipped AQUA

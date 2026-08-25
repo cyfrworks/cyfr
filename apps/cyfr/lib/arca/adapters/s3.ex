@@ -196,11 +196,12 @@ defmodule Arca.Adapters.S3 do
           :ok
 
         {:ok, keys} ->
-          # S3 supports DeleteObjects (POST ?delete) for batches of up to 1000.
-          # Single-key DELETEs keep the implementation simple; for large trees
-          # we'd batch — defer until profiling shows it matters.
-          Enum.reduce_while(keys, :ok, fn key, _acc ->
-            case delete_tolerating_missing("delete_tree", key) do
+          # DeleteObjects (POST ?delete) takes up to 1000 keys per request —
+          # one round-trip per batch instead of one per key.
+          keys
+          |> Enum.chunk_every(1000)
+          |> Enum.reduce_while(:ok, fn batch, _acc ->
+            case delete_objects_batch(batch) do
               :ok -> {:cont, :ok}
               {:error, _} = err -> {:halt, err}
             end
@@ -209,6 +210,28 @@ defmodule Arca.Adapters.S3 do
         {:error, reason} ->
           log_and_error("delete_tree", reason)
       end
+    end
+  end
+
+  defp delete_objects_batch(keys) do
+    body =
+      "<Delete><Quiet>true</Quiet>" <>
+        Enum.map_join(keys, "", fn key -> "<Object><Key>#{xml_escape(key)}</Key></Object>" end) <>
+        "</Delete>"
+
+    case request_bucket_post("delete=", body) do
+      {:ok, %{status: 200, body: resp}} ->
+        # Quiet mode answers only the failures; any <Error> element means
+        # part of the batch survived.
+        if resp =~ "<Error>",
+          do: log_and_error("delete_tree", {:s3_delete_objects, resp}),
+          else: :ok
+
+      {:ok, %{status: status, body: resp}} ->
+        log_and_error("delete_tree", status, resp)
+
+      {:error, reason} ->
+        log_and_error("delete_tree", reason)
     end
   end
 
@@ -229,7 +252,12 @@ defmodule Arca.Adapters.S3 do
     case list_keys(prefix_key) do
       {:ok, keys} ->
         leaves =
-          for key <- keys, String.starts_with?(key, prefix_with_slash) do
+          for key <- keys,
+              String.starts_with?(key, prefix_with_slash),
+              # A key ending in "/" is a console-written directory marker,
+              # not content — the Local adapter has no such object, and a
+              # walk that reported one would hand back an unreadable leaf.
+              not String.ends_with?(key, "/") do
             relative = String.replace_prefix(key, prefix_with_slash, "")
 
             case String.split(relative, "/", trim: true) do
@@ -253,7 +281,14 @@ defmodule Arca.Adapters.S3 do
 
     case list_entries(prefix_key) do
       {:ok, entries} ->
-        sizes = for {key, size} <- entries, String.starts_with?(key, prefix_with_slash), do: size
+        # Directory markers (keys ending "/") are not files — the Local
+        # adapter's walk never counts a directory either.
+        sizes =
+          for {key, size} <- entries,
+              String.starts_with?(key, prefix_with_slash),
+              not String.ends_with?(key, "/"),
+              do: size
+
         {:ok, %{files: length(sizes), bytes: Enum.sum(sizes)}}
 
       {:error, reason} ->
@@ -374,11 +409,13 @@ defmodule Arca.Adapters.S3 do
   defp list_keys_pages(prefix, token, acc, seen_tokens) do
     case request_list_page(prefix, token) do
       {:ok, body} ->
-        acc = acc ++ parse_list_keys(body)
+        # Pages accumulate newest-first and flatten once at the end —
+        # appending per page would re-copy the whole accumulator each time.
+        acc = [parse_list_keys(body) | acc]
 
         case next_continuation_token(body) do
           nil ->
-            {:ok, acc}
+            {:ok, acc |> Enum.reverse() |> List.flatten()}
 
           next ->
             if MapSet.member?(seen_tokens, next) do
@@ -392,6 +429,58 @@ defmodule Arca.Adapters.S3 do
       {:error, _} = error ->
         error
     end
+  end
+
+  # A bucket-level POST (DeleteObjects). Content-MD5 is required by S3 for
+  # this operation and rides inside the signature.
+  defp request_bucket_post(query, body) do
+    region = config!(:region)
+    {access_key, secret_key} = {config!(:access_key_id), config!(:secret_access_key)}
+    bucket = config!(:bucket)
+    base = endpoint_base()
+
+    url =
+      if path_style?() do
+        "#{base}/#{bucket}/?#{query}"
+      else
+        "#{scheme(base)}://#{bucket}.#{host_only(base)}/?#{query}"
+      end
+
+    datetime = :calendar.universal_time()
+
+    base_headers = [
+      {"host", host_for(url)},
+      {"x-amz-content-sha256", sha256_hex(body)},
+      {"content-md5", Base.encode64(:crypto.hash(:md5, body))}
+    ]
+
+    signed =
+      :aws_signature.sign_v4(
+        access_key,
+        secret_key,
+        region,
+        @service,
+        datetime,
+        "POST",
+        url,
+        base_headers,
+        body,
+        []
+      )
+
+    headers = signed |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+
+    Req.request(method: :post, url: url, headers: headers, body: body, decode_body: false)
+  end
+
+  # The inverse of xml_unescape/1, for keys carried inside a request body.
+  defp xml_escape(text) do
+    text
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&apos;")
   end
 
   defp request_list_page(prefix, token) do
@@ -503,11 +592,11 @@ defmodule Arca.Adapters.S3 do
   defp list_entries_pages(prefix, token, acc, seen_tokens) do
     case request_list_page(prefix, token) do
       {:ok, body} ->
-        acc = acc ++ parse_list_entries(body)
+        acc = [parse_list_entries(body) | acc]
 
         case next_continuation_token(body) do
           nil ->
-            {:ok, acc}
+            {:ok, acc |> Enum.reverse() |> List.flatten()}
 
           next ->
             if MapSet.member?(seen_tokens, next) do

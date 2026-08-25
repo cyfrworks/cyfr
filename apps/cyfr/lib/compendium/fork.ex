@@ -118,34 +118,12 @@ defmodule Compendium.Fork do
   # ============================================================================
 
   defp do_fork(ctx, source_base, target_base, target_name, target_version, source_ref_str) do
-    case collect_files(ctx, source_base, source_base) do
+    case Arca.read_subtree(ctx, source_base) do
+      {:ok, files} ->
+        write_files(files, ctx, target_base, target_name, target_version, source_ref_str)
+
       {:error, reason} ->
         {:error, reason}
-
-      files ->
-        write_files(files, ctx, target_base, target_name, target_version, source_ref_str)
-    end
-  end
-
-  defp collect_files(ctx, base_path, current_path) do
-    case Arca.list(ctx, current_path) do
-      {:ok, entries} ->
-        Enum.flat_map(entries, fn entry ->
-          entry_path = current_path ++ [entry]
-          rel_segments = entry_path -- base_path
-
-          case Arca.get(ctx, entry_path) do
-            {:ok, content} ->
-              [{rel_segments, content}]
-
-            {:error, _} ->
-              # Likely a directory — recurse
-              collect_files(ctx, base_path, entry_path)
-          end
-        end)
-
-      {:error, _} ->
-        []
     end
   end
 

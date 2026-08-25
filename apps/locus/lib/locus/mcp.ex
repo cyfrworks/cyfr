@@ -358,8 +358,7 @@ defmodule Locus.MCP do
 
     case Arca.get(ctx, pkg_path) do
       {:ok, _} ->
-        source_files = collect_tincture_source(ctx, base, base)
-        {:ok, source_files}
+        {:ok, collect_tincture_source(ctx, base)}
 
       {:error, _} ->
         {:error,
@@ -377,8 +376,7 @@ defmodule Locus.MCP do
 
     case Arca.get(ctx, lib_rs_path) do
       {:ok, _} ->
-        source_files = collect_source_files(ctx, src_base, src_base)
-        {:ok, source_files}
+        {:ok, collect_source_files(ctx, src_base)}
 
       {:error, _} ->
         {:error,
@@ -387,35 +385,20 @@ defmodule Locus.MCP do
     end
   end
 
-  # Recursively collect all source files under src_base, returning a map
-  # of relative paths (relative to src_base) to file contents.
-  # Excludes target/ directory.
-  defp collect_source_files(ctx, base_path, current_path) do
-    case Arca.list(ctx, current_path) do
-      {:ok, entries} ->
-        entries
-        |> Enum.reject(&(&1 in ["target"]))
-        |> Enum.reduce(%{}, fn entry, acc ->
-          entry_path = current_path ++ [entry]
-          rel_path = entry_path -- base_path
-
-          case Arca.get(ctx, entry_path) do
-            {:ok, content} ->
-              # It's a file — include if it's a .rs file or Cargo.toml
-              rel_str = Path.join(rel_path)
-
-              if String.ends_with?(entry, ".rs") or String.ends_with?(entry, ".wit") or
-                   entry == "Cargo.toml" do
-                Map.put(acc, rel_str, content)
-              else
-                acc
-              end
-
-            {:error, _} ->
-              # Likely a directory — recurse into it
-              Map.merge(acc, collect_source_files(ctx, base_path, entry_path))
-          end
-        end)
+  # Collect all source files under src_base as a map of relative paths to
+  # contents — one subtree read, no per-entry probing. Excludes anything
+  # under target/ and keeps only .rs/.wit files and Cargo.toml.
+  defp collect_source_files(ctx, src_base) do
+    case Arca.read_subtree(ctx, src_base) do
+      {:ok, pairs} ->
+        for {rel, content} <- pairs,
+            "target" not in rel,
+            name = List.last(rel),
+            String.ends_with?(name, ".rs") or String.ends_with?(name, ".wit") or
+              name == "Cargo.toml",
+            into: %{} do
+          {Path.join(rel), content}
+        end
 
       {:error, _} ->
         %{}
@@ -451,28 +434,16 @@ defmodule Locus.MCP do
     end
   end
 
-  @tincture_exclude_dirs ~w(node_modules dist .git)
-  @tincture_exclude_files ~w(data.db)
+  @tincture_excluded ~w(node_modules dist .git data.db)
 
-  defp collect_tincture_source(ctx, base_path, current_path) do
-    case Arca.list(ctx, current_path) do
-      {:ok, entries} ->
-        entries
-        |> Enum.reject(&(&1 in @tincture_exclude_dirs))
-        |> Enum.reject(&(&1 in @tincture_exclude_files))
-        |> Enum.reduce(%{}, fn entry, acc ->
-          entry_path = current_path ++ [entry]
-          rel_path = entry_path -- base_path
-
-          case Arca.get(ctx, entry_path) do
-            {:ok, content} ->
-              Map.put(acc, Path.join(rel_path), content)
-
-            {:error, _} ->
-              # Directory — recurse
-              Map.merge(acc, collect_tincture_source(ctx, base_path, entry_path))
-          end
-        end)
+  defp collect_tincture_source(ctx, base) do
+    case Arca.read_subtree(ctx, base) do
+      {:ok, pairs} ->
+        for {rel, content} <- pairs,
+            not Enum.any?(rel, &(&1 in @tincture_excluded)),
+            into: %{} do
+          {Path.join(rel), content}
+        end
 
       {:error, _} ->
         %{}

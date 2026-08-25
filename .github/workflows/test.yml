@@ -145,6 +145,52 @@ jobs:
       - name: Run tests
         run: mix test
 
+  s3-minio:
+    name: S3 adapter vs MinIO
+    runs-on: ubuntu-latest
+    env:
+      CYFR_DATABASE: sqlite
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '28'
+          elixir-version: '1.19.5'
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-minio-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-minio-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      # The stub suite verifies request shape; only a real implementation
+      # verifies the signature over pre-percent-encoded URLs and the
+      # Content-MD5-signed DeleteObjects batch. Credentials are non-secret
+      # CI fixtures mirrored in s3_minio_test.exs.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
+            minio/minio:latest server /data
+      - name: Install dependencies
+        run: mix deps.get
+      - name: Compile
+        run: mix compile --warnings-as-errors
+      - name: Wait for MinIO
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          echo "MinIO did not become healthy" >&2
+          docker logs minio || true
+          exit 1
+      - name: Run the S3 integration suite
+        working-directory: apps/cyfr
+        run: mix test --only s3_integration
+
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)
     runs-on: ubuntu-latest

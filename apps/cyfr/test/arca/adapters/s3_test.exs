@@ -7,8 +7,9 @@ defmodule Arca.Adapters.S3Test do
 
   Uses `Req`'s test plug feature to intercept HTTP calls and verify the
   adapter's request shape (URL, method, body, signed headers) without a
-  real S3/MinIO service. Integration coverage against a MinIO service
-  container is added separately in CI.
+  real S3/MinIO service. Integration coverage against a real MinIO lives
+  in `s3_minio_test.exs` (`mix test --only s3_integration`, the `s3-minio`
+  CI job).
   """
 
   use ExUnit.Case, async: false
@@ -231,6 +232,11 @@ defmodule Arca.Adapters.S3Test do
           conn.method == "DELETE" ->
             Plug.Conn.send_resp(conn, 204, "")
 
+          conn.method == "POST" and conn.query_string =~ "delete" ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            send(parent, {:delete_objects, body})
+            Plug.Conn.send_resp(conn, 200, "<DeleteResult></DeleteResult>")
+
           conn.query_string =~ "continuation-token=tok%2Bpage%2F2%3D%3D" ->
             Plug.Conn.send_resp(conn, 200, page2)
 
@@ -261,17 +267,19 @@ defmodule Arca.Adapters.S3Test do
       assert q2 =~ "continuation-token=tok%2Bpage%2F2%3D%3D"
     end
 
-    test "delete_tree removes keys from every page", %{ctx: ctx} do
+    test "delete_tree removes keys from every page in one DeleteObjects batch", %{ctx: ctx} do
       stub_paged_listing(self())
 
       assert :ok = S3.delete_tree(ctx, ["guest"])
 
-      # Drain the two GET pages, then expect one DELETE per key on both pages.
-      assert_received {:req, "GET", _, _}
-      assert_received {:req, "GET", _, _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/a.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/b.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/sub/c.txt", _}
+      # The bare-prefix object goes first, then one batched POST carrying
+      # every key from both pages — not one DELETE per key.
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest", _}
+      assert_received {:delete_objects, body}
+      assert body =~ "athanors/ath_test/guest/a.txt"
+      assert body =~ "athanors/ath_test/guest/b.txt"
+      assert body =~ "athanors/ath_test/guest/sub/c.txt"
+      refute_received {:delete_objects, _}
     end
 
     test "a repeated continuation token errors instead of looping", %{ctx: ctx} do
