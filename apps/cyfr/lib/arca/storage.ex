@@ -67,6 +67,8 @@ defmodule Arca.Storage do
 
       data/
       ├── cyfr.db                        # SQLite database (all structured data)
+      ├── mcp-bridge/                    # the mcp-bridge sidecar's own files — inside the
+      │                                  # root (compose mounts it), never an Arca path
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       ├── system/                        # Global: server-internal scratch (health probe)

@@ -118,16 +118,16 @@ your-project/
 ├── cyfr.yaml
 ├── .env                    # Secret key and config (do not commit)
 ├── .gitignore
-├── wit/                    # WIT interface definitions for WASM components
+├── wit/                    # WIT interface definitions for WASM components (developer reference)
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/
-│   └── _bundle/            # The tracked seed-bundle source every athanor starts from
 ├── aqua/                   # AQUA agent template (agent.json + role prompts) every athanor is given
 └── data/                   # ALL runtime state — one directory, .gitignored
     ├── cyfr.db             # Connections, consents, execution records
     ├── cache/              # Immutable cached artifacts (OCI blobs)
+    ├── system/             # Server-internal scratch (health probes)
+    ├── mcp-bridge/         # The mcp-bridge sidecar's own files (not managed by cyfr)
     └── athanors/           # One tree per athanor — Home, then each person's and group's
         └── <athanor id>/
             ├── components/ # {type}s/{publisher}/{name}/{version}/
@@ -135,10 +135,17 @@ your-project/
             │   ├── reagents/    # Your local reagents
             │   ├── formulas/    # Bundled formulas: list-models, aqua
             │   └── tinctures/   # Bundled example tinctures + your own
-            └── data/       # The athanor's files: builds, config, conversations
+            ├── aqua/       # The athanor's own AQUA agent definitions
+            ├── builds/     # Build records
+            ├── config/     # Retention settings and other per-athanor config
+            ├── conversations/  # Chat attachment files
+            └── guest/      # Files WASM components store (their `data/` scope)
 ```
 
-> `components/_bundle/` holds the working reference implementations every athanor is seeded from; it is read in place at runtime. Your own components live inside your athanor's tree under `data/`.
+> The seed bundle every athanor starts from rides inside the container image
+> (`CYFR_BUNDLE_PATH`) and is read in place — a scaffolded project carries no
+> `components/` directory. Your own components live inside your athanor's
+> tree under `components/`.
 
 ## Using Components
 
@@ -511,14 +518,16 @@ sign-in to the browser page a headless node refuses.
 ### Storage paths
 
 File storage defaults to the local `./data` volume — the one root holding
-every athanor's data and components, the caches, and (on SQLite) the
-database itself. Two release-only variables move the pieces:
+every athanor's tree, the caches, and (on SQLite) the database itself.
+Release-only variables move the pieces:
 
 ```bash
 CYFR_DATA_PATH=data                     # the one storage root; the SQLite
                                         # database defaults to cyfr.db inside it
 CYFR_BUNDLE_PATH=components/_bundle     # the seed bundle, read in place
                                         # (the container image sets its own)
+CYFR_AQUA_TEMPLATE_PATH=aqua            # the AQUA agent template, read in place
+                                        # (the image points it at /app/aqua)
 ```
 
 ### S3-compatible object storage
