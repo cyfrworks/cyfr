@@ -245,9 +245,8 @@ defmodule Opus.StorageHandler do
 
   # The operator's per-athanor ceiling for authenticated writes
   # (`CYFR_ATHANOR_STORAGE_BYTES`) — off unless set, as a private box needs
-  # none. `Sanctum.Tenancy.Caps.check_storage/2` measures both of the
-  # athanor's roots, data and components; the incoming size is the decoded
-  # payload.
+  # none. `Sanctum.Tenancy.Caps.check_storage/2` measures the athanor's
+  # whole tree; the incoming size is the decoded payload.
   defp validate_athanor_quota(action, %{content: content}, ctx) when action in @writing_actions do
     incoming =
       case Base.decode64(content || "") do

@@ -395,6 +395,10 @@ defmodule Arca do
     end
   end
 
+  # Accounting is universal — every tenant write lands here — but the cap
+  # itself is CHECKED only by the user-ingress writers, by design; see
+  # `Sanctum.Tenancy.Caps.check_storage/2` for the policy and its roster.
+  #
   # The cached athanor total stays O(1) per write: a successful put/append
   # BUMPS the cached bytes by what was written (an overwrite over-counts —
   # the safe direction — until the entry's own TTL walks the tree afresh;

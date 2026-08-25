@@ -61,8 +61,14 @@ defmodule Sanctum.Tenancy.Caps do
   @doc """
   `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
   `:athanor_storage_bytes` cap (or the cap is off). The one place the cap is
-  computed: authenticated WASM writes, chat attachments and published
-  component bytes all come here.
+  computed — and, deliberately, enforced only at the user-ingress writers:
+  authenticated WASM writes (`Opus.StorageHandler`), chat attachments
+  (`Prism.Attachments`), and the two `Compendium.Registry` publish paths.
+  Server-driven writers — the athanor seeder, template copies, fork,
+  build-artifact stores, OCI pulls — write uncapped by design: they move
+  operator-shipped or build-derived bytes, and failing them half-completes
+  a provision or a publish, which is worse than any over-cap state. Their
+  bytes still count — usage accounting in `Arca` sees every tenant write.
 
   The count is one walk of the athanor's whole tree — components, guest
   files, attachments, the seeded copies included, because a cap that
