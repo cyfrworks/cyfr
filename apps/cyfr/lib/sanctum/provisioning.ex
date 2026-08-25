@@ -275,7 +275,9 @@ defmodule Sanctum.Provisioning do
     for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at) do
       ctx = seed_ctx(athanor.id)
 
-      case AthanorSeeder.sync(athanor.id) do
+      # Boot never reads the present/modified distinction, so it skips the
+      # byte-digesting that classification costs.
+      case AthanorSeeder.sync(athanor.id, classify_drift: false) do
         {:ok, %{copied: [_ | _] = copied}} ->
           Logger.info(
             "[Provisioning] #{athanor.id}: synced #{length(copied)} bundle version(s): " <>

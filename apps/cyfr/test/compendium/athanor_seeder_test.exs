@@ -209,6 +209,38 @@ defmodule Compendium.AthanorSeederTest do
       assert {:ok, %{copied: [_]}} = AthanorSeeder.sync("ath_acme")
       assert {:ok, %{copied: [], present: [_], modified: []}} = AthanorSeeder.sync("ath_acme")
     end
+
+    test "classify_drift: false reports a drifted dir as present — no digesting", %{
+      bundle_dir: bundle_dir
+    } do
+      write_bundle!(bundle_dir)
+      assert :ok = AthanorSeeder.seed("ath_acme")
+
+      ctx = athanor_ctx("ath_acme")
+      edited = ["components", "catalysts", "local", "foo", "1.0.0", "cyfr-manifest.json"]
+      :ok = Arca.put(ctx, edited, ~s({"edited": true}))
+
+      # The boot sync opts out of drift classification: the drifted dir
+      # reads :present, which is only possible if no bytes were compared.
+      assert {:ok, report} = AthanorSeeder.sync("ath_acme", classify_drift: false)
+      assert report.copied == []
+      assert report.present == ["catalysts/local/foo/1.0.0"]
+      assert report.modified == []
+    end
+
+    test "an empty version directory is not a version", %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      File.mkdir_p!(Path.join([bundle_dir, "catalysts", "local", "foo", "9.9.9"]))
+
+      # An empty dir has nothing to copy; discovering it would fire a scan
+      # and a dep pull on every boot for nothing.
+      assert {:ok, report} = AthanorSeeder.sync("ath_acme")
+      assert report.copied == ["catalysts/local/foo/1.0.0"]
+      refute Arca.exists?(
+               athanor_ctx("ath_acme"),
+               ["components", "catalysts", "local", "foo", "9.9.9"]
+             )
+    end
   end
 
   test "Upstream.bundle_versions lists what the bundle ships", %{bundle_dir: bundle_dir} do
