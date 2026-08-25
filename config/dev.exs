@@ -30,11 +30,14 @@ config :phoenix, :stacktrace_depth, 20
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
 
-# Configure Arca for development. Expanded at config time — an unexpanded
+# Configure Arca for development. One database, one name: runtime.exs
+# resolves the same data/cyfr.db (CYFR_DATABASE_PATH-overridable) for dev
+# and prod alike; this line only adds the dev-only connection option, since
+# config/2 merges keyword lists. Expanded at config time — an unexpanded
 # relative path resolves against whichever umbrella app's CWD loads it and
 # litters apps/*/data/ with stray databases.
 config :cyfr, Arca.Repo,
-  database: Path.expand("data/dev.db"),
+  database: Path.expand("data/cyfr.db"),
   show_sensitive_data_on_connection_error: true
 
 # Sanctum dev configuration

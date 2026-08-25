@@ -204,50 +204,6 @@ if config_env() != :test do
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
 
-    # The filesystem roots, resolved and validated in one place
-    # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
-    # (every athanor's data and components, the cache/ and system/ globals,
-    # and the SQLite database unless CYFR_DATABASE_PATH points it
-    # elsewhere), plus the seed tree read in place — the repo/scaffold
-    # checkout by default, the baked image copy in Docker (the Dockerfile
-    # sets CYFR_SEED_PATH; the operator mount overlays its aqua/).
-    paths =
-      case Cyfr.RuntimeConfig.resolve_paths(getenv) do
-        {:ok, paths} -> paths
-        {:error, message} -> raise message
-      end
-
-    config :cyfr, :base_path, paths.base_path
-    config :cyfr, :seed_path, paths.seed_path
-
-    # Database connection config. The adapter is selected at compile time in
-    # config.exs from CYFR_DATABASE; here we supply connection parameters for
-    # whichever adapter was built — gated so SQLite-only keys (journal_mode,
-    # busy_timeout) never bleed into a Postgres build and vice versa.
-    case Cyfr.RuntimeConfig.repo_adapter() do
-      Ecto.Adapters.SQLite3 ->
-        pool_size =
-          case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do
-            {:ok, pool_size} -> pool_size
-            {:error, message} -> raise message
-          end
-
-        config :cyfr, Arca.Repo,
-          database: paths.database_path,
-          pool_size: pool_size,
-          journal_mode: :wal,
-          busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
-
-      Ecto.Adapters.Postgres ->
-        # A Postgres build carries no connection config from config.exs, so a
-        # CYFR_DATABASE_URL is required — its absence is a hard boot error
-        # rather than a silent attempt against a default localhost.
-        case Cyfr.RuntimeConfig.resolve_postgres(getenv) do
-          {:ok, repo_opts} -> config :cyfr, Arca.Repo, repo_opts
-          {:error, message} -> raise message
-        end
-    end
-
     # Warn if plain HTTP in production without a reverse proxy declaration
     unless env!("CYFR_BEHIND_PROXY", :string, nil) do
       IO.puts(
@@ -280,6 +236,56 @@ if config_env() != :test do
                cidrs |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
       end
     end
+  end
+
+  # The filesystem roots, resolved and validated in one place
+  # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
+  # (every athanor's data and components, the cache/ and system/ globals,
+  # and the SQLite database unless CYFR_DATABASE_PATH points it
+  # elsewhere), plus the seed tree read in place — the repo/scaffold
+  # checkout by default, the baked image copy in Docker (the Dockerfile
+  # sets CYFR_SEED_PATH; the operator mount overlays its aqua/).
+  #
+  # Dev and prod resolve identically — a path knob that only worked in
+  # releases was a silent fallback in dev, against this module's own
+  # contract. Test keeps its tmp pins: the whole file is skipped there.
+  # With the vars unset the defaults expand from CWD, so run dev from the
+  # umbrella root (locus builds already require it).
+  paths =
+    case Cyfr.RuntimeConfig.resolve_paths(getenv) do
+      {:ok, paths} -> paths
+      {:error, message} -> raise message
+    end
+
+  config :cyfr, :base_path, paths.base_path
+  config :cyfr, :seed_path, paths.seed_path
+
+  # Database connection config. The adapter is selected at compile time in
+  # config.exs from CYFR_DATABASE; here we supply connection parameters for
+  # whichever adapter was built — gated so SQLite-only keys (journal_mode,
+  # busy_timeout) never bleed into a Postgres build and vice versa.
+  case Cyfr.RuntimeConfig.repo_adapter() do
+    Ecto.Adapters.SQLite3 ->
+      pool_size =
+        case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do
+          {:ok, pool_size} -> pool_size
+          {:error, message} -> raise message
+        end
+
+      config :cyfr, Arca.Repo,
+        database: paths.database_path,
+        pool_size: pool_size,
+        journal_mode: :wal,
+        busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
+
+    Ecto.Adapters.Postgres ->
+      # A Postgres build carries no connection config from config.exs, so a
+      # CYFR_DATABASE_URL is required — its absence is a hard boot error
+      # rather than a silent attempt against a default localhost.
+      case Cyfr.RuntimeConfig.resolve_postgres(getenv) do
+        {:ok, repo_opts} -> config :cyfr, Arca.Repo, repo_opts
+        {:error, message} -> raise message
+      end
   end
 
   # CORS allowlist for the browser-facing HTTP surface (comma-separated

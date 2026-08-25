@@ -106,6 +106,9 @@ config :cyfr, ecto_repos: [Arca.Repo]
 # which can vary across umbrella apps during startup. The seed tree (the
 # component bundle and the AQUA agent template, `Arca.Storage.seed_roots/0`)
 # is anchored to the repo, not the CWD: it is read wherever the app runs from.
+# In dev and prod these are compile-time placeholders only — runtime.exs
+# re-resolves both through Cyfr.RuntimeConfig.resolve_paths/1 (CWD-anchored
+# defaults; run dev from the umbrella root). Test pins its own tmp roots.
 config :cyfr,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
