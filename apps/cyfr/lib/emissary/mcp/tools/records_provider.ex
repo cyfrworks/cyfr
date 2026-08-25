@@ -14,6 +14,15 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   `Opus.StorageHandler`, not as an MCP tool. The `retention` tool manages
   data retention policies (get, set, cleanup).
 
+  The `arca://files/{path}` resource is read-only (MCP resources have no
+  write operation) and deliberately un-scoped within the athanor:
+  `:storage_read` means the athanor's WHOLE tree — every scope in
+  `Arca.Storage.tenant_roots/0`, attachment blobs included. The athanor is
+  its members' own machine; the boundaries that matter are tenant and
+  platform, not intra-athanor compartments. Conversation transcripts are
+  rows, never reachable here, and an unknown first segment is a typed
+  refusal at the Arca gate.
+
   ## Retention Tool
 
   The `retention` tool manages data retention policies:
@@ -68,7 +77,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       %{
         uriTemplate: "arca://files/{path}",
         name: "Arca Files",
-        description: "Read files from Arca storage by path",
+        description:
+          "Read any file in the athanor's storage by path (components/, aqua/, " <>
+            "guest/, config/, conversations/) — :storage_read spans the whole tree",
         mimeType: "application/octet-stream"
       }
     ]
