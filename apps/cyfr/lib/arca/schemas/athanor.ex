@@ -68,6 +68,12 @@ defmodule Arca.Schemas.Athanor do
     athanor
     |> cast(attrs, fields)
     |> validate_required([:id, :kind, :name, :slug, :created_by])
+    # The id names the athanor's storage directory (`Arca.Storage`
+    # shares this grammar) — a dot or slash in an id would name a path
+    # outside the athanor's own tree.
+    |> validate_format(:id, Arca.Storage.athanor_id_format(),
+      message: "must be alphanumeric with underscores or hyphens"
+    )
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:status, @statuses)
     # The slug grammar is the namespace grammar: a person's athanor slug is

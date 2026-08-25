@@ -88,6 +88,32 @@ defmodule Arca.StorageAuthorizePathTest do
     refute Arca.exists?(a, ["notes", "hello.txt"])
   end
 
+  test "multi-level string segments name the same object as their split spelling", %{a: a} do
+    # One spelling per object: the facade flattens before the gate, so the
+    # Local adapter (which joins with the filesystem) and the S3 adapter
+    # (which joins into a key) can never disagree.
+    assert :ok = Arca.put(a, ["guest/sub/dir", "f.txt"], "flat")
+    assert {:ok, "flat"} = Arca.get(a, ["guest", "sub", "dir", "f.txt"])
+    assert Arca.exists?(a, ["guest", "sub/dir/f.txt"])
+
+    # Split artifacts (trailing slashes) are dropped, not stored.
+    assert :ok = Arca.put(a, ["guest/", "t.txt"], "x")
+    assert {:ok, "x"} = Arca.get(a, ["guest", "t.txt"])
+  end
+
+  test "the in-flight temp suffix is a reserved name for writes", %{a: a} do
+    # `.tmp.N` is the Local adapter's write marker — invisible to listings
+    # and the usage walk, reaped by the sweeper. A caller-chosen tmp name
+    # would be a hidden, uncounted object; the pattern means one thing.
+    assert {:error, :reserved_name} = Arca.put(a, ["guest", "blob.tmp.1"], "x")
+    assert {:error, :reserved_name} = Arca.append(a, ["guest", "log.tmp.99"], "x")
+    refute Arca.exists?(a, ["guest", "blob.tmp.1"])
+
+    # Only the exact suffix is reserved.
+    assert :ok = Arca.put(a, ["guest", "blob.tmp"], "x")
+    assert :ok = Arca.put(a, ["guest", "tmp.1"], "x")
+  end
+
   test "a context without an athanor cannot touch tenant storage at all" do
     platform =
       Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)

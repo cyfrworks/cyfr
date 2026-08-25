@@ -24,8 +24,22 @@ defmodule Cyfr.PathSafetyTest do
     end
 
     test "rejects multi-layer encoded traversal" do
-      assert_raise ArgumentError, ~r/encoded ".."/, fn ->
+      assert_raise ArgumentError, ~r/encoded dot segments/, fn ->
         PathSafety.validate_segments!(["%252e%252e/secrets"])
+      end
+    end
+
+    test "rejects dot, encoded dot, and empty segments" do
+      assert_raise ArgumentError, ~r/segment "\."/, fn ->
+        PathSafety.validate_segments!([".", "x"])
+      end
+
+      assert_raise ArgumentError, ~r/encoded dot segments/, fn ->
+        PathSafety.validate_segments!(["%2e"])
+      end
+
+      assert_raise ArgumentError, ~r/empty segments/, fn ->
+        PathSafety.validate_segments!(["a", ""])
       end
     end
 

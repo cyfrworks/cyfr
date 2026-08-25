@@ -14,8 +14,11 @@ defmodule Cyfr.PathSafety do
 
   The shared core is the union of both, plus backslash rejection:
 
-    * literal `..` segments
-    * multi-layer URI-encoded `..` (`%2e%2e`, `%252e...`)
+    * literal `..` and `.` segments (and their URI-encoded spellings,
+      multi-layer included — `%2e%2e`, `%252e...`)
+    * empty segments (`""` is not a name; on the segment-list contract it
+      is refused rather than silently collapsed, because the two storage
+      adapters disagreed on what it meant)
     * null bytes
     * absolute paths (leading `/`)
     * backslashes (Windows separators that sidestep `/`-based checks)
@@ -63,9 +66,14 @@ defmodule Cyfr.PathSafety do
   end
 
   defp check_segment(segment) when is_binary(segment) do
+    decoded = fully_decode(segment)
+
     cond do
-      segment == ".." ->
-        {:error, "Path traversal rejected: segment \"..\" is not allowed"}
+      segment == "" ->
+        {:error, "Path rejected: empty segments are not allowed"}
+
+      segment in [".", ".."] ->
+        {:error, "Path traversal rejected: segment #{inspect(segment)} is not allowed"}
 
       String.contains?(segment, <<0>>) ->
         {:error, "Path traversal rejected: null bytes are not allowed"}
@@ -76,8 +84,8 @@ defmodule Cyfr.PathSafety do
       String.starts_with?(segment, "/") ->
         {:error, "Path traversal rejected: absolute segments are not allowed"}
 
-      fully_decode(segment) =~ ~r/(^|[\/\\])\.\.($|[\/\\])/ ->
-        {:error, "Path traversal rejected: encoded \"..\" is not allowed"}
+      decoded in [".", ".."] or decoded =~ ~r/(^|[\/\\])\.\.($|[\/\\])/ ->
+        {:error, "Path traversal rejected: encoded dot segments are not allowed"}
 
       true ->
         :ok

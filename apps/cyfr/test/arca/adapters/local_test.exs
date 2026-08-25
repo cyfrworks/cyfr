@@ -403,17 +403,12 @@ defmodule Arca.Adapters.LocalTest do
       end
     end
 
-    test "handles empty path segments", %{ctx: ctx} do
-      path = ["guest", "", "file.txt"]
-
-      # Should either filter empty segments or handle gracefully
-      case Local.put(ctx, path, "content") do
-        :ok ->
-          # Should be able to read back
-          assert {:ok, _} = Local.get(ctx, path)
-
-        {:error, _} ->
-          :ok
+    test "rejects empty path segments at the adapter", %{ctx: ctx} do
+      # The Arca facade drops split artifacts; a bare "" reaching an
+      # adapter directly is refused rather than silently collapsed (the
+      # two adapters used to disagree about which object it named).
+      assert_raise ArgumentError, ~r/empty segments/, fn ->
+        Local.put(ctx, ["guest", "", "file.txt"], "content")
       end
     end
 

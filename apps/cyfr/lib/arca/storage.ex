@@ -222,6 +222,17 @@ defmodule Arca.Storage do
   @spec seed_roots() :: [String.t()]
   def seed_roots, do: @seed_roots
 
+  # The athanor-id grammar for storage: strictly alphanumeric plus `_`/`-`.
+  # No dots at all — an id of `"."` would join to `athanors/.` and expand to
+  # the ALL-athanors root; `".."`, slashes and percent-encodings are refused
+  # by the same stroke. `Arca.Schemas.Athanor` enforces the same shape on
+  # the row.
+  @athanor_id_format ~r/^[A-Za-z0-9_-]+$/
+
+  @doc "The athanor-id grammar shared with `Arca.Schemas.Athanor`."
+  @spec athanor_id_format() :: Regex.t()
+  def athanor_id_format, do: @athanor_id_format
+
   @doc """
   Build the tenant segment list `[athanor_id]` used by every storage adapter
   for tenant-scoped paths.
@@ -235,15 +246,17 @@ defmodule Arca.Storage do
   @spec tenant_segments(Context.t()) :: [String.t()]
   def tenant_segments(%Context{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
-    segments = [athanor_id]
-
     # Defense-in-depth: athanor ids are minted by trusted code, but a
     # corrupted row or a future code path that bypasses those validations
-    # could inject `..` or null bytes. Run the same path-traversal check we
-    # apply to user-supplied segments.
-    validate_path!(segments)
+    # could inject `..`, `"."` or a slash — each of which would name a
+    # directory outside the athanor's own tree.
+    unless athanor_id =~ @athanor_id_format do
+      raise ArgumentError,
+            "invalid athanor_id for storage: #{inspect(athanor_id)} " <>
+              "(must match #{inspect(@athanor_id_format)})"
+    end
 
-    segments
+    [athanor_id]
   end
 
   def tenant_segments(%Context{} = ctx) do

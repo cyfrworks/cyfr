@@ -38,8 +38,20 @@ defmodule Arca.StorageTest do
       end
     end
 
-    test "allows single dot segment" do
-      assert :ok = Storage.validate_path!([".", "file.txt"])
+    test "rejects single dot and empty segments" do
+      # `"."` names the parent directory itself (an athanor id of "." would
+      # be the all-athanors root) and `""` is not a name — both fail closed.
+      assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
+        Storage.validate_path!([".", "file.txt"])
+      end
+
+      assert_raise ArgumentError, ~r/empty segments/, fn ->
+        Storage.validate_path!(["builds", "", "file.txt"])
+      end
+
+      assert_raise ArgumentError, ~r/encoded dot segments/, fn ->
+        Storage.validate_path!(["%2e", "file.txt"])
+      end
     end
 
     test "allows segments containing .. in names" do
@@ -169,17 +181,21 @@ defmodule Arca.StorageTest do
       end
     end
 
-    test "rejects path traversal in athanor_id" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          namespace: "alice",
-          athanor_id: "..",
-          authenticated: true
-        )
+    test "rejects an athanor_id outside the strict id grammar" do
+      # `".."` escapes, and `"."` IS the all-athanors root once joined and
+      # expanded — the grammar has no dots or slashes at all.
+      for bad <- ["..", ".", "a/b", "a.b", "%2e"] do
+        ctx =
+          Context.build(
+            user_id: "user_1",
+            namespace: "alice",
+            athanor_id: bad,
+            authenticated: true
+          )
 
-      assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
-        Storage.tenant_segments(ctx)
+        assert_raise ArgumentError, ~r/invalid athanor_id/, fn ->
+          Storage.tenant_segments(ctx)
+        end
       end
     end
   end

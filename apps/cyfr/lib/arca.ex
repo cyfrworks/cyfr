@@ -86,7 +86,7 @@ defmodule Arca do
       {:ok, "hello"}
 
   """
-  def get(%Context{} = ctx, path), do: guarded(ctx, path, fn -> adapter(path).get(ctx, path) end)
+  def get(%Context{} = ctx, path), do: guarded(ctx, path, fn p -> adapter(p).get(ctx, p) end)
 
   @doc """
   Read and decode JSON content from storage.
@@ -120,7 +120,7 @@ defmodule Arca do
 
   """
   def put(%Context{} = ctx, path, content),
-    do: mutating(ctx, path, fn -> adapter(path).put(ctx, path, content) end)
+    do: mutating(ctx, path, {:create, byte_size(content)}, fn p -> adapter(p).put(ctx, p, content) end)
 
   @doc """
   Encode and write JSON content to storage.
@@ -157,7 +157,10 @@ defmodule Arca do
 
   """
   def append(%Context{} = ctx, path, content),
-    do: mutating(ctx, path, fn -> adapter(path).append(ctx, path, content) end)
+    do:
+      mutating(ctx, path, {:create, byte_size(content)}, fn p ->
+        adapter(p).append(ctx, p, content)
+      end)
 
   @doc """
   Delete content from storage.
@@ -174,7 +177,7 @@ defmodule Arca do
 
   """
   def delete(%Context{} = ctx, path),
-    do: mutating(ctx, path, fn -> adapter(path).delete(ctx, path) end)
+    do: mutating(ctx, path, :delete, fn p -> adapter(p).delete(ctx, p) end)
 
   @doc """
   List contents at path.
@@ -195,7 +198,7 @@ defmodule Arca do
 
   """
   def list(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter(path).list(ctx, path) end)
+    do: guarded(ctx, path, fn p -> adapter(p).list(ctx, p) end)
 
   @doc """
   List the entries directly under a path, each tagged `:file` or `:dir`.
@@ -205,7 +208,7 @@ defmodule Arca do
   itself a file answers `{:error, :enotdir}`.
   """
   def list_typed(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter(path).list_typed(ctx, path) end)
+    do: guarded(ctx, path, fn p -> adapter(p).list_typed(ctx, p) end)
 
   @doc """
   Recursive file count and byte total under a path prefix.
@@ -213,7 +216,7 @@ defmodule Arca do
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
   def usage(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter(path).usage(ctx, path) end)
+    do: guarded(ctx, path, fn p -> adapter(p).usage(ctx, p) end)
 
   @doc """
   Check if path exists.
@@ -226,6 +229,8 @@ defmodule Arca do
 
   """
   def exists?(%Context{} = ctx, path) do
+    path = normalize(path)
+
     case Arca.Storage.authorize_path(ctx, path) do
       :ok -> adapter(path).exists?(ctx, path)
       {:error, :forbidden} -> false
@@ -245,7 +250,7 @@ defmodule Arca do
 
   """
   def delete_tree(%Context{} = ctx, path),
-    do: mutating(ctx, path, fn -> adapter(path).delete_tree(ctx, path) end)
+    do: mutating(ctx, path, :delete, fn p -> adapter(p).delete_tree(ctx, p) end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -254,7 +259,7 @@ defmodule Arca do
   Order is unspecified.
   """
   def list_recursive(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter(path).list_recursive(ctx, path) end)
+    do: guarded(ctx, path, fn p -> adapter(p).list_recursive(ctx, p) end)
 
   @doc """
   Read a whole subtree as `{relative_path, binary}` pairs.
@@ -262,7 +267,7 @@ defmodule Arca do
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
   def read_subtree(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn -> adapter(path).read_subtree(ctx, path) end)
+    do: guarded(ctx, path, fn p -> adapter(p).read_subtree(ctx, p) end)
 
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
@@ -279,6 +284,8 @@ defmodule Arca do
   """
   def copy_tree(%Context{} = ctx, src, dest, opts \\ []) do
     exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
+    src = normalize(src)
+    dest = normalize(dest)
 
     with {:ok, leaves} <- list_recursive(ctx, src) do
       leaves
@@ -311,15 +318,42 @@ defmodule Arca do
   the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
   """
   def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []),
-    do: guarded(ctx, path, fn -> adapter(path).serve_to_conn(conn, ctx, path, opts) end)
+    do: guarded(ctx, path, fn p -> adapter(p).serve_to_conn(conn, ctx, p, opts) end)
+
+  # One spelling per object: every entry point flattens multi-level string
+  # segments (`"a/b"` → `["a", "b"]`, split artifacts dropped) before the
+  # gate, so the two adapters — one joins with the filesystem, one joins
+  # into a key — can never disagree about which object a path names.
+  # `Cyfr.PathSafety` still refuses a bare `""` at the adapter, for callers
+  # that reach one directly.
+  defp normalize(segments) when is_list(segments) do
+    Enum.flat_map(segments, fn
+      segment when is_binary(segment) -> segment |> String.split("/") |> Enum.reject(&(&1 == ""))
+      other -> [other]
+    end)
+  end
+
+  # `put`/`append` may not name a `.tmp.N` file: that suffix is the Local
+  # adapter's in-flight write marker, invisible to listings and to the
+  # usage walk — a caller-chosen tmp name would be a hidden, uncounted,
+  # sweeper-reaped object (and the S3 adapter would disagree about all
+  # three). Reserving the pattern keeps it meaning exactly one thing.
+  defp reserved_name?(path) do
+    case List.last(path) do
+      nil -> false
+      name -> name =~ ~r/\.tmp\.\d+$/
+    end
+  end
 
   # Every entry point runs the reserved-root gate before touching the
   # adapter: the seed bundle and the global roots are the server's own, and
   # every tenant path takes its athanor from the context — there is no path
   # spelling that reaches another athanor's bytes.
   defp guarded(ctx, path, fun) do
+    path = normalize(path)
+
     case Arca.Storage.authorize_path(ctx, path) do
-      :ok -> fun.()
+      :ok -> fun.(path)
       {:error, :forbidden} = err -> err
     end
   end
@@ -337,12 +371,21 @@ defmodule Arca do
   # forget — every mutation already passes through. Unconditional: a failed
   # write may still have left bytes behind. Globals are not tenant bytes
   # and invalidate nothing.
-  defp mutating(_ctx, ["seed" | _], _fun), do: {:error, :seed_read_only}
+  defp mutating(ctx, path, kind, fun) do
+    path = normalize(path)
 
-  defp mutating(ctx, path, fun) do
-    result = guarded(ctx, path, fun)
-    invalidate_athanor_usage(ctx, path)
-    result
+    cond do
+      Arca.Storage.classify(path) == :seed ->
+        {:error, :seed_read_only}
+
+      match?({:create, _}, kind) and reserved_name?(path) ->
+        {:error, :reserved_name}
+
+      true ->
+        result = guarded(ctx, path, fun)
+        invalidate_athanor_usage(ctx, path)
+        result
+    end
   end
 
   defp invalidate_athanor_usage(%Context{athanor_id: athanor_id}, path)
