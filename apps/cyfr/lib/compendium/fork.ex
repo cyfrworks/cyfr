@@ -27,8 +27,7 @@ defmodule Compendium.Fork do
         source_ref.type,
         source_ref.namespace,
         source_ref.name,
-        source_ref.version,
-        ctx
+        source_ref.version
       )
 
     target_base =
@@ -36,8 +35,7 @@ defmodule Compendium.Fork do
         source_ref.type,
         "local",
         target_name,
-        target_version,
-        ctx
+        target_version
       )
 
     source_ref_str = ComponentRef.to_string(source_ref)

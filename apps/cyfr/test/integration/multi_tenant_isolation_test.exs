@@ -263,17 +263,21 @@ defmodule MultiTenantIsolationTest do
       refute Arca.exists?(ctx_b, ["notes", "secret.txt"])
     end
 
-    test "the components tree is pinned per athanor: another athanor's path is forbidden",
+    test "the components tree is tenant-relative: the same spelling is each athanor's own",
          %{a: ctx_a, b: ctx_b} do
-      path = ["components", ctx_a.athanor_id, "catalysts", "local", "tool", "1.0.0", "x.txt"]
+      path = ["components", "catalysts", "local", "tool", "1.0.0", "x.txt"]
       :ok = Arca.put(ctx_a, path, "compiled")
 
+      # b's context addresses b's tree — a's bytes are unreachable, not
+      # merely refused: no path spelling names another athanor.
       assert {:ok, "compiled"} = Arca.get(ctx_a, path)
-      assert {:error, :forbidden} = Arca.get(ctx_b, path)
-      assert {:error, :forbidden} = Arca.put(ctx_b, path, "overwrite")
-      assert {:error, :forbidden} = Arca.delete(ctx_b, path)
+      assert {:error, :not_found} = Arca.get(ctx_b, path)
       refute Arca.exists?(ctx_b, path)
+      assert {:error, :not_found} = Arca.delete(ctx_b, path)
+
+      assert :ok = Arca.put(ctx_b, path, "b's own")
       assert {:ok, "compiled"} = Arca.get(ctx_a, path)
+      assert {:ok, "b's own"} = Arca.get(ctx_b, path)
     end
 
     test "the seed bundle is readable only by the system", %{a: ctx_a} do

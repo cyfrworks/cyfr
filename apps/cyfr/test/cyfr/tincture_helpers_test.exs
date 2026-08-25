@@ -20,7 +20,7 @@ defmodule Cyfr.TinctureHelpersTest do
     Application.put_env(:cyfr, :base_path, root)
 
     ctx = Sanctum.TestContext.local()
-    base = Arca.Adapters.Local.build_path(ctx, ["components", ctx.athanor_id])
+    base = Arca.Adapters.Local.build_path(ctx, ["components"])
     File.mkdir_p!(base)
     File.write!(Path.join(base, "index.html"), "<html></html>")
     File.write!(Path.join(base, "app.js"), "console.log('hi')")
@@ -41,11 +41,11 @@ defmodule Cyfr.TinctureHelpersTest do
       if prev, do: Application.put_env(:cyfr, :base_path, prev), else: :ok
     end)
 
-    # Asset routing: `["components", athanor_id | rest]` resolves inside the
+    # Asset routing: `["components" | rest]` resolves inside the context's
     # athanor's components subtree. We use an empty rest so files written
     # directly at `base/foo.js` are reachable via
-    # `serve_asset(conn, ctx, ["components", athanor_id], ["foo.js"])`.
-    %{base: base, ctx: ctx, version_segs: ["components", ctx.athanor_id]}
+    # `serve_asset(conn, ctx, ["components"], ["foo.js"])`.
+    %{base: base, ctx: ctx, version_segs: ["components"]}
   end
 
   defp create_athanor!(kind, slug) do

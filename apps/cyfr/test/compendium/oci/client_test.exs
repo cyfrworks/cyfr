@@ -170,7 +170,7 @@ defmodule Compendium.OCI.ClientTest do
 
     test "Arca stores and reads manifest json", %{ctx: ctx} do
       path =
-        ["components", ctx.athanor_id, "catalysts", "testpub", "my-tool", "1.0.0"] ++
+        ["components", "catalysts", "testpub", "my-tool", "1.0.0"] ++
           ["cyfr-manifest.json"]
 
       content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
@@ -182,7 +182,7 @@ defmodule Compendium.OCI.ClientTest do
     end
 
     test "Arca stores and reads README", %{ctx: ctx} do
-      path = ["components", ctx.athanor_id, "reagents", "cyfr", "data-proc", "2.0.0", "README.md"]
+      path = ["components", "reagents", "cyfr", "data-proc", "2.0.0", "README.md"]
       readme = "# Data Processor\n\nProcesses data."
 
       :ok = Arca.put(ctx, path, readme)
@@ -192,7 +192,7 @@ defmodule Compendium.OCI.ClientTest do
     end
 
     test "Arca stores extracted source files at correct paths", %{ctx: ctx} do
-      base = ["components", ctx.athanor_id, "catalysts", "cyfr", "tool", "1.0.0"]
+      base = ["components", "catalysts", "cyfr", "tool", "1.0.0"]
 
       # Simulate what maybe_store_source does
       files = [
@@ -215,7 +215,7 @@ defmodule Compendium.OCI.ClientTest do
 
     test "reading non-existent file from Arca returns error", %{ctx: ctx} do
       path =
-        ["components", ctx.athanor_id, "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
+        ["components", "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
 
       assert {:error, _} = Arca.get(ctx, path)
     end

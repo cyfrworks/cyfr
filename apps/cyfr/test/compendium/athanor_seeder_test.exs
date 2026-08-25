@@ -61,7 +61,7 @@ defmodule Compendium.AthanorSeederTest do
     copied =
       Arca.Adapters.Local.build_path(
         athanor_ctx("ath_acme"),
-        ["components", "ath_acme", "catalysts", "local", "foo", "1.0.0", "catalyst.wasm"]
+        ["components", "catalysts", "local", "foo", "1.0.0", "catalyst.wasm"]
       )
 
     assert File.exists?(copied)
@@ -138,7 +138,7 @@ defmodule Compendium.AthanorSeederTest do
     assert :ok = AthanorSeeder.seed("ath_acme")
 
     ctx = athanor_ctx("ath_acme")
-    prefix = ["components", "ath_acme", "catalysts", "local", "foo", "1.0.0", "src"]
+    prefix = ["components", "catalysts", "local", "foo", "1.0.0", "src"]
 
     assert {:ok, "fn main() {}"} = Arca.get(ctx, prefix ++ ["lib.rs"])
     refute Arca.exists?(ctx, prefix ++ ["target", "debug", "foo.o"])

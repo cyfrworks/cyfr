@@ -40,11 +40,12 @@ defmodule Compendium.AutoIndexerTest do
 
   defp create_component(type, publisher, name, version, opts \\ []) do
     athanor = Keyword.get(opts, :athanor, Sanctum.TestContext.athanor_id())
+    fixture_ctx = Sanctum.Context.build(user_id: "fixture", athanor_id: athanor, authenticated: true)
 
     dir =
       Arca.Adapters.Local.build_path(
-        Sanctum.TestContext.local(),
-        ["components", athanor, "#{type}s", publisher, name, version]
+        fixture_ctx,
+        ["components", "#{type}s", publisher, name, version]
       )
 
     File.mkdir_p!(dir)

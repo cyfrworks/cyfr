@@ -84,7 +84,7 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "component paths key inside the athanor's components subtree", %{ctx: ctx} do
-      assert :ok = S3.put(ctx, ["components", "ath_test", "catalysts", "x.wasm"], "wasm-bytes")
+      assert :ok = S3.put(ctx, ["components", "catalysts", "x.wasm"], "wasm-bytes")
 
       assert_received {:req, "PUT", path, _headers, _body}
       assert path == "/test-bucket/athanors/ath_test/components/catalysts/x.wasm"
@@ -106,10 +106,11 @@ defmodule Arca.Adapters.S3Test do
       end
     end
 
-    test "the bare components root has no key", %{ctx: ctx} do
-      assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
-        S3.list_recursive(ctx, ["components"])
-      end
+    test "the bare components root is the context's athanor's subtree", %{ctx: ctx} do
+      # No raise — the root maps under athanors/{ctx}/components like any
+      # other tenant path (this stub's listing answer is irrelevant here).
+      _ = S3.list_recursive(ctx, ["components"])
+      assert_received {:req, "GET", _path, _headers, _body}
     end
 
     test "cache paths bypass user scoping", %{ctx: ctx} do
@@ -313,19 +314,11 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, listing)
       end)
 
-      assert {:ok, leaves} = S3.list_recursive(ctx, ["components", "ath_test", "tinctures"])
+      assert {:ok, leaves} = S3.list_recursive(ctx, ["components", "tinctures"])
 
       assert Enum.sort(leaves) == [
-               [
-                 "components",
-                 "ath_test",
-                 "tinctures",
-                 "local",
-                 "dash",
-                 "1.0.0",
-                 "cyfr-manifest.json"
-               ],
-               ["components", "ath_test", "tinctures", "local", "dash", "1.0.0", "index.html"]
+               ["components", "tinctures", "local", "dash", "1.0.0", "cyfr-manifest.json"],
+               ["components", "tinctures", "local", "dash", "1.0.0", "index.html"]
              ]
 
       assert_received {:req, "GET", _, query}
@@ -349,7 +342,7 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, listing)
       end)
 
-      assert {:ok, %{files: 2, bytes: 12}} = S3.usage(ctx, ["components", "ath_test"])
+      assert {:ok, %{files: 2, bytes: 12}} = S3.usage(ctx, ["components"])
 
       assert_received {:req, "GET", _, query}
       assert URI.decode_query(query)["prefix"] =~ "athanors/ath_test/components"

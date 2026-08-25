@@ -52,9 +52,9 @@ defmodule Arca.StorageTest do
       Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
     end
 
-    test "everything an athanor owns lives under athanors/{id}" do
-      assert Storage.physical_segments(ath_ctx(), ["components", "ath_y", "tinctures"]) ==
-               ["athanors", "ath_y", "components", "tinctures"]
+    test "everything an athanor owns lives under athanors/{id} — the context's id" do
+      assert Storage.physical_segments(ath_ctx(), ["components", "tinctures"]) ==
+               ["athanors", "ath_x", "components", "tinctures"]
 
       assert Storage.physical_segments(ath_ctx(), ["notes", "a.txt"]) ==
                ["athanors", "ath_x", "data", "notes", "a.txt"]
@@ -87,9 +87,16 @@ defmodule Arca.StorageTest do
       end
     end
 
-    test "the bare components root has no physical location" do
-      assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
-        Storage.physical_segments(ath_ctx(), ["components"])
+    test "the bare components root is the athanor's own components subtree" do
+      assert Storage.physical_segments(ath_ctx(), ["components"]) ==
+               ["athanors", "ath_x", "components"]
+    end
+
+    test "a context without an athanor cannot name a component path (fail closed)" do
+      ctx = Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        Storage.physical_segments(ctx, ["components", "tinctures"])
       end
     end
   end
@@ -171,29 +178,10 @@ defmodule Arca.StorageTest do
   end
 
   describe "authorize_path/2" do
-    test "an athanor reaches its own component tree" do
+    test "an athanor's component tree is its own — the path is tenant-relative" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-      assert :ok = Storage.authorize_path(ctx, ["components", "ath_a", "catalysts", "local"])
-    end
-
-    test "an athanor is refused another athanor's component tree" do
-      ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-
-      assert {:error, :forbidden} =
-               Storage.authorize_path(ctx, ["components", "ath_b", "catalysts", "local"])
-    end
-
-    test "a bare components listing is refused for everyone" do
-      # The unified layout has no single components root; refusing here keeps
-      # the physical_segments raise from leaking to a platform caller.
-      member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-
-      platform =
-        Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
-
-      assert {:error, :forbidden} = Storage.authorize_path(member, ["components"])
-      assert {:error, :forbidden} = Storage.authorize_path(platform, ["components"])
-      assert :ok = Storage.authorize_path(platform, ["components", "ath_b", "tinctures"])
+      assert :ok = Storage.authorize_path(ctx, ["components", "catalysts", "local"])
+      assert :ok = Storage.authorize_path(ctx, ["components"])
     end
 
     test "the seed bundle is readable only by server-internal contexts" do

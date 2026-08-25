@@ -187,16 +187,16 @@ defmodule Compendium.AutoIndexer do
   # Discovery via Arca
   # ============================================================================
 
-  # Walk the athanor's own `components/{athanor_id}/` subtree via the
-  # configured storage adapter, find every `cyfr-manifest.json`, and return
-  # the version-directory segment lists.
+  # Walk the athanor's own `components/` subtree via the configured storage
+  # adapter, find every `cyfr-manifest.json`, and return the
+  # version-directory segment lists.
   #
-  # Each athanor indexes its own subtree — the listing is rooted there, and
-  # `register_from_arca`/`prune_stale_entries` stay keyed on `ctx`, so no
-  # scan writes another athanor's rows. The seed bundle (`_bundle`) is never
-  # reached: it is not under any athanor's root.
+  # Each athanor indexes its own subtree — the listing is rooted in `ctx`'s
+  # athanor, and `register_from_arca`/`prune_stale_entries` stay keyed on
+  # `ctx`, so no scan writes another athanor's rows. The seed bundle
+  # (`_bundle`) is never reached: it is not under any athanor's root.
   defp discover_component_segments(ctx) do
-    root = Compendium.ComponentPath.base_prefix(ctx)
+    root = Compendium.ComponentPath.base_prefix()
 
     case Arca.list_recursive(ctx, root) do
       {:ok, leaves} ->
@@ -205,7 +205,7 @@ defmodule Compendium.AutoIndexer do
         # Drop the manifest filename to get the version directory.
         |> Enum.map(&Enum.drop(&1, -1))
         |> Enum.uniq()
-        |> Enum.filter(&allowed_segments?(&1, ctx))
+        |> Enum.filter(&allowed_segments?/1)
 
       {:error, reason} ->
         Logger.warning("[AutoIndexer] Cannot list #{Enum.join(root, "/")}: #{inspect(reason)}")
@@ -213,20 +213,16 @@ defmodule Compendium.AutoIndexer do
     end
   end
 
-  # Layout: ["components", athanor_id, type_plural, publisher, name, version]
-  defp allowed_segments?(
-         ["components", seg_athanor, type_plural, publisher, _name, _version],
-         %{athanor_id: athanor_id}
-       )
+  # Layout: ["components", type_plural, publisher, name, version]
+  defp allowed_segments?(["components", type_plural, publisher, _name, _version])
        when type_plural in @type_plurals do
-    publisher in @allowed_publishers and seg_athanor == athanor_id
+    publisher in @allowed_publishers
   end
 
-  defp allowed_segments?(_, _), do: false
+  defp allowed_segments?(_), do: false
 
   defp extract_segment_metadata([
          "components",
-         _athanor_id,
          type_plural,
          publisher,
          name,

@@ -179,7 +179,8 @@ defmodule Opus.StorageHandler do
   # ============================================================================
 
   defp validate_and_dispatch(%{action: action, path: path} = request, edge, limits, ctx, opts) do
-    with :ok <- validate_action_allowed(edge, action),
+    with :ok <- validate_tenant(ctx),
+         :ok <- validate_action_allowed(edge, action),
          :ok <- validate_path_scope(path),
          :ok <- validate_path_safe(path),
          :ok <- validate_allowed_paths(edge, path),
@@ -189,6 +190,14 @@ defmodule Opus.StorageHandler do
       dispatch(action, request, limits, ctx)
     end
   end
+
+  # Every guest path is tenant-relative, so a context without an athanor has
+  # no storage at all — a typed refusal here, where Arca's fail-closed
+  # tenant guard would raise.
+  defp validate_tenant(%{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+
+  defp validate_tenant(_ctx),
+    do: {:error, :storage_path_denied, "Storage requires an athanor-scoped context."}
 
   @writing_actions ~w(write append)
 
@@ -267,10 +276,9 @@ defmodule Opus.StorageHandler do
         :error -> byte_size(content || "")
       end
 
-    # The components scope bypasses Arca's automatic tenant prefixing, so
-    # the usage walk needs the same athanor pin every other component path
-    # gets — unpinned, the bare root is refused and the quota never counts.
-    case Arca.usage(ctx, pin_tenant([storage_root(path)], ctx)) do
+    # The walk is rooted at the write's scope (`data` or `components`), and
+    # Arca scopes it to the context's athanor like every other path.
+    case Arca.usage(ctx, [storage_root(path)]) do
       {:ok, %{files: files, bytes: used}} ->
         cond do
           files >= quota.max_files ->
@@ -537,32 +545,15 @@ defmodule Opus.StorageHandler do
   # Private: Path Normalization
   # ============================================================================
 
-  defp normalize_path(path, ctx) when is_binary(path) do
+  # The guest vocabulary IS the host vocabulary: every path is
+  # tenant-relative and Arca scopes it to the context's athanor — a catalyst
+  # can never read or write another athanor's bytes because no path spelling
+  # names one.
+  defp normalize_path(path, _ctx) when is_binary(path) do
     path
     |> String.split("/")
     |> Enum.reject(&(&1 == ""))
-    |> pin_tenant(ctx)
   end
-
-  # Component storage is tenant-scoped, but the `components/` root bypasses
-  # Arca's automatic `{athanor_id}` prefixing (that prefix is applied to the
-  # `data/` root). A catalyst's component path is tenant-relative
-  # (`components/{type}s/...`); pin the caller's athanor here so a catalyst
-  # can never read or write another athanor's component bytes, regardless of
-  # its declared `allowed_paths`. `data/` and other roots are tenant-scoped
-  # by Arca and pass through unchanged.
-  defp pin_tenant(["components" | rest], %{athanor_id: athanor_id})
-       when is_binary(athanor_id) and athanor_id != "" do
-    ["components", athanor_id | rest]
-  end
-
-  # A context with no athanor cannot name a component path at all. Leaving
-  # the root unpinned is what `Arca.Storage.authorize_path/2` refuses, which
-  # is a clean `:forbidden` — where splicing a nil in raised from inside the
-  # path validator instead.
-  defp pin_tenant(["components" | rest], _ctx), do: ["components" | rest]
-
-  defp pin_tenant(segments, _ctx), do: segments
 
   # ============================================================================
   # Private: Response Encoding

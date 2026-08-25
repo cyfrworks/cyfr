@@ -99,7 +99,7 @@ defmodule Arca.CopyTreeTest do
     seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_seeded", scope: :athanor)
 
     src = Compendium.Bundle.bundle_prefix() ++ ["catalysts", "local"]
-    dest = ["components", "ath_seeded", "catalysts", "local"]
+    dest = ["components", "catalysts", "local"]
 
     assert :ok = Arca.copy_tree(seed, src, dest)
 

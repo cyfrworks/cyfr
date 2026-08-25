@@ -56,7 +56,7 @@ defmodule Opus.BootstrapFirstRunTest do
   # register it the way the auto-indexer does — the production-true path
   # (a real install copies the bundle in and scans it).
   defp stage_and_register(ctx, rel) do
-    segments = ["components", Sanctum.TestContext.athanor_id() | String.split(rel, "/")]
+    segments = ["components" | String.split(rel, "/")]
     dest = Arca.Adapters.Local.build_path(ctx, segments)
     File.mkdir_p!(Path.dirname(dest))
     File.cp_r!(Path.join(@bundle_root, rel), dest)

@@ -1173,8 +1173,7 @@ defmodule Compendium.MCP.ComponentTool do
             ref.namespace,
             ref.name,
             ref.version,
-            "README.md",
-            ctx
+            "README.md"
           )
 
         case Arca.get(ctx, path) do
@@ -1427,10 +1426,9 @@ defmodule Compendium.MCP.ComponentTool do
     publisher = component[:publisher] || component["publisher"]
     name = component[:name] || component["name"]
     version = component[:version] || component["version"]
-    athanor_id = component[:athanor_id] || component["athanor_id"]
 
     if publisher && name && version do
-      Compendium.ComponentPath.version_dir("tincture", publisher, name, version, athanor_id)
+      Compendium.ComponentPath.version_dir("tincture", publisher, name, version)
     end
   end
 end

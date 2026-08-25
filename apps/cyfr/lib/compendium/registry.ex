@@ -267,7 +267,7 @@ defmodule Compendium.Registry do
 
   - `ctx` - User context (used by Arca for tenant scoping)
   - `segments` - Path segments for the component version directory, e.g.
-    `["components", "<athanor_id>", "catalysts", "local", "my-tool", "0.1.0"]`
+    `["components", "catalysts", "local", "my-tool", "0.1.0"]`
   - `opts` - `:force` re-registers an unchanged component
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
@@ -519,8 +519,7 @@ defmodule Compendium.Registry do
             component.component_type,
             publisher,
             component.name,
-            component.version,
-            ctx
+            component.version
           )
 
         Logger.debug(
@@ -584,18 +583,19 @@ defmodule Compendium.Registry do
   # Storage Operations
   # ============================================================================
 
-  defp component_storage_path("tincture", publisher, name, version, tenant) do
-    Compendium.ComponentPath.version_dir("tincture", publisher, name, version, tenant)
+  defp component_storage_path("tincture", publisher, name, version) do
+    Compendium.ComponentPath.version_dir("tincture", publisher, name, version)
   end
 
-  defp component_storage_path(type, publisher, name, version, tenant) do
-    Compendium.ComponentPath.wasm_path(type, publisher, name, version, tenant)
+  defp component_storage_path(type, publisher, name, version) do
+    Compendium.ComponentPath.wasm_path(type, publisher, name, version)
   end
 
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
-    # Compendium.ComponentPath raises on an unresolved athanor, the same
-    # fail-closed guard Arca.Storage applies to the data/ tree.
-    path = component_storage_path(type, publisher, name, version, ctx)
+    # The path is tenant-relative; an unresolved athanor on `ctx` raises in
+    # Arca.Storage.tenant_segments/1, the same fail-closed guard as the
+    # data/ tree.
+    path = component_storage_path(type, publisher, name, version)
 
     case Arca.put(ctx, path, bytes) do
       :ok -> :ok
@@ -636,8 +636,7 @@ defmodule Compendium.Registry do
                     "tincture",
                     publisher,
                     name,
-                    version,
-                    ctx
+                    version
                   )
 
                 case store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir) do
@@ -1176,13 +1175,10 @@ defmodule Compendium.Registry do
 
   # Infer metadata from Arca segments — no Path.split, no filesystem lookup.
   #
-  # Layout: ["components", athanor_id, "{type}s", publisher, name, version]
-  # The athanor segment is informational here; the canonical tenant flows
-  # through `ctx` into `do_register/8`, and the scan (`AutoIndexer`) only ever
-  # passes segments whose athanor already matches `ctx`.
+  # Layout: ["components", "{type}s", publisher, name, version] — tenant-
+  # relative; the athanor flows through `ctx` into `do_register/8`.
   defp infer_segment_metadata([
          "components",
-         _athanor_id,
          type_plural,
          publisher,
          name,
@@ -1196,7 +1192,7 @@ defmodule Compendium.Registry do
   defp infer_segment_metadata(segments) do
     {:error,
      {:invalid_path,
-      "expected components/{athanor_id}/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+      "expected components/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
   end
 
   defp reject_tincture_publish_bytes("tincture") do
@@ -1405,15 +1401,15 @@ defmodule Compendium.Registry do
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
     version_dir =
-      ComponentPath.version_dir(component_type, publisher, comp.name, comp.version, ctx)
+      ComponentPath.version_dir(component_type, publisher, comp.name, comp.version)
 
     Arca.delete_tree(ctx, version_dir)
 
     # Clean up empty parent directories (name, then publisher)
-    name_dir = ComponentPath.name_dir(component_type, publisher, comp.name, ctx)
+    name_dir = ComponentPath.name_dir(component_type, publisher, comp.name)
     maybe_remove_empty_dir(ctx, name_dir)
 
-    publisher_dir = ComponentPath.publisher_dir(component_type, publisher, ctx)
+    publisher_dir = ComponentPath.publisher_dir(component_type, publisher)
     maybe_remove_empty_dir(ctx, publisher_dir)
 
     :ok

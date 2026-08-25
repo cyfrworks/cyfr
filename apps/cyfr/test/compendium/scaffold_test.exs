@@ -122,7 +122,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "catalysts", "local", "weather-api", "0.1.0"]
+          ["components", "catalysts", "local", "weather-api", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
@@ -160,7 +160,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "formulas", "local", "my-workflow", "0.1.0"]
+          ["components", "formulas", "local", "my-workflow", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
@@ -188,7 +188,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "reagents", "local", "my-transform", "0.1.0"]
+          ["components", "reagents", "local", "my-transform", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
@@ -222,7 +222,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "tinctures", "local", "test-dash", "0.1.0"]
+          ["components", "tinctures", "local", "test-dash", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
@@ -246,7 +246,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "tinctures", "local", "build-dash", "0.1.0"]
+          ["components", "tinctures", "local", "build-dash", "0.1.0"]
         )
 
       {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
@@ -264,7 +264,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "tinctures", "local", "pkg-dash", "0.1.0"]
+          ["components", "tinctures", "local", "pkg-dash", "0.1.0"]
         )
 
       {:ok, raw} = File.read(Path.join(base, "package.json"))
@@ -284,7 +284,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "tinctures", "local", "vite-dash", "0.1.0"]
+          ["components", "tinctures", "local", "vite-dash", "0.1.0"]
         )
 
       {:ok, config} = File.read(Path.join(base, "vite.config.ts"))
@@ -308,7 +308,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "tinctures", "local", "vanilla", "0.1.0"]
+          ["components", "tinctures", "local", "vanilla", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "app.js"))
@@ -336,8 +336,8 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
-          ["components", "ath_scaffold", "catalysts", "local", "other-tool", "0.1.0"]
+          ctx_other,
+          ["components", "catalysts", "local", "other-tool", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
@@ -352,7 +352,7 @@ defmodule Compendium.ScaffoldTest do
       base =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", ctx.athanor_id, "reagents", "local", "flat-tool", "0.1.0"]
+          ["components", "reagents", "local", "flat-tool", "0.1.0"]
         )
 
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))

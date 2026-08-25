@@ -57,9 +57,11 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   defp fixture_dir(athanor_id, publisher, name, version) do
+    ctx = Sanctum.Context.build(user_id: "fixture", athanor_id: athanor_id, authenticated: true)
+
     Arca.Adapters.Local.build_path(
-      Sanctum.TestContext.local(),
-      ["components", athanor_id, "tinctures", publisher, name, version]
+      ctx,
+      ["components", "tinctures", publisher, name, version]
     )
   end
 

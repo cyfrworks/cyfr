@@ -93,7 +93,7 @@ defmodule Sanctum.Tenancy.Caps do
         bytes
 
       _ ->
-        bytes = bytes_under(ctx, ["components", id])
+        bytes = bytes_under(ctx, ["components"])
         Arca.Cache.put(key, bytes, @components_usage_ttl_ms)
         bytes
     end

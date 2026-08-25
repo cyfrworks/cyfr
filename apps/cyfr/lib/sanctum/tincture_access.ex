@@ -134,8 +134,7 @@ defmodule Sanctum.TinctureAccess do
         component.component_type,
         component.publisher,
         component.name,
-        component.version,
-        component.athanor_id
+        component.version
       )
 
     component

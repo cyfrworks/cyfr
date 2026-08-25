@@ -8,78 +8,44 @@ defmodule Compendium.ComponentPathTest do
   alias Compendium.ComponentId
   alias Compendium.ComponentPath
 
-  @athanor "ath_a"
-
-  describe "base_prefix/1" do
-    test "accepts a bare athanor id" do
-      assert ComponentPath.base_prefix("ath_x") == ["components", "ath_x"]
-    end
-
-    test "accepts a map / struct exposing athanor_id" do
-      assert ComponentPath.base_prefix(%{athanor_id: "ath_x"}) == ["components", "ath_x"]
-      assert ComponentPath.base_prefix(Sanctum.TestContext.local()) == ["components", "ath_test"]
-    end
-
-    test "raises on an unresolved athanor — same fail-closed guard as Arca.Storage" do
-      assert_raise ArgumentError, ~r/resolved athanor_id is required/, fn ->
-        ComponentPath.base_prefix(nil)
-      end
-
-      assert_raise ArgumentError, ~r/resolved athanor_id is required/, fn ->
-        ComponentPath.base_prefix("")
-      end
-
-      assert_raise ArgumentError, ~r/resolved athanor_id is required/, fn ->
-        ComponentPath.base_prefix(%{athanor_id: nil})
-      end
+  describe "base_prefix/0" do
+    test "is tenant-relative — the context handed to Arca names the athanor" do
+      assert ComponentPath.base_prefix() == ["components"]
     end
   end
 
-  describe "version_dir/5" do
-    test "produces an athanor-scoped path" do
-      assert ComponentPath.version_dir("catalyst", "local", "my-tool", "1.0.0", @athanor) ==
-               ["components", "ath_a", "catalysts", "local", "my-tool", "1.0.0"]
-    end
-
-    test "two athanors resolve to distinct paths" do
-      a = ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0", "ath_a")
-      b = ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0", "ath_b")
-      refute a == b
+  describe "version_dir/4" do
+    test "produces a tenant-relative version path" do
+      assert ComponentPath.version_dir("catalyst", "local", "my-tool", "1.0.0") ==
+               ["components", "catalysts", "local", "my-tool", "1.0.0"]
     end
   end
 
-  describe "wasm_path/5" do
-    test "appends {type}.wasm under the athanor" do
-      assert ComponentPath.wasm_path("reagent", "local", "my-tool", "1.0.0", @athanor) ==
-               ["components", "ath_a", "reagents", "local", "my-tool", "1.0.0", "reagent.wasm"]
+  describe "wasm_path/4" do
+    test "appends {type}.wasm to the version directory" do
+      assert ComponentPath.wasm_path("reagent", "local", "my-tool", "1.0.0") ==
+               ["components", "reagents", "local", "my-tool", "1.0.0", "reagent.wasm"]
     end
   end
 
-  describe "file_path/6" do
-    test "produces an athanor-scoped path to an arbitrary file" do
-      assert ComponentPath.file_path(
-               "catalyst",
-               "local",
-               "my-tool",
-               "1.0.0",
-               "README.md",
-               @athanor
-             ) ==
-               ["components", "ath_a", "catalysts", "local", "my-tool", "1.0.0", "README.md"]
+  describe "file_path/5" do
+    test "produces a tenant-relative path to an arbitrary file" do
+      assert ComponentPath.file_path("catalyst", "local", "my-tool", "1.0.0", "README.md") ==
+               ["components", "catalysts", "local", "my-tool", "1.0.0", "README.md"]
     end
   end
 
-  describe "name_dir/4" do
-    test "produces an athanor-scoped name directory" do
-      assert ComponentPath.name_dir("reagent", "local", "my-tool", @athanor) ==
-               ["components", "ath_a", "reagents", "local", "my-tool"]
+  describe "name_dir/3" do
+    test "produces a tenant-relative name directory" do
+      assert ComponentPath.name_dir("reagent", "local", "my-tool") ==
+               ["components", "reagents", "local", "my-tool"]
     end
   end
 
-  describe "publisher_dir/3" do
-    test "produces an athanor-scoped publisher directory" do
-      assert ComponentPath.publisher_dir("catalyst", "local", @athanor) ==
-               ["components", "ath_a", "catalysts", "local"]
+  describe "publisher_dir/2" do
+    test "produces a tenant-relative publisher directory" do
+      assert ComponentPath.publisher_dir("catalyst", "local") ==
+               ["components", "catalysts", "local"]
     end
   end
 
@@ -103,7 +69,7 @@ defmodule Compendium.ComponentPathTest do
     test "nil/empty/local publisher all yield the same version path" do
       paths =
         for pub <- [nil, "", "local"] do
-          ComponentPath.version_dir("catalyst", pub, "foo", "1.0.0", @athanor)
+          ComponentPath.version_dir("catalyst", pub, "foo", "1.0.0")
         end
 
       assert Enum.uniq(paths) |> length() == 1
@@ -115,11 +81,11 @@ defmodule Compendium.ComponentPathTest do
       # The id chokepoint and the path chokepoint must normalize publisher
       # identically, or a nil-publisher component would be addressed by one id
       # and stored at a different path.
-      assert ComponentId.compute("foo", "1.0.0", nil, "catalyst", @athanor) ==
-               ComponentId.compute("foo", "1.0.0", "local", "catalyst", @athanor)
+      assert ComponentId.compute("foo", "1.0.0", nil, "catalyst", "ath_a") ==
+               ComponentId.compute("foo", "1.0.0", "local", "catalyst", "ath_a")
 
-      assert ComponentPath.version_dir("catalyst", nil, "foo", "1.0.0", @athanor) ==
-               ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0", @athanor)
+      assert ComponentPath.version_dir("catalyst", nil, "foo", "1.0.0") ==
+               ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0")
     end
   end
 

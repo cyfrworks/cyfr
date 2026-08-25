@@ -94,7 +94,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
       {:ok, _} = publish(ctx, name: "no-orphans")
 
       wasm_path =
-        Compendium.ComponentPath.wasm_path("reagent", "local", "no-orphans", "1.0.0", ctx)
+        Compendium.ComponentPath.wasm_path("reagent", "local", "no-orphans", "1.0.0")
 
       {:ok, stored_before} = Arca.get(ctx, wasm_path)
 
@@ -135,7 +135,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
         "description" => "local build"
       }
 
-      segments = ["components", ctx.athanor_id, "reagents", "local", "rebuilt", "1.0.0"]
+      segments = ["components", "reagents", "local", "rebuilt", "1.0.0"]
 
       write_component = fn bytes ->
         base = Arca.Adapters.Local.build_path(ctx, segments)

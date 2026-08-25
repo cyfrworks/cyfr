@@ -29,8 +29,8 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        Sanctum.TestContext.local(),
-        ["components", home.id, "tinctures", "local", @tincture, "1.0.0"]
+        %{Sanctum.TestContext.local() | athanor_id: home.id},
+        ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 
     File.mkdir_p!(dir)

@@ -33,18 +33,20 @@ defmodule Arca.Storage do
 
   ## Path Scoping
 
-  Paths are automatically scoped based on the first segment:
+  Every logical path is tenant-relative: the athanor always comes from the
+  context, never from the segments. Scoping keys on the first segment:
 
-  - **Component paths**: `["components", athanor_id | rest]` — the athanor
-    lives *inside* the segment list (`Compendium.ComponentPath` builds it),
-    so component paths are not run through `tenant_segments/1`. Adapters pin
-    them: a context may only reach its own athanor's components (a platform
-    context reaches every athanor's), and the seed bundle
-    `["components", "_bundle" | rest]` is reachable only by system contexts —
-    `Arca` routes it to the local `:bundle_path`, never to a storage adapter.
+  - **Component paths**: `["components" | rest]` (`Compendium.ComponentPath`
+    builds them) → the context's athanor's components subtree. Naming
+    another athanor's components is structurally impossible — there is no
+    place in the path to put an athanor. Platform code opens an athanor the
+    way it does for rows: a context focused on that athanor. The seed
+    bundle `["components", "_bundle" | rest]` is the one reserved spelling —
+    reachable only by system contexts, routed by `Arca` to the local
+    `:bundle_path`, never to a storage adapter.
   - **Global paths**: `cache`, `system` → stored at root level
-  - **Tenant-scoped paths**: everything else → stored under the athanor
-    (see `tenant_segments/1`)
+  - **Tenant-scoped paths**: everything else → stored under the athanor's
+    data subtree (see `tenant_segments/1`)
 
   `namespace` is a user-identity field and is NOT part of the path.
 
@@ -69,9 +71,9 @@ defmodule Arca.Storage do
           └── data/
               ├── aqua/                  # the athanor's AQUA agent definitions
               ├── builds/                # Locus build lifecycle
-              ├── data/                  # Athanor data (agent conversations, etc.)
               ├── config/                # Athanor config (retention settings, etc.)
-              └── audit/                 # Audit events (append-only JSONL, opt-in)
+              ├── conversations/         # chat attachment blobs
+              └── data/                  # guest (WASM) files
 
   The seed bundle every athanor is provisioned from is not stored state —
   it is read in place from `:bundle_path` (the repo/scaffold checkout, or
@@ -181,10 +183,11 @@ defmodule Arca.Storage do
   its one root — the single place the stored layout is written down.
 
   Everything an athanor owns lives under `athanors/{athanor_id}/`: its
-  components subtree and its data subtree. Globals (`cache/`, `system/`)
-  stay at the root. The seed bundle never reaches an adapter (`Arca` routes
-  it to `:bundle_path`), and the bare `components` root has no single
-  physical location — roster-driven code enumerates athanors instead.
+  components subtree and its data subtree — and the athanor is always the
+  context's, never named in the path. Globals (`cache/`, `system/`) stay at
+  the root. The seed bundle never reaches an adapter (`Arca` routes it to
+  `:bundle_path`). There is no all-athanors location — roster-driven code
+  enumerates athanor rows and works inside each one's context.
   """
   @spec physical_segments(Context.t(), path()) :: path()
   def physical_segments(ctx, segments) do
@@ -193,12 +196,8 @@ defmodule Arca.Storage do
         raise ArgumentError,
               "the seed bundle is not tenant storage; Arca routes it to :bundle_path"
 
-      ["components", athanor_id | rest] when is_binary(athanor_id) and athanor_id != "" ->
-        ["athanors", athanor_id, "components" | rest]
-
-      ["components" | _] ->
-        raise ArgumentError,
-              "the components root has no single physical location; enumerate athanors"
+      ["components" | rest] ->
+        ["athanors" | tenant_segments(ctx)] ++ ["components" | rest]
 
       [prefix | _] = segs ->
         if prefix in @global_prefixes,
@@ -213,17 +212,13 @@ defmodule Arca.Storage do
   @doc """
   Whether `ctx` may touch `path` at all.
 
-  The `components/` root is shared by every athanor, so its second segment
-  is the tenant: a context reaches only `components/{its own athanor}/…`
-  (a platform context reaches every athanor), a bare `components` listing
-  is refused for everyone — the unified layout has no single components
-  root, so roster-driven code enumerates athanors instead — and the seed
-  bundle `components/_bundle/…` is reachable
-  only by server-internal contexts (`auth_method: :system`). The global
-  roots `cache/` (OCI blobs) and `system/` (health probes) are the server's
-  own and likewise system-only. Every other path is tenant-prefixed by
-  `tenant_segments/1` and needs no check here. `Arca` runs this before
-  dispatching to any adapter.
+  Every tenant path — components and data alike — takes its athanor from
+  the context, so there is nothing cross-tenant to refuse here: a context
+  physically cannot name another athanor's tree. What remains reserved is
+  the server's own: the seed bundle `components/_bundle/…` (system contexts
+  only — `Arca` reads it in place from `:bundle_path`) and the global roots
+  `cache/` (OCI blobs) and `system/` (health probes). `Arca` runs this
+  before dispatching to any adapter.
   """
   @spec authorize_path(Context.t(), [String.t()]) :: :ok | {:error, :forbidden}
   def authorize_path(%Context{auth_method: :system}, ["components", "_bundle" | _]), do: :ok
@@ -235,18 +230,6 @@ defmodule Arca.Storage do
   def authorize_path(%Context{}, [root | _]) when root in ["cache", "system"],
     do: {:error, :forbidden}
 
-  # The bare components root has no single physical location
-  # (`physical_segments/2` raises) — refusing it here keeps the API
-  # contract typed instead of leaking that raise to a platform caller.
-  def authorize_path(%Context{}, ["components"]), do: {:error, :forbidden}
-
-  def authorize_path(%Context{scope: :platform}, ["components" | _]), do: :ok
-
-  def authorize_path(%Context{athanor_id: athanor_id}, ["components", athanor_id | _])
-      when is_binary(athanor_id) and athanor_id != "",
-      do: :ok
-
-  def authorize_path(%Context{}, ["components" | _]), do: {:error, :forbidden}
   def authorize_path(%Context{}, _path), do: :ok
 
   @doc """

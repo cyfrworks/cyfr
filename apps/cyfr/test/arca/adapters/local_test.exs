@@ -229,14 +229,14 @@ defmodule Arca.Adapters.LocalTest do
                ])
     end
 
-    test "component paths go under athanors/{athanor_id}/components", %{ctx: ctx} do
-      path = Local.build_path(ctx, ["components", "ath_x", "catalysts", "local", "t", "1.0.0"])
+    test "component paths go under the context's athanors/{athanor_id}/components", %{ctx: ctx} do
+      path = Local.build_path(ctx, ["components", "catalysts", "local", "t", "1.0.0"])
 
       assert path ==
                Path.join([
                  @test_base_path,
                  "athanors",
-                 "ath_x",
+                 ctx.athanor_id,
                  "components",
                  "catalysts",
                  "local",
@@ -253,10 +253,9 @@ defmodule Arca.Adapters.LocalTest do
       refute String.starts_with?(path, @test_base_path)
     end
 
-    test "the bare components root has no physical location", %{ctx: ctx} do
-      assert_raise ArgumentError, ~r/enumerate athanors/, fn ->
-        Local.build_path(ctx, ["components"])
-      end
+    test "the bare components root is the athanor's own components subtree", %{ctx: ctx} do
+      assert Local.build_path(ctx, ["components"]) ==
+               Path.join([@test_base_path, "athanors", ctx.athanor_id, "components"])
     end
   end
 
@@ -264,18 +263,17 @@ defmodule Arca.Adapters.LocalTest do
     test "the data walk and the components walk are disjoint", %{ctx: ctx} do
       # Caps.data_bytes/1 walks []; the components cap walks the athanor's
       # components prefix. Neither may see the other's bytes.
-      athanor = Sanctum.TestContext.athanor_id()
       :ok = Local.put(ctx, ["notes", "a.txt"], "12345")
 
       :ok =
         Local.put(
           ctx,
-          ["components", athanor, "reagents", "local", "x", "1.0.0", "reagent.wasm"],
+          ["components", "reagents", "local", "x", "1.0.0", "reagent.wasm"],
           "123"
         )
 
       assert {:ok, %{files: 1, bytes: 5}} = Local.usage(ctx, [])
-      assert {:ok, %{files: 1, bytes: 3}} = Local.usage(ctx, ["components", athanor])
+      assert {:ok, %{files: 1, bytes: 3}} = Local.usage(ctx, ["components"])
     end
 
     test "a missing prefix is empty usage", %{ctx: ctx} do

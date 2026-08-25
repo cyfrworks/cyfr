@@ -14,14 +14,15 @@ defmodule Arca do
 
   ## Path Scoping
 
-  Paths are automatically scoped based on the first segment:
+  Every path is tenant-relative — the athanor always comes from the
+  context. Scoping keys on the first segment:
 
-  - `["components", athanor_id | rest]` → the athanor's component artifacts;
-    `Compendium.ComponentPath` puts the tenant inside the segments
+  - `["components" | rest]` → the context's athanor's component artifacts
+    (`Compendium.ComponentPath` builds the shape)
   - `["components", "_bundle" | rest]` → the seed bundle, read in place from
     the local `:bundle_path` whatever storage adapter is configured
   - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix)
-  - everything else → tenant-scoped under the athanor
+  - everything else → tenant-scoped under the athanor's data subtree
     (`namespace` is identity-only and not part of the path)
 
   `Arca.Storage.physical_segments/2` is the one place the stored layout
@@ -29,7 +30,7 @@ defmodule Arca do
   written down.
 
   See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
-  list, `authorize_path/2` (the component-tree pin) and `tenant_segments/1`
+  list, `authorize_path/2` (the reserved-root gate) and `tenant_segments/1`
   (the canonical tenant-segment builder).
 
   ## Usage
@@ -309,9 +310,10 @@ defmodule Arca do
   def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []),
     do: guarded(ctx, path, fn -> adapter(path).serve_to_conn(conn, ctx, path, opts) end)
 
-  # Every entry point runs the component-path pin before touching the
-  # adapter, so no adapter — and no future one — can hand one athanor
-  # another athanor's bytes.
+  # Every entry point runs the reserved-root gate before touching the
+  # adapter: the seed bundle and the global roots are the server's own, and
+  # every tenant path takes its athanor from the context — there is no path
+  # spelling that reaches another athanor's bytes.
   defp guarded(ctx, path, fun) do
     case Arca.Storage.authorize_path(ctx, path) do
       :ok -> fun.()
@@ -319,22 +321,23 @@ defmodule Arca do
     end
   end
 
-  # A write anywhere under `components/<athanor>` changes what the storage
-  # cap measures, and that total is cached because walking the tree on every
-  # guest write is the cost the cap was written to avoid. Invalidating here
-  # rather than in each writer means a new writer cannot forget — every
-  # mutation already passes through. Unconditional: a failed write may still
-  # have left bytes behind.
+  # A write anywhere under the athanor's `components/` changes what the
+  # storage cap measures, and that total is cached because walking the tree
+  # on every guest write is the cost the cap was written to avoid.
+  # Invalidating here rather than in each writer means a new writer cannot
+  # forget — every mutation already passes through. Unconditional: a failed
+  # write may still have left bytes behind.
   defp mutating(ctx, path, fun) do
     result = guarded(ctx, path, fun)
-    invalidate_components_usage(path)
+    invalidate_components_usage(ctx, path)
     result
   end
 
-  defp invalidate_components_usage(["components", athanor_id | _]) when is_binary(athanor_id),
-    do: Arca.Cache.invalidate(Arca.Cache.Keys.components_usage(athanor_id))
+  defp invalidate_components_usage(%Context{athanor_id: athanor_id}, ["components" | _])
+       when is_binary(athanor_id) and athanor_id != "",
+       do: Arca.Cache.invalidate(Arca.Cache.Keys.components_usage(athanor_id))
 
-  defp invalidate_components_usage(_path), do: :ok
+  defp invalidate_components_usage(_ctx, _path), do: :ok
 
   # The seed bundle is server install media read straight from local disk
   # (`:cyfr, :bundle_path`), whatever storage adapter is configured — an

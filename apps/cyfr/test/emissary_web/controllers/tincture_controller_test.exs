@@ -7,7 +7,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
   defp tincture_dir(name) do
     Arca.Adapters.Local.build_path(
       Sanctum.TestContext.local(),
-      ["components", "ath_test", "tinctures", "local", name, "1.0.0"]
+      ["components", "tinctures", "local", name, "1.0.0"]
     )
   end
 

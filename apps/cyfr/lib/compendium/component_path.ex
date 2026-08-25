@@ -5,50 +5,34 @@ defmodule Compendium.ComponentPath do
   @moduledoc """
   Centralized path segment construction for component storage.
 
-  Produces Arca path segments (a list of strings) that are tenant-scoped:
+  Produces tenant-relative Arca path segments (a list of strings):
 
-      components/{athanor_id}/{type}s/{publisher}/{name}/{version}/
+      components/{type}s/{publisher}/{name}/{version}/
 
   These are logical segments — `Arca.Storage.physical_segments/2` maps them
-  under the athanor's own root (`athanors/{athanor_id}/components/...`).
+  under the *context's* athanor (`athanors/{athanor_id}/components/...`), so
+  the paths carry no tenant: which athanor's tree they land in is decided by
+  the context handed to `Arca`, exactly like the data tree, and naming
+  another athanor's components is structurally impossible. The `publisher`
+  segment is normalized through `normalize_publisher/1` (`nil`/`""` collapse
+  to the `local` namespace), so this module is the single chokepoint for
+  component-path shape *and* publisher defaulting — there is exactly one
+  layout, and the segment can never diverge from the id minted by
+  `Compendium.ComponentId`.
 
-  Every function takes a `tenant` — a `%Sanctum.Context{}`, a component
-  row/map (anything exposing `:athanor_id`), or a bare athanor id. The tenant
-  must be resolved: an absent athanor raises, exactly like
-  `Arca.Storage.tenant_segments/1` for the data tree, so an unresolved
-  context can never land in another athanor's tree. The `publisher` segment
-  is normalized through `normalize_publisher/1` (`nil`/`""` collapse to the
-  `local` namespace). So this module is the single chokepoint for
-  component-path tenancy *and* publisher defaulting — there is exactly one
-  on-disk layout, no flat fallback, and the segment can never diverge from
-  the id minted by `Compendium.ComponentId`.
-
-  The seed bundle every athanor is provisioned from keeps the logical prefix
-  `components/_bundle/{type}s/local/...` (`Compendium.Bundle`) but is read in
-  place from `:bundle_path`, outside the storage root; it is bytes only and
-  never a tenant.
+  The seed bundle every athanor is provisioned from keeps the reserved
+  logical prefix `components/_bundle/{type}s/local/...` (`Compendium.Bundle`)
+  but is read in place from `:bundle_path`, outside the storage root; it is
+  bytes only and never a tenant.
   """
 
   @type_plurals Enum.map(Sanctum.ComponentRef.valid_types(), &(&1 <> "s"))
 
   @default_publisher "local"
 
-  @type tenant :: %{athanor_id: String.t()} | String.t()
-
-  @doc "Root prefix segments: `[\"components\", athanor_id]` (requires a resolved athanor)."
-  @spec base_prefix(tenant()) :: [String.t()]
-  def base_prefix(%{athanor_id: athanor_id}), do: prefix(athanor_id)
-  def base_prefix(athanor_id), do: prefix(athanor_id)
-
-  defp prefix(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    ["components", athanor_id]
-  end
-
-  defp prefix(athanor_id) do
-    raise ArgumentError,
-          "Compendium.ComponentPath: a resolved athanor_id is required " <>
-            "(got #{inspect(athanor_id)})"
-  end
+  @doc "Root prefix segments: `[\"components\"]` — the context's athanor's tree."
+  @spec base_prefix() :: [String.t()]
+  def base_prefix, do: ["components"]
 
   @doc """
   Canonical publisher segment default. `nil`/`""` collapse to the seeded
@@ -84,36 +68,34 @@ defmodule Compendium.ComponentPath do
   def local_publisher?(publisher), do: normalize_publisher(publisher) == @default_publisher
 
   @doc "Path segments to a component version directory."
-  @spec version_dir(String.t(), String.t() | nil, String.t(), String.t(), tenant()) :: [
-          String.t()
-        ]
-  def version_dir(type, publisher, name, version, tenant) do
-    base_prefix(tenant) ++ ["#{type}s", normalize_publisher(publisher), name, version]
+  @spec version_dir(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
+  def version_dir(type, publisher, name, version) do
+    base_prefix() ++ ["#{type}s", normalize_publisher(publisher), name, version]
   end
 
   @doc "Path segments to the WASM binary for a component."
-  @spec wasm_path(String.t(), String.t() | nil, String.t(), String.t(), tenant()) :: [String.t()]
-  def wasm_path(type, publisher, name, version, tenant) do
-    version_dir(type, publisher, name, version, tenant) ++ ["#{type}.wasm"]
+  @spec wasm_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
+  def wasm_path(type, publisher, name, version) do
+    version_dir(type, publisher, name, version) ++ ["#{type}.wasm"]
   end
 
   @doc "Path segments to an arbitrary file in a component version directory."
-  @spec file_path(String.t(), String.t() | nil, String.t(), String.t(), String.t(), tenant()) ::
+  @spec file_path(String.t(), String.t() | nil, String.t(), String.t(), String.t()) ::
           [String.t()]
-  def file_path(type, publisher, name, version, filename, tenant) do
-    version_dir(type, publisher, name, version, tenant) ++ [filename]
+  def file_path(type, publisher, name, version, filename) do
+    version_dir(type, publisher, name, version) ++ [filename]
   end
 
   @doc "Path segments to a component name directory (parent of version dirs)."
-  @spec name_dir(String.t(), String.t() | nil, String.t(), tenant()) :: [String.t()]
-  def name_dir(type, publisher, name, tenant) do
-    base_prefix(tenant) ++ ["#{type}s", normalize_publisher(publisher), name]
+  @spec name_dir(String.t(), String.t() | nil, String.t()) :: [String.t()]
+  def name_dir(type, publisher, name) do
+    base_prefix() ++ ["#{type}s", normalize_publisher(publisher), name]
   end
 
   @doc "Path segments to a publisher directory."
-  @spec publisher_dir(String.t(), String.t() | nil, tenant()) :: [String.t()]
-  def publisher_dir(type, publisher, tenant) do
-    base_prefix(tenant) ++ ["#{type}s", normalize_publisher(publisher)]
+  @spec publisher_dir(String.t(), String.t() | nil) :: [String.t()]
+  def publisher_dir(type, publisher) do
+    base_prefix() ++ ["#{type}s", normalize_publisher(publisher)]
   end
 
   @doc "Known type plural strings."

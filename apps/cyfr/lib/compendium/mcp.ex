@@ -98,8 +98,7 @@ defmodule Compendium.MCP do
                 ref.type,
                 ref.namespace,
                 ref.name,
-                ref.version,
-                ctx
+                ref.version
               ) ++ String.split(path, "/")
 
             case Arca.get(ctx, asset_path) do

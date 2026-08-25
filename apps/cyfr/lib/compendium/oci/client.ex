@@ -630,8 +630,7 @@ defmodule Compendium.OCI.Client do
         "tincture",
         publisher,
         component[:name],
-        component[:version],
-        ctx
+        component[:version]
       )
 
     entries =
@@ -675,8 +674,7 @@ defmodule Compendium.OCI.Client do
         cref.namespace,
         cref.name,
         cref.version,
-        "cyfr-manifest.json",
-        ctx
+        "cyfr-manifest.json"
       )
 
     with {:ok, content} <- Arca.get(ctx, manifest_path),
@@ -703,8 +701,7 @@ defmodule Compendium.OCI.Client do
         cref.namespace,
         cref.name,
         cref.version,
-        "README.md",
-        ctx
+        "README.md"
       )
 
     case Arca.get(ctx, readme_path) do
@@ -720,8 +717,7 @@ defmodule Compendium.OCI.Client do
         cref.type,
         cref.namespace,
         cref.name,
-        cref.version,
-        ctx
+        cref.version
       ) ++ ["src"]
 
     case collect_arca_files(ctx, src_dir, src_dir) do
@@ -855,8 +851,7 @@ defmodule Compendium.OCI.Client do
         component_ref.namespace,
         component_ref.name,
         component_ref.version,
-        "cyfr-manifest.json",
-        ctx
+        "cyfr-manifest.json"
       )
 
     case Arca.put(ctx, path, config_bytes) do
@@ -875,8 +870,7 @@ defmodule Compendium.OCI.Client do
         component_ref.namespace,
         component_ref.name,
         component_ref.version,
-        "README.md",
-        ctx
+        "README.md"
       )
 
     case Arca.put(ctx, path, readme_bytes) do
@@ -898,8 +892,7 @@ defmodule Compendium.OCI.Client do
         component_ref.type,
         component_ref.namespace,
         component_ref.name,
-        component_ref.version,
-        ctx
+        component_ref.version
       )
 
     try do

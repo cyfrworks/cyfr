@@ -5,7 +5,8 @@ defmodule Prism.TinctureRegistry do
   @moduledoc """
   Registry for tincture components.
 
-  Scans every athanor's `components/{athanor_id}/tinctures/` tree for
+  Scans every active athanor's `components/tinctures/` tree — each inside
+  that athanor's own context — for
   cyfr-manifest.json files with `"type": "tincture"` and provides lookup APIs
   for the shell and public tincture controllers. Each row carries the
   athanor's route segment (`athanor_segment`) so callers can build public
@@ -98,29 +99,29 @@ defmodule Prism.TinctureRegistry do
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
   # object-store adapter. The walk is roster-driven: every active athanor
-  # row, then that athanor's own tinctures prefix — never a whole-root
-  # filesystem walk, so nothing outside a registered athanor is ever read
-  # and an archived athanor drops out by not being enumerated. The scanner
-  # uses a synthetic platform context with `:storage_read` permission only.
+  # row, opened with its own internal context — paths are tenant-relative,
+  # so there is no reaching across athanors from one context — and never a
+  # whole-root filesystem walk, so nothing outside a registered athanor is
+  # ever read and an archived athanor drops out by not being enumerated.
   defp scan_tinctures do
-    ctx = scan_context()
-
     Sanctum.Tenancy.Athanors.list_active()
-    |> Enum.flat_map(&scan_athanor(ctx, &1))
+    |> Enum.flat_map(&scan_athanor/1)
     |> pick_latest_versions()
   end
 
   # One athanor's tinctures, each carrying its route segment. An unreadable
   # tree logs and contributes nothing — one bad athanor must not empty the
   # registry.
-  defp scan_athanor(ctx, athanor) do
-    case Arca.list_recursive(ctx, ["components", athanor.id, @tincture_type_plural]) do
+  defp scan_athanor(athanor) do
+    ctx = scan_context(athanor.id)
+
+    case Arca.list_recursive(ctx, ["components", @tincture_type_plural]) do
       {:ok, leaves} ->
         segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
 
         leaves
         |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
-        |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs) end)
+        |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs, athanor.id) end)
         |> Enum.map(&put_segment(&1, segment))
 
       {:error, reason} ->
@@ -132,13 +133,15 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  defp scan_context do
-    # Server-built roster scan of each athanor's component tree (not cron).
-    # Routed through the single server-internal builder (auth_method: :system).
+  defp scan_context(athanor_id) do
+    # Server-built roster scan (not cron), routed through the single
+    # server-internal builder (auth_method: :system) and scoped to the one
+    # athanor being scanned — its context is what names its tree.
     Sanctum.internal_context(
       user_id: "_system_scan",
-      permissions: [:storage_read],
-      scope: :platform
+      athanor_id: athanor_id,
+      scope: :athanor,
+      permissions: [:storage_read]
     )
   end
 
@@ -147,13 +150,11 @@ defmodule Prism.TinctureRegistry do
     %{tincture | athanor_segment: segment, entry_url: entry_url}
   end
 
-  defp read_and_parse(ctx, manifest_segs) do
+  defp read_and_parse(ctx, manifest_segs, athanor_id) do
     # Only consider manifests under tinctures/ — components/ also contains
     # catalysts/reagents/formulas which we ignore here. The seed bundle is
     # not an athanor and carries no route.
     if tincture_path?(manifest_segs) do
-      athanor_id = extract_athanor_id(manifest_segs)
-
       case Arca.get(ctx, manifest_segs) do
         {:ok, raw} ->
           parse_manifest(ctx, manifest_segs, raw, athanor_id)
@@ -170,14 +171,13 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # Layout: ["components", athanor_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  defp tincture_path?(["components", _athanor, @tincture_type_plural | _]), do: true
+  # Layout: ["components", "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  # — tenant-relative; the athanor is the scanning context's.
+  defp tincture_path?(["components", @tincture_type_plural | _]), do: true
   defp tincture_path?(_), do: false
 
-  # Manifest-segments OR a scope (Context/map) → athanor_id. Path segments
-  # carry the athanor between "components" and "tinctures"; scopes carry it as
-  # a field. Nothing is normalized: an absent athanor lists nothing.
-  defp extract_athanor_id(["components", athanor_id, @tincture_type_plural | _]), do: athanor_id
+  # A lookup scope (Context/map) → athanor_id. Nothing is normalized: an
+  # absent athanor lists nothing.
   defp extract_athanor_id(%{athanor_id: athanor_id}), do: athanor_id
   defp extract_athanor_id(%{"athanor_id" => athanor_id}), do: athanor_id
   defp extract_athanor_id(_), do: nil

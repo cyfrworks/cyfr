@@ -70,7 +70,9 @@ defmodule Compendium.AthanorSeeder do
   defp copy_bundle(ctx, athanor_id) do
     Enum.reduce_while(Bundle.type_plurals(), :ok, fn type_plural, :ok ->
       src = Bundle.bundle_prefix() ++ [type_plural, Bundle.publisher()]
-      dest = ComponentPath.base_prefix(athanor_id) ++ [type_plural, Bundle.publisher()]
+      # Tenant-relative: `ctx` carries the new athanor, so the copy lands in
+      # its tree.
+      dest = ComponentPath.base_prefix() ++ [type_plural, Bundle.publisher()]
 
       case Arca.copy_tree(ctx, src, dest, exclude: &excluded?/1) do
         :ok ->

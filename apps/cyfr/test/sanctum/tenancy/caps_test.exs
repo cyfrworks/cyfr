@@ -163,7 +163,7 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     # Any write under the athanor's component root drops it, so the cap
     # cannot go on measuring a tree that has changed underneath it.
-    :ok = Arca.put(ctx, ["components", ctx.athanor_id, "cap-probe.txt"], "bytes")
+    :ok = Arca.put(ctx, ["components", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == :miss
 
     # A write elsewhere is not that tree and leaves it alone.

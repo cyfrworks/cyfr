@@ -211,7 +211,7 @@ defmodule Compendium.MCPTest do
       asset_dir =
         Arca.Adapters.Local.build_path(
           ctx,
-          ["components", "ath_test", "reagents", "local", "asset-test", "1.0.0"]
+          ["components", "reagents", "local", "asset-test", "1.0.0"]
         )
 
       File.mkdir_p!(asset_dir)
@@ -673,7 +673,7 @@ defmodule Compendium.MCPTest do
                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_dep_test_dir(_test_dir, type, name, version, manifest) do
-      segments = ["components", "ath_test", "#{type}s", "local", name, version]
+      segments = ["components", "#{type}s", "local", name, version]
       comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
@@ -871,7 +871,7 @@ defmodule Compendium.MCPTest do
                        <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_plan_component(_test_dir, type, name, version, manifest) do
-      segments = ["components", "ath_test", "#{type}s", "local", name, version]
+      segments = ["components", "#{type}s", "local", name, version]
       comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)
@@ -1149,7 +1149,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "removes a filesystem component", %{ctx: ctx} do
-      segments = ["components", "ath_test", "catalysts", "local", "remove-fs-test", "1.0.0"]
+      segments = ["components", "catalysts", "local", "remove-fs-test", "1.0.0"]
       comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
@@ -1429,7 +1429,7 @@ defmodule Compendium.MCPTest do
 
   describe "component inspect - include_readme" do
     test "inspect with include_readme returns readme content", %{ctx: ctx} do
-      segments = ["components", "ath_test", "catalysts", "local", "readme-test", "1.0.0"]
+      segments = ["components", "catalysts", "local", "readme-test", "1.0.0"]
       comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
@@ -1453,7 +1453,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect without include_readme omits readme", %{ctx: ctx} do
-      segments = ["components", "ath_test", "catalysts", "local", "no-readme-flag", "1.0.0"]
+      segments = ["components", "catalysts", "local", "no-readme-flag", "1.0.0"]
       comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
@@ -1475,7 +1475,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect with include_readme returns nil when no README", %{ctx: ctx} do
-      segments = ["components", "ath_test", "reagents", "local", "no-readme-file", "1.0.0"]
+      segments = ["components", "reagents", "local", "no-readme-file", "1.0.0"]
       comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
 
       File.mkdir_p!(comp_dir)
@@ -1566,7 +1566,7 @@ defmodule Compendium.MCPTest do
                       <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_component_dir(_test_dir, type, name, version, manifest) do
-      segments = ["components", "ath_test", "#{type}s", "local", name, version]
+      segments = ["components", "#{type}s", "local", name, version]
       comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
 
       File.mkdir_p!(comp_dir)

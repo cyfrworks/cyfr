@@ -3,9 +3,10 @@
 
 defmodule Arca.StorageAuthorizePathTest do
   @moduledoc """
-  The component tree is shared by every athanor; `Arca` pins each context to
-  its own subtree before any adapter call, so no athanor can read another's
-  bytes and only server-internal contexts see the seed bundle.
+  Every tenant path takes its athanor from the context, so isolation is
+  structural — no path spelling names another athanor's tree. What
+  `authorize_path/2` still guards is the server's own: the seed bundle and
+  the global roots.
   """
 
   use ExUnit.Case, async: false
@@ -41,17 +42,19 @@ defmodule Arca.StorageAuthorizePathTest do
     {:ok, a: a, b: b, seed: seed}
   end
 
-  test "an athanor cannot read, list, or write another athanor's components", %{a: a, b: b} do
-    path = ["components", "ath_a", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
+  test "component paths are tenant-relative — the context is the only addressing", %{a: a, b: b} do
+    path = ["components", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
     assert :ok = Arca.put(a, path, "{}")
 
-    assert {:error, :forbidden} = Arca.get(b, path)
-    assert {:error, :forbidden} = Arca.list_recursive(b, ["components", "ath_a"])
-    assert {:error, :forbidden} = Arca.put(b, path, "overwritten")
+    # The same spelling under b's context is b's own (empty) tree.
+    assert {:error, :not_found} = Arca.get(b, path)
     refute Arca.exists?(b, path)
+    assert {:ok, []} = Arca.list_recursive(b, ["components"])
 
-    # The owner still reads its own bytes.
+    # b writing the same spelling lands in b's tree and leaves a's alone.
+    assert :ok = Arca.put(b, path, "mine")
     assert {:ok, "{}"} = Arca.get(a, path)
+    assert {:ok, "mine"} = Arca.get(b, path)
   end
 
   test "the seed bundle is readable only by server-internal contexts", %{a: a, seed: seed} do
@@ -62,20 +65,19 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:ok, "{}"} = Arca.get(seed, path)
   end
 
-  test "a bare components listing is refused for everyone — it has no physical root", %{a: a} do
+  test "a context without an athanor cannot touch tenant storage at all" do
     platform =
       Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
 
-    # The tenant pin refuses a member outright.
-    assert {:error, :forbidden} = Arca.list_recursive(a, ["components"])
-    assert {:error, :forbidden} = Arca.Storage.authorize_path(a, ["components"])
+    # Platform opens an athanor the way it does for rows — with a context
+    # focused on it. Unfocused, tenant paths are nowhere: fail closed.
+    assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+      Arca.list_recursive(platform, ["components"])
+    end
 
-    # A platform context reaches every athanor's subtree, but the unified
-    # layout has no single components root — roster-driven code enumerates
-    # athanors instead, so even platform gets a typed refusal, not a raise.
-    assert {:error, :forbidden} = Arca.Storage.authorize_path(platform, ["components"])
-    assert {:error, :forbidden} = Arca.list_recursive(platform, ["components"])
-    assert :ok = Arca.Storage.authorize_path(platform, ["components", "ath_a"])
+    assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+      Arca.get(platform, ["notes", "x.txt"])
+    end
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do
