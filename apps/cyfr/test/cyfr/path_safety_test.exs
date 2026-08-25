@@ -8,12 +8,12 @@ defmodule Cyfr.PathSafetyTest do
 
   describe "validate_segments!/1 (Arca contract)" do
     test "accepts ordinary segments" do
-      assert :ok = PathSafety.validate_segments!(["builds", "build_1", "started.json"])
+      assert :ok = PathSafety.validate_segments!(["guest", "notes", "started.json"])
     end
 
     test "rejects literal .. segments" do
       assert_raise ArgumentError, ~r/segment ".." is not allowed/, fn ->
-        PathSafety.validate_segments!(["builds", "..", "etc", "passwd"])
+        PathSafety.validate_segments!(["guest", "..", "etc", "passwd"])
       end
     end
 

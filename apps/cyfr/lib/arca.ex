@@ -205,8 +205,13 @@ defmodule Arca do
       ["a.txt", "b.txt"]
 
   """
-  def list(%Context{} = ctx, path),
-    do: guarded(ctx, path, fn p -> adapter(p).list(ctx, p) end)
+  # Names are the typed listing minus its kinds — one adapter callback, not
+  # two spellings of the same walk.
+  def list(%Context{} = ctx, path) do
+    with {:ok, entries} <- list_typed(ctx, path) do
+      {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
+    end
+  end
 
   @doc """
   List the entries directly under a path, each tagged `:file` or `:dir`.
@@ -349,7 +354,7 @@ defmodule Arca do
   defp reserved_name?(path) do
     case List.last(path) do
       nil -> false
-      name -> name =~ ~r/\.tmp\.\d+$/
+      name -> Arca.Storage.tmp_name?(name)
     end
   end
 

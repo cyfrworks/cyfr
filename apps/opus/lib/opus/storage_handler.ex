@@ -343,8 +343,8 @@ defmodule Opus.StorageHandler do
        end) do
       :ok
     else
-      {:error, :storage_path_denied,
-       "Path must start with 'data/' or 'components/'. Got: '#{path}'"}
+      allowed = Enum.map_join(valid_scopes(), " or ", &"'#{&1}/'")
+      {:error, :storage_path_denied, "Path must start with #{allowed}. Got: '#{path}'"}
     end
   end
 

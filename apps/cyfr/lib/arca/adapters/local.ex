@@ -148,13 +148,6 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def list(%Context{} = ctx, path) do
-    with {:ok, entries} <- list_typed(ctx, path) do
-      {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
-    end
-  end
-
-  @impl true
   def list_typed(%Context{} = ctx, path) do
     full_path = build_path(ctx, path)
 
@@ -183,7 +176,7 @@ defmodule Arca.Adapters.Local do
   # A `put/3` in flight (or a crashed one): named `<file>.tmp.<n>` next to
   # its target. Never content — listings, walks and usage skip the pattern,
   # and `sweep_stale_tmp/1` reclaims orphans.
-  defp tmp_name?(name), do: name =~ ~r/\.tmp\.\d+$/
+  defp tmp_name?(name), do: Arca.Storage.tmp_name?(name)
 
   @impl true
   def exists?(%Context{} = ctx, path) do

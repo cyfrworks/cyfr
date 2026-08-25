@@ -149,13 +149,6 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def list(%Context{} = ctx, segments) do
-    with {:ok, entries} <- list_typed(ctx, segments) do
-      {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
-    end
-  end
-
-  @impl true
   def list_typed(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
     prefix = build_key(ctx, segments)

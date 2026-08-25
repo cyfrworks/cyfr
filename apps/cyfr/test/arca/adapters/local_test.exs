@@ -171,18 +171,17 @@ defmodule Arca.Adapters.LocalTest do
     end
   end
 
-  describe "list/2" do
+  describe "listing names" do
     test "lists directory contents", %{ctx: ctx} do
       Local.put(ctx, ["guest", "dir", "a.txt"], "a")
       Local.put(ctx, ["guest", "dir", "b.txt"], "b")
       Local.put(ctx, ["guest", "dir", "c.txt"], "c")
 
-      {:ok, files} = Local.list(ctx, ["guest", "dir"])
-      assert Enum.sort(files) == ["a.txt", "b.txt", "c.txt"]
+      assert list_names(ctx, ["guest", "dir"]) == ["a.txt", "b.txt", "c.txt"]
     end
 
     test "returns empty list for missing directory", %{ctx: ctx} do
-      assert {:ok, []} = Local.list(ctx, ["guest", "nonexistent"])
+      assert list_names(ctx, ["guest", "nonexistent"]) == []
     end
   end
 
@@ -220,7 +219,7 @@ defmodule Arca.Adapters.LocalTest do
       Local.put(ctx, ["cache", "test_1.bin"], "1")
       Local.put(ctx, ["cache", "test_2.bin"], "2")
 
-      {:ok, files} = Local.list(ctx, ["cache"])
+      files = list_names(ctx, ["cache"])
       assert "test_1.bin" in files
       assert "test_2.bin" in files
     end
@@ -557,8 +556,7 @@ defmodule Arca.Adapters.LocalTest do
         :ok = Local.put(ctx, path, "content #{i}")
       end
 
-      {:ok, files} = Local.list(ctx, base)
-      assert length(files) == 3
+      assert length(list_names(ctx, base)) == 3
     end
   end
 
@@ -568,7 +566,7 @@ defmodule Arca.Adapters.LocalTest do
       :ok = Local.put(ctx, ["guest", "atomic", "target.txt"], "v2")
 
       assert {:ok, "v2"} = Local.get(ctx, ["guest", "atomic", "target.txt"])
-      assert {:ok, ["target.txt"]} = Local.list(ctx, ["guest", "atomic"])
+      assert list_names(ctx, ["guest", "atomic"]) == ["target.txt"]
     end
 
     test "an overwrite failure cleans up its temp file", %{ctx: ctx} do
@@ -580,8 +578,14 @@ defmodule Arca.Adapters.LocalTest do
 
       # The directory survives untouched and the temp file (written next to
       # it, in atomic2/) is cleaned up.
-      assert {:ok, ["child.txt"]} = Local.list(ctx, ["guest", "atomic2", "occupied"])
-      assert {:ok, ["occupied"]} = Local.list(ctx, ["guest", "atomic2"])
+      assert list_names(ctx, ["guest", "atomic2", "occupied"]) == ["child.txt"]
+      assert list_names(ctx, ["guest", "atomic2"]) == ["occupied"]
     end
+  end
+
+  # The adapter surface has one listing callback; names are its first column.
+  defp list_names(ctx, path) do
+    {:ok, entries} = Local.list_typed(ctx, path)
+    entries |> Enum.map(&elem(&1, 0)) |> Enum.sort()
   end
 end

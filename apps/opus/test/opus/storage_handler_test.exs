@@ -747,7 +747,7 @@ defmodule Opus.StorageHandlerTest do
       assert {:error, :storage_path_denied, msg} =
                StorageHandler.validate_path_scope("secrets/key.json")
 
-      assert msg =~ "must start with 'data/' or 'components/'"
+      assert msg =~ "must start with 'components/' or 'data/'"
 
       assert {:error, :storage_path_denied, _} =
                StorageHandler.validate_path_scope("agent/file.txt")
@@ -883,7 +883,7 @@ defmodule Opus.StorageHandlerTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "must start with 'data/' or 'components/'"
+      assert decoded["error"]["message"] =~ "must start with 'components/' or 'data/'"
     end
   end
 

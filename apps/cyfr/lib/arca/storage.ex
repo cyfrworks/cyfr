@@ -190,6 +190,16 @@ defmodule Arca.Storage do
   def guest_scopes, do: @guest_scopes
 
   @doc """
+  Whether `name` is spelled like an in-flight atomic write (`<file>.tmp.<n>`,
+  the shape `Arca.Adapters.Local` renames over its target). One predicate
+  for both layers: the facade reserves the shape on writes so no adapter
+  ever stores content a Local listing would hide, and the Local adapter
+  hides it from listings and walks.
+  """
+  @spec tmp_name?(String.t()) :: boolean()
+  def tmp_name?(name) when is_binary(name), do: name =~ ~r/\.tmp\.\d+$/
+
+  @doc """
   Classify a logical path by its first segment: `:seed` (install media),
   `:global` (`cache/`, `system/`), `:tenant` (the closed roster in
   `tenant_roots/0`, plus the empty path — the athanor's whole tree), or
@@ -357,9 +367,6 @@ defmodule Arca.Storage do
 
   @doc "Delete content from storage"
   @callback delete(Context.t(), path()) :: :ok | error()
-
-  @doc "List the names directly under a path prefix"
-  @callback list(Context.t(), path()) :: {:ok, [String.t()]} | error()
 
   @doc """
   List the entries directly under a path prefix, each with its kind.

@@ -12,7 +12,9 @@ defmodule Arca.Adapters.ContractTest do
   on the other; `exists?` counted directories on one; a missing-key delete
   was a silent `:ok`; a console-written directory marker (`foo/`) was a
   zero-byte file in one walk and nothing in the other. Every case here is
-  a question both adapters must answer identically.
+  a question both adapters must answer identically. (`list/2` no longer
+  appears here: the behaviour dropped the callback — names are derived from
+  `list_typed/2` in the `Arca` facade, one walk, nothing to diverge.)
 
   The shared fixture tree under `guest/`: `a.txt` = "a", `b.txt` = "b",
   `sub/c.txt` = "c" (and, on S3, a `marker/` directory-marker object).
@@ -42,12 +44,6 @@ defmodule Arca.Adapters.ContractTest do
 
   defp contract_empty_listing(adapter, ctx) do
     assert {:ok, []} = adapter.list_typed(ctx, ["guest", "nothing-here"])
-  end
-
-  defp contract_list_matches_list_typed(adapter, ctx) do
-    {:ok, entries} = adapter.list_typed(ctx, ["guest"])
-    {:ok, names} = adapter.list(ctx, ["guest"])
-    assert Enum.sort(names) == entries |> Enum.map(&elem(&1, 0)) |> Enum.sort()
   end
 
   defp contract_exists_files_only(adapter, ctx) do
@@ -127,9 +123,6 @@ defmodule Arca.Adapters.ContractTest do
 
     test "a path with nothing under it lists empty", %{ctx: ctx},
       do: contract_empty_listing(Local, ctx)
-
-    test "list/2 returns the same names", %{ctx: ctx},
-      do: contract_list_matches_list_typed(Local, ctx)
 
     test "exists?/2 answers files, not directories", %{ctx: ctx},
       do: contract_exists_files_only(Local, ctx)
@@ -235,9 +228,6 @@ defmodule Arca.Adapters.ContractTest do
 
     test "a path with nothing under it lists empty", %{ctx: ctx},
       do: contract_empty_listing(S3, ctx)
-
-    test "list/2 returns the same names", %{ctx: ctx},
-      do: contract_list_matches_list_typed(S3, ctx)
 
     test "exists?/2 answers files, not directories", %{ctx: ctx},
       do: contract_exists_files_only(S3, ctx)
