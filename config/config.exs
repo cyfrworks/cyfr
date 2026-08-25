@@ -86,7 +86,7 @@ case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
     config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
 
     config :cyfr, Arca.Repo,
-      database: "data/cyfr.db",
+      database: Path.expand("data/cyfr.db"),
       pool_size: 20,
       journal_mode: :wal,
       busy_timeout: 5_000
@@ -112,6 +112,22 @@ config :cyfr,
 # The AQUA agent template every new athanor is given (`Compendium.AquaTemplate`).
 # Anchored to the repo, not the CWD: it is read wherever the app runs from.
 config :cyfr, :aqua_template_path, Path.expand("../aqua", __DIR__)
+
+# Storage-adjacent knobs, spelled out so the defaults are discoverable —
+# the readers fall back to the same values, but an invisible knob is a knob
+# nobody knows to turn.
+#
+# The recursive file/byte ceiling for unauthenticated (public tincture)
+# guest writes (`Opus.StorageHandler`); the operator's per-athanor cap for
+# authenticated writes is CYFR_ATHANOR_STORAGE_BYTES.
+config :cyfr, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
+
+# Concurrent object reads in the S3 adapter's subtree dump (seeding,
+# packing) — bounded so a wide tree cannot open unbounded connections.
+config :cyfr, :s3_read_subtree_concurrency, 10
+
+# Decompression ceiling for published tincture archives (zip-bomb guard).
+config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
 
 # CORS Configuration â wildcard default for fresh installs. The boot guard in
 # Cyfr.Application requires an explicit allowlist once authentication is

@@ -76,6 +76,65 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
+  describe "resolve_paths/1" do
+    test "unset => the documented defaults, expanded" do
+      assert {:ok, paths} = RuntimeConfig.resolve_paths(env(%{}))
+
+      assert paths.base_path == Path.expand("data")
+      assert paths.bundle_path == Path.expand("components/_bundle")
+      assert paths.aqua_template_path == Path.expand("aqua")
+      assert paths.database_path == Path.join(paths.base_path, "cyfr.db")
+    end
+
+    test "every root is overridable, and the database follows the data root" do
+      assert {:ok, paths} =
+               RuntimeConfig.resolve_paths(
+                 env(%{
+                   "CYFR_DATA_PATH" => "/srv/cyfr",
+                   "CYFR_BUNDLE_PATH" => "/media/bundle",
+                   "CYFR_AQUA_TEMPLATE_PATH" => "/media/aqua"
+                 })
+               )
+
+      assert paths.base_path == "/srv/cyfr"
+      assert paths.bundle_path == "/media/bundle"
+      assert paths.aqua_template_path == "/media/aqua"
+      assert paths.database_path == "/srv/cyfr/cyfr.db"
+    end
+
+    test "CYFR_DATABASE_PATH points the SQLite file elsewhere" do
+      assert {:ok, paths} =
+               RuntimeConfig.resolve_paths(
+                 env(%{"CYFR_DATA_PATH" => "/srv/cyfr", "CYFR_DATABASE_PATH" => "/db/cyfr.db"})
+               )
+
+      assert paths.database_path == "/db/cyfr.db"
+    end
+
+    test "a set-but-blank variable fails the boot instead of defaulting" do
+      for var <- ~w(CYFR_DATA_PATH CYFR_BUNDLE_PATH CYFR_AQUA_TEMPLATE_PATH CYFR_DATABASE_PATH) do
+        assert {:error, message} = RuntimeConfig.resolve_paths(env(%{var => "   "}))
+        assert message =~ var
+      end
+    end
+  end
+
+  describe "resolve_pool_size/1" do
+    test "unset => 20; a value must be a positive integer" do
+      assert {:ok, 20} = RuntimeConfig.resolve_pool_size(env(%{}))
+      assert {:ok, 64} = RuntimeConfig.resolve_pool_size(env(%{"CYFR_DB_POOL_SIZE" => "64"}))
+
+      # One parser for both adapters: the value that refuses a Postgres boot
+      # must refuse a SQLite boot identically.
+      for bad <- ["nope", "0", "-4", "12x", "1.5"] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_pool_size(env(%{"CYFR_DB_POOL_SIZE" => bad}))
+
+        assert message =~ "CYFR_DB_POOL_SIZE"
+      end
+    end
+  end
+
   describe "resolve_storage/1" do
     test "unset => local default" do
       assert {:ok, :local} = RuntimeConfig.resolve_storage(env(%{}))

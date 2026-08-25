@@ -204,11 +204,22 @@ if config_env() != :test do
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
 
-    # The one runtime storage root: every athanor's data and components,
-    # plus the cache/ and system/ globals — and the SQLite database below,
-    # unless CYFR_DATABASE_PATH points it elsewhere.
-    base_path = env!("CYFR_DATA_PATH", :string, "data") |> Path.expand()
-    config :cyfr, :base_path, base_path
+    # The filesystem roots, resolved and validated in one place
+    # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
+    # (every athanor's data and components, the cache/ and system/ globals,
+    # and the SQLite database unless CYFR_DATABASE_PATH points it
+    # elsewhere), plus the seed media read in place — the repo/scaffold
+    # checkout by default, the baked image copy / operator mount in Docker
+    # (the Dockerfile sets CYFR_BUNDLE_PATH and CYFR_AQUA_TEMPLATE_PATH).
+    paths =
+      case Cyfr.RuntimeConfig.resolve_paths(getenv) do
+        {:ok, paths} -> paths
+        {:error, message} -> raise message
+      end
+
+    config :cyfr, :base_path, paths.base_path
+    config :cyfr, :bundle_path, paths.bundle_path
+    config :cyfr, :aqua_template_path, paths.aqua_template_path
 
     # Database connection config. The adapter is selected at compile time in
     # config.exs from CYFR_DATABASE; here we supply connection parameters for
@@ -216,10 +227,15 @@ if config_env() != :test do
     # busy_timeout) never bleed into a Postgres build and vice versa.
     case Cyfr.RuntimeConfig.repo_adapter() do
       Ecto.Adapters.SQLite3 ->
+        pool_size =
+          case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do
+            {:ok, pool_size} -> pool_size
+            {:error, message} -> raise message
+          end
+
         config :cyfr, Arca.Repo,
-          database: env!("CYFR_DATABASE_PATH", :string, nil) || Path.join(base_path, "cyfr.db"),
-          pool_size:
-            parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
+          database: paths.database_path,
+          pool_size: pool_size,
           journal_mode: :wal,
           busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
 
@@ -232,15 +248,6 @@ if config_env() != :test do
           {:error, message} -> raise message
         end
     end
-
-    # Seed media is read in place: the repo/scaffold checkout by default,
-    # the baked image copy / operator mount in Docker (the Dockerfile sets
-    # CYFR_BUNDLE_PATH and CYFR_AQUA_TEMPLATE_PATH).
-    bundle_path = env!("CYFR_BUNDLE_PATH", :string, "components/_bundle") |> Path.expand()
-    config :cyfr, :bundle_path, bundle_path
-
-    aqua_template_path = env!("CYFR_AQUA_TEMPLATE_PATH", :string, "aqua") |> Path.expand()
-    config :cyfr, :aqua_template_path, aqua_template_path
 
     # Warn if plain HTTP in production without a reverse proxy declaration
     unless env!("CYFR_BEHIND_PROXY", :string, nil) do

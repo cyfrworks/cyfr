@@ -167,6 +167,54 @@ defmodule Cyfr.RuntimeConfig do
   def sqlite_busy_timeout_ms, do: 5_000
 
   @doc """
+  Resolve the filesystem roots from the environment (release runtime):
+
+    * `CYFR_DATA_PATH` — the one runtime storage root (default `"data"`)
+    * `CYFR_BUNDLE_PATH` — the seed bundle, read in place (default
+      `"components/_bundle"`)
+    * `CYFR_AQUA_TEMPLATE_PATH` — the AQUA template, read in place
+      (default `"aqua"`)
+    * `CYFR_DATABASE_PATH` — the SQLite file (default `cyfr.db` under the
+      data root; ignored on Postgres)
+
+  Every path comes back expanded. Set-or-default, never silent fallback: an
+  unset variable takes its default, a set-but-blank one fails the boot.
+  Returns `{:ok, %{base_path: _, bundle_path: _, aqua_template_path: _,
+  database_path: _}}` or `{:error, message}`.
+  """
+  @spec resolve_paths(getenv) :: {:ok, map()} | {:error, String.t()}
+  def resolve_paths(getenv) when is_function(getenv, 1) do
+    with {:ok, base} <- path_var(getenv, "CYFR_DATA_PATH", "data"),
+         {:ok, bundle} <- path_var(getenv, "CYFR_BUNDLE_PATH", "components/_bundle"),
+         {:ok, aqua} <- path_var(getenv, "CYFR_AQUA_TEMPLATE_PATH", "aqua"),
+         {:ok, db} <- path_var(getenv, "CYFR_DATABASE_PATH", Path.join(base, "cyfr.db")) do
+      {:ok, %{base_path: base, bundle_path: bundle, aqua_template_path: aqua, database_path: db}}
+    end
+  end
+
+  defp path_var(getenv, var, default) do
+    case getenv.(var) do
+      nil ->
+        {:ok, Path.expand(default)}
+
+      value ->
+        case String.trim(value) do
+          "" -> {:error, "#{var} is set but blank; unset it or give it a path."}
+          path -> {:ok, Path.expand(path)}
+        end
+    end
+  end
+
+  @doc """
+  Resolve `CYFR_DB_POOL_SIZE` (default 20, must be a positive integer) —
+  one parser for both database adapters, so the same value cannot boot one
+  and refuse the other.
+  """
+  @spec resolve_pool_size(getenv) :: {:ok, pos_integer()} | {:error, String.t()}
+  def resolve_pool_size(getenv) when is_function(getenv, 1),
+    do: parse_pool_size(getenv.("CYFR_DB_POOL_SIZE"))
+
+  @doc """
   Resolve the storage backend from `CYFR_STORAGE` (`local` default | `s3`).
 
   Returns `{:ok, :local}`, `{:ok, {:s3, opts}}` (a keyword list shaped for

@@ -220,7 +220,7 @@ defmodule Locus.MCP do
     end
   end
 
-  defp build_record_path(build_id), do: ["builds", build_id <> ".json"]
+  defp build_record_path(build_id), do: Cyfr.BuildRecords.path(build_id)
 
   defp format_async_error(reason),
     do: if(is_binary(reason), do: reason, else: inspect(reason))

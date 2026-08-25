@@ -20,16 +20,19 @@ defmodule Cyfr.Retention do
   ## Storage
 
   An athanor's settings are persisted to `config/retention.json` under the
-  tenant-scoped path that `Arca.Storage.tenant_segments/1` builds, so each
-  athanor carries its own copy. Settings are shared by all members of the
-  athanor. If no settings exist, global defaults from application config
-  are used.
+  tenant path `Arca.Storage.physical_segments/2` maps into the athanor's
+  data tree, so each athanor carries its own copy. Settings are shared by
+  all members of the athanor. If no settings exist, the defaults below
+  apply.
 
-  ## Global Defaults (config.exs)
+  ## Defaults
+
+  The defaults live in this module's attributes; application config may
+  override them:
 
       config :cyfr, Cyfr.Retention,
-        executions: 10,        # Keep last N executions per athanor
-        builds: 10             # Keep last N builds per athanor
+        executions: 10_000,    # Keep last N executions per athanor
+        builds: 100            # Keep last N builds per athanor
 
   ## Programmatic Usage
 
@@ -476,11 +479,11 @@ defmodule Cyfr.Retention do
   # Private Helpers
   # ============================================================================
 
-  # Build records are flat `builds/{id}.json` files (Locus.MCP's
-  # build_record_path/1); an entry without a readable `started_at` is
-  # kept, never deleted.
+  # Build records are flat files under `Cyfr.BuildRecords.prefix/0` — the
+  # one owner of the shape Locus writes and this sweep reads; an entry
+  # without a readable `started_at` is kept, never deleted.
   defp list_builds_with_timestamps(ctx) do
-    case Arca.list(ctx, ["builds"]) do
+    case Arca.list(ctx, Cyfr.BuildRecords.prefix()) do
       {:ok, entries} ->
         builds =
           entries
@@ -498,13 +501,13 @@ defmodule Cyfr.Retention do
   end
 
   defp get_build_timestamp(ctx, entry) do
-    case Arca.get_json(ctx, ["builds", entry]) do
+    case Arca.get_json(ctx, Cyfr.BuildRecords.prefix() ++ [entry]) do
       {:ok, data} -> data["started_at"]
       _ -> nil
     end
   end
 
   defp delete_build(ctx, id) do
-    Arca.delete(ctx, ["builds", id <> ".json"])
+    Arca.delete(ctx, Cyfr.BuildRecords.path(id))
   end
 end

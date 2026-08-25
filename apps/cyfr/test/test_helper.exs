@@ -29,9 +29,9 @@ end
 Sanctum.TestContext.seed_athanors!()
 
 # The suite must never write into the repo's own storage tree: every storage
-# root is under tmp (config/test.exs), so an entry appearing under the repo's
-# data/athanors/ means a test reached the real filesystem around the tmp
-# roots. (Bare data/ is legitimate — the suite DB lives at data/test.db.)
+# root — the suite DB included — is under tmp (config/test.exs), so an entry
+# appearing under the repo's data/athanors/ means a test reached the real
+# filesystem around the tmp roots.
 #
 # The check is on what the run ADDS, not on what is there. A developer who
 # has run the server locally has real athanor trees under data/athanors/,

@@ -40,8 +40,17 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # would drop those requests under load; give the single shared connection room.
 case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
   "sqlite" ->
+    # Stable across runs (so migrations are reused) and keyed by checkout
+    # (so two worktrees never share a file) — but OUT of the repo's data/:
+    # a run that dies mid-suite must not leave a database that poisons the
+    # next one inside the working tree.
     config :cyfr, Arca.Repo,
-      database: Path.expand("data/test.db"),
+      database:
+        Path.join([
+          System.tmp_dir!(),
+          "cyfr_test_db_#{:erlang.phash2(Path.expand("."))}",
+          "test.db"
+        ]),
       pool: Ecto.Adapters.SQL.Sandbox,
       pool_size: 20,
       ownership_timeout: 60_000,
