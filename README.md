@@ -136,7 +136,6 @@ your-project/
             │   ├── formulas/    # Bundled formulas: list-models, aqua
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA agent definitions
-            ├── builds/     # Build records
             ├── config/     # Retention settings and other per-athanor config
             ├── conversations/  # Chat attachment files
             └── guest/      # Files WASM components store (their `data/` scope)

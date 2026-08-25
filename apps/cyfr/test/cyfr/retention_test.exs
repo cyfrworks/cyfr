@@ -4,6 +4,8 @@
 defmodule Cyfr.RetentionTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Cyfr.Retention
   alias Sanctum.Context
 
@@ -151,8 +153,7 @@ defmodule Cyfr.RetentionTest do
       {:ok, count} = Retention.cleanup_builds(ctx, keep: 3)
       assert count == 2
 
-      {:ok, remaining} = Arca.list(ctx, ["builds"])
-      assert Enum.sort(remaining) == ["build_3.json", "build_4.json", "build_5.json"]
+      assert build_ids(ctx) == ["build_3", "build_4", "build_5"]
     end
 
     test "dry_run names the oldest builds without deleting", %{ctx: ctx} do
@@ -163,8 +164,7 @@ defmodule Cyfr.RetentionTest do
       {:ok, result} = Retention.cleanup_builds(ctx, keep: 2, dry_run: true)
       assert Enum.sort(result.would_delete) == ["build_1", "build_2"]
 
-      {:ok, remaining} = Arca.list(ctx, ["builds"])
-      assert length(remaining) == 4
+      assert length(build_ids(ctx)) == 4
     end
   end
 
@@ -189,8 +189,7 @@ defmodule Cyfr.RetentionTest do
       assert result.errors == []
       assert result.builds_deleted >= 2
 
-      {:ok, remaining} = Arca.list(ctx, ["builds"])
-      assert Enum.sort(remaining) == ["build_3.json", "build_4.json"]
+      assert build_ids(ctx) == ["build_3", "build_4"]
     end
   end
 
@@ -425,13 +424,25 @@ defmodule Cyfr.RetentionTest do
   # Writes the record exactly as Locus.MCP's build_record_path/1 does:
   # one flat builds/{id}.json with started_at inside.
   defp create_build_with_timestamp(ctx, id, timestamp) do
-    :ok =
-      Arca.put_json(ctx, ["builds", id <> ".json"], %{
-        "build_id" => id,
-        "reference" => "reagent:local.test:0.1.0",
-        "status" => "started",
-        "started_at" => timestamp
-      })
+    :ok = Cyfr.BuildRecords.record_started(ctx, id, "reagent:local.test:0.1.0")
+
+    # Pin started_at so ordering is the fixture's, not the insert order's.
+    {:ok, pinned, 0} = DateTime.from_iso8601(timestamp)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(b in Arca.Schemas.BuildRecord, where: b.id == ^id),
+        set: [started_at: pinned]
+      )
+
+    :ok
+  end
+
+  defp build_ids(ctx) do
+    from(b in Arca.Schemas.BuildRecord, select: b.id)
+    |> Arca.QueryHelpers.where_tenant(ctx)
+    |> Arca.Repo.all()
+    |> Enum.sort()
   end
 
   defp create_mcp_log(id, %DateTime{} = timestamp, ctx) do

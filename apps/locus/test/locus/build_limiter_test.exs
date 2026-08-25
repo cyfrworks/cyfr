@@ -158,6 +158,11 @@ defmodule Locus.BuildLimiterTest do
   end
 
   test "status of an unknown build errors" do
+    # Build records are rows now — the status lookup queries the Repo, so
+    # this test needs its own sandbox connection like any DB test.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
     ctx = Sanctum.TestContext.local()
 
     assert {:error, message} =

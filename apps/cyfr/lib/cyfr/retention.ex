@@ -300,10 +300,9 @@ defmodule Cyfr.Retention do
   @doc """
   Clean up old build records for a user.
 
-  Build records are flat `builds/{id}.json` status files written by
-  `Locus.MCP`, so this still uses file-based cleanup via the Arca
-  storage adapter. The newest `keep` records survive, ordered by their
-  `started_at` timestamp.
+  Build records are `build_records` rows written by `Locus.MCP`
+  (`Cyfr.BuildRecords` owns the shape). The newest `keep` survive,
+  ordered by `started_at`.
   """
   @spec cleanup_builds(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
@@ -312,33 +311,13 @@ defmodule Cyfr.Retention do
     keep = Keyword.get(opts, :keep, user_settings["builds"])
     dry_run = Keyword.get(opts, :dry_run, false)
 
-    case list_builds_with_timestamps(ctx) do
-      {:ok, builds} ->
-        sorted = Enum.sort_by(builds, fn {_id, ts} -> ts end, :desc)
-        to_delete = Enum.drop(sorted, keep)
-
-        if dry_run do
-          ids_to_delete = Enum.map(to_delete, fn {id, _ts} -> id end)
-          {:ok, %{would_delete: ids_to_delete}}
-        else
-          deleted_count =
-            to_delete
-            |> Enum.map(fn {id, _ts} -> delete_build(ctx, id) end)
-            |> Enum.count(&(&1 == :ok))
-
-          {:ok, deleted_count}
-        end
-
-      {:error, _} = err ->
-        err
-    end
+    Cyfr.BuildRecords.prune(ctx, keep, dry_run: dry_run)
   end
 
   @doc """
   Clean up build records for every active athanor, each inside its own
-  context (its own retention settings). Build records are files, not rows,
-  so the walk is the athanor roster — an archived athanor drops out by not
-  being enumerated.
+  context (its own retention settings). The walk is the athanor roster —
+  an archived athanor drops out by not being enumerated.
   """
   @spec cleanup_all_builds(keyword()) :: {:ok, map()}
   def cleanup_all_builds(opts \\ []) do
@@ -471,39 +450,4 @@ defmodule Cyfr.Retention do
       {:error, :database_error}
   end
 
-  # ============================================================================
-  # Private Helpers
-  # ============================================================================
-
-  # Build records are flat files under `Cyfr.BuildRecords.prefix/0` — the
-  # one owner of the shape Locus writes and this sweep reads; an entry
-  # without a readable `started_at` is kept, never deleted.
-  defp list_builds_with_timestamps(ctx) do
-    case Arca.list(ctx, Cyfr.BuildRecords.prefix()) do
-      {:ok, entries} ->
-        builds =
-          entries
-          |> Enum.map(fn entry -> {Path.rootname(entry), get_build_timestamp(ctx, entry)} end)
-          |> Enum.reject(fn {_id, ts} -> is_nil(ts) end)
-
-        {:ok, builds}
-
-      {:error, :not_found} ->
-        {:ok, []}
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  defp get_build_timestamp(ctx, entry) do
-    case Arca.get_json(ctx, Cyfr.BuildRecords.prefix() ++ [entry]) do
-      {:ok, data} -> data["started_at"]
-      _ -> nil
-    end
-  end
-
-  defp delete_build(ctx, id) do
-    Arca.delete(ctx, Cyfr.BuildRecords.path(id))
-  end
 end

@@ -49,8 +49,8 @@ defmodule Arca do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
-      :ok = Arca.put(ctx, ["builds", "build_1.json"], json)
-      {:ok, content} = Arca.get(ctx, ["builds", "build_1.json"])
+      :ok = Arca.put(ctx, ["config", "settings.json"], json)
+      {:ok, content} = Arca.get(ctx, ["config", "settings.json"])
 
       # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)

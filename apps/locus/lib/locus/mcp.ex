@@ -142,7 +142,7 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "status", "build_id" => build_id})
       when is_binary(build_id) do
-    case Arca.get_json(ctx, build_record_path(build_id)) do
+    case Cyfr.BuildRecords.get(ctx, build_id) do
       {:ok, record} -> {:ok, record}
       _ -> {:error, "Unknown build: #{build_id}"}
     end
@@ -187,40 +187,29 @@ defmodule Locus.MCP do
   # process, record the outcome. Completion also rides the build:<id> topic
   # the progress callback already broadcasts on.
   defp start_async_compile(ctx, reference, build_id) do
-    started = %{
-      build_id: build_id,
-      reference: reference,
-      status: "started",
-      started_at: DateTime.utc_now() |> DateTime.to_iso8601()
-    }
-
-    with :ok <- Arca.put_json(ctx, build_record_path(build_id), started) do
-      Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-        record =
+    case Cyfr.BuildRecords.record_started(ctx, build_id, reference) do
+      :ok ->
+        Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
           case run_compile(ctx, reference, build_id) do
             {:ok, result} ->
-              Map.merge(started, %{
-                status: "compiled",
-                result: result,
-                finished_at: DateTime.utc_now() |> DateTime.to_iso8601()
-              })
+              Cyfr.BuildRecords.record_finished(ctx, build_id, "compiled", result)
 
             {:error, reason} ->
-              Map.merge(started, %{
-                status: "failed",
-                error: format_async_error(reason),
-                finished_at: DateTime.utc_now() |> DateTime.to_iso8601()
-              })
+              Cyfr.BuildRecords.record_finished(
+                ctx,
+                build_id,
+                "failed",
+                format_async_error(reason)
+              )
           end
+        end)
 
-        Arca.put_json(ctx, build_record_path(build_id), record)
-      end)
+        {:ok, %{status: "started", build_id: build_id, reference: reference}}
 
-      {:ok, %{status: "started", build_id: build_id, reference: reference}}
+      {:error, _} ->
+        {:error, "Could not record build start for #{build_id}"}
     end
   end
-
-  defp build_record_path(build_id), do: Cyfr.BuildRecords.path(build_id)
 
   defp format_async_error(reason),
     do: if(is_binary(reason), do: reason, else: inspect(reason))

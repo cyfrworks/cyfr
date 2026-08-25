@@ -74,10 +74,10 @@ defmodule Arca.Adapters.S3Test do
 
   describe "put/3" do
     test "writes content with tenant key under the athanor root", %{ctx: ctx} do
-      assert :ok = S3.put(ctx, ["builds", "build_1.json"], "{}")
+      assert :ok = S3.put(ctx, ["config", "retention.json"], "{}")
 
       assert_received {:req, "PUT", path, headers, body}
-      assert path == "/test-bucket/athanors/ath_test/builds/build_1.json"
+      assert path == "/test-bucket/athanors/ath_test/config/retention.json"
       assert body == "{}"
       assert {"authorization", auth} = Enum.find(headers, fn {k, _} -> k == "authorization" end)
       assert auth =~ "AWS4-HMAC-SHA256"
@@ -95,10 +95,10 @@ defmodule Arca.Adapters.S3Test do
       # An athanor id literally "components" must not collide with a global
       # root: every tenant key lives under the disjoint athanors/ root.
       odd_ctx = %{ctx | athanor_id: "components"}
-      assert :ok = S3.put(odd_ctx, ["builds", "b.json"], "{}")
+      assert :ok = S3.put(odd_ctx, ["config", "b.json"], "{}")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/athanors/components/builds/b.json"
+      assert path == "/test-bucket/athanors/components/config/b.json"
     end
 
     test "seed media never reaches the bucket", %{ctx: ctx} do

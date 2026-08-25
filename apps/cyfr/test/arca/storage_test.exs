@@ -46,7 +46,7 @@ defmodule Arca.StorageTest do
       end
 
       assert_raise ArgumentError, ~r/empty segments/, fn ->
-        Storage.validate_path!(["builds", "", "file.txt"])
+        Storage.validate_path!(["config", "", "file.txt"])
       end
 
       assert_raise ArgumentError, ~r/encoded dot segments/, fn ->
@@ -223,7 +223,7 @@ defmodule Arca.StorageTest do
 
     test "tenant-prefixed paths are not gated here; the global roots are the server's" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-      assert :ok = Storage.authorize_path(ctx, ["builds", "b1", "started.json"])
+      assert :ok = Storage.authorize_path(ctx, ["config", "retention.json"])
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["cache", "oci", "x"])
       assert {:error, :forbidden} = Storage.authorize_path(ctx, ["system", "health"])
       assert :ok = Storage.authorize_path(Sanctum.system_context(), ["cache", "oci", "x"])
@@ -241,7 +241,7 @@ defmodule Arca.StorageTest do
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua builds components config conversations guest)
+               ~w(aqua components config conversations guest)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant

@@ -26,7 +26,6 @@ defmodule Arca.Adapters.Local do
           │   ├── cyfr-manifest.json
           │   └── src/
           ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── builds/                    # Locus build records (flat JSON)
           │   └── {build_id}.json
           ├── config/                    # Athanor config (retention settings, etc.)
           ├── conversations/             # chat attachment blobs
