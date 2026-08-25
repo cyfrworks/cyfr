@@ -61,16 +61,26 @@ defmodule Opus.MCP do
     ]
   end
 
+  def read(%Context{authenticated: false}, "opus://executions/" <> _rest) do
+    {:error, "Authentication required to read executions"}
+  end
+
   def read(%Context{} = ctx, "opus://executions/" <> rest) do
-    case parse_execution_uri(rest) do
-      {:execution, exec_id} ->
-        get_execution_resource(ctx, exec_id)
+    # Resources have no annotation chokepoint — the router delegates
+    # authorization to each handler, so the `:storage_read` the execution
+    # record tools declare is enforced here; `Opus.ExecutionRecord.get/2`
+    # supplies the tenant scoping.
+    with :ok <- Context.require_permission(ctx, :storage_read) do
+      case parse_execution_uri(rest) do
+        {:execution, exec_id} ->
+          get_execution_resource(ctx, exec_id)
 
-      {:execution_logs, exec_id} ->
-        get_execution_logs_resource(ctx, exec_id)
+        {:execution_logs, exec_id} ->
+          get_execution_logs_resource(ctx, exec_id)
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 

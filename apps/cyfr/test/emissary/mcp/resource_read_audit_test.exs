@@ -41,4 +41,51 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
       end
     end
   end
+
+  # Templates never appear in `list_resources/0`, so the audit above cannot
+  # see them — which is exactly how `arca://files/{path}` shipped without a
+  # permission gate. Expanding each `{placeholder}` to a probe value and
+  # asserting the refusal is authorization-shaped (never a not-found from a
+  # data access that already happened) holds template handlers to the same
+  # contract.
+  test "every registered resource template refuses unauthorized reads before touching data" do
+    anonymous =
+      Context.build(
+        user_id: nil,
+        athanor_id: nil,
+        permissions: [],
+        auth_method: nil,
+        authenticated: false
+      )
+
+    permissionless =
+      Context.build(
+        user_id: "user_audit",
+        athanor_id: "ath_audit",
+        permissions: [],
+        auth_method: :api_key,
+        authenticated: true
+      )
+
+    templates = ResourceRegistry.list_resource_templates()
+    assert templates != [], "no resource templates registered — audit is vacuous"
+
+    for %{"uriTemplate" => template} <- templates,
+        uri = String.replace(template, ~r/\{[^}]+\}/, "probe"),
+        {label, ctx} <- [anonymous: anonymous, permissionless: permissionless] do
+      case ResourceRegistry.read(ctx, uri) do
+        {:error, reason} ->
+          assert to_string(reason) =~ ~r/Authentication required|Unauthorized/,
+                 "#{label} read of #{uri} was refused with #{inspect(reason)} — " <>
+                   "the gate must fire before any data access, not fall through " <>
+                   "to a not-found"
+
+        {:ok, _content} ->
+          flunk(
+            "#{label} read of #{uri} succeeded — a resource template handler " <>
+              "must enforce its own authorization (the Router deliberately does not)"
+          )
+      end
+    end
+  end
 end

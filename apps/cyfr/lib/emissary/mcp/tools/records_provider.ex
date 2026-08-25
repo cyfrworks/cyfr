@@ -38,7 +38,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   ## Architecture Note
 
-  Tool definitions live next to their implementation under `lib/arca`.
+  Tool definitions live next to their implementation in this module.
   Emissary discovers this provider via configuration and delegates
   calls here.
 
@@ -93,7 +93,12 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def read(%Context{} = ctx, "arca://files/" <> path) do
-    with :ok <- tenant_gate(ctx) do
+    # Resources have no annotation chokepoint — the router delegates
+    # authorization to each handler, so the `:storage_read` the template
+    # advertises is enforced here. `require_permission/2` fails closed on
+    # guest-plane contexts.
+    with :ok <- Context.require_permission(ctx, :storage_read),
+         :ok <- tenant_gate(ctx) do
       segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
       case Arca.get(ctx, segments) do

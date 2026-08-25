@@ -76,6 +76,25 @@ defmodule Compendium.MCP do
   end
 
   def read(%Context{} = ctx, "compendium://components/" <> reference) do
+    with :ok <- Context.require_permission(ctx, :component_read) do
+      read_component_metadata(ctx, reference)
+    end
+  end
+
+  def read(%Context{} = ctx, "compendium://assets/" <> rest) do
+    with :ok <- Context.require_permission(ctx, :component_read) do
+      read_component_asset(ctx, rest)
+    end
+  end
+
+  def read(_ctx, uri) do
+    {:error, "Unknown resource URI: #{uri}"}
+  end
+
+  # Resources bypass the tool-annotation chokepoint (the router delegates
+  # authorization to each handler), so the `:component_read` the sibling
+  # component tool actions declare is enforced above, per clause.
+  defp read_component_metadata(ctx, reference) do
     case Shared.resolve_component(ctx, reference) do
       {:ok, component, _ref} ->
         case Jason.encode(component) do
@@ -88,7 +107,7 @@ defmodule Compendium.MCP do
     end
   end
 
-  def read(%Context{} = ctx, "compendium://assets/" <> rest) do
+  defp read_component_asset(ctx, rest) do
     case String.split(rest, "/", parts: 2) do
       [reference, path] when path != "" ->
         case Shared.resolve_component(ctx, reference) do
@@ -117,10 +136,6 @@ defmodule Compendium.MCP do
       _ ->
         {:error, "Invalid asset URI: missing path after reference"}
     end
-  end
-
-  def read(_ctx, uri) do
-    {:error, "Unknown resource URI: #{uri}"}
   end
 
   # ============================================================================
