@@ -428,6 +428,18 @@ defmodule Opus.StorageHandler do
     end
   end
 
+  # The bare root is a synthetic listing of the two guest scopes — never an
+  # Arca walk: `[]` would list the athanor's whole data root, where host
+  # state (aqua/, config/, conversations/) lives alongside guest files, and
+  # a `*` path grant would hand all of it to the guest.
+  defp dispatch("list", %{path: ""}, _limits, _ctx) do
+    {:ok, %{"path" => "", "files" => Enum.map(@valid_scopes, &(&1 <> "/"))}}
+  end
+
+  defp dispatch("exists", %{path: ""}, _limits, _ctx) do
+    {:ok, %{"path" => "", "exists" => true}}
+  end
+
   defp dispatch("list", %{path: path}, _limits, ctx) do
     segments = normalize_path(path, ctx)
 

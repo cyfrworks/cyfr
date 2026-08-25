@@ -76,6 +76,33 @@ defmodule Opus.StorageHandlerTest do
   end
 
   # ============================================================================
+  # Bare-root listing
+  # ============================================================================
+
+  describe "bare-root listing" do
+    test "empty path answers the two scopes, never the athanor's data root", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      # The widest grant there is — the synthetic answer must hold even here.
+      edge = EdgeFixtures.edge(paths: ["*"], actions: ["read", "write", "list", "exists"])
+      imports = StorageHandler.build_storage_imports(edge, nil, ctx, ref)
+      {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
+
+      # Host state a raw root walk would have surfaced to the guest.
+      :ok = Arca.put(ctx, ["aqua", "agent.json"], "{}")
+
+      list = call_fn.(Jason.encode!(%{"action" => "list", "path" => ""})) |> Jason.decode!()
+      assert list["status"] == "ok"
+      assert Enum.sort(list["files"]) == ["components/", "data/"]
+
+      exists = call_fn.(Jason.encode!(%{"action" => "exists", "path" => ""})) |> Jason.decode!()
+      assert exists["status"] == "ok"
+      assert exists["exists"] == true
+    end
+  end
+
+  # ============================================================================
   # Read Action
   # ============================================================================
 
