@@ -6,8 +6,8 @@ defmodule Compendium.Scaffold do
   Scaffolds new component projects with directory structure, WIT files,
   manifest, and starter Rust source.
 
-  Creates the standard layout under
-  `components/{athanor_id}/{type}s/local/{name}/{version}/`.
+  Creates the standard layout under the athanor's
+  `components/{type}s/local/{name}/{version}/`.
   """
 
   alias Sanctum.Context

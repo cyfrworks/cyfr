@@ -360,6 +360,15 @@ jobs:
           if [ -n "$docs_hits" ]; then
             echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
+          # Per-athanor tree diagrams in the guides may only name real tenant
+          # roots. A guide once documented a phantom data/ scope under the
+          # athanor (the guest's LOGICAL vocabulary, physical guest/) and no
+          # pattern caught it; retired roots (config/, builds/) must not
+          # come back either.
+          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(data|config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
+          if [ -n "$phantom_hits" ]; then
+            echo "::error::guide tree diagrams name a scope that is not a tenant root (see Arca.Storage.tenant_roots/0)"; echo "$phantom_hits"; fail=1
+          fi
           # Seed media lives under seed/ — the old root locations must never
           # come back as tracked content.
           if git ls-files 'components/*' 'aqua/*' | grep -q .; then

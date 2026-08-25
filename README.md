@@ -517,15 +517,17 @@ sign-in to the browser page a headless node refuses.
 
 File storage defaults to the local `./data` volume — the one root holding
 every athanor's tree, the caches, and (on SQLite) the database itself.
-Release-only variables move the pieces:
+These variables move the pieces (dev and releases alike; tests pin their
+own tmp roots):
 
 ```bash
-CYFR_DATA_PATH=data                     # the one storage root; the SQLite
-                                        # database defaults to cyfr.db inside it
+CYFR_DATA_PATH=data                     # the one storage root
 CYFR_SEED_PATH=seed                     # the seed tree, read in place: the
                                         # component bundle under components/ and
                                         # the AQUA agent template under aqua/
                                         # (the image points it at /app/seed)
+CYFR_DATABASE_PATH=data/cyfr.db         # the SQLite file; defaults to
+                                        # cyfr.db inside the storage root
 ```
 
 ### S3-compatible object storage

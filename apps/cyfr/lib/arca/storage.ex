@@ -160,6 +160,12 @@ defmodule Arca.Storage do
   # The closed roster of tenant scopes. Every athanor tree holds exactly
   # these subtrees; an unknown first segment is refused, never silently
   # minted as a new subtree. A new kind of tenant state is a new entry here.
+  #
+  # The volume holds more than Arca paths: `cyfr.db` (+ WAL/SHM) and the
+  # `mcp-bridge/` sidecar state live inside `:base_path`, and Caddy keeps
+  # its own named volumes — none of them are, or should become, entries in
+  # any roster here. Arca addresses tenant and global blobs; everything
+  # else on the volume is another program's file.
   @tenant_roots ~w(aqua components conversations guest)
 
   @doc """

@@ -33,7 +33,7 @@ defmodule Compendium.AutoIndexer do
   @type_plurals Compendium.ComponentPath.type_plurals()
   @allowed_publishers ["local"]
   @doc """
-  Scan the context's athanor tree (`components/{athanor_id}/`) via
+  Scan the context's athanor's `components/` tree via
   `Arca.list_recursive/2` and register all discovered local components.
 
   Identical behaviour on the Local FS adapter and any configured object-store

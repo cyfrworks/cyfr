@@ -28,7 +28,9 @@ your-project/
         │   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
         │   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
-        └── data/          # The athanor's runtime data
+        ├── aqua/          # The athanor's AQUA agent definitions
+        ├── conversations/ # Chat attachment files
+        └── guest/         # Files WASM components store — their `data/` scope
 ```
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):

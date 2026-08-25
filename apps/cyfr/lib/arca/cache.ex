@@ -5,11 +5,10 @@ defmodule Arca.Cache do
   @moduledoc """
   ETS-backed read-through cache with TTL support.
 
-  A valid public API for ephemeral in-memory data. Services may use
-  `Arca.Cache` directly for short-lived, non-persistent state such as MCP
-  sessions and SSE buffers.
+  A valid public API for ephemeral in-memory data: services may use
+  `Arca.Cache` directly for short-lived, non-persistent state.
 
-  Attacker-cardinality state does **not** belong here: request rate-limit
+  Attacker-cardinality state does **not** belong here — request rate-limit
   counters live in `Cyfr.RateLimiter`'s own table, so a flood cannot evict
   sessions or OAuth state from this shared one. Eviction and expiry run on
   `Arca.Cache.Sweeper`'s timer, never on the `put/3` hot path.
