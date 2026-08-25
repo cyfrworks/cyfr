@@ -25,13 +25,12 @@ defmodule Arca.Adapters.Local do
           │   ├── {type}.wasm
           │   ├── cyfr-manifest.json
           │   └── src/
-          └── data/
-              ├── aqua/                  # the athanor's AQUA agent definitions
-              ├── builds/                # Locus build records (flat JSON)
-              │   └── {build_id}.json
-              ├── config/                # Athanor config (retention settings, etc.)
-              ├── conversations/         # chat attachment blobs
-              └── data/                  # guest (WASM) files
+          ├── aqua/                      # the athanor's AQUA agent definitions
+          ├── builds/                    # Locus build records (flat JSON)
+          │   └── {build_id}.json
+          ├── config/                    # Athanor config (retention settings, etc.)
+          ├── conversations/             # chat attachment blobs
+          └── guest/                     # guest (WASM) files — the guest's `data/` scope
 
   ## Structured Logs (database only)
 

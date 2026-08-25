@@ -36,19 +36,21 @@ defmodule Arca.Storage do
   Every logical path is tenant-relative: the athanor always comes from the
   context, never from the segments. Scoping keys on the first segment:
 
-  - **Component paths**: `["components" | rest]` (`Compendium.ComponentPath`
-    builds them) → the context's athanor's components subtree. Naming
-    another athanor's components is structurally impossible — there is no
-    place in the path to put an athanor. Platform code opens an athanor the
-    way it does for rows: a context focused on that athanor.
   - **Seed media**: `["seed", root | rest]` — the install media every
     athanor is provisioned from (`seed/components` the bundle,
     `seed/aqua` the AQUA template; `seed_roots/0` is the table). Read in
     place from local disk (each root's config key), reachable only by
     system contexts, never stored through an adapter.
   - **Global paths**: `cache`, `system` → stored at root level
-  - **Tenant-scoped paths**: everything else → stored under the athanor's
-    data subtree (see `tenant_segments/1`)
+  - **Tenant-scoped paths**: everything else → stored verbatim under the
+    context's athanor (see `tenant_segments/1`). Naming another athanor's
+    tree is structurally impossible — there is no place in the path to put
+    an athanor; platform code opens an athanor the way it does for rows,
+    with a context focused on it. The scopes in use: `components/`
+    (`Compendium.ComponentPath`), `aqua/`, `builds/`, `config/`,
+    `conversations/`, and `guest/` — the WASM guest's `data/` scope, given
+    its physical name by `Opus.StorageHandler` at the guest boundary so a
+    `data/` grant can never see a host scope.
 
   `namespace` is a user-identity field and is NOT part of the path.
 
@@ -70,12 +72,11 @@ defmodule Arca.Storage do
       ├── system/                        # Global: server-internal scratch (health probe)
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
-          └── data/
-              ├── aqua/                  # the athanor's AQUA agent definitions
-              ├── builds/                # Locus build lifecycle
-              ├── config/                # Athanor config (retention settings, etc.)
-              ├── conversations/         # chat attachment blobs
-              └── data/                  # guest (WASM) files
+          ├── aqua/                      # the athanor's AQUA agent definitions
+          ├── builds/                    # Locus build lifecycle
+          ├── config/                    # Athanor config (retention settings, etc.)
+          ├── conversations/             # chat attachment blobs
+          └── guest/                     # guest (WASM) files — the guest's `data/` scope
 
   The seed media every athanor is provisioned from is not stored state —
   each root is read in place from its configured directory
@@ -206,12 +207,13 @@ defmodule Arca.Storage do
   Map logical segments to the physical segments every adapter stores under
   its one root — the single place the stored layout is written down.
 
-  Everything an athanor owns lives under `athanors/{athanor_id}/`: its
-  components subtree and its data subtree — and the athanor is always the
-  context's, never named in the path. Globals (`cache/`, `system/`) stay at
-  the root. The seed bundle never reaches an adapter (`Arca` routes it to
-  `:bundle_path`). There is no all-athanors location — roster-driven code
-  enumerates athanor rows and works inside each one's context.
+  Everything an athanor owns lives under `athanors/{athanor_id}/`, logical
+  segments verbatim — and the athanor is always the context's, never named
+  in the path. The empty path is the athanor's whole tree (the storage
+  cap's one walk). Globals (`cache/`, `system/`) stay at the root. Seed
+  media never reaches an adapter (`Arca` routes each root to its
+  configured directory). There is no all-athanors location — roster-driven
+  code enumerates athanor rows and works inside each one's context.
   """
   @spec physical_segments(Context.t(), path()) :: path()
   def physical_segments(ctx, segments) do
@@ -220,16 +222,13 @@ defmodule Arca.Storage do
         raise ArgumentError,
               "seed media is not tenant storage; Arca routes it to its configured root"
 
-      ["components" | rest] ->
-        ["athanors" | tenant_segments(ctx)] ++ ["components" | rest]
-
       [prefix | _] = segs ->
         if prefix in @global_prefixes,
           do: segs,
-          else: ["athanors" | tenant_segments(ctx)] ++ ["data" | segs]
+          else: ["athanors" | tenant_segments(ctx)] ++ segs
 
       [] ->
-        ["athanors" | tenant_segments(ctx)] ++ ["data"]
+        ["athanors" | tenant_segments(ctx)]
     end
   end
 

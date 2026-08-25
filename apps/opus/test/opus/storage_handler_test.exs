@@ -115,7 +115,7 @@ defmodule Opus.StorageHandlerTest do
         )
 
       # Write file via Arca directly
-      :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "hello world")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -170,7 +170,7 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["path"] == "data/test.txt"
 
       # Verify via Arca
-      {:ok, stored} = Arca.get(ctx, ["data", "test.txt"])
+      {:ok, stored} = Arca.get(ctx, ["guest", "test.txt"])
       assert stored == "hello world"
     end
 
@@ -224,8 +224,8 @@ defmodule Opus.StorageHandlerTest do
         )
 
       # Write some files
-      :ok = Arca.put(ctx, ["data", "a.txt"], "aaa")
-      :ok = Arca.put(ctx, ["data", "b.txt"], "bbb")
+      :ok = Arca.put(ctx, ["guest", "a.txt"], "aaa")
+      :ok = Arca.put(ctx, ["guest", "b.txt"], "bbb")
 
       request = Jason.encode!(%{"action" => "list", "path" => "data"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -243,8 +243,8 @@ defmodule Opus.StorageHandlerTest do
         )
 
       # Write a file and a nested file (which creates the subdirectory)
-      :ok = Arca.put(ctx, ["data", "file.txt"], "content")
-      :ok = Arca.put(ctx, ["data", "subdir", "nested.txt"], "nested")
+      :ok = Arca.put(ctx, ["guest", "file.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "subdir", "nested.txt"], "nested")
 
       request = Jason.encode!(%{"action" => "list", "path" => "data"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -275,7 +275,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["data", "to-delete.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "to-delete.txt"], "content")
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/to-delete.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -285,7 +285,7 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["deleted"] == true
 
       # Verify deleted
-      assert {:error, :not_found} = Arca.get(ctx, ["data", "to-delete.txt"])
+      assert {:error, :not_found} = Arca.get(ctx, ["guest", "to-delete.txt"])
     end
   end
 
@@ -301,7 +301,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["data", "exists.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "exists.txt"], "content")
 
       request = Jason.encode!(%{"action" => "exists", "path" => "data/exists.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -454,7 +454,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -558,7 +558,7 @@ defmodule Opus.StorageHandlerTest do
         nil
       )
 
-      :ok = Arca.put(ctx, ["data", "telemetry-test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "telemetry-test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/telemetry-test.txt"})
       _result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -604,7 +604,7 @@ defmodule Opus.StorageHandlerTest do
     test "denies action not in allowed_actions", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "list", "exists"])
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
 
       request =
         Jason.encode!(%{
@@ -623,7 +623,7 @@ defmodule Opus.StorageHandlerTest do
     test "allows action in allowed_actions", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "list", "exists"])
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -635,7 +635,7 @@ defmodule Opus.StorageHandlerTest do
     test "denies all actions when default (empty list)", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"])
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -651,7 +651,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
 
       # Read
       request = Jason.encode!(%{"action" => "read", "path" => "data/test.txt"})
@@ -678,7 +678,7 @@ defmodule Opus.StorageHandlerTest do
     test "denies delete when only read allowed", %{ctx: ctx, component_ref: ref} do
       edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read"])
 
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "content")
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, edge, nil, ctx, ref)
@@ -769,7 +769,7 @@ defmodule Opus.StorageHandlerTest do
           actions: ["read", "write", "append", "list", "delete", "exists"]
         )
 
-      :ok = Arca.put(ctx, ["data", "log.txt"], "line1\n")
+      :ok = Arca.put(ctx, ["guest", "log.txt"], "line1\n")
 
       request =
         Jason.encode!(%{
@@ -786,7 +786,7 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["size"] == 6
 
       # Verify content was appended
-      {:ok, content} = Arca.get(ctx, ["data", "log.txt"])
+      {:ok, content} = Arca.get(ctx, ["guest", "log.txt"])
       assert content == "line1\nline2\n"
     end
 
@@ -929,7 +929,7 @@ defmodule Opus.StorageHandlerTest do
       ctx: ctx,
       component_ref: ref
     } do
-      :ok = Arca.put(ctx, ["data", "big.txt"], String.duplicate("y", 64))
+      :ok = Arca.put(ctx, ["guest", "big.txt"], String.duplicate("y", 64))
 
       request = ~s({"action": "read", "path": "data/big.txt"})
 

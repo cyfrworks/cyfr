@@ -51,11 +51,11 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
-  # The component tree changes only when something writes to it, and
-  # `Arca` invalidates this on every such write, so the walk happens once
+  # The athanor's tree changes only when something writes to it, and
+  # `Arca` invalidates this on every tenant write, so the walk happens once
   # per change rather than once per guest write. The TTL is a backstop for
   # bytes that arrive without passing through Arca at all.
-  @components_usage_ttl_ms :timer.minutes(5)
+  @athanor_usage_ttl_ms :timer.minutes(5)
 
   @doc """
   `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
@@ -63,11 +63,11 @@ defmodule Sanctum.Tenancy.Caps do
   computed: authenticated WASM writes, chat attachments and published
   component bytes all come here.
 
-  An athanor's bytes live in two subtrees — its data and its components —
-  and both are counted, the seeded copies included, because a cap that
-  bounds one subtree is not a cap on the athanor. Data is walked live;
-  components are read from a cache Arca invalidates on write, so the hot
-  path pays for one walk, not two.
+  The count is one walk of the athanor's whole tree — components, guest
+  files, attachments, the seeded copies included, because a cap that
+  bounds one subtree is not a cap on the athanor — read from a cache that
+  `Arca` invalidates on every tenant write, so the hot path normally pays
+  no walk at all.
   """
   @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
           :ok | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}
@@ -77,29 +77,27 @@ defmodule Sanctum.Tenancy.Caps do
         :ok
 
       cap ->
-        if data_bytes(ctx) + components_bytes(ctx) + incoming > cap,
+        if athanor_bytes(ctx) + incoming > cap,
           do: {:error, {:limit_reached, :athanor_storage_bytes, cap}},
           else: :ok
     end
   end
 
-  defp data_bytes(ctx), do: bytes_under(ctx, [])
-
-  defp components_bytes(%{athanor_id: id} = ctx) when is_binary(id) and id != "" do
-    key = Arca.Cache.Keys.components_usage(id)
+  defp athanor_bytes(%{athanor_id: id} = ctx) when is_binary(id) and id != "" do
+    key = Arca.Cache.Keys.athanor_usage(id)
 
     case Arca.Cache.get(key) do
       {:ok, bytes} when is_integer(bytes) ->
         bytes
 
       _ ->
-        bytes = bytes_under(ctx, ["components"])
-        Arca.Cache.put(key, bytes, @components_usage_ttl_ms)
+        bytes = bytes_under(ctx, [])
+        Arca.Cache.put(key, bytes, @athanor_usage_ttl_ms)
         bytes
     end
   end
 
-  defp components_bytes(_ctx), do: 0
+  defp athanor_bytes(_ctx), do: 0
 
   defp bytes_under(ctx, segments) do
     case Arca.usage(ctx, segments) do

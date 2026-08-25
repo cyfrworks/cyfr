@@ -276,9 +276,10 @@ defmodule Opus.StorageHandler do
         :error -> byte_size(content || "")
       end
 
-    # The walk is rooted at the write's scope (`data` or `components`), and
-    # Arca scopes it to the context's athanor like every other path.
-    case Arca.usage(ctx, [storage_root(path)]) do
+    # The walk is rooted at the write's scope (`data` or `components`,
+    # mapped to its physical name), and Arca scopes it to the context's
+    # athanor like every other path.
+    case Arca.usage(ctx, map_guest_scope([storage_root(path)])) do
       {:ok, %{files: files, bytes: used}} ->
         cond do
           files >= quota.max_files ->
@@ -545,15 +546,22 @@ defmodule Opus.StorageHandler do
   # Private: Path Normalization
   # ============================================================================
 
-  # The guest vocabulary IS the host vocabulary: every path is
-  # tenant-relative and Arca scopes it to the context's athanor — a catalyst
-  # can never read or write another athanor's bytes because no path spelling
-  # names one.
+  # Every path is tenant-relative and Arca scopes it to the context's
+  # athanor — a catalyst can never read or write another athanor's bytes
+  # because no path spelling names one. The one vocabulary difference: the
+  # guest contract says `data/`, and the host stores that scope under the
+  # athanor's `guest/` subtree, a physical sibling of the host scopes
+  # (aqua/, config/, …) so a `data/` grant can never see them. Mapped here,
+  # at the boundary; responses keep speaking `data/`.
   defp normalize_path(path, _ctx) when is_binary(path) do
     path
     |> String.split("/")
     |> Enum.reject(&(&1 == ""))
+    |> map_guest_scope()
   end
+
+  defp map_guest_scope(["data" | rest]), do: ["guest" | rest]
+  defp map_guest_scope(segments), do: segments
 
   # ============================================================================
   # Private: Response Encoding

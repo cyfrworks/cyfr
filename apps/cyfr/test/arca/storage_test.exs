@@ -52,26 +52,29 @@ defmodule Arca.StorageTest do
       Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
     end
 
-    test "everything an athanor owns lives under athanors/{id} — the context's id" do
+    test "everything an athanor owns lives under athanors/{id} — the context's id, verbatim" do
       assert Storage.physical_segments(ath_ctx(), ["components", "tinctures"]) ==
                ["athanors", "ath_x", "components", "tinctures"]
 
-      assert Storage.physical_segments(ath_ctx(), ["notes", "a.txt"]) ==
-               ["athanors", "ath_x", "data", "notes", "a.txt"]
+      assert Storage.physical_segments(ath_ctx(), ["conversations", "conv_1", "a.png"]) ==
+               ["athanors", "ath_x", "conversations", "conv_1", "a.png"]
     end
 
-    test "the guest data scope nests under the athanor's data root" do
-      # ["data" | rest] is a tenant-relative prefix like any other, so it
-      # lands at athanors/{id}/data/data/… — collapsing that nesting would
-      # alias the guest scope onto the whole data root (aqua/, config/, …).
-      assert Storage.physical_segments(ath_ctx(), ["data", "notes.txt"]) ==
-               ["athanors", "ath_x", "data", "data", "notes.txt"]
+    test "the guest scope is a sibling of the host scopes" do
+      # Opus.StorageHandler maps the guest contract's `data/` to `guest/` at
+      # the boundary, so a `data/` grant physically cannot reach aqua/,
+      # config/ or any other host scope — they are siblings, not children.
+      assert Storage.physical_segments(ath_ctx(), ["guest", "notes.txt"]) ==
+               ["athanors", "ath_x", "guest", "notes.txt"]
+
+      assert Storage.physical_segments(ath_ctx(), ["aqua", "agent.json"]) ==
+               ["athanors", "ath_x", "aqua", "agent.json"]
     end
 
-    test "the empty path is the athanor's data root, disjoint from components" do
-      # Caps.data_bytes/1 walks []; the trailing "data" keeps that walk from
-      # double-counting the components subtree.
-      assert Storage.physical_segments(ath_ctx(), []) == ["athanors", "ath_x", "data"]
+    test "the empty path is the athanor's whole tree" do
+      # The storage cap's one walk: everything the athanor owns, components
+      # included.
+      assert Storage.physical_segments(ath_ctx(), []) == ["athanors", "ath_x"]
     end
 
     test "globals stay at the storage root" do

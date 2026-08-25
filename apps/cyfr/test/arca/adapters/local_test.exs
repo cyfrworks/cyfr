@@ -147,9 +147,9 @@ defmodule Arca.Adapters.LocalTest do
       path = ["isolation", "test.txt"]
       Local.put(ctx, path, "content")
 
-      # namespace is identity-only; the path is athanors/{athanor_id}/data/...
+      # namespace is identity-only; the path is athanors/{athanor_id}/...
       expected_path =
-        Path.join([@test_base_path, "athanors", ctx.athanor_id, "data", "isolation", "test.txt"])
+        Path.join([@test_base_path, "athanors", ctx.athanor_id, "isolation", "test.txt"])
 
       assert File.exists?(expected_path)
     end
@@ -214,7 +214,9 @@ defmodule Arca.Adapters.LocalTest do
       assert path == Path.join([@test_base_path, "cache", "oci", "sha256"])
     end
 
-    test "tenant paths go under athanors/{athanor_id}/data (no namespace segment)", %{ctx: ctx} do
+    test "tenant paths go verbatim under athanors/{athanor_id} (no namespace segment)", %{
+      ctx: ctx
+    } do
       path = Local.build_path(ctx, ["executions", "exec_123", "started.json"])
 
       assert path ==
@@ -222,7 +224,6 @@ defmodule Arca.Adapters.LocalTest do
                  @test_base_path,
                  "athanors",
                  ctx.athanor_id,
-                 "data",
                  "executions",
                  "exec_123",
                  "started.json"
@@ -260,9 +261,9 @@ defmodule Arca.Adapters.LocalTest do
   end
 
   describe "usage/2" do
-    test "the data walk and the components walk are disjoint", %{ctx: ctx} do
-      # Caps.data_bytes/1 walks []; the components cap walks the athanor's
-      # components prefix. Neither may see the other's bytes.
+    test "the empty-path walk counts the whole athanor, components included", %{ctx: ctx} do
+      # The storage cap's one walk: a cap that bounds one subtree is not a
+      # cap on the athanor.
       :ok = Local.put(ctx, ["notes", "a.txt"], "12345")
 
       :ok =
@@ -272,7 +273,7 @@ defmodule Arca.Adapters.LocalTest do
           "123"
         )
 
-      assert {:ok, %{files: 1, bytes: 5}} = Local.usage(ctx, [])
+      assert {:ok, %{files: 2, bytes: 8}} = Local.usage(ctx, [])
       assert {:ok, %{files: 1, bytes: 3}} = Local.usage(ctx, ["components"])
     end
 

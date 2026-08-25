@@ -149,9 +149,9 @@ defmodule Sanctum.Tenancy.CapsTest do
              Caps.check_storage(ctx, 10)
   end
 
-  test "the component total is cached, and a write to the tree drops it" do
+  test "the athanor total is cached, and any tenant write drops it" do
     ctx = Sanctum.TestContext.local()
-    key = Arca.Cache.Keys.components_usage(ctx.athanor_id)
+    key = Arca.Cache.Keys.athanor_usage(ctx.athanor_id)
 
     Arca.Cache.invalidate(key)
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000_000)
@@ -161,15 +161,20 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert {:ok, cached} = Arca.Cache.get(key)
     assert is_integer(cached)
 
-    # Any write under the athanor's component root drops it, so the cap
-    # cannot go on measuring a tree that has changed underneath it.
+    # Any write in the athanor's tree drops it — components and data alike —
+    # so the cap cannot go on measuring a tree that changed underneath it.
     :ok = Arca.put(ctx, ["components", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == :miss
 
-    # A write elsewhere is not that tree and leaves it alone.
     assert :ok = Caps.check_storage(ctx, 1)
-    assert {:ok, _} = Arca.Cache.get(key)
     :ok = Arca.put(ctx, ["cap-probe.txt"], "bytes")
+    assert Arca.Cache.get(key) == :miss
+
+    # A write to a global root is the server's bytes, not the athanor's,
+    # and leaves the total alone.
+    assert :ok = Caps.check_storage(ctx, 1)
+    sys = Sanctum.internal_context(user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor)
+    :ok = Arca.put(sys, ["cache", "cap-probe.txt"], "bytes")
     assert {:ok, _} = Arca.Cache.get(key)
   end
 

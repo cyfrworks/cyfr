@@ -58,6 +58,6 @@ defmodule Arca.Cache.Keys do
   @doc "Match spec shape for every tool-server digest of one athanor."
   def match_tool_server_digest(athanor_id), do: {:tool_server_digest, athanor_id, :_}
 
-  @doc "The byte total of an athanor's component tree, for the storage cap."
-  def components_usage(athanor_id), do: {:components_usage, athanor_id}
+  @doc "The byte total of an athanor's whole tree, for the storage cap."
+  def athanor_usage(athanor_id), do: {:athanor_usage, athanor_id}
 end

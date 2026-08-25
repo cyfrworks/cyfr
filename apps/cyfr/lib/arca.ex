@@ -23,12 +23,11 @@ defmodule Arca do
     template — `Arca.Storage.seed_roots/0`), read in place from local disk
     whatever storage adapter is configured
   - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix)
-  - everything else → tenant-scoped under the athanor's data subtree
+  - everything else → tenant-scoped, verbatim under the context's athanor
     (`namespace` is identity-only and not part of the path)
 
   `Arca.Storage.physical_segments/2` is the one place the stored layout
-  (`athanors/{athanor_id}/data|components/...` under a single root) is
-  written down.
+  (`athanors/{athanor_id}/...` under a single root) is written down.
 
   See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
   list, `authorize_path/2` (the reserved-root gate) and `tenant_segments/1`
@@ -322,23 +321,34 @@ defmodule Arca do
     end
   end
 
-  # A write anywhere under the athanor's `components/` changes what the
-  # storage cap measures, and that total is cached because walking the tree
-  # on every guest write is the cost the cap was written to avoid.
-  # Invalidating here rather than in each writer means a new writer cannot
-  # forget — every mutation already passes through. Unconditional: a failed
-  # write may still have left bytes behind.
+  # A write anywhere in the athanor's tree changes what the storage cap
+  # measures, and that total is cached because walking the tree on every
+  # guest write is the cost the cap was written to avoid. Invalidating here
+  # rather than in each writer means a new writer cannot forget — every
+  # mutation already passes through. Unconditional: a failed write may
+  # still have left bytes behind. Globals and seed media are not tenant
+  # bytes and invalidate nothing.
   defp mutating(ctx, path, fun) do
     result = guarded(ctx, path, fun)
-    invalidate_components_usage(ctx, path)
+    invalidate_athanor_usage(ctx, path)
     result
   end
 
-  defp invalidate_components_usage(%Context{athanor_id: athanor_id}, ["components" | _])
-       when is_binary(athanor_id) and athanor_id != "",
-       do: Arca.Cache.invalidate(Arca.Cache.Keys.components_usage(athanor_id))
+  defp invalidate_athanor_usage(%Context{athanor_id: athanor_id}, path)
+       when is_binary(athanor_id) and athanor_id != "" do
+    tenant_path? =
+      case path do
+        ["seed" | _] -> false
+        [prefix | _] -> prefix not in Arca.Storage.global_prefixes()
+        [] -> true
+      end
 
-  defp invalidate_components_usage(_ctx, _path), do: :ok
+    if tenant_path?,
+      do: Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(athanor_id)),
+      else: :ok
+  end
+
+  defp invalidate_athanor_usage(_ctx, _path), do: :ok
 
   # Seed media is server install media read straight from local disk
   # (each root's config key — `Arca.Storage.seed_roots/0`), whatever

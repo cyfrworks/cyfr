@@ -9,7 +9,7 @@ defmodule Compendium.AquaTemplate do
   under the reserved `seed/aqua` root (`Arca.Storage.seed_roots/0`), read in
   place from `:aqua_template_path`: the repo's `aqua/` on a checkout, the
   operator-editable `/app/aqua` mount in Docker. Every athanor owns a copy
-  under its tenant storage (`data/athanors/{athanor_id}/data/aqua/`),
+  under its tenant storage (`data/athanors/{athanor_id}/aqua/`),
   written when the athanor is provisioned; the Agents page and the `aqua`
   tool then edit that copy, so a group's members shape their own agent
   without touching anyone else's.

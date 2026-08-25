@@ -62,21 +62,21 @@ defmodule Arca.Adapters.S3Test do
 
   defp route(conn) do
     case {conn.method, conn.request_path} do
-      {"GET", "/test-bucket/athanors/ath_test/data/exists.txt"} -> {:ok, 200, "hi"}
+      {"GET", "/test-bucket/athanors/ath_test/exists.txt"} -> {:ok, 200, "hi"}
       {"PUT", _} -> {:ok, 200, ""}
       {"DELETE", _} -> {:ok, 204, ""}
-      {"HEAD", "/test-bucket/athanors/ath_test/data/exists.txt"} -> {:ok, 200, ""}
+      {"HEAD", "/test-bucket/athanors/ath_test/exists.txt"} -> {:ok, 200, ""}
       {"GET", _} -> :not_found
       _ -> :not_found
     end
   end
 
   describe "put/3" do
-    test "writes content with user-scoped key under the data/ root", %{ctx: ctx} do
+    test "writes content with tenant key under the athanor root", %{ctx: ctx} do
       assert :ok = S3.put(ctx, ["builds", "build_1.json"], "{}")
 
       assert_received {:req, "PUT", path, headers, body}
-      assert path == "/test-bucket/athanors/ath_test/data/builds/build_1.json"
+      assert path == "/test-bucket/athanors/ath_test/builds/build_1.json"
       assert body == "{}"
       assert {"authorization", auth} = Enum.find(headers, fn {k, _} -> k == "authorization" end)
       assert auth =~ "AWS4-HMAC-SHA256"
@@ -97,7 +97,7 @@ defmodule Arca.Adapters.S3Test do
       assert :ok = S3.put(odd_ctx, ["builds", "b.json"], "{}")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/athanors/components/data/builds/b.json"
+      assert path == "/test-bucket/athanors/components/builds/b.json"
     end
 
     test "seed media never reaches the bucket", %{ctx: ctx} do
@@ -130,7 +130,7 @@ defmodule Arca.Adapters.S3Test do
       assert :ok = S3.put(ctx, ["reports", "x.txt"], "content")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/tenants/prod/athanors/ath_test/data/reports/x.txt"
+      assert path == "/test-bucket/tenants/prod/athanors/ath_test/reports/x.txt"
     end
   end
 
@@ -157,8 +157,8 @@ defmodule Arca.Adapters.S3Test do
   describe "delete/2" do
     test "deletes an existing object", %{ctx: ctx} do
       assert :ok = S3.delete(ctx, ["exists.txt"])
-      assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
+      assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/exists.txt", _, _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/exists.txt", _, _}
     end
 
     test "a missing key is :not_found, not a silent :ok", %{ctx: ctx} do
@@ -175,19 +175,19 @@ defmodule Arca.Adapters.S3Test do
 
       # One path stays one object: the existing body is read and written back
       # extended, rather than a child object appearing under the path.
-      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
+      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/exists.txt", _, _}
 
-      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/data/exists.txt", _,
+      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/exists.txt", _,
                        "hi-more"}
     end
 
     test "creates the object when the path does not exist yet", %{ctx: ctx} do
       assert :ok = S3.append(ctx, ["audit", "2026-05-05.jsonl"], "event-1\n")
 
-      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/data/audit/2026-05-05.jsonl",
+      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/audit/2026-05-05.jsonl",
                        _, _}
 
-      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/data/audit/2026-05-05.jsonl",
+      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/audit/2026-05-05.jsonl",
                        _, "event-1\n"}
     end
 
@@ -210,8 +210,8 @@ defmodule Arca.Adapters.S3Test do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>true</IsTruncated>
-        <Contents><Key>athanors/ath_test/data/tree/a.txt</Key></Contents>
-        <Contents><Key>athanors/ath_test/data/tree/b.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/tree/a.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/tree/b.txt</Key></Contents>
         <NextContinuationToken>tok+page/2==</NextContinuationToken>
       </ListBucketResult>
       """
@@ -220,7 +220,7 @@ defmodule Arca.Adapters.S3Test do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>false</IsTruncated>
-        <Contents><Key>athanors/ath_test/data/tree/sub/c.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/tree/sub/c.txt</Key></Contents>
       </ListBucketResult>
       """
 
@@ -269,9 +269,9 @@ defmodule Arca.Adapters.S3Test do
       # Drain the two GET pages, then expect one DELETE per key on both pages.
       assert_received {:req, "GET", _, _}
       assert_received {:req, "GET", _, _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/data/tree/a.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/data/tree/b.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/data/tree/sub/c.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/tree/a.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/tree/b.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/tree/sub/c.txt", _}
     end
 
     test "a repeated continuation token errors instead of looping", %{ctx: ctx} do
@@ -280,7 +280,7 @@ defmodule Arca.Adapters.S3Test do
       looping_page = """
       <ListBucketResult>
         <IsTruncated>true</IsTruncated>
-        <Contents><Key>athanors/ath_test/data/tree/a.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/tree/a.txt</Key></Contents>
         <NextContinuationToken>same-token</NextContinuationToken>
       </ListBucketResult>
       """
