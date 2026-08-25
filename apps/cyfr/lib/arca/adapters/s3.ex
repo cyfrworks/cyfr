@@ -365,25 +365,21 @@ defmodule Arca.Adapters.S3 do
   # Private — HTTP / SigV4
   # ============================================================================
 
-  defp request(method, key, body \\ "") do
-    url = build_url(key)
-    region = config!(:region)
-    creds = {config!(:access_key_id), config!(:secret_access_key)}
-    {access_key, secret_key} = creds
-    datetime = :calendar.universal_time()
-
-    base_headers = [
-      {"host", host_for(url)},
-      {"x-amz-content-sha256", sha256_hex(body)}
-    ]
+  # Sign and send one request. Everything S3-bound goes through here: one
+  # header set, one SigV4 signing, one Req call — an operation contributes
+  # only its method, URL, body, and any extra headers the signature must
+  # cover.
+  defp signed_request(method, url, body, extra_headers \\ []) do
+    base_headers =
+      [{"host", host_for(url)}, {"x-amz-content-sha256", sha256_hex(body)}] ++ extra_headers
 
     signed =
       :aws_signature.sign_v4(
-        access_key,
-        secret_key,
-        region,
+        config!(:access_key_id),
+        config!(:secret_access_key),
+        config!(:region),
         @service,
-        datetime,
+        :calendar.universal_time(),
         method_string(method),
         url,
         base_headers,
@@ -391,24 +387,36 @@ defmodule Arca.Adapters.S3 do
         []
       )
 
-    headers = signed |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+    headers = Enum.map(signed, fn {k, v} -> {to_string(k), to_string(v)} end)
 
     Req.request(method: method, url: url, headers: headers, body: body, decode_body: false)
   end
 
-  # ListObjectsV2 caps each response at 1000 keys, so every enumeration must
-  # follow NextContinuationToken until IsTruncated goes false — otherwise
-  # component scans and tree deletions silently stop at the first page.
-  defp list_keys(prefix) do
-    list_keys_pages(prefix, nil, [], MapSet.new())
+  defp request(method, key, body \\ ""), do: signed_request(method, build_url(key), body)
+
+  # A bucket-level POST (DeleteObjects). Content-MD5 is required by S3 for
+  # this operation and rides inside the signature.
+  defp request_bucket_post(query, body) do
+    signed_request(:post, bucket_query_url(query), body, [
+      {"content-md5", Base.encode64(:crypto.hash(:md5, body))}
+    ])
   end
 
-  defp list_keys_pages(prefix, token, acc, seen_tokens) do
+  # ListObjectsV2 caps each response at 1000 keys, so every enumeration must
+  # follow NextContinuationToken until IsTruncated goes false — otherwise
+  # component scans and tree deletions silently stop at the first page. The
+  # parser is the only thing the two enumerations (bare keys; key+size
+  # entries) do differently.
+  defp list_keys(prefix), do: list_pages(prefix, &parse_list_keys/1, nil, [], MapSet.new())
+
+  defp list_entries(prefix), do: list_pages(prefix, &parse_list_entries/1, nil, [], MapSet.new())
+
+  defp list_pages(prefix, parser, token, acc, seen_tokens) do
     case request_list_page(prefix, token) do
       {:ok, body} ->
         # Pages accumulate newest-first and flatten once at the end —
         # appending per page would re-copy the whole accumulator each time.
-        acc = [parse_list_keys(body) | acc]
+        acc = [parser.(body) | acc]
 
         case next_continuation_token(body) do
           nil ->
@@ -419,55 +427,13 @@ defmodule Arca.Adapters.S3 do
               # A repeated token would loop forever; treat it as a bad server.
               {:error, {:s3_list_repeated_token, next}}
             else
-              list_keys_pages(prefix, next, acc, MapSet.put(seen_tokens, next))
+              list_pages(prefix, parser, next, acc, MapSet.put(seen_tokens, next))
             end
         end
 
       {:error, _} = error ->
         error
     end
-  end
-
-  # A bucket-level POST (DeleteObjects). Content-MD5 is required by S3 for
-  # this operation and rides inside the signature.
-  defp request_bucket_post(query, body) do
-    region = config!(:region)
-    {access_key, secret_key} = {config!(:access_key_id), config!(:secret_access_key)}
-    bucket = config!(:bucket)
-    base = endpoint_base()
-
-    url =
-      if path_style?() do
-        "#{base}/#{bucket}/?#{query}"
-      else
-        "#{scheme(base)}://#{bucket}.#{host_only(base)}/?#{query}"
-      end
-
-    datetime = :calendar.universal_time()
-
-    base_headers = [
-      {"host", host_for(url)},
-      {"x-amz-content-sha256", sha256_hex(body)},
-      {"content-md5", Base.encode64(:crypto.hash(:md5, body))}
-    ]
-
-    signed =
-      :aws_signature.sign_v4(
-        access_key,
-        secret_key,
-        region,
-        @service,
-        datetime,
-        "POST",
-        url,
-        base_headers,
-        body,
-        []
-      )
-
-    headers = signed |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
-
-    Req.request(method: :post, url: url, headers: headers, body: body, decode_body: false)
   end
 
   # The inverse of xml_unescape/1, for keys carried inside a request body.
@@ -481,11 +447,6 @@ defmodule Arca.Adapters.S3 do
   end
 
   defp request_list_page(prefix, token) do
-    region = config!(:region)
-    {access_key, secret_key} = {config!(:access_key_id), config!(:secret_access_key)}
-    bucket = config!(:bucket)
-    base = endpoint_base()
-
     # Params assembled in canonical (sorted) order for SigV4.
     params =
       if(token, do: [{"continuation-token", token}], else: []) ++
@@ -496,39 +457,7 @@ defmodule Arca.Adapters.S3 do
         "#{k}=#{URI.encode(v, &URI.char_unreserved?/1)}"
       end)
 
-    # Path-style: <endpoint>/<bucket>/?<query>
-    # Virtual-host: <bucket>.<endpoint>/?<query>
-    url =
-      if path_style?() do
-        "#{base}/#{bucket}/?#{query}"
-      else
-        "#{scheme(base)}://#{bucket}.#{host_only(base)}/?#{query}"
-      end
-
-    datetime = :calendar.universal_time()
-
-    base_headers = [
-      {"host", host_for(url)},
-      {"x-amz-content-sha256", sha256_hex("")}
-    ]
-
-    signed =
-      :aws_signature.sign_v4(
-        access_key,
-        secret_key,
-        region,
-        @service,
-        datetime,
-        "GET",
-        url,
-        base_headers,
-        "",
-        []
-      )
-
-    headers = signed |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
-
-    case Req.request(method: :get, url: url, headers: headers, decode_body: false) do
+    case signed_request(:get, bucket_query_url(query), "") do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:s3_list, status, body}}
       {:error, reason} -> {:error, reason}
@@ -582,32 +511,7 @@ defmodule Arca.Adapters.S3 do
     |> Enum.map(fn [_, key] -> xml_unescape(key) end)
   end
 
-  # Same pagination as list_keys, keeping each object's size. Every
-  # <Contents> element carries Key then Size in document order.
-  defp list_entries(prefix), do: list_entries_pages(prefix, nil, [], MapSet.new())
-
-  defp list_entries_pages(prefix, token, acc, seen_tokens) do
-    case request_list_page(prefix, token) do
-      {:ok, body} ->
-        acc = [parse_list_entries(body) | acc]
-
-        case next_continuation_token(body) do
-          nil ->
-            {:ok, acc |> Enum.reverse() |> List.flatten()}
-
-          next ->
-            if MapSet.member?(seen_tokens, next) do
-              {:error, {:s3_list_repeated_token, next}}
-            else
-              list_entries_pages(prefix, next, acc, MapSet.put(seen_tokens, next))
-            end
-        end
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
+  # Every <Contents> element carries Key then Size in document order.
   defp parse_list_entries(body) do
     Regex.scan(~r{<Contents>.*?<Key>([^<]+)</Key>.*?<Size>(\d+)</Size>.*?</Contents>}s, body)
     |> Enum.map(fn [_, key, size] -> {xml_unescape(key), String.to_integer(size)} end)
@@ -636,16 +540,23 @@ defmodule Arca.Adapters.S3 do
   # Private — URL / config helpers
   # ============================================================================
 
-  defp build_url(key) do
+  # Path-style: <endpoint>/<bucket>/<suffix> — virtual-host:
+  # <bucket>.<endpoint>/<suffix>. The one place the two addressing styles
+  # are spelled out.
+  defp bucket_url(suffix) do
     bucket = config!(:bucket)
     base = endpoint_base()
 
     if path_style?() do
-      "#{base}/#{bucket}/#{encode_key(key)}"
+      "#{base}/#{bucket}/#{suffix}"
     else
-      "#{scheme(base)}://#{bucket}.#{host_only(base)}/#{encode_key(key)}"
+      "#{scheme(base)}://#{bucket}.#{host_only(base)}/#{suffix}"
     end
   end
+
+  defp build_url(key), do: bucket_url(encode_key(key))
+
+  defp bucket_query_url(query), do: bucket_url("?" <> query)
 
   defp endpoint_base do
     case config(:endpoint) do
@@ -680,6 +591,7 @@ defmodule Arca.Adapters.S3 do
 
   defp method_string(:get), do: "GET"
   defp method_string(:put), do: "PUT"
+  defp method_string(:post), do: "POST"
   defp method_string(:delete), do: "DELETE"
   defp method_string(:head), do: "HEAD"
 
