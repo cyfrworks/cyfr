@@ -154,8 +154,17 @@ defmodule Arca.Adapters.S3Test do
   end
 
   describe "delete/2" do
-    test "returns :ok on 204", %{ctx: ctx} do
-      assert :ok = S3.delete(ctx, ["whatever.txt"])
+    test "deletes an existing object", %{ctx: ctx} do
+      assert :ok = S3.delete(ctx, ["exists.txt"])
+      assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
+    end
+
+    test "a missing key is :not_found, not a silent :ok", %{ctx: ctx} do
+      # Real S3 answers 204 for a DELETE of a key that never existed; the
+      # probe is what keeps this `{:error, :not_found}` like the Local adapter.
+      assert {:error, :not_found} = S3.delete(ctx, ["whatever.txt"])
+      refute_received {:req, "DELETE", _, _, _}
     end
   end
 

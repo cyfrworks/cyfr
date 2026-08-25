@@ -11,7 +11,9 @@ defmodule Arca.Adapters.ListTypedContractTest do
   place the two are held to the *same* answers, which is what the callback is
   for. The adapters disagreed here before it existed: a path that is a file
   answered `{:error, :enotdir}` on one and `{:ok, []}` on the other, and no
-  test covered it.
+  test covered it. `exists?/2`, `delete/2` and `delete_tree/2` joined for the
+  same reason — directory probes, missing-key deletes and an object at a
+  tree's own path all had adapter-specific answers once.
   """
 
   use ExUnit.Case, async: false
@@ -65,6 +67,23 @@ defmodule Arca.Adapters.ListTypedContractTest do
       {:ok, names} = Local.list(ctx, ["tree"])
       assert Enum.sort(names) == entries |> Enum.map(&elem(&1, 0)) |> Enum.sort()
     end
+
+    test "exists?/2 answers files, not directories", %{ctx: ctx} do
+      assert Local.exists?(ctx, ["tree", "a.txt"])
+      refute Local.exists?(ctx, ["tree"])
+      refute Local.exists?(ctx, ["tree", "missing.txt"])
+    end
+
+    test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
+      assert {:error, :not_found} = Local.delete(ctx, ["tree", "missing.txt"])
+      assert :ok = Local.delete(ctx, ["tree", "a.txt"])
+      refute Local.exists?(ctx, ["tree", "a.txt"])
+    end
+
+    test "delete_tree/2 removes an object at the tree's own path", %{ctx: ctx} do
+      assert :ok = Local.delete_tree(ctx, ["tree", "a.txt"])
+      refute Local.exists?(ctx, ["tree", "a.txt"])
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -116,6 +135,10 @@ defmodule Arca.Adapters.ListTypedContractTest do
               conn.request_path == "/test-bucket/athanors/ath_test/data/tree/a.txt" ->
             Plug.Conn.send_resp(conn, 200, "")
 
+          # Deletes succeed for any key — real S3 does not 404 a DELETE.
+          conn.method == "DELETE" ->
+            Plug.Conn.send_resp(conn, 204, "")
+
           true ->
             Plug.Conn.send_resp(conn, 404, "")
         end
@@ -154,6 +177,21 @@ defmodule Arca.Adapters.ListTypedContractTest do
       {:ok, entries} = S3.list_typed(ctx, ["tree"])
       {:ok, names} = S3.list(ctx, ["tree"])
       assert Enum.sort(names) == entries |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+    end
+
+    test "exists?/2 answers files, not directories", %{ctx: ctx} do
+      assert S3.exists?(ctx, ["tree", "a.txt"])
+      refute S3.exists?(ctx, ["tree"])
+      refute S3.exists?(ctx, ["tree", "missing.txt"])
+    end
+
+    test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
+      assert {:error, :not_found} = S3.delete(ctx, ["tree", "missing.txt"])
+      assert :ok = S3.delete(ctx, ["tree", "a.txt"])
+    end
+
+    test "delete_tree/2 removes an object at the tree's own path", %{ctx: ctx} do
+      assert :ok = S3.delete_tree(ctx, ["tree", "a.txt"])
     end
 
     test "a zero-byte directory marker reads as a directory, not a file", %{ctx: ctx} do

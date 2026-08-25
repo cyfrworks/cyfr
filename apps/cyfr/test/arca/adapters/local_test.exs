@@ -54,6 +54,52 @@ defmodule Arca.Adapters.LocalTest do
     end
   end
 
+  describe "atomic-write hygiene" do
+    test "in-flight temp names are invisible to listings, walks and usage", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
+
+      # A crashed put's orphan, next to its target.
+      orphan = Local.build_path(ctx, ["tree", "a.txt"]) <> ".tmp.12345"
+      File.write!(orphan, "partial")
+
+      assert {:ok, [{"a.txt", :file}]} = Local.list_typed(ctx, ["tree"])
+      assert {:ok, [["tree", "a.txt"]]} = Local.list_recursive(ctx, ["tree"])
+      assert {:ok, %{files: 1}} = Local.usage(ctx, ["tree"])
+    end
+
+    test "sweep_stale_tmp/1 removes only stale temp files", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
+      orphan = Local.build_path(ctx, ["tree", "a.txt"]) <> ".tmp.999"
+      File.write!(orphan, "partial")
+
+      # Too fresh to sweep.
+      assert {:ok, 0} = Local.sweep_stale_tmp(3600)
+      assert File.exists?(orphan)
+
+      # A negative age makes everything stale.
+      assert {:ok, 1} = Local.sweep_stale_tmp(-1)
+      refute File.exists?(orphan)
+      assert {:ok, "a"} = Local.get(ctx, ["tree", "a.txt"])
+    end
+  end
+
+  describe "symlinks" do
+    test "walks do not follow a symlink out of the tree", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
+
+      outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.txt"), "secret")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      tree_dir = Local.build_path(ctx, ["tree", "a.txt"]) |> Path.dirname()
+      File.ln_s!(outside, Path.join(tree_dir, "link"))
+
+      assert {:ok, [["tree", "a.txt"]]} = Local.list_recursive(ctx, ["tree"])
+      assert {:ok, %{files: 1, bytes: 1}} = Local.usage(ctx, ["tree"])
+    end
+  end
+
   describe "exists?/2" do
     test "returns true for existing file", %{ctx: ctx} do
       path = ["exists", "test.txt"]

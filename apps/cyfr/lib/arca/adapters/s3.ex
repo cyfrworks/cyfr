@@ -118,17 +118,28 @@ defmodule Arca.Adapters.S3 do
   @impl true
   def delete(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
+    key = build_key(ctx, segments)
 
-    case request(:delete, build_key(ctx, segments)) do
-      # S3 returns 204 No Content on successful delete; 404 means already gone.
-      # Both are :ok here to match the Local adapter's idempotent semantics
-      # (Local treats :enoent on delete as `{:error, :not_found}` though, so
-      #  preserve that for consistency).
-      {:ok, %{status: 204}} -> :ok
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: 404}} -> {:error, :not_found}
-      {:ok, %{status: status, body: body}} -> log_and_error("delete", status, body)
-      {:error, reason} -> log_and_error("delete", reason)
+    # Real S3 answers 204 even for a key that never existed, so a bare DELETE
+    # cannot tell "deleted" from "was never there" — probe first, and a
+    # missing file is `{:error, :not_found}` on both adapters.
+    case request(:head, key) do
+      {:ok, %{status: 200}} ->
+        case request(:delete, key) do
+          {:ok, %{status: status}} when status in [200, 204] -> :ok
+          {:ok, %{status: 404}} -> {:error, :not_found}
+          {:ok, %{status: status, body: body}} -> log_and_error("delete", status, body)
+          {:error, reason} -> log_and_error("delete", reason)
+        end
+
+      {:ok, %{status: 404}} ->
+        {:error, :not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        log_and_error("delete", status, body)
+
+      {:error, reason} ->
+        log_and_error("delete", reason)
     end
   end
 
@@ -175,29 +186,36 @@ defmodule Arca.Adapters.S3 do
     Arca.Storage.validate_path!(segments)
     prefix = build_key(ctx, segments)
 
-    case list_keys(prefix) do
-      {:ok, []} ->
-        :ok
+    # An object can sit AT the tree's own key (Local's rm_rf removes it, and
+    # the listing below only sees keys under `prefix/`) — delete it
+    # explicitly; missing is the normal case and fine.
+    with :ok <- delete_tolerating_missing("delete_tree", prefix) do
+      case list_keys(prefix) do
+        {:ok, []} ->
+          :ok
 
-      {:ok, keys} ->
-        # S3 supports DeleteObjects (POST ?delete) for batches of up to 1000.
-        # Single-key DELETEs keep the implementation simple; for large trees
-        # we'd batch — defer until profiling shows it matters.
-        Enum.reduce_while(keys, :ok, fn key, _acc ->
-          case request(:delete, key) do
-            {:ok, %{status: status}} when status in [200, 204, 404] ->
-              {:cont, :ok}
+        {:ok, keys} ->
+          # S3 supports DeleteObjects (POST ?delete) for batches of up to 1000.
+          # Single-key DELETEs keep the implementation simple; for large trees
+          # we'd batch — defer until profiling shows it matters.
+          Enum.reduce_while(keys, :ok, fn key, _acc ->
+            case delete_tolerating_missing("delete_tree", key) do
+              :ok -> {:cont, :ok}
+              {:error, _} = err -> {:halt, err}
+            end
+          end)
 
-            {:ok, %{status: status, body: body}} ->
-              {:halt, log_and_error("delete_tree", status, body)}
+        {:error, reason} ->
+          log_and_error("delete_tree", reason)
+      end
+    end
+  end
 
-            {:error, reason} ->
-              {:halt, log_and_error("delete_tree", reason)}
-          end
-        end)
-
-      {:error, reason} ->
-        log_and_error("delete_tree", reason)
+  defp delete_tolerating_missing(op, key) do
+    case request(:delete, key) do
+      {:ok, %{status: status}} when status in [200, 204, 404] -> :ok
+      {:ok, %{status: status, body: body}} -> log_and_error(op, status, body)
+      {:error, reason} -> log_and_error(op, reason)
     end
   end
 

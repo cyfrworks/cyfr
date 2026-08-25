@@ -137,7 +137,10 @@ defmodule Arca.Adapters.Local do
       {:ok, names} ->
         # On a filesystem the kind is a stat, and the adapter is the only layer
         # entitled to make one — which is the point of the callback.
-        {:ok, Enum.map(names, &{&1, kind(Path.join(full_path, &1))})}
+        {:ok,
+         names
+         |> Enum.reject(&tmp_name?/1)
+         |> Enum.map(&{&1, kind(Path.join(full_path, &1))})}
 
       {:error, :enoent} ->
         {:ok, []}
@@ -149,10 +152,19 @@ defmodule Arca.Adapters.Local do
 
   defp kind(path), do: if(File.dir?(path), do: :dir, else: :file)
 
+  # A `put/3` in flight (or a crashed one): named `<file>.tmp.<n>` next to
+  # its target. Never content — listings, walks and usage skip the pattern,
+  # and `sweep_stale_tmp/1` reclaims orphans.
+  defp tmp_name?(name), do: name =~ ~r/\.tmp\.\d+$/
+
   @impl true
   def exists?(%Context{} = ctx, path) do
     full_path = build_path(ctx, path)
-    File.exists?(full_path)
+    # Files only, matching the S3 adapter's HEAD probe: a directory "exists"
+    # on a filesystem but has no object-store counterpart, and the two
+    # adapters must answer the same question the same way. Directories are
+    # asked about with `list_typed/2`.
+    File.regular?(full_path)
   end
 
   @impl true
@@ -252,11 +264,66 @@ defmodule Arca.Adapters.Local do
       {:ok, entries} ->
         Enum.flat_map(entries, fn entry ->
           full = Path.join(dir, entry)
-          if File.dir?(full), do: walk_files(full), else: [full]
+
+          # lstat, not stat: a symlink inside a tree must not pull outside
+          # bytes into walks, usage counts or tree copies (the same rule the
+          # registry applies when storing extracted files).
+          cond do
+            tmp_name?(entry) -> []
+            lstat_type(full) == :directory -> walk_files(full)
+            lstat_type(full) == :regular -> [full]
+            true -> []
+          end
         end)
 
       {:error, _} ->
         []
+    end
+  end
+
+  defp lstat_type(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: type}} -> type
+      {:error, _} -> :undefined
+    end
+  end
+
+  @doc """
+  Remove `put/3` temp files older than `max_age_seconds` (default one day) —
+  orphans of crashed writes. Listings never surface them; this reclaims the
+  bytes. Returns `{:ok, removed_count}`.
+  """
+  def sweep_stale_tmp(max_age_seconds \\ 86_400) do
+    cutoff = System.os_time(:second) - max_age_seconds
+    {:ok, sweep_tmp_dir(base_path(), cutoff)}
+  end
+
+  defp sweep_tmp_dir(dir, cutoff) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        Enum.reduce(entries, 0, fn entry, acc ->
+          full = Path.join(dir, entry)
+
+          cond do
+            tmp_name?(entry) ->
+              case File.lstat(full, time: :posix) do
+                {:ok, %File.Stat{type: :regular, mtime: mtime}} when mtime < cutoff ->
+                  if File.rm(full) == :ok, do: acc + 1, else: acc
+
+                _ ->
+                  acc
+              end
+
+            lstat_type(full) == :directory ->
+              acc + sweep_tmp_dir(full, cutoff)
+
+            true ->
+              acc
+          end
+        end)
+
+      {:error, _} ->
+        0
     end
   end
 
@@ -271,13 +338,29 @@ defmodule Arca.Adapters.Local do
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
 
-    case segments do
-      ["components", "_bundle" | rest] ->
-        Path.join([bundle_path() | rest])
+    {root, relative} =
+      case segments do
+        ["components", "_bundle" | rest] ->
+          {bundle_path(), rest}
 
-      _ ->
-        Path.join([base_path() | Arca.Storage.physical_segments(ctx, segments)])
+        _ ->
+          {base_path(), Arca.Storage.physical_segments(ctx, segments)}
+      end
+
+    path = Path.join([root | relative])
+
+    # Belt over the denylist: whatever the validator and the layout produced,
+    # the joined path must still live under its root.
+    unless contained_in?(path, root) do
+      raise ArgumentError, "storage path escapes its root: #{inspect(segments)}"
     end
+
+    path
+  end
+
+  defp contained_in?(path, root) do
+    expanded = Path.expand(path)
+    expanded == root or String.starts_with?(expanded, root <> "/")
   end
 
   @doc "Get the expanded base path for storage."
