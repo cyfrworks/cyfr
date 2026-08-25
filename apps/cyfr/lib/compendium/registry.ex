@@ -633,6 +633,7 @@ defmodule Compendium.Registry do
       # content.
       case gunzip_bounded(archive_bytes, tincture_max_decompressed_bytes()) do
         {:ok, tar_binary} ->
+          # arca:bypass-ok=D — tar extraction into the scratch dir above.
           case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
             :ok ->
               with {:ok, validation} <- Compendium.TinctureValidator.validate(tmp_dir),

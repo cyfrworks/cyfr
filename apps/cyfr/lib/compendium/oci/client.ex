@@ -743,6 +743,7 @@ defmodule Compendium.OCI.Client do
     tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{:rand.uniform(1_000_000)}.tar")
 
     try do
+      # arca:bypass-ok=D — tar written to the scratch path above.
       case :erl_tar.create(String.to_charlist(tmp), tar_entries) do
         :ok ->
           # arca:bypass-ok=D — read back the tar scratch file.
@@ -900,6 +901,8 @@ defmodule Compendium.OCI.Client do
     try do
       tar_binary = :zlib.gunzip(source_bytes)
 
+      # arca:bypass-ok=D — `[:memory]` extraction does no filesystem I/O at
+      # all; tagged because the gate matches the call, not the option.
       case :erl_tar.extract({:binary, tar_binary}, [:memory]) do
         {:ok, entries} ->
           Enum.each(entries, fn {filename, content} ->

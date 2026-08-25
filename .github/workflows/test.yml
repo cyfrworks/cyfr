@@ -197,7 +197,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Arca.Storage's single-seam policy: all file/blob I/O flows through the
-      # storage adapter. A direct File.* / Path.wildcard call outside the
+      # storage adapter. A direct File.* / Path.wildcard call — or its Erlang
+      # spelling (:file, :filelib, :erl_tar, :prim_file) — outside the
       # adapter must be acknowledged with an `# arca:bypass-ok=<A|B|C|D>` tag
       # (see the bypass-group table in Arca.Storage) on the call's own line or
       # within the four lines above it — LINE-scoped, so one tag can no longer
@@ -216,7 +217,7 @@ jobs:
             if grep -qE 'arca:bypass-ok=[A-D] — entire module' "$f"; then continue; fi
             bad="$(awk '
               /arca:bypass-ok/ { ok = NR }
-              /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard/ {
+              /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./ {
                 if ($0 ~ /^[[:space:]]*#/) next
                 if (ok && NR - ok <= 4) next
                 print NR ": " $0
