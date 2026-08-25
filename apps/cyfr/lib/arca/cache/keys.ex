@@ -67,4 +67,14 @@ defmodule Arca.Cache.Keys do
 
   @doc "The byte total of an athanor's whole tree, for the storage cap."
   def athanor_usage(athanor_id), do: {:athanor_usage, athanor_id}
+
+  # Two keys, not one {bytes, files} tuple: `bump_existing/2` is an
+  # `:ets.update_counter` on the row's single value slot, so each counter
+  # needs its own row to stay O(1).
+
+  @doc "The byte total under one tenant scope of an athanor (public quota)."
+  def scope_usage_bytes(athanor_id, scope), do: {:scope_usage, athanor_id, scope, :bytes}
+
+  @doc "The file count under one tenant scope of an athanor (public quota)."
+  def scope_usage_files(athanor_id, scope), do: {:scope_usage, athanor_id, scope, :files}
 end

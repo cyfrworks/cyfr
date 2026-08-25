@@ -415,11 +415,30 @@ defmodule Arca do
   defp account_usage(%Context{athanor_id: athanor_id}, path, kind, result)
        when is_binary(athanor_id) and athanor_id != "" do
     if Arca.Storage.classify(path) == :tenant do
-      key = Arca.Cache.Keys.athanor_usage(athanor_id)
+      whole = Arca.Cache.Keys.athanor_usage(athanor_id)
+      scope = List.first(path)
 
       case {kind, result} do
-        {{:create, bytes}, :ok} -> Arca.Cache.bump_existing(key, bytes)
-        _delete_or_failed -> Arca.Cache.invalidate(key)
+        {{:create, bytes}, :ok} ->
+          Arca.Cache.bump_existing(whole, bytes)
+
+          # The per-scope pair backs the public quota. The file count bumps
+          # unconditionally — an overwrite over-counts a file the same safe
+          # direction the bytes over-count — and the TTL walks it true again.
+          if scope do
+            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope), bytes)
+            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_files(athanor_id, scope), 1)
+          end
+
+        _delete_or_failed ->
+          Arca.Cache.invalidate(whole)
+
+          # Both scope counters go together: dropping only one would leave a
+          # stale count that never recovers inside its TTL.
+          if scope do
+            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope))
+            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_files(athanor_id, scope))
+          end
       end
     end
 

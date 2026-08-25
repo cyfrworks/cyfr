@@ -71,6 +71,8 @@ defmodule Opus.StorageHandler do
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
+  require Logger
+
   alias Sanctum.Authority.Blob.Edge
   alias Sanctum.Context
   alias Sanctum.Limits
@@ -278,7 +280,7 @@ defmodule Opus.StorageHandler do
     # The walk is rooted at the write's scope (`data` or `components`,
     # mapped to its physical name), and Arca scopes it to the context's
     # athanor like every other path.
-    case Arca.usage(ctx, map_guest_scope([storage_root(path)])) do
+    case scope_usage(ctx, map_guest_scope([storage_root(path)])) do
       {:ok, %{files: files, bytes: used}} ->
         cond do
           files >= quota.max_files ->
@@ -296,7 +298,39 @@ defmodule Opus.StorageHandler do
       _ ->
         # An unreadable namespace is an empty one for quota purposes: the
         # write itself still passes through every path and action check.
+        # A warning marks the fail-open so an operator can see it happen.
+        Logger.warning(
+          "[Opus.StorageHandler] public-quota usage unreadable for #{ctx.athanor_id}; " <>
+            "allowing the write"
+        )
+
         :ok
+    end
+  end
+
+  @scope_usage_ttl_ms :timer.minutes(5)
+
+  # Read-through on the per-scope counters `Arca` bumps on every tenant
+  # write and drops on deletes — the same discipline as the athanor byte
+  # cap's cache, so the public path stops paying a recursive walk per write.
+  defp scope_usage(%{athanor_id: athanor_id} = ctx, [physical_scope] = scope_root) do
+    bytes_key = Arca.Cache.Keys.scope_usage_bytes(athanor_id, physical_scope)
+    files_key = Arca.Cache.Keys.scope_usage_files(athanor_id, physical_scope)
+
+    with {:ok, bytes} when is_integer(bytes) <- Arca.Cache.get(bytes_key),
+         {:ok, files} when is_integer(files) <- Arca.Cache.get(files_key) do
+      {:ok, %{files: files, bytes: bytes}}
+    else
+      _ ->
+        case Arca.usage(ctx, scope_root) do
+          {:ok, %{files: files, bytes: bytes} = usage} ->
+            Arca.Cache.put(bytes_key, bytes, @scope_usage_ttl_ms)
+            Arca.Cache.put(files_key, files, @scope_usage_ttl_ms)
+            {:ok, usage}
+
+          other ->
+            other
+        end
     end
   end
 

@@ -12,6 +12,11 @@ defmodule Opus.StorageHandlerTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Arca.Cache.init()
 
+    # The public-quota counters are keyed (athanor, scope) and survive
+    # writes by design; each test here gets a fresh storage root under the
+    # same athanor id, so stale counters must go first.
+    Arca.Cache.delete_match({:scope_usage, :_, :_, :_})
+
     test_dir = Path.join(System.tmp_dir!(), "storage_handler_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     original_base_path = Application.get_env(:cyfr, :base_path)
@@ -977,6 +982,30 @@ defmodule Opus.StorageHandlerTest do
       decoded = quota_write(ctx, ref, "data/three/c.txt", 4, quota)
       assert decoded["error"]["type"] == "storage_quota_exceeded"
       assert decoded["error"]["message"] =~ "file quota"
+    end
+
+    test "usage is cached and bumped per write, not re-walked", %{ctx: ctx, component_ref: ref} do
+      quota = %{max_bytes: 1_000_000, max_files: 10}
+
+      # The first check primes the counters; the write itself bumps them.
+      assert %{"written" => true} = quota_write(ctx, ref, "data/a.txt", 4, quota)
+
+      bytes_key = Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "guest")
+      files_key = Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "guest")
+      assert {:ok, 4} = Arca.Cache.get(bytes_key)
+      assert {:ok, 1} = Arca.Cache.get(files_key)
+
+      # A second write is answered from the bumped counters — and bumps on.
+      assert %{"written" => true} = quota_write(ctx, ref, "data/b.txt", 6, quota)
+      assert {:ok, 10} = Arca.Cache.get(bytes_key)
+      assert {:ok, 2} = Arca.Cache.get(files_key)
+
+      # A delete drops both counters so reclaimed space is recomputed.
+      del_edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write", "delete"])
+      request = ~s({"action": "delete", "path": "data/b.txt"})
+      assert %{"deleted" => true} = StorageHandler.execute(request, del_edge, nil, ctx, ref, []) |> Jason.decode!()
+      assert :miss = Arca.Cache.get(bytes_key)
+      assert :miss = Arca.Cache.get(files_key)
     end
 
     test "the incoming size is the decoded payload, not the base64 framing", %{
