@@ -145,6 +145,77 @@ defmodule Compendium.AthanorSeederTest do
     refute Arca.exists?(ctx, prefix ++ ["node_modules", "pkg.js"])
   end
 
+  describe "sync/1" do
+    test "copies only the versions the athanor lacks", %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      assert :ok = AthanorSeeder.seed("ath_acme")
+
+      # A later release ships a newer version of the same catalyst.
+      newer = Path.join([bundle_dir, "catalysts", "local", "foo", "1.1.0"])
+      File.mkdir_p!(newer)
+      File.write!(Path.join(newer, "catalyst.wasm"), @valid_wasm)
+
+      File.write!(
+        Path.join(newer, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => "foo",
+          "version" => "1.1.0",
+          "type" => "catalyst",
+          "caps" => %{"egress" => %{"domains" => []}}
+        })
+      )
+
+      assert {:ok, report} = AthanorSeeder.sync("ath_acme")
+      assert report.copied == ["catalysts/local/foo/1.1.0"]
+      assert report.present == ["catalysts/local/foo/1.0.0"]
+      assert report.modified == []
+
+      ctx = athanor_ctx("ath_acme")
+
+      assert Arca.exists?(
+               ctx,
+               ["components", "catalysts", "local", "foo", "1.1.0", "catalyst.wasm"]
+             )
+
+      # The new arrival is registered.
+      assert {:ok, _} =
+               Arca.ComponentStorage.get_component(ctx, "foo", "1.1.0", "local", "catalyst")
+    end
+
+    test "never touches an existing version dir, and reports its drift", %{
+      bundle_dir: bundle_dir
+    } do
+      write_bundle!(bundle_dir)
+      assert :ok = AthanorSeeder.seed("ath_acme")
+
+      # The member edits the seeded copy in place.
+      ctx = athanor_ctx("ath_acme")
+      edited = ["components", "catalysts", "local", "foo", "1.0.0", "cyfr-manifest.json"]
+      :ok = Arca.put(ctx, edited, ~s({"edited": true}))
+
+      assert {:ok, report} = AthanorSeeder.sync("ath_acme")
+      assert report.copied == []
+      assert report.modified == ["catalysts/local/foo/1.0.0"]
+
+      # The member's bytes survive.
+      assert {:ok, ~s({"edited": true})} = Arca.get(ctx, edited)
+    end
+
+    test "is idempotent — a second sync reports everything present", %{
+      bundle_dir: bundle_dir
+    } do
+      write_bundle!(bundle_dir)
+      assert {:ok, %{copied: [_]}} = AthanorSeeder.sync("ath_acme")
+      assert {:ok, %{copied: [], present: [_], modified: []}} = AthanorSeeder.sync("ath_acme")
+    end
+  end
+
+  test "Upstream.bundle_versions lists what the bundle ships", %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    assert Compendium.Upstream.bundle_versions("catalyst", "foo") == ["1.0.0"]
+    assert Compendium.Upstream.bundle_versions("catalyst", "nope") == []
+  end
+
   test "the bundle itself is never indexed as the athanor's rows", %{
     bundle_dir: bundle_dir
   } do

@@ -28,6 +28,11 @@ defmodule Compendium.AquaTemplate do
   @manifest "agent.json"
   @seed_prefix ["seed", "aqua"]
 
+  # The pristine stamp: the digest of the shipped file set at the moment it
+  # was copied in. A dotfile, so `files/0`'s manifest/.md filter — and with
+  # it the tool surface — never lists it.
+  @stamp ".seeded_digest"
+
   @doc "The template's seed segments: `[\"seed\", \"aqua\"]`."
   @spec seed_prefix() :: [String.t()]
   def seed_prefix, do: @seed_prefix
@@ -64,14 +69,21 @@ defmodule Compendium.AquaTemplate do
 
       names ->
         if @manifest in names do
-          Enum.reduce_while(names, :ok, fn name, :ok ->
-            with {:ok, content} <- Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]),
-                 :ok <- Arca.put(ctx, ["aqua", name], content) do
-              {:cont, :ok}
-            else
-              {:error, reason} -> {:halt, {:error, {name, reason}}}
-            end
-          end)
+          copied =
+            Enum.reduce_while(names, :ok, fn name, :ok ->
+              with {:ok, content} <- Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]),
+                   :ok <- Arca.put(ctx, ["aqua", name], content) do
+                {:cont, :ok}
+              else
+                {:error, reason} -> {:halt, {:error, {name, reason}}}
+              end
+            end)
+
+          # The stamp is what refresh/1 compares against: this copy is
+          # pristine as of the template it was taken from.
+          with :ok <- copied do
+            Arca.put(ctx, ["aqua", @stamp], shipped_digest())
+          end
         else
           {:error, :template_missing}
         end
@@ -100,5 +112,90 @@ defmodule Compendium.AquaTemplate do
           err
       end
     end
+  end
+
+  @doc """
+  Upgrade the athanor's copy when a newer release shipped a new template —
+  but only a copy the members never touched.
+
+  Compares three digests: the shipped template, the stamp written when the
+  copy was made, and the copy as it stands. Shipped == stamp means nothing
+  new; copy == stamp means the members never edited it, so the new template
+  replaces it (and restamps); anything else is the members' own work and is
+  left alone — `reset/1` is their deliberate path to the new template. A
+  copy from before stamping exists is treated as edited (never clobbered).
+
+  Returns `{:ok, :current | :refreshed | :modified | :unstamped}` or
+  `{:error, reason}`.
+  """
+  @spec refresh(Context.t()) ::
+          {:ok, :current | :refreshed | :modified | :unstamped} | {:error, term()}
+  def refresh(%Context{} = ctx) do
+    Context.require_tenant!(ctx)
+    shipped = shipped_digest()
+
+    case Arca.get(ctx, ["aqua", @stamp]) do
+      {:ok, ^shipped} ->
+        {:ok, :current}
+
+      {:ok, stamped} ->
+        if copy_digest(ctx) == stamped do
+          with :ok <- copy_into(ctx) do
+            Logger.info("[Compendium.AquaTemplate] refreshed AQUA template for #{ctx.athanor_id}")
+            {:ok, :refreshed}
+          end
+        else
+          {:ok, :modified}
+        end
+
+      {:error, :not_found} ->
+        {:ok, :unstamped}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Replace the athanor's copy with the shipped template — the explicit
+  "reset to shipped" a modified copy upgrades through.
+  """
+  @spec reset(Context.t()) :: :ok | {:error, term()}
+  def reset(%Context{} = ctx), do: copy_into(ctx)
+
+  # The digest of the shipped file set — what a pristine copy hashes to.
+  defp shipped_digest do
+    digest_files(fn name -> Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]) end, files())
+  end
+
+  # The digest of the athanor's copy, over the same kind of file set the
+  # template ships (manifest + prompts) — an added, removed or edited file
+  # all change it.
+  defp copy_digest(ctx) do
+    names =
+      case Arca.list_typed(ctx, ["aqua"]) do
+        {:ok, entries} ->
+          for {name, :file} <- entries,
+              name == @manifest or String.ends_with?(name, ".md"),
+              do: name
+
+        {:error, _} ->
+          []
+      end
+
+    digest_files(fn name -> Arca.get(ctx, ["aqua", name]) end, names)
+  end
+
+  defp digest_files(read, names) do
+    names
+    |> Enum.sort()
+    |> Enum.map(fn name ->
+      case read.(name) do
+        {:ok, content} -> [name, 0, content, 0]
+        {:error, _} -> [name, 0]
+      end
+    end)
+    |> IO.iodata_to_binary()
+    |> Cyfr.Digest.sha256()
   end
 end

@@ -30,9 +30,19 @@ defmodule Cyfr.Bootstrap do
     if Application.get_env(:cyfr, :provisioning_boot_enabled, true) do
       reconcile_platform_admins()
       ensure_home_seeded()
+      sync_seed_media()
     end
 
     :ok
+  end
+
+  # A new release may ship new seed media (bundle versions, a new AQUA
+  # template); boot is when existing athanors are offered it — additively,
+  # never over anything they own.
+  defp sync_seed_media do
+    Sanctum.Provisioning.sync_seeds()
+  rescue
+    e -> Logger.error("[Cyfr.Bootstrap] seed sync raised: #{Exception.message(e)}")
   end
 
   # `CYFR_PLATFORM_ADMIN_EMAILS` is the operator list, and a sign-in is what

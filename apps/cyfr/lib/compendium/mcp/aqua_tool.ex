@@ -60,6 +60,14 @@ defmodule Compendium.MCP.AquaTool do
             kind: :destructive,
             planes: [:external],
             permission: :component_manage
+          },
+          # Replaces the athanor's agent definitions with the shipped
+          # template — the deliberate upgrade path for an edited copy that
+          # the pristine-only boot refresh leaves alone.
+          "reset" => %{
+            kind: :destructive,
+            planes: [:external],
+            permission: :component_manage
           }
         }
       },
@@ -68,9 +76,9 @@ defmodule Compendium.MCP.AquaTool do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "enum" => ["list", "get", "create", "update", "delete"],
+            "enum" => ["list", "get", "create", "update", "delete", "reset"],
             "description" =>
-              "Action: list/get agents and guides, or create/update/delete to manage agents. For create, pass type=orchestrator|sub-agent to choose the agent kind (docs are read-only)."
+              "Action: list/get agents and guides, create/update/delete to manage agents (for create, pass type=orchestrator|sub-agent to choose the agent kind; docs are read-only), or reset to replace the athanor's agent definitions with the shipped template."
           },
           "name" => %{
             "type" => "string",
@@ -271,6 +279,15 @@ defmodule Compendium.MCP.AquaTool do
 
   def handle(_ctx, %{"action" => "update"}) do
     {:error, "Missing required argument: name"}
+  end
+
+  # --- reset ---
+
+  def handle(%Context{} = ctx, %{"action" => "reset"}) do
+    case Compendium.AquaTemplate.reset(ctx) do
+      :ok -> {:ok, %{reset: true, files: Compendium.AquaTemplate.files()}}
+      {:error, reason} -> {:error, "Failed to reset: #{inspect(reason)}"}
+    end
   end
 
   # --- delete ---

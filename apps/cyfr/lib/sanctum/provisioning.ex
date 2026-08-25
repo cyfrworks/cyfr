@@ -260,6 +260,59 @@ defmodule Sanctum.Provisioning do
     end
   end
 
+  @doc """
+  Additively sync every provisioned athanor with the seed media a release
+  shipped: bundle versions an athanor lacks are copied in and registered
+  (their published deps pulled), and an unmodified AQUA template copy is
+  refreshed (`Compendium.AquaTemplate.refresh/1`). Existing version
+  directories and edited templates are never touched.
+
+  Runs at boot (`Cyfr.Bootstrap`); a failure logs and moves on — a sync
+  must never take the server down or block another athanor's.
+  """
+  @spec sync_seeds() :: :ok
+  def sync_seeds do
+    for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at) do
+      ctx = seed_ctx(athanor.id)
+
+      case AthanorSeeder.sync(athanor.id) do
+        {:ok, %{copied: [_ | _] = copied}} ->
+          Logger.info(
+            "[Provisioning] #{athanor.id}: synced #{length(copied)} bundle version(s): " <>
+              Enum.join(copied, ", ")
+          )
+
+          case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx)) do
+            %{failed: []} ->
+              :ok
+
+            %{failed: failed} ->
+              Logger.warning(
+                "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
+              )
+          end
+
+        {:ok, _report} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[Provisioning] #{athanor.id}: bundle sync failed: #{inspect(reason)}")
+      end
+
+      case Compendium.AquaTemplate.refresh(ctx) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Provisioning] #{athanor.id}: AQUA template refresh failed: #{inspect(reason)}"
+          )
+      end
+    end
+
+    :ok
+  end
+
   # Every static dependency the athanor's local components declare that
   # is not present — the published catalysts the bundled AQUA depends on.
   defp missing_bundle_deps(ctx) do
