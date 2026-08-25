@@ -13,23 +13,24 @@ defmodule Compendium.AthanorSeederTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_seeder_#{:rand.uniform(100_000)}")
-    bundle_dir = Path.join(test_dir, "bundle")
+    seed_dir = Path.join(test_dir, "seed")
+    bundle_dir = Path.join(seed_dir, "components")
     File.mkdir_p!(bundle_dir)
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_bundle = Application.get_env(:cyfr, :bundle_path)
+    prev_seed = Application.get_env(:cyfr, :seed_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :bundle_path, bundle_dir)
+    Application.put_env(:cyfr, :seed_path, seed_dir)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :bundle_path, prev_bundle)
+      Application.put_env(:cyfr, :seed_path, prev_seed)
       File.rm_rf!(test_dir)
     end)
 
     {:ok, bundle_dir: bundle_dir}
   end
 
-  # A bundled catalyst under the seed source (`:bundle_path`).
+  # A bundled catalyst under the seed source (`seed/components`).
   defp write_bundle!(bundle_dir) do
     src = Path.join([bundle_dir, "catalysts", "local", "foo", "1.0.0"])
     File.mkdir_p!(src)

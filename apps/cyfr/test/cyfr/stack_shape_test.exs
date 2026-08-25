@@ -47,17 +47,17 @@ defmodule Cyfr.StackShapeTest do
     refute compose =~ ~r/^\s*- \.\/components:/m
   end
 
-  test "the image carries the seed bundle and reads it in place" do
+  test "the image carries the seed tree and reads it in place" do
     # A bare image boot (no host bind mount) must still be able to provision
-    # Home: the bundle rides in the image at a defaults path and the release
-    # reads it there directly (CYFR_BUNDLE_PATH) — no first-boot copy.
+    # Home: the bundle rides in the image inside the seed tree and the
+    # release reads it there directly (CYFR_SEED_PATH) — no first-boot copy.
     dockerfile = read!("Dockerfile")
     entrypoint = read!("docker-entrypoint.sh")
     dockerignore = read!(".dockerignore")
 
-    assert dockerfile =~ ~r/^COPY components\/_bundle\/ \/app\/components-defaults\/_bundle\/$/m
-    assert dockerfile =~ ~r/^ENV CYFR_BUNDLE_PATH=\/app\/components-defaults\/_bundle$/m
-    refute entrypoint =~ "components-defaults"
+    assert dockerfile =~ ~r/^COPY seed\/components\/ \/app\/seed\/components\/$/m
+    assert dockerfile =~ ~r/^ENV CYFR_SEED_PATH=\/app\/seed$/m
+    refute entrypoint =~ ~r/seed\/components/
 
     # The bundle source ships in the build context; the old components/*
     # allowlist pair is gone for good.
@@ -68,9 +68,14 @@ defmodule Cyfr.StackShapeTest do
 
   test "the AQUA template is the second seed root, and WIT is embedded" do
     dockerfile = read!("Dockerfile")
+    entrypoint = read!("docker-entrypoint.sh")
+    compose = read!("docker-compose.yml")
 
-    # The template's seed root points at the operator-editable mount.
-    assert dockerfile =~ ~r/^ENV CYFR_AQUA_TEMPLATE_PATH=\/app\/aqua$/m
+    # The template lives inside the seed tree at the operator-editable
+    # mount, seeded from the baked defaults on first boot.
+    assert compose =~ ~r/^\s*- \.\/aqua:\/app\/seed\/aqua$/m
+    assert dockerfile =~ ~r/^COPY seed\/aqua\/ \/app\/aqua-defaults\/$/m
+    assert entrypoint =~ "cp -r /app/aqua-defaults/. /app/seed/aqua/"
 
     # WIT rides in the BUILD context (Compendium.WITSource embeds it — an
     # absent tree fails the compile), and the runtime image no longer

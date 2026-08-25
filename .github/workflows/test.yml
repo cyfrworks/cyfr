@@ -22,7 +22,7 @@ on:
       - 'docker-entrypoint.sh'
       - '.env.example'
       - 'wit/**'
-      - 'aqua/**'
+      - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
       # never runs on.
       - 'apps/codex/**'
@@ -54,7 +54,7 @@ on:
       - 'docker-entrypoint.sh'
       - '.env.example'
       - 'wit/**'
-      - 'aqua/**'
+      - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
       # never runs on.
       - 'apps/codex/**'
@@ -303,7 +303,12 @@ jobs:
           if [ -n "$docs_hits" ]; then
             echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
-          if git ls-files 'components/*' | grep -v '^components/_bundle/'; then
-            echo "::error::tracked components outside components/_bundle/"; fail=1
+          # Seed media lives under seed/ — the old root locations must never
+          # come back as tracked content.
+          if git ls-files 'components/*' 'aqua/*' | grep -q .; then
+            echo "::error::seed media lives under seed/ — nothing may be tracked at components/ or aqua/"; fail=1
+          fi
+          if git ls-files 'seed/*' | grep -vE '^seed/(components|aqua)/' | grep -q .; then
+            echo "::error::seed/ carries only its two roots, components/ and aqua/"; fail=1
           fi
           exit $fail

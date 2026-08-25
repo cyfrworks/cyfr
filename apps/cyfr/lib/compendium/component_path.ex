@@ -22,8 +22,8 @@ defmodule Compendium.ComponentPath do
 
   The seed bundle every athanor is provisioned from lives under the
   reserved `seed/components/{type}s/local/...` prefix (`Compendium.Bundle`)
-  and is read in place from `:bundle_path`, outside the storage root; it is
-  bytes only and never a tenant.
+  and is read in place from the seed tree (`:seed_path`), outside the
+  storage root; it is bytes only and never a tenant.
   """
 
   @type_plurals Enum.map(Sanctum.ComponentRef.valid_types(), &(&1 <> "s"))

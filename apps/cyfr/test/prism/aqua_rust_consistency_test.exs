@@ -13,7 +13,7 @@ defmodule Prism.AquaRustConsistencyTest do
 
   @aqua_glob Path.join([
                __DIR__,
-               "../../../../components/_bundle/formulas/local/aqua/*/src/src/tools.rs"
+               "../../../../seed/components/formulas/local/aqua/*/src/src/tools.rs"
              ])
 
   # Host-side only: the Rust side declares it, but its verbs are handled by

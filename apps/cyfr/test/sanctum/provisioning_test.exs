@@ -19,12 +19,15 @@ defmodule Sanctum.ProvisioningTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_provisioning_#{:rand.uniform(100_000)}")
-    bundle_dir = Path.join(test_dir, "bundle")
+    seed_dir = Path.join(test_dir, "seed")
+    bundle_dir = Path.join(seed_dir, "components")
     File.mkdir_p!(bundle_dir)
+    # Provisioning also copies the AQUA template out of the seed tree.
+    File.cp_r!(Path.expand("../../../../seed/aqua", __DIR__), Path.join(seed_dir, "aqua"))
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_bundle = Application.get_env(:cyfr, :bundle_path)
+    prev_seed = Application.get_env(:cyfr, :seed_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :bundle_path, bundle_dir)
+    Application.put_env(:cyfr, :seed_path, seed_dir)
 
     # The registry is unreachable in this suite: a bundle that needs a pull
     # cannot be provisioned, which is the failure path under test.
@@ -33,7 +36,7 @@ defmodule Sanctum.ProvisioningTest do
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :bundle_path, prev_bundle)
+      Application.put_env(:cyfr, :seed_path, prev_seed)
 
       if prev_registry,
         do: Application.put_env(:cyfr, :registry_url, prev_registry),

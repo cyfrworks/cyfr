@@ -373,7 +373,7 @@ fn parse_catalyst_output(result: &Value) -> Result<Value, String> {
 }
 ```
 
-> All `invoke::call` requests use MCP format: `{"tool": "...", "action": "...", "args": {...}}`. For sub-component execution use tool `"execution"` with action `"run"`. See the bundled `components/_bundle/formulas/local/list-models` formula for a production example.
+> All `invoke::call` requests use MCP format: `{"tool": "...", "action": "...", "args": {...}}`. For sub-component execution use tool `"execution"` with action `"run"`. See the bundled `seed/components/formulas/local/list-models` formula for a production example.
 
 ### Build
 
@@ -464,7 +464,7 @@ fn race_providers(refs: &[&str], input: &Value) -> Result<Value, String> {
 }
 ```
 
-See the bundled `components/_bundle/formulas/local/list-models` formula for a production example.
+See the bundled `seed/components/formulas/local/list-models` formula for a production example.
 
 ---
 

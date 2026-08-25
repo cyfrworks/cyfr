@@ -143,9 +143,9 @@ your-project/
 ```
 
 > The seed bundle every athanor starts from rides inside the container image
-> (`CYFR_BUNDLE_PATH`) and is read in place — a scaffolded project carries no
-> `components/` directory. Your own components live inside your athanor's
-> tree under `components/`.
+> (under `CYFR_SEED_PATH`, mounted so `./aqua` overlays its `aqua/` root) and
+> is read in place — a scaffolded project carries no `components/` directory.
+> Your own components live inside your athanor's tree under `components/`.
 
 ## Using Components
 
@@ -524,10 +524,10 @@ Release-only variables move the pieces:
 ```bash
 CYFR_DATA_PATH=data                     # the one storage root; the SQLite
                                         # database defaults to cyfr.db inside it
-CYFR_BUNDLE_PATH=components/_bundle     # the seed bundle, read in place
-                                        # (the container image sets its own)
-CYFR_AQUA_TEMPLATE_PATH=aqua            # the AQUA agent template, read in place
-                                        # (the image points it at /app/aqua)
+CYFR_SEED_PATH=seed                     # the seed tree, read in place: the
+                                        # component bundle under components/ and
+                                        # the AQUA agent template under aqua/
+                                        # (the image points it at /app/seed)
 ```
 
 ### S3-compatible object storage

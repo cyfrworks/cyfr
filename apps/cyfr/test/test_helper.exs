@@ -20,10 +20,15 @@ excludes =
 
 if excludes != [], do: ExUnit.configure(exclude: excludes)
 
-# The tmp storage roots configured in config/test.exs.
-for key <- [:base_path, :bundle_path] do
-  File.mkdir_p!(Application.fetch_env!(:cyfr, key))
-end
+# The tmp storage roots configured in config/test.exs: the tenant root, and
+# the seed tree with an empty bundle plus a copy of the shipped AQUA
+# template (template reads stay real without the suite touching the repo's
+# own seed/).
+File.mkdir_p!(Application.fetch_env!(:cyfr, :base_path))
+
+seed_path = Application.fetch_env!(:cyfr, :seed_path)
+File.mkdir_p!(Path.join(seed_path, "components"))
+File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqua"))
 
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()

@@ -208,9 +208,9 @@ if config_env() != :test do
     # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
     # (every athanor's data and components, the cache/ and system/ globals,
     # and the SQLite database unless CYFR_DATABASE_PATH points it
-    # elsewhere), plus the seed media read in place — the repo/scaffold
-    # checkout by default, the baked image copy / operator mount in Docker
-    # (the Dockerfile sets CYFR_BUNDLE_PATH and CYFR_AQUA_TEMPLATE_PATH).
+    # elsewhere), plus the seed tree read in place — the repo/scaffold
+    # checkout by default, the baked image copy in Docker (the Dockerfile
+    # sets CYFR_SEED_PATH; the operator mount overlays its aqua/).
     paths =
       case Cyfr.RuntimeConfig.resolve_paths(getenv) do
         {:ok, paths} -> paths
@@ -218,8 +218,7 @@ if config_env() != :test do
       end
 
     config :cyfr, :base_path, paths.base_path
-    config :cyfr, :bundle_path, paths.bundle_path
-    config :cyfr, :aqua_template_path, paths.aqua_template_path
+    config :cyfr, :seed_path, paths.seed_path
 
     # Database connection config. The adapter is selected at compile time in
     # config.exs from CYFR_DATABASE; here we supply connection parameters for

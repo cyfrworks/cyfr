@@ -37,17 +37,18 @@ defmodule Arca.CopyTreeTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "copy_tree_#{System.unique_integer([:positive])}")
-    bundle = Path.join(base, "bundle")
+    seed = Path.join(base, "seed")
+    bundle = Path.join(seed, "components")
     File.mkdir_p!(bundle)
 
     prev_base = Application.fetch_env!(:cyfr, :base_path)
-    prev_bundle = Application.fetch_env!(:cyfr, :bundle_path)
+    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
     Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :bundle_path, bundle)
+    Application.put_env(:cyfr, :seed_path, seed)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :bundle_path, prev_bundle)
+      Application.put_env(:cyfr, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

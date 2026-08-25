@@ -96,7 +96,9 @@ defmodule Compendium.ReleaseDigestTest do
   # ============================================================================
 
   describe "bundled and vendored manifests" do
-    @manifests Path.wildcard(Path.join([__DIR__, "../../../../components/**/cyfr-manifest.json"]))
+    @manifests Path.wildcard(
+                 Path.join([__DIR__, "../../../../seed/components/**/cyfr-manifest.json"])
+               )
 
     test "every checked-in manifest yields a release digest" do
       # If this fails, some real manifest carries a float or null in a

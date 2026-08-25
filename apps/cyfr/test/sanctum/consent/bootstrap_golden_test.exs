@@ -19,7 +19,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @repo_root Path.expand("../../../../..", __DIR__)
-  @bundle Path.join(@repo_root, "components/_bundle")
+  @bundle Path.join(@repo_root, "seed/components")
   @golden Path.expand("../../support/fixtures/consent_golden.json", __DIR__)
 
   setup do
@@ -27,17 +27,18 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_golden_#{:rand.uniform(1_000_000)}")
-    bundle_dir = Path.join(test_dir, "bundle")
+    seed_dir = Path.join(test_dir, "seed")
+    bundle_dir = Path.join(seed_dir, "components")
     copy_bundle!(bundle_dir)
 
     prev_base = Application.get_env(:cyfr, :base_path)
-    prev_bundle = Application.get_env(:cyfr, :bundle_path)
+    prev_seed = Application.get_env(:cyfr, :seed_path)
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :bundle_path, bundle_dir)
+    Application.put_env(:cyfr, :seed_path, seed_dir)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :bundle_path, prev_bundle)
+      Application.put_env(:cyfr, :seed_path, prev_seed)
       File.rm_rf!(test_dir)
     end)
 

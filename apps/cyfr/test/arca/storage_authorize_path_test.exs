@@ -20,16 +20,16 @@ defmodule Arca.StorageAuthorizePathTest do
     prev_base = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, base)
 
-    # The bundle test writes through the bundle branch of build_path/2;
-    # keep those bytes out of the suite-shared bundle root.
-    bundle = Path.join(base, "bundle")
-    File.mkdir_p!(bundle)
-    prev_bundle = Application.get_env(:cyfr, :bundle_path)
-    Application.put_env(:cyfr, :bundle_path, bundle)
+    # The bundle test writes through the seed branch of build_path/2;
+    # keep those bytes out of the suite-shared seed tree.
+    seed = Path.join(base, "seed")
+    File.mkdir_p!(Path.join(seed, "components"))
+    prev_seed = Application.get_env(:cyfr, :seed_path)
+    Application.put_env(:cyfr, :seed_path, seed)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :bundle_path, prev_bundle)
+      Application.put_env(:cyfr, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

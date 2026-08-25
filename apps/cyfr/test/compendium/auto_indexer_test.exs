@@ -181,10 +181,10 @@ defmodule Compendium.AutoIndexerTest do
     end
 
     test "never indexes the seed bundle", %{ctx: ctx, test_dir: test_dir} do
-      # A bundle fixture of this test's own — never the suite-shared bundle dir.
-      prev_bundle = Application.get_env(:cyfr, :bundle_path)
-      Application.put_env(:cyfr, :bundle_path, Path.join(test_dir, "bundle_fixture"))
-      on_exit(fn -> Application.put_env(:cyfr, :bundle_path, prev_bundle) end)
+      # A seed fixture of this test's own — never the suite-shared seed tree.
+      prev_seed = Application.get_env(:cyfr, :seed_path)
+      Application.put_env(:cyfr, :seed_path, Path.join(test_dir, "seed_fixture"))
+      on_exit(fn -> Application.put_env(:cyfr, :seed_path, prev_seed) end)
 
       create_component("catalyst", "local", "bundled", "0.1.0", athanor: "_bundle")
 

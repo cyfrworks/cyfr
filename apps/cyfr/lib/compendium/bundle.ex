@@ -7,7 +7,7 @@ defmodule Compendium.Bundle do
 
   Its logical prefix is `seed/components/{type}s/local/{name}/{version}/…`,
   and it is install media, not tenant storage: `Arca` reads it in place from
-  `:bundle_path` (outside the storage root), nothing indexes it as rows, and
+  the seed tree (`:seed_path`, outside the storage root), nothing indexes it as rows, and
   only server-internal contexts may touch it (`Arca.Storage.authorize_path/2`
   — `seed/` is a reserved root, see `Arca.Storage.seed_roots/0`).
   `Compendium.AthanorSeeder` copies it into a new athanor, whose own scan

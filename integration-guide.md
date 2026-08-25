@@ -1033,7 +1033,7 @@ A typical live-data pipeline:
 | `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
 | `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
 | `CYFR_DATA_PATH` | `data` | The one runtime storage root (athanor data and components, caches) |
-| `CYFR_BUNDLE_PATH` | `components/_bundle` | Seed-bundle source, read in place |
+| `CYFR_SEED_PATH` | `seed` | Seed tree (component bundle + AQUA template), read in place |
 | `CYFR_BEHIND_PROXY` | — | Set to `true` when behind a TLS-terminating reverse proxy |
 
 ### Authentication

@@ -10,8 +10,8 @@ defmodule Arca.Adapters.Local do
   The logical→physical mapping is `Arca.Storage.physical_segments/2` — the
   one place the layout is written down. This adapter joins its output under
   `:base_path`; seed media (`["seed", root | rest]`) is the sole exception,
-  read in place from each root's configured directory
-  (`Arca.Storage.seed_roots/0`).
+  read in place from the one seed tree (`:seed_path`,
+  `Arca.Storage.seed_roots/0`).
 
   ## Directory Structure
 
@@ -43,8 +43,7 @@ defmodule Arca.Adapters.Local do
       config :cyfr,
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data",
-        bundle_path: "./components/_bundle",
-        aqua_template_path: "./aqua"
+        seed_path: "./seed"
 
   """
 
@@ -365,12 +364,13 @@ defmodule Arca.Adapters.Local do
   end
 
   defp seed_root_path!(seed_root) do
-    case Arca.Storage.seed_roots() do
-      %{^seed_root => config_key} ->
-        Application.fetch_env!(:cyfr, config_key) |> Path.expand()
-
-      _ ->
-        raise ArgumentError, "unknown seed root: #{inspect(seed_root)}"
+    if seed_root in Arca.Storage.seed_roots() do
+      :cyfr
+      |> Application.fetch_env!(:seed_path)
+      |> Path.expand()
+      |> Path.join(seed_root)
+    else
+      raise ArgumentError, "unknown seed root: #{inspect(seed_root)}"
     end
   end
 

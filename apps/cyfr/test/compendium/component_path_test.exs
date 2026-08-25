@@ -52,7 +52,7 @@ defmodule Compendium.ComponentPathTest do
   describe "the seed bundle" do
     test "lives under the reserved seed root, outside every athanor's tree" do
       assert Bundle.bundle_prefix() == ["seed", "components"]
-      assert Map.has_key?(Arca.Storage.seed_roots(), "components")
+      assert "components" in Arca.Storage.seed_roots()
     end
   end
 

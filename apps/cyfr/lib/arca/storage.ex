@@ -38,8 +38,8 @@ defmodule Arca.Storage do
 
   - **Seed media**: `["seed", root | rest]` — the install media every
     athanor is provisioned from (`seed/components` the bundle,
-    `seed/aqua` the AQUA template; `seed_roots/0` is the table). Read in
-    place from local disk (each root's config key), reachable only by
+    `seed/aqua` the AQUA template; `seed_roots/0` is the roster). Read in
+    place from the one seed tree (`:seed_path`), reachable only by
     system contexts, never stored through an adapter.
   - **Global paths**: `cache`, `system` → stored at root level
   - **Tenant-scoped paths**: everything else → stored verbatim under the
@@ -81,11 +81,10 @@ defmodule Arca.Storage do
           └── guest/                     # guest (WASM) files — the guest's `data/` scope
 
   The seed media every athanor is provisioned from is not stored state —
-  each root is read in place from its configured directory
-  (`seed_roots/0`): the component bundle from `:bundle_path` (the repo
-  checkout, or the baked image copy in Docker) and the AQUA template from
-  `:aqua_template_path` (the repo's `aqua/`, or the operator-editable
-  `/app/aqua` mount).
+  every root is read in place as a same-named subdirectory of the one seed
+  tree (`:seed_path`, the repo's `seed/` on a checkout, `/app/seed` in
+  Docker): the component bundle at `seed/components` (baked into the image)
+  and the AQUA template at `seed/aqua` (the operator-editable mount).
 
   ## Structured Logs (database only)
 
@@ -156,22 +155,20 @@ defmodule Arca.Storage do
   def global_prefixes, do: @global_prefixes
 
   # Seed media: install media read in place from local disk, never tenant
-  # state and never adapter-stored. Each logical root maps to the config key
-  # holding its physical path. One table, so a new kind of seed media is a
-  # new entry — not a new special case in every gate.
-  @seed_roots %{
-    "components" => :bundle_path,
-    "aqua" => :aqua_template_path
-  }
+  # state and never adapter-stored. Every root is a subdirectory of the one
+  # seed tree (`:seed_path`), named after its logical root. One roster, so a
+  # new kind of seed media is a new entry — not a new special case in every
+  # gate.
+  @seed_roots ~w(components aqua)
 
   @doc """
-  The seed-media roots: logical `["seed", root | rest]` prefixes and the
-  config key each one's physical path lives under. `Arca` pins them to the
-  Local adapter, `authorize_path/2` admits only system contexts, and
-  `Arca.Adapters.Local.build_path/2` routes them to their configured
-  directories — outside the storage root.
+  The seed-media roots: the logical `["seed", root | rest]` prefixes, each a
+  same-named subdirectory of the one seed tree (`:seed_path`). `Arca` pins
+  them to the Local adapter, `authorize_path/2` admits only system contexts,
+  and `Arca.Adapters.Local.build_path/2` routes them under the seed tree —
+  outside the storage root.
   """
-  @spec seed_roots() :: %{String.t() => atom()}
+  @spec seed_roots() :: [String.t()]
   def seed_roots, do: @seed_roots
 
   @doc """

@@ -59,7 +59,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   alias Sanctum.Tenancy.Athanors
 
   @repo_root Path.expand("../../../..", __DIR__)
-  @bundle Path.join(@repo_root, "components/_bundle")
+  @bundle Path.join(@repo_root, "seed/components")
   @wasm Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm")
   @providers ~w(claude openai gemini grok openrouter)
 
@@ -68,15 +68,18 @@ defmodule Sanctum.ProvisioningClosureTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_closure_#{:rand.uniform(1_000_000)}")
-    bundle_dir = Path.join(test_dir, "bundle")
+    seed_dir = Path.join(test_dir, "seed")
+    bundle_dir = Path.join(seed_dir, "components")
     copy_bundle!(bundle_dir)
+    # Provisioning also copies the AQUA template out of the seed tree.
+    File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
     {:ok, server} = Bandit.start_link(plug: {Registry, fixtures()}, ip: {127, 0, 0, 1}, port: 0)
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
     prev = %{
       base_path: Application.get_env(:cyfr, :base_path),
-      bundle_path: Application.get_env(:cyfr, :bundle_path),
+      seed_path: Application.get_env(:cyfr, :seed_path),
       oci: Application.get_env(:cyfr, :oci_registry_url),
       registry: Application.get_env(:cyfr, :registry_url),
       egress: Application.get_env(:cyfr, :private_egress_targets),
@@ -84,7 +87,7 @@ defmodule Sanctum.ProvisioningClosureTest do
     }
 
     Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :bundle_path, bundle_dir)
+    Application.put_env(:cyfr, :seed_path, seed_dir)
     # `localhost:` is the one host the OCI reference layer maps to http.
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
@@ -95,7 +98,7 @@ defmodule Sanctum.ProvisioningClosureTest do
     on_exit(fn ->
       for {key, value} <- [
             base_path: prev.base_path,
-            bundle_path: prev.bundle_path,
+            seed_path: prev.seed_path,
             oci_registry_url: prev.oci,
             registry_url: prev.registry,
             private_egress_targets: prev.egress,

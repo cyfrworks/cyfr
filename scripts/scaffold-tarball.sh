@@ -9,7 +9,7 @@ OUTPUT="${1:-cyfr-scaffold.tar.gz}"
 ITEMS=(
   component-guide.md tincture-guide.md integration-guide.md
   LICENSE LICENSES/ FAIR_SOURCE.md
-  wit/ aqua/
+  wit/
   # Deploy files: `cyfr init` lays these down so `cyfr up` brings up the full
   # self-hosted stack (cyfr + mcp-bridge, plus caddy in TLS mode).
   # They are the single source of truth — the codex binary no longer embeds
@@ -27,5 +27,9 @@ if [ ${#FOUND[@]} -eq 0 ]; then
   exit 1
 fi
 
-tar czf "$OUTPUT" "${FOUND[@]}"
+# The AQUA template ships under its operator-project name `aqua/` (the
+# codex scaffold contract) while living at seed/aqua in this repo.
+[ -d seed/aqua ] || { echo "Error: seed/aqua missing" >&2; exit 1; }
+
+tar czf "$OUTPUT" "${FOUND[@]}" -C seed aqua
 echo "Created $OUTPUT ($(du -h "$OUTPUT" | cut -f1) compressed)"

@@ -249,10 +249,11 @@ defmodule Prism.TinctureRegistryTest do
     test "the seed bundle is never a tincture source", %{base: base} do
       # A tincture-shaped manifest inside the bundle source must never be
       # scanned: the roster walk only enumerates athanor rows.
-      bundle_dir = Path.join(base, "bundle_fixture")
-      prev_bundle = Application.get_env(:cyfr, :bundle_path)
-      Application.put_env(:cyfr, :bundle_path, bundle_dir)
-      on_exit(fn -> Application.put_env(:cyfr, :bundle_path, prev_bundle) end)
+      seed_dir = Path.join(base, "seed_fixture")
+      bundle_dir = Path.join(seed_dir, "components")
+      prev_seed = Application.get_env(:cyfr, :seed_path)
+      Application.put_env(:cyfr, :seed_path, seed_dir)
+      on_exit(fn -> Application.put_env(:cyfr, :seed_path, prev_seed) end)
 
       dir = Path.join([bundle_dir, "tinctures", "local", "bundled", "0.1.0"])
       File.mkdir_p!(dir)

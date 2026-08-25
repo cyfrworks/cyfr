@@ -39,7 +39,6 @@ COPY apps/ apps/
 # the tree is missing, so an image can never ship an empty ABI)
 COPY component-guide.md tincture-guide.md integration-guide.md ./
 COPY wit/ wit/
-COPY aqua/ aqua/
 
 # Full compile + build assets + release
 RUN mix compile && mix assets.deploy && mix release cyfr
@@ -62,24 +61,21 @@ COPY --from=builder /app/_build/prod/rel/cyfr ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
-# Copy the AQUA agent template (manifest + prompts) to a defaults location.
-# The release reads the template from /app/aqua (`:cyfr, :aqua_template_path`)
-# and copies it into each athanor's own storage when the athanor is
-# provisioned; docker-entrypoint.sh seeds /app/aqua/ from this defaults dir
-# on first start. This works whether or not the user has a host volume mount
-# at /app/aqua: empty mount → entrypoint seeds it; pre-populated mount →
-# entrypoint skips.
-COPY --from=builder /app/aqua /app/aqua-defaults
-
-# The seed bundle every athanor is provisioned from. Baked into the image
-# and read in place (`:cyfr, :bundle_path` via CYFR_BUNDLE_PATH below) — no
-# first-boot copy, no bind mount: a bare image boot can always mint athanors.
-COPY components/_bundle/ /app/components-defaults/_bundle/
-ENV CYFR_BUNDLE_PATH=/app/components-defaults/_bundle
-
-# The AQUA template is the second seed root: the operator-editable /app/aqua
-# mount (seeded from /app/aqua-defaults on first boot by the entrypoint).
-ENV CYFR_AQUA_TEMPLATE_PATH=/app/aqua
+# The seed tree (`:cyfr, :seed_path` via CYFR_SEED_PATH below), read in
+# place — one root, two kinds of media:
+#
+# - seed/components — the bundle every athanor is provisioned from. Baked
+#   into the image, no first-boot copy, no bind mount: a bare image boot
+#   can always mint athanors.
+# - seed/aqua — the AQUA agent template (manifest + prompts), the
+#   operator-editable mount. Defaults are baked at /app/aqua-defaults and
+#   docker-entrypoint.sh seeds /app/seed/aqua/ from them on first start.
+#   This works whether or not the user has a host volume mount at
+#   /app/seed/aqua: empty mount → entrypoint seeds it; pre-populated
+#   mount → entrypoint skips.
+COPY seed/components/ /app/seed/components/
+COPY seed/aqua/ /app/aqua-defaults/
+ENV CYFR_SEED_PATH=/app/seed
 
 # gosu for entrypoint privilege drop (standard Docker pattern)
 RUN set -eux; \

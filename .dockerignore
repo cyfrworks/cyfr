@@ -23,12 +23,13 @@ docker-compose*.yml
 !tincture-guide.md
 !integration-guide.md
 !FAIR_SOURCE.md
-!aqua/
+!seed/aqua/
 .formatter.exs
 tmp/
 .env
 .env.*
-components/_bundle/**/target/
-components/_bundle/**/node_modules/
+seed/components/**/target/
+seed/components/**/node_modules/
+aqua/
 apps/*/test/
 _build_pg/

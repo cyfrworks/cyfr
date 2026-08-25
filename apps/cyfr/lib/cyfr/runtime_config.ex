@@ -170,25 +170,23 @@ defmodule Cyfr.RuntimeConfig do
   Resolve the filesystem roots from the environment (release runtime):
 
     * `CYFR_DATA_PATH` — the one runtime storage root (default `"data"`)
-    * `CYFR_BUNDLE_PATH` — the seed bundle, read in place (default
-      `"components/_bundle"`)
-    * `CYFR_AQUA_TEMPLATE_PATH` — the AQUA template, read in place
-      (default `"aqua"`)
+    * `CYFR_SEED_PATH` — the seed tree, read in place: the component bundle
+      under `components/` and the AQUA template under `aqua/`
+      (default `"seed"`)
     * `CYFR_DATABASE_PATH` — the SQLite file (default `cyfr.db` under the
       data root; ignored on Postgres)
 
   Every path comes back expanded. Set-or-default, never silent fallback: an
   unset variable takes its default, a set-but-blank one fails the boot.
-  Returns `{:ok, %{base_path: _, bundle_path: _, aqua_template_path: _,
-  database_path: _}}` or `{:error, message}`.
+  Returns `{:ok, %{base_path: _, seed_path: _, database_path: _}}` or
+  `{:error, message}`.
   """
   @spec resolve_paths(getenv) :: {:ok, map()} | {:error, String.t()}
   def resolve_paths(getenv) when is_function(getenv, 1) do
     with {:ok, base} <- path_var(getenv, "CYFR_DATA_PATH", "data"),
-         {:ok, bundle} <- path_var(getenv, "CYFR_BUNDLE_PATH", "components/_bundle"),
-         {:ok, aqua} <- path_var(getenv, "CYFR_AQUA_TEMPLATE_PATH", "aqua"),
+         {:ok, seed} <- path_var(getenv, "CYFR_SEED_PATH", "seed"),
          {:ok, db} <- path_var(getenv, "CYFR_DATABASE_PATH", Path.join(base, "cyfr.db")) do
-      {:ok, %{base_path: base, bundle_path: bundle, aqua_template_path: aqua, database_path: db}}
+      {:ok, %{base_path: base, seed_path: seed, database_path: db}}
     end
   end
 

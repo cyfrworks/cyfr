@@ -120,16 +120,17 @@ config :cyfr, provisioning_inline: true
 config :cyfr, execution_sweeper_enabled: false
 
 # Default storage roots for tests (individual tests may override), both under
-# one throwaway root: `base_path` holds all tenant storage, `bundle_path`
-# starts empty so no test sees a bundle it did not write. Leaving either at
-# its config.exs default would make tests read or write the repo's own trees.
-# The AQUA template stays the shipped one — it is only ever read, and copied
-# into an athanor's own storage under `base_path`.
+# one throwaway root: `base_path` holds all tenant storage, and the seed tree
+# starts with an empty bundle so no test sees one it did not write. Leaving
+# either at its config.exs default would make tests read or write the repo's
+# own trees. test_helper.exs copies the shipped AQUA template into the
+# throwaway seed tree — it is only ever read, and copied into an athanor's
+# own storage under `base_path`.
 test_root = Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
 
 config :cyfr,
   base_path: test_root,
-  bundle_path: Path.join(test_root, "bundle")
+  seed_path: Path.join(test_root, "seed")
 
 # Sanctum test configuration
 config :cyfr,

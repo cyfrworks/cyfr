@@ -103,15 +103,13 @@ config :cyfr, ecto_repos: [Arca.Repo]
 
 # Arca Storage Configuration
 # Paths are expanded to absolute at config time so they don't depend on runtime CWD,
-# which can vary across umbrella apps during startup.
+# which can vary across umbrella apps during startup. The seed tree (the
+# component bundle and the AQUA agent template, `Arca.Storage.seed_roots/0`)
+# is anchored to the repo, not the CWD: it is read wherever the app runs from.
 config :cyfr,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
-  bundle_path: Path.expand("./components/_bundle")
-
-# The AQUA agent template every new athanor is given (`Compendium.AquaTemplate`).
-# Anchored to the repo, not the CWD: it is read wherever the app runs from.
-config :cyfr, :aqua_template_path, Path.expand("../aqua", __DIR__)
+  seed_path: Path.expand("../seed", __DIR__)
 
 # Storage-adjacent knobs, spelled out so the defaults are discoverable —
 # the readers fall back to the same values, but an invisible knob is a knob

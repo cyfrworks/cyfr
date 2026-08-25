@@ -107,7 +107,7 @@ func warnMissingStackServices(path string) {
 // must appear in the cyfr service's volumes list.
 var requiredVolumes = []string{
 	"./data:/app/data",
-	"./aqua:/app/aqua",
+	"./aqua:/app/seed/aqua",
 }
 
 // requiredPorts must appear in the cyfr service's ports list. Bound to the

@@ -351,7 +351,7 @@ defmodule Arca do
   defp invalidate_athanor_usage(_ctx, _path), do: :ok
 
   # Seed media is server install media read straight from local disk
-  # (each root's config key — `Arca.Storage.seed_roots/0`), whatever
+  # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
   # storage adapter is configured: an object-store deployment provisions
   # athanors from the shipped media without the bucket ever holding a copy.
   # Everything else goes to the configured adapter.

@@ -81,8 +81,7 @@ defmodule Cyfr.RuntimeConfigTest do
       assert {:ok, paths} = RuntimeConfig.resolve_paths(env(%{}))
 
       assert paths.base_path == Path.expand("data")
-      assert paths.bundle_path == Path.expand("components/_bundle")
-      assert paths.aqua_template_path == Path.expand("aqua")
+      assert paths.seed_path == Path.expand("seed")
       assert paths.database_path == Path.join(paths.base_path, "cyfr.db")
     end
 
@@ -91,14 +90,12 @@ defmodule Cyfr.RuntimeConfigTest do
                RuntimeConfig.resolve_paths(
                  env(%{
                    "CYFR_DATA_PATH" => "/srv/cyfr",
-                   "CYFR_BUNDLE_PATH" => "/media/bundle",
-                   "CYFR_AQUA_TEMPLATE_PATH" => "/media/aqua"
+                   "CYFR_SEED_PATH" => "/media/seed"
                  })
                )
 
       assert paths.base_path == "/srv/cyfr"
-      assert paths.bundle_path == "/media/bundle"
-      assert paths.aqua_template_path == "/media/aqua"
+      assert paths.seed_path == "/media/seed"
       assert paths.database_path == "/srv/cyfr/cyfr.db"
     end
 
@@ -112,7 +109,7 @@ defmodule Cyfr.RuntimeConfigTest do
     end
 
     test "a set-but-blank variable fails the boot instead of defaulting" do
-      for var <- ~w(CYFR_DATA_PATH CYFR_BUNDLE_PATH CYFR_AQUA_TEMPLATE_PATH CYFR_DATABASE_PATH) do
+      for var <- ~w(CYFR_DATA_PATH CYFR_SEED_PATH CYFR_DATABASE_PATH) do
         assert {:error, message} = RuntimeConfig.resolve_paths(env(%{var => "   "}))
         assert message =~ var
       end

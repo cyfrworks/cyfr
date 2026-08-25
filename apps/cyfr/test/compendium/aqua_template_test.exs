@@ -14,17 +14,18 @@ defmodule Compendium.AquaTemplateTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "aqua_template_#{System.unique_integer([:positive])}")
-    template = Path.join(base, "template")
+    seed = Path.join(base, "seed")
+    template = Path.join(seed, "aqua")
     File.mkdir_p!(template)
 
     prev_base = Application.fetch_env!(:cyfr, :base_path)
-    prev_template = Application.fetch_env!(:cyfr, :aqua_template_path)
+    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
     Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :aqua_template_path, template)
+    Application.put_env(:cyfr, :seed_path, seed)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :aqua_template_path, prev_template)
+      Application.put_env(:cyfr, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 
