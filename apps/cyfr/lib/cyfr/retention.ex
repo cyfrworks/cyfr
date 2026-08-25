@@ -77,11 +77,7 @@ defmodule Cyfr.Retention do
           messages_days: non_neg_integer()
         }
   def settings do
-    # The module moved out of Arca; the old config key keeps working for
-    # one release so an operator's config does not silently reset.
-    config =
-      Application.get_env(:cyfr, __MODULE__) ||
-        Application.get_env(:cyfr, Arca.Retention, [])
+    config = Application.get_env(:cyfr, __MODULE__, [])
 
     %{
       executions: Keyword.get(config, :executions, @default_execution_retention),

@@ -597,6 +597,7 @@ defmodule PrismWeb.ConversationLive do
        %{
          "filename" => entry.client_name,
          "media_type" => entry.client_type,
+         # arca:bypass-ok=D — Plug-managed upload tmp file.
          "bytes" => File.read!(path)
        }}
     end)

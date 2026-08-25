@@ -239,12 +239,9 @@ defmodule Opus.StorageHandler do
 
   defp validate_public_quota(_action, _request, _ctx, _opts), do: :ok
 
-  defp default_public_quota do
-    Application.get_env(:cyfr, :public_storage_quota, %{
-      max_bytes: 26_214_400,
-      max_files: 200
-    })
-  end
+  # config.exs guarantees the key; an inline fallback here would be a
+  # second spelling of the same numbers, free to drift.
+  defp default_public_quota, do: Application.fetch_env!(:cyfr, :public_storage_quota)
 
   # The operator's per-athanor ceiling for authenticated writes
   # (`CYFR_ATHANOR_STORAGE_BYTES`) — off unless set, as a private box needs

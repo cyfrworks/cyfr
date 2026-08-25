@@ -16,6 +16,7 @@ defmodule Compendium.MCP.AquaTool do
   # Repo root — used for compile-time doc embedding. Resolved by walking up from
   # this file until the guide files are found, rather than hard-coding the number
   # of parent hops (which silently breaks whenever this module is moved).
+  # arca:bypass-ok=C — compile-time repo-root discovery.
   @project_root Enum.reduce_while(1..10, Path.expand(__DIR__), fn _, dir ->
                   if File.exists?(Path.join(dir, "component-guide.md")) do
                     {:halt, dir}
@@ -28,6 +29,7 @@ defmodule Compendium.MCP.AquaTool do
   @external_resource Path.join(@project_root, "component-guide.md")
   @external_resource Path.join(@project_root, "tincture-guide.md")
   @external_resource Path.join(@project_root, "integration-guide.md")
+  # arca:bypass-ok=C — compile-time embed; runtime never reads these files.
   @component_guide File.read!(Path.join(@project_root, "component-guide.md"))
   @tincture_guide File.read!(Path.join(@project_root, "tincture-guide.md"))
   @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))

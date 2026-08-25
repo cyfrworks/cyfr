@@ -15,9 +15,13 @@ defmodule Arca.Adapters.S3 do
   Mirrors `Arca.Adapters.Local` exactly: both adapters join
   `Arca.Storage.physical_segments/2` under one root, so a key generated
   against one decodes identically against the other —
-  `<prefix>/athanors/{athanor_id}/data/<rest>`,
-  `<prefix>/athanors/{athanor_id}/components/<rest>`, and the globals
-  `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
+  `<prefix>/athanors/{athanor_id}/<scope>/<rest>` for every tenant scope
+  in `Arca.Storage.tenant_roots/0` (`components/`, `guest/`, `aqua/`, …)
+  and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
+
+  An S3 deployment is not a whole-box backup: the bucket holds Arca
+  objects; the volume still holds the database and the sidecars'
+  files (`data/cyfr.db`, `data/mcp-bridge/`).
 
   The `athanors/` root keeps every tenant key disjoint from the global
   roots, so an athanor id that happens to equal a reserved root name can
@@ -64,7 +68,7 @@ defmodule Arca.Adapters.S3 do
   # O(size) each. The ceiling is the default node `max_response_size` — the size
   # past which the guest `read` action already declines to return the object —
   # so refusing here takes away nothing a caller could otherwise read back.
-  @max_append_bytes 5_242_880
+  @max_append_bytes Sanctum.Limits.default_max_response_size()
 
   @impl true
   def get(%Context{} = ctx, segments) do

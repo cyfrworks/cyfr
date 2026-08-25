@@ -146,9 +146,9 @@ defmodule Compendium.AutoIndexerTest do
 
       result = AutoIndexer.scan(ctx: ctx)
 
-      # scanned_dirs records the athanor's Arca prefix, not raw filesystem paths.
-      expected_path = "components/#{ctx.athanor_id}/"
-      assert [%{path: ^expected_path, via: "Arca.list_recursive"}] = result.scanned_dirs
+      # scanned_dirs speaks the logical vocabulary: tenant-relative, no
+      # athanor in the path (the context carries it).
+      assert [%{path: "components/", via: "Arca.list_recursive"}] = result.scanned_dirs
     end
 
     test "scans multiple component types", %{ctx: ctx} do

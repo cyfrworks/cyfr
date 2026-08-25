@@ -24,6 +24,7 @@ defmodule Compendium.WITSource do
       type_dir = Path.join(@wit_root, type)
 
       files =
+        # arca:bypass-ok=C — compile-time embed of the tracked wit/ tree.
         [type_dir, "**", "*.wit"]
         |> Path.join()
         |> Path.wildcard()
@@ -46,6 +47,7 @@ defmodule Compendium.WITSource do
   @wit_files Map.new(wit_entries, fn {type, type_dir, files} ->
                {type,
                 Enum.map(files, fn file ->
+                  # arca:bypass-ok=C — compile-time embed.
                   {Path.split(Path.relative_to(file, type_dir)), File.read!(file)}
                 end)}
              end)

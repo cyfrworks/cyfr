@@ -545,6 +545,10 @@ CYFR_S3_SECRET_ACCESS_KEY=...
 
 All four required vars must be set or the server refuses to start.
 
+> On S3 the bucket holds the Arca objects only — the `data/` volume still
+> holds the database and the sidecars' files (`cyfr.db`, `mcp-bridge/`), so
+> backing up an S3 deployment means both.
+
 ### Proxy trust and rate limits
 
 - `CYFR_TRUSTED_PROXY_HOPS` (default `1`) — how many reverse-proxy hops sit

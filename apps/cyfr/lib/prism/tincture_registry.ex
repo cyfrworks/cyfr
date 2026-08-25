@@ -115,7 +115,10 @@ defmodule Prism.TinctureRegistry do
   defp scan_athanor(athanor) do
     ctx = scan_context(athanor.id)
 
-    case Arca.list_recursive(ctx, ["components", @tincture_type_plural]) do
+    case Arca.list_recursive(
+           ctx,
+           Compendium.ComponentPath.base_prefix() ++ [@tincture_type_plural]
+         ) do
       {:ok, leaves} ->
         segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
 

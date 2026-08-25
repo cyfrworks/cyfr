@@ -24,6 +24,13 @@ defmodule Arca.Cache.Keys do
   def match_compiled_component, do: {:compiled_component, :_}
 
   @doc """
+  Raw WASM bytes for a digest — the fetch cache one step before
+  `compiled_component/1`, equally content-addressed and shared across
+  athanors.
+  """
+  def wasm_bytes(digest), do: {:wasm_bytes, digest}
+
+  @doc """
   The resolved activation of a component's static closure within an
   athanor, keyed by the root's node key and release digest.
   """

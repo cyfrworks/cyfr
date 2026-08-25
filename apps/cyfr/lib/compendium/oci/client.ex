@@ -745,6 +745,7 @@ defmodule Compendium.OCI.Client do
     try do
       case :erl_tar.create(String.to_charlist(tmp), tar_entries) do
         :ok ->
+          # arca:bypass-ok=D — read back the tar scratch file.
           case File.read(tmp) do
             {:ok, tar_binary} -> {:ok, :zlib.gzip(tar_binary)}
             {:error, _} -> :none
@@ -754,6 +755,7 @@ defmodule Compendium.OCI.Client do
           :none
       end
     after
+      # arca:bypass-ok=D — remove the tar scratch file.
       File.rm(tmp)
     end
   end

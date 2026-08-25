@@ -197,11 +197,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Arca.Storage's single-seam policy: all file/blob I/O flows through the
-      # storage adapter. A direct File.* / Path.wildcard call outside the adapter
-      # must be acknowledged with an `# arca:bypass-ok=<A|B|C|D>` tag (see the
-      # bypass-group table in Arca.Storage). This asserts every file that makes
-      # such a call carries a tag, so a new module cannot silently bypass the
-      # object-store seam.
+      # storage adapter. A direct File.* / Path.wildcard call outside the
+      # adapter must be acknowledged with an `# arca:bypass-ok=<A|B|C|D>` tag
+      # (see the bypass-group table in Arca.Storage) on the call's own line or
+      # within the four lines above it — LINE-scoped, so one tag can no longer
+      # exempt a whole file's worth of unrelated calls. A module that is
+      # wholly scratch-dir mechanics may declare
+      # `arca:bypass-ok=<X> — entire module` once instead.
       - name: Assert direct filesystem calls are tagged
         run: |
           set -uo pipefail
@@ -211,15 +213,23 @@ jobs:
               */arca/adapters/*) continue ;;
               apps/cyfr/lib/arca/storage.ex) continue ;;
             esac
-            calls="$(grep -nE '(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard' "$f" | grep -v '^[0-9]*: *#' || true)"
-            if [ -n "$calls" ] && ! grep -q 'arca:bypass-ok' "$f"; then
-              echo "::error file=$f::direct filesystem I/O without an arca:bypass-ok tag (see Arca.Storage single-seam policy)"
-              echo "$calls"
+            if grep -qE 'arca:bypass-ok=[A-D] — entire module' "$f"; then continue; fi
+            bad="$(awk '
+              /arca:bypass-ok/ { ok = NR }
+              /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard/ {
+                if ($0 ~ /^[[:space:]]*#/) next
+                if (ok && NR - ok <= 4) next
+                print NR ": " $0
+              }
+            ' "$f")"
+            if [ -n "$bad" ]; then
+              echo "::error file=$f::direct filesystem I/O without a nearby arca:bypass-ok tag (see Arca.Storage single-seam policy)"
+              echo "$bad"
               fail=1
             fi
           done < <(git ls-files 'apps/cyfr/lib/*.ex' 'apps/cyfr/lib/**/*.ex' 'apps/opus/lib/*.ex' 'apps/opus/lib/**/*.ex' 'apps/locus/lib/*.ex' 'apps/locus/lib/**/*.ex')
           if [ "$fail" -ne 0 ]; then
-            echo "Untagged filesystem I/O found. Route it through Arca, or tag it # arca:bypass-ok=<A|B|C|D>."
+            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D>."
             exit 1
           fi
 

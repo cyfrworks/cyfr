@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# arca:bypass-ok=D — entire module: every File call operates on the
+# tar-extract scratch dir the OCI publish flow hands it; no Arca-tracked
+# content lives on the local filesystem.
 defmodule Compendium.TinctureValidator do
   @moduledoc """
   Validate tincture bundles and compute content digests.

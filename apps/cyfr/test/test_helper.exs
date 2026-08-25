@@ -36,10 +36,10 @@ File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqu
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()
 
-# The suite must never write into the repo's own storage tree: every storage
-# root — the suite DB included — is under tmp (config/test.exs), so an entry
-# appearing under the repo's data/athanors/ means a test reached the real
-# filesystem around the tmp roots.
+# The suite must never write into the repo's own trees: every storage root —
+# the suite DB and the seed tree included — is under tmp (config/test.exs),
+# so an entry appearing under the repo's data/ or seed/ means a test reached
+# the real filesystem around the tmp roots.
 #
 # The check is on what the run ADDS, not on what is there. A developer who
 # has run the server locally has real athanor trees under data/athanors/,
@@ -47,7 +47,7 @@ Sanctum.TestContext.seed_athanors!()
 # the machine that most needs it — green and red would look the same. On a
 # fresh checkout the snapshot is empty, so any stray write still fails.
 repo_root = Path.expand("../../..", __DIR__)
-watched_dirs = ["data/athanors"]
+watched_dirs = ["data", "data/athanors", "seed", "seed/components", "seed/aqua"]
 
 entries_under = fn dir ->
   path = Path.join(repo_root, dir)

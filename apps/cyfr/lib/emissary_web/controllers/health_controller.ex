@@ -100,7 +100,9 @@ defmodule EmissaryWeb.HealthController do
         permissions: [:storage_read, :storage_write]
       )
 
-    path = ["system", "health", ".write_probe"]
+    # Unique per probe: two concurrent checks must not race on one file's
+    # delete, where the loser would report the node unhealthy.
+    path = ["system", "health", ".write_probe.#{System.unique_integer([:positive])}"]
 
     with :ok <- Arca.put(ctx, path, Integer.to_string(System.system_time(:second))),
          :ok <- Arca.delete(ctx, path) do

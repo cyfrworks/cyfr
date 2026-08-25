@@ -73,12 +73,21 @@ defmodule Sanctum.Limits do
   @spec fields() :: [atom()]
   def fields, do: @fields
 
+  # One spelling of the default read ceiling — the S3 adapter's append
+  # bound derives from it, so a limits change cannot silently desynchronize
+  # the two.
+  @default_max_response_size 5_242_880
+
+  @doc "The default per-call read ceiling shared across component types."
+  @spec default_max_response_size() :: pos_integer()
+  def default_max_response_size, do: @default_max_response_size
+
   @type_defaults %{
     catalyst: %{
       timeout: "3m",
       max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
-      max_response_size: 5_242_880,
+      max_response_size: @default_max_response_size,
       rate_limit: %{requests: 100, window: "1m"},
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
@@ -87,7 +96,7 @@ defmodule Sanctum.Limits do
       timeout: "5m",
       max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
-      max_response_size: 5_242_880,
+      max_response_size: @default_max_response_size,
       rate_limit: %{requests: 100, window: "1m"},
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
@@ -96,7 +105,7 @@ defmodule Sanctum.Limits do
       timeout: "1m",
       max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
-      max_response_size: 5_242_880,
+      max_response_size: @default_max_response_size,
       rate_limit: %{requests: 100, window: "1m"},
       max_concurrent_tasks: 10,
       batch_timeout: "5m"
@@ -105,7 +114,7 @@ defmodule Sanctum.Limits do
       timeout: "1m",
       max_memory_bytes: 67_108_864,
       max_request_size: 1_048_576,
-      max_response_size: 5_242_880,
+      max_response_size: @default_max_response_size,
       rate_limit: %{requests: 100, window: "1m"},
       max_concurrent_tasks: 10,
       batch_timeout: "5m"

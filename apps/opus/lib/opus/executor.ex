@@ -585,7 +585,7 @@ defmodule Opus.Executor do
       "[fetch_component_bytes] digest=#{inspect(digest)}, component_keys=#{inspect(Map.keys(component))}"
     )
 
-    cache_key = {:wasm_bytes, digest}
+    cache_key = Arca.Cache.Keys.wasm_bytes(digest)
 
     case digest && Arca.Cache.get(cache_key) do
       {:ok, bytes} ->

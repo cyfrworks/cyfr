@@ -179,7 +179,7 @@ defmodule Compendium.AutoIndexer do
       errors: results.errors,
       total: total,
       elapsed_ms: elapsed,
-      scanned_dirs: [%{path: "components/#{ctx.athanor_id}/", via: "Arca.list_recursive"}]
+      scanned_dirs: [%{path: "components/", via: "Arca.list_recursive"}]
     }
   end
 

@@ -5,9 +5,10 @@ defmodule Compendium.Registry do
   @moduledoc """
   Local component registry with database-backed metadata and canonical directory layout.
 
-  Components are stored at (athanor-scoped, matching the `data/` tenant layout):
-  - `components/{athanor_id}/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
-  - `components/{athanor_id}/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
+  Components are stored under the context's athanor (the tenant is never
+  in the path — `Compendium.ComponentPath` builds the shape):
+  - `components/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
+  - `components/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
 
   The `publisher` is a flat namespace scoped to signing identity:
   - `local` — reserved for unsigned local components (default for local publish)
@@ -739,6 +740,7 @@ defmodule Compendium.Registry do
   # healthy component whose stored files do not match its digest.
   defp store_tincture_files(ctx, base_dir, current_dir, arca_base) do
     current_dir
+    # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
     |> Enum.reject(&(&1 in @tincture_excluded_on_pull))
     |> Enum.reduce_while(:ok, fn entry, :ok ->
@@ -749,6 +751,7 @@ defmodule Compendium.Registry do
           # lstat, not stat: File.dir?/File.read follow symlinks, so a link
           # here would recurse into itself or copy a host file into Arca.
           # The validator refuses links too; this is the store-side backstop.
+          # arca:bypass-ok=D — stat the tar-extract scratch entries.
           match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path)) ->
             {:error, {:tincture_symlink_rejected, Path.relative_to(path, base_dir)}}
 
@@ -759,6 +762,7 @@ defmodule Compendium.Registry do
             rel = Path.relative_to(path, base_dir)
             segments = arca_base ++ String.split(rel, "/")
 
+            # arca:bypass-ok=D — read the scratch file for the Arca write.
             case File.read(path) do
               {:ok, content} -> Arca.put(ctx, segments, content)
               {:error, reason} -> {:error, {:tincture_read_failed, rel, reason}}
