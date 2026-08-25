@@ -84,8 +84,11 @@ defmodule Arca.Adapters.Local do
 
   @impl true
   def put(%Context{} = ctx, path, content) do
+    refuse_seed_write!(path)
     full_path = build_path(ctx, path)
 
+    # No symlink guard needed here: the write lands at a temp name and
+    # `File.rename/2` REPLACES a link at the target rather than following it.
     with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
       # Write-then-rename keeps the object atomic: a concurrent reader sees
       # either the old or the new content, never a torn file, and a crash
@@ -113,15 +116,30 @@ defmodule Arca.Adapters.Local do
 
   @impl true
   def append(%Context{} = ctx, path, content) do
+    refuse_seed_write!(path)
     full_path = build_path(ctx, path)
 
-    with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
-      File.write(full_path, content, [:append])
+    # `File.write [:append]` opens with O_APPEND and FOLLOWS a symlink —
+    # unlike `put/3`, whose rename replaces the link. Refuse like `get/2`
+    # does; this guards the final component (a symlinked parent directory
+    # is the same residual `get/2` carries — only the walks lstat every
+    # level). Checked before mkdir_p: lstat on a missing target is
+    # `:undefined`, and a refused call should create no directories.
+    case lstat_type(full_path) do
+      :symlink ->
+        Logger.warning("[Arca.Local.append] refusing symlink at #{full_path}")
+        {:error, :symlink_denied}
+
+      _ ->
+        with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
+          File.write(full_path, content, [:append])
+        end
     end
   end
 
   @impl true
   def delete(%Context{} = ctx, path) do
+    refuse_seed_write!(path)
     full_path = build_path(ctx, path)
 
     case File.rm(full_path) do
@@ -182,6 +200,7 @@ defmodule Arca.Adapters.Local do
 
   @impl true
   def delete_tree(%Context{} = ctx, path) do
+    refuse_seed_write!(path)
     full_path = build_path(ctx, path)
 
     case File.rm_rf(full_path) do
@@ -385,6 +404,17 @@ defmodule Arca.Adapters.Local do
     expanded = Path.expand(path)
     expanded == root or String.starts_with?(expanded, root <> "/")
   end
+
+  # The seed tree is read-only at the Arca facade for every context; this
+  # clause makes the adapter refuse on its own, so a direct adapter call
+  # cannot write into (or `rm_rf` out of) the operator's seed media. S3 is
+  # already defended the same way — `physical_segments/2` raises on seed —
+  # and a direct-adapter seed write is a programming error, so raise.
+  defp refuse_seed_write!(["seed" | _]) do
+    raise ArgumentError, "seed media is read-only; no adapter accepts seed writes"
+  end
+
+  defp refuse_seed_write!(_path), do: :ok
 
   defp seed_root_path!(seed_root) do
     if seed_root in Arca.Storage.seed_roots() do

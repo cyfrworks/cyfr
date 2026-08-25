@@ -98,6 +98,50 @@ defmodule Arca.Adapters.LocalTest do
       assert {:ok, [["guest", "a.txt"]]} = Local.list_recursive(ctx, ["guest"])
       assert {:ok, %{files: 1, bytes: 1}} = Local.usage(ctx, ["guest"])
     end
+
+    test "get/2 refuses a file symlink out of the tree", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+
+      outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      secret = Path.join(outside, "secret.txt")
+      File.write!(secret, "secret")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      tree_dir = Local.build_path(ctx, ["guest", "a.txt"]) |> Path.dirname()
+      File.ln_s!(secret, Path.join(tree_dir, "link.txt"))
+
+      assert {:error, :symlink_denied} = Local.get(ctx, ["guest", "link.txt"])
+    end
+
+    test "append/3 refuses a file symlink and leaves the target untouched", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+
+      outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      secret = Path.join(outside, "secret.txt")
+      File.write!(secret, "secret")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      tree_dir = Local.build_path(ctx, ["guest", "a.txt"]) |> Path.dirname()
+      File.ln_s!(secret, Path.join(tree_dir, "link.txt"))
+
+      assert {:error, :symlink_denied} = Local.append(ctx, ["guest", "link.txt"], "injected")
+      assert File.read!(secret) == "secret"
+    end
+  end
+
+  describe "seed writes" do
+    test "every mutating callback refuses seed paths outright", %{ctx: ctx} do
+      for call <- [
+            fn -> Local.put(ctx, ["seed", "components", "x.txt"], "x") end,
+            fn -> Local.append(ctx, ["seed", "components", "x.txt"], "x") end,
+            fn -> Local.delete(ctx, ["seed", "components", "x.txt"]) end,
+            fn -> Local.delete_tree(ctx, ["seed", "components"]) end
+          ] do
+        assert_raise ArgumentError, ~r/seed media is read-only/, call
+      end
+    end
   end
 
   describe "exists?/2" do
