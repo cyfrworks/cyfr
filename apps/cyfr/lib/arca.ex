@@ -49,8 +49,8 @@ defmodule Arca do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
-      :ok = Arca.put(ctx, ["config", "settings.json"], json)
-      {:ok, content} = Arca.get(ctx, ["config", "settings.json"])
+      :ok = Arca.put(ctx, ["guest", "notes.txt"], content)
+      {:ok, content} = Arca.get(ctx, ["guest", "notes.txt"])
 
       # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
@@ -59,8 +59,8 @@ defmodule Arca do
       :ok = Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
-      :ok = Arca.put_json(ctx, ["config", "settings.json"], %{...})
-      {:ok, map} = Arca.get_json(ctx, ["config", "settings.json"])
+      :ok = Arca.put_json(ctx, ["guest", "state.json"], %{...})
+      {:ok, map} = Arca.get_json(ctx, ["guest", "state.json"])
 
   ## Retention
 
@@ -102,9 +102,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["config", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
       :ok
-      iex> Arca.get_json(ctx, ["config", "data.json"])
+      iex> Arca.get_json(ctx, ["guest", "data.json"])
       {:ok, %{"key" => "value"}}
 
   """
@@ -136,7 +136,7 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["config", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["guest", "data.json"], %{"key" => "value"})
       :ok
 
   """

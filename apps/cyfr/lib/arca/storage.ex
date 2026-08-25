@@ -5,7 +5,7 @@ defmodule Arca.Storage do
   @moduledoc """
   Behaviour for storage adapters.
 
-  All paths are lists of segments, e.g. `["config", "retention.json"]`.
+  All paths are lists of segments, e.g. `["guest", "notes.txt"]`.
   The adapter handles joining to the actual storage location.
 
   ## Single seam policy
@@ -47,8 +47,9 @@ defmodule Arca.Storage do
     Naming another athanor's tree is structurally impossible — there is no
     place in the path to put an athanor; platform code opens an athanor
     the way it does for rows, with a context focused on it. The scopes:
-    `components/` (`Compendium.ComponentPath`), `aqua/`, `config/`, `conversations/`, and `guest/` — the WASM guest's `data/`
-    scope (`guest_scopes/0` is the map, applied by `Opus.StorageHandler`
+    `components/` (`Compendium.ComponentPath`), `aqua/`,
+    `conversations/`, and `guest/` — the WASM guest's `data/` scope
+    (`guest_scopes/0` is the map, applied by `Opus.StorageHandler`
     at the guest boundary) so a `data/` grant can never see a host scope.
   - **Anything else** → refused (`authorize_path/2`): an unknown first
     segment is never silently minted as a new subtree.
@@ -76,9 +77,11 @@ defmodule Arca.Storage do
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── config/                    # Athanor config (retention settings, etc.)
           ├── conversations/             # chat attachment blobs
           └── guest/                     # guest (WASM) files — the guest's `data/` scope
+
+  Per-athanor settings (retention policy included) are rows — the
+  `athanors.settings` document — never blobs; the tree holds only content.
 
   The seed media every athanor is provisioned from is not stored state —
   every root is read in place as a same-named subdirectory of the one seed
@@ -123,7 +126,7 @@ defmodule Arca.Storage do
       ctx = Sanctum.TestContext.local()
 
       # Tenant-scoped (auto-prefixed with {athanor_id}/)
-      Arca.put(ctx, ["config", "retention.json"], json_content)
+      Arca.put(ctx, ["guest", "notes.txt"], content)
 
       # Global (no tenant prefix)
       Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
@@ -157,7 +160,7 @@ defmodule Arca.Storage do
   # The closed roster of tenant scopes. Every athanor tree holds exactly
   # these subtrees; an unknown first segment is refused, never silently
   # minted as a new subtree. A new kind of tenant state is a new entry here.
-  @tenant_roots ~w(aqua components config conversations guest)
+  @tenant_roots ~w(aqua components conversations guest)
 
   @doc """
   The tenant scopes: the first segments a tenant-scoped path may start
@@ -172,8 +175,7 @@ defmodule Arca.Storage do
   # The guest (WASM) storage vocabulary and the physical tenant scope each
   # guest scope stores under. The guest contract says `data/`; the host
   # stores that scope under `guest/`, a physical sibling of the host
-  # scopes (aqua/, config/, conversations/, …) so a `data/` grant can
-  # never see them.
+  # scopes (aqua/, conversations/) so a `data/` grant can never see them.
   @guest_scopes %{"data" => "guest", "components" => "components"}
 
   @doc """
@@ -328,10 +330,10 @@ defmodule Arca.Storage do
 
   ## Examples
 
-      iex> Arca.Storage.validate_path!(["config", "retention.json"])
+      iex> Arca.Storage.validate_path!(["guest", "notes.txt"])
       :ok
 
-      iex> Arca.Storage.validate_path!(["config", "..", "..", "etc", "passwd"])
+      iex> Arca.Storage.validate_path!(["guest", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
 
   """

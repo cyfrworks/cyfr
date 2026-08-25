@@ -261,16 +261,16 @@ defmodule Arca.Adapters.LocalTest do
     test "tenant paths go verbatim under athanors/{athanor_id} (no namespace segment)", %{
       ctx: ctx
     } do
-      path = Local.build_path(ctx, ["config", "sub", "retention.json"])
+      path = Local.build_path(ctx, ["guest", "sub", "notes.txt"])
 
       assert path ==
                Path.join([
                  @test_base_path,
                  "athanors",
                  ctx.athanor_id,
-                 "config",
+                 "guest",
                  "sub",
-                 "retention.json"
+                 "notes.txt"
                ])
     end
 

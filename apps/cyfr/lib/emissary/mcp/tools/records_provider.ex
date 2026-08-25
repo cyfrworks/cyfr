@@ -79,7 +79,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         name: "Arca Files",
         description:
           "Read any file in the athanor's storage by path (components/, aqua/, " <>
-            "guest/, config/, conversations/) — :storage_read spans the whole tree",
+            "guest/, conversations/) — :storage_read spans the whole tree",
         mimeType: "application/octet-stream"
       }
     ]
@@ -568,9 +568,12 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # ============================================================================
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
-    with :ok <- tenant_gate(ctx) do
-      settings = Cyfr.Retention.get_settings(ctx)
+    with :ok <- tenant_gate(ctx),
+         {:ok, settings} <- Cyfr.Retention.get_settings(ctx) do
       {:ok, %{action: "get", settings: settings}}
+    else
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, "Failed to read retention settings: #{inspect(reason)}"}
     end
   end
 
@@ -579,7 +582,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     with :ok <- tenant_gate(ctx) do
       case Cyfr.Retention.set_settings(ctx, settings) do
         :ok ->
-          new_settings = Cyfr.Retention.get_settings(ctx)
+          {:ok, new_settings} = Cyfr.Retention.get_settings(ctx)
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, reason} ->

@@ -26,8 +26,6 @@ defmodule Arca.Adapters.Local do
           │   ├── cyfr-manifest.json
           │   └── src/
           ├── aqua/                      # the athanor's AQUA agent definitions
-          │   └── {build_id}.json
-          ├── config/                    # Athanor config (retention settings, etc.)
           ├── conversations/             # chat attachment blobs
           └── guest/                     # guest (WASM) files — the guest's `data/` scope
 

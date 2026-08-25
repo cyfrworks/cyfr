@@ -20,6 +20,9 @@ defmodule Cyfr.RetentionTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # Retention settings live on the athanor row, so the athanor must exist.
+    Arca.TenantTestHelper.ensure_athanor_row("ath_retention_#{rand_id}")
+
     # Use a unique athanor per test: execution retention is per-athanor, so
     # a unique id isolates each test's executions from cross-test pollution.
     ctx =
@@ -243,7 +246,7 @@ defmodule Cyfr.RetentionTest do
       :ok = Retention.set_settings(ctx, %{"executions" => 5, "builds" => 3})
 
       # Retrieve and verify
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["executions"] == 5
       assert settings["builds"] == 3
     end
@@ -255,29 +258,44 @@ defmodule Cyfr.RetentionTest do
       # Update only executions
       :ok = Retention.set_settings(ctx, %{"executions" => 20})
 
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["executions"] == 20
       # unchanged
       assert settings["builds"] == 3
     end
 
     test "returns defaults when no user settings exist", %{ctx: ctx} do
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
 
       assert settings["executions"] == 10_000
       assert settings["builds"] == 100
     end
 
-    test "handles corrupt settings file gracefully", %{ctx: ctx} do
-      # Write corrupt JSON directly
-      user_config_path =
-        Arca.Adapters.Local.build_path(ctx, ["config", "retention.json"])
+    test "a missing athanor row means never configured: defaults, no error" do
+      ctx =
+        Context.build(
+          user_id: "user_rowless",
+          athanor_id: "ath_rowless_#{:rand.uniform(100_000)}",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
-      File.mkdir_p!(Path.dirname(user_config_path))
-      File.write!(user_config_path, "not valid json {{{")
+      {:ok, settings} = Retention.get_settings(ctx)
+      assert settings["executions"] == 10_000
+
+      # But nothing can be persisted without a row.
+      assert {:error, :not_found} = Retention.set_settings(ctx, %{"executions" => 5})
+    end
+
+    test "handles a corrupt settings document gracefully", %{ctx: ctx} do
+      # Corrupt the row's settings JSON directly, past the changeset.
+      from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id)
+      |> Arca.Repo.update_all(set: [settings: "not valid json {{{"])
 
       # Should return defaults
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["executions"] == 10_000
       assert settings["builds"] == 100
     end
@@ -308,22 +326,22 @@ defmodule Cyfr.RetentionTest do
       :ok = Retention.set_settings(ath_a_ctx, %{"executions" => 5})
       :ok = Retention.set_settings(ath_b_ctx, %{"executions" => 15})
 
-      assert Retention.get_settings(ath_a_ctx)["executions"] == 5
-      assert Retention.get_settings(ath_b_ctx)["executions"] == 15
+      assert {:ok, %{"executions" => 5}} = Retention.get_settings(ath_a_ctx)
+      assert {:ok, %{"executions" => 15}} = Retention.get_settings(ath_b_ctx)
     end
 
     test "rejects invalid values", %{ctx: ctx} do
       :ok = Retention.set_settings(ctx, %{"executions" => -5})
 
       # Should use previous value (default 10_000) due to validation
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["executions"] == 10_000
     end
 
     test "handles string values", %{ctx: ctx} do
       :ok = Retention.set_settings(ctx, %{"executions" => "7"})
 
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["executions"] == 7
     end
   end
@@ -379,13 +397,13 @@ defmodule Cyfr.RetentionTest do
     end
 
     test "get_settings includes mcp_log_days", %{ctx: ctx} do
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["mcp_log_days"] == 30
     end
 
     test "set_settings persists mcp_log_days", %{ctx: ctx} do
       :ok = Retention.set_settings(ctx, %{"mcp_log_days" => 14})
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["mcp_log_days"] == 14
     end
   end

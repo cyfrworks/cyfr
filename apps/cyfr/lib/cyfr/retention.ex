@@ -19,11 +19,14 @@ defmodule Cyfr.Retention do
 
   ## Storage
 
-  An athanor's settings are persisted to `config/retention.json` under the
-  tenant path `Arca.Storage.physical_segments/2` maps into the athanor's
-  data tree, so each athanor carries its own copy. Settings are shared by
-  all members of the athanor. If no settings exist, the defaults below
-  apply.
+  An athanor's retention policy lives under the `"retention"` key of its
+  settings document (`Sanctum.Tenancy.Athanors.settings/1` — the row's
+  JSON column), next to every other per-athanor setting. Settings are
+  shared by all members of the athanor; an athanor that never configured
+  retention gets the defaults below. Every key drives destructive
+  cleanup, so an unreadable settings document is an error the cleanup
+  walks skip — defaulting there could delete data the athanor asked to
+  keep.
 
   ## Defaults
 
@@ -39,7 +42,7 @@ defmodule Cyfr.Retention do
       ctx = Sanctum.TestContext.local()
 
       # Get the athanor's settings (or defaults)
-      settings = Cyfr.Retention.get_settings(ctx)
+      {:ok, settings} = Cyfr.Retention.get_settings(ctx)
 
       # Update the athanor's settings
       :ok = Cyfr.Retention.set_settings(ctx, %{"executions" => 5})
@@ -91,55 +94,80 @@ defmodule Cyfr.Retention do
   @doc """
   Get retention settings for a context's athanor.
 
-  Reads the athanor's settings from Arca, falling back to global defaults.
-  Settings are stored at `config/retention.json` in the athanor's tenant
-  directory and are shared by all its members.
+  Reads `settings["retention"]` from the athanor's row, filling missing
+  keys from the global defaults. A missing row means the athanor never
+  configured retention — the defaults apply. An unreadable row is an
+  error, not the defaults: every setting drives destructive cleanup, and
+  a transient database failure must not silently shorten a policy the
+  athanor lengthened.
   """
-  @spec get_settings(Context.t()) :: map()
+  @spec get_settings(Context.t()) :: {:ok, map()} | {:error, term()}
   def get_settings(%Context{} = ctx) do
     defaults = settings()
 
-    case Arca.get_json(ctx, ["config", "retention.json"]) do
-      {:ok, user_settings} ->
-        %{
-          "executions" => user_settings["executions"] || defaults.executions,
-          "builds" => user_settings["builds"] || defaults.builds,
-          "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days,
-          "policy_log_days" => user_settings["policy_log_days"] || defaults.policy_log_days,
-          "messages_days" => user_settings["messages_days"] || defaults.messages_days
-        }
+    case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
+      {:ok, athanor} ->
+        user_settings =
+          case Sanctum.Tenancy.Athanors.settings(athanor)["retention"] do
+            %{} = map -> map
+            _ -> %{}
+          end
 
-      {:error, _} ->
-        %{
-          "executions" => defaults.executions,
-          "builds" => defaults.builds,
-          "mcp_log_days" => defaults.mcp_log_days,
-          "policy_log_days" => defaults.policy_log_days,
-          "messages_days" => defaults.messages_days
-        }
+        {:ok,
+         %{
+           "executions" => user_settings["executions"] || defaults.executions,
+           "builds" => user_settings["builds"] || defaults.builds,
+           "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days,
+           "policy_log_days" => user_settings["policy_log_days"] || defaults.policy_log_days,
+           "messages_days" => user_settings["messages_days"] || defaults.messages_days
+         }}
+
+      {:error, :not_found} ->
+        {:ok,
+         %{
+           "executions" => defaults.executions,
+           "builds" => defaults.builds,
+           "mcp_log_days" => defaults.mcp_log_days,
+           "policy_log_days" => defaults.policy_log_days,
+           "messages_days" => defaults.messages_days
+         }}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Cyfr.Retention] settings unreadable for athanor #{ctx.athanor_id} " <>
+            "(#{inspect(reason)}); skipping rather than defaulting"
+        )
+
+        {:error, reason}
     end
   end
 
   @doc """
   Set retention settings for the context's athanor.
 
-  Stores the athanor's settings in Arca at `config/retention.json`.
-  Only provided keys are updated; missing keys retain their current values.
+  Writes the full policy under `settings["retention"]` on the athanor's
+  row. Only provided keys are updated; missing keys retain their current
+  values.
   """
   @spec set_settings(Context.t(), map()) :: :ok | {:error, term()}
   def set_settings(%Context{} = ctx, new_settings) when is_map(new_settings) do
-    current = get_settings(ctx)
+    with {:ok, current} <- get_settings(ctx),
+         {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
+      updated = %{
+        "executions" => get_positive_int(new_settings, "executions", current["executions"]),
+        "builds" => get_positive_int(new_settings, "builds", current["builds"]),
+        "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"]),
+        "policy_log_days" =>
+          get_positive_int(new_settings, "policy_log_days", current["policy_log_days"]),
+        "messages_days" =>
+          get_positive_int(new_settings, "messages_days", current["messages_days"])
+      }
 
-    updated = %{
-      "executions" => get_positive_int(new_settings, "executions", current["executions"]),
-      "builds" => get_positive_int(new_settings, "builds", current["builds"]),
-      "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"]),
-      "policy_log_days" =>
-        get_positive_int(new_settings, "policy_log_days", current["policy_log_days"]),
-      "messages_days" => get_positive_int(new_settings, "messages_days", current["messages_days"])
-    }
-
-    Arca.put_json(ctx, ["config", "retention.json"], updated)
+      case Sanctum.Tenancy.Athanors.put_settings(athanor, %{"retention" => updated}) do
+        {:ok, _athanor} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
   end
 
   defp get_positive_int(map, key, default) do
@@ -179,23 +207,24 @@ defmodule Cyfr.Retention do
   @spec cleanup_executions(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_executions(%Context{} = ctx, opts \\ []) do
-    user_settings = get_settings(ctx)
-    keep = Keyword.get(opts, :keep, user_settings["executions"])
-    dry_run = Keyword.get(opts, :dry_run, false)
+    with {:ok, user_settings} <- get_settings(ctx) do
+      keep = Keyword.get(opts, :keep, user_settings["executions"])
+      dry_run = Keyword.get(opts, :dry_run, false)
 
-    tenant_opts = [athanor_id: ctx.athanor_id]
+      tenant_opts = [athanor_id: ctx.athanor_id]
 
-    if dry_run do
-      ids_to_delete = Arca.Execution.ids_to_delete(keep, tenant_opts)
+      if dry_run do
+        ids_to_delete = Arca.Execution.ids_to_delete(keep, tenant_opts)
 
-      total = length(Arca.Execution.list(athanor_id: ctx.athanor_id, limit: 999_999))
+        total = length(Arca.Execution.list(athanor_id: ctx.athanor_id, limit: 999_999))
 
-      would_keep = min(total, keep)
-      {:ok, %{would_delete: ids_to_delete, would_keep: would_keep}}
-    else
-      case Arca.Execution.delete_older_than(keep, tenant_opts) do
-        {:error, _} = err -> err
-        {count, _} -> {:ok, count}
+        would_keep = min(total, keep)
+        {:ok, %{would_delete: ids_to_delete, would_keep: would_keep}}
+      else
+        case Arca.Execution.delete_older_than(keep, tenant_opts) do
+          {:error, _} = err -> err
+          {count, _} -> {:ok, count}
+        end
       end
     end
   end
@@ -222,8 +251,8 @@ defmodule Cyfr.Retention do
     {successes, failures} =
       tenants
       |> Enum.map(fn athanor_id ->
-        # Each athanor's cleanup runs inside that athanor: its own settings
-        # file, its own rows.
+        # Each athanor's cleanup runs inside that athanor: its own settings,
+        # its own rows.
         tenant_ctx =
           Sanctum.internal_context(
             user_id: ctx.user_id,
@@ -307,11 +336,12 @@ defmodule Cyfr.Retention do
   @spec cleanup_builds(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_builds(%Context{} = ctx, opts \\ []) do
-    user_settings = get_settings(ctx)
-    keep = Keyword.get(opts, :keep, user_settings["builds"])
-    dry_run = Keyword.get(opts, :dry_run, false)
+    with {:ok, user_settings} <- get_settings(ctx) do
+      keep = Keyword.get(opts, :keep, user_settings["builds"])
+      dry_run = Keyword.get(opts, :dry_run, false)
 
-    Cyfr.BuildRecords.prune(ctx, keep, dry_run: dry_run)
+      Cyfr.BuildRecords.prune(ctx, keep, dry_run: dry_run)
+    end
   end
 
   @doc """
@@ -359,22 +389,23 @@ defmodule Cyfr.Retention do
   @spec cleanup_mcp_logs(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
-    user_settings = get_settings(ctx)
-    days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
-    dry_run = Keyword.get(opts, :dry_run, false)
+    with {:ok, user_settings} <- get_settings(ctx) do
+      days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
+      dry_run = Keyword.get(opts, :dry_run, false)
 
-    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-    tenant_opts = [athanor_id: ctx.athanor_id]
+      cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
+      tenant_opts = [athanor_id: ctx.athanor_id]
 
-    if dry_run do
-      case Arca.McpLog.count_before(cutoff, tenant_opts) do
-        {:error, _} = err -> err
-        count -> {:ok, %{would_delete: count}}
-      end
-    else
-      case Arca.McpLog.delete_before(cutoff, tenant_opts) do
-        {:error, _} = err -> err
-        {count, _} -> {:ok, count}
+      if dry_run do
+        case Arca.McpLog.count_before(cutoff, tenant_opts) do
+          {:error, _} = err -> err
+          count -> {:ok, %{would_delete: count}}
+        end
+      else
+        case Arca.McpLog.delete_before(cutoff, tenant_opts) do
+          {:error, _} = err -> err
+          {count, _} -> {:ok, count}
+        end
       end
     end
   end
@@ -397,22 +428,23 @@ defmodule Cyfr.Retention do
   @spec cleanup_policy_logs(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_policy_logs(%Context{} = ctx, opts \\ []) do
-    user_settings = get_settings(ctx)
-    days = Keyword.get(opts, :days, user_settings["policy_log_days"])
-    dry_run = Keyword.get(opts, :dry_run, false)
+    with {:ok, user_settings} <- get_settings(ctx) do
+      days = Keyword.get(opts, :days, user_settings["policy_log_days"])
+      dry_run = Keyword.get(opts, :dry_run, false)
 
-    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-    tenant_opts = [athanor_id: ctx.athanor_id]
+      cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
+      tenant_opts = [athanor_id: ctx.athanor_id]
 
-    if dry_run do
-      case Arca.PolicyLog.count_before(cutoff, tenant_opts) do
-        {:error, _} = err -> err
-        count -> {:ok, %{would_delete: count}}
-      end
-    else
-      case Arca.PolicyLog.delete_before(cutoff, tenant_opts) do
-        {:error, _} = err -> err
-        {count, _} -> {:ok, count}
+      if dry_run do
+        case Arca.PolicyLog.count_before(cutoff, tenant_opts) do
+          {:error, _} = err -> err
+          count -> {:ok, %{would_delete: count}}
+        end
+      else
+        case Arca.PolicyLog.delete_before(cutoff, tenant_opts) do
+          {:error, _} = err -> err
+          {count, _} -> {:ok, count}
+        end
       end
     end
   end
@@ -434,20 +466,21 @@ defmodule Cyfr.Retention do
   @spec cleanup_conversations(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_conversations(%Context{} = ctx, opts \\ []) do
-    days = Keyword.get(opts, :days, get_settings(ctx)["messages_days"])
-    dry_run = Keyword.get(opts, :dry_run, false)
-    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
+    with {:ok, user_settings} <- get_settings(ctx) do
+      days = Keyword.get(opts, :days, user_settings["messages_days"])
+      dry_run = Keyword.get(opts, :dry_run, false)
+      cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
 
-    if dry_run do
-      {:ok, %{would_delete: Arca.ConversationStorage.count_before(ctx, cutoff)}}
-    else
-      {count, _} = Arca.ConversationStorage.delete_before(ctx, cutoff)
-      {:ok, count}
+      if dry_run do
+        {:ok, %{would_delete: Arca.ConversationStorage.count_before(ctx, cutoff)}}
+      else
+        {count, _} = Arca.ConversationStorage.delete_before(ctx, cutoff)
+        {:ok, count}
+      end
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.Retention] cleanup_conversations failed: #{Exception.message(e)}")
       {:error, :database_error}
   end
-
 end

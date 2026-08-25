@@ -28,6 +28,9 @@ defmodule Arca.IntegrationTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # Retention settings live on the athanor row, so the athanor must exist.
+    Arca.TenantTestHelper.ensure_athanor_row("ath_integration_#{rand_id}")
+
     # Use a unique athanor per test: execution retention/listing is
     # per-athanor, so a unique id isolates each test from shared-state pollution.
     ctx =
@@ -98,7 +101,7 @@ defmodule Arca.IntegrationTest do
       :ok = Retention.set_settings(ctx, %{"executions" => 3})
 
       # Verify settings
-      settings = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(ctx)
       assert settings["executions"] == 3
 
       # 2. Create 5 executions with different timestamps via SQLite
@@ -356,9 +359,9 @@ defmodule Arca.IntegrationTest do
       :ok = Retention.set_settings(member1, %{"executions" => 5})
 
       # Shared within the tenant — a fellow member sees the same setting.
-      assert Retention.get_settings(member2)["executions"] == 5
-      # A different tenant keeps its own default.
-      assert Retention.get_settings(other_tenant)["executions"] == 10_000
+      assert {:ok, %{"executions" => 5}} = Retention.get_settings(member2)
+      # A different tenant (no row: never configured) keeps its own default.
+      assert {:ok, %{"executions" => 10_000}} = Retention.get_settings(other_tenant)
     end
   end
 

@@ -443,7 +443,7 @@ defmodule Opus.StorageHandler do
 
   # The bare root is a synthetic listing of the two guest scopes — never an
   # Arca walk: `[]` would list the athanor's whole data root, where host
-  # state (aqua/, config/, conversations/) lives alongside guest files, and
+  # state (aqua/, conversations/) lives alongside guest files, and
   # a `*` path grant would hand all of it to the guest.
   defp dispatch("list", %{path: ""}, _limits, _ctx) do
     {:ok, %{"path" => "", "files" => Enum.map(valid_scopes(), &(&1 <> "/"))}}
@@ -555,7 +555,7 @@ defmodule Opus.StorageHandler do
   # because no path spelling names one. The one vocabulary difference: the
   # guest contract says `data/`, and the host stores that scope under the
   # athanor's `guest/` subtree, a physical sibling of the host scopes
-  # (aqua/, config/, …) so a `data/` grant can never see them. Mapped here,
+  # (aqua/, conversations/, …) so a `data/` grant can never see them. Mapped here,
   # at the boundary; responses keep speaking `data/`.
   defp normalize_path(path, _ctx) when is_binary(path) do
     path
