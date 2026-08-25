@@ -193,8 +193,9 @@ defmodule Compendium.AutoIndexer do
   #
   # Each athanor indexes its own subtree — the listing is rooted in `ctx`'s
   # athanor, and `register_from_arca`/`prune_stale_entries` stay keyed on
-  # `ctx`, so no scan writes another athanor's rows. The seed bundle
-  # (`_bundle`) is never reached: it is not under any athanor's root.
+  # `ctx`, so no scan writes another athanor's rows. The seed bundle is
+  # never reached: it lives under the reserved `seed/` root, not under any
+  # athanor's tree.
   defp discover_component_segments(ctx) do
     root = Compendium.ComponentPath.base_prefix()
 

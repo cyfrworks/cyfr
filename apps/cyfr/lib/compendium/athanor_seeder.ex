@@ -5,11 +5,11 @@ defmodule Compendium.AthanorSeeder do
   @moduledoc """
   Seed an athanor with the bundled components.
 
-  Component storage is athanor-scoped (`components/{athanor_id}/...`), so a
-  brand-new athanor starts empty. The seed bundle (`Compendium.Bundle`,
-  `components/_bundle/`) is copied in — the `http`/`files` catalysts, the
-  `aqua`/`list-models` formulas, sample tinctures — and the athanor's own
-  scan registers the copies, giving every athanor the same working baseline.
+  Component storage is athanor-scoped, so a brand-new athanor starts
+  empty. The seed bundle (`Compendium.Bundle`, `seed/components/`) is
+  copied in — the `http`/`files` catalysts, the `aqua`/`list-models`
+  formulas, sample tinctures — and the athanor's own scan registers the
+  copies, giving every athanor the same working baseline.
 
   Seeding is idempotent — re-seeding copies identical bytes and the rescan
   reports the components as unchanged. It is not best-effort: a copy failure

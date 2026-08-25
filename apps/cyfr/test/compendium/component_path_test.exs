@@ -50,9 +50,9 @@ defmodule Compendium.ComponentPathTest do
   end
 
   describe "the seed bundle" do
-    test "lives beside the athanor trees under a segment no athanor can own" do
-      assert Bundle.bundle_prefix() == ["components", "_bundle"]
-      refute Sanctum.ComponentRef.valid_personal_slug?(Bundle.segment())
+    test "lives under the reserved seed root, outside every athanor's tree" do
+      assert Bundle.bundle_prefix() == ["seed", "components"]
+      assert Map.has_key?(Arca.Storage.seed_roots(), "components")
     end
   end
 

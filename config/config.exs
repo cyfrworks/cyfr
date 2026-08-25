@@ -113,10 +113,6 @@ config :cyfr,
 # Anchored to the repo, not the CWD: it is read wherever the app runs from.
 config :cyfr, :aqua_template_path, Path.expand("../aqua", __DIR__)
 
-# WIT path + build timeout for component scaffolding and WASM builds. Locus
-# reads these under the `:cyfr` app key (Locus.Builder), not `:locus`.
-config :cyfr, :wit_path, Path.expand("../wit", __DIR__)
-
 # CORS Configuration â wildcard default for fresh installs. The boot guard in
 # Cyfr.Application requires an explicit allowlist once authentication is
 # configured. Override via CYFR_CORS_ALLOWED_ORIGINS.

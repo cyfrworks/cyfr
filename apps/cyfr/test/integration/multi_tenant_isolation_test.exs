@@ -281,7 +281,7 @@ defmodule MultiTenantIsolationTest do
     end
 
     test "the seed bundle is readable only by the system", %{a: ctx_a} do
-      path = ["components", "_bundle", "catalysts", "local", "seed", "1.0.0", "manifest.json"]
+      path = ["seed", "components", "catalysts", "local", "seed", "1.0.0", "manifest.json"]
       assert {:error, :forbidden} = Arca.get(ctx_a, path)
       assert {:error, :forbidden} = Arca.put(ctx_a, path, "{}")
     end

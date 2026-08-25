@@ -40,10 +40,12 @@ defmodule Arca.Storage do
     builds them) → the context's athanor's components subtree. Naming
     another athanor's components is structurally impossible — there is no
     place in the path to put an athanor. Platform code opens an athanor the
-    way it does for rows: a context focused on that athanor. The seed
-    bundle `["components", "_bundle" | rest]` is the one reserved spelling —
-    reachable only by system contexts, routed by `Arca` to the local
-    `:bundle_path`, never to a storage adapter.
+    way it does for rows: a context focused on that athanor.
+  - **Seed media**: `["seed", root | rest]` — the install media every
+    athanor is provisioned from (`seed/components` the bundle,
+    `seed/aqua` the AQUA template; `seed_roots/0` is the table). Read in
+    place from local disk (each root's config key), reachable only by
+    system contexts, never stored through an adapter.
   - **Global paths**: `cache`, `system` → stored at root level
   - **Tenant-scoped paths**: everything else → stored under the athanor's
     data subtree (see `tenant_segments/1`)
@@ -75,9 +77,12 @@ defmodule Arca.Storage do
               ├── conversations/         # chat attachment blobs
               └── data/                  # guest (WASM) files
 
-  The seed bundle every athanor is provisioned from is not stored state —
-  it is read in place from `:bundle_path` (the repo/scaffold checkout, or
-  the baked image copy in Docker).
+  The seed media every athanor is provisioned from is not stored state —
+  each root is read in place from its configured directory
+  (`seed_roots/0`): the component bundle from `:bundle_path` (the repo
+  checkout, or the baked image copy in Docker) and the AQUA template from
+  `:aqua_template_path` (the repo's `aqua/`, or the operator-editable
+  `/app/aqua` mount).
 
   ## Structured Logs (database only)
 
@@ -147,6 +152,25 @@ defmodule Arca.Storage do
 
   def global_prefixes, do: @global_prefixes
 
+  # Seed media: install media read in place from local disk, never tenant
+  # state and never adapter-stored. Each logical root maps to the config key
+  # holding its physical path. One table, so a new kind of seed media is a
+  # new entry — not a new special case in every gate.
+  @seed_roots %{
+    "components" => :bundle_path,
+    "aqua" => :aqua_template_path
+  }
+
+  @doc """
+  The seed-media roots: logical `["seed", root | rest]` prefixes and the
+  config key each one's physical path lives under. `Arca` pins them to the
+  Local adapter, `authorize_path/2` admits only system contexts, and
+  `Arca.Adapters.Local.build_path/2` routes them to their configured
+  directories — outside the storage root.
+  """
+  @spec seed_roots() :: %{String.t() => atom()}
+  def seed_roots, do: @seed_roots
+
   @doc """
   Build the tenant segment list `[athanor_id]` used by every storage adapter
   for tenant-scoped paths.
@@ -192,9 +216,9 @@ defmodule Arca.Storage do
   @spec physical_segments(Context.t(), path()) :: path()
   def physical_segments(ctx, segments) do
     case segments do
-      ["components", "_bundle" | _] ->
+      ["seed" | _] ->
         raise ArgumentError,
-              "the seed bundle is not tenant storage; Arca routes it to :bundle_path"
+              "seed media is not tenant storage; Arca routes it to its configured root"
 
       ["components" | rest] ->
         ["athanors" | tenant_segments(ctx)] ++ ["components" | rest]
@@ -215,14 +239,14 @@ defmodule Arca.Storage do
   Every tenant path — components and data alike — takes its athanor from
   the context, so there is nothing cross-tenant to refuse here: a context
   physically cannot name another athanor's tree. What remains reserved is
-  the server's own: the seed bundle `components/_bundle/…` (system contexts
-  only — `Arca` reads it in place from `:bundle_path`) and the global roots
-  `cache/` (OCI blobs) and `system/` (health probes). `Arca` runs this
-  before dispatching to any adapter.
+  the server's own: the seed media `seed/…` (system contexts only — `Arca`
+  reads each root in place from its configured directory) and the global
+  roots `cache/` (OCI blobs) and `system/` (health probes). `Arca` runs
+  this before dispatching to any adapter.
   """
   @spec authorize_path(Context.t(), [String.t()]) :: :ok | {:error, :forbidden}
-  def authorize_path(%Context{auth_method: :system}, ["components", "_bundle" | _]), do: :ok
-  def authorize_path(%Context{}, ["components", "_bundle" | _]), do: {:error, :forbidden}
+  def authorize_path(%Context{auth_method: :system}, ["seed" | _]), do: :ok
+  def authorize_path(%Context{}, ["seed" | _]), do: {:error, :forbidden}
 
   def authorize_path(%Context{auth_method: :system}, [root | _]) when root in ["cache", "system"],
     do: :ok

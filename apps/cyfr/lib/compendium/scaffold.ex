@@ -413,58 +413,15 @@ defmodule Compendium.Scaffold do
   end
 
   # ============================================================================
-  # WIT Files — compile-embedded from canonical wit/{type}/ directory
+  # WIT Files
   # ============================================================================
-  #
-  # WIT templates ship with the cyfr release and are version-locked to the
-  # source tree. We embed them at compile time (matching the
-  # `@component_guide` pattern in `Compendium.MCP`) so the runtime never
-  # touches the filesystem for templates — same behaviour on Local and S3.
-  #
-  # `Locus.Builder` still reads `:cyfr, :wit_path` at runtime because cargo
-  # needs the WIT files on the local filesystem to compile against (Group D
-  # sandbox); this scaffold use is independent.
-  #
-  # Each file contributes an `@external_resource` so `mix compile` knows
-  # to rebuild this module when a WIT changes.
 
-  @wit_root Path.expand("../../../../wit", __DIR__)
-
-  # arca:bypass-ok=C — compile-time embed of WIT templates. The Path.wildcard
-  # + File.read! calls below run only at module compilation; runtime never
-  # touches the filesystem for templates.
-  for type <- Sanctum.ComponentRef.executable_types() do
-    type_dir = Path.join(@wit_root, type)
-
-    files =
-      [type_dir, "**", "*.wit"]
-      |> Path.join()
-      |> Path.wildcard()
-
-    for file <- files do
-      @external_resource file
-    end
-
-    Module.put_attribute(
-      __MODULE__,
-      :"wit_files_#{type}",
-      Enum.map(files, fn file ->
-        relative = Path.relative_to(file, type_dir)
-        {Path.split(relative), File.read!(file)}
-      end)
-    )
-  end
-
+  # The embedded WIT tree (`Compendium.WITSource` — the one source the
+  # Locus build sandbox consumes too), mapped into the scaffold's layout.
   defp wit_files(base_path, type_atom) do
-    files =
-      case type_atom do
-        :catalyst -> @wit_files_catalyst
-        :formula -> @wit_files_formula
-        :reagent -> @wit_files_reagent
-        _ -> []
-      end
-
-    Enum.map(files, fn {rel_segments, content} ->
+    type_atom
+    |> Compendium.WITSource.files()
+    |> Enum.map(fn {rel_segments, content} ->
       {base_path ++ ["src", "wit" | rel_segments], content}
     end)
   end

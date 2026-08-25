@@ -81,9 +81,13 @@ defmodule Arca.StorageTest do
                ["system", "health", ".write_probe"]
     end
 
-    test "the seed bundle is not tenant storage" do
-      assert_raise ArgumentError, ~r/bundle/, fn ->
-        Storage.physical_segments(ath_ctx(), ["components", "_bundle", "x"])
+    test "seed media is not tenant storage" do
+      assert_raise ArgumentError, ~r/seed media/, fn ->
+        Storage.physical_segments(ath_ctx(), ["seed", "components", "x"])
+      end
+
+      assert_raise ArgumentError, ~r/seed media/, fn ->
+        Storage.physical_segments(ath_ctx(), ["seed", "aqua", "agent.json"])
       end
     end
 
@@ -192,9 +196,10 @@ defmodule Arca.StorageTest do
 
       seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
 
-      assert {:error, :forbidden} = Storage.authorize_path(member, ["components", "_bundle"])
-      assert {:error, :forbidden} = Storage.authorize_path(platform, ["components", "_bundle"])
-      assert :ok = Storage.authorize_path(seed, ["components", "_bundle", "catalysts"])
+      assert {:error, :forbidden} = Storage.authorize_path(member, ["seed", "components"])
+      assert {:error, :forbidden} = Storage.authorize_path(platform, ["seed", "aqua"])
+      assert :ok = Storage.authorize_path(seed, ["seed", "components", "catalysts"])
+      assert :ok = Storage.authorize_path(seed, ["seed", "aqua", "agent.json"])
     end
 
     test "tenant-prefixed paths are not gated here; the global roots are the server's" do

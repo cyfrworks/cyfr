@@ -58,7 +58,7 @@ defmodule Arca.StorageAuthorizePathTest do
   end
 
   test "the seed bundle is readable only by server-internal contexts", %{a: a, seed: seed} do
-    path = ["components", "_bundle", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
+    path = ["seed", "components", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
     assert :ok = Arca.put(seed, path, "{}")
 
     assert {:error, :forbidden} = Arca.get(a, path)

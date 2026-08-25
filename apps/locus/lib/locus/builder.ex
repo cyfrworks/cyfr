@@ -360,23 +360,26 @@ defmodule Locus.Builder do
     end)
   end
 
+  # The WIT definitions are the host ABI, release-embedded
+  # (`Compendium.WITSource`) — written into the sandbox rather than copied
+  # from a disk directory, so a build compiles against exactly what the
+  # running host implements, on any storage adapter.
   defp copy_wit_files(tmp_dir, target_type) do
-    wit_source = wit_source_path(target_type)
-    wit_dest = Path.join(tmp_dir, "wit")
+    case Compendium.WITSource.files(target_type) do
+      [] ->
+        {:error, {:wit_not_found, target_type}}
 
-    if File.dir?(wit_source) do
-      case File.cp_r(wit_source, wit_dest) do
-        {:ok, _} -> :ok
-        {:error, reason, file} -> {:error, {:wit_copy_failed, file, reason}}
-      end
-    else
-      {:error, {:wit_not_found, wit_source}}
+      files ->
+        Enum.reduce_while(files, :ok, fn {rel_segments, content}, :ok ->
+          dest = Path.join([tmp_dir, "wit" | rel_segments])
+          File.mkdir_p!(Path.dirname(dest))
+
+          case File.write(dest, content) do
+            :ok -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, {:wit_copy_failed, dest, reason}}}
+          end
+        end)
     end
-  end
-
-  defp wit_source_path(target_type) do
-    wit_base = Application.fetch_env!(:cyfr, :wit_path) |> Path.expand()
-    Path.join(wit_base, to_string(target_type))
   end
 
   defp run_compiler(tmp_dir, :rust, timeout_ms, on_progress) do

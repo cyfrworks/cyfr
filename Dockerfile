@@ -34,8 +34,11 @@ COPY config/ config/
 # Copy application source
 COPY apps/ apps/
 
-# Copy top-level guides (embedded at compile time by Compendium.MCP)
+# Copy top-level guides (embedded at compile time by Compendium.MCP) and the
+# WIT definitions (embedded by Compendium.WITSource — the compile fails if
+# the tree is missing, so an image can never ship an empty ABI)
 COPY component-guide.md tincture-guide.md integration-guide.md ./
+COPY wit/ wit/
 COPY aqua/ aqua/
 
 # Full compile + build assets + release
@@ -59,9 +62,6 @@ COPY --from=builder /app/_build/prod/rel/cyfr ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
-# Copy WIT interface definitions (needed by scaffolding and compilation)
-COPY wit/ wit/
-
 # Copy the AQUA agent template (manifest + prompts) to a defaults location.
 # The release reads the template from /app/aqua (`:cyfr, :aqua_template_path`)
 # and copies it into each athanor's own storage when the athanor is
@@ -76,6 +76,10 @@ COPY --from=builder /app/aqua /app/aqua-defaults
 # first-boot copy, no bind mount: a bare image boot can always mint athanors.
 COPY components/_bundle/ /app/components-defaults/_bundle/
 ENV CYFR_BUNDLE_PATH=/app/components-defaults/_bundle
+
+# The AQUA template is the second seed root: the operator-editable /app/aqua
+# mount (seeded from /app/aqua-defaults on first boot by the entrypoint).
+ENV CYFR_AQUA_TEMPLATE_PATH=/app/aqua
 
 # gosu for entrypoint privilege drop (standard Docker pattern)
 RUN set -eux; \

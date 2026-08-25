@@ -233,10 +233,14 @@ if config_env() != :test do
         end
     end
 
-    # The seed bundle is read in place: the repo/scaffold checkout by default,
-    # the baked image copy in Docker (the Dockerfile sets CYFR_BUNDLE_PATH).
+    # Seed media is read in place: the repo/scaffold checkout by default,
+    # the baked image copy / operator mount in Docker (the Dockerfile sets
+    # CYFR_BUNDLE_PATH and CYFR_AQUA_TEMPLATE_PATH).
     bundle_path = env!("CYFR_BUNDLE_PATH", :string, "components/_bundle") |> Path.expand()
     config :cyfr, :bundle_path, bundle_path
+
+    aqua_template_path = env!("CYFR_AQUA_TEMPLATE_PATH", :string, "aqua") |> Path.expand()
+    config :cyfr, :aqua_template_path, aqua_template_path
 
     # Warn if plain HTTP in production without a reverse proxy declaration
     unless env!("CYFR_BEHIND_PROXY", :string, nil) do

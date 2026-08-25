@@ -246,7 +246,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "the seed bundle resolves to :bundle_path, never the storage root", %{ctx: ctx} do
-      path = Local.build_path(ctx, ["components", "_bundle", "catalysts", "local"])
+      path = Local.build_path(ctx, ["seed", "components", "catalysts", "local"])
       bundle = Application.fetch_env!(:cyfr, :bundle_path) |> Path.expand()
 
       assert path == Path.join([bundle, "catalysts", "local"])

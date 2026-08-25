@@ -100,9 +100,9 @@ defmodule Arca.Adapters.S3Test do
       assert path == "/test-bucket/athanors/components/data/builds/b.json"
     end
 
-    test "the seed bundle never reaches the bucket", %{ctx: ctx} do
-      assert_raise ArgumentError, ~r/bundle/, fn ->
-        S3.put(ctx, ["components", "_bundle", "catalysts", "x.wasm"], "wasm-bytes")
+    test "seed media never reaches the bucket", %{ctx: ctx} do
+      assert_raise ArgumentError, ~r/seed media/, fn ->
+        S3.put(ctx, ["seed", "components", "catalysts", "x.wasm"], "wasm-bytes")
       end
     end
 

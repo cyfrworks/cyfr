@@ -51,8 +51,13 @@ defmodule Prism.AgentConfigTest do
     refute Map.has_key?(policy(ctx, "aqua"), "component.pull")
 
     # The template on disk is untouched — the edit was the athanor's copy.
-    template =
-      Jason.decode!(File.read!(Path.join(Compendium.AquaTemplate.template_path(), "agent.json")))
+    {:ok, raw} =
+      Arca.get(
+        Sanctum.system_context(),
+        Compendium.AquaTemplate.seed_prefix() ++ ["agent.json"]
+      )
+
+    template = Jason.decode!(raw)
 
     assert template["agents"]["aqua"]["tool_policy"]["component.pull"] == "ask"
   end

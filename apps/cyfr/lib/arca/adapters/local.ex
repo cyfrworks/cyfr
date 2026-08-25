@@ -9,8 +9,9 @@ defmodule Arca.Adapters.Local do
 
   The logical→physical mapping is `Arca.Storage.physical_segments/2` — the
   one place the layout is written down. This adapter joins its output under
-  `:base_path`; the seed bundle (`["components", "_bundle" | rest]`) is the
-  sole exception, read in place from `:bundle_path`.
+  `:base_path`; seed media (`["seed", root | rest]`) is the sole exception,
+  read in place from each root's configured directory
+  (`Arca.Storage.seed_roots/0`).
 
   ## Directory Structure
 
@@ -25,12 +26,12 @@ defmodule Arca.Adapters.Local do
           │   ├── cyfr-manifest.json
           │   └── src/
           └── data/
+              ├── aqua/                  # the athanor's AQUA agent definitions
               ├── builds/                # Locus build records (flat JSON)
               │   └── {build_id}.json
-              ├── data/                  # Athanor data (agent conversations, etc.)
               ├── config/                # Athanor config (retention settings, etc.)
-              └── audit/                 # Audit events (append-only JSONL, opt-in)
-                  └── {date}.jsonl
+              ├── conversations/         # chat attachment blobs
+              └── data/                  # guest (WASM) files
 
   ## Structured Logs (database only)
 
@@ -43,7 +44,8 @@ defmodule Arca.Adapters.Local do
       config :cyfr,
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data",
-        bundle_path: "./components/_bundle"
+        bundle_path: "./components/_bundle",
+        aqua_template_path: "./aqua"
 
   """
 
@@ -330,18 +332,18 @@ defmodule Arca.Adapters.Local do
   @doc """
   Build the full filesystem path for logical segments.
 
-  The seed bundle (`["components", "_bundle" | rest]`) is read in place from
-  `:bundle_path`; every other path joins `Arca.Storage.physical_segments/2`
-  under `:base_path`. Component access is pinned per athanor by
-  `Arca.Storage.authorize_path/2` before any adapter call.
+  Seed media (`["seed", root | rest]`) is read in place from its configured
+  directory (`Arca.Storage.seed_roots/0`); every other path joins
+  `Arca.Storage.physical_segments/2` under `:base_path`. The reserved roots
+  are gated by `Arca.Storage.authorize_path/2` before any adapter call.
   """
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
 
     {root, relative} =
       case segments do
-        ["components", "_bundle" | rest] ->
-          {bundle_path(), rest}
+        ["seed", seed_root | rest] ->
+          {seed_root_path!(seed_root), rest}
 
         _ ->
           {base_path(), Arca.Storage.physical_segments(ctx, segments)}
@@ -363,15 +365,19 @@ defmodule Arca.Adapters.Local do
     expanded == root or String.starts_with?(expanded, root <> "/")
   end
 
+  defp seed_root_path!(seed_root) do
+    case Arca.Storage.seed_roots() do
+      %{^seed_root => config_key} ->
+        Application.fetch_env!(:cyfr, config_key) |> Path.expand()
+
+      _ ->
+        raise ArgumentError, "unknown seed root: #{inspect(seed_root)}"
+    end
+  end
+
   @doc "Get the expanded base path for storage."
   def base_path do
     Application.fetch_env!(:cyfr, :base_path)
-    |> Path.expand()
-  end
-
-  @doc "Get the expanded seed-bundle source path."
-  def bundle_path do
-    Application.fetch_env!(:cyfr, :bundle_path)
     |> Path.expand()
   end
 end

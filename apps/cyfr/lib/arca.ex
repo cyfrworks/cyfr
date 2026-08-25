@@ -19,8 +19,9 @@ defmodule Arca do
 
   - `["components" | rest]` → the context's athanor's component artifacts
     (`Compendium.ComponentPath` builds the shape)
-  - `["components", "_bundle" | rest]` → the seed bundle, read in place from
-    the local `:bundle_path` whatever storage adapter is configured
+  - `["seed", root | rest]` → seed media (the component bundle, the AQUA
+    template — `Arca.Storage.seed_roots/0`), read in place from local disk
+    whatever storage adapter is configured
   - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix)
   - everything else → tenant-scoped under the athanor's data subtree
     (`namespace` is identity-only and not part of the path)
@@ -339,11 +340,11 @@ defmodule Arca do
 
   defp invalidate_components_usage(_ctx, _path), do: :ok
 
-  # The seed bundle is server install media read straight from local disk
-  # (`:cyfr, :bundle_path`), whatever storage adapter is configured — an
-  # object-store deployment provisions athanors from the shipped bundle
-  # without the bucket ever holding a copy. Everything else goes to the
-  # configured adapter.
-  defp adapter(["components", "_bundle" | _]), do: Arca.Adapters.Local
+  # Seed media is server install media read straight from local disk
+  # (each root's config key — `Arca.Storage.seed_roots/0`), whatever
+  # storage adapter is configured: an object-store deployment provisions
+  # athanors from the shipped media without the bucket ever holding a copy.
+  # Everything else goes to the configured adapter.
+  defp adapter(["seed" | _]), do: Arca.Adapters.Local
   defp adapter(_path), do: Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
 end

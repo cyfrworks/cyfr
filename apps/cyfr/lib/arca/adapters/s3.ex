@@ -21,9 +21,10 @@ defmodule Arca.Adapters.S3 do
 
   The `athanors/` root keeps every tenant key disjoint from the global
   roots, so an athanor id that happens to equal a reserved root name can
-  never collide with it inside the bucket. The seed bundle never reaches
-  the bucket — `Arca` reads it from local disk (`:bundle_path`).
-  `namespace` is identity-only and is not part of the path.
+  never collide with it inside the bucket. Seed media never reaches the
+  bucket — `Arca` reads each root from local disk
+  (`Arca.Storage.seed_roots/0`). `namespace` is identity-only and is not
+  part of the path.
 
   ## Append semantics
 

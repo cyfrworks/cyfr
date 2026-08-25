@@ -66,6 +66,23 @@ defmodule Cyfr.StackShapeTest do
     assert dockerignore =~ ~r/^data\/$/m
   end
 
+  test "the AQUA template is the second seed root, and WIT is embedded" do
+    dockerfile = read!("Dockerfile")
+
+    # The template's seed root points at the operator-editable mount.
+    assert dockerfile =~ ~r/^ENV CYFR_AQUA_TEMPLATE_PATH=\/app\/aqua$/m
+
+    # WIT rides in the BUILD context (Compendium.WITSource embeds it — an
+    # absent tree fails the compile), and the runtime image no longer
+    # carries a wit/ directory to read.
+    stages = String.split(dockerfile, ~r/^FROM /m)
+    builder = Enum.find(stages, &String.contains?(&1, "AS builder"))
+    runner = Enum.find(stages, &String.contains?(&1, "AS runner"))
+
+    assert builder =~ ~r/^COPY wit\/ wit\/$/m
+    refute runner =~ ~r/^COPY wit\/ wit\/$/m
+  end
+
   test "the env template names no retired knobs" do
     env = read!(".env.example")
     # Spelled with the underscore split so the vocabulary gate itself does
