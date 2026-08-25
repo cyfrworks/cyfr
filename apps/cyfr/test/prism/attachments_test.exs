@@ -63,6 +63,9 @@ defmodule Prism.AttachmentsTest do
     assert {:error, :attachment_too_large} = Attachments.store(ctx, "c", "m", big)
 
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 10)
+    # The usage cache is suite-shared per athanor and now survives writes
+    # (bumped, not dropped) — start this cap check from a fresh walk.
+    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
     ok = [%{"filename" => "small", "media_type" => "text/plain", "bytes" => "12345"}]
     assert {:ok, _} = Attachments.store(ctx, "c", "m1", ok)
     over = [%{"filename" => "more", "media_type" => "text/plain", "bytes" => "1234567"}]
