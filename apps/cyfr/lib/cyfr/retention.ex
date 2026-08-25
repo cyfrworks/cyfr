@@ -335,6 +335,30 @@ defmodule Cyfr.Retention do
     end
   end
 
+  @doc """
+  Clean up build records for every active athanor, each inside its own
+  context (its own retention settings). Build records are files, not rows,
+  so the walk is the athanor roster — an archived athanor drops out by not
+  being enumerated.
+  """
+  @spec cleanup_all_builds(keyword()) :: {:ok, map()}
+  def cleanup_all_builds(opts \\ []) do
+    athanors = Sanctum.Tenancy.Athanors.list_active()
+
+    results =
+      Enum.map(athanors, fn athanor ->
+        ctx =
+          Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
+
+        {athanor.id, cleanup_builds(ctx, opts)}
+      end)
+
+    deleted = results |> Enum.map(fn {_, r} -> count_of(r) end) |> Enum.sum()
+    errors = for {athanor_id, {:error, reason}} <- results, do: {athanor_id, reason}
+
+    {:ok, %{tenants: length(athanors), builds_deleted: deleted, errors: errors}}
+  end
+
   # ============================================================================
   # MCP Log Cleanup
   # ============================================================================

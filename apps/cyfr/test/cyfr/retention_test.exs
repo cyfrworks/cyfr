@@ -168,6 +168,32 @@ defmodule Cyfr.RetentionTest do
     end
   end
 
+  describe "cleanup_all_builds/1" do
+    test "prunes each active athanor's builds inside its own context" do
+      {:ok, athanor} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Builds",
+          slug: "builds-#{System.unique_integer([:positive])}",
+          created_by: "test"
+        })
+
+      ctx = Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
+
+      for i <- 1..4 do
+        create_build_with_timestamp(ctx, "build_#{i}", "2025-01-0#{i}T10:00:00Z")
+      end
+
+      {:ok, result} = Retention.cleanup_all_builds(keep: 2)
+
+      assert result.errors == []
+      assert result.builds_deleted >= 2
+
+      {:ok, remaining} = Arca.list(ctx, ["builds"])
+      assert Enum.sort(remaining) == ["build_3.json", "build_4.json"]
+    end
+  end
+
   # ============================================================================
   # All-User Execution Cleanup
   # ============================================================================

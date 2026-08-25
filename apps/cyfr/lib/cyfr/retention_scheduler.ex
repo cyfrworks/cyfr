@@ -6,9 +6,10 @@ defmodule Cyfr.RetentionScheduler do
   Periodic retention cleanup, enabled when retention is configured.
 
   When retention is disabled, this GenServer returns `:ignore` and never
-  starts. When enabled, it runs `Cyfr.Retention.cleanup_all_executions/2`
-  and `Cyfr.Retention.cleanup_mcp_logs/2` on a configurable interval
-  (default 6 hours) to prevent unbounded storage growth.
+  starts. When enabled, it runs `Cyfr.Retention.cleanup_all_executions/2`,
+  `Cyfr.Retention.cleanup_all_logs/1` and `Cyfr.Retention.cleanup_all_builds/1`
+  on a configurable interval (default 6 hours) to prevent unbounded storage
+  growth.
   """
 
   use GenServer
@@ -115,7 +116,40 @@ defmodule Cyfr.RetentionScheduler do
       e -> Logger.error("[RetentionScheduler] Log cleanup crashed: #{Exception.message(e)}")
     end
 
+    try do
+      case Cyfr.Retention.cleanup_all_builds() do
+        {:ok, %{tenants: tenants, builds_deleted: deleted, errors: errors}} ->
+          if deleted > 0,
+            do:
+              Logger.info(
+                "[RetentionScheduler] Cleaned #{deleted} build records across #{tenants} tenants"
+              )
+
+          for {athanor_id, reason} <- errors do
+            Logger.warning(
+              "[RetentionScheduler] Build cleanup failed athanor=#{athanor_id}: #{inspect(reason)}"
+            )
+          end
+      end
+    rescue
+      e -> Logger.error("[RetentionScheduler] Build cleanup crashed: #{Exception.message(e)}")
+    end
+
     sweep_webhook_deliveries()
+    sweep_stale_tmp_files()
+  end
+
+  # Orphaned atomic-write temp files are a Local-adapter artifact; object
+  # stores have no in-flight keys to reclaim.
+  defp sweep_stale_tmp_files do
+    if Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local) == Arca.Adapters.Local do
+      try do
+        {:ok, count} = Arca.Adapters.Local.sweep_stale_tmp()
+        if count > 0, do: Logger.info("[RetentionScheduler] Removed #{count} stale temp files")
+      rescue
+        e -> Logger.error("[RetentionScheduler] Temp sweep crashed: #{Exception.message(e)}")
+      end
+    end
   end
 
   # Webhook idempotency table sweep. Default TTL 24h — webhook senders that
