@@ -81,6 +81,31 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:ok, "{}"} = Arca.get(seed, path)
   end
 
+  test "a refused seed write leaves the tree byte-identical on disk", %{seed: seed} do
+    seed_root = Application.fetch_env!(:cyfr, :seed_path)
+    seed_file = Path.join(seed_root, "components/catalysts/local/y/0.1.0/cyfr-manifest.json")
+    File.mkdir_p!(Path.dirname(seed_file))
+    File.write!(seed_file, ~s({"shipped": true}))
+
+    snapshot = fn ->
+      Path.wildcard(Path.join(seed_root, "**"))
+      |> Enum.sort()
+      |> Enum.map(&{&1, File.dir?(&1) || File.read!(&1)})
+    end
+
+    before = snapshot.()
+    path = ["seed", "components", "catalysts", "local", "y", "0.1.0", "cyfr-manifest.json"]
+
+    # The error tuple alone would not prove the tree survived — a refusal
+    # that landed after a partial write would still return it.
+    assert {:error, :seed_read_only} = Arca.put(seed, path, "clobbered")
+    assert {:error, :seed_read_only} = Arca.append(seed, path, "clobbered")
+    assert {:error, :seed_read_only} = Arca.delete(seed, path)
+    assert {:error, :seed_read_only} = Arca.delete_tree(seed, ["seed", "components"])
+
+    assert snapshot.() == before
+  end
+
   test "an unknown first segment is refused, never minted as a new subtree", %{a: a} do
     assert {:error, :forbidden} = Arca.put(a, ["notes", "hello.txt"], "hi")
     assert {:error, :forbidden} = Arca.get(a, ["notes", "hello.txt"])

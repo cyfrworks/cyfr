@@ -1,6 +1,26 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Sanctum.Tenancy.CapsTest.UnreadableAdapter do
+  @moduledoc false
+  # A storage adapter whose usage walk always fails — the fail-open branch's
+  # only door.
+  @behaviour Arca.Storage
+
+  defdelegate get(ctx, path), to: Arca.Adapters.Local
+  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate delete(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
+  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
+  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+
+  def usage(_ctx, _path), do: {:error, :eacces}
+end
+
 defmodule Sanctum.Tenancy.CapsTest do
   @moduledoc """
   The public-door caps: off unless set, and when set, enforced where each
@@ -147,6 +167,30 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
              Caps.check_storage(ctx, 10)
+  end
+
+  test "an unreadable usage walk fails open with a warning, never blocks writes" do
+    prev_adapter = Application.get_env(:cyfr, :storage_adapter)
+    Application.put_env(:cyfr, :storage_adapter, Sanctum.Tenancy.CapsTest.UnreadableAdapter)
+
+    on_exit(fn ->
+      if prev_adapter,
+        do: Application.put_env(:cyfr, :storage_adapter, prev_adapter),
+        else: Application.delete_env(:cyfr, :storage_adapter)
+    end)
+
+    ctx = Sanctum.TestContext.local()
+    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
+    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
+
+    # Fail-open by policy: an unreadable tree counts zero (with a warning),
+    # so availability wins over the ceiling — the deliberate direction.
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Caps.check_storage(ctx, 50)
+      end)
+
+    assert log =~ "usage walk failed"
   end
 
   test "the athanor total is cached, bumped by writes, and dropped by deletes" do

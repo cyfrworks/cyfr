@@ -29,6 +29,22 @@ defmodule Arca.Adapters.ContractTest do
   # The shared contract — one body per case, called from both describes.
   # ---------------------------------------------------------------------------
 
+  defp contract_put_get_roundtrip(adapter, ctx) do
+    assert :ok = adapter.put(ctx, ["guest", "rt.txt"], "round-trip")
+    assert {:ok, "round-trip"} = adapter.get(ctx, ["guest", "rt.txt"])
+  end
+
+  # Both adapters create on first append and concatenate on the next. The
+  # ceilings diverge by design — S3's read-modify-write refuses past
+  # `:object_too_large` while Local's O_APPEND is unbounded — and each
+  # adapter's own suite asserts its side; concurrency semantics diverge the
+  # same way (last-writer-wins on S3) and are likewise not a shared case.
+  defp contract_append_roundtrip(adapter, ctx) do
+    assert :ok = adapter.append(ctx, ["guest", "log.jsonl"], "one\n")
+    assert :ok = adapter.append(ctx, ["guest", "log.jsonl"], "two\n")
+    assert {:ok, "one\ntwo\n"} = adapter.get(ctx, ["guest", "log.jsonl"])
+  end
+
   defp contract_dir_vs_file(adapter, ctx, extra_dirs) do
     assert {:ok, entries} = adapter.list_typed(ctx, ["guest"])
 
@@ -115,6 +131,12 @@ defmodule Arca.Adapters.ContractTest do
       {:ok, ctx: ctx}
     end
 
+    test "put/2 then get/2 round-trips the bytes", %{ctx: ctx},
+      do: contract_put_get_roundtrip(Local, ctx)
+
+    test "append/3 creates, then concatenates", %{ctx: ctx},
+      do: contract_append_roundtrip(Local, ctx)
+
     test "tells a directory from a file", %{ctx: ctx},
       do: contract_dir_vs_file(Local, ctx, [])
 
@@ -179,11 +201,20 @@ defmodule Arca.Adapters.ContractTest do
       <ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>
       """
 
-      objects = %{
-        "/test-bucket/athanors/ath_test/guest/a.txt" => "a",
-        "/test-bucket/athanors/ath_test/guest/b.txt" => "b",
-        "/test-bucket/athanors/ath_test/guest/sub/c.txt" => "c"
-      }
+      # A stateful object store, so the write-side contract cases (put→get,
+      # append) can actually round-trip. Listings stay the static fixture —
+      # the tree-shape cases assert against it, never against writes.
+      store =
+        start_supervised!(
+          {Agent,
+           fn ->
+             %{
+               "/test-bucket/athanors/ath_test/guest/a.txt" => "a",
+               "/test-bucket/athanors/ath_test/guest/b.txt" => "b",
+               "/test-bucket/athanors/ath_test/guest/sub/c.txt" => "c"
+             }
+           end}
+        )
 
       Req.Test.stub(:s3, fn conn ->
         prefix = Plug.Conn.fetch_query_params(conn).query_params["prefix"]
@@ -197,12 +228,21 @@ defmodule Arca.Adapters.ContractTest do
           conn.method == "GET" and is_binary(prefix) ->
             Plug.Conn.send_resp(conn, 200, empty)
 
-          # The fixture objects answer GETs and HEADs; nothing else exists.
-          conn.method in ["GET", "HEAD"] and is_map_key(objects, conn.request_path) ->
-            Plug.Conn.send_resp(conn, 200, Map.fetch!(objects, conn.request_path))
+          conn.method == "PUT" ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            Agent.update(store, &Map.put(&1, conn.request_path, body))
+            Plug.Conn.send_resp(conn, 200, "")
+
+          # The stored objects answer GETs and HEADs; nothing else exists.
+          conn.method in ["GET", "HEAD"] ->
+            case Agent.get(store, &Map.get(&1, conn.request_path)) do
+              nil -> Plug.Conn.send_resp(conn, 404, "")
+              body -> Plug.Conn.send_resp(conn, 200, body)
+            end
 
           # Deletes succeed for any key — real S3 does not 404 a DELETE.
           conn.method == "DELETE" ->
+            Agent.update(store, &Map.delete(&1, conn.request_path))
             Plug.Conn.send_resp(conn, 204, "")
 
           true ->
@@ -219,6 +259,12 @@ defmodule Arca.Adapters.ContractTest do
 
       {:ok, ctx: Sanctum.TestContext.local()}
     end
+
+    test "put/2 then get/2 round-trips the bytes", %{ctx: ctx},
+      do: contract_put_get_roundtrip(S3, ctx)
+
+    test "append/3 creates, then concatenates", %{ctx: ctx},
+      do: contract_append_roundtrip(S3, ctx)
 
     test "tells a directory from a file", %{ctx: ctx},
       do: contract_dir_vs_file(S3, ctx, [{"marker", :dir}])

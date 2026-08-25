@@ -1,6 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Compendium.AthanorSeederTest.RefusingAdapter do
+  @moduledoc false
+  # Every write refuses — the shape of a full or misconfigured object store.
+  # Reads delegate to Local, which is also where the seed bundle is pinned.
+  @behaviour Arca.Storage
+
+  defdelegate get(ctx, path), to: Arca.Adapters.Local
+  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate delete(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
+  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
+  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
+  defdelegate usage(ctx, path), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+
+  def put(_ctx, _path, _content), do: {:error, :eacces}
+end
+
 defmodule Compendium.AthanorSeederTest do
   use ExUnit.Case, async: false
 
@@ -226,6 +246,31 @@ defmodule Compendium.AthanorSeederTest do
       assert report.copied == []
       assert report.present == ["catalysts/local/foo/1.0.0"]
       assert report.modified == []
+    end
+
+    test "a failed copy is a typed seed_failed error, not a silent half-seed", %{
+      bundle_dir: bundle_dir
+    } do
+      write_bundle!(bundle_dir)
+
+      prev_adapter = Application.get_env(:cyfr, :storage_adapter)
+
+      Application.put_env(
+        :cyfr,
+        :storage_adapter,
+        Compendium.AthanorSeederTest.RefusingAdapter
+      )
+
+      on_exit(fn ->
+        if prev_adapter,
+          do: Application.put_env(:cyfr, :storage_adapter, prev_adapter),
+          else: Application.delete_env(:cyfr, :storage_adapter)
+      end)
+
+      # Seeding is not best-effort: the caller learns which version failed
+      # and why, and decides what an athanor without its baseline means.
+      assert {:error, {:seed_failed, "catalysts/local/foo/1.0.0", _reason}} =
+               AthanorSeeder.sync("ath_acme")
     end
 
     test "an empty version directory is not a version", %{bundle_dir: bundle_dir} do

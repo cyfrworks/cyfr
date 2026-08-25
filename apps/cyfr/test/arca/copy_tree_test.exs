@@ -25,6 +25,30 @@ defmodule Arca.CopyTreeTest.RecordingAdapter do
   end
 end
 
+defmodule Arca.CopyTreeTest.VanishingAdapter do
+  @moduledoc false
+  # Lists one leaf more than exists, so the copy meets a file that vanished
+  # between the walk and its read.
+  @behaviour Arca.Storage
+
+  defdelegate get(ctx, path), to: Arca.Adapters.Local
+  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate delete(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
+  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
+  defdelegate usage(ctx, path), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+
+  def list_recursive(ctx, path) do
+    with {:ok, leaves} <- Arca.Adapters.Local.list_recursive(ctx, path) do
+      {:ok, leaves ++ [path ++ ["ghost.txt"]]}
+    end
+  end
+end
+
 defmodule Arca.CopyTreeTest do
   @moduledoc """
   `Arca.copy_tree/3` is the seeding seam: the source is read per-path (the
@@ -76,6 +100,24 @@ defmodule Arca.CopyTreeTest do
 
     assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
     assert {:error, :not_found} = Arca.get(ctx, ["guest", "dest", "target", "debug", "junk.o"])
+  end
+
+  test "a file that vanishes between the walk and its read is skipped, not fatal" do
+    prev_adapter = Application.get_env(:cyfr, :storage_adapter)
+    Application.put_env(:cyfr, :storage_adapter, Arca.CopyTreeTest.VanishingAdapter)
+
+    on_exit(fn ->
+      if prev_adapter,
+        do: Application.put_env(:cyfr, :storage_adapter, prev_adapter),
+        else: Application.delete_env(:cyfr, :storage_adapter)
+    end)
+
+    ctx = Sanctum.TestContext.local()
+    :ok = Arca.put(ctx, ["guest", "src", "a.txt"], "A")
+
+    assert :ok = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"])
+    assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
+    assert {:error, :not_found} = Arca.get(ctx, ["guest", "dest", "ghost.txt"])
   end
 
   test "seeds the bundle through the configured adapter, reading it in place", %{bundle: bundle} do

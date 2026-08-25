@@ -14,7 +14,7 @@ defmodule Arca.SchemaBaselineTest do
     api_keys components executions mcp_logs policy_logs
     vault_entries profiles consents consent_vault_refs consent_proofs
     oauth_provider_credentials mcp_servers webhooks cron_schedules
-    conversations messages
+    conversations messages build_records
   )
 
   @expected_tables ~w(
@@ -22,6 +22,7 @@ defmodule Arca.SchemaBaselineTest do
     executions mcp_logs policy_logs vault_entries profiles
     consents consent_vault_refs consent_proofs oauth_provider_credentials
     mcp_servers webhooks webhook_deliveries cron_schedules conversations messages
+    build_records
   )
 
   setup do
