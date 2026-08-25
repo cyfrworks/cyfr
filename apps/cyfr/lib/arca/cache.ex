@@ -159,6 +159,21 @@ defmodule Arca.Cache do
   end
 
   @doc """
+  Atomically add `delta` to an existing integer entry, preserving its
+  expiry. A missing entry stays missing — the next read-through
+  recomputes — and a non-integer value is left untouched. Never extends
+  a TTL: an expired-but-unswept entry is bumped in place and still reads
+  as a miss.
+  """
+  @spec bump_existing(term(), integer()) :: :ok
+  def bump_existing(key, delta) when is_integer(delta) do
+    :ets.update_counter(@table_name, key, {2, delta})
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  @doc """
   Remove a cached value by key.
   """
   @spec invalidate(term()) :: :ok

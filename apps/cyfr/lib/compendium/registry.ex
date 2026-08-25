@@ -230,17 +230,22 @@ defmodule Compendium.Registry do
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
              # Runs after validation, before any Arca write — same ordering
-             # guarantee as the WASM path, where the check precedes store_wasm.
+             # guarantee as the WASM path, where the check precedes
+             # store_wasm. The storage cap sees the measured decompressed
+             # total, not the archive size: the extracted tree is what
+             # actually lands in the athanor.
              before_store: fn validation ->
-               check_release_immutable(
-                 ctx,
-                 name,
-                 version,
-                 validation.digest,
-                 manifest_bytes,
-                 publisher,
-                 "tincture"
-               )
+               with :ok <- Sanctum.Tenancy.Caps.check_storage(ctx, validation.size) do
+                 check_release_immutable(
+                   ctx,
+                   name,
+                   version,
+                   validation.digest,
+                   manifest_bytes,
+                   publisher,
+                   "tincture"
+                 )
+               end
              end
            ),
          {:ok, component} <-

@@ -12,8 +12,8 @@ defmodule Sanctum.Tenancy.Caps do
   `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES`). A `nil` cap is off.
   A private box needs none of them; a `*` server sets them.
 
-  The byte cap counts both of an athanor's subtrees — its data and its
-  components, the seeded copies included — on every write, which is what
+  The byte cap counts the athanor's whole tree — every scope, the seeded
+  copies included — on every write, which is what
   `CYFR_ATHANOR_STORAGE_BYTES` claims to bound.
   """
 
@@ -51,10 +51,11 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
-  # The athanor's tree changes only when something writes to it, and
-  # `Arca` invalidates this on every tenant write, so the walk happens once
-  # per change rather than once per guest write. The TTL is a backstop for
-  # bytes that arrive without passing through Arca at all.
+  # `Arca` keeps this current without re-walking: every successful tenant
+  # write bumps the cached total by the bytes written (over-counting an
+  # overwrite — the safe direction), and deletes drop it so reclaimed space
+  # is recomputed. The TTL bounds the overwrite drift and backstops bytes
+  # that arrive without passing through Arca at all.
   @athanor_usage_ttl_ms :timer.minutes(5)
 
   @doc """
@@ -66,8 +67,8 @@ defmodule Sanctum.Tenancy.Caps do
   The count is one walk of the athanor's whole tree — components, guest
   files, attachments, the seeded copies included, because a cap that
   bounds one subtree is not a cap on the athanor — read from a cache that
-  `Arca` invalidates on every tenant write, so the hot path normally pays
-  no walk at all.
+  `Arca` keeps current per write (bytes bumped on writes, dropped on
+  deletes), so the hot path pays no walk at all.
   """
   @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
           :ok | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}
@@ -101,8 +102,21 @@ defmodule Sanctum.Tenancy.Caps do
 
   defp bytes_under(ctx, segments) do
     case Arca.usage(ctx, segments) do
-      {:ok, %{bytes: bytes}} when is_integer(bytes) -> bytes
-      _ -> 0
+      {:ok, %{bytes: bytes}} when is_integer(bytes) ->
+        bytes
+
+      other ->
+        # Fail open — an unreadable tree reads as empty for the cap — but
+        # never silently: a quiet zero would let writes walk past the
+        # ceiling with nothing in the logs to say why.
+        require Logger
+
+        Logger.warning(
+          "[Sanctum.Tenancy.Caps] usage walk failed for #{ctx.athanor_id}: " <>
+            "#{inspect(other)}; treating as 0 bytes"
+        )
+
+        0
     end
   end
 

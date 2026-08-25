@@ -986,6 +986,46 @@ defmodule Compendium.RegistryTest do
     end
   end
 
+  describe "publish_tincture_archive/4 — athanor storage cap" do
+    test "refuses when the extracted tree would pass the athanor cap", %{ctx: ctx} do
+      prev_caps = Application.get_env(:cyfr, :caps)
+      Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
+      Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
+
+      on_exit(fn ->
+        if prev_caps,
+          do: Application.put_env(:cyfr, :caps, prev_caps),
+          else: Application.delete_env(:cyfr, :caps)
+      end)
+
+      archive =
+        tincture_archive([
+          {"cyfr-manifest.json",
+           Jason.encode!(%{"name" => "capped", "version" => "1.0.0", "type" => "tincture"})},
+          {"index.html", "<html></html>"}
+        ])
+
+      # The OCI-pull publish is capped like every other write: the check
+      # sees the measured decompressed size and runs before any Arca write.
+      assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "capped",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "acme"
+               })
+
+      assert {:error, :not_found} = Registry.get(ctx, "capped", "1.0.0")
+
+      version_dir = Compendium.ComponentPath.version_dir("tincture", "acme", "capped", "1.0.0")
+
+      case Arca.list(ctx, version_dir) do
+        {:ok, entries} -> assert entries == []
+        {:error, _} -> :ok
+      end
+    end
+  end
+
   describe "remote-origin publishes — local namespace refusal" do
     test "publish_bytes refuses remote content into the local namespace", %{ctx: ctx} do
       assert {:error, {:namespace_rejected, msg}} =

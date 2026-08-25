@@ -208,8 +208,14 @@ defmodule Arca.Adapters.Local do
       bytes =
         Enum.reduce(leaves, 0, fn leaf, acc ->
           case File.stat(leaf) do
-            {:ok, %File.Stat{size: size}} -> acc + size
-            {:error, _} -> acc
+            {:ok, %File.Stat{size: size}} ->
+              acc + size
+
+            {:error, reason} ->
+              # Fail open (quota reads an unreadable file as empty), never
+              # silently: an under-count here weakens the storage cap.
+              Logger.warning("[Arca.Local.usage] stat #{inspect(reason)} for #{leaf}")
+              acc
           end
         end)
 
@@ -276,7 +282,10 @@ defmodule Arca.Adapters.Local do
           end
         end)
 
-      {:error, _} ->
+      {:error, reason} ->
+        # Fail open (walks and quota read an unreadable directory as
+        # empty), never silently: an under-count weakens the storage cap.
+        Logger.warning("[Arca.Local.walk] ls #{inspect(reason)} for #{dir}")
         []
     end
   end

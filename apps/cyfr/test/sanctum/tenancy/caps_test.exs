@@ -149,7 +149,7 @@ defmodule Sanctum.Tenancy.CapsTest do
              Caps.check_storage(ctx, 10)
   end
 
-  test "the athanor total is cached, and any tenant write drops it" do
+  test "the athanor total is cached, bumped by writes, and dropped by deletes" do
     ctx = Sanctum.TestContext.local()
     key = Arca.Cache.Keys.athanor_usage(ctx.athanor_id)
 
@@ -161,21 +161,26 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert {:ok, cached} = Arca.Cache.get(key)
     assert is_integer(cached)
 
-    # Any write in the athanor's tree drops it — components and data alike —
-    # so the cap cannot go on measuring a tree that changed underneath it.
+    # A write anywhere in the athanor's tree bumps the total by exactly
+    # what was written — no re-walk — components and guest files alike.
     :ok = Arca.put(ctx, ["components", "cap-probe.txt"], "bytes")
-    assert Arca.Cache.get(key) == :miss
+    assert Arca.Cache.get(key) == {:ok, cached + 5}
 
-    assert :ok = Caps.check_storage(ctx, 1)
-    :ok = Arca.put(ctx, ["guest", "cap-probe.txt"], "bytes")
+    :ok = Arca.put(ctx, ["guest", "cap-probe.txt"], "1234567890")
+    assert Arca.Cache.get(key) == {:ok, cached + 15}
+
+    # A delete reclaims space: the entry drops so the next check walks the
+    # tree afresh instead of guessing what the delete removed.
+    :ok = Arca.delete(ctx, ["guest", "cap-probe.txt"])
     assert Arca.Cache.get(key) == :miss
 
     # A write to a global root is the server's bytes, not the athanor's,
     # and leaves the total alone.
     assert :ok = Caps.check_storage(ctx, 1)
+    assert {:ok, rewalked} = Arca.Cache.get(key)
     sys = Sanctum.internal_context(user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor)
     :ok = Arca.put(sys, ["cache", "cap-probe.txt"], "bytes")
-    assert {:ok, _} = Arca.Cache.get(key)
+    assert Arca.Cache.get(key) == {:ok, rewalked}
   end
 
   test "max_members_per_group counts seats — active and invited" do

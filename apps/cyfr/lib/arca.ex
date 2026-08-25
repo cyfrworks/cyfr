@@ -367,10 +367,9 @@ defmodule Arca do
   # For everything else: a write anywhere in the athanor's tree changes
   # what the storage cap measures, and that total is cached because walking
   # the tree on every guest write is the cost the cap was written to avoid.
-  # Invalidating here rather than in each writer means a new writer cannot
-  # forget — every mutation already passes through. Unconditional: a failed
-  # write may still have left bytes behind. Globals are not tenant bytes
-  # and invalidate nothing.
+  # Accounting here rather than in each writer means a new writer cannot
+  # forget — every mutation already passes through. Globals are not tenant
+  # bytes and touch nothing.
   defp mutating(ctx, path, kind, fun) do
     path = normalize(path)
 
@@ -383,19 +382,34 @@ defmodule Arca do
 
       true ->
         result = guarded(ctx, path, fun)
-        invalidate_athanor_usage(ctx, path)
+        account_usage(ctx, path, kind, result)
         result
     end
   end
 
-  defp invalidate_athanor_usage(%Context{athanor_id: athanor_id}, path)
+  # The cached athanor total stays O(1) per write: a successful put/append
+  # BUMPS the cached bytes by what was written (an overwrite over-counts —
+  # the safe direction — until the entry's own TTL walks the tree afresh;
+  # `bump_existing` never extends a TTL). Deletes and failed writes drop
+  # the entry instead, so reclaimed space is recomputed accurately and a
+  # partial write can never be under-counted. Invalidating on every write
+  # — the previous scheme — made each subsequent cap check re-walk the
+  # whole tree: O(total files) per write under sustained writing.
+  defp account_usage(%Context{athanor_id: athanor_id}, path, kind, result)
        when is_binary(athanor_id) and athanor_id != "" do
-    if Arca.Storage.classify(path) == :tenant,
-      do: Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(athanor_id)),
-      else: :ok
+    if Arca.Storage.classify(path) == :tenant do
+      key = Arca.Cache.Keys.athanor_usage(athanor_id)
+
+      case {kind, result} do
+        {{:create, bytes}, :ok} -> Arca.Cache.bump_existing(key, bytes)
+        _delete_or_failed -> Arca.Cache.invalidate(key)
+      end
+    end
+
+    :ok
   end
 
-  defp invalidate_athanor_usage(_ctx, _path), do: :ok
+  defp account_usage(_ctx, _path, _kind, _result), do: :ok
 
   # Seed media is server install media read straight from local disk
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
