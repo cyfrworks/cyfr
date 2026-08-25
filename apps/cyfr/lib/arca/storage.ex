@@ -42,15 +42,17 @@ defmodule Arca.Storage do
     place from the one seed tree (`:seed_path`), reachable only by
     system contexts, never stored through an adapter.
   - **Global paths**: `cache`, `system` → stored at root level
-  - **Tenant-scoped paths**: everything else → stored verbatim under the
-    context's athanor (see `tenant_segments/1`). Naming another athanor's
-    tree is structurally impossible — there is no place in the path to put
-    an athanor; platform code opens an athanor the way it does for rows,
-    with a context focused on it. The scopes in use: `components/`
-    (`Compendium.ComponentPath`), `aqua/`, `builds/`, `config/`,
-    `conversations/`, and `guest/` — the WASM guest's `data/` scope, given
-    its physical name by `Opus.StorageHandler` at the guest boundary so a
-    `data/` grant can never see a host scope.
+  - **Tenant-scoped paths**: the closed roster in `tenant_roots/0` →
+    stored verbatim under the context's athanor (see `tenant_segments/1`).
+    Naming another athanor's tree is structurally impossible — there is no
+    place in the path to put an athanor; platform code opens an athanor
+    the way it does for rows, with a context focused on it. The scopes:
+    `components/` (`Compendium.ComponentPath`), `aqua/`, `builds/`,
+    `config/`, `conversations/`, and `guest/` — the WASM guest's `data/`
+    scope (`guest_scopes/0` is the map, applied by `Opus.StorageHandler`
+    at the guest boundary) so a `data/` grant can never see a host scope.
+  - **Anything else** → refused (`authorize_path/2`): an unknown first
+    segment is never silently minted as a new subtree.
 
   `namespace` is a user-identity field and is NOT part of the path.
 
@@ -154,6 +156,55 @@ defmodule Arca.Storage do
 
   def global_prefixes, do: @global_prefixes
 
+  # The closed roster of tenant scopes. Every athanor tree holds exactly
+  # these subtrees; an unknown first segment is refused, never silently
+  # minted as a new subtree. A new kind of tenant state is a new entry here.
+  @tenant_roots ~w(aqua builds components config conversations guest)
+
+  @doc """
+  The tenant scopes: the first segments a tenant-scoped path may start
+  with, each a subtree of `athanors/{athanor_id}/`. `authorize_path/2`
+  refuses everything outside this roster (and outside the seed/global
+  vocabularies), so a typo'd or invented root is a typed refusal instead
+  of a brand-new subtree.
+  """
+  @spec tenant_roots() :: [String.t()]
+  def tenant_roots, do: @tenant_roots
+
+  # The guest (WASM) storage vocabulary and the physical tenant scope each
+  # guest scope stores under. The guest contract says `data/`; the host
+  # stores that scope under `guest/`, a physical sibling of the host
+  # scopes (aqua/, config/, conversations/, …) so a `data/` grant can
+  # never see them.
+  @guest_scopes %{"data" => "guest", "components" => "components"}
+
+  @doc """
+  The guest storage scopes: what a WASM guest may name in a path, mapped
+  to the physical tenant scope each one stores under. `Opus.StorageHandler`
+  applies this at the guest boundary (requests come in speaking `data/`,
+  responses keep speaking it); keeping the map here means the layout —
+  including the one vocabulary difference between guest and host — is
+  written down in a single module.
+  """
+  @spec guest_scopes() :: %{String.t() => String.t()}
+  def guest_scopes, do: @guest_scopes
+
+  @doc """
+  Classify a logical path by its first segment: `:seed` (install media),
+  `:global` (`cache/`, `system/`), `:tenant` (the closed roster in
+  `tenant_roots/0`, plus the empty path — the athanor's whole tree), or
+  `:invalid` (everything else — refused at the `Arca` gate).
+
+  The one classification `physical_segments/2`, `authorize_path/2` and
+  `Arca`'s usage-cache invalidation all share.
+  """
+  @spec classify(path()) :: :seed | :global | :tenant | :invalid
+  def classify(["seed" | _]), do: :seed
+  def classify([root | _]) when root in @global_prefixes, do: :global
+  def classify([root | _]) when root in @tenant_roots, do: :tenant
+  def classify([]), do: :tenant
+  def classify(_), do: :invalid
+
   # Seed media: install media read in place from local disk, never tenant
   # state and never adapter-stored. Every root is a subdirectory of the one
   # seed tree (`:seed_path`), named after its logical root. One roster, so a
@@ -216,43 +267,46 @@ defmodule Arca.Storage do
   """
   @spec physical_segments(Context.t(), path()) :: path()
   def physical_segments(ctx, segments) do
-    case segments do
-      ["seed" | _] ->
+    case classify(segments) do
+      :seed ->
         raise ArgumentError,
               "seed media is not tenant storage; Arca routes it to its configured root"
 
-      [prefix | _] = segs ->
-        if prefix in @global_prefixes,
-          do: segs,
-          else: ["athanors" | tenant_segments(ctx)] ++ segs
+      :global ->
+        segments
 
-      [] ->
-        ["athanors" | tenant_segments(ctx)]
+      :tenant ->
+        ["athanors" | tenant_segments(ctx)] ++ segments
+
+      :invalid ->
+        raise ArgumentError,
+              "unknown storage root #{inspect(hd(segments))}; " <>
+                "tenant scopes are #{inspect(@tenant_roots)} (see Arca.Storage.tenant_roots/0)"
     end
   end
 
   @doc """
   Whether `ctx` may touch `path` at all.
 
-  Every tenant path — components and data alike — takes its athanor from
-  the context, so there is nothing cross-tenant to refuse here: a context
-  physically cannot name another athanor's tree. What remains reserved is
-  the server's own: the seed media `seed/…` (system contexts only — `Arca`
-  reads each root in place from its configured directory) and the global
-  roots `cache/` (OCI blobs) and `system/` (health probes). `Arca` runs
-  this before dispatching to any adapter.
+  Every tenant path takes its athanor from the context, so there is
+  nothing cross-tenant to refuse here: a context physically cannot name
+  another athanor's tree. What this gate refuses is (a) the server's own
+  reserved vocabularies for non-system contexts — the seed media `seed/…`
+  (read in place from the seed tree) and the global roots `cache/` (OCI
+  blobs) and `system/` (health probes) — and (b) any first segment outside
+  the closed rosters, for everyone: an unknown root is a typo or an
+  invented subtree, never storage. `Arca` runs this before dispatching to
+  any adapter. Writability is a separate gate — seed media is read-only
+  at the `Arca` facade whatever the context.
   """
   @spec authorize_path(Context.t(), [String.t()]) :: :ok | {:error, :forbidden}
-  def authorize_path(%Context{auth_method: :system}, ["seed" | _]), do: :ok
-  def authorize_path(%Context{}, ["seed" | _]), do: {:error, :forbidden}
-
-  def authorize_path(%Context{auth_method: :system}, [root | _]) when root in ["cache", "system"],
-    do: :ok
-
-  def authorize_path(%Context{}, [root | _]) when root in ["cache", "system"],
-    do: {:error, :forbidden}
-
-  def authorize_path(%Context{}, _path), do: :ok
+  def authorize_path(%Context{} = ctx, path) do
+    case classify(path) do
+      :tenant -> :ok
+      :invalid -> {:error, :forbidden}
+      _seed_or_global -> if ctx.auth_method == :system, do: :ok, else: {:error, :forbidden}
+    end
+  end
 
   @doc """
   Validate that path segments contain no traversal attacks.

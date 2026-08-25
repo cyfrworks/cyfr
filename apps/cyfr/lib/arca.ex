@@ -21,10 +21,13 @@ defmodule Arca do
     (`Compendium.ComponentPath` builds the shape)
   - `["seed", root | rest]` → seed media (the component bundle, the AQUA
     template — `Arca.Storage.seed_roots/0`), read in place from local disk
-    whatever storage adapter is configured
+    whatever storage adapter is configured — and read-only at this seam
   - `["cache" | rest]`, `["system" | rest]` → global (no tenant prefix)
-  - everything else → tenant-scoped, verbatim under the context's athanor
-    (`namespace` is identity-only and not part of the path)
+  - the other tenant scopes (`Arca.Storage.tenant_roots/0`) → verbatim
+    under the context's athanor (`namespace` is identity-only and not
+    part of the path)
+  - anything else → `{:error, :forbidden}`; an unknown root is refused,
+    never minted as a new subtree
 
   `Arca.Storage.physical_segments/2` is the one place the stored layout
   (`athanors/{athanor_id}/...` under a single root) is written down.
@@ -45,7 +48,7 @@ defmodule Arca do
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
 
       # Append-only storage (JSONL-style logs)
-      :ok = Arca.append(ctx, ["logs", "2025-01-15.jsonl"], log_line <> "\\n")
+      :ok = Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
       :ok = Arca.put_json(ctx, ["config", "settings.json"], %{...})
@@ -77,9 +80,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["test", "file.txt"], "hello")
+      iex> Arca.put(ctx, ["guest", "file.txt"], "hello")
       :ok
-      iex> Arca.get(ctx, ["test", "file.txt"])
+      iex> Arca.get(ctx, ["guest", "file.txt"])
       {:ok, "hello"}
 
   """
@@ -91,9 +94,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["test", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["config", "data.json"], %{"key" => "value"})
       :ok
-      iex> Arca.get_json(ctx, ["test", "data.json"])
+      iex> Arca.get_json(ctx, ["config", "data.json"])
       {:ok, %{"key" => "value"}}
 
   """
@@ -112,7 +115,7 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["deep", "nested", "path", "file.txt"], "content")
+      iex> Arca.put(ctx, ["guest", "nested", "path", "file.txt"], "content")
       :ok
 
   """
@@ -125,7 +128,7 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["test", "data.json"], %{"key" => "value"})
+      iex> Arca.put_json(ctx, ["config", "data.json"], %{"key" => "value"})
       :ok
 
   """
@@ -147,9 +150,9 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.append(ctx, ["logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
+      iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
-      iex> Arca.append(ctx, ["logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
+      iex> Arca.append(ctx, ["guest", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
 
   """
@@ -162,11 +165,11 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["test", "file.txt"], "hello")
+      iex> Arca.put(ctx, ["guest", "file.txt"], "hello")
       :ok
-      iex> Arca.delete(ctx, ["test", "file.txt"])
+      iex> Arca.delete(ctx, ["guest", "file.txt"])
       :ok
-      iex> Arca.get(ctx, ["test", "file.txt"])
+      iex> Arca.get(ctx, ["guest", "file.txt"])
       {:error, :not_found}
 
   """
@@ -182,11 +185,11 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["listdir", "a.txt"], "a")
+      iex> Arca.put(ctx, ["guest", "listdir", "a.txt"], "a")
       :ok
-      iex> Arca.put(ctx, ["listdir", "b.txt"], "b")
+      iex> Arca.put(ctx, ["guest", "listdir", "b.txt"], "b")
       :ok
-      iex> {:ok, files} = Arca.list(ctx, ["listdir"])
+      iex> {:ok, files} = Arca.list(ctx, ["guest", "listdir"])
       iex> Enum.sort(files)
       ["a.txt", "b.txt"]
 
@@ -218,7 +221,7 @@ defmodule Arca do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["nonexistent"])
+      iex> Arca.exists?(ctx, ["guest", "nonexistent"])
       false
 
   """
@@ -321,13 +324,21 @@ defmodule Arca do
     end
   end
 
-  # A write anywhere in the athanor's tree changes what the storage cap
-  # measures, and that total is cached because walking the tree on every
-  # guest write is the cost the cap was written to avoid. Invalidating here
-  # rather than in each writer means a new writer cannot forget — every
-  # mutation already passes through. Unconditional: a failed write may
-  # still have left bytes behind. Globals and seed media are not tenant
-  # bytes and invalidate nothing.
+  # Seed media is read-only at this seam, whatever the context: the seeder
+  # and the AQUA template only ever read seed and write the athanor, so a
+  # write here is always a bug — and letting one through would mutate the
+  # tracked repo tree or the operator's mount. "Read in place" is an
+  # invariant, not a convention.
+  #
+  # For everything else: a write anywhere in the athanor's tree changes
+  # what the storage cap measures, and that total is cached because walking
+  # the tree on every guest write is the cost the cap was written to avoid.
+  # Invalidating here rather than in each writer means a new writer cannot
+  # forget — every mutation already passes through. Unconditional: a failed
+  # write may still have left bytes behind. Globals are not tenant bytes
+  # and invalidate nothing.
+  defp mutating(_ctx, ["seed" | _], _fun), do: {:error, :seed_read_only}
+
   defp mutating(ctx, path, fun) do
     result = guarded(ctx, path, fun)
     invalidate_athanor_usage(ctx, path)
@@ -336,14 +347,7 @@ defmodule Arca do
 
   defp invalidate_athanor_usage(%Context{athanor_id: athanor_id}, path)
        when is_binary(athanor_id) and athanor_id != "" do
-    tenant_path? =
-      case path do
-        ["seed" | _] -> false
-        [prefix | _] -> prefix not in Arca.Storage.global_prefixes()
-        [] -> true
-      end
-
-    if tenant_path?,
+    if Arca.Storage.classify(path) == :tenant,
       do: Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(athanor_id)),
       else: :ok
   end

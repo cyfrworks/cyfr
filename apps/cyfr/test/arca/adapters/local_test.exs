@@ -25,7 +25,7 @@ defmodule Arca.Adapters.LocalTest do
   describe "put/3 and get/2" do
     test "writes and reads content", %{ctx: ctx} do
       content = "hello world"
-      path = ["test", "file.txt"]
+      path = ["guest", "file.txt"]
 
       assert :ok == Local.put(ctx, path, content)
       assert {:ok, ^content} = Local.get(ctx, path)
@@ -33,7 +33,7 @@ defmodule Arca.Adapters.LocalTest do
 
     test "creates nested directories", %{ctx: ctx} do
       content = "nested content"
-      path = ["deep", "nested", "path", "file.txt"]
+      path = ["guest", "nested", "path", "file.txt"]
 
       assert :ok == Local.put(ctx, path, content)
       assert {:ok, ^content} = Local.get(ctx, path)
@@ -41,7 +41,7 @@ defmodule Arca.Adapters.LocalTest do
 
     test "handles binary content", %{ctx: ctx} do
       content = <<0, 1, 2, 3, 255>>
-      path = ["binary", "data.bin"]
+      path = ["guest", "data.bin"]
 
       assert :ok == Local.put(ctx, path, content)
       assert {:ok, ^content} = Local.get(ctx, path)
@@ -50,26 +50,26 @@ defmodule Arca.Adapters.LocalTest do
 
   describe "get/2 errors" do
     test "returns not_found for missing file", %{ctx: ctx} do
-      assert {:error, :not_found} = Local.get(ctx, ["nonexistent", "file.txt"])
+      assert {:error, :not_found} = Local.get(ctx, ["guest", "nonexistent", "file.txt"])
     end
   end
 
   describe "atomic-write hygiene" do
     test "in-flight temp names are invisible to listings, walks and usage", %{ctx: ctx} do
-      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
 
       # A crashed put's orphan, next to its target.
-      orphan = Local.build_path(ctx, ["tree", "a.txt"]) <> ".tmp.12345"
+      orphan = Local.build_path(ctx, ["guest", "a.txt"]) <> ".tmp.12345"
       File.write!(orphan, "partial")
 
-      assert {:ok, [{"a.txt", :file}]} = Local.list_typed(ctx, ["tree"])
-      assert {:ok, [["tree", "a.txt"]]} = Local.list_recursive(ctx, ["tree"])
-      assert {:ok, %{files: 1}} = Local.usage(ctx, ["tree"])
+      assert {:ok, [{"a.txt", :file}]} = Local.list_typed(ctx, ["guest"])
+      assert {:ok, [["guest", "a.txt"]]} = Local.list_recursive(ctx, ["guest"])
+      assert {:ok, %{files: 1}} = Local.usage(ctx, ["guest"])
     end
 
     test "sweep_stale_tmp/1 removes only stale temp files", %{ctx: ctx} do
-      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
-      orphan = Local.build_path(ctx, ["tree", "a.txt"]) <> ".tmp.999"
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+      orphan = Local.build_path(ctx, ["guest", "a.txt"]) <> ".tmp.999"
       File.write!(orphan, "partial")
 
       # Too fresh to sweep.
@@ -79,43 +79,43 @@ defmodule Arca.Adapters.LocalTest do
       # A negative age makes everything stale.
       assert {:ok, 1} = Local.sweep_stale_tmp(-1)
       refute File.exists?(orphan)
-      assert {:ok, "a"} = Local.get(ctx, ["tree", "a.txt"])
+      assert {:ok, "a"} = Local.get(ctx, ["guest", "a.txt"])
     end
   end
 
   describe "symlinks" do
     test "walks do not follow a symlink out of the tree", %{ctx: ctx} do
-      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
 
       outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
       File.mkdir_p!(outside)
       File.write!(Path.join(outside, "secret.txt"), "secret")
       on_exit(fn -> File.rm_rf!(outside) end)
 
-      tree_dir = Local.build_path(ctx, ["tree", "a.txt"]) |> Path.dirname()
+      tree_dir = Local.build_path(ctx, ["guest", "a.txt"]) |> Path.dirname()
       File.ln_s!(outside, Path.join(tree_dir, "link"))
 
-      assert {:ok, [["tree", "a.txt"]]} = Local.list_recursive(ctx, ["tree"])
-      assert {:ok, %{files: 1, bytes: 1}} = Local.usage(ctx, ["tree"])
+      assert {:ok, [["guest", "a.txt"]]} = Local.list_recursive(ctx, ["guest"])
+      assert {:ok, %{files: 1, bytes: 1}} = Local.usage(ctx, ["guest"])
     end
   end
 
   describe "exists?/2" do
     test "returns true for existing file", %{ctx: ctx} do
-      path = ["exists", "test.txt"]
+      path = ["guest", "test.txt"]
       Local.put(ctx, path, "content")
 
       assert Local.exists?(ctx, path)
     end
 
     test "returns false for missing file", %{ctx: ctx} do
-      refute Local.exists?(ctx, ["missing", "file.txt"])
+      refute Local.exists?(ctx, ["guest", "missing", "file.txt"])
     end
   end
 
   describe "delete/2" do
     test "removes existing file", %{ctx: ctx} do
-      path = ["delete", "me.txt"]
+      path = ["guest", "me.txt"]
       Local.put(ctx, path, "content")
 
       assert :ok == Local.delete(ctx, path)
@@ -123,33 +123,33 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "returns not_found for missing file", %{ctx: ctx} do
-      assert {:error, :not_found} = Local.delete(ctx, ["missing.txt"])
+      assert {:error, :not_found} = Local.delete(ctx, ["guest", "missing.txt"])
     end
   end
 
   describe "list/2" do
     test "lists directory contents", %{ctx: ctx} do
-      Local.put(ctx, ["dir", "a.txt"], "a")
-      Local.put(ctx, ["dir", "b.txt"], "b")
-      Local.put(ctx, ["dir", "c.txt"], "c")
+      Local.put(ctx, ["guest", "dir", "a.txt"], "a")
+      Local.put(ctx, ["guest", "dir", "b.txt"], "b")
+      Local.put(ctx, ["guest", "dir", "c.txt"], "c")
 
-      {:ok, files} = Local.list(ctx, ["dir"])
+      {:ok, files} = Local.list(ctx, ["guest", "dir"])
       assert Enum.sort(files) == ["a.txt", "b.txt", "c.txt"]
     end
 
     test "returns empty list for missing directory", %{ctx: ctx} do
-      assert {:ok, []} = Local.list(ctx, ["nonexistent"])
+      assert {:ok, []} = Local.list(ctx, ["guest", "nonexistent"])
     end
   end
 
   describe "tenant-scoped paths" do
     test "stores files under {athanor_id} (namespace not in path)", %{ctx: ctx} do
-      path = ["isolation", "test.txt"]
+      path = ["guest", "isolation", "test.txt"]
       Local.put(ctx, path, "content")
 
       # namespace is identity-only; the path is athanors/{athanor_id}/...
       expected_path =
-        Path.join([@test_base_path, "athanors", ctx.athanor_id, "isolation", "test.txt"])
+        Path.join([@test_base_path, "athanors", ctx.athanor_id, "guest", "isolation", "test.txt"])
 
       assert File.exists?(expected_path)
     end
@@ -184,7 +184,7 @@ defmodule Arca.Adapters.LocalTest do
 
   describe "append/3" do
     test "appends content to file", %{ctx: ctx} do
-      path = ["audit", "2025-01-15.jsonl"]
+      path = ["guest", "2025-01-15.jsonl"]
 
       assert :ok == Local.append(ctx, path, ~s|{"event":"login"}\n|)
       assert :ok == Local.append(ctx, path, ~s|{"event":"logout"}\n|)
@@ -194,14 +194,14 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "creates file if it doesn't exist", %{ctx: ctx} do
-      path = ["audit", "new.jsonl"]
+      path = ["guest", "new.jsonl"]
 
       assert :ok == Local.append(ctx, path, "first line\n")
       assert {:ok, "first line\n"} = Local.get(ctx, path)
     end
 
     test "creates nested directories", %{ctx: ctx} do
-      path = ["deep", "nested", "audit.jsonl"]
+      path = ["guest", "nested", "audit.jsonl"]
 
       assert :ok == Local.append(ctx, path, "content\n")
       assert Local.exists?(ctx, path)
@@ -217,15 +217,15 @@ defmodule Arca.Adapters.LocalTest do
     test "tenant paths go verbatim under athanors/{athanor_id} (no namespace segment)", %{
       ctx: ctx
     } do
-      path = Local.build_path(ctx, ["executions", "exec_123", "started.json"])
+      path = Local.build_path(ctx, ["builds", "b_123", "started.json"])
 
       assert path ==
                Path.join([
                  @test_base_path,
                  "athanors",
                  ctx.athanor_id,
-                 "executions",
-                 "exec_123",
+                 "builds",
+                 "b_123",
                  "started.json"
                ])
     end
@@ -266,7 +266,7 @@ defmodule Arca.Adapters.LocalTest do
     test "the empty-path walk counts the whole athanor, components included", %{ctx: ctx} do
       # The storage cap's one walk: a cap that bounds one subtree is not a
       # cap on the athanor.
-      :ok = Local.put(ctx, ["notes", "a.txt"], "12345")
+      :ok = Local.put(ctx, ["guest", "a.txt"], "12345")
 
       :ok =
         Local.put(
@@ -280,7 +280,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "a missing prefix is empty usage", %{ctx: ctx} do
-      assert {:ok, %{files: 0, bytes: 0}} = Local.usage(ctx, ["never-written"])
+      assert {:ok, %{files: 0, bytes: 0}} = Local.usage(ctx, ["guest", "never-written"])
     end
   end
 
@@ -290,7 +290,7 @@ defmodule Arca.Adapters.LocalTest do
 
   describe "special characters in filenames" do
     test "handles spaces in filename", %{ctx: ctx} do
-      path = ["test", "file with spaces.txt"]
+      path = ["guest", "file with spaces.txt"]
       content = "content with spaces"
 
       assert :ok == Local.put(ctx, path, content)
@@ -299,7 +299,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "handles unicode in filename", %{ctx: ctx} do
-      path = ["test", "文件名.txt"]
+      path = ["guest", "文件名.txt"]
       content = "unicode content"
 
       assert :ok == Local.put(ctx, path, content)
@@ -307,7 +307,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "handles emoji in filename", %{ctx: ctx} do
-      path = ["test", "📁data.json"]
+      path = ["guest", "📁data.json"]
       content = ~s|{"emoji": true}|
 
       assert :ok == Local.put(ctx, path, content)
@@ -315,7 +315,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "handles dashes and underscores", %{ctx: ctx} do
-      path = ["test-dir", "file_name-v1.2.3.txt"]
+      path = ["guest", "test-dir", "file_name-v1.2.3.txt"]
       content = "versioned content"
 
       assert :ok == Local.put(ctx, path, content)
@@ -323,7 +323,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "handles dots in directory names", %{ctx: ctx} do
-      path = ["v1.0.0", "release.txt"]
+      path = ["guest", "v1.0.0", "release.txt"]
       content = "release notes"
 
       assert :ok == Local.put(ctx, path, content)
@@ -339,7 +339,7 @@ defmodule Arca.Adapters.LocalTest do
     test "handles 1MB+ file", %{ctx: ctx} do
       # Generate 1MB of content
       content = String.duplicate("x", 1_000_000)
-      path = ["large", "big_file.bin"]
+      path = ["guest", "big_file.bin"]
 
       assert :ok == Local.put(ctx, path, content)
       assert {:ok, read_content} = Local.get(ctx, path)
@@ -347,7 +347,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "handles file with many small appends", %{ctx: ctx} do
-      path = ["audit", "many_lines.jsonl"]
+      path = ["guest", "many_lines.jsonl"]
 
       # Append 1000 small lines
       for i <- 1..1000 do
@@ -367,7 +367,7 @@ defmodule Arca.Adapters.LocalTest do
   describe "binary content handling" do
     test "handles null bytes in content", %{ctx: ctx} do
       content = <<0, 1, 2, 0, 3, 0, 0, 4>>
-      path = ["binary", "nulls.bin"]
+      path = ["guest", "nulls.bin"]
 
       assert :ok == Local.put(ctx, path, content)
       assert {:ok, ^content} = Local.get(ctx, path)
@@ -375,14 +375,14 @@ defmodule Arca.Adapters.LocalTest do
 
     test "handles all byte values 0-255", %{ctx: ctx} do
       content = :binary.list_to_bin(Enum.to_list(0..255))
-      path = ["binary", "all_bytes.bin"]
+      path = ["guest", "all_bytes.bin"]
 
       assert :ok == Local.put(ctx, path, content)
       assert {:ok, ^content} = Local.get(ctx, path)
     end
 
     test "handles empty file", %{ctx: ctx} do
-      path = ["binary", "empty.bin"]
+      path = ["guest", "empty.bin"]
 
       assert :ok == Local.put(ctx, path, "")
       assert {:ok, ""} = Local.get(ctx, path)
@@ -404,7 +404,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "handles empty path segments", %{ctx: ctx} do
-      path = ["test", "", "file.txt"]
+      path = ["guest", "", "file.txt"]
 
       # Should either filter empty segments or handle gracefully
       case Local.put(ctx, path, "content") do
@@ -425,8 +425,8 @@ defmodule Arca.Adapters.LocalTest do
       end
 
       # Trailing slashes without a leading one remain acceptable input.
-      case Local.put(ctx, ["test/", "file.txt/"], "content") do
-        :ok -> assert {:ok, _} = Local.get(ctx, ["test/", "file.txt/"])
+      case Local.put(ctx, ["guest", "test/", "file.txt/"], "content") do
+        :ok -> assert {:ok, _} = Local.get(ctx, ["guest", "test/", "file.txt/"])
         {:error, _} -> :ok
       end
     end
@@ -441,7 +441,7 @@ defmodule Arca.Adapters.LocalTest do
       tasks =
         for i <- 1..10 do
           Task.async(fn ->
-            path = ["concurrent", "file_#{i}.txt"]
+            path = ["guest", "concurrent", "file_#{i}.txt"]
             content = "content #{i}"
             :ok = Local.put(ctx, path, content)
             {:ok, read} = Local.get(ctx, path)
@@ -455,7 +455,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "concurrent appends to same file", %{ctx: ctx} do
-      path = ["concurrent", "shared.jsonl"]
+      path = ["guest", "concurrent", "shared.jsonl"]
 
       # First create the file
       :ok = Local.put(ctx, path, "")
@@ -477,7 +477,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "concurrent reads are safe", %{ctx: ctx} do
-      path = ["concurrent", "readonly.txt"]
+      path = ["guest", "concurrent", "readonly.txt"]
       content = "read me many times"
       :ok = Local.put(ctx, path, content)
 
@@ -500,7 +500,7 @@ defmodule Arca.Adapters.LocalTest do
   describe "deep nesting" do
     test "handles 20+ levels of nesting", %{ctx: ctx} do
       # Create a path with 20 directory levels
-      deep_path = Enum.to_list(1..20) |> Enum.map(&"level_#{&1}") |> Kernel.++(["deep_file.txt"])
+      deep_path = ["guest" | Enum.map(1..20, &"level_#{&1}")] ++ ["deep_file.txt"]
 
       content = "very deep content"
 
@@ -510,7 +510,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "lists deeply nested directory", %{ctx: ctx} do
-      base = Enum.to_list(1..10) |> Enum.map(&"d#{&1}")
+      base = ["guest" | Enum.map(1..10, &"d#{&1}")]
 
       # Create multiple files in the deep directory
       for i <- 1..3 do
@@ -525,24 +525,24 @@ defmodule Arca.Adapters.LocalTest do
 
   describe "atomic put" do
     test "leaves no temp residue after a successful write", %{ctx: ctx} do
-      :ok = Local.put(ctx, ["atomic", "target.txt"], "v1")
-      :ok = Local.put(ctx, ["atomic", "target.txt"], "v2")
+      :ok = Local.put(ctx, ["guest", "atomic", "target.txt"], "v1")
+      :ok = Local.put(ctx, ["guest", "atomic", "target.txt"], "v2")
 
-      assert {:ok, "v2"} = Local.get(ctx, ["atomic", "target.txt"])
-      assert {:ok, ["target.txt"]} = Local.list(ctx, ["atomic"])
+      assert {:ok, "v2"} = Local.get(ctx, ["guest", "atomic", "target.txt"])
+      assert {:ok, ["target.txt"]} = Local.list(ctx, ["guest", "atomic"])
     end
 
     test "an overwrite failure cleans up its temp file", %{ctx: ctx} do
       # Renaming onto a non-empty directory fails on every platform, which
       # exercises the temp-cleanup path without needing to fake File.write.
-      :ok = Local.put(ctx, ["atomic2", "occupied", "child.txt"], "x")
+      :ok = Local.put(ctx, ["guest", "atomic2", "occupied", "child.txt"], "x")
 
-      assert {:error, _} = Local.put(ctx, ["atomic2", "occupied"], "clobber")
+      assert {:error, _} = Local.put(ctx, ["guest", "atomic2", "occupied"], "clobber")
 
       # The directory survives untouched and the temp file (written next to
       # it, in atomic2/) is cleaned up.
-      assert {:ok, ["child.txt"]} = Local.list(ctx, ["atomic2", "occupied"])
-      assert {:ok, ["occupied"]} = Local.list(ctx, ["atomic2"])
+      assert {:ok, ["child.txt"]} = Local.list(ctx, ["guest", "atomic2", "occupied"])
+      assert {:ok, ["occupied"]} = Local.list(ctx, ["guest", "atomic2"])
     end
   end
 end

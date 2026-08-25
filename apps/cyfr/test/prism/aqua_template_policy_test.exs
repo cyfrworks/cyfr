@@ -16,7 +16,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   alias Emissary.MCP.ToolRegistry
   alias Prism.AquaVirtualTools
 
-  @template Path.join([File.cwd!(), "..", "..", "aqua", "agent.json"]) |> Path.expand()
+  @template Path.expand("../../../../seed/aqua/agent.json", __DIR__)
 
   test "every tool_policy key in the shipped template is reachable from a chat" do
     unreachable =

@@ -57,26 +57,26 @@ defmodule Arca.CopyTreeTest do
 
   test "copies a subtree preserving relative layout, source untouched" do
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.put(ctx, ["stage", "src", "a.txt"], "A")
-    :ok = Arca.put(ctx, ["stage", "src", "sub", "b.txt"], "B")
+    :ok = Arca.put(ctx, ["guest", "src", "a.txt"], "A")
+    :ok = Arca.put(ctx, ["guest", "src", "sub", "b.txt"], "B")
 
-    assert :ok = Arca.copy_tree(ctx, ["stage", "src"], ["stage", "dest"])
+    assert :ok = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"])
 
-    assert {:ok, "A"} = Arca.get(ctx, ["stage", "dest", "a.txt"])
-    assert {:ok, "B"} = Arca.get(ctx, ["stage", "dest", "sub", "b.txt"])
-    assert {:ok, "A"} = Arca.get(ctx, ["stage", "src", "a.txt"])
+    assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
+    assert {:ok, "B"} = Arca.get(ctx, ["guest", "dest", "sub", "b.txt"])
+    assert {:ok, "A"} = Arca.get(ctx, ["guest", "src", "a.txt"])
   end
 
   test "exclude: skips matching files before their content is read" do
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.put(ctx, ["stage", "src", "a.txt"], "A")
-    :ok = Arca.put(ctx, ["stage", "src", "target", "debug", "junk.o"], "JUNK")
+    :ok = Arca.put(ctx, ["guest", "src", "a.txt"], "A")
+    :ok = Arca.put(ctx, ["guest", "src", "target", "debug", "junk.o"], "JUNK")
 
     exclude = fn relative -> "target" in relative end
-    assert :ok = Arca.copy_tree(ctx, ["stage", "src"], ["stage", "dest"], exclude: exclude)
+    assert :ok = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"], exclude: exclude)
 
-    assert {:ok, "A"} = Arca.get(ctx, ["stage", "dest", "a.txt"])
-    assert {:error, :not_found} = Arca.get(ctx, ["stage", "dest", "target", "debug", "junk.o"])
+    assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
+    assert {:error, :not_found} = Arca.get(ctx, ["guest", "dest", "target", "debug", "junk.o"])
   end
 
   test "seeds the bundle through the configured adapter, reading it in place", %{bundle: bundle} do

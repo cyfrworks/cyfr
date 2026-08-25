@@ -213,5 +213,44 @@ defmodule Arca.StorageTest do
       assert :ok = Storage.authorize_path(Sanctum.system_context(), ["cache", "oci", "x"])
       assert :ok = Storage.authorize_path(Sanctum.system_context(), ["system", "health"])
     end
+
+    test "an unknown first segment is refused for every context" do
+      ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["notes", "hello.txt"])
+      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["data", "x.txt"])
+      assert {:error, :forbidden} = Storage.authorize_path(Sanctum.system_context(), ["notes"])
+    end
+  end
+
+  describe "classify/1 and tenant_roots/0" do
+    test "the tenant roster is closed, and every scope classifies" do
+      assert Storage.tenant_roots() ==
+               ~w(aqua builds components config conversations guest)
+
+      for root <- Storage.tenant_roots() do
+        assert Storage.classify([root, "x"]) == :tenant
+      end
+
+      assert Storage.classify([]) == :tenant
+      assert Storage.classify(["seed", "components"]) == :seed
+      assert Storage.classify(["cache", "oci"]) == :global
+      assert Storage.classify(["system", "health"]) == :global
+      assert Storage.classify(["notes", "x"]) == :invalid
+      assert Storage.classify(["data", "x"]) == :invalid
+    end
+
+    test "physical_segments refuses an unknown root instead of minting a subtree" do
+      assert_raise ArgumentError, ~r/unknown storage root/, fn ->
+        Storage.physical_segments(ath_ctx(), ["notes", "hello.txt"])
+      end
+    end
+
+    test "the guest scope map names only tenant scopes" do
+      assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
+
+      for {_guest, physical} <- Storage.guest_scopes() do
+        assert physical in Storage.tenant_roots()
+      end
+    end
   end
 end

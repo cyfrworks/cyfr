@@ -107,7 +107,7 @@ defmodule Sanctum.ContextFocusTest do
       })
 
     b_ctx = ctx.("github|https://github.com|someone", b.id, false)
-    :ok = Arca.put(b_ctx, ["data", "secret.txt"], "b's bytes")
+    :ok = Arca.put(b_ctx, ["guest", "secret.txt"], "b's bytes")
 
     # the audit ledger of B is invisible from A
     assert {:error, msg} =
@@ -125,10 +125,10 @@ defmodule Sanctum.ContextFocusTest do
 
     # and so is B's storage: a URI is rooted in the focused athanor, never another
     assert {:error, "File not found" <> _} =
-             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/data/secret.txt")
+             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/guest/secret.txt")
 
     assert {:ok, %{content: content}} =
-             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/data/secret.txt")
+             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/guest/secret.txt")
 
     assert Base.decode64!(content) == "b's bytes"
   end

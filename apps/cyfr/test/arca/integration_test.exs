@@ -59,29 +59,29 @@ defmodule Arca.IntegrationTest do
   describe "list → write → read → delete workflow" do
     test "complete file lifecycle via Arca API", %{ctx: ctx} do
       # 1. List - should start empty
-      {:ok, files} = Arca.list(ctx, ["workflow"])
+      {:ok, files} = Arca.list(ctx, ["guest", "workflow"])
       assert files == []
 
       # 2. Write - create a file
-      :ok = Arca.put(ctx, ["workflow", "test.txt"], "hello world")
+      :ok = Arca.put(ctx, ["guest", "workflow", "test.txt"], "hello world")
 
       # 3. List - should now contain the file
-      {:ok, files} = Arca.list(ctx, ["workflow"])
+      {:ok, files} = Arca.list(ctx, ["guest", "workflow"])
       assert "test.txt" in files
 
       # 4. Read - verify content
-      {:ok, content} = Arca.get(ctx, ["workflow", "test.txt"])
+      {:ok, content} = Arca.get(ctx, ["guest", "workflow", "test.txt"])
       assert content == "hello world"
 
       # 5. Exists - verify existence
-      assert Arca.exists?(ctx, ["workflow", "test.txt"])
+      assert Arca.exists?(ctx, ["guest", "workflow", "test.txt"])
 
       # 6. Delete - remove the file
-      :ok = Arca.delete(ctx, ["workflow", "test.txt"])
+      :ok = Arca.delete(ctx, ["guest", "workflow", "test.txt"])
 
       # 7. Verify deletion
-      refute Arca.exists?(ctx, ["workflow", "test.txt"])
-      {:error, :not_found} = Arca.get(ctx, ["workflow", "test.txt"])
+      refute Arca.exists?(ctx, ["guest", "workflow", "test.txt"])
+      {:error, :not_found} = Arca.get(ctx, ["guest", "workflow", "test.txt"])
     end
 
     # Note: The storage MCP tool was removed in favor of the cyfr:storage/files
@@ -250,14 +250,14 @@ defmodule Arca.IntegrationTest do
         api_key_type: nil
       }
 
-      :ok = Arca.put(member1, ["private", "secret.txt"], "shared secret")
+      :ok = Arca.put(member1, ["guest", "private", "secret.txt"], "shared secret")
 
       # A fellow member reads the same file (members are interchangeable).
-      {:ok, content} = Arca.get(member2, ["private", "secret.txt"])
+      {:ok, content} = Arca.get(member2, ["guest", "private", "secret.txt"])
       assert content == "shared secret"
 
       # A different tenant cannot.
-      {:error, :not_found} = Arca.get(other_tenant, ["private", "secret.txt"])
+      {:error, :not_found} = Arca.get(other_tenant, ["guest", "private", "secret.txt"])
     end
 
     test "execution cleanup is per-athanor (affects all members' executions)" do
@@ -462,21 +462,21 @@ defmodule Arca.IntegrationTest do
         "list" => [1, 2, 3]
       }
 
-      :ok = Arca.put_json(ctx, ["json_test", "data.json"], data)
+      :ok = Arca.put_json(ctx, ["guest", "json_test", "data.json"], data)
 
-      {:ok, read_data} = Arca.get_json(ctx, ["json_test", "data.json"])
+      {:ok, read_data} = Arca.get_json(ctx, ["guest", "json_test", "data.json"])
 
       assert read_data == data
     end
 
     test "get_json returns error for missing file", %{ctx: ctx} do
-      {:error, :not_found} = Arca.get_json(ctx, ["json_test", "nonexistent.json"])
+      {:error, :not_found} = Arca.get_json(ctx, ["guest", "json_test", "nonexistent.json"])
     end
 
     test "get_json returns error for invalid JSON", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["json_test", "invalid.json"], "not valid json {{{")
+      :ok = Arca.put(ctx, ["guest", "json_test", "invalid.json"], "not valid json {{{")
 
-      {:error, %Jason.DecodeError{}} = Arca.get_json(ctx, ["json_test", "invalid.json"])
+      {:error, %Jason.DecodeError{}} = Arca.get_json(ctx, ["guest", "json_test", "invalid.json"])
     end
   end
 end

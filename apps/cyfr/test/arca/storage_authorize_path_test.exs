@@ -57,12 +57,35 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:ok, "mine"} = Arca.get(b, path)
   end
 
-  test "the seed bundle is readable only by server-internal contexts", %{a: a, seed: seed} do
+  test "the seed bundle is read-only, and readable only by server-internal contexts",
+       %{a: a, seed: seed} do
     path = ["seed", "components", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
-    assert :ok = Arca.put(seed, path, "{}")
+
+    # Seed is install media: writes are refused at the seam for EVERY
+    # context, system ones included — fixtures land on disk, the way
+    # install media does.
+    assert {:error, :seed_read_only} = Arca.put(seed, path, "{}")
+    assert {:error, :seed_read_only} = Arca.put(a, path, "{}")
+    assert {:error, :seed_read_only} = Arca.delete(seed, path)
+    assert {:error, :seed_read_only} = Arca.delete_tree(seed, ["seed", "components"])
+
+    seed_file =
+      :cyfr
+      |> Application.fetch_env!(:seed_path)
+      |> Path.join("components/catalysts/local/x/0.1.0/cyfr-manifest.json")
+
+    File.mkdir_p!(Path.dirname(seed_file))
+    File.write!(seed_file, "{}")
 
     assert {:error, :forbidden} = Arca.get(a, path)
     assert {:ok, "{}"} = Arca.get(seed, path)
+  end
+
+  test "an unknown first segment is refused, never minted as a new subtree", %{a: a} do
+    assert {:error, :forbidden} = Arca.put(a, ["notes", "hello.txt"], "hi")
+    assert {:error, :forbidden} = Arca.get(a, ["notes", "hello.txt"])
+    assert {:error, :forbidden} = Arca.list_recursive(a, ["data", "x"])
+    refute Arca.exists?(a, ["notes", "hello.txt"])
   end
 
   test "a context without an athanor cannot touch tenant storage at all" do
@@ -76,14 +99,14 @@ defmodule Arca.StorageAuthorizePathTest do
     end
 
     assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-      Arca.get(platform, ["notes", "x.txt"])
+      Arca.get(platform, ["guest", "x.txt"])
     end
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do
-    assert :ok = Arca.put(a, ["notes", "hello.txt"], "hi")
-    assert {:ok, "hi"} = Arca.get(a, ["notes", "hello.txt"])
+    assert :ok = Arca.put(a, ["guest", "hello.txt"], "hi")
+    assert {:ok, "hi"} = Arca.get(a, ["guest", "hello.txt"])
     # b's own tree simply lacks the file — it never sees a's.
-    assert {:error, :not_found} = Arca.get(b, ["notes", "hello.txt"])
+    assert {:error, :not_found} = Arca.get(b, ["guest", "hello.txt"])
   end
 end

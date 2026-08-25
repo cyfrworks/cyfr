@@ -256,11 +256,11 @@ defmodule MultiTenantIsolationTest do
 
   describe "Arca blob isolation" do
     test "an athanor's private tree is invisible to another athanor", %{a: ctx_a, b: ctx_b} do
-      :ok = Arca.put(ctx_a, ["notes", "secret.txt"], "for A only")
+      :ok = Arca.put(ctx_a, ["guest", "secret.txt"], "for A only")
 
-      assert {:ok, "for A only"} = Arca.get(ctx_a, ["notes", "secret.txt"])
-      assert {:error, :not_found} = Arca.get(ctx_b, ["notes", "secret.txt"])
-      refute Arca.exists?(ctx_b, ["notes", "secret.txt"])
+      assert {:ok, "for A only"} = Arca.get(ctx_a, ["guest", "secret.txt"])
+      assert {:error, :not_found} = Arca.get(ctx_b, ["guest", "secret.txt"])
+      refute Arca.exists?(ctx_b, ["guest", "secret.txt"])
     end
 
     test "the components tree is tenant-relative: the same spelling is each athanor's own",
@@ -283,7 +283,7 @@ defmodule MultiTenantIsolationTest do
     test "the seed bundle is readable only by the system", %{a: ctx_a} do
       path = ["seed", "components", "catalysts", "local", "seed", "1.0.0", "manifest.json"]
       assert {:error, :forbidden} = Arca.get(ctx_a, path)
-      assert {:error, :forbidden} = Arca.put(ctx_a, path, "{}")
+      assert {:error, :seed_read_only} = Arca.put(ctx_a, path, "{}")
     end
   end
 
@@ -356,7 +356,7 @@ defmodule MultiTenantIsolationTest do
     end
 
     test "Arca refuses an athanor-less blob path", %{unresolved: ctx} do
-      assert_raise ArgumentError, fn -> Arca.put(ctx, ["notes", "x"], "y") end
+      assert_raise ArgumentError, fn -> Arca.put(ctx, ["guest", "x"], "y") end
     end
 
     test "an athanor-scoped context is still allowed", %{a: ctx} do

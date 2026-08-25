@@ -167,7 +167,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert Arca.Cache.get(key) == :miss
 
     assert :ok = Caps.check_storage(ctx, 1)
-    :ok = Arca.put(ctx, ["cap-probe.txt"], "bytes")
+    :ok = Arca.put(ctx, ["guest", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == :miss
 
     # A write to a global root is the server's bytes, not the athanor's,

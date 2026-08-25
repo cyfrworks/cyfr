@@ -62,10 +62,10 @@ defmodule Arca.Adapters.S3Test do
 
   defp route(conn) do
     case {conn.method, conn.request_path} do
-      {"GET", "/test-bucket/athanors/ath_test/exists.txt"} -> {:ok, 200, "hi"}
+      {"GET", "/test-bucket/athanors/ath_test/guest/exists.txt"} -> {:ok, 200, "hi"}
       {"PUT", _} -> {:ok, 200, ""}
       {"DELETE", _} -> {:ok, 204, ""}
-      {"HEAD", "/test-bucket/athanors/ath_test/exists.txt"} -> {:ok, 200, ""}
+      {"HEAD", "/test-bucket/athanors/ath_test/guest/exists.txt"} -> {:ok, 200, ""}
       {"GET", _} -> :not_found
       _ -> :not_found
     end
@@ -127,67 +127,67 @@ defmodule Arca.Adapters.S3Test do
         Application.get_env(:cyfr, :s3) |> Keyword.put(:prefix, "tenants/prod")
       )
 
-      assert :ok = S3.put(ctx, ["reports", "x.txt"], "content")
+      assert :ok = S3.put(ctx, ["guest", "x.txt"], "content")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/tenants/prod/athanors/ath_test/reports/x.txt"
+      assert path == "/test-bucket/tenants/prod/athanors/ath_test/guest/x.txt"
     end
   end
 
   describe "get/2" do
     test "returns content on 200", %{ctx: ctx} do
-      assert {:ok, "hi"} = S3.get(ctx, ["exists.txt"])
+      assert {:ok, "hi"} = S3.get(ctx, ["guest", "exists.txt"])
     end
 
     test "returns :not_found on 404", %{ctx: ctx} do
-      assert {:error, :not_found} = S3.get(ctx, ["missing.txt"])
+      assert {:error, :not_found} = S3.get(ctx, ["guest", "missing.txt"])
     end
   end
 
   describe "exists?/2" do
     test "returns true on 200", %{ctx: ctx} do
-      assert S3.exists?(ctx, ["exists.txt"])
+      assert S3.exists?(ctx, ["guest", "exists.txt"])
     end
 
     test "returns false on 404", %{ctx: ctx} do
-      refute S3.exists?(ctx, ["missing.txt"])
+      refute S3.exists?(ctx, ["guest", "missing.txt"])
     end
   end
 
   describe "delete/2" do
     test "deletes an existing object", %{ctx: ctx} do
-      assert :ok = S3.delete(ctx, ["exists.txt"])
-      assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/exists.txt", _, _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/exists.txt", _, _}
+      assert :ok = S3.delete(ctx, ["guest", "exists.txt"])
+      assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/guest/exists.txt", _, _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/exists.txt", _, _}
     end
 
     test "a missing key is :not_found, not a silent :ok", %{ctx: ctx} do
       # Real S3 answers 204 for a DELETE of a key that never existed; the
       # probe is what keeps this `{:error, :not_found}` like the Local adapter.
-      assert {:error, :not_found} = S3.delete(ctx, ["whatever.txt"])
+      assert {:error, :not_found} = S3.delete(ctx, ["guest", "whatever.txt"])
       refute_received {:req, "DELETE", _, _, _}
     end
   end
 
   describe "append/3" do
     test "extends the object in place, so get/2 returns the whole file", %{ctx: ctx} do
-      assert :ok = S3.append(ctx, ["exists.txt"], "-more")
+      assert :ok = S3.append(ctx, ["guest", "exists.txt"], "-more")
 
       # One path stays one object: the existing body is read and written back
       # extended, rather than a child object appearing under the path.
-      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/exists.txt", _, _}
+      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/guest/exists.txt", _, _}
 
-      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/exists.txt", _,
+      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/guest/exists.txt", _,
                        "hi-more"}
     end
 
     test "creates the object when the path does not exist yet", %{ctx: ctx} do
-      assert :ok = S3.append(ctx, ["audit", "2026-05-05.jsonl"], "event-1\n")
+      assert :ok = S3.append(ctx, ["guest", "audit", "2026-05-05.jsonl"], "event-1\n")
 
-      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/audit/2026-05-05.jsonl",
+      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/guest/audit/2026-05-05.jsonl",
                        _, _}
 
-      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/audit/2026-05-05.jsonl",
+      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/guest/audit/2026-05-05.jsonl",
                        _, "event-1\n"}
     end
 
@@ -195,7 +195,7 @@ defmodule Arca.Adapters.S3Test do
       oversized = :binary.copy("x", 5_242_881)
 
       assert {:error, :object_too_large} =
-               S3.append(ctx, ["audit", "2026-05-05.jsonl"], oversized)
+               S3.append(ctx, ["guest", "audit", "2026-05-05.jsonl"], oversized)
 
       refute_received {:req, "PUT", _, _, _}
     end
@@ -210,8 +210,8 @@ defmodule Arca.Adapters.S3Test do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>true</IsTruncated>
-        <Contents><Key>athanors/ath_test/tree/a.txt</Key></Contents>
-        <Contents><Key>athanors/ath_test/tree/b.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/a.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/b.txt</Key></Contents>
         <NextContinuationToken>tok+page/2==</NextContinuationToken>
       </ListBucketResult>
       """
@@ -220,7 +220,7 @@ defmodule Arca.Adapters.S3Test do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>false</IsTruncated>
-        <Contents><Key>athanors/ath_test/tree/sub/c.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/sub/c.txt</Key></Contents>
       </ListBucketResult>
       """
 
@@ -246,12 +246,12 @@ defmodule Arca.Adapters.S3Test do
     test "list_recursive follows continuation tokens across pages", %{ctx: ctx} do
       stub_paged_listing(self())
 
-      assert {:ok, leaves} = S3.list_recursive(ctx, ["tree"])
+      assert {:ok, leaves} = S3.list_recursive(ctx, ["guest"])
 
       assert Enum.sort(leaves) == [
-               ["tree", "a.txt"],
-               ["tree", "b.txt"],
-               ["tree", "sub", "c.txt"]
+               ["guest", "a.txt"],
+               ["guest", "b.txt"],
+               ["guest", "sub", "c.txt"]
              ]
 
       # Exactly two list requests: the initial page and the token follow-up.
@@ -264,14 +264,14 @@ defmodule Arca.Adapters.S3Test do
     test "delete_tree removes keys from every page", %{ctx: ctx} do
       stub_paged_listing(self())
 
-      assert :ok = S3.delete_tree(ctx, ["tree"])
+      assert :ok = S3.delete_tree(ctx, ["guest"])
 
       # Drain the two GET pages, then expect one DELETE per key on both pages.
       assert_received {:req, "GET", _, _}
       assert_received {:req, "GET", _, _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/tree/a.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/tree/b.txt", _}
-      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/tree/sub/c.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/a.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/b.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/guest/sub/c.txt", _}
     end
 
     test "a repeated continuation token errors instead of looping", %{ctx: ctx} do
@@ -280,7 +280,7 @@ defmodule Arca.Adapters.S3Test do
       looping_page = """
       <ListBucketResult>
         <IsTruncated>true</IsTruncated>
-        <Contents><Key>athanors/ath_test/tree/a.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/a.txt</Key></Contents>
         <NextContinuationToken>same-token</NextContinuationToken>
       </ListBucketResult>
       """
@@ -290,7 +290,7 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, looping_page)
       end)
 
-      assert {:error, _} = S3.list_recursive(ctx, ["tree"])
+      assert {:error, _} = S3.list_recursive(ctx, ["guest"])
     end
   end
 

@@ -13,7 +13,10 @@ defmodule Opus.StorageHandler do
 
   All storage operations are deny-by-default. A Catalyst's consent edge must
   carry `storage.paths` — an empty list (or a nil edge) means **deny all**.
-  Use `["data/*"]` or `["components/*"]` to allow all paths within a scope.
+  A grant entry ending in `/` allows everything under that prefix (so
+  `["data/"]` or `["components/"]` allows a whole scope), `"*"` allows every
+  path, and anything else must match exactly (`Opus.EdgeGuard.allows_path?/2`
+  is the predicate).
 
   Path safety is enforced at the host boundary:
   - Paths must start with `data/` or `components/` (valid scopes)
@@ -323,10 +326,14 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  @valid_scopes ["data", "components"]
+  # The guest storage vocabulary — `Arca.Storage.guest_scopes/0` is the
+  # SSOT (it also names the physical scope each one stores under); this
+  # boundary only ever consumes it.
+  defp valid_scopes, do: Enum.sort(Map.keys(Arca.Storage.guest_scopes()))
 
   @doc """
-  Validate that a path starts with a valid scope (`data/` or `components/`).
+  Validate that a path starts with a valid guest scope
+  (`Arca.Storage.guest_scopes/0` — `data/` or `components/`).
 
   Accepts bare scope names like `"data"` for directory listing.
   Empty paths are allowed (for root-level list/exists operations).
@@ -335,7 +342,7 @@ defmodule Opus.StorageHandler do
   def validate_path_scope(""), do: :ok
 
   def validate_path_scope(path) do
-    if Enum.any?(@valid_scopes, fn scope ->
+    if Enum.any?(valid_scopes(), fn scope ->
          path == scope or String.starts_with?(path, scope <> "/")
        end) do
       :ok
@@ -442,7 +449,7 @@ defmodule Opus.StorageHandler do
   # state (aqua/, config/, conversations/) lives alongside guest files, and
   # a `*` path grant would hand all of it to the guest.
   defp dispatch("list", %{path: ""}, _limits, _ctx) do
-    {:ok, %{"path" => "", "files" => Enum.map(@valid_scopes, &(&1 <> "/"))}}
+    {:ok, %{"path" => "", "files" => Enum.map(valid_scopes(), &(&1 <> "/"))}}
   end
 
   defp dispatch("exists", %{path: ""}, _limits, _ctx) do
@@ -560,8 +567,17 @@ defmodule Opus.StorageHandler do
     |> map_guest_scope()
   end
 
-  defp map_guest_scope(["data" | rest]), do: ["guest" | rest]
-  defp map_guest_scope(segments), do: segments
+  # The guest→physical scope map is `Arca.Storage.guest_scopes/0` — the
+  # layout, including the one vocabulary difference between guest and
+  # host, is written down in a single module.
+  defp map_guest_scope([scope | rest]) do
+    case Arca.Storage.guest_scopes() do
+      %{^scope => physical} -> [physical | rest]
+      _ -> [scope | rest]
+    end
+  end
+
+  defp map_guest_scope([]), do: []
 
   # ============================================================================
   # Private: Response Encoding

@@ -93,15 +93,15 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "read/2" do
     test "reads file resource", %{ctx: ctx} do
       # Create a test file using Arca API
-      :ok = Arca.put(ctx, ["test.txt"], "hello world")
+      :ok = Arca.put(ctx, ["guest", "test.txt"], "hello world")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/test.txt")
+      {:ok, result} = MCP.read(ctx, "arca://files/guest/test.txt")
       assert result.mimeType == "application/octet-stream"
       assert Base.decode64!(result.content) == "hello world"
     end
 
     test "returns error for missing file", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://files/missing.txt")
+      {:error, msg} = MCP.read(ctx, "arca://files/guest/missing.txt")
       assert msg =~ "not found"
     end
 
@@ -594,16 +594,16 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "resource read error paths" do
     test "handles get error other than not_found", %{ctx: ctx} do
       # read/2 with valid file
-      :ok = Arca.put(ctx, ["resource_test.txt"], "content")
+      :ok = Arca.put(ctx, ["guest", "resource_test.txt"], "content")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/resource_test.txt")
+      {:ok, result} = MCP.read(ctx, "arca://files/guest/resource_test.txt")
       assert Base.decode64!(result.content) == "content"
     end
 
     test "handles nested path in resource URI", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["deep", "nested", "file.txt"], "nested content")
+      :ok = Arca.put(ctx, ["guest", "nested", "file.txt"], "nested content")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/deep/nested/file.txt")
+      {:ok, result} = MCP.read(ctx, "arca://files/guest/nested/file.txt")
       assert Base.decode64!(result.content) == "nested content"
     end
   end

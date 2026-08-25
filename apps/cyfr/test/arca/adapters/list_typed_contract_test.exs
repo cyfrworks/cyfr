@@ -42,47 +42,47 @@ defmodule Arca.Adapters.ListTypedContractTest do
       end)
 
       ctx = Sanctum.TestContext.local()
-      :ok = Local.put(ctx, ["tree", "a.txt"], "a")
-      :ok = Local.put(ctx, ["tree", "b.txt"], "b")
-      :ok = Local.put(ctx, ["tree", "sub", "c.txt"], "c")
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+      :ok = Local.put(ctx, ["guest", "b.txt"], "b")
+      :ok = Local.put(ctx, ["guest", "sub", "c.txt"], "c")
 
       {:ok, ctx: ctx}
     end
 
     test "tells a directory from a file", %{ctx: ctx} do
-      assert {:ok, entries} = Local.list_typed(ctx, ["tree"])
+      assert {:ok, entries} = Local.list_typed(ctx, ["guest"])
       assert Enum.sort(entries) == [{"a.txt", :file}, {"b.txt", :file}, {"sub", :dir}]
     end
 
     test "a path that is a file is not an empty directory", %{ctx: ctx} do
-      assert {:error, :enotdir} = Local.list_typed(ctx, ["tree", "a.txt"])
+      assert {:error, :enotdir} = Local.list_typed(ctx, ["guest", "a.txt"])
     end
 
     test "a path with nothing under it lists empty", %{ctx: ctx} do
-      assert {:ok, []} = Local.list_typed(ctx, ["nothing-here"])
+      assert {:ok, []} = Local.list_typed(ctx, ["guest", "nothing-here"])
     end
 
     test "list/2 returns the same names", %{ctx: ctx} do
-      {:ok, entries} = Local.list_typed(ctx, ["tree"])
-      {:ok, names} = Local.list(ctx, ["tree"])
+      {:ok, entries} = Local.list_typed(ctx, ["guest"])
+      {:ok, names} = Local.list(ctx, ["guest"])
       assert Enum.sort(names) == entries |> Enum.map(&elem(&1, 0)) |> Enum.sort()
     end
 
     test "exists?/2 answers files, not directories", %{ctx: ctx} do
-      assert Local.exists?(ctx, ["tree", "a.txt"])
-      refute Local.exists?(ctx, ["tree"])
-      refute Local.exists?(ctx, ["tree", "missing.txt"])
+      assert Local.exists?(ctx, ["guest", "a.txt"])
+      refute Local.exists?(ctx, ["guest"])
+      refute Local.exists?(ctx, ["guest", "missing.txt"])
     end
 
     test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
-      assert {:error, :not_found} = Local.delete(ctx, ["tree", "missing.txt"])
-      assert :ok = Local.delete(ctx, ["tree", "a.txt"])
-      refute Local.exists?(ctx, ["tree", "a.txt"])
+      assert {:error, :not_found} = Local.delete(ctx, ["guest", "missing.txt"])
+      assert :ok = Local.delete(ctx, ["guest", "a.txt"])
+      refute Local.exists?(ctx, ["guest", "a.txt"])
     end
 
     test "delete_tree/2 removes an object at the tree's own path", %{ctx: ctx} do
-      assert :ok = Local.delete_tree(ctx, ["tree", "a.txt"])
-      refute Local.exists?(ctx, ["tree", "a.txt"])
+      assert :ok = Local.delete_tree(ctx, ["guest", "a.txt"])
+      refute Local.exists?(ctx, ["guest", "a.txt"])
     end
   end
 
@@ -106,10 +106,10 @@ defmodule Arca.Adapters.ListTypedContractTest do
       <?xml version="1.0" encoding="UTF-8"?>
       <ListBucketResult>
         <IsTruncated>false</IsTruncated>
-        <Contents><Key>athanors/ath_test/tree/a.txt</Key></Contents>
-        <Contents><Key>athanors/ath_test/tree/b.txt</Key></Contents>
-        <Contents><Key>athanors/ath_test/tree/sub/c.txt</Key></Contents>
-        <Contents><Key>athanors/ath_test/tree/marker/</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/a.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/b.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/sub/c.txt</Key></Contents>
+        <Contents><Key>athanors/ath_test/guest/marker/</Key></Contents>
       </ListBucketResult>
       """
 
@@ -123,7 +123,7 @@ defmodule Arca.Adapters.ListTypedContractTest do
 
         cond do
           # A listing under the tree prefix.
-          conn.method == "GET" and prefix == "athanors/ath_test/tree/" ->
+          conn.method == "GET" and prefix == "athanors/ath_test/guest/" ->
             Plug.Conn.send_resp(conn, 200, listing)
 
           # Any other listing is empty.
@@ -132,7 +132,7 @@ defmodule Arca.Adapters.ListTypedContractTest do
 
           # `a.txt` is a real object; nothing else is.
           conn.method == "HEAD" and
-              conn.request_path == "/test-bucket/athanors/ath_test/tree/a.txt" ->
+              conn.request_path == "/test-bucket/athanors/ath_test/guest/a.txt" ->
             Plug.Conn.send_resp(conn, 200, "")
 
           # Deletes succeed for any key — real S3 does not 404 a DELETE.
@@ -155,7 +155,7 @@ defmodule Arca.Adapters.ListTypedContractTest do
     end
 
     test "tells a directory from a file", %{ctx: ctx} do
-      assert {:ok, entries} = S3.list_typed(ctx, ["tree"])
+      assert {:ok, entries} = S3.list_typed(ctx, ["guest"])
 
       assert Enum.sort(entries) == [
                {"a.txt", :file},
@@ -166,32 +166,32 @@ defmodule Arca.Adapters.ListTypedContractTest do
     end
 
     test "a path that is a file is not an empty directory", %{ctx: ctx} do
-      assert {:error, :enotdir} = S3.list_typed(ctx, ["tree", "a.txt"])
+      assert {:error, :enotdir} = S3.list_typed(ctx, ["guest", "a.txt"])
     end
 
     test "a path with nothing under it lists empty", %{ctx: ctx} do
-      assert {:ok, []} = S3.list_typed(ctx, ["nothing-here"])
+      assert {:ok, []} = S3.list_typed(ctx, ["guest", "nothing-here"])
     end
 
     test "list/2 returns the same names", %{ctx: ctx} do
-      {:ok, entries} = S3.list_typed(ctx, ["tree"])
-      {:ok, names} = S3.list(ctx, ["tree"])
+      {:ok, entries} = S3.list_typed(ctx, ["guest"])
+      {:ok, names} = S3.list(ctx, ["guest"])
       assert Enum.sort(names) == entries |> Enum.map(&elem(&1, 0)) |> Enum.sort()
     end
 
     test "exists?/2 answers files, not directories", %{ctx: ctx} do
-      assert S3.exists?(ctx, ["tree", "a.txt"])
-      refute S3.exists?(ctx, ["tree"])
-      refute S3.exists?(ctx, ["tree", "missing.txt"])
+      assert S3.exists?(ctx, ["guest", "a.txt"])
+      refute S3.exists?(ctx, ["guest"])
+      refute S3.exists?(ctx, ["guest", "missing.txt"])
     end
 
     test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
-      assert {:error, :not_found} = S3.delete(ctx, ["tree", "missing.txt"])
-      assert :ok = S3.delete(ctx, ["tree", "a.txt"])
+      assert {:error, :not_found} = S3.delete(ctx, ["guest", "missing.txt"])
+      assert :ok = S3.delete(ctx, ["guest", "a.txt"])
     end
 
     test "delete_tree/2 removes an object at the tree's own path", %{ctx: ctx} do
-      assert :ok = S3.delete_tree(ctx, ["tree", "a.txt"])
+      assert :ok = S3.delete_tree(ctx, ["guest", "a.txt"])
     end
 
     test "a zero-byte directory marker reads as a directory, not a file", %{ctx: ctx} do
@@ -199,7 +199,7 @@ defmodule Arca.Adapters.ListTypedContractTest do
       # The key has nothing after the trailing slash, so a naive basename read
       # calls it a file; the local adapter would call the same thing a
       # directory. `marker/` is that object in the fixture.
-      {:ok, entries} = S3.list_typed(ctx, ["tree"])
+      {:ok, entries} = S3.list_typed(ctx, ["guest"])
       assert Enum.filter(entries, &(elem(&1, 0) == "marker")) == [{"marker", :dir}]
     end
   end
