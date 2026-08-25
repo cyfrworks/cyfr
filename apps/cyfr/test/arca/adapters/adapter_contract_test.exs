@@ -131,23 +131,27 @@ defmodule Arca.Adapters.ContractTest do
       {:ok, ctx: ctx}
     end
 
-    test "put/2 then get/2 round-trips the bytes", %{ctx: ctx},
+    test("put/2 then get/2 round-trips the bytes", %{ctx: ctx},
       do: contract_put_get_roundtrip(Local, ctx)
+    )
 
-    test "append/3 creates, then concatenates", %{ctx: ctx},
+    test("append/3 creates, then concatenates", %{ctx: ctx},
       do: contract_append_roundtrip(Local, ctx)
+    )
 
-    test "tells a directory from a file", %{ctx: ctx},
-      do: contract_dir_vs_file(Local, ctx, [])
+    test("tells a directory from a file", %{ctx: ctx}, do: contract_dir_vs_file(Local, ctx, []))
 
-    test "a path that is a file is not an empty directory", %{ctx: ctx},
+    test("a path that is a file is not an empty directory", %{ctx: ctx},
       do: contract_file_is_not_a_directory(Local, ctx)
+    )
 
-    test "a path with nothing under it lists empty", %{ctx: ctx},
+    test("a path with nothing under it lists empty", %{ctx: ctx},
       do: contract_empty_listing(Local, ctx)
+    )
 
-    test "exists?/2 answers files, not directories", %{ctx: ctx},
+    test("exists?/2 answers files, not directories", %{ctx: ctx},
       do: contract_exists_files_only(Local, ctx)
+    )
 
     test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
       contract_delete(Local, ctx)
@@ -159,14 +163,17 @@ defmodule Arca.Adapters.ContractTest do
       refute Local.exists?(ctx, ["guest", "a.txt"])
     end
 
-    test "list_recursive/2 returns every leaf as full segments", %{ctx: ctx},
+    test("list_recursive/2 returns every leaf as full segments", %{ctx: ctx},
       do: contract_list_recursive(Local, ctx)
+    )
 
-    test "usage/2 counts files and bytes, nothing else", %{ctx: ctx},
+    test("usage/2 counts files and bytes, nothing else", %{ctx: ctx},
       do: contract_usage(Local, ctx)
+    )
 
-    test "read_subtree/2 returns relative pairs", %{ctx: ctx},
+    test("read_subtree/2 returns relative pairs", %{ctx: ctx},
       do: contract_read_subtree(Local, ctx)
+    )
   end
 
   # ---------------------------------------------------------------------------
@@ -260,38 +267,45 @@ defmodule Arca.Adapters.ContractTest do
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 
-    test "put/2 then get/2 round-trips the bytes", %{ctx: ctx},
+    test("put/2 then get/2 round-trips the bytes", %{ctx: ctx},
       do: contract_put_get_roundtrip(S3, ctx)
+    )
 
-    test "append/3 creates, then concatenates", %{ctx: ctx},
+    test("append/3 creates, then concatenates", %{ctx: ctx},
       do: contract_append_roundtrip(S3, ctx)
+    )
 
-    test "tells a directory from a file", %{ctx: ctx},
+    test("tells a directory from a file", %{ctx: ctx},
       do: contract_dir_vs_file(S3, ctx, [{"marker", :dir}])
+    )
 
-    test "a path that is a file is not an empty directory", %{ctx: ctx},
+    test("a path that is a file is not an empty directory", %{ctx: ctx},
       do: contract_file_is_not_a_directory(S3, ctx)
+    )
 
-    test "a path with nothing under it lists empty", %{ctx: ctx},
+    test("a path with nothing under it lists empty", %{ctx: ctx},
       do: contract_empty_listing(S3, ctx)
+    )
 
-    test "exists?/2 answers files, not directories", %{ctx: ctx},
+    test("exists?/2 answers files, not directories", %{ctx: ctx},
       do: contract_exists_files_only(S3, ctx)
+    )
 
-    test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx},
+    test("delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx},
       do: contract_delete(S3, ctx)
+    )
 
-    test "delete_tree/2 removes an object at the tree's own path", %{ctx: ctx},
+    test("delete_tree/2 removes an object at the tree's own path", %{ctx: ctx},
       do: contract_delete_tree_object_at_path(S3, ctx)
+    )
 
-    test "list_recursive/2 returns every leaf as full segments", %{ctx: ctx},
+    test("list_recursive/2 returns every leaf as full segments", %{ctx: ctx},
       do: contract_list_recursive(S3, ctx)
+    )
 
-    test "usage/2 counts files and bytes, nothing else", %{ctx: ctx},
-      do: contract_usage(S3, ctx)
+    test("usage/2 counts files and bytes, nothing else", %{ctx: ctx}, do: contract_usage(S3, ctx))
 
-    test "read_subtree/2 returns relative pairs", %{ctx: ctx},
-      do: contract_read_subtree(S3, ctx)
+    test("read_subtree/2 returns relative pairs", %{ctx: ctx}, do: contract_read_subtree(S3, ctx))
 
     test "a zero-byte directory marker reads as a directory, not a file", %{ctx: ctx} do
       # Some consoles write an empty object at `foo/` to make a folder appear.

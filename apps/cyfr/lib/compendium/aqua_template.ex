@@ -182,7 +182,10 @@ defmodule Compendium.AquaTemplate do
 
   # The digest of the shipped file set — what a pristine copy hashes to.
   defp shipped_digest do
-    digest_files(fn name -> Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]) end, files())
+    digest_files(
+      fn name -> Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]) end,
+      files()
+    )
   end
 
   # The digest of the athanor's copy, over the same kind of file set the

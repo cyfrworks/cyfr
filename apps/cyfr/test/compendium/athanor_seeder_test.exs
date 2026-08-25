@@ -281,6 +281,7 @@ defmodule Compendium.AthanorSeederTest do
       # and a dep pull on every boot for nothing.
       assert {:ok, report} = AthanorSeeder.sync("ath_acme")
       assert report.copied == ["catalysts/local/foo/1.0.0"]
+
       refute Arca.exists?(
                athanor_ctx("ath_acme"),
                ["components", "catalysts", "local", "foo", "9.9.9"]

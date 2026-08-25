@@ -128,7 +128,10 @@ defmodule Arca do
 
   """
   def put(%Context{} = ctx, path, content),
-    do: mutating(ctx, path, {:create, byte_size(content)}, fn p -> adapter(p).put(ctx, p, content) end)
+    do:
+      mutating(ctx, path, {:create, byte_size(content)}, fn p ->
+        adapter(p).put(ctx, p, content)
+      end)
 
   @doc """
   Encode and write JSON content to storage.

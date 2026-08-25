@@ -23,8 +23,8 @@ defmodule Compendium.WITSource do
     for type <- Sanctum.ComponentRef.executable_types() do
       type_dir = Path.join(@wit_root, type)
 
+      # arca:bypass-ok=C — compile-time embed of the tracked wit/ tree.
       files =
-        # arca:bypass-ok=C — compile-time embed of the tracked wit/ tree.
         [type_dir, "**", "*.wit"]
         |> Path.join()
         |> Path.wildcard()

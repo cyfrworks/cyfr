@@ -108,8 +108,8 @@ jobs:
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
-          otp-version: '28'
-          elixir-version: '1.19.5'
+          otp-version: '29'
+          elixir-version: '1.20.0'
       - name: Cache deps and build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -155,8 +155,8 @@ jobs:
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         id: beam
         with:
-          otp-version: '28'
-          elixir-version: '1.19.5'
+          otp-version: '29'
+          elixir-version: '1.20.0'
       - name: Cache deps and build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

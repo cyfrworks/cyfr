@@ -1003,7 +1003,10 @@ defmodule Opus.StorageHandlerTest do
       # A delete drops both counters so reclaimed space is recomputed.
       del_edge = EdgeFixtures.edge(paths: ["data/"], actions: ["read", "write", "delete"])
       request = ~s({"action": "delete", "path": "data/b.txt"})
-      assert %{"deleted" => true} = StorageHandler.execute(request, del_edge, nil, ctx, ref, []) |> Jason.decode!()
+
+      assert %{"deleted" => true} =
+               StorageHandler.execute(request, del_edge, nil, ctx, ref, []) |> Jason.decode!()
+
       assert :miss = Arca.Cache.get(bytes_key)
       assert :miss = Arca.Cache.get(files_key)
     end

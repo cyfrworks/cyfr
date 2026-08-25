@@ -145,7 +145,18 @@ defmodule Arca.Adapters.S3MinioTest do
     ]
 
     signed =
-      :aws_signature.sign_v4(@access, @secret, @region, "s3", datetime, "PUT", url, headers, "", [])
+      :aws_signature.sign_v4(
+        @access,
+        @secret,
+        @region,
+        "s3",
+        datetime,
+        "PUT",
+        url,
+        headers,
+        "",
+        []
+      )
 
     {:ok, %{status: status}} =
       Req.request(
