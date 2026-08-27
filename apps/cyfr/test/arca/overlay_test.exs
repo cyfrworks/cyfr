@@ -102,6 +102,19 @@ defmodule Arca.OverlayTest do
       assert Arca.Storage.locate(["guest", "x"]) == :not_overlaid
       assert Arca.Storage.locate([]) == :not_overlaid
     end
+
+    test "a junk shape under components/ is plain storage — never a unit", %{ctx: ctx} do
+      # Only the grammar mints a unit: no copy-on-write, no origin mark,
+      # no status entry for a shape the domain would never name.
+      junk = ["components", "junk", "a", "b", "not-semver"]
+      assert Arca.Storage.locate(junk ++ ["file.txt"]) == :above_unit
+
+      :ok = Arca.put(ctx, junk ++ ["file.txt"], "stray")
+
+      assert Arca.Overlay.unit_status(ctx, junk) == {:ok, :absent}
+      assert {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "components")
+      refute Map.has_key?(statuses, junk)
+    end
   end
 
   describe "read-through" do

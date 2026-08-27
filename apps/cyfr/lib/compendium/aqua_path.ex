@@ -26,6 +26,30 @@ defmodule Compendium.AquaPath do
   @skills "skills"
   @skill_manifest "SKILL.md"
 
+  # The one grammar for agent and skill names — the tool boundary
+  # (`Compendium.MCP.AquaTool.validate_name`) and the unit locator both
+  # speak it, so a name the tools refuse can never mint a unit.
+  @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
+
+  @doc "The agent/skill name grammar — letters, digits, `_` and `-`."
+  @spec name_format() :: Regex.t()
+  def name_format, do: @name_format
+
+  @doc """
+  Whether `name` is a valid agent or skill name.
+
+  ## Examples
+
+      iex> Compendium.AquaPath.valid_name?("aqua_web")
+      true
+
+      iex> Compendium.AquaPath.valid_name?("../escape")
+      false
+
+  """
+  @spec valid_name?(term()) :: boolean()
+  def valid_name?(name), do: is_binary(name) and name =~ @name_format
+
   @doc """
   The scope root, for whole-tree operations.
 
@@ -104,10 +128,12 @@ defmodule Compendium.AquaPath do
 
   @doc """
   The overlay's unit grammar for `aqua/` (`Arca.Storage.UnitLocator`):
-  an agent is a file-shaped unit (the `.md` file itself — a single put
-  materializes it), a skill a directory unit sentinel'd by `SKILL.md`.
-  Paths outside the two unit grammars — the roots themselves, or a stray
-  shape — are above the units.
+  an agent is a file-shaped unit (a valid-named `.md` file — a single put
+  materializes it), a skill a valid-named directory unit sentinel'd by
+  `SKILL.md`. A unit is a claim the storage layer acts on — copy-on-write,
+  origin marks, status — so only the grammar mints one: a stray
+  `agents/notes.txt` or a junk-named skill dir stays plain storage,
+  outside the roster and the reset bookkeeping.
 
   ## Examples
 
@@ -120,12 +146,26 @@ defmodule Compendium.AquaPath do
       iex> Compendium.AquaPath.locate(["aqua", "agents"])
       :above_unit
 
+      iex> Compendium.AquaPath.locate(["aqua", "agents", "notes.txt"])
+      :above_unit
+
   """
   @impl Arca.Storage.UnitLocator
-  def locate([@root_name, @agents, file | _rest]), do: {:file, @root ++ [@agents, file]}
+  def locate([@root_name, @agents, file | _rest] = _path) do
+    if String.ends_with?(file, ".md") and valid_name?(Path.basename(file, ".md")) do
+      {:file, @root ++ [@agents, file]}
+    else
+      :above_unit
+    end
+  end
 
-  def locate([@root_name, @skills, name | _rest]),
-    do: {:dir, @root ++ [@skills, name], @skill_manifest}
+  def locate([@root_name, @skills, name | _rest]) do
+    if valid_name?(name) do
+      {:dir, @root ++ [@skills, name], @skill_manifest}
+    else
+      :above_unit
+    end
+  end
 
   def locate(_path), do: :above_unit
 end

@@ -82,6 +82,20 @@ defmodule Compendium.ComponentPathTest do
         assert {:dir, ^vd, _sentinel} = ComponentPath.locate(path)
       end
     end
+
+    test "only the grammar mints a unit — junk five-segment shapes stay plain storage" do
+      # A unit is a claim the storage layer acts on (copy-on-write, origin,
+      # status); depth alone must not create one.
+      for junk <- [
+            ["components", "not-a-type", "local", "x", "1.0.0"],
+            ["components", "catalysts", "local", "x", "not-semver"],
+            ["components", "catalysts", "local", "!!", "1.0.0"],
+            ["components", "catalysts", "", "x", "1.0.0"]
+          ] do
+        assert ComponentPath.locate(junk) == :above_unit
+        assert ComponentPath.parse(junk) == :error
+      end
+    end
   end
 
   describe "type_plural/1" do

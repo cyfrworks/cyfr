@@ -32,4 +32,15 @@ defmodule Compendium.AquaPathTest do
     assert AquaPath.locate(AquaPath.agents_root()) == :above_unit
     assert AquaPath.locate(AquaPath.skills_root()) == :above_unit
   end
+
+  test "only the grammar mints a unit — junk names and non-.md files stay plain storage" do
+    assert AquaPath.locate(AquaPath.agents_root() ++ ["notes.txt"]) == :above_unit
+    assert AquaPath.locate(AquaPath.agents_root() ++ ["bad name.md"]) == :above_unit
+    assert AquaPath.locate(AquaPath.agents_root() ++ [".md"]) == :above_unit
+    assert AquaPath.locate(AquaPath.skills_root() ++ ["bad name", "SKILL.md"]) == :above_unit
+
+    refute AquaPath.valid_name?("../escape")
+    refute AquaPath.valid_name?("")
+    refute AquaPath.valid_name?(nil)
+  end
 end

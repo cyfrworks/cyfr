@@ -40,9 +40,9 @@ defmodule Compendium.MCP.AquaTool do
   @tincture_guide File.read!(Path.join(@project_root, "tincture-guide.md"))
   @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))
 
-  # Agent and skill names become path segments — refuse anything else at
-  # this boundary with a typed error, where the adapter would raise.
-  @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
+  # Agent and skill names become path segments — refused at this boundary
+  # with a typed error, where the adapter would raise. The grammar itself
+  # is the path's: `Compendium.AquaPath.valid_name?/1`.
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -560,13 +560,11 @@ defmodule Compendium.MCP.AquaTool do
     end
   end
 
-  defp validate_name(name) when is_binary(name) do
-    if name =~ @name_format,
+  defp validate_name(name) do
+    if AquaPath.valid_name?(name),
       do: :ok,
       else: {:error, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}
   end
-
-  defp validate_name(_), do: {:error, "Invalid name"}
 
   # The policy vocabulary is exactly "ask" | "auto" and keys are
   # "tool.action", "tool.*", or a bare native-tool name ("native_search").

@@ -80,14 +80,20 @@ defmodule Compendium.ComponentPath do
           | :error
   def parse([@components_root, type_plural, publisher, name, version | rest])
       when type_plural in @type_plurals do
-    {:ok,
-     %{
-       type: String.trim_trailing(type_plural, "s"),
-       publisher: publisher,
-       name: name,
-       version: version,
-       rest: rest
-     }}
+    with :ok <- Sanctum.ComponentRef.validate_namespace(publisher),
+         :ok <- Sanctum.ComponentRef.validate_name(name),
+         :ok <- Sanctum.ComponentRef.validate_version(version) do
+      {:ok,
+       %{
+         type: String.trim_trailing(type_plural, "s"),
+         publisher: publisher,
+         name: name,
+         version: version,
+         rest: rest
+       }}
+    else
+      {:error, _} -> :error
+    end
   end
 
   def parse(_segments), do: :error
@@ -116,10 +122,11 @@ defmodule Compendium.ComponentPath do
   @doc """
   The overlay's unit grammar for `components/`
   (`Arca.Storage.UnitLocator`): every path at or below a version
-  directory belongs to that directory-shaped unit, sentinel'd by the
-  manifest; anything shallower is above the units. Depth-only on
-  purpose — junk shapes under `components/` are the registry's to ignore,
-  not the storage layer's to police.
+  directory that `parse/1` accepts belongs to that directory-shaped
+  unit, sentinel'd by the manifest; anything else is above the units.
+  A unit is a claim the storage layer acts on — copy-on-write, origin
+  marks, status — so only the grammar mints one: a junk five-segment
+  shape stays plain storage, never a CoW'd, quota-charged phantom unit.
 
   ## Examples
 
@@ -129,10 +136,17 @@ defmodule Compendium.ComponentPath do
       iex> Compendium.ComponentPath.locate(["components", "catalysts"])
       :above_unit
 
+      iex> Compendium.ComponentPath.locate(["components", "junk", "a", "b", "not-semver"])
+      :above_unit
+
   """
   @impl Arca.Storage.UnitLocator
-  def locate(path) when length(path) < @unit_depth, do: :above_unit
-  def locate(path), do: {:dir, Enum.take(path, @unit_depth), @manifest_name}
+  def locate(path) do
+    case parse(path) do
+      {:ok, _parts} -> {:dir, Enum.take(path, @unit_depth), @manifest_name}
+      :error -> :above_unit
+    end
+  end
 
   @doc "Path segments to a component version's manifest."
   @spec manifest_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
