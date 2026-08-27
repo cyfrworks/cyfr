@@ -239,7 +239,11 @@ defmodule Emissary.MCP.ExternalServer do
         # it, and it would otherwise be copied into every task heap.
         snapshot = %{state | tools: [], in_flight: %{}}
 
+        logger_metadata = Cyfr.LoggerContext.capture()
+
         case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+               Cyfr.LoggerContext.restore(logger_metadata)
+
                reply =
                  try do
                    dispatch_upstream_call(snapshot, body, tool_name)

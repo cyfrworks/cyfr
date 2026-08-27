@@ -165,7 +165,7 @@ defmodule Sanctum.Consent.Commit do
         athanor_id: ctx.athanor_id,
         expected_revision: prep.expected_revision
       }
-      |> put_present(:profile_id, prep.profile_id)
+      |> Cyfr.MapUtil.put_present(:profile_id, prep.profile_id)
 
     Proof.mint(bindings, ttl_ms: 600_000)
   end
@@ -541,7 +541,7 @@ defmodule Sanctum.Consent.Commit do
         athanor_id: ctx.athanor_id,
         expected_revision: prep.expected_revision
       }
-      |> put_present(:profile_id, prep.profile_id)
+      |> Cyfr.MapUtil.put_present(:profile_id, prep.profile_id)
 
     case Proof.consume(Map.get(params, :plan_token, ""), bindings) do
       :ok ->
@@ -580,7 +580,7 @@ defmodule Sanctum.Consent.Commit do
         athanor_id: ctx.athanor_id,
         expected_revision: prep.expected_revision
       }
-      |> put_present(:profile_id, prep.profile_id)
+      |> Cyfr.MapUtil.put_present(:profile_id, prep.profile_id)
 
     Proof.mint(bindings)
   end
@@ -594,7 +594,7 @@ defmodule Sanctum.Consent.Commit do
         athanor_id: ctx.athanor_id,
         expected_revision: prep.expected_revision
       }
-      |> put_present(:profile_id, prep.profile_id)
+      |> Cyfr.MapUtil.put_present(:profile_id, prep.profile_id)
 
     case Proof.consume(Map.get(params, :proof, ""), bindings) do
       :ok ->
@@ -802,7 +802,4 @@ defmodule Sanctum.Consent.Commit do
     {:error,
      {:consent_conflict, %{expected_revision: expected, actual_revision: actual, cause: cause}}}
   end
-
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 end

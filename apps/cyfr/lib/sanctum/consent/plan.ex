@@ -186,11 +186,8 @@ defmodule Sanctum.Consent.Plan do
         athanor_id: ctx.athanor_id,
         expected_revision: expected_revision
       }
-      |> put_present(:profile_id, profile_id)
+      |> Cyfr.MapUtil.put_present(:profile_id, profile_id)
 
     Proof.mint(bindings, ttl_ms: @plan_ttl_ms)
   end
-
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 end

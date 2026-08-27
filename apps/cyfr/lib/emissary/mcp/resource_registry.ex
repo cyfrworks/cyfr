@@ -76,8 +76,11 @@ defmodule Emissary.MCP.ResourceRegistry do
             # and does not trap exits, so a linked provider crash would kill the
             # request instead of returning an error. Unlinked, it arrives here as
             # `{:exit, reason}`.
+            logger_metadata = Cyfr.LoggerContext.capture()
+
             task =
               Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+                Cyfr.LoggerContext.restore(logger_metadata)
                 provider.read(ctx, uri)
               end)
 
@@ -87,7 +90,7 @@ defmodule Emissary.MCP.ResourceRegistry do
                 result
 
               {:exit, reason} ->
-                Logger.error("ResourceRegistry: read crashed for #{uri}: #{inspect(reason)}")
+                Logger.error("[ResourceRegistry] read crashed for #{uri}: #{inspect(reason)}")
                 {:error, "Resource read failed for #{uri}"}
 
               nil ->

@@ -189,7 +189,11 @@ defmodule Locus.MCP do
   defp start_async_compile(ctx, reference, build_id) do
     case Cyfr.BuildRecords.record_started(ctx, build_id, reference) do
       :ok ->
+        logger_metadata = Cyfr.LoggerContext.capture()
+
         Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+          Cyfr.LoggerContext.restore(logger_metadata)
+
           case run_compile(ctx, reference, build_id) do
             {:ok, result} ->
               Cyfr.BuildRecords.record_finished(ctx, build_id, "compiled", result)
@@ -259,20 +263,31 @@ defmodule Locus.MCP do
             # auth gate, timeout containment, and request-log audit row as
             # every other dispatch — and supervised, unlike a bare
             # Task.start.
+            logger_metadata = Cyfr.LoggerContext.capture()
+
             Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-              case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-                     "action" => "register"
-                   }) do
-                {:ok, _} ->
-                  :ok
+              Cyfr.LoggerContext.restore(logger_metadata)
 
-                {:error, reason} ->
-                  Logger.warning(
-                    "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
-                  )
+              outcome =
+                case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+                       "action" => "register"
+                     }) do
+                  {:ok, _} ->
+                    "done"
 
-                  Compendium.AutoIndexer.scan(ctx: ctx)
-              end
+                  {:error, reason} ->
+                    Logger.warning(
+                      "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
+                    )
+
+                    Compendium.AutoIndexer.scan(ctx: ctx)
+                    "indexed"
+                end
+
+              # Async builds carry the outcome on their row, so build.status
+              # stops answering "pending" forever; sync builds have no row
+              # and this is a no-op.
+              Cyfr.BuildRecords.record_registration(ctx, build_id, outcome)
             end)
 
             {:ok,

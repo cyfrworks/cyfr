@@ -118,9 +118,9 @@ defmodule Sanctum.MCP.VaultTool do
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name, "kind" => kind} = args) do
     params =
       %{name: name, kind: kind, fields: Map.get(args, "fields", %{})}
-      |> put_present(:provider_hint, args["provider_hint"])
-      |> put_present(:oauth_endpoints, args["oauth_endpoints"])
-      |> put_present(:oauth_scopes, args["oauth_scopes"])
+      |> Cyfr.MapUtil.put_present(:provider_hint, args["provider_hint"])
+      |> Cyfr.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
+      |> Cyfr.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
 
     case Vault.create(ctx, params) do
       {:ok, view} -> {:ok, %{entry: view}}
@@ -196,9 +196,9 @@ defmodule Sanctum.MCP.VaultTool do
   def handle(%Context{} = ctx, %{"action" => "rebind", "id" => id} = args) do
     params =
       %{id: id}
-      |> put_present(:oauth_endpoints, args["oauth_endpoints"])
-      |> put_present(:oauth_scopes, args["oauth_scopes"])
-      |> put_present(:field_names, args["field_names"])
+      |> Cyfr.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
+      |> Cyfr.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
+      |> Cyfr.MapUtil.put_present(:field_names, args["field_names"])
 
     case Vault.rebind(ctx, params) do
       {:ok, result} -> {:ok, Map.put(result, :status, "rebound")}
@@ -237,9 +237,6 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   # ---------------------------------------------------------------------------
-
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp fmt({:surface_not_permitted, method}) do
     "consent_class_required: vault mutations need an interactive (:oidc) session, got #{method}"

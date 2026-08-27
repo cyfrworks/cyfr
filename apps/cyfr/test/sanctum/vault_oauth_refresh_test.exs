@@ -62,7 +62,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
     :telemetry.attach(
       handler_id,
-      [:cyfr, :vault, :oauth_refresh],
+      [:cyfr, :sanctum, :vault, :oauth_refresh],
       fn _event, _measure, %{status: status}, _cfg ->
         if status == :attempt, do: :counters.add(counter, 1, 1)
       end,

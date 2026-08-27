@@ -145,8 +145,11 @@ defmodule Opus.Chain do
       execution_id = Keyword.get(opts, :execution_id) || Opus.ExecutionRecord.generate_id()
       opts = Keyword.put(opts, :execution_id, execution_id)
 
+      logger_metadata = Cyfr.LoggerContext.capture()
+
       start =
         Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+          Cyfr.LoggerContext.restore(logger_metadata)
           Registry.register(Opus.ExecutionRegistry, execution_id, :running)
 
           try do
@@ -252,16 +255,22 @@ defmodule Opus.Chain do
     else
       exec_opts =
         [authority: decision.authority, authority_required: true]
-        |> put_present(:parent_execution_id, Keyword.get(opts, :parent_execution_id))
-        |> put_present(:root_execution_id, Keyword.get(opts, :root_execution_id))
-        |> put_present(:activation_digest, Keyword.get(opts, :activation_digest))
-        |> put_present(:activation_stamp, Keyword.get(opts, :activation_stamp))
-        |> put_present(:client_ip, Keyword.get(opts, :client_ip))
-        |> put_present(:execution_id, Keyword.get(opts, :execution_id))
-        |> put_present(:type, decision.component && Map.get(decision.component, "type"))
+        |> Arca.QueryHelpers.maybe_put(
+          :parent_execution_id,
+          Keyword.get(opts, :parent_execution_id)
+        )
+        |> Arca.QueryHelpers.maybe_put(:root_execution_id, Keyword.get(opts, :root_execution_id))
+        |> Arca.QueryHelpers.maybe_put(:activation_digest, Keyword.get(opts, :activation_digest))
+        |> Arca.QueryHelpers.maybe_put(:activation_stamp, Keyword.get(opts, :activation_stamp))
+        |> Arca.QueryHelpers.maybe_put(:client_ip, Keyword.get(opts, :client_ip))
+        |> Arca.QueryHelpers.maybe_put(:execution_id, Keyword.get(opts, :execution_id))
+        |> Arca.QueryHelpers.maybe_put(
+          :type,
+          decision.component && Map.get(decision.component, "type")
+        )
         # Which edge authorized this hop, for the §4.5 audit line.
-        |> put_present(:dep_ref, decision.reference)
-        |> put_present(:need, decision.need)
+        |> Arca.QueryHelpers.maybe_put(:dep_ref, decision.reference)
+        |> Arca.QueryHelpers.maybe_put(:need, decision.need)
 
       Opus.Executor.run(ctx, decision.reference, input, exec_opts)
     end
@@ -336,9 +345,6 @@ defmodule Opus.Chain do
       end
     end
   end
-
-  defp put_present(opts, _key, nil), do: opts
-  defp put_present(opts, key, value), do: Keyword.put(opts, key, value)
 
   @doc """
   Load the root authority a reference would execute under, without

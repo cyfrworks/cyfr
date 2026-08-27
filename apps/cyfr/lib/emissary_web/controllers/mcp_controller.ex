@@ -439,8 +439,11 @@ defmodule EmissaryWeb.MCPController do
   defp streamed_dispatch(conn, context, params, request_id, token) do
     Progress.listen(request_id, token)
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     task =
       Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
         MCP.handle_message(context, params)
       end)
 

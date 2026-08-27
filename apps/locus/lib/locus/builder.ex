@@ -470,8 +470,11 @@ defmodule Locus.Builder do
   end
 
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     task =
       Task.async(fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
         executable = System.find_executable(command) || command
 
         port =

@@ -196,7 +196,14 @@ defmodule Sanctum.Provisioning do
       fun.()
       :ok
     else
-      case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fun) do
+      logger_metadata = Cyfr.LoggerContext.capture()
+
+      task_fun = fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+        fun.()
+      end
+
+      case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, task_fun) do
         {:ok, _pid} ->
           :ok
 

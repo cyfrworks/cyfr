@@ -52,6 +52,27 @@ defmodule Cyfr.BuildRecordsTest do
     refute Map.has_key?(record, "result")
   end
 
+  test "registration outcome lands on the finished row, and a missing row is a no-op", %{
+    ctx: ctx
+  } do
+    :ok = BuildRecords.record_started(ctx, "build_r", "reagent:local.demo:0.1.0")
+
+    :ok =
+      BuildRecords.record_finished(ctx, "build_r", "compiled", %{
+        "digest" => "sha256:abc",
+        "registration" => "pending"
+      })
+
+    :ok = BuildRecords.record_registration(ctx, "build_r", "done")
+
+    assert {:ok, %{"result" => result}} = BuildRecords.get(ctx, "build_r")
+    assert result["registration"] == "done"
+    assert result["digest"] == "sha256:abc"
+
+    # Sync builds have no row — the outcome went to the caller inline.
+    assert :ok = BuildRecords.record_registration(ctx, "build_none", "done", 1)
+  end
+
   test "records are tenant-scoped", %{ctx: ctx} do
     :ok = BuildRecords.record_started(ctx, "build_t", "reagent:local.demo:0.1.0")
 

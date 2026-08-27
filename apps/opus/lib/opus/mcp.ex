@@ -372,7 +372,11 @@ defmodule Opus.MCP do
       end
 
     # Spawn execution in background, registering PID for cancellation
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+
            case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
              {:ok, _} ->
                run_root_formatted(ctx, reference, input, opts, args)

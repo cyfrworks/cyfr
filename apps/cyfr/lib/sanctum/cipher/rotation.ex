@@ -88,7 +88,7 @@ defmodule Sanctum.Cipher.Rotation do
         dry_run: dry
       }
 
-      :telemetry.execute([:cyfr, :crypto_rotation, :run], %{count: 1}, result)
+      :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :run], %{count: 1}, result)
       {:ok, result}
     end
   end
@@ -130,7 +130,7 @@ defmodule Sanctum.Cipher.Rotation do
 
     case page(table, nil, batch, acc, opts) do
       {:ok, summary} ->
-        :telemetry.execute([:cyfr, :crypto_rotation, :table], summary, %{table: table})
+        :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :table], summary, %{table: table})
         {:ok, summary}
 
       {:error, _} = err ->
@@ -235,7 +235,7 @@ defmodule Sanctum.Cipher.Rotation do
 
       {:rotate, planned} ->
         if Keyword.get(opts, :dry_run, false) do
-          :telemetry.execute([:cyfr, :crypto_rotation, :row], %{count: 1}, %{
+          :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
             table: table,
             id: id,
             result: :would_rotate
@@ -295,7 +295,7 @@ defmodule Sanctum.Cipher.Rotation do
       {1, _} ->
         invalidate.()
 
-        :telemetry.execute([:cyfr, :crypto_rotation, :row], %{count: 1}, %{
+        :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
           table: table,
           id: id,
           result: :rotated
@@ -306,7 +306,7 @@ defmodule Sanctum.Cipher.Rotation do
       {0, _} ->
         # A concurrent legitimate write changed the row (it now holds a
         # primary-key ciphertext). Treat as skipped; a later pass confirms.
-        :telemetry.execute([:cyfr, :crypto_rotation, :row], %{count: 1}, %{
+        :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
           table: table,
           id: id,
           result: :cas_miss

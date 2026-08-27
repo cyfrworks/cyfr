@@ -118,7 +118,7 @@ defmodule Opus.ExecutionEventBuffer do
             "producer carries no athanor_id"
         )
 
-        :telemetry.execute([:cyfr, :execution_events, :broadcast_failure], %{count: 1}, %{
+        :telemetry.execute([:cyfr, :opus, :execution_events, :broadcast_failure], %{count: 1}, %{
           execution_id: execution_id,
           type: event.type,
           reason: :missing_athanor
@@ -140,7 +140,7 @@ defmodule Opus.ExecutionEventBuffer do
           "[ExecutionEventBuffer] PubSub broadcast failed for #{execution_id}: #{inspect(reason)}"
         )
 
-        :telemetry.execute([:cyfr, :execution_events, :broadcast_failure], %{count: 1}, %{
+        :telemetry.execute([:cyfr, :opus, :execution_events, :broadcast_failure], %{count: 1}, %{
           execution_id: execution_id,
           type: event.type
         })

@@ -71,10 +71,10 @@ defmodule Emissary.MCP.ToolRegistry do
         "description" => meta.description,
         "inputSchema" => meta.input_schema
       }
-      |> maybe_put("title", meta[:title])
-      |> maybe_put("icons", meta[:icons])
-      |> maybe_put("outputSchema", meta[:output_schema])
-      |> maybe_put("annotations", meta[:annotations])
+      |> Cyfr.MapUtil.put_present("title", meta[:title])
+      |> Cyfr.MapUtil.put_present("icons", meta[:icons])
+      |> Cyfr.MapUtil.put_present("outputSchema", meta[:output_schema])
+      |> Cyfr.MapUtil.put_present("annotations", meta[:annotations])
     end)
     |> Enum.sort_by(& &1["name"])
   end
@@ -124,9 +124,6 @@ defmodule Emissary.MCP.ToolRegistry do
 
   defp prune_to_in_chain(_tool_def), do: nil
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
   @doc """
   Look up a registered tool's provider module and cached meta.
 
@@ -161,10 +158,10 @@ defmodule Emissary.MCP.ToolRegistry do
             "description" => meta.description,
             "inputSchema" => meta.input_schema
           }
-          |> maybe_put("title", meta[:title])
-          |> maybe_put("icons", meta[:icons])
-          |> maybe_put("outputSchema", meta[:output_schema])
-          |> maybe_put("annotations", meta[:annotations])
+          |> Cyfr.MapUtil.put_present("title", meta[:title])
+          |> Cyfr.MapUtil.put_present("icons", meta[:icons])
+          |> Cyfr.MapUtil.put_present("outputSchema", meta[:output_schema])
+          |> Cyfr.MapUtil.put_present("annotations", meta[:annotations])
 
         {:ok, tool_def}
 
@@ -258,12 +255,9 @@ defmodule Emissary.MCP.ToolRegistry do
 
   defp put_lineage(args, lineage) when is_map(lineage) do
     args
-    |> put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
-    |> put_present("root_execution_id", Map.get(lineage, :root_execution_id))
+    |> Cyfr.MapUtil.put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
+    |> Cyfr.MapUtil.put_present("root_execution_id", Map.get(lineage, :root_execution_id))
   end
-
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   @doc """
   Whether a running chain can reach `tool.action` at all.
@@ -866,7 +860,13 @@ defmodule Emissary.MCP.ToolRegistry do
     request_id = ctx.request_id
     trackable? = is_binary(request_id)
 
-    task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, execute_fn)
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    task =
+      Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+        execute_fn.()
+      end)
 
     if trackable?, do: Emissary.MCP.RunningTasks.register(request_id, task)
 

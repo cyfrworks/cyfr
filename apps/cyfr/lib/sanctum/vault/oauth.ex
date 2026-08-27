@@ -64,7 +64,7 @@ defmodule Sanctum.Vault.OAuth do
         "expires_at" => compute_expires_at(response["expires_in"]),
         "token_type" => response["token_type"] || oauth["token_type"] || "bearer"
       }
-      |> put_present("scopes", oauth["scopes"])
+      |> Cyfr.MapUtil.put_present("scopes", oauth["scopes"])
 
     Map.put(payload, "oauth", new_oauth)
   end
@@ -307,12 +307,9 @@ defmodule Sanctum.Vault.OAuth do
 
   def compute_expires_at(_), do: nil
 
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
-
   defp emit_telemetry(entry, provider, status) do
     :telemetry.execute(
-      [:cyfr, :vault, :oauth_refresh],
+      [:cyfr, :sanctum, :vault, :oauth_refresh],
       %{system_time: System.system_time()},
       %{entry_id: entry.id, provider: provider, status: status}
     )

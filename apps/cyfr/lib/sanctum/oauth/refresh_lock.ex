@@ -48,8 +48,12 @@ defmodule Sanctum.OAuth.RefreshLock do
   end
 
   defp do_run(key, refresh_fun, recheck_fun, timeout_ms, attempts) do
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     task =
       Task.Supervisor.async_nolink(@task_supervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+
         case Registry.register(@registry, key, :leader) do
           {:ok, _} ->
             {:leader, refresh_fun.()}

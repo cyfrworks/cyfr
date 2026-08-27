@@ -79,14 +79,14 @@ defmodule Prism.TinctureRegistry do
   @impl true
   def handle_continue(:initial_scan, state) do
     count = store_tinctures(state.table, scan_tinctures())
-    Logger.info("TinctureRegistry: loaded #{count} tincture(s)")
+    Logger.info("[TinctureRegistry] loaded #{count} tincture(s)")
     {:noreply, state}
   end
 
   @impl true
   def handle_call(:reload, _from, state) do
     count = store_tinctures(state.table, scan_tinctures())
-    Logger.info("TinctureRegistry: reloaded #{count} tincture(s)")
+    Logger.info("[TinctureRegistry] reloaded #{count} tincture(s)")
     {:reply, :ok, state}
   end
 

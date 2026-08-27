@@ -358,7 +358,7 @@ defmodule Emissary.MCP.Router do
     require Logger
     # `method` is unvalidated client input headed for structured logs —
     # bound it so a caller cannot inflate a log line at will.
-    Logger.warning("MCP: Unknown notification: #{String.slice(to_string(method), 0, 200)}")
+    Logger.warning("[MCP] Unknown notification: #{String.slice(to_string(method), 0, 200)}")
     :ok
   end
 

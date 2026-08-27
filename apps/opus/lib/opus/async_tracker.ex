@@ -61,7 +61,17 @@ defmodule Opus.AsyncTracker do
   """
   @spec spawn_task(pid(), (-> term()), String.t()) :: {:ok, String.t()} | {:error, term()}
   def spawn_task(tracker, fun, reference) do
-    GenServer.call(tracker, {:spawn, fun, reference})
+    # Captured here, in the caller — the tracker process has its own
+    # (empty) Logger metadata, so capturing at the spawn site inside
+    # handle_call would tag the task with nothing.
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    task_fun = fn ->
+      Cyfr.LoggerContext.restore(logger_metadata)
+      fun.()
+    end
+
+    GenServer.call(tracker, {:spawn, task_fun, reference})
   end
 
   @doc """

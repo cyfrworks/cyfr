@@ -87,6 +87,7 @@ defmodule Sanctum.SignIn do
             "[Sanctum.SignIn] activate_invited failed for #{user_id}: #{inspect(reason)}"
           )
       end
+
       # Provisioning failure is recorded on the athanor and retried on the
       # next sign-in; it never refuses the sign-in itself.
       _ = Sanctum.Provisioning.after_sign_in(user_id)
@@ -240,8 +241,11 @@ defmodule Sanctum.SignIn do
     do: Compendium.Registry.Client.probe_identity(provider, access_token)
 
   defp probe(provider, access_token, true) do
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     task =
       Task.Supervisor.async_nolink(Sanctum.ProvisioningSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
         Compendium.Registry.Client.probe_identity(provider, access_token)
       end)
 

@@ -15,7 +15,6 @@ defmodule Cyfr.BuildRecords do
 
   import Ecto.Query
 
-
   alias Arca.QueryHelpers
   alias Arca.Schemas.BuildRecord
   alias Sanctum.Context
@@ -25,7 +24,7 @@ defmodule Cyfr.BuildRecords do
   def record_started(%Context{} = ctx, build_id, reference) do
     attrs = %{
       id: build_id,
-      athanor_id: ctx.athanor_id,
+      athanor_id: Context.athanor!(ctx),
       user_id: ctx.user_id,
       reference: reference,
       status: "started",
@@ -82,6 +81,53 @@ defmodule Cyfr.BuildRecords do
   end
 
   @doc """
+  Record the post-compile registration outcome onto a finished build's
+  result, so `build.status` answers with what actually happened instead
+  of the `"pending"` the compile result was born with.
+
+  The registration task is spawned before the async wrapper finalizes
+  the row, so a not-yet-"compiled" row is retried briefly rather than
+  dropped; a build with no row (sync mode) is a no-op — its caller got
+  the outcome inline.
+  """
+  @spec record_registration(Context.t(), String.t(), String.t()) :: :ok
+  def record_registration(ctx, build_id, outcome, attempts \\ 5)
+
+  def record_registration(%Context{} = ctx, build_id, outcome, attempts)
+      when is_binary(outcome) and attempts > 0 do
+    row =
+      BuildRecord
+      |> where([b], b.id == ^build_id)
+      |> QueryHelpers.where_tenant(ctx)
+      |> Arca.Repo.one()
+
+    case row do
+      nil ->
+        :ok
+
+      %{status: "compiled", result: result} when is_binary(result) ->
+        patched =
+          result
+          |> Jason.decode!()
+          |> Map.put("registration", outcome)
+          |> Jason.encode!()
+
+        BuildRecord
+        |> where([b], b.id == ^build_id)
+        |> QueryHelpers.where_tenant(ctx)
+        |> Arca.Repo.update_all(set: [result: patched])
+
+        :ok
+
+      _still_running ->
+        Process.sleep(400)
+        record_registration(ctx, build_id, outcome, attempts - 1)
+    end
+  end
+
+  def record_registration(_ctx, _build_id, _outcome, _attempts), do: :ok
+
+  @doc """
   Delete every build record past the newest `keep`, ordered by
   `started_at`. `dry_run: true` counts instead of deleting. The
   row-plane retention convention: `{:ok, affected_count}` — or
@@ -121,11 +167,11 @@ defmodule Cyfr.BuildRecords do
       "status" => r.status,
       "started_at" => DateTime.to_iso8601(r.started_at)
     }
-    |> put_present("finished_at", r.finished_at && DateTime.to_iso8601(r.finished_at))
-    |> put_present("error", r.error)
-    |> put_present("result", r.result && Jason.decode!(r.result))
+    |> Cyfr.MapUtil.put_present(
+      "finished_at",
+      r.finished_at && DateTime.to_iso8601(r.finished_at)
+    )
+    |> Cyfr.MapUtil.put_present("error", r.error)
+    |> Cyfr.MapUtil.put_present("result", r.result && Jason.decode!(r.result))
   end
-
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 end

@@ -97,7 +97,7 @@ defmodule Sanctum.MCP.ProfileTool do
     with {:ok, kind} <- kind(args) do
       params =
         %{ref: ref, kind: kind}
-        |> put_present(:label, args["label"])
+        |> Cyfr.MapUtil.put_present(:label, args["label"])
 
       case Plan.plan(ctx, params) do
         {:ok, plan} -> {:ok, plan}
@@ -223,10 +223,10 @@ defmodule Sanctum.MCP.ProfileTool do
          {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])) do
       decisions =
         %{ref: raw["ref"] || "", kind: kind, bindings: bindings, tool_servers: tool_servers}
-        |> put_present(:label, raw["label"])
-        |> put_present(:scope, scope)
-        |> put_present(:invoke_mode, invoke_mode)
-        |> put_present(:limits, raw["limits"])
+        |> Cyfr.MapUtil.put_present(:label, raw["label"])
+        |> Cyfr.MapUtil.put_present(:scope, scope)
+        |> Cyfr.MapUtil.put_present(:invoke_mode, invoke_mode)
+        |> Cyfr.MapUtil.put_present(:limits, raw["limits"])
         |> Map.put(:override, raw["override"] == true)
         |> maybe_publish_passthrough(raw)
 
@@ -252,7 +252,7 @@ defmodule Sanctum.MCP.ProfileTool do
     decoded =
       Enum.map(list, fn grant ->
         %{server_name: grant["server_name"]}
-        |> put_present(:tool_patterns, grant["tool_patterns"])
+        |> Cyfr.MapUtil.put_present(:tool_patterns, grant["tool_patterns"])
       end)
 
     {:ok, decoded}
@@ -305,9 +305,6 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   defp key_capability(_ctx), do: {:ok, nil}
-
-  defp put_present(map, _key, nil), do: map
-  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   # ---------------------------------------------------------------------------
   # Error rendering — §4.3 payloads verbatim in the tag: json convention

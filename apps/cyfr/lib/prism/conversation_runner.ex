@@ -430,7 +430,10 @@ defmodule Prism.ConversationRunner do
       turn = state.turn
       turn.unsubscribe(exec_id, state.turn_ctx || ctx)
 
+      logger_metadata = Cyfr.LoggerContext.capture()
+
       Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
         turn.cancel_for_restart(ctx, exec_id, payload)
       end)
 
@@ -584,7 +587,11 @@ defmodule Prism.ConversationRunner do
     group? = state.kind == "group"
     turn = state.turn
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Cyfr.LoggerContext.restore(logger_metadata)
+
       result =
         try do
           attachments = Attachments.load(ctx, conv_id, turn_attachments)
@@ -1021,7 +1028,10 @@ defmodule Prism.ConversationRunner do
     if exec_id do
       turn.unsubscribe(exec_id, turn_ctx)
 
+      logger_metadata = Cyfr.LoggerContext.capture()
+
       Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
         turn.cancel(ctx, exec_id)
       end)
     end
@@ -1105,7 +1115,11 @@ defmodule Prism.ConversationRunner do
         id = msg.id
         turn = state.turn
 
+        logger_metadata = Cyfr.LoggerContext.capture()
+
         Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+          Cyfr.LoggerContext.restore(logger_metadata)
+
           result =
             try do
               turn.run_approved(proposal, ctx)
