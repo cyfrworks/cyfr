@@ -13,6 +13,13 @@ defmodule Emissary.MCP.InputValidator do
   - Required fields
   - Enum values (prevents injection of unexpected actions)
   - Basic type conformance (string, integer, number, boolean, object, array)
+  - String length bounds and `pattern` where the schema declares them
+  - Nested objects, recursively — a `"type": "object"` property with its
+    own `required`/`properties` is held to them
+
+  Not a full JSON Schema implementation by design: `oneOf`/`allOf`,
+  array `items`, numeric ranges and format keywords are not enforced —
+  no tool schema in the tree relies on them for safety.
   """
 
   @doc """
@@ -81,7 +88,7 @@ defmodule Emissary.MCP.InputValidator do
   defp validate_value(key, value, prop_schema) do
     with :ok <- validate_type(key, value, prop_schema),
          :ok <- validate_enum(key, value, prop_schema) do
-      :ok
+      validate_string_constraints(key, value, prop_schema)
     end
   end
 
@@ -104,8 +111,13 @@ defmodule Emissary.MCP.InputValidator do
     if is_boolean(value), do: :ok, else: {:error, "Field '#{key}' must be a boolean"}
   end
 
-  defp validate_type(key, value, %{"type" => "object"}) do
-    if is_map(value), do: :ok, else: {:error, "Field '#{key}' must be an object"}
+  defp validate_type(key, value, %{"type" => "object"} = prop_schema) do
+    if is_map(value) do
+      # Recurse: a nested object's own required/properties bind too.
+      validate(value, prop_schema)
+    else
+      {:error, "Field '#{key}' must be an object"}
+    end
   end
 
   defp validate_type(key, value, %{"type" => "array"}) do
@@ -124,4 +136,36 @@ defmodule Emissary.MCP.InputValidator do
   end
 
   defp validate_enum(_key, _value, _schema), do: :ok
+
+  # Declared string bounds and pattern. An invalid pattern is the schema
+  # author's bug — it is skipped rather than failing every request.
+  defp validate_string_constraints(key, value, prop_schema) when is_binary(value) do
+    min = prop_schema["minLength"]
+    max = prop_schema["maxLength"]
+    length = String.length(value)
+
+    cond do
+      is_integer(min) and length < min ->
+        {:error, "Field '#{key}' must be at least #{min} characters"}
+
+      is_integer(max) and length > max ->
+        {:error, "Field '#{key}' must be at most #{max} characters"}
+
+      is_binary(prop_schema["pattern"]) ->
+        case Regex.compile(prop_schema["pattern"]) do
+          {:ok, regex} ->
+            if Regex.match?(regex, value),
+              do: :ok,
+              else: {:error, "Field '#{key}' does not match the required pattern"}
+
+          _ ->
+            :ok
+        end
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_string_constraints(_key, _value, _prop_schema), do: :ok
 end

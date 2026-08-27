@@ -23,9 +23,9 @@ defmodule Sanctum.Context do
 
   Every service function takes context as its first argument:
 
-      Opus.execute(ctx, reference, input)
-      Locus.build(ctx, source, target)
       Arca.get(ctx, path)
+      Arca.put(ctx, path, bytes)
+      Sanctum.Context.authorize(ctx, :storage_read, path)
 
   Context carries the tenant coordinate `athanor_id` and its `scope`. Every
   request context is `:athanor` — it works inside one athanor, the one its

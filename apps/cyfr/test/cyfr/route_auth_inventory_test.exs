@@ -120,4 +120,22 @@ defmodule Cyfr.RouteAuthInventoryTest do
       #{stale |> MapSet.to_list() |> Enum.sort() |> inspect(pretty: true)}
     """
   end
+
+  test "/metrics is the one route outside the router table, by exemption" do
+    # The Prometheus scrape short-circuits in the Endpoint before the
+    # router, so no @classified row can cover it. Its reviewed posture:
+    # disabled unless CYFR_PROMETHEUS_METRICS=true, and unauthenticated BY
+    # DESIGN when enabled — the deployment binds it privately or
+    # allowlists it at the proxy (EmissaryWeb.MetricsPlug moduledoc).
+    # This pins both the mount and the exemption: a second endpoint-level
+    # route must extend this test, not slip past the inventory.
+    endpoint = File.read!(Path.join(__DIR__, "../../lib/emissary_web/endpoint.ex"))
+
+    mounts =
+      Regex.scan(~r/^\s*plug[ (]+(EmissaryWeb\.\w+Plug)/m, endpoint)
+      |> Enum.map(fn [_, mod] -> mod end)
+      |> Enum.filter(&(&1 == "EmissaryWeb.MetricsPlug"))
+
+    assert mounts == ["EmissaryWeb.MetricsPlug"]
+  end
 end

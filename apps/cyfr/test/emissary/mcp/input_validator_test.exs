@@ -121,4 +121,56 @@ defmodule Emissary.MCP.InputValidatorTest do
       assert msg =~ "must be an object"
     end
   end
+
+  describe "string constraints" do
+    test "enforces declared minLength, maxLength and pattern" do
+      schema = %{
+        "properties" => %{
+          "slug" => %{
+            "type" => "string",
+            "minLength" => 2,
+            "maxLength" => 5,
+            "pattern" => "^[a-z]+$"
+          }
+        }
+      }
+
+      assert :ok = InputValidator.validate(%{"slug" => "abc"}, schema)
+      assert {:error, msg} = InputValidator.validate(%{"slug" => "a"}, schema)
+      assert msg =~ "at least 2"
+      assert {:error, msg} = InputValidator.validate(%{"slug" => "abcdef"}, schema)
+      assert msg =~ "at most 5"
+      assert {:error, msg} = InputValidator.validate(%{"slug" => "ABC"}, schema)
+      assert msg =~ "pattern"
+    end
+
+    test "an invalid pattern in the schema does not fail the request" do
+      schema = %{"properties" => %{"x" => %{"type" => "string", "pattern" => "["}}}
+      assert :ok = InputValidator.validate(%{"x" => "anything"}, schema)
+    end
+  end
+
+  describe "nested objects" do
+    test "a nested object's own required and properties bind" do
+      schema = %{
+        "properties" => %{
+          "config" => %{
+            "type" => "object",
+            "required" => ["name"],
+            "properties" => %{"count" => %{"type" => "integer"}}
+          }
+        }
+      }
+
+      assert :ok = InputValidator.validate(%{"config" => %{"name" => "x", "count" => 1}}, schema)
+
+      assert {:error, msg} = InputValidator.validate(%{"config" => %{"count" => 1}}, schema)
+      assert msg =~ "Missing required field: name"
+
+      assert {:error, msg} =
+               InputValidator.validate(%{"config" => %{"name" => "x", "count" => "1"}}, schema)
+
+      assert msg =~ "must be an integer"
+    end
+  end
 end

@@ -81,14 +81,13 @@ defmodule EmissaryWeb.Router do
   # OAuth callback for catalyst OAuth providers (not user auth)
   # Must be defined before the /:provider wildcard below
   scope "/auth/oauth", EmissaryWeb do
-    pipe_through :api
+    pipe_through [:api, :oauth_callback_throttle]
 
     get "/callback", OAuthCallbackController, :callback
   end
 
-  # OAuth kickoff gets a conservative per-IP throttle; callbacks do not
-  # (they come from IdPs on behalf of real users, and shared-NAT corporate
-  # IPs would be locked out if we throttled callbacks).
+  # OAuth kickoff gets a conservative per-IP throttle; callbacks get the
+  # generous :oauth_callback_throttle above.
   pipeline :oauth_start_throttle do
     plug EmissaryWeb.Plugs.AuthRateLimit,
       bucket: :oauth_start,
@@ -106,6 +105,27 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
+  # The legal pages proxy cyfr.run (a cold GET fetches every policy body;
+  # the submit relays the acceptance) — a modest per-IP budget keeps one
+  # client from turning this server into an amplifier against cyfr.run.
+  pipeline :legal_accept_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :legal_accept,
+      max_requests: 12,
+      window_ms: 60_000
+  end
+
+  # Callbacks arrive from IdPs on real users' behalf, often through
+  # shared-NAT corporate IPs, so their budget is generous — high enough
+  # that a floor of real users never trips it, low enough that one IP
+  # cannot spin the token-exchange machinery unboundedly.
+  pipeline :oauth_callback_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :oauth_callback,
+      max_requests: 60,
+      window_ms: 60_000
+  end
+
   # OAuth/OIDC authentication routes. GitHub/Google browser sign-in is
   # device flow on `/login`; `/auth/:provider` is the OIDC kickoff (and
   # leftover web OAuth if a client secret is configured). Static paths
@@ -116,15 +136,17 @@ defmodule EmissaryWeb.Router do
     get "/post-legal-accept", AuthController, :post_legal_accept
     get "/device/complete/:ticket", AuthController, :device_complete
 
-    # Throttle only the kickoff endpoint; the callback path is reached by
-    # the IdP, not the client, and must not be throttled.
     scope "/" do
       pipe_through :oauth_start_throttle
 
       get "/:provider", AuthController, :request
     end
 
-    get "/:provider/callback", AuthController, :callback
+    scope "/" do
+      pipe_through :oauth_callback_throttle
+
+      get "/:provider/callback", AuthController, :callback
+    end
   end
 
   # Personal-namespace claim gate (web flow).
@@ -148,7 +170,7 @@ defmodule EmissaryWeb.Router do
   # proactively from the post-login flow. Renders the bundled policies
   # for read + clickwrap, then POSTs to cyfr.run /v1/legal/accept.
   scope "/legal/accept", PrismWeb do
-    pipe_through :browser
+    pipe_through [:browser, :legal_accept_throttle]
 
     get "/", LegalAcceptController, :show
     post "/submit", LegalAcceptController, :submit
@@ -303,8 +325,17 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
   end
 
+  # A thread can legitimately render a handful of attachments at once;
+  # the budget is sized for pages, not loops.
+  pipeline :attachment_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :attachment,
+      max_requests: 120,
+      window_ms: 60_000
+  end
+
   scope "/a/:athanor", PrismWeb do
-    pipe_through :attachment
+    pipe_through [:attachment, :attachment_throttle]
 
     get "/attachments/:message_id/:filename", AttachmentController, :show
   end
