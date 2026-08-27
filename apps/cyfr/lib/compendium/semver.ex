@@ -102,6 +102,16 @@ defmodule Compendium.Semver do
   def sort_desc(versions), do: Enum.sort(versions, &(compare(&1, &2) != :lt))
 
   @doc """
+  Sort elements by a version projected from each, newest first — the one
+  spelling of "semver-descending by key" (`sort_desc/1` is the
+  bare-strings form), so no view re-derives the comparator inline.
+  """
+  @spec sort_desc_by([elem], (elem -> String.t())) :: [elem] when elem: term()
+  def sort_desc_by(items, key_fun) when is_list(items) and is_function(key_fun, 1) do
+    Enum.sort_by(items, key_fun, &(compare(&1, &2) != :lt))
+  end
+
+  @doc """
   The supersession predicate: `newer` strictly supersedes `version` only
   when BOTH parse and `newer` is greater — an unparsable name never
   supersedes anything.

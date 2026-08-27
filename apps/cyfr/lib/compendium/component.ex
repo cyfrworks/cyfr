@@ -28,26 +28,26 @@ defmodule Compendium.Component do
   """
   @spec inspect_component(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def inspect_component(%Context{} = ctx, reference) when is_binary(reference) do
-    with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-      case resolve_component(ctx, resolved_ref) do
-        {:ok, component, ref} ->
-          result =
-            component
-            |> Map.put("component_ref", canonical_ref(ref))
-            |> Map.put("type", ref.type)
+    case resolve_component(ctx, reference) do
+      {:ok, component, ref} ->
+        canonical = canonical_ref(ref)
 
-          result =
-            if resolved_ref != reference do
-              Map.put(result, "resolved_from", reference)
-            else
-              result
-            end
+        result =
+          component
+          |> Map.put("component_ref", canonical)
+          |> Map.put("type", ref.type)
 
-          {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+        result =
+          if canonical != reference do
+            Map.put(result, "resolved_from", reference)
+          else
+            result
+          end
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+        {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -73,46 +73,44 @@ defmodule Compendium.Component do
   """
   @spec setup_plan(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def setup_plan(%Context{} = ctx, reference) when is_binary(reference) do
-    with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-      case resolve_component(ctx, resolved_ref) do
-        {:ok, component, ref} ->
-          canonical_ref = canonical_ref(ref)
+    case resolve_component(ctx, reference) do
+      {:ok, component, ref} ->
+        canonical_ref = canonical_ref(ref)
 
-          manifest = component[:manifest] || component["manifest"] || %{}
-          manifest = decode_manifest(manifest)
+        manifest = component[:manifest] || component["manifest"] || %{}
+        manifest = decode_manifest(manifest)
 
-          needs = declared_needs(manifest)
-          deps = extract_dependency_refs(manifest)
+        needs = declared_needs(manifest)
+        deps = extract_dependency_refs(manifest)
 
-          description =
-            component[:description] || component["description"] || manifest["description"]
+        description =
+          component[:description] || component["description"] || manifest["description"]
 
-          # A component with a profile answers "ready" from its consent:
-          # every bound need still live and digest-matching. Without a
-          # profile, only a component that requires nothing reads ready —
-          # anything with a required need is waiting on the consent walk.
-          consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
+        # A component with a profile answers "ready" from its consent:
+        # every bound need still live and digest-matching. Without a
+        # profile, only a component that requires nothing reads ready —
+        # anything with a required need is waiting on the consent walk.
+        consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
 
-          ready =
-            case consent do
-              nil -> not Enum.any?(needs, & &1.required)
-              consent -> consent.ready
-            end
+        ready =
+          case consent do
+            nil -> not Enum.any?(needs, & &1.required)
+            consent -> consent.ready
+          end
 
-          {:ok,
-           %{
-             component_ref: canonical_ref,
-             description: description,
-             type: ref.type,
-             needs: needs,
-             dependencies: deps,
-             consent: consent,
-             ready: ready
-           }}
+        {:ok,
+         %{
+           component_ref: canonical_ref,
+           description: description,
+           type: ref.type,
+           needs: needs,
+           dependencies: deps,
+           consent: consent,
+           ready: ready
+         }}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -122,34 +120,25 @@ defmodule Compendium.Component do
 
   @doc """
   Resolve a component reference string into its registry row and a ref map
-  carrying the actually-resolved version. A versionless reference resolves
-  to the most recent version (`Registry.get_latest/4`, then a re-fetch so
-  the manifest is included). Every error — malformed reference, not found,
-  storage fault — is a human-readable `{:error, binary}`, never a raise.
+  carrying the actually-resolved version — one registry lookup, whether
+  the ref is pinned (`Registry.get/5`) or versionless
+  (`Registry.get_latest/4`, whose row already carries the manifest).
+  Every error — malformed reference, not found, storage fault — is a
+  human-readable `{:error, binary}`, never a raise.
 
   The one resolver: the MCP tool modules delegate here
-  (`Compendium.MCP.Shared`), so internal callers and the tool surface can
-  never drift.
+  (`Compendium.MCP.Shared`) and `Compendium.Resolver` is its
+  string-in/string-out adapter, so no caller and no surface can drift.
   """
   @spec resolve_component(Context.t(), term()) :: {:ok, map(), map()} | {:error, String.t()}
   def resolve_component(%Context{} = ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
+        # One lookup either way: `get_latest/4` reads full rows (manifest
+        # included), so a versionless ref needs no re-fetch.
         result =
           if version == nil do
-            case Registry.get_latest(ctx, name, namespace, type) do
-              {:ok, component} ->
-                resolved_version = component[:version]
-
-                if resolved_version do
-                  Registry.get(ctx, name, resolved_version, namespace, type)
-                else
-                  {:ok, component}
-                end
-
-              error ->
-                error
-            end
+            Registry.get_latest(ctx, name, namespace, type)
           else
             Registry.get(ctx, name, version, namespace, type)
           end
@@ -175,15 +164,18 @@ defmodule Compendium.Component do
   end
 
   @doc """
-  Parse a canonical component reference (`type:namespace.name:version`)
-  into `{:ok, namespace, name, version, type}` for registry lookup — the
-  namespace doubles as the publisher filter; type and version may be nil.
+  Parse a component reference — canonical (`type:namespace.name:version`)
+  or the flexible short forms (`c:local.tool`) — into
+  `{:ok, namespace, name, version, type}` for registry lookup. The one
+  grammar for every resolver (`Sanctum.ComponentRef.normalize_flexible/1`,
+  fields validated); the namespace doubles as the publisher filter, and
+  version may be nil.
   """
   @spec parse_reference(term()) ::
           {:ok, String.t(), String.t(), String.t() | nil, String.t() | nil}
           | {:error, String.t()}
   def parse_reference(reference) when is_binary(reference) do
-    case Sanctum.ComponentRef.parse(reference) do
+    case Sanctum.ComponentRef.normalize_flexible(reference) do
       {:ok, %Sanctum.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
         {:ok, namespace, name, version, type}
 

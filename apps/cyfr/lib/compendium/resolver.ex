@@ -3,11 +3,11 @@
 
 defmodule Compendium.Resolver do
   @moduledoc """
-  Single entry point for converting flexible component refs to pinned refs.
-
-  Resolves version-less references (e.g., `c:local.claude`) to exact-version
-  references (e.g., `catalyst:local.claude:0.1.0`) by looking up the latest
-  version in the registry.
+  The string-in/string-out adapter over the one resolver
+  (`Compendium.Component.resolve_component/2`): callers that hold a ref
+  STRING and want a pinned ref string plus audit metadata (the executor,
+  schedules, webhooks) speak this shape; everything that touches the
+  registry to answer it lives with the owner.
 
   Already-pinned references pass through with no registry lookup.
 
@@ -37,7 +37,6 @@ defmodule Compendium.Resolver do
 
   alias Sanctum.Context
   alias Sanctum.ComponentRef
-  alias Compendium.Registry
 
   @type resolution_metadata :: %{
           resolved_from: String.t(),
@@ -59,11 +58,28 @@ defmodule Compendium.Resolver do
           {:ok, String.t(), resolution_metadata()} | {:error, String.t()}
   def resolve(%Context{} = ctx, ref) when is_binary(ref) do
     case ComponentRef.normalize_flexible(ref) do
-      {:ok, %ComponentRef{version: nil} = parsed} ->
-        resolve_latest(ctx, ref, parsed)
+      {:ok, %ComponentRef{version: nil}} ->
+        with {:ok, component, resolved} <- Compendium.Component.resolve_component(ctx, ref) do
+          resolved_to =
+            ComponentRef.to_string(%ComponentRef{
+              type: resolved.type,
+              namespace: resolved.namespace,
+              name: resolved.name,
+              version: resolved.version
+            })
+
+          {:ok, resolved_to,
+           %{
+             resolved_from: ref,
+             resolved_to: resolved_to,
+             was_resolved: true,
+             resolved_at: DateTime.utc_now(),
+             digest: component[:digest] || component["digest"]
+           }}
+        end
 
       {:ok, parsed} ->
-        # Already pinned — pass through
+        # Already pinned — pass through, no registry lookup.
         resolved_to = ComponentRef.to_string(parsed)
 
         {:ok, resolved_to,
@@ -101,44 +117,6 @@ defmodule Compendium.Resolver do
       {:error, _reason} ->
         Logger.debug("[Resolver] Passing through unresolvable ref: #{ref}")
         {:ok, ref}
-    end
-  end
-
-  # Resolve a version-less (nil) ref by querying the registry for the most
-  # recent version of the component.
-  defp resolve_latest(ctx, original_ref, %ComponentRef{} = parsed) do
-    case Registry.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
-      {:ok, component} ->
-        resolved_version = component[:version] || component["version"]
-
-        if resolved_version do
-          resolved = %{parsed | version: resolved_version}
-          resolved_to = ComponentRef.to_string(resolved)
-          digest = component[:digest] || component["digest"]
-
-          {:ok, resolved_to,
-           %{
-             resolved_from: original_ref,
-             resolved_to: resolved_to,
-             was_resolved: true,
-             resolved_at: DateTime.utc_now(),
-             digest: digest
-           }}
-        else
-          {:error,
-           "Component found but has no version: #{original_ref}. " <>
-             "This may indicate a corrupt registry entry."}
-        end
-
-      {:error, :not_found} ->
-        name_ref = ComponentRef.to_name_ref(parsed)
-
-        {:error,
-         "No versions found for #{name_ref}. " <>
-           "Register or pull a version first."}
-
-      {:error, reason} ->
-        {:error, "Failed to resolve component: #{inspect(reason)}"}
     end
   end
 end

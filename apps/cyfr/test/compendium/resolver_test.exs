@@ -90,7 +90,7 @@ defmodule Compendium.ResolverTest do
 
     test "errors when component not found", %{ctx: ctx} do
       assert {:error, msg} = Resolver.resolve(ctx, "c:local.nonexistent")
-      assert msg =~ "No versions found"
+      assert msg =~ "Component not found"
     end
 
     test "errors on empty ref", %{ctx: ctx} do
