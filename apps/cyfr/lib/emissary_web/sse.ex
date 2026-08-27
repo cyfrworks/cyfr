@@ -31,6 +31,42 @@ defmodule EmissaryWeb.SSE do
   def keep_alive_ms, do: @keep_alive_ms
 
   @doc """
+  Open a chunked `text/event-stream` response with the headers every SSE
+  surface needs.
+
+  Both surfaces set these by hand and disagreed: one added `connection:
+  keep-alive`, which is a hop-by-hop header HTTP/2 forbids a server to send
+  and which the connection handling does not read anyway. `x-accel-buffering`
+  is the one that matters — a reverse proxy buffers by default, which turns a
+  stream into a single delivery at the end, the exact thing a client opening
+  one asked to avoid.
+
+  The framing that follows stays per-surface, deliberately: JSON-RPC
+  notifications have nothing to resume to, while execution events carry a
+  sequence and answer `Last-Event-ID`.
+  """
+  @spec open(Plug.Conn.t()) :: Plug.Conn.t()
+  def open(%Plug.Conn{state: :chunked} = conn), do: conn
+
+  def open(%Plug.Conn{} = conn) do
+    conn
+    |> Plug.Conn.put_resp_header("content-type", "text/event-stream")
+    |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+    |> Plug.Conn.put_resp_header("x-accel-buffering", "no")
+    |> Plug.Conn.send_chunked(200)
+  end
+
+  @doc """
+  The keep-alive comment. An SSE comment is any line beginning with `:` —
+  it exists to keep intermediaries and idle timeouts from closing a stream
+  that is legitimately quiet, and doubles as the disconnect probe, since a
+  quiet subscription and a dead client look identical until something is
+  written.
+  """
+  @spec keep_alive_comment() :: String.t()
+  def keep_alive_comment, do: ": keep-alive\n\n"
+
+  @doc """
   Claim a stream slot for the caller under `tag`, bounded by the
   `limit_key` app-config budget (default #{@default_max_concurrent}).
   """

@@ -38,11 +38,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           last_seq = parse_last_event_id(conn)
 
           conn
-          |> put_resp_header("content-type", "text/event-stream")
-          |> put_resp_header("cache-control", "no-cache")
-          |> put_resp_header("connection", "keep-alive")
-          |> put_resp_header("x-accel-buffering", "no")
-          |> send_chunked(200)
+          |> EmissaryWeb.SSE.open()
           |> stream_events(execution_id, last_seq, exec)
         else
           {:auth, _} ->
@@ -140,7 +136,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           end
       after
         @keep_alive_interval_ms ->
-          case chunk(conn, ": keep-alive\n\n") do
+          case chunk(conn, EmissaryWeb.SSE.keep_alive_comment()) do
             {:ok, conn} ->
               event_loop(conn, execution_id, exec, deadline)
 

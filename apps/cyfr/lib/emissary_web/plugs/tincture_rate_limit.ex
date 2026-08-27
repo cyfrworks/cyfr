@@ -32,8 +32,6 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   (used by the test env so unrelated controller suites don't trip the limit).
   """
 
-  import Plug.Conn
-
   # The invoke budget both surfaces share as their DEFAULT (config override:
   # :tincture_rate_limit_max). The HTTP pipeline keys it by IP through this
   # plug; the console shell keys the same budget by person — deliberately
@@ -75,13 +73,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
         conn
 
       {:deny, retry_after} ->
-        conn
-        |> put_resp_header("retry-after", to_string(retry_after))
-        |> EmissaryWeb.ApiError.halt(
-          429,
-          :rate_limited,
-          "Rate limit exceeded. Try again in #{retry_after} seconds."
-        )
+        EmissaryWeb.RateLimitRefusal.halt(conn, retry_after, EmissaryWeb.ApiError)
     end
   end
 end

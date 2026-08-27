@@ -34,8 +34,6 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
   `EmissaryWeb.Plugs.AuthRateLimit`.
   """
 
-  import Plug.Conn
-
   @default_max 120
   @default_window_ms 60_000
 
@@ -60,12 +58,10 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
         conn
 
       {:deny, retry_after} ->
-        conn
-        |> put_resp_header("retry-after", to_string(retry_after))
-        |> Keyword.get(opts, :errors, @default_errors).halt(
-          429,
-          :rate_limited,
-          "Rate limit exceeded. Try again in #{retry_after} seconds."
+        EmissaryWeb.RateLimitRefusal.halt(
+          conn,
+          retry_after,
+          Keyword.get(opts, :errors, @default_errors)
         )
     end
   end

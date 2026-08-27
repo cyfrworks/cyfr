@@ -492,22 +492,14 @@ defmodule EmissaryWeb.MCPController do
     :cancelled
   end
 
-  defp open_stream(%Plug.Conn{state: :chunked} = conn), do: conn
-
-  defp open_stream(conn) do
-    conn
-    |> put_resp_header("content-type", "text/event-stream")
-    |> put_resp_header("cache-control", "no-cache")
-    # Reverse proxies buffer by default, which turns a progress stream into one
-    # delivery at the end — the exact thing the client asked to avoid.
-    |> put_resp_header("x-accel-buffering", "no")
-    |> send_chunked(200)
-  end
+  defp open_stream(conn), do: EmissaryWeb.SSE.open(conn)
 
   # Nothing to keep alive until the stream exists. Once it does, the comment
   # line doubles as the disconnect probe: a quiet subscription and a dead client
   # look identical until something is written.
-  defp keep_alive(%Plug.Conn{state: :chunked} = conn), do: chunk(conn, ":\n\n") |> tag(conn)
+  defp keep_alive(%Plug.Conn{state: :chunked} = conn),
+    do: chunk(conn, EmissaryWeb.SSE.keep_alive_comment()) |> tag(conn)
+
   defp keep_alive(conn), do: {:ok, conn}
 
   defp write_event(conn, payload) do

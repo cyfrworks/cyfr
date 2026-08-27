@@ -42,13 +42,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
         conn
 
       {:deny, retry_after} ->
-        conn
-        |> put_resp_header("retry-after", to_string(retry_after))
-        |> EmissaryWeb.ApiError.halt(
-          429,
-          :rate_limited,
-          "Rate limit exceeded. Try again in #{retry_after} seconds."
-        )
+        EmissaryWeb.RateLimitRefusal.halt(conn, retry_after, EmissaryWeb.ApiError)
     end
   end
 
