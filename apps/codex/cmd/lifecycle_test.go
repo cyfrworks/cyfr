@@ -8,7 +8,7 @@ import (
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\n# MCP_BRIDGE_TOKEN=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nMCP_BRIDGE_TOKEN=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 
 	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
 	// CYFR_BEHIND_PROXY.
@@ -47,6 +47,38 @@ func TestRenderEnvFile(t *testing.T) {
 	}
 	if strings.Contains(got, "PORTA") {
 		t.Errorf("no porta variable belongs in .env:\n%s", got)
+	}
+
+	// A template that ships the bridge token commented out is filled in the
+	// same way.
+	got = renderEnvFile("# MCP_BRIDGE_TOKEN=\n", "S", "BRIDGETOK", "localhost", "", "", false)
+	if !strings.Contains(got, "MCP_BRIDGE_TOKEN=BRIDGETOK") || strings.Contains(got, "# MCP_BRIDGE_TOKEN=") {
+		t.Errorf("commented MCP_BRIDGE_TOKEN not filled in:\n%s", got)
+	}
+}
+
+// The fixture-based test above proves the substitution rules; this one proves
+// them against the .env.example that actually ships. A key the renderer is
+// supposed to set but the template spells differently is exactly the bug that
+// once left MCP_BRIDGE_TOKEN empty on every fresh install.
+func TestRenderEnvFileShippedTemplate(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
+	if err != nil {
+		t.Fatalf("read shipped .env.example: %v", err)
+	}
+
+	got := renderEnvFile(string(raw), "SEKRIT", "BRIDGETOK", "example.com", "me@example.com", "ops@example.com", true)
+	for _, want := range []string{
+		"\nCYFR_SECRET_KEY_BASE=SEKRIT\n",
+		"\nMCP_BRIDGE_TOKEN=BRIDGETOK\n",
+		"\nCYFR_HOST=example.com\n",
+		"\nCYFR_BEHIND_PROXY=true\n",
+		"\nCADDY_ACME_EMAIL=ops@example.com\n",
+		"\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("shipped template: renderEnvFile did not produce %q", strings.TrimSpace(want))
+		}
 	}
 }
 

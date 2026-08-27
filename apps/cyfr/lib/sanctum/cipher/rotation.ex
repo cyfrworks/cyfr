@@ -39,8 +39,10 @@ defmodule Sanctum.Cipher.Rotation do
 
   The cipher binds the row's canonical tenant tuple as AAD. This module
   rebuilds that tuple from each row's stored columns; the shapes here MUST
-  stay identical to how `Sanctum.Vault` and `Sanctum.Webhook` persist them
-  (the athanor id the storage layer persists is bound through unchanged).
+  stay identical to how `Sanctum.Vault`, `Sanctum.Webhook` and
+  `Sanctum.ProviderCredentials` persist them (the athanor id the storage
+  layer persists is bound through unchanged). Every `Sanctum.CipherAAD`
+  purpose has a table here — the roster test pins the two lists together.
   """
 
   require Logger
@@ -64,9 +66,10 @@ defmodule Sanctum.Cipher.Rotation do
   nothing; `:batch_size` (default #{@batch}).
 
   Returns `{:ok, %{webhooks: summary, vault_entries: summary,
-  registry_tokens: summary, dry_run: bool}}` or `{:error, {table,
-  reason, sample_id}}` (the run aborted fail-closed; rerun after fixing the
-  cause — already-rotated rows are skipped).
+  registry_tokens: summary, oauth_provider_credentials: summary,
+  dry_run: bool}}` or `{:error, {table, reason, sample_id}}` (the run
+  aborted fail-closed; rerun after fixing the cause — already-rotated rows
+  are skipped).
   """
   @spec reencrypt_all(keyword()) :: {:ok, map()} | {:error, {atom(), term(), term()}}
   def reencrypt_all(opts \\ []) do
@@ -75,11 +78,13 @@ defmodule Sanctum.Cipher.Rotation do
 
     with {:ok, w} <- rotate_table(:webhooks, opts),
          {:ok, v} <- rotate_table(:vault_entries, opts),
-         {:ok, r} <- rotate_table(:registry_tokens, opts) do
+         {:ok, r} <- rotate_table(:registry_tokens, opts),
+         {:ok, p} <- rotate_table(:oauth_provider_credentials, opts) do
       result = %{
         webhooks: w,
         vault_entries: v,
         registry_tokens: r,
+        oauth_provider_credentials: p,
         dry_run: dry
       }
 
@@ -104,7 +109,8 @@ defmodule Sanctum.Cipher.Rotation do
         [
           {:webhooks, :secret_encrypted},
           {:vault_entries, :sealed_payload},
-          {:registry_tokens, :credential_ciphertext}
+          {:registry_tokens, :credential_ciphertext},
+          {:oauth_provider_credentials, :payload_ciphertext}
         ],
         fn {table, col} ->
           {table, audit_table(table, col, primary)}
@@ -197,6 +203,18 @@ defmodule Sanctum.Cipher.Rotation do
       :registry_tokens,
       row.id,
       [{:credential_ciphertext, row.ct, aad}],
+      opts,
+      fn -> :ok end
+    )
+  end
+
+  defp rotate_row(:oauth_provider_credentials, row, opts) do
+    aad = Sanctum.CipherAAD.provider_credential(row.athanor_id, row.provider)
+
+    rotate_columns(
+      :oauth_provider_credentials,
+      row.id,
+      [{:payload_ciphertext, row.ct, aad}],
       opts,
       fn -> :ok end
     )
@@ -338,6 +356,17 @@ defmodule Sanctum.Cipher.Rotation do
     |> Arca.Repo.all()
   end
 
+  defp fetch_page(:oauth_provider_credentials, cursor, batch) do
+    base(cursor, batch, Arca.Schemas.OauthProviderCredential)
+    |> select([r], %{
+      id: r.id,
+      athanor_id: r.athanor_id,
+      provider: r.provider,
+      ct: r.payload_ciphertext
+    })
+    |> Arca.Repo.all()
+  end
+
   defp base(nil, batch, schema) do
     from(r in schema, order_by: [asc: r.id], limit: ^batch)
   end
@@ -349,6 +378,7 @@ defmodule Sanctum.Cipher.Rotation do
   defp schema_for(:webhooks), do: Arca.Schemas.Webhook
   defp schema_for(:vault_entries), do: Arca.Schemas.VaultEntry
   defp schema_for(:registry_tokens), do: Arca.Schemas.RegistryToken
+  defp schema_for(:oauth_provider_credentials), do: Arca.Schemas.OauthProviderCredential
 
   defp audit_table(table, col, primary) do
     # nil excluded for tombstoned vault entries; the other ciphertext columns

@@ -299,10 +299,13 @@ func ask(r *bufio.Reader, question, def string) string {
 }
 
 // renderEnvFile fills in a .env.example template: substitutes the generated
-// secret key, un-comments and sets MCP_BRIDGE_TOKEN so the bridge boots closed,
-// sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips CYFR_BEHIND_PROXY
-// based on the TLS choice, and (if adminEmail is non-empty) un-comments and
-// sets CYFR_PLATFORM_ADMIN_EMAILS. Everything else is left as-is.
+// secret key, sets MCP_BRIDGE_TOKEN (whether the template ships it commented
+// or not) so the bridge boots closed, sets CYFR_HOST, sets CADDY_ACME_EMAIL
+// if non-empty, flips CYFR_BEHIND_PROXY based on the TLS choice, and (if
+// adminEmail is non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS.
+// Everything else is left as-is. TestRenderEnvFileShippedTemplate binds this
+// key set to the real .env.example — a template edit that strands a key
+// fails there, not on a user's first `cyfr up`.
 func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail string, tls bool) string {
 	behindProxy := "false"
 	if tls {
@@ -313,7 +316,8 @@ func renderEnvFile(template, secretKey, bridgeToken, host, adminEmail, acmeEmail
 		switch {
 		case strings.HasPrefix(line, "CYFR_SECRET_KEY_BASE="):
 			lines[i] = "CYFR_SECRET_KEY_BASE=" + secretKey
-		case strings.HasPrefix(line, "# MCP_BRIDGE_TOKEN="):
+		case strings.HasPrefix(line, "MCP_BRIDGE_TOKEN="),
+			strings.HasPrefix(line, "# MCP_BRIDGE_TOKEN="):
 			lines[i] = "MCP_BRIDGE_TOKEN=" + bridgeToken
 		case strings.HasPrefix(line, "CYFR_HOST="):
 			lines[i] = "CYFR_HOST=" + host

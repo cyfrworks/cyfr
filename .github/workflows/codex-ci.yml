@@ -8,10 +8,14 @@ on:
     branches: [main]
     paths:
       - 'apps/codex/**'
+      # TestRenderEnvFileShippedTemplate binds `cyfr init` to the shipped
+      # template — a template-only edit must run the Go tests.
+      - '.env.example'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
       - 'apps/codex/**'
+      - '.env.example'
       - '.github/workflows/codex-ci.yml'
 
 permissions:

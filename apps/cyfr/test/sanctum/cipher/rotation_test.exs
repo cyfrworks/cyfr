@@ -100,6 +100,22 @@ defmodule Sanctum.Cipher.RotationTest do
     id
   end
 
+  defp put_provider_credential_row(provider, plaintext) do
+    aad = Sanctum.CipherAAD.provider_credential(@athanor, provider)
+    {:ok, ct} = Cipher.encrypt(plaintext, aad)
+
+    :ok =
+      Arca.ProviderCredentialStorage.put(%{
+        athanor_id: @athanor,
+        provider: provider,
+        payload_ciphertext: ct,
+        created_by: "user_1"
+      })
+
+    {:ok, row} = Arca.ProviderCredentialStorage.get(@athanor, provider)
+    row.id
+  end
+
   # Seals a v3 envelope as the pre-athanor writer did (production has no v3
   # writer and no v3 read path left; legacy rows are fabricated here).
   defp seal_v3(plaintext, %{purpose: purpose, name: name}, label, master) do
@@ -148,12 +164,15 @@ defmodule Sanctum.Cipher.RotationTest do
 
       {:ok, rt_row} = Arca.RegistryTokenStorage.get("user_1", "registry.test", "alice")
 
+      pc = put_provider_credential_row("google", ~s({"client_id":"cid","client_secret":"cs"}))
+
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
       assert {:ok, summary} = Rotation.reencrypt_all()
       assert summary.webhooks == %{scanned: 1, rotated: 1, skipped: 0}
       assert summary.vault_entries == %{scanned: 1, rotated: 1, skipped: 0}
       assert summary.registry_tokens == %{scanned: 1, rotated: 1, skipped: 0}
+      assert summary.oauth_provider_credentials == %{scanned: 1, rotated: 1, skipped: 0}
       refute summary.dry_run
 
       # Every column is now on k2 and still decrypts to the original plaintext.
@@ -178,6 +197,14 @@ defmodule Sanctum.Cipher.RotationTest do
 
       assert {:ok, ~s({"token":"cyfr_pt_x"})} =
                Cipher.decrypt(col("registry_tokens", rt_row.id, :credential_ciphertext), rt_aad)
+
+      assert {:ok, "k2"} =
+               Cipher.label(col("oauth_provider_credentials", pc, :payload_ciphertext))
+
+      pc_aad = Sanctum.CipherAAD.provider_credential(@athanor, "google")
+
+      assert {:ok, ~s({"client_id":"cid","client_secret":"cs"})} =
+               Cipher.decrypt(col("oauth_provider_credentials", pc, :payload_ciphertext), pc_aad)
     end
 
     test "re-running is a no-op (idempotent / resumable)" do
@@ -252,6 +279,55 @@ defmodule Sanctum.Cipher.RotationTest do
       assert report.vault_entries.total == 1
       assert report.vault_entries.on_primary == 1
       assert report.vault_entries.unknown == 0
+    end
+
+    test "covers oauth provider credentials" do
+      put_provider_credential_row("github", ~s({"client_id":"cid","client_secret":null}))
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, report} = Rotation.audit()
+      assert report.oauth_provider_credentials.total == 1
+      assert report.oauth_provider_credentials.on_primary == 0
+      assert report.oauth_provider_credentials.on_other == %{"k1" => 1}
+      assert report.oauth_provider_credentials.unknown == 0
+    end
+  end
+
+  describe "T-REENCRYPT: roster binding" do
+    # Every AAD purpose is a table of sealed rows somewhere; a purpose the
+    # rotation tool does not walk is a key an operator retires while it still
+    # seals live secrets. The two lists live in different files, so this test
+    # is what keeps them one list.
+    @root Path.expand("../../../../..", __DIR__)
+    @purpose_tables %{
+      vault_entry: :vault_entries,
+      webhook_secret: :webhooks,
+      registry_token: :registry_tokens,
+      oauth_provider_credential: :oauth_provider_credentials
+    }
+
+    test "every Sanctum.CipherAAD purpose has a rotation and an audit table" do
+      aad_src = File.read!(Path.join(@root, "apps/cyfr/lib/sanctum/cipher_aad.ex"))
+
+      purposes =
+        Regex.scan(~r/purpose: :(\w+)/, aad_src)
+        |> Enum.map(fn [_, p] -> String.to_existing_atom(p) end)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert purposes == Enum.sort(Map.keys(@purpose_tables)),
+             "Sanctum.CipherAAD gained or lost a purpose — teach " <>
+               "Sanctum.Cipher.Rotation its table and update @purpose_tables here"
+
+      rot_src = File.read!(Path.join(@root, "apps/cyfr/lib/sanctum/cipher/rotation.ex"))
+
+      for {purpose, table} <- @purpose_tables do
+        assert rot_src =~ "defp rotate_row(:#{table}, ",
+               "rotation has no rotate_row/3 clause for :#{table} (purpose :#{purpose})"
+
+        assert rot_src =~ "{:#{table}, :",
+               "audit/0's roster is missing :#{table} (purpose :#{purpose})"
+      end
     end
   end
 
