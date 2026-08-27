@@ -173,14 +173,7 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  defp get_bearer_token(%Plug.Conn{} = conn) do
-    case Plug.Conn.get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> token
-      _ -> nil
-    end
-  end
-
-  defp get_bearer_token(_conn), do: nil
+  defp get_bearer_token(conn), do: Sanctum.BearerToken.read(conn)
 
   defp default_permissions do
     # Anyone who passes the operator's configured OIDC provider is fully

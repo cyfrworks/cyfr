@@ -47,7 +47,15 @@ defmodule PrismWeb.LegalAcceptControllerTest do
        %{conn: conn} do
     conn = log_in_user(conn, test_user())
 
-    partial = post(conn, "/legal/accept/submit", %{"policy_version" => "v3", "ack_terms" => "on"})
+    # The form carries its own roster — the submit validates the ack boxes
+    # the server-rendered page actually offered.
+    partial =
+      post(conn, "/legal/accept/submit", %{
+        "policy_version" => "v3",
+        "policies" => "terms,privacy",
+        "ack_terms" => "on"
+      })
+
     assert response(partial, 400) =~ "All policy checkboxes must be ticked"
 
     missing = post(conn, "/legal/accept/submit", %{"ack_terms" => "on"})

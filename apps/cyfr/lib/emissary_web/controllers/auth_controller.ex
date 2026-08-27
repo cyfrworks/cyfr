@@ -37,15 +37,16 @@ defmodule EmissaryWeb.AuthController do
   Ueberauth handles the redirect automatically based on the :provider param.
   """
   def request(conn, _params) do
-    # Ueberauth plug handles the redirect
-    # This is called if no Ueberauth strategy matches
-    conn
-    |> put_status(:not_found)
-    |> json(%{
-      error: "unknown_provider",
-      message:
-        "OAuth provider not configured. Available providers depend on environment configuration."
-    })
+    # Ueberauth plug handles the redirect; this is the no-strategy branch.
+    # A browser pipeline answers in HTML — these arms used to dump JSON
+    # into the person's window.
+    EmissaryWeb.MinimalPage.send_page(
+      conn,
+      404,
+      "Unknown sign-in provider",
+      "<p>This sign-in provider is not configured on this server.</p>" <>
+        "<p><a href=\"/login\">Back to sign-in</a></p>"
+    )
   end
 
   @doc """
@@ -137,34 +138,42 @@ defmodule EmissaryWeb.AuthController do
       {:error, {:door, _reason}} ->
         # Refused at the door: no session, no cookie, no cyfr.run call. One
         # message whichever branch refused.
-        conn
-        |> put_status(:forbidden)
-        |> put_resp_content_type("text/html")
-        |> send_resp(403, door_refusal_page())
+        EmissaryWeb.MinimalPage.send_page(
+          conn,
+          403,
+          "Not allowed on this server",
+          "<p>#{EmissaryWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+        )
 
       {:error, reason} ->
-        conn
-        |> put_status(:unauthorized)
-        |> json(%{error: "authentication_failed", message: friendly_error_message(reason)})
+        EmissaryWeb.MinimalPage.send_page(
+          conn,
+          401,
+          "Sign-in failed",
+          "<p>#{EmissaryWeb.MinimalPage.h(friendly_error_message(reason))}</p>" <>
+            "<p><a href=\"/login\">Try again</a></p>"
+        )
     end
   end
 
   def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
-    conn
-    |> put_status(:unauthorized)
-    |> json(%{
-      error: "oauth_failure",
-      message: failure_message(failure)
-    })
+    EmissaryWeb.MinimalPage.send_page(
+      conn,
+      401,
+      "Sign-in failed",
+      "<p>#{EmissaryWeb.MinimalPage.h(failure_message(failure))}</p>" <>
+        "<p><a href=\"/login\">Try again</a></p>"
+    )
   end
 
   def callback(conn, _params) do
-    conn
-    |> put_status(:bad_request)
-    |> json(%{
-      error: "invalid_callback",
-      message: "Invalid OAuth callback. Missing auth or failure information."
-    })
+    EmissaryWeb.MinimalPage.send_page(
+      conn,
+      400,
+      "Invalid sign-in callback",
+      "<p>The sign-in callback carried no auth or failure information.</p>" <>
+        "<p><a href=\"/login\">Try again</a></p>"
+    )
   end
 
   @doc """
@@ -177,24 +186,24 @@ defmodule EmissaryWeb.AuthController do
     probe → 412 → /legal/accept → /auth/post-legal-accept → probe → ok
   """
   def post_legal_accept(conn, _params) do
-    conn = fetch_cookies(conn, encrypted: ["_cyfr_pending_probe"])
-    access_token = conn.cookies["_cyfr_pending_probe"]
-    session_token = get_session(conn, :sanctum_session_token)
+    case PrismWeb.PendingProbe.pop(conn) do
+      {:ok, conn, access_token} ->
+        do_post_legal_accept(conn, access_token)
 
-    cond do
-      not is_binary(access_token) or access_token == "" ->
+      {_missing, conn} ->
         # Cookie expired (10 min TTL) or never set. Force fresh OAuth.
         Logger.info(
-          "[EmissaryWeb.AuthController] post_legal_accept: missing _cyfr_pending_probe; " <>
+          "[EmissaryWeb.AuthController] post_legal_accept: missing probe cookie; " <>
             "redirecting to login"
         )
 
         conn |> redirect(to: "/login")
+    end
+  end
 
-      not is_binary(session_token) or session_token == "" ->
-        conn |> redirect(to: "/login")
-
-      true ->
+  defp do_post_legal_accept(conn, access_token) do
+    case get_session(conn, EmissaryWeb.SignInResponse.session_key()) do
+      session_token when is_binary(session_token) and session_token != "" ->
         with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
              {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do
           provider = peeked.provider || "github"
@@ -221,6 +230,9 @@ defmodule EmissaryWeb.AuthController do
         else
           _ -> conn |> redirect(to: "/login")
         end
+
+      _ ->
+        conn |> redirect(to: "/login")
     end
   end
 
@@ -300,12 +312,7 @@ defmodule EmissaryWeb.AuthController do
   # Private Helpers
   # ============================================================================
 
-  defp get_bearer_token(conn) do
-    case Plug.Conn.get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> token
-      _ -> nil
-    end
-  end
+  defp get_bearer_token(conn), do: Sanctum.BearerToken.read(conn)
 
   # The door, then what sign-in records — before any session exists and
   # before cyfr.run hears of the identity. It runs here, at the one place the
@@ -349,22 +356,6 @@ defmodule EmissaryWeb.AuthController do
   end
 
   defp screen_name(_), do: nil
-
-  # A refused sign-in lands on a plain page: the person has no session and
-  # nothing of the console is theirs to see.
-  defp door_refusal_page do
-    message = Plug.HTML.html_escape(Sanctum.Door.refusal_message())
-
-    """
-    <!doctype html>
-    <html lang="en">
-    <head><meta charset="utf-8"><title>Not allowed</title>
-    <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}</style>
-    </head>
-    <body><h1>Not allowed on this server</h1><p>#{message}</p></body>
-    </html>
-    """
-  end
 
   defp authenticate_with_provider(auth) do
     # Dispatch generically to whatever module is configured. Both

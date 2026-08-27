@@ -12,7 +12,7 @@ defmodule PrismWeb.SessionController do
   alias Sanctum.Session
 
   def logout(conn, _params) do
-    case get_session(conn, :sanctum_session_token) do
+    case get_session(conn, EmissaryWeb.SignInResponse.session_key()) do
       token when is_binary(token) and token != "" -> Session.destroy(token)
       _ -> :ok
     end

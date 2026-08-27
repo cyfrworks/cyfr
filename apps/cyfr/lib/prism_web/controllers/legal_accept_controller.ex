@@ -12,8 +12,8 @@ defmodule PrismWeb.LegalAcceptController do
     * `ClaimNamespaceController.submit` — when cyfr.run returns 412
       `POLICY_ACCEPTANCE_REQUIRED` on a claim attempt.
 
-  The IdP `access_token` is read from the same encrypted
-  `_cyfr_pending_probe` cookie that `ClaimNamespaceController` consumes
+  The IdP `access_token` is read from the same pending-probe cookie
+  (`PrismWeb.PendingProbe`) that `ClaimNamespaceController` consumes
   (so the user's OAuth roundtrip happens once and feeds both the
   acceptance and the claim).
 
@@ -27,13 +27,12 @@ defmodule PrismWeb.LegalAcceptController do
   require Logger
 
   alias Compendium.Registry.Client
-
-  @policy_names ~w(terms privacy aup content-policy dmca cookies transparency)
+  alias PrismWeb.PendingProbe
 
   def show(conn, params) do
     case Client.get_legal_version() do
       {:ok, %{"policy_version" => version, "policies" => policies}} ->
-        bodies = fetch_all_bodies(policies)
+        bodies = fetch_all_bodies(version, policies)
         provider = Map.get(params, "provider", current_provider(conn))
 
         page(conn, 200, version, bodies, provider, nil)
@@ -45,7 +44,11 @@ defmodule PrismWeb.LegalAcceptController do
   end
 
   def submit(conn, %{"policy_version" => version} = params) when is_binary(version) do
-    # All 7 acknowledgement checkboxes must be ticked.
+    # Every acknowledgement checkbox the form rendered must be ticked. The
+    # roster rides in the form itself — the server's policy list, not a
+    # local copy that goes stale when cyfr.run adds or retires a policy.
+    # (Trimming it client-side cheats nobody: cyfr.run enforces acceptance
+    # by version on its side.)
     if not all_acknowledged?(params) do
       error_page(
         conn,
@@ -54,7 +57,7 @@ defmodule PrismWeb.LegalAcceptController do
           "Please return to the form and confirm each policy."
       )
     else
-      with {:ok, conn, access_token} <- pop_pending_probe(conn),
+      with {:ok, conn, access_token} <- PendingProbe.pop(conn),
            {:ok, provider} <- current_provider(conn, params),
            {:ok, _body} <-
              Client.accept_policies(provider, access_token, nil, version) do
@@ -95,19 +98,14 @@ defmodule PrismWeb.LegalAcceptController do
         {:error, :invalid_access_token} ->
           # IdP token expired between OAuth callback and accept submit.
           conn
-          |> clear_pending_probe()
+          |> PendingProbe.clear()
           |> redirect(to: "/login")
 
         {:error, err} ->
-          msg =
-            case err do
-              %Compendium.OCI.Errors{} -> Compendium.OCI.Errors.to_string(err)
-              other when is_binary(other) -> other
-              other -> inspect(other)
-            end
-
-          Logger.error("[LegalAcceptController] accept_policies error: #{msg}")
-          error_page(conn, 200, msg)
+          # 502: cyfr.run refused or misanswered the accept — a 200 said
+          # "fine" about a failure. Internal terms are logged, never shown.
+          Logger.error("[LegalAcceptController] accept_policies error: #{inspect(err)}")
+          error_page(conn, 502, accept_error_message(err))
       end
     end
   end
@@ -118,56 +116,69 @@ defmodule PrismWeb.LegalAcceptController do
   # Helpers
   # ============================================================================
 
-  defp fetch_all_bodies(policies) when is_list(policies) do
-    policies
-    |> Enum.map(fn %{"name" => name, "title" => title} ->
-      case Client.get_legal_page(name) do
-        {:ok, %{"content_markdown" => md}} -> {name, title, md}
-        _ -> {name, title, "_(failed to load #{name})_"}
-      end
-    end)
+  # One outbound call per policy used to run sequentially on every GET —
+  # 1+N round-trips to cyfr.run before the page painted. The bodies are
+  # immutable per policy_version, so they memoize on it; a cold read
+  # fetches them concurrently.
+  @bodies_ttl_ms :timer.minutes(10)
+
+  defp fetch_all_bodies(version, policies) when is_list(policies) do
+    case Arca.Cache.get({:legal_bodies, version}) do
+      {:ok, bodies} ->
+        bodies
+
+      :miss ->
+        bodies =
+          policies
+          |> Task.async_stream(
+            fn %{"name" => name, "title" => title} ->
+              case Client.get_legal_page(name) do
+                {:ok, %{"content_markdown" => md}} -> {name, title, md}
+                _ -> {name, title, "_(failed to load #{name})_"}
+              end
+            end,
+            ordered: true,
+            timeout: 15_000,
+            on_timeout: :kill_task
+          )
+          |> Enum.zip(policies)
+          |> Enum.map(fn
+            {{:ok, body}, _policy} ->
+              body
+
+            {_, %{"name" => name, "title" => title}} ->
+              {name, title, "_(failed to load #{name})_"}
+          end)
+
+        # A page that failed to load is not worth pinning for 10 minutes.
+        if Enum.all?(bodies, fn {_, _, md} -> not String.starts_with?(md, "_(failed") end) do
+          Arca.Cache.put({:legal_bodies, version}, bodies, @bodies_ttl_ms)
+        end
+
+        bodies
+    end
   end
 
-  defp fetch_all_bodies(_), do: []
+  defp fetch_all_bodies(_version, _), do: []
 
   defp all_acknowledged?(params) do
-    Enum.all?(@policy_names, fn name ->
+    names = String.split(params["policies"] || "", ",", trim: true)
+
+    Enum.all?(names, fn name ->
       ack_field = "ack_" <> String.replace(name, "-", "_")
       params[ack_field] == "on"
     end)
   end
 
-  defp current_provider(conn) do
-    case Sanctum.Caller.peek(get_session(conn, :sanctum_session_token)) do
-      {:ok, %{provider: p}} when p in ["github", "google"] -> p
-      _ -> "github"
-    end
-  end
+  defp current_provider(conn), do: PendingProbe.current_provider(conn)
 
-  defp current_provider(_conn, %{"provider" => p}) when p in ["github", "google"], do: {:ok, p}
-  defp current_provider(conn, _params), do: {:ok, current_provider(conn)}
+  defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
 
-  # `AuthController.maybe_stash_pending_probe/3` writes this cookie with
-  # `encrypt: true`; fetching it `signed:` fails verification and reads as nil.
-  defp pop_pending_probe(conn) do
-    conn = fetch_cookies(conn, encrypted: ["_cyfr_pending_probe"])
+  defp accept_error_message(%Compendium.OCI.Errors{} = err),
+    do: Compendium.MCP.Shared.to_error_string(err)
 
-    case conn.cookies["_cyfr_pending_probe"] do
-      token when is_binary(token) and token != "" ->
-        {:ok, conn, token}
-
-      _ ->
-        # Either no logged-in user or the cookie expired/missing.
-        case get_session(conn, :sanctum_session_token) do
-          token when is_binary(token) and token != "" -> {:expired, conn}
-          _ -> {:not_logged_in, conn}
-        end
-    end
-  end
-
-  defp clear_pending_probe(conn) do
-    delete_resp_cookie(conn, "_cyfr_pending_probe")
-  end
+  defp accept_error_message(msg) when is_binary(msg), do: msg
+  defp accept_error_message(_), do: "The acceptance could not be recorded — try again."
 
   # ============================================================================
   # Rendering — the two pages, in the Prism root layout

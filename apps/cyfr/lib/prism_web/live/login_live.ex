@@ -37,44 +37,16 @@ defmodule PrismWeb.LoginLive do
   end
 
   @impl true
-  def handle_event("start", %{"provider" => provider}, socket)
-      when provider in ["github", "google"] do
-    if socket.assigns.login_state == :waiting do
-      {:noreply, socket}
-    else
-      provider_atom = String.to_existing_atom(provider)
+  def handle_event("start", %{"provider" => provider}, socket) do
+    cond do
+      not DeviceFlow.provider?(provider) ->
+        {:noreply, socket}
 
-      case device_flow().init_device_flow(provider_atom) do
-        {:ok, info} ->
-          if connected?(socket), do: schedule_poll(info.interval)
+      socket.assigns.login_state == :waiting ->
+        {:noreply, socket}
 
-          {:noreply,
-           socket
-           |> assign(:login_state, :waiting)
-           |> assign(:provider, provider_atom)
-           |> assign(:user_code, info.user_code)
-           |> assign(:verification_uri, info.verification_uri)
-           |> assign(:device_code, info.device_code)
-           |> assign(:poll_interval, info.interval || @default_poll_interval_s)
-           |> assign(:error, nil)}
-
-        {:error, {:client_id_not_configured, p}} ->
-          {:noreply, assign(socket, :error, "#{p} is not configured on this server.")}
-
-        {:error, {:device_code_error, code}} ->
-          Logger.warning("[LoginLive] device-flow init rejected: #{inspect(code)}")
-
-          {:noreply,
-           assign(
-             socket,
-             :error,
-             "Device flow was rejected (#{code}). For Google, the OAuth client must be type \"TV and Limited Input devices\"."
-           )}
-
-        {:error, reason} ->
-          Logger.warning("[LoginLive] device-flow init failed: #{inspect(reason)}")
-          {:noreply, assign(socket, :error, "Couldn't start sign-in. Try again in a moment.")}
-      end
+      true ->
+        start_device_flow(socket, provider)
     end
   end
 
@@ -82,6 +54,42 @@ defmodule PrismWeb.LoginLive do
 
   def handle_event("cancel", _params, socket) do
     {:noreply, assign_idle(socket, nil)}
+  end
+
+  defp start_device_flow(socket, provider) do
+    provider_atom = String.to_existing_atom(provider)
+
+    case device_flow().init_device_flow(provider_atom) do
+      {:ok, info} ->
+        if connected?(socket), do: schedule_poll(info.interval)
+
+        {:noreply,
+         socket
+         |> assign(:login_state, :waiting)
+         |> assign(:provider, provider_atom)
+         |> assign(:user_code, info.user_code)
+         |> assign(:verification_uri, info.verification_uri)
+         |> assign(:device_code, info.device_code)
+         |> assign(:poll_interval, info.interval || @default_poll_interval_s)
+         |> assign(:error, nil)}
+
+      {:error, {:client_id_not_configured, p}} ->
+        {:noreply, assign(socket, :error, "#{p} is not configured on this server.")}
+
+      {:error, {:device_code_error, code}} ->
+        Logger.warning("[LoginLive] device-flow init rejected: #{inspect(code)}")
+
+        {:noreply,
+         assign(
+           socket,
+           :error,
+           "Device flow was rejected (#{code}). For Google, the OAuth client must be type \"TV and Limited Input devices\"."
+         )}
+
+      {:error, reason} ->
+        Logger.warning("[LoginLive] device-flow init failed: #{inspect(reason)}")
+        {:noreply, assign(socket, :error, "Couldn't start sign-in. Try again in a moment.")}
+    end
   end
 
   @impl true
@@ -98,7 +106,10 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[LoginLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp finish_poll(socket, {:ok, %{status: "pending"} = result}) do
     interval =

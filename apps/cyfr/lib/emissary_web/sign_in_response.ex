@@ -35,7 +35,8 @@ defmodule EmissaryWeb.SignInResponse do
 
   require Logger
 
-  @probe_cookie "_cyfr_pending_probe"
+  @probe_cookie PrismWeb.PendingProbe.cookie_name()
+  @session_key :sanctum_session_token
 
   @type outcome ::
           {:proceed, map()}
@@ -43,6 +44,13 @@ defmodule EmissaryWeb.SignInResponse do
           | {:needs_claim, String.t() | nil}
           | {:reauthenticate, atom()}
           | {:unavailable, atom()}
+
+  @doc """
+  The Plug session key holding the Sanctum session token. This module is
+  the one writer; every reader takes the spelling from here (LiveView
+  mounts see the session as a string-keyed map — `to_string/1` it).
+  """
+  def session_key, do: @session_key
 
   @spec respond(Plug.Conn.t(), outcome(), keyword()) :: Plug.Conn.t()
   def respond(conn, outcome, opts)
@@ -106,10 +114,8 @@ defmodule EmissaryWeb.SignInResponse do
         _ -> conn
       end
 
-    conn
-    |> put_status(:service_unavailable)
-    |> put_resp_content_type("text/html")
-    |> send_resp(503, unavailable_page(reason, Keyword.get(opts, :retry_path, "/login")))
+    {title, inner} = unavailable_page(reason, Keyword.get(opts, :retry_path, "/login"))
+    EmissaryWeb.MinimalPage.send_page(conn, 503, title, inner)
   end
 
   @doc """
@@ -161,7 +167,7 @@ defmodule EmissaryWeb.SignInResponse do
       {:mint, ctx} ->
         case Sanctum.Session.create(ctx) do
           {:ok, session} ->
-            fun.(put_session(conn, :sanctum_session_token, session.token))
+            fun.(put_session(conn, @session_key, session.token))
 
           {:error, reason} ->
             Logger.error("[EmissaryWeb.SignInResponse] session create failed: #{inspect(reason)}")
@@ -172,7 +178,7 @@ defmodule EmissaryWeb.SignInResponse do
         end
 
       {:token, token} ->
-        fun.(put_session(conn, :sanctum_session_token, token))
+        fun.(put_session(conn, @session_key, token))
 
       :existing ->
         fun.(conn)
@@ -258,19 +264,14 @@ defmodule EmissaryWeb.SignInResponse do
   end
 
   # A first-time person whom the registry could not place: nothing was set
-  # up and there is no session — a plain page and a way to try again.
+  # up and there is no session — the shared no-session shell and a way to
+  # try again.
   defp unavailable_page(reason, retry_path) do
     {title, message} = unavailable_copy(reason)
-    href = Plug.HTML.html_escape(retry_path)
+    href = EmissaryWeb.MinimalPage.h(retry_path)
 
-    """
-    <!doctype html>
-    <html lang="en">
-    <head><meta charset="utf-8"><title>#{title}</title>
-    <style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}</style>
-    </head>
-    <body><h1>#{title}</h1><p>#{message}</p><p><a href="#{href}">Try again</a></p></body>
-    </html>
-    """
+    {title,
+     "<p>#{EmissaryWeb.MinimalPage.h(message)}</p>" <>
+       "<p><a href=\"#{href}\">Try again</a></p>"}
   end
 end

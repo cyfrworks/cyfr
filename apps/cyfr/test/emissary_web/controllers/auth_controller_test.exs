@@ -17,13 +17,14 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "returns 404 for unknown provider", %{conn: conn} do
       conn = get(conn, ~p"/auth/unknown_provider")
 
-      assert json_response(conn, 404)["error"] == "unknown_provider"
-      assert json_response(conn, 404)["message"] =~ "OAuth provider not configured"
+      # A browser pipeline answers in HTML now, not JSON dumped into the
+      # person's window.
+      assert html_response(conn, 404) =~ "Unknown sign-in provider"
     end
 
     test "GET /auth/github without web-callback credentials is 404, not 500", %{conn: conn} do
       conn = get(conn, ~p"/auth/github")
-      assert json_response(conn, 404)["error"] == "unknown_provider"
+      assert html_response(conn, 404) =~ "Unknown sign-in provider"
     end
   end
 
@@ -62,7 +63,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       # Simulate a callback without Ueberauth data
       conn = get(conn, ~p"/auth/github/callback")
 
-      assert json_response(conn, 400)["error"] == "invalid_callback"
+      assert html_response(conn, 400) =~ "Invalid sign-in callback"
     end
 
     test "handles ueberauth failure", %{conn: conn} do
@@ -79,8 +80,8 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> assign(:ueberauth_failure, failure)
         |> EmissaryWeb.AuthController.callback(%{})
 
-      assert json_response(conn, 401)["error"] == "oauth_failure"
-      assert json_response(conn, 401)["message"] =~ "Access denied"
+      assert html_response(conn, 401) =~ "Sign-in failed"
+      assert html_response(conn, 401) =~ "Access denied"
     end
 
     test "a callback for an identity the door refuses gets a 403 and no session", %{conn: conn} do

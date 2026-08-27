@@ -604,6 +604,18 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   defp get_client_secret(:google), do: Application.get_env(:cyfr, :google_client_secret)
 
+  @doc """
+  The device-flow providers this server can sign a person in with — the
+  one roster; the web surfaces validate against it instead of each
+  carrying its own ["github", "google"] literal.
+  """
+  @spec providers() :: [String.t()]
+  def providers, do: ~w(github google)
+
+  @doc "Whether `value` names a known device-flow provider."
+  @spec provider?(term()) :: boolean()
+  def provider?(value), do: value in providers()
+
   defp normalize_provider("github"), do: :github
   defp normalize_provider(:github), do: :github
   defp normalize_provider("google"), do: :google

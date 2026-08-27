@@ -28,7 +28,6 @@ defmodule Sanctum.TinctureAuth do
   - `:unauthenticated` — No valid credentials found
   """
 
-  import Plug.Conn, only: [get_req_header: 2]
 
   alias Sanctum.Context
 
@@ -100,15 +99,15 @@ defmodule Sanctum.TinctureAuth do
   # parameter.
 
   defp try_bearer_header(conn) do
-    case get_req_header(conn, "authorization") do
-      ["Bearer " <> token | _] when token != "" ->
+    case Sanctum.BearerToken.read(conn) do
+      token when is_binary(token) ->
         if Sanctum.ApiKey.looks_like_key?(token) do
           validate_api_key(token, conn)
         else
           try_sanctum_session(token)
         end
 
-      _ ->
+      nil ->
         :skip
     end
   end

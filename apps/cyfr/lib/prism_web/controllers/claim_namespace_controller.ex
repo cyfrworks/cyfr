@@ -7,8 +7,9 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   - `GET /claim-namespace` — renders a form prompting the user for a slug
     (default = suggested username from the OAuth provider login).
-  - `POST /claim-namespace/submit` — decrypts the `_cyfr_pending_probe`
-    cookie, invokes `Compendium.Registry.Client.claim_personal_namespace/4`,
+  - `POST /claim-namespace/submit` — reads the pending-probe cookie
+    (`PrismWeb.PendingProbe`), invokes
+    `Compendium.Registry.Client.claim_personal_namespace/4`,
     stores the issued push token, and redirects to the configured post-login
     landing target via `EmissaryWeb.SafeRedirect`.
 
@@ -22,6 +23,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   alias Compendium.Registry.Client
   alias Compendium.Registry.CredentialStore
+  alias PrismWeb.PendingProbe
 
   def show(conn, _params) do
     suggested = get_session(conn, :claim_suggested_username) || ""
@@ -33,7 +35,7 @@ defmodule PrismWeb.ClaimNamespaceController do
     # with a confusing 400 INVALID_USERNAME otherwise.
     username = String.trim(raw_username)
 
-    with {:ok, conn, access_token} <- pop_pending_probe(conn),
+    with {:ok, conn, access_token} <- PendingProbe.pop(conn),
          {:ok, user_id} <- current_user_id(conn),
          {:ok, provider} <- current_provider(conn, params),
          {:ok, body} <-
@@ -73,7 +75,7 @@ defmodule PrismWeb.ClaimNamespaceController do
             end
 
           conn
-          |> clear_pending_probe()
+          |> PendingProbe.clear()
           |> delete_session(:claim_suggested_username)
           |> EmissaryWeb.SafeRedirect.post_login()
 
@@ -99,7 +101,7 @@ defmodule PrismWeb.ClaimNamespaceController do
         # the claim submission. Can't recover; bounce back through login.
         # Clear the dead cookie so the fresh auth round starts clean.
         conn
-        |> clear_pending_probe()
+        |> PendingProbe.clear()
         |> redirect(to: "/login")
 
       {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
@@ -111,14 +113,10 @@ defmodule PrismWeb.ClaimNamespaceController do
         |> redirect(to: "/legal/accept")
 
       {:error, err} ->
-        msg =
-          case err do
-            %Compendium.OCI.Errors{} -> Compendium.OCI.Errors.to_string(err)
-            b when is_binary(b) -> b
-            other -> inspect(other)
-          end
-
-        page(conn, 200, username, msg)
+        # 422: the claim was refused and the form re-renders for a retry —
+        # a 200 said "fine" about a failure. Internal terms are logged,
+        # never put on the page.
+        page(conn, 422, username, claim_error_message(err))
     end
   end
 
@@ -157,44 +155,22 @@ defmodule PrismWeb.ClaimNamespaceController do
     )
   end
 
-  # Reads (but does NOT delete) the encrypted `_cyfr_pending_probe` cookie.
-  # `AuthController.maybe_stash_pending_probe/3` writes it with `encrypt: true`
-  # (the value is a provider access token — plaintext in a signed cookie would
-  # leak it to anyone who reads the jar), so it must be fetched as `encrypted:`;
-  # fetching it `signed:` fails verification and reads as nil. The caller must
-  # call `clear_pending_probe/1` on the success path — a failed claim (e.g.
-  # `slug_taken` 409) re-renders the form and the user retries with the same
-  # access_token. Deleting here would doom the retry to 400 "Login session
-  # expired" after a single typo.
-  defp pop_pending_probe(conn) do
-    conn = fetch_cookies(conn, encrypted: ["_cyfr_pending_probe"])
+  defp claim_error_message(%Compendium.OCI.Errors{} = err),
+    do: Compendium.MCP.Shared.to_error_string(err)
 
-    case conn.cookies["_cyfr_pending_probe"] do
-      token when is_binary(token) and token != "" ->
-        {:ok, conn, token}
+  defp claim_error_message(msg) when is_binary(msg), do: msg
 
-      _ ->
-        {:expired, conn}
-    end
-  end
-
-  defp clear_pending_probe(conn) do
-    delete_resp_cookie(conn, "_cyfr_pending_probe")
+  defp claim_error_message(other) do
+    Logger.error("[ClaimNamespaceController] claim failed: #{inspect(other)}")
+    "The claim failed — try again."
   end
 
   defp current_user_id(conn) do
-    case Sanctum.Caller.peek(get_session(conn, :sanctum_session_token)) do
+    case Sanctum.Caller.peek(get_session(conn, EmissaryWeb.SignInResponse.session_key())) do
       {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
       _ -> {:not_logged_in, conn}
     end
   end
 
-  defp current_provider(_conn, %{"provider" => p}) when p in ["github", "google"], do: {:ok, p}
-
-  defp current_provider(conn, _params) do
-    case Sanctum.Caller.peek(get_session(conn, :sanctum_session_token)) do
-      {:ok, %{provider: p}} when p in ["github", "google"] -> {:ok, p}
-      _ -> {:ok, "github"}
-    end
-  end
+  defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
 end

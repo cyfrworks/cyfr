@@ -22,30 +22,22 @@ defmodule EmissaryWeb.OAuthCallbackController do
 
     case Sanctum.Vault.OAuthGrant.complete(state, code, redirect_uri) do
       {:ok, result} ->
-        send_callback_html(conn, 200, success_html(result.provider, result.name))
+        success_page(conn, result.provider, result.name)
 
       {:error, :unknown_state} ->
-        send_callback_html(
-          conn,
-          400,
-          error_html("Authorization failed", "invalid or expired state parameter")
-        )
+        error_page(conn, "Authorization failed", "invalid or expired state parameter")
 
       {:error, reason} ->
-        send_callback_html(conn, 400, error_html("Authorization failed", fmt_reason(reason)))
+        error_page(conn, "Authorization failed", fmt_reason(reason))
     end
   end
 
   def callback(conn, %{"error" => error}) do
-    send_callback_html(conn, 400, error_html("Authorization denied", error))
+    error_page(conn, "Authorization denied", error)
   end
 
   def callback(conn, _params) do
-    send_callback_html(
-      conn,
-      400,
-      error_html("Invalid callback", "Missing authorization parameters. Please try again.")
-    )
+    error_page(conn, "Invalid callback", "Missing authorization parameters. Please try again.")
   end
 
   defp fmt_reason(reason) when is_binary(reason), do: reason
@@ -54,118 +46,45 @@ defmodule EmissaryWeb.OAuthCallbackController do
 
   # Override the endpoint's `default-src 'none'` CSP to allow inline styles
   # for this HTML response. This is a one-off browser-facing page (post-OAuth
-  # redirect), not an API endpoint, so relaxing CSP here is safe.
-  # sobelow_skip ["XSS.SendResp"]
-  # Every interpolation in the html builders goes through html_escape/1;
-  # Sobelow cannot trace the escaping across the private helpers.
-  defp send_callback_html(conn, status, html) do
+  # redirect), not an API endpoint, so relaxing CSP here is safe. The page
+  # itself is EmissaryWeb.MinimalPage — the one no-session shell.
+  defp send_page(conn, status, title, inner, opts) do
     conn
     |> put_resp_header(
       "content-security-policy",
       "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
     )
-    |> put_resp_content_type("text/html")
-    |> send_resp(status, html)
+    |> EmissaryWeb.MinimalPage.send_page(status, title, inner, opts)
   end
 
-  # -- HTML responses --
-
-  defp success_html(provider, connection_name) do
+  defp success_page(conn, provider, connection_name) do
     provider_display = provider |> to_string() |> String.capitalize()
 
-    callback_html(
-      "Authorization Complete",
+    send_page(
+      conn,
+      200,
+      "Connected to #{provider_display}",
       """
-      <div class="icon">&#10003;</div>
-      <h1>Connected to #{html_escape(provider_display)}</h1>
-      <p class="detail">#{html_escape(connection_name)}</p>
+      <p class="detail">#{EmissaryWeb.MinimalPage.h(connection_name)}</p>
       <p>You can close this window and return to your terminal.</p>
       """,
-      "#10b981"
+      icon: "\u2713",
+      accent: "#10b981"
     )
   end
 
-  defp error_html(title, message) do
-    callback_html(
+  defp error_page(conn, title, message) do
+    send_page(
+      conn,
+      400,
       title,
       """
-      <div class="icon">&#10007;</div>
-      <h1>#{html_escape(title)}</h1>
-      <p>#{html_escape(message)}</p>
+      <p>#{EmissaryWeb.MinimalPage.h(message)}</p>
       <p>Close this window and try again.</p>
       """,
-      "#ef4444"
+      icon: "\u2717",
+      accent: "#ef4444"
     )
   end
 
-  defp callback_html(title, body, accent_color) do
-    """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>CYFR &mdash; #{html_escape(title)}</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-          background: #0a0a0a;
-          color: #e5e5e5;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 100vh;
-        }
-        .card {
-          text-align: center;
-          max-width: 420px;
-          padding: 3rem 2rem;
-        }
-        .icon {
-          font-size: 3rem;
-          width: 5rem;
-          height: 5rem;
-          line-height: 5rem;
-          border-radius: 50%;
-          background: #{accent_color}18;
-          color: #{accent_color};
-          margin: 0 auto 1.5rem;
-        }
-        h1 {
-          font-size: 1.25rem;
-          font-weight: 600;
-          margin-bottom: 0.75rem;
-        }
-        p {
-          color: #a3a3a3;
-          font-size: 0.9rem;
-          line-height: 1.5;
-          margin-bottom: 0.5rem;
-        }
-        .detail {
-          font-family: ui-monospace, "SF Mono", monospace;
-          font-size: 0.8rem;
-          color: #737373;
-          margin-bottom: 1rem;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        #{body}
-      </div>
-    </body>
-    </html>
-    """
-  end
-
-  defp html_escape(text) do
-    text
-    |> to_string()
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-    |> String.replace("\"", "&quot;")
-  end
 end

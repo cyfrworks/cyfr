@@ -36,6 +36,7 @@
       <input type="hidden" name="_csrf_token" value={@csrf_token} />
       <input type="hidden" name="policy_version" value={@version} />
       <input type="hidden" name="provider" value={@provider} />
+      <input type="hidden" name="policies" value={Enum.map_join(@bodies, ",", &elem(&1, 0))} />
       <fieldset class="space-y-2">
         <legend class="text-sm font-medium text-gray-200 mb-2">Acknowledgements</legend>
         <label

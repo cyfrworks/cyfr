@@ -197,16 +197,16 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # Returns {:ok, context, :api_key | :session_token}, :no_key when no bearer
   # credential is present, or {:error, reason}.
   defp resolve_bearer_credential(conn) do
-    case get_req_header(conn, "authorization") do
-      ["Bearer " <> token | _] when token != "" ->
+    case Sanctum.BearerToken.read(conn) do
+      nil ->
+        :no_key
+
+      token ->
         if Sanctum.ApiKey.looks_like_key?(token) do
           with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key}
         else
           with {:ok, ctx, kind} <- validate_session_token(token), do: {:ok, ctx, kind}
         end
-
-      _ ->
-        :no_key
     end
   end
 

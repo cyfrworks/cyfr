@@ -61,7 +61,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
   end
 
   describe "POST /claim-namespace/submit" do
-    test "returns 400 with 'Login session expired' when :_cyfr_pending_probe cookie missing",
+    test "redirects to /login when probe cookie and session are both missing",
          %{conn: conn} do
       csrf = get_csrf_from_form(conn)
 
@@ -72,8 +72,24 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
           "username" => "alice"
         })
 
-      # The pop_pending_probe/1 guard fires before any HTTP call; controller
-      # returns 400 and re-renders the form with the "expired" error banner.
+      # The PendingProbe guard fires before any HTTP call; with no session
+      # either, this is a never-signed-in caller, not an expired one.
+      assert conn.status == 401
+      assert redirected_to(conn, 401) == "/login"
+    end
+
+    test "returns 400 with 'Login session expired' when a session exists but the probe cookie lapsed",
+         %{conn: conn} do
+      csrf = get_csrf_from_form(conn)
+
+      conn =
+        conn
+        |> init_test_session(%{sanctum_session_token: "stale-but-present"})
+        |> post(~p"/claim-namespace/submit", %{
+          "_csrf_token" => csrf,
+          "username" => "alice"
+        })
+
       assert conn.status == 400
       body = response(conn, 400)
       assert body =~ "Login session expired"

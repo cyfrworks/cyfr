@@ -168,10 +168,5 @@ defmodule Sanctum.Auth.OAuth do
   # every writer and reader uses `:sanctum_session_token` — so it always
   # returned nil. Restoring it under the real key would hand `POST /mcp`,
   # which carries no CSRF protection, an ambient browser credential.
-  defp get_session_token(conn) do
-    case Plug.Conn.get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> token
-      _ -> nil
-    end
-  end
+  defp get_session_token(conn), do: Sanctum.BearerToken.read(conn)
 end
