@@ -3,19 +3,11 @@
 
 defmodule Arca.ConversationStorageTest.FailingDeleteAdapter do
   @moduledoc false
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   # A conversation's whole blob tree refuses to delete.
   def delete_tree(_ctx, ["conversations", _id]), do: {:error, :eacces}
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+  def delete_tree(ctx, path), do: Arca.Adapters.Local.delete_tree(ctx, path)
 end
 
 defmodule Arca.ConversationStorageTest do

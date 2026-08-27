@@ -31,68 +31,66 @@ defmodule Compendium.ForkTest do
   # ============================================================================
 
   defp create_source_component(type, publisher, name, version, opts \\ []) do
-    base =
-      Arca.Adapters.Local.build_path(
-        Sanctum.TestContext.local(),
-        ["components", "#{type}s", publisher, name, version]
-      )
+    files =
+      if(Keyword.get(opts, :with_source, true),
+        do: [
+          {"src/Cargo.toml", "[package]\nname = \"test\""},
+          {"src/src/lib.rs", "fn main() {}"}
+        ],
+        else: []
+      ) ++
+        if(Keyword.get(opts, :with_readme, false),
+          do: [{"README.md", "# Test Component"}],
+          else: []
+        )
 
-    manifest = %{
-      "name" => name,
-      "type" => type,
-      "version" => version,
-      "publisher" => publisher,
-      "description" => "A test component"
-    }
-
-    File.mkdir_p!(base)
-    File.write!(Path.join(base, "cyfr-manifest.json"), Jason.encode!(manifest, pretty: true))
-
-    if Keyword.get(opts, :with_source, true) do
-      src_dir = Path.join(base, "src")
-      File.mkdir_p!(Path.join(src_dir, "src"))
-      File.write!(Path.join([src_dir, "Cargo.toml"]), "[package]\nname = \"test\"")
-      File.write!(Path.join([src_dir, "src", "lib.rs"]), "fn main() {}")
-    end
-
-    if Keyword.get(opts, :with_wasm, false) do
-      File.write!(Path.join(base, "#{type}.wasm"), "fake-wasm-binary")
-    end
-
-    if Keyword.get(opts, :with_readme, false) do
-      File.write!(Path.join(base, "README.md"), "# Test Component")
-    end
-
-    base
+    Arca.Test.UnitFixtures.tenant_component!(
+      Sanctum.TestContext.local(),
+      type,
+      publisher,
+      name,
+      version,
+      manifest: %{
+        "name" => name,
+        "type" => type,
+        "version" => version,
+        "publisher" => publisher,
+        "description" => "A test component"
+      },
+      wasm: if(Keyword.get(opts, :with_wasm, false), do: "fake-wasm-binary", else: false),
+      files: files
+    )
   end
 
   defp create_tincture_component(publisher, name, version, opts \\ []) do
+    files =
+      [
+        {"index.html", "<html><body>Hello</body></html>"},
+        {"app.js", "console.log('hello')"},
+        {"style.css", "body { color: red; }"}
+      ] ++
+        if(Keyword.get(opts, :with_source, true),
+          do: [{"src/main.js", "export default function() {}"}],
+          else: []
+        )
+
     base =
-      Arca.Adapters.Local.build_path(
+      Arca.Test.UnitFixtures.tenant_component!(
         Sanctum.TestContext.local(),
-        ["components", "tinctures", publisher, name, version]
+        "tincture",
+        publisher,
+        name,
+        version,
+        manifest: %{
+          "name" => name,
+          "type" => "tincture",
+          "version" => version,
+          "publisher" => publisher,
+          "description" => "A test tincture",
+          "tincture" => %{"entry" => "index.html"}
+        },
+        files: files
       )
-
-    manifest = %{
-      "name" => name,
-      "type" => "tincture",
-      "version" => version,
-      "publisher" => publisher,
-      "description" => "A test tincture",
-      "tincture" => %{"entry" => "index.html"}
-    }
-
-    File.mkdir_p!(base)
-    File.write!(Path.join(base, "cyfr-manifest.json"), Jason.encode!(manifest, pretty: true))
-    File.write!(Path.join(base, "index.html"), "<html><body>Hello</body></html>")
-    File.write!(Path.join(base, "app.js"), "console.log('hello')")
-    File.write!(Path.join(base, "style.css"), "body { color: red; }")
-
-    if Keyword.get(opts, :with_source, true) do
-      src_dir = Path.join(base, "src")
-      File.mkdir_p!(src_dir)
-      File.write!(Path.join(src_dir, "main.js"), "export default function() {}")
-    end
 
     if Keyword.get(opts, :with_data_db, false) do
       File.write!(Path.join(base, "data.db"), "fake-sqlite-db")

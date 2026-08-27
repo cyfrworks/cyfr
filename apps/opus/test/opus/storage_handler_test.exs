@@ -3,15 +3,7 @@
 
 defmodule Opus.StorageHandlerTest.UnreadableUsageAdapter do
   @moduledoc false
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Opus.StorageTestDouble
 
   def usage(_ctx, _path), do: {:error, :unreadable}
 end

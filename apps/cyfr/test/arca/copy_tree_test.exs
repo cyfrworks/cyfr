@@ -6,17 +6,7 @@ defmodule Arca.CopyTreeTest.RecordingAdapter do
   # Delegates to the Local adapter but records every put — stands in for an
   # object store so the bundle→storage seeding seam is exercised with a
   # non-default adapter configured.
-  @behaviour Arca.Storage
-
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   def put(ctx, path, content) do
     if pid = Process.whereis(:copy_tree_recorder), do: send(pid, {:adapter_put, path})
@@ -28,17 +18,7 @@ defmodule Arca.CopyTreeTest.VanishingAdapter do
   @moduledoc false
   # Lists one leaf more than exists, so the copy meets a file that vanished
   # between the walk and its read.
-  @behaviour Arca.Storage
-
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   def list_recursive(ctx, path) do
     with {:ok, leaves} <- Arca.Adapters.Local.list_recursive(ctx, path) do

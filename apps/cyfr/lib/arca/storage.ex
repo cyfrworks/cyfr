@@ -632,6 +632,21 @@ defmodule Arca.Storage do
   end
 
   @doc """
+  Refuse a seed write at the adapter itself — one raise, one message,
+  whichever adapter is asked. Seed media is read-only at the `Arca`
+  facade for every context; this is the backstop that keeps a direct
+  adapter call from writing into (or `rm_rf`-ing out of) the operator's
+  install media, spelled once so the adapters cannot drift apart in how
+  they refuse.
+  """
+  @spec refuse_seed_write!(path()) :: :ok
+  def refuse_seed_write!(["seed" | _]) do
+    raise ArgumentError, "seed media is read-only; no adapter accepts seed writes"
+  end
+
+  def refuse_seed_write!(_path), do: :ok
+
+  @doc """
   Validate that path segments contain no traversal attacks.
 
   Delegates to `Cyfr.PathSafety.validate_segments!/1` (the canonical

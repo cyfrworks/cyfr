@@ -5,17 +5,7 @@ defmodule Sanctum.Tenancy.CapsTest.UnreadableAdapter do
   @moduledoc false
   # A storage adapter whose usage walk always fails — the fail-closed
   # branch's only door.
-  @behaviour Arca.Storage
-
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   def usage(_ctx, _path), do: {:error, :eacces}
 end

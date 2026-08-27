@@ -455,16 +455,8 @@ defmodule Arca.Adapters.Local do
     expanded == root or String.starts_with?(expanded, root <> "/")
   end
 
-  # The seed tree is read-only at the Arca facade for every context; this
-  # clause makes the adapter refuse on its own, so a direct adapter call
-  # cannot write into (or `rm_rf` out of) the operator's seed media. S3 is
-  # already defended the same way — `physical_segments/2` raises on seed —
-  # and a direct-adapter seed write is a programming error, so raise.
-  defp refuse_seed_write!(["seed" | _]) do
-    raise ArgumentError, "seed media is read-only; no adapter accepts seed writes"
-  end
-
-  defp refuse_seed_write!(_path), do: :ok
+  # One spelling for every adapter — `Arca.Storage.refuse_seed_write!/1`.
+  defdelegate refuse_seed_write!(path), to: Arca.Storage
 
   defp seed_root_path!(seed_root) do
     if seed_root in Arca.Storage.seed_roots() do

@@ -3,33 +3,18 @@
 
 defmodule Arca.OverlayTest.FailingCopyAdapter do
   @moduledoc false
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   # Fails the materialization mid-copy: the wasm binary never lands.
   def put(_ctx, _path, "WASM-BYTES"), do: {:error, :enospc}
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
+  def put(ctx, path, content), do: Arca.Adapters.Local.put(ctx, path, content)
 end
 
 defmodule Arca.OverlayTest.DownAdapter do
   @moduledoc false
   # A tenant adapter whose listings are down — the outage shape an object
   # store produces. Everything else answers normally.
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   def list_typed(_ctx, _path), do: {:error, :adapter_down}
   def list_recursive(_ctx, _path), do: {:error, :adapter_down}

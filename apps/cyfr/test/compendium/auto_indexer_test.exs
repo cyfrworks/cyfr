@@ -4,17 +4,7 @@
 defmodule Compendium.AutoIndexerTest.OutageAdapter do
   @moduledoc false
   # Every listing fails — a storage outage. Everything else delegates.
-  @behaviour Arca.Storage
-
-  defdelegate get(ctx, path), to: Arca.Adapters.Local
-  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-  defdelegate delete(ctx, path), to: Arca.Adapters.Local
-  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+  use Arca.Storage.TestDouble
 
   def list_recursive(_ctx, _path), do: {:error, :injected_outage}
 end
@@ -62,14 +52,6 @@ defmodule Compendium.AutoIndexerTest do
     fixture_ctx =
       Sanctum.Context.build(user_id: "fixture", athanor_id: athanor, authenticated: true)
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        fixture_ctx,
-        ["components", "#{type}s", publisher, name, version]
-      )
-
-    File.mkdir_p!(dir)
-
     manifest = %{
       "type" => type,
       "version" => version,
@@ -83,10 +65,10 @@ defmodule Compendium.AutoIndexerTest do
         manifest
       end
 
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.write!(Path.join(dir, "#{type}.wasm"), @valid_wasm)
-
-    dir
+    Arca.Test.UnitFixtures.tenant_component!(fixture_ctx, type, publisher, name, version,
+      manifest: manifest,
+      wasm: @valid_wasm
+    )
   end
 
   describe "discover/1" do

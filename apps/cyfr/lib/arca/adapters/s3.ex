@@ -89,6 +89,8 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def put(%Context{} = ctx, segments, content) do
+    Arca.Storage.refuse_seed_write!(segments)
+
     case request(:put, build_key(ctx, segments), content) do
       {:ok, %{status: status}} when status in 200..299 -> :ok
       {:ok, %{status: status, body: body}} -> log_and_error("put", status, body)
@@ -98,6 +100,8 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def append(%Context{} = ctx, segments, content) do
+    Arca.Storage.refuse_seed_write!(segments)
+
     with {:ok, existing} <- read_for_append(ctx, segments) do
       merged = existing <> content
 
@@ -121,6 +125,7 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def delete(%Context{} = ctx, segments) do
+    Arca.Storage.refuse_seed_write!(segments)
     key = build_key(ctx, segments)
 
     # Real S3 answers 204 even for a key that never existed, so a bare DELETE
@@ -176,6 +181,7 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def delete_tree(%Context{} = ctx, segments) do
+    Arca.Storage.refuse_seed_write!(segments)
     prefix = build_key(ctx, segments)
 
     # An object can sit AT the tree's own key (Local's rm_rf removes it, and

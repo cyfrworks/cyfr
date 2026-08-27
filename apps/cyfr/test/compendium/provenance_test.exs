@@ -29,22 +29,16 @@ defmodule Compendium.ProvenanceTest do
     Arca.Cache.init()
 
     base = Path.join(System.tmp_dir!(), "provenance_#{System.unique_integer([:positive])}")
-    seed = Path.join(base, "seed")
-
-    bundle_version = Path.join([seed, "components", "reagents", "local", "bundled-tool", "1.0.0"])
-    File.mkdir_p!(bundle_version)
-
-    File.write!(
-      Path.join(bundle_version, "cyfr-manifest.json"),
-      Jason.encode!(%{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"})
-    )
-
-    File.write!(Path.join(bundle_version, "reagent.wasm"), @valid_wasm)
 
     prev_base = Application.fetch_env!(:cyfr, :base_path)
     prev_seed = Application.fetch_env!(:cyfr, :seed_path)
     Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :seed_path, seed)
+    Application.put_env(:cyfr, :seed_path, Path.join(base, "seed"))
+
+    Arca.Test.UnitFixtures.seed_component!("reagent", "local", "bundled-tool", "1.0.0",
+      manifest: %{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"},
+      wasm: @valid_wasm
+    )
 
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, prev_base)
@@ -67,15 +61,12 @@ defmodule Compendium.ProvenanceTest do
 
     # The athanor's own component: tenant bytes, no seed counterpart.
     own_dir = ["components", "reagents", "local", "own-tool", "0.1.0"]
-    own_local = Arca.Adapters.Local.build_path(ctx, own_dir)
-    File.mkdir_p!(own_local)
 
-    File.write!(
-      Path.join(own_local, "cyfr-manifest.json"),
-      Jason.encode!(%{"type" => "reagent", "version" => "0.1.0"})
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "reagent", "local", "own-tool", "0.1.0",
+      manifest: %{"type" => "reagent", "version" => "0.1.0"},
+      wasm: @valid_wasm
     )
 
-    File.write!(Path.join(own_local, "reagent.wasm"), @valid_wasm)
     {:ok, own} = Registry.register_from_arca(ctx, own_dir)
     assert Provenance.of(ctx, own) == {:ok, :user}
 
@@ -117,20 +108,10 @@ defmodule Compendium.ProvenanceTest do
 
   test "overview/1 answers the whole athanor with catalog and superseded flags", %{ctx: ctx} do
     # The next release ships 1.1.0 beside the registered 1.0.0.
-    seed_v2 =
-      Path.join([
-        Application.fetch_env!(:cyfr, :seed_path),
-        "components/reagents/local/bundled-tool/1.1.0"
-      ])
-
-    File.mkdir_p!(seed_v2)
-
-    File.write!(
-      Path.join(seed_v2, "cyfr-manifest.json"),
-      Jason.encode!(%{"type" => "reagent", "version" => "1.1.0"})
+    Arca.Test.UnitFixtures.seed_component!("reagent", "local", "bundled-tool", "1.1.0",
+      manifest: %{"type" => "reagent", "version" => "1.1.0"},
+      wasm: @valid_wasm
     )
-
-    File.write!(Path.join(seed_v2, "reagent.wasm"), @valid_wasm)
 
     {:ok, _} =
       Registry.publish_bytes(ctx, @valid_wasm, %{
@@ -234,20 +215,10 @@ defmodule Compendium.ProvenanceTest do
     # A later release ships the very same name and version.
     shipped_wasm = @valid_wasm <> <<1>>
 
-    seed_dir =
-      Path.join([
-        Application.fetch_env!(:cyfr, :seed_path),
-        "components/reagents/local/mine-first/1.0.0"
-      ])
-
-    File.mkdir_p!(seed_dir)
-
-    File.write!(
-      Path.join(seed_dir, "cyfr-manifest.json"),
-      Jason.encode!(%{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"})
+    Arca.Test.UnitFixtures.seed_component!("reagent", "local", "mine-first", "1.0.0",
+      manifest: %{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"},
+      wasm: shipped_wasm
     )
-
-    File.write!(Path.join(seed_dir, "reagent.wasm"), shipped_wasm)
 
     # Still the user's work: reset refuses to wipe it, delete is allowed —
     # and only then does the shipped unit show through.
@@ -302,17 +273,9 @@ defmodule Compendium.ProvenanceTest do
     {:ok, own} = Registry.register_from_arca(ctx, own_dir)
     assert {:ok, %{provenance: :user, shadows_shipped: false}} = Provenance.status(ctx, own)
 
-    seed_dir =
-      Path.join([
-        Application.fetch_env!(:cyfr, :seed_path),
-        "components/reagents/local/mine-first/1.0.0"
-      ])
-
-    File.mkdir_p!(seed_dir)
-
-    File.write!(
-      Path.join(seed_dir, "cyfr-manifest.json"),
-      Jason.encode!(%{"type" => "reagent", "version" => "1.0.0"})
+    Arca.Test.UnitFixtures.seed_component!("reagent", "local", "mine-first", "1.0.0",
+      manifest: %{"type" => "reagent", "version" => "1.0.0"},
+      wasm: false
     )
 
     assert {:ok, %{provenance: :user, drift: nil, shadows_shipped: true}} =

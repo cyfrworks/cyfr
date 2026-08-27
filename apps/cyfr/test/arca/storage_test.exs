@@ -403,6 +403,8 @@ defmodule Arca.StorageTest do
   describe "read_subtree_via/4" do
     defmodule HangingAdapter do
       @moduledoc false
+      use Arca.Storage.TestDouble
+
       def list_recursive(_ctx, path), do: {:ok, [path ++ ["stuck.txt"]]}
       def list_typed(_ctx, _path), do: {:ok, []}
 

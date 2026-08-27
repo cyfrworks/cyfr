@@ -146,6 +146,32 @@ defmodule Arca.Adapters.ContractTest do
     end
   end
 
+  # Seed media is read-only at every adapter, with ONE message — the two
+  # adapters once refused with different mechanisms and different words
+  # (`Arca.Storage.refuse_seed_write!/1` is now the single spelling).
+  defp contract_seed_writes_refused(adapter, ctx) do
+    for call <- [
+          fn -> adapter.put(ctx, ["seed", "components", "x.txt"], "x") end,
+          fn -> adapter.append(ctx, ["seed", "components", "x.txt"], "x") end,
+          fn -> adapter.delete(ctx, ["seed", "components", "x.txt"]) end,
+          fn -> adapter.delete_tree(ctx, ["seed", "components"]) end
+        ] do
+      assert_raise ArgumentError, ~r/seed media is read-only/, call
+    end
+  end
+
+  # Traversal segments refuse identically at validation, before any I/O —
+  # the same denylist on every adapter.
+  defp contract_traversal_refused(adapter, ctx) do
+    assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
+      adapter.get(ctx, ["guest", "..", "escape.txt"])
+    end
+
+    assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
+      adapter.put(ctx, ["guest", "..", "escape.txt"], "x")
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Local
   # ---------------------------------------------------------------------------
@@ -232,6 +258,14 @@ defmodule Arca.Adapters.ContractTest do
 
     test("an over-long segment is refused before any I/O", %{ctx: ctx},
       do: contract_overlong_segment_refused(Local, ctx)
+    )
+
+    test("seed writes refuse with the one message", %{ctx: ctx},
+      do: contract_seed_writes_refused(Local, ctx)
+    )
+
+    test("traversal segments refuse before any I/O", %{ctx: ctx},
+      do: contract_traversal_refused(Local, ctx)
     )
   end
 
@@ -334,6 +368,14 @@ defmodule Arca.Adapters.ContractTest do
 
     test("an over-long segment is refused before any I/O", %{ctx: ctx},
       do: contract_overlong_segment_refused(Arca.Overlay, ctx)
+    )
+
+    test("seed writes refuse with the one message", %{ctx: ctx},
+      do: contract_seed_writes_refused(Arca.Overlay, ctx)
+    )
+
+    test("traversal segments refuse before any I/O", %{ctx: ctx},
+      do: contract_traversal_refused(Arca.Overlay, ctx)
     )
   end
 
@@ -490,6 +532,14 @@ defmodule Arca.Adapters.ContractTest do
 
     test("an over-long segment is refused before any I/O", %{ctx: ctx},
       do: contract_overlong_segment_refused(S3, ctx)
+    )
+
+    test("seed writes refuse with the one message", %{ctx: ctx},
+      do: contract_seed_writes_refused(S3, ctx)
+    )
+
+    test("traversal segments refuse before any I/O", %{ctx: ctx},
+      do: contract_traversal_refused(S3, ctx)
     )
   end
 end
