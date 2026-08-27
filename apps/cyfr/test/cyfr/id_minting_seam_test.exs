@@ -10,9 +10,11 @@ defmodule Cyfr.IdMintingSeamTest do
   into a mint site; give the id its prefix instead, so every id in the
   system says what it names.
 
-  Scope is `apps/cyfr/lib` (the other umbrella apps belong to another
-  workstream); `Cyfr.UUID7` itself is the generator's home and the one
-  file allowed to spell the raw call.
+  Scope is every app that mints rows — cyfr, opus and locus. It used to be
+  cyfr alone, and the one holdout the exemption hid was the execution id:
+  `"exec_#{Ecto.UUID.generate()}"`, random v4, in a system whose id module
+  documents `execution_id/0` as v7. `Cyfr.UUID7` itself is the generator's
+  home and the one file allowed to spell the raw call.
   """
   use ExUnit.Case, async: true
 
@@ -31,7 +33,8 @@ defmodule Cyfr.IdMintingSeamTest do
 
   test "bare UUID minting exists only at the enumerated exceptions" do
     found =
-      for file <- Path.wildcard(Path.join([@root, "apps/cyfr/lib", "**/*.ex"])),
+      for dir <- ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib),
+          file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
           count = length(Regex.scan(@bare_pattern, File.read!(file))),
           count > 0,
           into: %{} do

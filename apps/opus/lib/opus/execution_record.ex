@@ -454,10 +454,15 @@ defmodule Opus.ExecutionRecord do
 
   @doc """
   Generate a unique execution ID.
+
+  Through `Cyfr.UUID7` like every other id in the system. It was the one
+  holdout on `Ecto.UUID.generate/0` — random v4, so execution ids neither
+  sorted by time nor inserted in index order, which is the property v7 was
+  chosen for and which execution records, queried by time more than
+  anything else, want most.
   """
-  def generate_id do
-    "exec_#{Ecto.UUID.generate()}"
-  end
+  @spec generate_id() :: String.t()
+  def generate_id, do: Cyfr.UUID7.execution_id()
 
   defp encode_reference(ref) when is_binary(ref), do: ref
   defp encode_reference(nil), do: nil

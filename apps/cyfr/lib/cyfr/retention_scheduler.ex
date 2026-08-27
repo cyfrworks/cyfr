@@ -107,9 +107,12 @@ defmodule Cyfr.RetentionScheduler do
       )
     end
 
+    # The athanor rides as metadata, not as text in the sentence: it is on
+    # the configured log roster, so an aggregator can filter a whole tenant's
+    # retention failures out of a shared server without parsing messages.
     for {athanor_id, kind, reason} <- errors do
-      Logger.warning(
-        "[RetentionScheduler] #{kind} cleanup failed athanor=#{athanor_id}: #{inspect(reason)}"
+      Logger.warning("[RetentionScheduler] #{kind} cleanup failed: #{inspect(reason)}",
+        athanor_id: athanor_id
       )
     end
   end
@@ -146,8 +149,8 @@ defmodule Cyfr.RetentionScheduler do
         end
 
         for {athanor_id, reason} <- errors do
-          Logger.warning(
-            "[RetentionScheduler] Blob orphan sweep failed athanor=#{athanor_id}: #{inspect(reason)}"
+          Logger.warning("[RetentionScheduler] Blob orphan sweep failed: #{inspect(reason)}",
+            athanor_id: athanor_id
           )
         end
 

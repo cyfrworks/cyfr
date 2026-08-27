@@ -128,21 +128,11 @@ defmodule Sanctum.Session do
 
   defp create_session_with_permissions(%Context{} = ctx, token, now, expires_at, permissions_json) do
     attrs = %{
-      "token_prefix" => String.slice(token, 0, 8),
-      "user_id" => ctx.user_id,
-      "email" => ctx.email,
-      "provider" => ctx.provider,
-      "permissions" => permissions_json,
-      "expires_at" => DateTime.to_iso8601(expires_at),
-      "inserted_at" => DateTime.to_iso8601(now)
-    }
-
-    parsed_attrs = %{
-      token_prefix: attrs["token_prefix"],
-      user_id: attrs["user_id"],
-      email: attrs["email"],
-      provider: attrs["provider"],
-      permissions: attrs["permissions"],
+      token_prefix: String.slice(token, 0, 8),
+      user_id: ctx.user_id,
+      email: ctx.email,
+      provider: ctx.provider,
+      permissions: permissions_json,
       # A resolved context carries its athanor; a nil marks a not-yet-resolved
       # session (user with no membership) and is re-resolved on load. No
       # scope is persisted: every session works inside its athanor, and the
@@ -152,7 +142,7 @@ defmodule Sanctum.Session do
       inserted_at: now
     }
 
-    case Arca.SessionStorage.create_session(hash_token(token), parsed_attrs) do
+    case Arca.SessionStorage.create_session(hash_token(token), attrs) do
       :ok ->
         session = %{
           token: token,

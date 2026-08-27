@@ -138,25 +138,29 @@ defmodule Opus.ComponentType do
       false
 
   """
-  @spec wasi_options(t(), map()) :: WasiP2Options.t() | nil
-  def wasi_options(type, env \\ %{})
-
   # Every executable type gets the same sandbox: `allow_http: false`, because
   # egress goes through the host function where the edge is enforced, never
   # through `wasi:http`. Three identical clauses invited the reading that the
   # types differ here. They do not.
-  def wasi_options(type, env) when type in @valid_types do
+  #
+  # The guest gets no host environment. This took an `env` argument that
+  # defaulted to `%{}` and that the one caller never passed — a lever for
+  # putting host environment variables inside the sandbox, with no caller
+  # and no test, sitting on the module whose job is to say what the sandbox
+  # allows.
+  @spec wasi_options(t()) :: WasiP2Options.t() | nil
+  def wasi_options(type) when type in @valid_types do
     %WasiP2Options{
       allow_http: false,
       inherit_stdin: false,
       inherit_stdout: true,
       inherit_stderr: true,
       args: [],
-      env: env
+      env: %{}
     }
   end
 
-  def wasi_options(_, _env), do: nil
+  def wasi_options(_), do: nil
 
   @doc """
   Returns the list of valid component types.
