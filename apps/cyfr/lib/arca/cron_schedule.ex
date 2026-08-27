@@ -125,6 +125,8 @@ defmodule Arca.CronSchedule do
   before a tenant context can be constructed (chicken-and-egg: we need
   the schedule's user_id/athanor_id to build a context).
   """
+  # arca:unscoped-ok the daemon reads the row to LEARN the athanor it must
+  # build a context from — scoping first would need the answer it is asking for.
   def get_for_daemon(id) do
     Arca.Repo.get(__MODULE__, id)
   end
@@ -160,6 +162,8 @@ defmodule Arca.CronSchedule do
   a per-schedule `Context` from `user_id`/`athanor_id` before executing, same
   rationale as `get_for_daemon/1`.
   """
+  # arca:unscoped-ok the firing loop walks every athanor by design, then runs
+  # each schedule inside a context built from its own row.
   def active_schedules do
     from(s in __MODULE__,
       where: s.status == "active",
@@ -175,6 +179,8 @@ defmodule Arca.CronSchedule do
   Returns `:claimed` or `:held`.
   """
   @spec claim(String.t(), String.t(), pos_integer()) :: :claimed | :held
+  # arca:unscoped-ok a claim races nodes over one known schedule id, before
+  # any context exists; the id came from `active_schedules/0`.
   def claim(id, node_name, ttl_seconds) when is_binary(id) and is_binary(node_name) do
     now = DateTime.utc_now()
     expires = DateTime.add(now, ttl_seconds, :second)
@@ -191,6 +197,8 @@ defmodule Arca.CronSchedule do
 
   @doc "Give a claim back once the firing is over (only the claimant's own)."
   @spec release_claim(String.t(), String.t()) :: :ok
+  # arca:unscoped-ok the claimant gives back its own claim, matched on
+  # `claimed_by` — a node can only release what it holds.
   def release_claim(id, node_name) when is_binary(id) and is_binary(node_name) do
     from(s in __MODULE__, where: s.id == ^id and s.claimed_by == ^node_name)
     |> Arca.Repo.update_all(set: [claimed_by: nil, claim_expires_at: nil])
@@ -266,6 +274,8 @@ defmodule Arca.CronSchedule do
 
   @doc "Gets a schedule by ID, scoped to the given tenant context."
   @spec get_tenant(Context.t(), String.t()) :: %__MODULE__{} | nil
+  # arca:unscoped-ok the platform scope is the operator's own read; the
+  # tenant arm below it scopes.
   def get_tenant(%Context{scope: :platform}, id) do
     Arca.Repo.get(__MODULE__, id)
   end

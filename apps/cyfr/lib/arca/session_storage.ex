@@ -87,6 +87,8 @@ defmodule Arca.SessionStorage do
   Update a session's expires_at.
   """
   @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
+  # arca:unscoped-ok sessions are addressed by token hash — the credential is
+  # the scope, and the athanor is a column on the row it finds.
   def refresh_session(token_hash, new_expires_at) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.refresh_session", fn ->
       query = from(s in Session, where: s.token_hash == ^token_hash)
@@ -102,6 +104,7 @@ defmodule Arca.SessionStorage do
   Delete a session by token_hash.
   """
   @spec delete_session(binary()) :: :ok | {:error, :database_error}
+  # arca:unscoped-ok signing out is addressed by the token being retired.
   def delete_session(token_hash) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_session", fn ->
       query = from(s in Session, where: s.token_hash == ^token_hash)
@@ -130,6 +133,8 @@ defmodule Arca.SessionStorage do
   Delete every session of one user. Returns `{:ok, count}`.
   """
   @spec delete_by_user(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  # arca:unscoped-ok crossing athanors is the point: a person denied at the
+  # door loses every session, wherever it was established.
   def delete_by_user(user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_by_user", fn ->
       {count, _} = Arca.Repo.delete_all(from(s in Session, where: s.user_id == ^user_id))
@@ -160,6 +165,8 @@ defmodule Arca.SessionStorage do
   Returns `{:ok, count}`.
   """
   @spec cleanup_expired_sessions() :: {:ok, non_neg_integer()}
+  # arca:unscoped-ok expiry is server-wide housekeeping over a column that
+  # has nothing to do with tenancy.
   def cleanup_expired_sessions do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.cleanup_expired_sessions", fn ->
       now = DateTime.utc_now()

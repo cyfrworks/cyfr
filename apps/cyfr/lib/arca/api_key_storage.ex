@@ -137,6 +137,8 @@ defmodule Arca.ApiKeyStorage do
   correct and authoritative path regardless of how the deployment is configured.
   """
   @spec get_key_by_hash(binary()) :: {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
+  # arca:unscoped-ok a key hash is a 192-bit globally-unique credential; the
+  # athanor comes FROM the row, so there is no context to scope by yet.
   def get_key_by_hash(key_hash) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_hash", fn ->
       query =
@@ -194,6 +196,8 @@ defmodule Arca.ApiKeyStorage do
   Revoke every live key a person created, across athanors. Returns the count.
   """
   @spec revoke_all_created_by(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  # arca:unscoped-ok crossing athanors is the point: a person losing standing
+  # loses every key they made, wherever they made it.
   def revoke_all_created_by(user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_all_created_by", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

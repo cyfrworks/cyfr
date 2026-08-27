@@ -357,6 +357,8 @@ defmodule Arca.Execution do
   finished or been failed by the sweeper).
   """
   @spec renew_lease(String.t(), DateTime.t()) :: non_neg_integer()
+  # arca:unscoped-ok the runner renews the lease on the row it is running;
+  # the id comes from trusted runtime state, never from a request.
   def renew_lease(id, %DateTime{} = until) do
     {count, _} =
       from(e in __MODULE__, where: e.id == ^id and e.status == "running")

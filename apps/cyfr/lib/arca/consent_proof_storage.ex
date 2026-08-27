@@ -29,6 +29,8 @@ defmodule Arca.ConsentProofStorage do
   who read the row an instant before the winner's delete landed.
   """
   @spec take(String.t()) :: {:ok, ConsentProof.t()} | {:error, :not_found}
+  # arca:unscoped-ok proofs are token-keyed and single-use; the hash is the
+  # whole address, and the row names its own athanor.
   def take(token_hash) when is_binary(token_hash) do
     # Deliberate default: an outage reads as an unusable proof (:not_found) —
     # fail closed, a proof the store cannot confirm consumed never grants.

@@ -3,73 +3,159 @@
 
 defmodule Arca.UnscopedQuerySeamTest do
   @moduledoc """
-  Mechanical guard for the greppable marker of intentionally unscoped
-  row-plane queries: `# arca:unscoped-ok <why>`. Style follows
-  `Arca.DbRescueSeamTest`: read the sources, compare literals — a failure
-  means either a new unscoped query was tagged without being added to the
-  roster below (review it: is crossing tenants really this site's job?),
-  or a tagged site moved/disappeared and the roster is stale.
+  Every row-plane query over a tenant-keyed table either scopes itself or
+  says why it does not.
 
-  The full "every Repo call flows through where_tenant/where_athanor or
-  carries a tag" assertion is deliberately not attempted: whole tables are
-  legitimately not tenant-keyed (sessions and users are user-plane, consent
-  proofs are token-keyed, the door store is server-wide), so a blanket scan
-  would drown the five real cross-tenant sites in false positives. Pinning
-  the tags keeps them greppable and reviewed instead.
+  This used to be a hand-kept roster of five files, counted by literal —
+  and it under-counted, because a query only entered the roster if someone
+  remembered to tag it first. `Arca.CronSchedule`'s four daemon queries had
+  their reasons written out in prose docs and no tag at all, so the marker
+  the seam existed to keep greppable was not on the sites that most needed
+  it. Counting tags cannot find a query that was never tagged.
+
+  What makes the check possible without drowning in false positives is that
+  the tenant-keyed tables name themselves: a schema with `field :athanor_id`
+  is a tenant table, and one without is not. Sessions, users, door entries
+  and registry tokens are addressed by credential or by person, so they are
+  simply out of scope rather than exceptions to be listed. The roster is
+  derived, not written down.
+
+  A query counts as scoped if it mentions `where_tenant`, `where_athanor`,
+  or `athanor_id` — the last covers the bare-athanor storage APIs, which
+  filter on the column directly. Anything else carries
+  `# arca:unscoped-ok <why>` on or above the function head.
   """
   use ExUnit.Case, async: true
 
   @root Path.expand("../../../..", __DIR__)
 
-  @tag_pattern ~r/# arca:unscoped-ok\s+\S/
+  # `Repo.` as well as `Arca.Repo.` — half the modules alias it.
+  @repo_verbs ~r/\bRepo\.(all|one|update_all|delete_all|aggregate|exists\?|get|get_by)\b/
+  @scoped ~r/where_tenant|where_athanor|athanor_id/
+  @tag_marker ~r/#\s*arca:unscoped-ok\s+\S/
 
-  # The enumerated intentionally-unscoped sites: every file allowed to carry
-  # the tag, with how many tagged sites it holds. Each tag sits beside the
-  # query it justifies, with the reason on the same comment.
-  @allowed %{
-    # with_running_turn/0: boot recovery walks every athanor's mid-turn
-    # conversations, then reconciles each inside its own context.
-    "apps/cyfr/lib/arca/conversation_storage.ex" => 1,
-    # list_stale_running/2 (the cross-tenant sweeper scan) and
-    # mark_failed_if_running/2 (ids from trusted runtime state only).
-    "apps/cyfr/lib/arca/execution.ex" => 2,
-    # purge_expired/1: proofs are token-keyed, the sweep is server-wide.
-    "apps/cyfr/lib/arca/consent_proof_storage.ex" => 1,
-    # hashes_by_user/1: sessions are user-owned rows; user_id is the scope.
-    "apps/cyfr/lib/arca/session_storage.ex" => 1
-  }
+  defp sources do
+    [@root, "apps/cyfr/lib", "**/*.ex"] |> Path.join() |> Path.wildcard()
+  end
 
-  test "arca:unscoped-ok tags exist only at the enumerated sites" do
-    found =
-      for file <- Path.wildcard(Path.join([@root, "apps/cyfr/lib", "**/*.ex"])),
-          count = length(Regex.scan(@tag_pattern, File.read!(file))),
-          count > 0,
-          into: %{} do
-        {Path.relative_to(file, @root), count}
+  # Modules whose schema declares an athanor column — the tables a query can
+  # be scoped to in the first place.
+  defp tenant_schemas do
+    for path <- sources(),
+        source = File.read!(path),
+        source =~ ~r/^\s*field :athanor_id/m,
+        [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),
+        into: MapSet.new(),
+        do: module
+  end
+
+  # Top-level function bodies, paired with the line their head is on. The
+  # contiguous `#` comment lines directly above the head come with it, since
+  # that is where the tag goes — `@doc` blocks stay out, so prose mentioning
+  # an athanor cannot pass for scoping.
+  defp functions(lines) do
+    starts = for {line, i} <- Enum.with_index(lines), line =~ ~r/^  defp? /, do: i
+
+    # A function ends where the NEXT one's comment preamble begins, so a tag
+    # is counted once — against the function it sits above, not also against
+    # the one it happens to follow.
+    bounds =
+      Enum.zip(
+        starts,
+        Enum.map(Enum.drop(starts, 1), &(&1 - length(comments_above(lines, &1)))) ++
+          [length(lines)]
+      )
+
+    for {from, to} <- bounds do
+      preamble = comments_above(lines, from)
+      body = Enum.slice(lines, from, max(to - from, 1))
+      {from + 1, Enum.join(preamble ++ body, "\n")}
+    end
+  end
+
+  defp comments_above(lines, index) do
+    lines
+    |> Enum.take(index)
+    |> Enum.reverse()
+    |> Enum.take_while(&(&1 =~ ~r/^\s*#/))
+    |> Enum.reverse()
+  end
+
+  defp queried_schemas(body, enclosing, tenant_schemas, by_short) do
+    named = Regex.scan(~r/\b([A-Z][\w.]*)\b/, body) |> Enum.map(&Enum.at(&1, 1))
+
+    from_self =
+      if String.contains?(body, "__MODULE__") and enclosing in tenant_schemas,
+        do: [enclosing],
+        else: []
+
+    named
+    |> Enum.map(fn name ->
+      if MapSet.member?(tenant_schemas, name),
+        do: name,
+        else: Map.get(by_short, name |> String.split(".") |> List.last())
+    end)
+    |> Enum.concat(from_self)
+    |> Enum.filter(&(&1 && MapSet.member?(tenant_schemas, &1)))
+    |> Enum.uniq()
+  end
+
+  test "an unscoped query over a tenant-keyed table says why" do
+    schemas = tenant_schemas()
+
+    assert MapSet.size(schemas) > 10,
+           "expected the tenant-keyed schemas to be found, got #{MapSet.size(schemas)}"
+
+    by_short = for s <- schemas, into: %{}, do: {s |> String.split(".") |> List.last(), s}
+
+    offenders =
+      for path <- sources(),
+          source = File.read!(path),
+          [_, enclosing] = Regex.run(~r/^defmodule ([\w.]+) do/m, source) || [nil, nil],
+          {line, body} <- functions(String.split(source, "\n")),
+          body =~ @repo_verbs,
+          not (body =~ @scoped),
+          not (body =~ @tag_marker),
+          tables = queried_schemas(body, enclosing, schemas, by_short),
+          tables != [] do
+        head = body |> String.split("\n") |> hd() |> String.trim()
+        "#{Path.relative_to(path, @root)}:#{line}: #{head} (#{Enum.join(tables, ", ")})"
       end
 
-    new_sites =
-      for {file, count} <- found,
-          count > Map.get(@allowed, file, 0),
-          do: {file, count - Map.get(@allowed, file, 0)}
-
-    assert new_sites == [],
+    assert offenders == [],
            """
-           `# arca:unscoped-ok` tags outside this test's roster:
+           These query a tenant-keyed table without scoping it and without
+           saying why:
 
-           #{Enum.map_join(Enum.sort(new_sites), "\n", fn {f, n} -> "  #{f} (+#{n})" end)}
+           #{Enum.map_join(Enum.sort(offenders), "\n", &"  #{&1}")}
 
-           A row-plane query that deliberately crosses tenants carries the
-           tag beside it with its reason — and a row here, so every such
-           site stays enumerated and reviewed. If the query can be scoped,
-           scope it through `Arca.QueryHelpers.where_tenant/2` or
-           `where_athanor/2` instead.
+           Scope it through `Arca.QueryHelpers.where_tenant/2` or
+           `where_athanor/2`. If crossing tenants is genuinely this site's
+           job, put `# arca:unscoped-ok <why>` on the function head so the
+           reason is greppable and reviewed — a prose docstring is not the
+           marker, because nothing can grep for the absence of one.
            """
+  end
 
-    stale = for {file, count} <- @allowed, Map.get(found, file, 0) != count, do: file
+  test "the tag is only on functions that actually query" do
+    stale =
+      for path <- sources(),
+          source = File.read!(path),
+          {line, body} <- functions(String.split(source, "\n")),
+          body =~ @tag_marker,
+          not (body =~ @repo_verbs) do
+        head = body |> String.split("\n") |> hd() |> String.trim()
+        "#{Path.relative_to(path, @root)}:#{line}: #{head}"
+      end
 
     assert stale == [],
-           "stale roster entries (tagged site count changed — update the " <>
-             "roster and its comments): #{inspect(Enum.sort(stale))}"
+           """
+           `# arca:unscoped-ok` on a function that no longer queries:
+
+           #{Enum.map_join(Enum.sort(stale), "\n", &"  #{&1}")}
+
+           Remove the tag — a marker that outlives its query trains readers
+           to ignore it.
+           """
   end
 end

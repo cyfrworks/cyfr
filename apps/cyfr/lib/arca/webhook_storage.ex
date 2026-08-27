@@ -87,6 +87,8 @@ defmodule Arca.WebhookStorage do
   > decrypt only what is needed for signature verification.
   """
   @spec get_by_slug(String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
+  # arca:unscoped-ok the slug IS the public address a sender posts to; the
+  # athanor is read off the row and every later step is scoped by it.
   def get_by_slug(slug) when is_binary(slug) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_slug", fn ->
       query = from(w in Webhook, where: w.slug == ^slug, limit: 1)

@@ -106,6 +106,10 @@ defmodule Arca.ConversationStorage do
   def delete(%Context{} = ctx, id) when is_binary(id) do
     with {:ok, conv} <- get(ctx, id),
          :ok <- delete_blobs(ctx, conv.id) do
+      # arca:unscoped-ok the messages are scoped transitively — `get(ctx, id)`
+      # above already proved this conversation is the caller's athanor's, and
+      # a message belongs to exactly one conversation.
+      #
       # Messages cascade through the FK; delete them explicitly as well so
       # SQLite files opened without foreign_keys=ON cannot leave orphans.
       Repo.transaction(fn ->
