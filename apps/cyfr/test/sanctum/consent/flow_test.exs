@@ -563,6 +563,35 @@ defmodule Sanctum.Consent.FlowTest do
                })
     end
 
+    test "a second implicit binding is refused too, with no needs block", %{ctx: ctx} do
+      # The refusal was guarded `when declared != nil`, which exempted the
+      # one case its own comment describes: a manifest with no needs block,
+      # whose bindings are all the implicit "@ingress" slot. Both entered the
+      # approved digest and `build_blob/2` rode only the first — a consent
+      # that says it approved a credential it did not.
+      publish!(ctx, "flow-implicit-two")
+      a = entry!(ctx)
+      b = entry!(ctx)
+
+      assert {:error, :multiple_source_bindings_unrepresentable} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-implicit-two",
+                 bindings: [
+                   %{need: "@ingress", entry_id: a.id},
+                   %{need: "@ingress", entry_id: b.id}
+                 ]
+               })
+
+      # One still binds.
+      assert {:ok, preview} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-implicit-two",
+                 bindings: [%{need: "@ingress", entry_id: a.id}]
+               })
+
+      assert is_binary(preview.commit_digest)
+    end
+
     test "setup readiness joins the declared needs", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-ready")
       {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)

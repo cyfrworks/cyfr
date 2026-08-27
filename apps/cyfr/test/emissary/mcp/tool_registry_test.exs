@@ -9,7 +9,7 @@ defmodule Emissary.MCP.ToolRegistryTest.CrashingProvider do
   def handle(_tool, _ctx, %{"action" => "exit"}), do: exit(:provider_exit)
 
   def handle(_tool, _ctx, %{"action" => "unauthorized"}),
-    do: raise(Sanctum.UnauthorizedError, action: :athanor_required)
+    do: raise(Sanctum.UnauthorizedError, reason: :missing_tenant)
 
   def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
 end
@@ -299,10 +299,15 @@ defmodule Emissary.MCP.ToolRegistryTest do
       register_crashing_tool()
       ctx = Sanctum.TestContext.local()
 
-      assert {:error, {:unauthorized, message}} =
+      # The reason travels, not a rendered sentence: the wire boundary
+      # renders a raised refusal exactly as it renders a returned one, which
+      # is how it gets its own JSON-RPC code instead of everything landing
+      # on :insufficient_permissions.
+      assert {:error, reason} =
                ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
 
-      assert message =~ "athanor_required"
+      assert reason == :missing_tenant
+      assert Sanctum.Unauthorized.reason?(reason)
       assert Process.alive?(self())
     end
 

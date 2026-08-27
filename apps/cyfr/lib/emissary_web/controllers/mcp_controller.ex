@@ -111,10 +111,16 @@ defmodule EmissaryWeb.MCPController do
     # (outside the tool-task boundary, which converts its own) — answered
     # in the JSON-RPC envelope as the auth error it is, never as a 500.
     e in Sanctum.UnauthorizedError ->
+      # The reason picks the code: absent identity is `:auth_required`,
+      # which is what a client retries on. Answering every refusal
+      # `:insufficient_permissions` told an unauthenticated caller their
+      # permissions were the problem.
+      code = Sanctum.Unauthorized.code(e.reason)
+
       respond_error(
         conn,
-        :insufficient_permissions,
-        Message.encode_error(params["id"], :insufficient_permissions, Exception.message(e))
+        code,
+        Message.encode_error(params["id"], code, Exception.message(e))
       )
   end
 

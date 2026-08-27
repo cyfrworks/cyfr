@@ -442,9 +442,14 @@ defmodule Sanctum.Consent.Commit do
       end
     end)
     |> case do
-      {:ok, [_, _ | _], _entries} when declared != nil ->
+      {:ok, [_, _ | _], _entries} ->
         # One credential per execution closure (§3.11): a direct-run source
-        # holds exactly one, so a second binding has nowhere to ride.
+        # holds exactly one, so a second binding has nowhere to ride. This
+        # was guarded `when declared != nil`, which exempted the very case
+        # the sentence describes — a manifest with no needs block, whose
+        # bindings are all the implicit "@ingress" slot. Two of them passed,
+        # both entered the approved digest, and `build_blob/2` rode the
+        # first: a consent that says it approved a credential it did not.
         {:error, :multiple_source_bindings_unrepresentable}
 
       {:ok, bindings, entries} ->

@@ -3,33 +3,39 @@
 
 defmodule Sanctum.UnauthorizedError do
   @moduledoc """
-  Raised when a context lacks required permissions or access level.
+  The raised form of a `Sanctum.Unauthorized` refusal.
+
+  Two control-flow shapes, one vocabulary. Most gates refuse with
+  `{:error, reason}`; the `!` accessors (`Sanctum.Context.tenant!/1`,
+  `athanor!/1`) have no tuple to return and raise instead. What raised used
+  to carry its own words — "Unauthorized for action: athanor_required" —
+  so the same refusal read one way when returned and another when raised,
+  and a surface that rescued it had nothing to branch on but the prose.
+
+  It now carries the reason itself: `Sanctum.Unauthorized.message/2` writes
+  the sentence and `code/1` maps it to a JSON-RPC code, exactly as for the
+  returned form.
 
   Carries a `Plug.Exception` status of 403, so a raise that escapes to the
-  endpoint renders as the authorization refusal it is — never a 500. The
-  MCP surface additionally maps it to the `:insufficient_permissions`
-  JSON-RPC code (the controller's rescue for the request process, the tool
-  registry's task boundary for handlers).
+  endpoint renders as the authorization refusal it is — never a 500.
   """
 
-  defexception [:permission, :action, :message]
+  defexception [:reason, :message]
 
   @impl true
-  def exception(opts) do
-    cond do
-      Keyword.has_key?(opts, :permission) ->
-        permission = Keyword.fetch!(opts, :permission)
-        msg = "Missing required permission: #{permission}"
-        %__MODULE__{permission: permission, action: nil, message: msg}
+  def exception(opts) when is_list(opts) do
+    opts |> Keyword.get(:reason, :unauthenticated) |> build()
+  end
 
-      Keyword.has_key?(opts, :action) ->
-        action = Keyword.fetch!(opts, :action)
-        msg = "Unauthorized for action: #{action}"
-        %__MODULE__{permission: nil, action: action, message: msg}
+  def exception(reason), do: build(reason)
 
-      true ->
-        %__MODULE__{permission: nil, action: nil, message: "Unauthorized"}
-    end
+  defp build(reason) do
+    message =
+      if Sanctum.Unauthorized.reason?(reason),
+        do: Sanctum.Unauthorized.message(reason),
+        else: "Unauthorized"
+
+    %__MODULE__{reason: reason, message: message}
   end
 end
 

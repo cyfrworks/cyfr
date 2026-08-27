@@ -446,7 +446,7 @@ defmodule Sanctum.Context do
   def require_tenant!(%__MODULE__{} = ctx) do
     case tenant_gate(ctx) do
       :ok -> ctx
-      {:error, _} -> raise Sanctum.UnauthorizedError, action: :tenant_required
+      {:error, _} -> raise Sanctum.UnauthorizedError, reason: :missing_tenant
     end
   end
 
@@ -463,7 +463,7 @@ defmodule Sanctum.Context do
       when is_binary(athanor_id) and athanor_id != "",
       do: athanor_id
 
-  def athanor!(%__MODULE__{}), do: raise(Sanctum.UnauthorizedError, action: :athanor_required)
+  def athanor!(%__MODULE__{}), do: raise(Sanctum.UnauthorizedError, reason: :missing_tenant)
 
   @doc """
   Focus the context on an athanor: the one narrowing entry every LiveView

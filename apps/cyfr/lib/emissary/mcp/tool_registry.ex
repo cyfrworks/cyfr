@@ -915,12 +915,16 @@ defmodule Emissary.MCP.ToolRegistry do
         {:ok, result} ->
           result
 
-        {:exit, {%Sanctum.UnauthorizedError{} = exception, _stacktrace}} ->
+        {:exit, {%Sanctum.UnauthorizedError{reason: reason}, _stacktrace}} ->
           # An authorization refusal that surfaced as a raise inside the
           # handler (`Context.athanor!/1`, `require_tenant!/1`) is a
           # refusal, not a crash: no error log, and the router answers it
           # with the auth error code instead of an isError "crashed" text.
-          {:error, {:unauthorized, Exception.message(exception)}}
+          # The reason travels, not the sentence — the wire boundary renders
+          # it the same way it renders the returned form, which is how the
+          # raised one gets its own code rather than everything landing on
+          # `:insufficient_permissions`.
+          {:error, reason}
 
         {:exit, {exception, stacktrace}} when is_exception(exception) ->
           Logger.error("Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}")
