@@ -365,4 +365,49 @@ defmodule Prism.ConversationCompactorTest do
       %{"role" => role, "content" => "Recent #{i}"}
     end)
   end
+
+  describe "size estimation of blocks it does not recognise" do
+    test "a tool-call block is measured, not charged a flat 50 characters" do
+      # A `tool_use` carrying its arguments is the bulk of a tool-heavy
+      # history. Charging each one 50 characters meant a megabyte of
+      # arguments estimated as a few hundred bytes, compaction concluded it
+      # was well under budget, and the provider rejected the request nobody
+      # had trimmed.
+      big_args = %{"path" => String.duplicate("x", 40_000)}
+
+      messages =
+        for i <- 1..30 do
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{
+                "type" => "tool_use",
+                "id" => "t#{i}",
+                "name" => "files.read",
+                "input" => big_args
+              }
+            ]
+          }
+        end
+
+      compacted = Prism.ConversationCompactor.compact(messages)
+
+      refute compacted == messages,
+             "a history of ~1.2MB of tool arguments was passed through untouched"
+    end
+
+    test "an unencodable term does not take the turn down" do
+      messages = [%{"role" => "user", "content" => [%{"pid" => self()}]}]
+      assert is_list(Prism.ConversationCompactor.compact(messages))
+    end
+
+    test "small histories still pass through untouched" do
+      messages = [
+        %{"role" => "user", "content" => "hello"},
+        %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "hi"}]}
+      ]
+
+      assert Prism.ConversationCompactor.compact(messages) == messages
+    end
+  end
 end

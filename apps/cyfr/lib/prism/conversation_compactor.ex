@@ -205,11 +205,13 @@ defmodule Prism.ConversationCompactor do
       is_binary(content) -> byte_size(content)
       is_list(content) -> Enum.reduce(content, 0, &(block_chars(&1) + &2))
       is_list(parts) -> Enum.reduce(parts, 0, &(block_chars(&1) + &2))
-      true -> 0
+      # A shape this function does not recognise still goes to the provider,
+      # so it is measured rather than assumed weightless.
+      true -> encoded_size(msg)
     end
   end
 
-  defp message_chars(_), do: 0
+  defp message_chars(msg), do: encoded_size(msg)
 
   defp block_chars(%{"text" => text}) when is_binary(text), do: byte_size(text)
   defp block_chars(%{"content" => text}) when is_binary(text), do: byte_size(text)
@@ -218,7 +220,22 @@ defmodule Prism.ConversationCompactor do
     do: Enum.reduce(nested, 0, &(block_chars(&1) + &2))
 
   defp block_chars(%{"functionResponse" => %{"response" => resp}}) when is_map(resp),
-    do: byte_size(Jason.encode!(resp))
+    do: encoded_size(resp)
 
-  defp block_chars(_), do: 50
+  # Every other block — a `tool_use` carrying its arguments, a `tool_calls`
+  # entry, an image part — was charged a flat 50 characters. A tool-heavy
+  # history is mostly those, so a megabyte of arguments estimated as a few
+  # hundred bytes, compaction concluded it was well under budget, and the
+  # provider rejected the request nobody had trimmed.
+  defp block_chars(block), do: encoded_size(block)
+
+  # The size the thing will actually be on the wire. `Jason.encode/1` rather
+  # than `encode!/1`: this is an estimate on the way to a decision, and a
+  # term it cannot encode must not take the turn down.
+  defp encoded_size(term) do
+    case Jason.encode(term) do
+      {:ok, json} -> byte_size(json)
+      {:error, _} -> term |> inspect(limit: 200, printable_limit: 4096) |> byte_size()
+    end
+  end
 end
