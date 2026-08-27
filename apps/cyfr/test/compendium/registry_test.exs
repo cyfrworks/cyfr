@@ -1047,6 +1047,45 @@ defmodule Compendium.RegistryTest do
     end
   end
 
+  describe "the row lands only after the unit is whole" do
+    test "every published unit carries its sentinel — completeness and rows agree", %{ctx: ctx} do
+      assert {:ok, _} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "sentineled",
+                 version: "1.0.0",
+                 type: "reagent"
+               })
+
+      unit = ["components", "reagents", "local", "sentineled", "1.0.0"]
+      assert Arca.exists?(ctx, unit ++ [Compendium.ComponentPath.manifest_name()])
+      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :own}
+    end
+
+    test "a refused row rolls the committed unit back — no orphan for the scanner", %{ctx: ctx} do
+      manifest =
+        Jason.encode!(%{
+          "name" => "rolled-back",
+          "version" => "1.0.0",
+          "type" => "reagent",
+          "publisher" => "local",
+          "dependencies" => %{"static" => [%{"ref" => "not a valid ref !!"}]}
+        })
+
+      assert {:error, _} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "rolled-back",
+                 version: "1.0.0",
+                 type: "reagent",
+                 manifest: manifest
+               })
+
+      assert {:error, :not_found} = Registry.get(ctx, "rolled-back", "1.0.0")
+
+      assert {:ok, []} =
+               Arca.list_recursive(ctx, ["components", "reagents", "local", "rolled-back"])
+    end
+  end
+
   describe "remote-origin publishes — local namespace refusal" do
     test "publish_bytes refuses remote content into the local namespace", %{ctx: ctx} do
       assert {:error, {:namespace_rejected, msg}} =

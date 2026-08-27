@@ -165,11 +165,10 @@ defmodule Compendium.ForkTest do
           <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
           <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-      create_source_component("reagent", "acme", "lineage-tool", "1.0.0", with_wasm: true)
-      create_source_component("reagent", "acme", "lineage-tool", "1.1.0", with_wasm: true)
-
       # Pulled components carry rows; upstream_status reads what this
-      # install KNOWS, so the upstream line must be registered.
+      # install KNOWS, so the upstream line must be registered. The
+      # publish commits the unit wholesale, so the fixture's src/ tree is
+      # laid AFTER it — as a pull's unit files would ride the commit.
       for version <- ["1.0.0", "1.1.0"] do
         {:ok, _} =
           Compendium.Registry.publish_bytes(ctx, valid_wasm, %{
@@ -179,6 +178,9 @@ defmodule Compendium.ForkTest do
             publisher: "acme"
           })
       end
+
+      create_source_component("reagent", "acme", "lineage-tool", "1.0.0", with_wasm: true)
+      create_source_component("reagent", "acme", "lineage-tool", "1.1.0", with_wasm: true)
 
       source_ref = parse_ref!("r:acme.lineage-tool:1.0.0")
       assert {:ok, _} = Fork.fork(ctx, source_ref, name: "my-lineage")

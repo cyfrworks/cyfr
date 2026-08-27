@@ -89,6 +89,7 @@ defmodule Compendium.Registry do
   def publish_bytes(%Context{} = ctx, wasm_bytes, metadata, opts \\ [])
       when is_binary(wasm_bytes) and is_map(metadata) do
     allow_overwrite = Keyword.get(opts, :allow_overwrite, false)
+    unit_files = Keyword.get(opts, :unit_files, [])
 
     with {:ok, name} <- get_required(metadata, :name),
          {:ok, version} <- get_required(metadata, :version),
@@ -103,8 +104,8 @@ defmodule Compendium.Registry do
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_capability_blocks(manifest_map),
-         # Before store_wasm: a refused republish must leave no bytes behind
-         # for the scanner to pick up.
+         # Before the unit commit: a refused republish must leave no bytes
+         # behind for the scanner to pick up.
          :ok <-
            check_release_immutable(
              ctx,
@@ -115,17 +116,98 @@ defmodule Compendium.Registry do
              publisher,
              component_type
            ),
-         :ok <- Sanctum.Tenancy.Caps.check_storage(ctx, byte_size(wasm_bytes)),
-         :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
-         {:ok, component} <-
-           build_component(ctx, name, version, metadata, validation, publisher,
-             manifest: manifest_bytes,
-             manifest_map: manifest_map
+         {:ok, _written} <-
+           commit_component_unit(
+             ctx,
+             component_type,
+             publisher,
+             name,
+             version,
+             wasm_bytes,
+             manifest_bytes,
+             unit_files
            ),
-         {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
-         :ok <- validate_dependencies(component, manifest_bytes) do
+         {:ok, component} <-
+           register_row_or_roll_back(ctx, name, version, metadata, validation, publisher,
+             type: component_type,
+             manifest: manifest_bytes,
+             manifest_map: manifest_map,
+             allow_overwrite: allow_overwrite,
+             source: Keyword.get(opts, :source)
+           ) do
       invalidate_executor_caches(ctx)
       {:ok, component}
+    end
+  end
+
+  # One unit commit before the row: the artifact, any extra unit files (a
+  # pull's README and src/ tree), and the manifest sentinel — synthesized
+  # minimal when the publish carries none, so every published unit reads
+  # complete and completeness and rows can never disagree. The storage
+  # cap sees the whole incoming unit, not just the artifact.
+  defp commit_component_unit(ctx, type, publisher, name, version, wasm_bytes, manifest, extras) do
+    version_dir = ComponentPath.version_dir(type, publisher, name, version)
+    wasm_rel = [List.last(ComponentPath.wasm_path(type, publisher, name, version))]
+
+    total =
+      byte_size(wasm_bytes) + Enum.sum(for {_rel, bytes} <- extras, do: byte_size(bytes))
+
+    sentinel =
+      manifest ||
+        Jason.encode!(%{
+          "name" => name,
+          "version" => version,
+          "type" => type,
+          "publisher" => publisher
+        })
+
+    case Arca.Overlay.commit_unit(ctx, version_dir, {:files, [{wasm_rel, wasm_bytes} | extras]},
+           cap: {:checked, total},
+           sentinel: sentinel
+         ) do
+      {:ok, _written} = ok -> ok
+      {:error, {:limit_reached, _, _}} = cap -> cap
+      {:error, :storage_unverifiable} = unverifiable -> unverifiable
+      {:error, reason} -> {:error, {:wasm_write_failed, reason}}
+    end
+  end
+
+  # The row lands only after the unit is whole — and a refused row must
+  # not leave an orphaned unit behind for the scanner to read as a
+  # component. Dependency refs validate before the row is saved.
+  defp register_row_or_roll_back(ctx, name, version, metadata, validation, publisher, opts) do
+    build_opts =
+      [manifest: opts[:manifest], manifest_map: opts[:manifest_map]] ++
+        if opts[:source], do: [source: opts[:source]], else: []
+
+    result =
+      with {:ok, component} <-
+             build_component(ctx, name, version, metadata, validation, publisher, build_opts),
+           :ok <- validate_dependencies(component, opts[:manifest]),
+           {:ok, _} <-
+             save_component(ctx, component, opts[:allow_overwrite], name, version) do
+        {:ok, component}
+      end
+
+    case result do
+      {:ok, _component} = ok ->
+        ok
+
+      {:error, _} = error ->
+        version_dir = ComponentPath.version_dir(opts[:type], publisher, name, version)
+
+        case Arca.delete_tree(ctx, version_dir) do
+          :ok ->
+            :ok
+
+          {:error, cleanup} ->
+            Logger.warning(
+              "[Compendium.Registry] unit cleanup after refused row failed for " <>
+                "#{Enum.join(version_dir, "/")}: #{inspect(cleanup)}"
+            )
+        end
+
+        error
     end
   end
 
@@ -187,7 +269,11 @@ defmodule Compendium.Registry do
              # The metadata manifest — the pull path's authoritative config
              # blob — is the commit's sentinel when present; absent, the
              # archive's own manifest completes the unit.
-             sentinel: manifest_bytes
+             sentinel: manifest_bytes,
+             # Extra unit files (a pull's README and src/ tree) ride the
+             # same commit; listed after the archive's entries, so a layer
+             # wins any name collision with an archived file.
+             unit_files: Keyword.get(opts, :unit_files, [])
            ),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
@@ -605,18 +691,6 @@ defmodule Compendium.Registry do
     Compendium.ComponentPath.wasm_path(type, publisher, name, version)
   end
 
-  defp store_wasm(ctx, type, publisher, name, version, bytes) do
-    # The path is tenant-relative; an unresolved athanor on `ctx` raises in
-    # Arca.Storage.tenant_segments/1, the same fail-closed guard as the
-    # data/ tree.
-    path = component_storage_path(type, publisher, name, version)
-
-    case Arca.put(ctx, path, bytes) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:wasm_write_failed, reason}}
-    end
-  end
-
   # Extract a tincture tar+gzip archive, validate it, and store files to Arca.
   # Returns {:ok, %{digest, size, exports}} on success.
   # Strip SQLite runtime artifacts defensively; `data.db` itself is allowed
@@ -655,6 +729,9 @@ defmodule Compendium.Registry do
                     version
                   )
 
+                extras = Keyword.get(opts, :unit_files, [])
+                extras_bytes = Enum.sum(for {_rel, bytes} <- extras, do: byte_size(bytes))
+
                 # One unit commit: the validated files stream from the
                 # scratch dir one at a time (lazy reads keep the memory
                 # bound), the manifest sentinel lands last, a partial
@@ -664,10 +741,10 @@ defmodule Compendium.Registry do
                   {:files,
                    Enum.map(entries, fn {rel, path} ->
                      {rel, fn -> read_scratch(tmp_dir, path) end}
-                   end)}
+                   end) ++ extras}
 
                 case Arca.Overlay.commit_unit(ctx, version_dir, source,
-                       cap: {:checked, validation.size},
+                       cap: {:checked, validation.size + extras_bytes},
                        sentinel: Keyword.get(opts, :sentinel)
                      ) do
                   {:ok, _written} ->

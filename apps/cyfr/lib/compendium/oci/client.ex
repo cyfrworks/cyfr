@@ -63,6 +63,12 @@ defmodule Compendium.OCI.Client do
          {:ok, source_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
          {:ok, sig_meta} <- verify_signature(oci_ref),
+         # README and src/ ride the same unit commit as the artifact and
+         # the manifest sentinel: one unit, one outcome — a local write
+         # failure fails the pull and rolls the unit back, and the DB row
+         # is minted only after the unit is whole. Fetch failures for the
+         # optional layers stay best-effort (maybe_fetch_layer above).
+         unit_files = source_unit_files(source_bytes) ++ readme_unit_files(readme_bytes),
          {:ok, component} <-
            store_component(
              ctx,
@@ -71,15 +77,9 @@ defmodule Compendium.OCI.Client do
              content_bytes,
              parsed,
              config_bytes,
-             sig_meta
-           ),
-         :ok <- maybe_store_readme(ctx, component_ref, readme_bytes),
-         :ok <- maybe_store_source(ctx, component_ref, source_bytes),
-         # The manifest — the unit's completion sentinel — lands LAST
-         # (the `Arca.put_files/2` discipline): a crash mid-pull must not
-         # leave a unit the scanners read as complete while its files are
-         # missing.
-         :ok <- maybe_store_manifest(ctx, component_ref, config_bytes) do
+             sig_meta,
+             unit_files
+           ) do
       # Cache manifest for future use, under the same key fetch_manifest
       # reads (a digest-pinned pull must never overwrite a tag entry).
       tag = ref.tag || ref.digest || "latest"
@@ -561,7 +561,8 @@ defmodule Compendium.OCI.Client do
          content_bytes,
          parsed,
          config_bytes,
-         sig_meta
+         sig_meta,
+         unit_files
        ) do
     metadata = %{
       name: component_ref.name,
@@ -582,18 +583,22 @@ defmodule Compendium.OCI.Client do
 
     # origin: :remote marks these publishes as carrying registry-sourced
     # content, so Registry refuses the local namespace even if a future ref
-    # shape slips past refuse_local_namespace/1.
+    # shape slips past refuse_local_namespace/1. The row's source says how
+    # the bytes arrived: pulled — "oci", whatever the type.
     case component_ref.type do
       "tincture" ->
         Registry.publish_tincture_archive(ctx, content_bytes, metadata,
           allow_overwrite: true,
-          origin: :remote
+          origin: :remote,
+          unit_files: unit_files
         )
 
       _wasm_type ->
         Registry.publish_bytes(ctx, content_bytes, metadata,
           allow_overwrite: true,
-          origin: :remote
+          origin: :remote,
+          source: "oci",
+          unit_files: unit_files
         )
     end
   end
@@ -811,59 +816,13 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  # Store cyfr-manifest.json to Arca for a pulled component.
-  defp maybe_store_manifest(_ctx, _component_ref, nil), do: :ok
+  # The optional src/ layer, as relative unit files for the commit. An
+  # unparsable tarball degrades to no src/ (a fetch-side concern, logged)
+  # — but once extraction succeeds, the files ride the unit commit and a
+  # write failure fails the whole pull.
+  defp source_unit_files(nil), do: []
 
-  defp maybe_store_manifest(ctx, component_ref, config_bytes) do
-    path =
-      Compendium.ComponentPath.manifest_path(
-        component_ref.type,
-        component_ref.namespace,
-        component_ref.name,
-        component_ref.version
-      )
-
-    case Arca.put(ctx, path, config_bytes) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:manifest_store_failed, reason}}
-    end
-  end
-
-  # Store README.md to Arca for a pulled component.
-  defp maybe_store_readme(_ctx, _component_ref, nil), do: :ok
-
-  defp maybe_store_readme(ctx, component_ref, readme_bytes) do
-    path =
-      Compendium.ComponentPath.file_path(
-        component_ref.type,
-        component_ref.namespace,
-        component_ref.name,
-        component_ref.version,
-        "README.md"
-      )
-
-    case Arca.put(ctx, path, readme_bytes) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Compendium.OCI.Client] Failed to store README: #{inspect(reason)}")
-        :ok
-    end
-  end
-
-  # Extract and store src/ files from a gzipped tarball to Arca.
-  defp maybe_store_source(_ctx, _component_ref, nil), do: :ok
-
-  defp maybe_store_source(ctx, component_ref, source_bytes) do
-    base =
-      Compendium.ComponentPath.version_dir(
-        component_ref.type,
-        component_ref.namespace,
-        component_ref.name,
-        component_ref.version
-      )
-
+  defp source_unit_files(source_bytes) do
     try do
       tar_binary = :zlib.gunzip(source_bytes)
 
@@ -871,36 +830,30 @@ defmodule Compendium.OCI.Client do
       # all; tagged because the gate matches the call, not the option.
       case :erl_tar.extract({:binary, tar_binary}, [:memory]) do
         {:ok, entries} ->
-          Enum.each(entries, fn {filename, content} ->
+          for {filename, content} <- entries do
             # filename is a charlist from :erl_tar
-            rel_path = to_string(filename)
-            path_segments = base ++ ["src" | String.split(rel_path, "/")]
-
-            case Arca.put(ctx, path_segments, content) do
-              :ok ->
-                :ok
-
-              {:error, reason} ->
-                Logger.warning(
-                  "[Compendium.OCI.Client] Failed to store source file #{rel_path}: #{inspect(reason)}"
-                )
-            end
-          end)
+            {["src" | String.split(to_string(filename), "/")], content}
+          end
 
         {:error, reason} ->
           Logger.warning(
             "[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}"
           )
+
+          []
       end
     rescue
       e ->
         Logger.warning(
           "[Compendium.OCI.Client] Failed to decompress source tarball: #{inspect(e)}"
         )
-    end
 
-    :ok
+        []
+    end
   end
+
+  defp readme_unit_files(nil), do: []
+  defp readme_unit_files(readme_bytes), do: [{["README.md"], readme_bytes}]
 
   # ============================================================================
   # Private: Discovery
