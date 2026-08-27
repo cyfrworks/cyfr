@@ -84,6 +84,16 @@ defmodule Opus.ExecutionEventBufferTest do
     send(pid, :timeout)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
 
+    # And it STAYS stopped. The child spec is :transient for this reason —
+    # a DynamicSupervisor restarts a :permanent child even on a :normal
+    # exit, so the idle timeout reaped nothing and every execution ever run
+    # kept a process for the life of the node.
+    assert Enum.any?(1..200, fn _ ->
+             Registry.lookup(Opus.ExecutionEventBuffer.Registry, exec_id) == [] or
+               (Process.sleep(10) && false)
+           end),
+           "the idle-stopped buffer was restarted — the timeout reaps nothing"
+
     # The next event restarts the buffer.
     :ok = ExecutionEventBuffer.push(exec_id, %{"kind" => "text_delta", "n" => 3}, 3, record)
     ExecutionEventBuffer.flush(exec_id)

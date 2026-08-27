@@ -403,7 +403,7 @@ defmodule Emissary.MCP.McpServersTool do
              name: server.name,
              url: server.url,
              enabled: server.enabled,
-             config: ExternalServers.config_map(server),
+             config: readable_config(server),
              status: format_status(status),
              server_info: format_server_info(status),
              tools: tools
@@ -582,6 +582,31 @@ defmodule Emissary.MCP.McpServersTool do
       end
     end
   end
+
+  # The connection config as `get`/`list` may show it: everything except
+  # the literal value of a header.
+  #
+  # `config_json` is not an encrypted column, and create refuses a literal
+  # in a header whose NAME looks like a credential — but that check is a
+  # denylist, and "x-hub", "x-tenant", "x-signature" are not on it. A token
+  # written under one of those sits in plaintext, and `get` is annotated
+  # `kind: :read` with no permission, so every member of the athanor could
+  # read it back. Header names and `vault:` binding names are the part that
+  # is genuinely shared operator infrastructure; the values are not.
+  defp readable_config(server) do
+    config = ExternalServers.config_map(server)
+
+    case Map.get(config, "headers") do
+      %{} = headers -> Map.put(config, "headers", Map.new(headers, &redact_header/1))
+      _ -> config
+    end
+  end
+
+  # A `vault:` reference names a Connection, which is the binding an
+  # operator needs to see; anything else is a literal and only its presence
+  # is reported.
+  defp redact_header({name, "vault:" <> _ = reference}), do: {name, reference}
+  defp redact_header({name, _literal}), do: {name, "[set]"}
 
   # The vault entry names a server's headers reference (`vault:<name>`).
   defp vault_refs(server) do

@@ -198,6 +198,59 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
   end
 
+  describe "handle/3 - get does not hand back stored header values" do
+    # `config_json` is not encrypted, and create only refuses a literal in a
+    # header whose NAME looks like a credential — a denylist that "x-hub"
+    # and "x-signature" walk straight past. `get` is annotated read with no
+    # permission, so anything stored there is readable by every member of
+    # the athanor. Header names and vault binding names are the shared
+    # operator infrastructure; the values are not.
+    test "a literal header value is reported as set, never returned", %{ctx: ctx} do
+      McpServersTool.handle("mcp_servers", ctx, %{
+        "action" => "create",
+        "name" => "hdr-redact",
+        "config" => %{
+          "url" => "https://localhost:99999/mcp",
+          "headers" => %{"x-hub" => "super-secret-literal", "x-plain" => "not-a-secret"}
+        }
+      })
+
+      assert {:ok, %{config: config}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "get",
+                 "name" => "hdr-redact"
+               })
+
+      headers = config["headers"]
+
+      # The names stay — they are how an operator sees the wiring.
+      assert Map.keys(headers) |> Enum.sort() == ["x-hub", "x-plain"]
+
+      assert headers["x-hub"] == "[set]"
+      assert headers["x-plain"] == "[set]"
+      refute inspect(config) =~ "super-secret-literal"
+    end
+
+    test "a vault reference is still shown — it names a Connection", %{ctx: ctx} do
+      McpServersTool.handle("mcp_servers", ctx, %{
+        "action" => "create",
+        "name" => "hdr-vault",
+        "config" => %{
+          "url" => "https://localhost:99999/mcp",
+          "headers" => %{"authorization" => "vault:my_connection"}
+        }
+      })
+
+      assert {:ok, %{config: config}} =
+               McpServersTool.handle("mcp_servers", ctx, %{
+                 "action" => "get",
+                 "name" => "hdr-vault"
+               })
+
+      assert config["headers"]["authorization"] == "vault:my_connection"
+    end
+  end
+
   describe "handle/3 - get" do
     test "requires name", %{ctx: ctx} do
       assert {:error, "Missing required parameter: name"} =

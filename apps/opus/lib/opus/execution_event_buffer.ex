@@ -31,7 +31,14 @@ defmodule Opus.ExecutionEventBuffer do
       Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
   """
 
-  use GenServer
+  # `:transient` so the idle timeout actually reaps. `use GenServer`'s
+  # default is `:permanent`, and a DynamicSupervisor restarts a permanent
+  # child even on a `:normal` exit — so this process stopped after two
+  # minutes idle and came straight back, every two minutes, for the life of
+  # the node. One process per execution ever run, which is the accumulation
+  # the idle timeout was written to prevent. A crash still restarts.
+  use GenServer, restart: :transient
+
   require Logger
 
   @max_events 50

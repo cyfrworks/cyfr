@@ -62,15 +62,22 @@ defmodule PrismWeb.PendingProbe do
     end
   end
 
+  # The session's provider is not caller input to be validated — it is what
+  # actually signed this person in, and it is what cyfr.run is being told
+  # about them. Filtering it through the device-flow roster (github,
+  # google) meant an OIDC deployment reported every one of its people as
+  # "github", because `provider?("oidcc")` is false and the fallback is the
+  # roster's first entry. The `params` path above still validates, because
+  # that value does come from the request.
   defp session_provider(conn) do
     case Sanctum.Caller.peek(get_session(conn, EmissaryWeb.SignInResponse.session_key())) do
-      {:ok, %{provider: p}} ->
-        if Sanctum.Auth.DeviceFlow.provider?(p), do: p, else: default_provider()
-
-      _ ->
-        default_provider()
+      {:ok, %{provider: p}} when is_binary(p) and p != "" -> p
+      _ -> default_provider()
     end
   end
 
+  # No session at all: nothing has said who this is, and the claim that
+  # follows will fail on its own. The roster's first entry is a placeholder,
+  # not a claim about the person.
   defp default_provider, do: hd(Sanctum.Auth.DeviceFlow.providers())
 end

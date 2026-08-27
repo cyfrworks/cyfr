@@ -44,73 +44,90 @@ defmodule PrismWeb.LegalAcceptController do
   end
 
   def submit(conn, %{"policy_version" => version} = params) when is_binary(version) do
-    # Every acknowledgement checkbox the form rendered must be ticked. The
-    # roster rides in the form itself — the server's policy list, not a
-    # local copy that goes stale when cyfr.run adds or retires a policy.
-    # (Trimming it client-side cheats nobody: cyfr.run enforces acceptance
-    # by version on its side.)
-    if not all_acknowledged?(params) do
+    submit_checked(conn, params, version, policy_roster(version, params))
+  end
+
+  def submit(conn, _params), do: error_page(conn, 400, "policy_version is required")
+
+  defp submit_checked(conn, params, version, roster) do
+    if all_acknowledged?(params, roster) do
+      do_submit(conn, params, version)
+    else
       error_page(
         conn,
         400,
         "All policy checkboxes must be ticked before continuing. " <>
           "Please return to the form and confirm each policy."
       )
-    else
-      with {:ok, conn, access_token} <- PendingProbe.pop(conn),
-           {:ok, provider} <- current_provider(conn, params),
-           {:ok, _body} <-
-             Client.accept_policies(provider, access_token, nil, version) do
-        # Acceptance recorded server-side. Route to /auth/post-legal-accept
-        # so AuthController re-runs probe_and_store with the still-valid
-        # access_token (cookie not cleared) and dispatches to /claim-namespace
-        # or the dashboard based on the new probe result. This single
-        # post-accept landing handles both the probe-gated and claim-gated
-        # paths uniformly.
-        conn |> redirect(to: "/auth/post-legal-accept")
-      else
-        {:expired, conn} ->
-          error_page(conn, 400, "Login session expired. Please re-authenticate and try again.")
-
-        {:not_logged_in, conn} ->
-          conn |> redirect(to: "/login")
-
-        {:error, %Compendium.OCI.Errors{reason: :policy_version_mismatch} = err} ->
-          required = Compendium.OCI.Errors.required_version(err)
-          # Server bumped between page-load and submit — redirect back to
-          # /legal/accept so the user re-reads the new version. Pass
-          # required version in query so log shows the divergence.
-          query =
-            if is_binary(required),
-              do: "?required=" <> URI.encode_www_form(required),
-              else: ""
-
-          conn |> redirect(to: "/legal/accept" <> query)
-
-        {:error, %Compendium.OCI.Errors{reason: :unauthorized}} ->
-          # 403 IDENTITY_BANNED at the accept endpoint. Surface as a flat error.
-          error_page(
-            conn,
-            403,
-            "This identity is currently restricted from publishing on cyfr.run."
-          )
-
-        {:error, :invalid_access_token} ->
-          # IdP token expired between OAuth callback and accept submit.
-          conn
-          |> PendingProbe.clear()
-          |> redirect(to: "/login")
-
-        {:error, err} ->
-          # 502: cyfr.run refused or misanswered the accept — a 200 said
-          # "fine" about a failure. Internal terms are logged, never shown.
-          Logger.error("[LegalAcceptController] accept_policies error: #{inspect(err)}")
-          error_page(conn, 502, accept_error_message(err))
-      end
     end
   end
 
-  def submit(conn, _params), do: error_page(conn, 400, "policy_version is required")
+  # Which policies had to be ticked, preferring the roster this server
+  # actually rendered: `show/2` caches the bodies under the version, so the
+  # submit that follows reads what the person was shown rather than what
+  # their form says they were shown. The form's list is the fallback for a
+  # cold cache, and an empty roster is refused either way — `policies=""`
+  # made `Enum.all?([], …)` vacuously true, and recorded an acceptance with
+  # nothing ticked at all.
+  defp policy_roster(version, params) do
+    case Arca.Cache.get({:legal_bodies, version}) do
+      {:ok, [_ | _] = bodies} -> Enum.map(bodies, fn {name, _title, _md} -> name end)
+      _ -> String.split(params["policies"] || "", ",", trim: true)
+    end
+  end
+
+  defp do_submit(conn, params, version) do
+    with {:ok, conn, access_token} <- PendingProbe.pop(conn),
+         {:ok, provider} <- current_provider(conn, params),
+         {:ok, _body} <-
+           Client.accept_policies(provider, access_token, nil, version) do
+      # Acceptance recorded server-side. Route to /auth/post-legal-accept
+      # so AuthController re-runs probe_and_store with the still-valid
+      # access_token (cookie not cleared) and dispatches to /claim-namespace
+      # or the dashboard based on the new probe result. This single
+      # post-accept landing handles both the probe-gated and claim-gated
+      # paths uniformly.
+      conn |> redirect(to: "/auth/post-legal-accept")
+    else
+      {:expired, conn} ->
+        error_page(conn, 400, "Login session expired. Please re-authenticate and try again.")
+
+      {:not_logged_in, conn} ->
+        conn |> redirect(to: "/login")
+
+      {:error, %Compendium.OCI.Errors{reason: :policy_version_mismatch} = err} ->
+        required = Compendium.OCI.Errors.required_version(err)
+        # Server bumped between page-load and submit — redirect back to
+        # /legal/accept so the user re-reads the new version. Pass
+        # required version in query so log shows the divergence.
+        query =
+          if is_binary(required),
+            do: "?required=" <> URI.encode_www_form(required),
+            else: ""
+
+        conn |> redirect(to: "/legal/accept" <> query)
+
+      {:error, %Compendium.OCI.Errors{reason: :unauthorized}} ->
+        # 403 IDENTITY_BANNED at the accept endpoint. Surface as a flat error.
+        error_page(
+          conn,
+          403,
+          "This identity is currently restricted from publishing on cyfr.run."
+        )
+
+      {:error, :invalid_access_token} ->
+        # IdP token expired between OAuth callback and accept submit.
+        conn
+        |> PendingProbe.clear()
+        |> redirect(to: "/login")
+
+      {:error, err} ->
+        # 502: cyfr.run refused or misanswered the accept — a 200 said
+        # "fine" about a failure. Internal terms are logged, never shown.
+        Logger.error("[LegalAcceptController] accept_policies error: #{inspect(err)}")
+        error_page(conn, 502, accept_error_message(err))
+    end
+  end
 
   # ============================================================================
   # Helpers
@@ -161,14 +178,18 @@ defmodule PrismWeb.LegalAcceptController do
 
   defp fetch_all_bodies(_version, _), do: []
 
-  defp all_acknowledged?(params) do
-    names = String.split(params["policies"] || "", ",", trim: true)
+  # An empty roster is refused rather than vacuously satisfied: nothing to
+  # acknowledge means nothing was agreed to, and recording an acceptance
+  # would be recording agreement to nothing.
+  defp all_acknowledged?(_params, []), do: false
 
+  defp all_acknowledged?(params, names) when is_list(names) do
     Enum.all?(names, fn name ->
-      ack_field = "ack_" <> String.replace(name, "-", "_")
-      params[ack_field] == "on"
+      params["ack_" <> String.replace(name, "-", "_")] == "on"
     end)
   end
+
+  defp all_acknowledged?(_params, _names), do: false
 
   defp current_provider(conn), do: PendingProbe.current_provider(conn)
 

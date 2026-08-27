@@ -67,12 +67,35 @@ defmodule PrismWeb.LegalAcceptControllerTest do
   } do
     conn = log_in_user(conn, test_user())
 
+    names = ~w(terms privacy aup content-policy dmca cookies transparency)
+
     acks =
-      for name <- ~w(terms privacy aup content-policy dmca cookies transparency), into: %{} do
+      for name <- names, into: %{} do
         {"ack_" <> String.replace(name, "-", "_"), "on"}
       end
 
-    conn = post(conn, "/legal/accept/submit", Map.put(acks, "policy_version", "v3"))
+    params =
+      acks
+      |> Map.put("policy_version", "v3")
+      |> Map.put("policies", Enum.join(names, ","))
+
+    conn = post(conn, "/legal/accept/submit", params)
     assert response(conn, 400) =~ "Login session expired"
+  end
+
+  # `policies=""` made `Enum.all?([], …)` vacuously true, so a submission
+  # that ticked nothing at all was accepted and sent on to be recorded.
+  # cyfr.run enforces that a version was accepted, not that this person was
+  # shown each policy in it — that half is ours to hold.
+  test "POST naming no policies at all is refused, not vacuously accepted", %{conn: conn} do
+    conn = log_in_user(conn, test_user())
+
+    for params <- [
+          %{"policy_version" => "v3", "policies" => ""},
+          %{"policy_version" => "v3"}
+        ] do
+      refused = post(conn, "/legal/accept/submit", params)
+      assert response(refused, 400) =~ "All policy checkboxes must be ticked"
+    end
   end
 end

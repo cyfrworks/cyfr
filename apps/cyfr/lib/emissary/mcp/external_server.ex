@@ -711,13 +711,42 @@ defmodule Emissary.MCP.ExternalServer do
     |> List.last() || ""
   end
 
+  # Operator-configured headers, merged over the ones this client sets.
+  #
+  # Two things are checked because the values do not all come from the
+  # operator's own typing: a `vault:` reference resolves to whatever the
+  # Connection holds. A CR or LF in a name or value is a header-injection
+  # primitive against the upstream — it would split one header into
+  # several, or forge a body — and a name that is not a valid HTTP token
+  # cannot be sent at all. Neither belongs on the wire, and dropping the
+  # header is the only safe reading: there is no "escaped" form of a
+  # newline in a header.
   defp merge_headers(base, extra) when is_map(extra) do
     Enum.reduce(extra, base, fn {k, v}, acc ->
-      [{String.downcase(to_string(k)), to_string(v)} | acc]
+      name = k |> to_string() |> String.downcase()
+      value = to_string(v)
+
+      if valid_header_name?(name) and not control_chars?(value) do
+        [{name, value} | acc]
+      else
+        Logger.warning(
+          "[ExternalServer] refusing header #{inspect(name)}: a header name must be an HTTP " <>
+            "token and neither name nor value may carry control characters"
+        )
+
+        acc
+      end
     end)
   end
 
   defp merge_headers(base, _), do: base
+
+  # RFC 9110 token: the characters a header field name may use.
+  defp valid_header_name?(name) do
+    name != "" and String.match?(name, ~r/^[!#$%&'*+\-.^_`|~0-9a-z]+$/)
+  end
+
+  defp control_chars?(value), do: String.match?(value, ~r/[\x00-\x1f\x7f]/)
 
   # ============================================================================
   # Secret Resolution
