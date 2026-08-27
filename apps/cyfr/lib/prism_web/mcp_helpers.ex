@@ -8,6 +8,25 @@ defmodule PrismWeb.MCPHelpers do
   All tool invocations go through `Emissary.MCP.ToolRegistry.call_external/3`
   using the `Sanctum.Context` stored in socket assigns.
 
+  ## Two planes, and which one a mutation belongs to
+
+  Almost everything the console changes goes through a tool: components,
+  executions, schedules, keys, webhooks, connections, the door. Those are
+  the athanor's state, an agent can reach them too, and one gate should
+  answer for both.
+
+  What does not go through a tool is state that exists only because a
+  person is looking at a screen — their UI preferences, the conversation
+  they are having, a cache key being invalidated after a refresh. There is
+  no tool for those because there should not be one: a `conversation.read`
+  tool would put someone's chat history inside the agent-reachable surface,
+  which is the opposite of what a private console is for.
+
+  The rule, then: **if an agent should be able to do it, it is a tool call.
+  If it exists only for the person at the keyboard, the console owns it
+  directly.** `PrismWeb.ToolSeamTest` pins the second list, which is two
+  calls long — the ones that grow it are worth an argument.
+
   ## Result keys
 
   Built-in tools return their handler's Elixir terms verbatim — atom keys,
