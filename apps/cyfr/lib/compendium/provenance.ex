@@ -29,8 +29,6 @@ defmodule Compendium.Provenance do
 
   @type t :: :bundled | :bundled_modified | :user | :remote
 
-  @remote_sources ~w(oci published)
-
   @doc """
   Classify one registry row (an `Arca.ComponentStorage` component map).
   A storage outage answers `{:error, term}` — provenance derived from a
@@ -38,7 +36,7 @@ defmodule Compendium.Provenance do
   """
   @spec of(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def of(%Context{} = ctx, component) do
-    if to_string(Map.get(component, :source)) in @remote_sources do
+    if Compendium.Source.remote?(Map.get(component, :source)) do
       {:ok, :remote}
     else
       with {:ok, status} <- Arca.Overlay.unit_status(ctx, version_dir(component)) do
@@ -85,7 +83,7 @@ defmodule Compendium.Provenance do
   end
 
   defp classify_row(statuses, row) do
-    if to_string(Map.get(row, :source)) in @remote_sources do
+    if Compendium.Source.remote?(Map.get(row, :source)) do
       :remote
     else
       of_status(Map.get(statuses, version_dir(row), :absent))
@@ -114,7 +112,7 @@ defmodule Compendium.Provenance do
            }}
           | {:error, term()}
   def status(%Context{} = ctx, component) do
-    if to_string(Map.get(component, :source)) in @remote_sources do
+    if Compendium.Source.remote?(Map.get(component, :source)) do
       {:ok, %{provenance: :remote, drift: nil, shadows_shipped: false}}
     else
       unit_dir = version_dir(component)
@@ -283,7 +281,7 @@ defmodule Compendium.Provenance do
     end
   end
 
-  defp remote_row?(row), do: to_string(Map.get(row, :source)) in @remote_sources
+  defp remote_row?(row), do: Compendium.Source.remote?(Map.get(row, :source))
 
   defp type_of(row), do: to_string(Map.get(row, :component_type, ""))
 

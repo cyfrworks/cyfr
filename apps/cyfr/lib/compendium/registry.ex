@@ -277,7 +277,7 @@ defmodule Compendium.Registry do
            ),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
-             source: "oci",
+             source: Compendium.Source.oci(),
              manifest: manifest_bytes,
              manifest_map: manifest_map
            ),
@@ -336,7 +336,7 @@ defmodule Compendium.Registry do
     else
       with {:ok, component} <-
              build_component(ctx, name, version, metadata, validation, publisher,
-               source: "filesystem",
+               source: Compendium.Source.filesystem(),
                manifest: manifest_json,
                manifest_map: manifest
              ) do
@@ -375,7 +375,10 @@ defmodule Compendium.Registry do
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
     # Get all filesystem-registered components
     {:ok, existing} =
-      Arca.ComponentStorage.list_components(ctx, source: "filesystem", limit: :none)
+      Arca.ComponentStorage.list_components(ctx,
+        source: Compendium.Source.filesystem(),
+        limit: :none
+      )
 
     discovered_set = MapSet.new(discovered_components)
 
@@ -938,8 +941,18 @@ defmodule Compendium.Registry do
   defp build_component(ctx, name, version, metadata, validation, publisher, opts) do
     now = DateTime.utc_now()
     component_type = Map.fetch!(metadata, :type)
-    source = Keyword.get(opts, :source, "published")
+    source = Keyword.get(opts, :source, Compendium.Source.published())
     manifest = Keyword.get(opts, :manifest)
+
+    # Every ingress converges here — the one place the closed source
+    # roster is enforced, since the row store takes raw attrs. A value
+    # outside it would silently skew provenance and the signature
+    # verifier's fail-closed branch.
+    unless source in Compendium.Source.values() do
+      raise ArgumentError,
+            "unknown component source #{inspect(source)}; " <>
+              "the roster is #{inspect(Compendium.Source.values())}"
+    end
 
     # Every ingress converges here, so this is the one place activation
     # identity is computed. Callers pass the already-decoded manifest so the

@@ -47,15 +47,15 @@ defmodule Opus.SignatureVerifier do
 
     cond do
       # Local/filesystem components are trusted by ownership
-      source in ["filesystem", "published", nil] ->
+      source in [Compendium.Source.filesystem(), Compendium.Source.published(), nil] ->
         :ok
 
       # OCI component with verification — check identity/issuer match if requested
-      source == "oci" and verified == true ->
+      source == Compendium.Source.oci() and verified == true ->
         check_identity_match(identity, issuer, stored_identity, stored_issuer)
 
       # OCI component without verification — reject
-      source == "oci" ->
+      source == Compendium.Source.oci() ->
         {:error,
          "Component pulled from OCI registry without signature verification. Re-pull to verify."}
 

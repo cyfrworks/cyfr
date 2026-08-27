@@ -92,7 +92,7 @@ defmodule Compendium.OCI.Client do
         manifest_digest: manifest_digest,
         size: component.size,
         type: component.component_type,
-        source: "oci"
+        source: Compendium.Source.oci()
       }
 
       result =
@@ -597,7 +597,7 @@ defmodule Compendium.OCI.Client do
         Registry.publish_bytes(ctx, content_bytes, metadata,
           allow_overwrite: true,
           origin: :remote,
-          source: "oci",
+          source: Compendium.Source.oci(),
           unit_files: unit_files
         )
     end
