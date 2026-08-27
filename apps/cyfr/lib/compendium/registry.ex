@@ -128,14 +128,13 @@ defmodule Compendium.Registry do
              unit_files
            ),
          {:ok, component} <-
-           register_row_or_roll_back(ctx, name, version, metadata, validation, publisher,
-             type: component_type,
+           land_row(ctx, name, version, metadata, validation, publisher,
              manifest: manifest_bytes,
              manifest_map: manifest_map,
              allow_overwrite: allow_overwrite,
-             source: Keyword.get(opts, :source)
+             source: Keyword.get(opts, :source),
+             rollback_unit: ComponentPath.version_dir(component_type, publisher, name, version)
            ) do
-      invalidate_executor_caches(ctx)
       {:ok, component}
     end
   end
@@ -172,10 +171,13 @@ defmodule Compendium.Registry do
     end
   end
 
-  # The row lands only after the unit is whole — and a refused row must
-  # not leave an orphaned unit behind for the scanner to read as a
-  # component. Dependency refs validate before the row is saved.
-  defp register_row_or_roll_back(ctx, name, version, metadata, validation, publisher, opts) do
+  # The one way a publish's row lands: build → validate dependency refs →
+  # save → invalidate the executor caches, in that order for every
+  # ingress — a row must never land before its refs are known good. On
+  # any failure, `rollback_unit:` deletes the just-committed unit so
+  # completeness and rows can never disagree (the scanner never passes
+  # it: its bytes are the user's source).
+  defp land_row(ctx, name, version, metadata, validation, publisher, opts) do
     build_opts =
       [manifest: opts[:manifest], manifest_map: opts[:manifest_map]] ++
         if opts[:source], do: [source: opts[:source]], else: []
@@ -186,28 +188,28 @@ defmodule Compendium.Registry do
            :ok <- validate_dependencies(component, opts[:manifest]),
            {:ok, _} <-
              save_component(ctx, component, opts[:allow_overwrite], name, version) do
+        invalidate_executor_caches(ctx)
         {:ok, component}
       end
 
-    case result do
-      {:ok, _component} = ok ->
-        ok
+    with {:error, _} = error <- result do
+      rollback_unit(ctx, opts[:rollback_unit])
+      error
+    end
+  end
 
-      {:error, _} = error ->
-        version_dir = ComponentPath.version_dir(opts[:type], publisher, name, version)
+  defp rollback_unit(_ctx, nil), do: :ok
 
-        case Arca.delete_tree(ctx, version_dir) do
-          :ok ->
-            :ok
+  defp rollback_unit(ctx, version_dir) do
+    case Arca.delete_tree(ctx, version_dir) do
+      :ok ->
+        :ok
 
-          {:error, cleanup} ->
-            Logger.warning(
-              "[Compendium.Registry] unit cleanup after refused row failed for " <>
-                "#{Enum.join(version_dir, "/")}: #{inspect(cleanup)}"
-            )
-        end
-
-        error
+      {:error, cleanup} ->
+        Logger.warning(
+          "[Compendium.Registry] unit cleanup after refused row failed for " <>
+            "#{Enum.join(version_dir, "/")}: #{inspect(cleanup)}"
+        )
     end
   end
 
@@ -276,14 +278,13 @@ defmodule Compendium.Registry do
              unit_files: Keyword.get(opts, :unit_files, [])
            ),
          {:ok, component} <-
-           build_component(ctx, name, version, metadata, validation, publisher,
+           land_row(ctx, name, version, metadata, validation, publisher,
              source: Compendium.Source.oci(),
              manifest: manifest_bytes,
-             manifest_map: manifest_map
-           ),
-         {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
-         :ok <- validate_dependencies(component, manifest_bytes) do
-      invalidate_executor_caches(ctx)
+             manifest_map: manifest_map,
+             allow_overwrite: allow_overwrite,
+             rollback_unit: ComponentPath.version_dir("tincture", publisher, name, version)
+           ) do
       {:ok, component}
     end
   end
@@ -339,11 +340,16 @@ defmodule Compendium.Registry do
                source: Compendium.Source.filesystem(),
                manifest: manifest_json,
                manifest_map: manifest
-             ) do
+             ),
+           # Refs validate BEFORE any row moves: a re-scan of a manifest
+           # gone dep-broken must leave the existing row standing, not
+           # replace it and then report failure.
+           :ok <- validate_dependencies(component, manifest) do
+        # Replace whatever type this name:version held — the path's type
+        # segment is the truth the row follows.
         Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
 
-        with {:ok, _} <- put_component(ctx, component),
-             :ok <- validate_dependencies(component, manifest) do
+        with {:ok, _} <- put_component(ctx, component) do
           invalidate_executor_caches(ctx)
 
           :telemetry.execute(
@@ -703,9 +709,11 @@ defmodule Compendium.Registry do
       # bundled unit as :bundled — both mapped to this surface's words.
       case Arca.Overlay.revert_copy(ctx, Compendium.Provenance.version_dir(component)) do
         :ok ->
+          # The re-registration invalidates the executor caches when the
+          # pristine bytes differ from the row; an `:unchanged` answer
+          # means nothing moved and nothing needs sweeping.
           with {:ok, _} <-
                  register_from_arca(ctx, Compendium.Provenance.version_dir(component)) do
-            invalidate_executor_caches(ctx)
             {:ok, :reset}
           end
 
@@ -952,15 +960,9 @@ defmodule Compendium.Registry do
     source = Keyword.get(opts, :source, Compendium.Source.published())
     manifest = Keyword.get(opts, :manifest)
 
-    # Every ingress converges here — the one place the closed source
-    # roster is enforced, since the row store takes raw attrs. A value
-    # outside it would silently skew provenance and the signature
-    # verifier's fail-closed branch.
-    unless source in Compendium.Source.values() do
-      raise ArgumentError,
-            "unknown component source #{inspect(source)}; " <>
-              "the roster is #{inspect(Compendium.Source.values())}"
-    end
+    # The closed source roster is enforced where rows are written
+    # (`Arca.ComponentStorage`), so a value outside it cannot land from
+    # any door — this builder no longer keeps its own copy of the gate.
 
     # Every ingress converges here, so this is the one place activation
     # identity is computed. Callers pass the already-decoded manifest so the

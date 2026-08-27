@@ -28,7 +28,7 @@ defmodule Sanctum.Test.ComponentHelpers do
       manifest: Jason.encode!(manifest),
       publisher: "local",
       publisher_id: ctx.user_id,
-      source: "local",
+      source: Compendium.Source.filesystem(),
       signature_verified: false,
       inserted_at: now,
       updated_at: now

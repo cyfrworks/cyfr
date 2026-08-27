@@ -35,7 +35,7 @@ defmodule Arca.ComponentStorageTest do
         manifest: "{}",
         publisher: "local",
         publisher_id: nil,
-        source: "test",
+        source: Compendium.Source.filesystem(),
         signature_verified: false,
         signer_identity: nil,
         signer_issuer: nil,
@@ -47,6 +47,18 @@ defmodule Arca.ComponentStorageTest do
   end
 
   describe "put_component/2 and get_component/3" do
+    test "refuses a source outside the closed roster — forged rows cannot land", %{ctx: ctx} do
+      attrs = component_attrs("forged", "1.0.0", %{source: "local"})
+
+      assert_raise ArgumentError, ~r/unknown component source/, fn ->
+        ComponentStorage.put_component(ctx, attrs)
+      end
+
+      assert_raise ArgumentError, ~r/unknown component source/, fn ->
+        ComponentStorage.insert_component(ctx, attrs)
+      end
+    end
+
     test "stores and retrieves a component", %{ctx: ctx} do
       attrs = component_attrs("my-comp", "1.0.0")
       assert {:ok, _} = ComponentStorage.put_component(ctx, attrs)

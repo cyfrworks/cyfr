@@ -83,7 +83,7 @@ defmodule Arca.ComponentStorage do
   the context.
   """
   def put_component(%Context{} = ctx, attrs) when is_map(attrs) do
-    attrs = ensure_tenant_fields(ctx, attrs)
+    attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(ctx, &1))
 
     rescuing_db("put_component", fn -> do_put_component(attrs) end)
   end
@@ -128,7 +128,7 @@ defmodule Arca.ComponentStorage do
   athanor/publisher/name/version/type combination already exists.
   """
   def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
-    attrs = ensure_tenant_fields(ctx, attrs)
+    attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(ctx, &1))
 
     rescuing_db("insert_component", fn ->
       case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
@@ -137,6 +137,23 @@ defmodule Arca.ComponentStorage do
         error -> {:error, error}
       end
     end)
+  end
+
+  # The closed source roster (`Compendium.Source.values/0`), enforced
+  # where rows are WRITTEN — an unrostered value would silently skew
+  # provenance derivation and the signature verifier's fail-closed
+  # branch. A raise, not a tuple: every legitimate ingress already
+  # speaks the roster, so an outsider value is programmer error.
+  defp validate_source!(attrs) do
+    source = Map.get(attrs, :source) || Map.get(attrs, "source")
+
+    unless source in Compendium.Source.values() do
+      raise ArgumentError,
+            "unknown component source #{inspect(source)}; " <>
+              "the roster is #{inspect(Compendium.Source.values())}"
+    end
+
+    attrs
   end
 
   @doc """

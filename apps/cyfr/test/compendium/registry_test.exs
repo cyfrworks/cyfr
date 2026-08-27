@@ -1118,6 +1118,39 @@ defmodule Compendium.RegistryTest do
       assert {:ok, []} =
                Arca.list_recursive(ctx, ["components", "reagents", "local", "rolled-back"])
     end
+
+    test "a tincture publish with a bad dependency ref leaves neither unit nor row", %{ctx: ctx} do
+      manifest =
+        Jason.encode!(%{
+          "name" => "dep-broken",
+          "version" => "1.0.0",
+          "type" => "tincture",
+          "publisher" => "acme",
+          "dependencies" => %{"static" => [%{"ref" => "not a valid ref !!"}]}
+        })
+
+      archive =
+        tincture_archive([
+          {"cyfr-manifest.json", manifest},
+          {"index.html", "<html></html>"}
+        ])
+
+      assert {:error, {:dependency_extraction_failed, _}} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "dep-broken",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "acme",
+                 manifest: manifest
+               })
+
+      # The row never landed and the committed unit rolled back — this
+      # ingress used to save the row before validating and leave BOTH.
+      assert {:error, :not_found} = Registry.get(ctx, "dep-broken", "1.0.0")
+
+      assert {:ok, []} =
+               Arca.list_recursive(ctx, ["components", "tinctures", "acme", "dep-broken"])
+    end
   end
 
   describe "remote-origin publishes — local namespace refusal" do

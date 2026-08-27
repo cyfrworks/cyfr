@@ -100,7 +100,7 @@ defmodule Sanctum.TinctureAccessTest do
         manifest: Jason.encode!(pub_manifest),
         publisher: "local",
         publisher_id: "local|local|testns",
-        source: "local",
+        source: Compendium.Source.filesystem(),
         signature_verified: false,
         inserted_at: now,
         updated_at: now
@@ -120,7 +120,7 @@ defmodule Sanctum.TinctureAccessTest do
         manifest: Jason.encode!(priv_manifest),
         publisher: "local",
         publisher_id: "local|local|testns",
-        source: "local",
+        source: Compendium.Source.filesystem(),
         signature_verified: false,
         inserted_at: now,
         updated_at: now

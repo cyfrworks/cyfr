@@ -13,7 +13,8 @@ defmodule Compendium.Source do
   - `"oci"` — pulled from a remote registry (WASM and tinctures alike).
 
   `remote?/1` is the one predicate provenance derives `:remote` from;
-  `values/0` is the closed roster the schema validates against.
+  `values/0` is the closed roster the row store enforces
+  (`Arca.ComponentStorage` refuses to write anything outside it).
   """
 
   @filesystem "filesystem"
@@ -32,7 +33,7 @@ defmodule Compendium.Source do
   @spec oci() :: String.t()
   def oci, do: @oci
 
-  @doc "The closed roster — what the schema admits."
+  @doc "The closed roster — what the row store admits."
   @spec values() :: [String.t()]
   def values, do: [@filesystem, @published, @oci]
 

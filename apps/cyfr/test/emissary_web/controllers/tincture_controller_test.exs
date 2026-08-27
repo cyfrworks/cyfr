@@ -101,7 +101,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
           manifest: Jason.encode!(manifest),
           publisher: "local",
           publisher_id: "local|local|testns",
-          source: "local",
+          source: Compendium.Source.filesystem(),
           signature_verified: false,
           inserted_at: now,
           updated_at: now

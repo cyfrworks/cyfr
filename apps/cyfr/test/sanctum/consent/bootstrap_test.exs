@@ -106,7 +106,7 @@ defmodule Sanctum.Consent.BootstrapTest do
           manifest: "{}",
           publisher: "local",
           publisher_id: nil,
-          source: "test",
+          source: Compendium.Source.filesystem(),
           signature_verified: false,
           signer_identity: nil,
           signer_issuer: nil,

@@ -271,6 +271,31 @@ defmodule Compendium.AutoIndexerTest do
     end
   end
 
+  describe "dep-broken re-scan" do
+    test "a re-scan of a manifest gone dep-broken keeps the existing row", %{ctx: ctx} do
+      dir = create_component("catalyst", "local", "dep-regress", "1.0.0")
+      {:ok, %{registered: 1}} = AutoIndexer.scan(ctx: ctx)
+      {:ok, row} = Arca.ComponentStorage.get_component(ctx, "dep-regress", "1.0.0")
+
+      # The manifest goes dep-broken on disk; the next scan must not
+      # replace the standing row with a failure (refs validate before
+      # any row moves).
+      File.write!(
+        Path.join(dir, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "type" => "catalyst",
+          "version" => "1.0.0",
+          "dependencies" => %{"static" => [%{"ref" => "not a valid ref !!"}]}
+        })
+      )
+
+      {:ok, %{errors: 1}} = AutoIndexer.scan(ctx: ctx)
+
+      assert {:ok, kept} = Arca.ComponentStorage.get_component(ctx, "dep-regress", "1.0.0")
+      assert kept.manifest == row.manifest
+    end
+  end
+
   describe "discovery outage" do
     test "a listing outage registers nothing and prunes nothing", %{ctx: ctx} do
       create_component("catalyst", "local", "outage-survivor", "1.0.0")
