@@ -268,20 +268,9 @@ defmodule EmissaryWeb.MCPController do
   # subscriptions/listen
   # ============================================================================
 
-  # How long to wait before writing a keep-alive comment. Intermediaries and
-  # client idle timeouts close a connection that says nothing; a quiet
-  # subscription is the normal state, not a broken one.
-  @keep_alive_ms :timer.seconds(15)
-
-  # A subscription does not live forever. Nothing in the protocol requires a
-  # bound, but an unbounded one means a client that vanishes without closing
-  # cleanly holds a process and a socket until the VM restarts — and the
-  # specification already defines how a server ends one on its own initiative,
-  # so there is a correct way to do it. The client reconnects; that is what the
-  # graceful-close response is for.
-  defp max_stream_ms do
-    Application.get_env(:cyfr, :mcp_subscription_max_ms, :timer.minutes(30))
-  end
+  # The per-caller stream bounds live in EmissaryWeb.SSE, shared with the
+  # execution-events surface under per-surface tags and budgets.
+  @keep_alive_ms EmissaryWeb.SSE.keep_alive_ms()
 
   # An open stream pins a process and a socket for up to the full stream
   # window, and the dispatcher's auth gate never sees this method — the stream
@@ -302,7 +291,7 @@ defmodule EmissaryWeb.MCPController do
         "Unauthorized: subscriptions/listen requires authentication"
       )
     else
-      case claim_stream_slot(context) do
+      case EmissaryWeb.SSE.claim_slot(:mcp_listen, context, :mcp_subscription_max_concurrent) do
         :ok ->
           open_stream(conn, context, params, request_id, id)
 
@@ -321,7 +310,7 @@ defmodule EmissaryWeb.MCPController do
   defp open_stream(conn, context, params, request_id, id) do
     filter = get_in(params, ["params", "notifications"]) || %{}
     {:ok, acknowledged} = Subscriptions.listen(context, filter)
-    deadline = System.monotonic_time(:millisecond) + max_stream_ms()
+    deadline = EmissaryWeb.SSE.deadline(:mcp_subscription_max_ms)
 
     conn
     |> put_resp_header(@protocol_version_header, @protocol_version)
@@ -339,23 +328,6 @@ defmodule EmissaryWeb.MCPController do
     |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("x-request-id", request_id)
     |> respond_error(code, Message.encode_error(id, code, message))
-  end
-
-  # One Registry entry per open stream, keyed by caller. The entry dies with
-  # the conn process, so slots free themselves; the count is read under the
-  # same key before registering. The window between count and register can
-  # briefly overshoot under a burst — acceptable slack for a bound whose job
-  # is stopping unbounded socket pinning.
-  defp claim_stream_slot(context) do
-    key = {context.athanor_id, context.user_id}
-    limit = Application.get_env(:cyfr, :mcp_subscription_max_concurrent, 8)
-
-    if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do
-      {:error, :stream_limit}
-    else
-      {:ok, _} = Registry.register(Emissary.MCP.SubscriptionRegistry, key, :stream)
-      :ok
-    end
   end
 
   # The acknowledgment must be the first message on the stream, and must carry

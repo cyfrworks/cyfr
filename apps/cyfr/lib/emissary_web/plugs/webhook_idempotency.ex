@@ -57,15 +57,12 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
   end
 
   defp missing_key(conn, header) do
-    body =
-      Jason.encode!(%{
-        "error" => "missing_idempotency_key",
-        "message" => "this webhook requires the '#{header}' header on every delivery"
-      })
-
     conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(400, body)
+    |> EmissaryWeb.ApiError.send(
+      400,
+      :missing_idempotency_key,
+      "this webhook requires the '#{header}' header on every delivery"
+    )
     |> halt()
   end
 

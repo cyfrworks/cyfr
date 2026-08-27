@@ -279,7 +279,28 @@ defmodule Emissary.MCP.Router do
         {:ok, cacheable(%{"contents" => [content_entry]}, @resource_ttl_ms, @resource_scope)}
 
       {:error, reason} ->
-        {:error, :resource_not_found, "Failed to read resource: #{inspect(reason)}"}
+        require Logger
+        Logger.warning("[MCP.Router] resource read failed: #{inspect(reason)}")
+
+        cond do
+          # An authz refusal or a store outage is not "not found".
+          Sanctum.Unauthorized.reason?(reason) ->
+            {:error, Sanctum.Unauthorized.code(reason),
+             Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+
+          reason == :database_error ->
+            {:error, :internal_error, "Failed to read resource: the store could not answer"}
+
+          # A binary reason is a handler's crafted, client-safe diagnosis
+          # ("Invalid URI format: …", "No provider found for scheme …").
+          is_binary(reason) ->
+            {:error, :resource_not_found, reason}
+
+          # Anything else is an internal term (an exit tuple, a struct) —
+          # logged above, never reflected.
+          true ->
+            {:error, :resource_not_found, "Resource not found or unreadable"}
+        end
     end
   end
 

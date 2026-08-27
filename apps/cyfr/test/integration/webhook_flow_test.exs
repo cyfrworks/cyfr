@@ -171,7 +171,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     # Phoenix's default error handler returns "" for unmatched routes, so a
     # JSON body with `error: "not_found"` is proof that our plug halted (not
     # the framework).
-    assert json_response(conn, 404)["error"] == "not_found"
+    assert json_response(conn, 404)["code"] == "not_found"
   end
 
   test "body exceeding webhook size cap raises RequestTooLargeError (mapped to 413 by Plug.Exception)",

@@ -70,7 +70,7 @@ defmodule EmissaryWeb.TinctureController do
         conn
         |> put_resp_header("www-authenticate", "Bearer")
         |> put_status(401)
-        |> json(%{error: "token_cannot_renew_itself"})
+        |> EmissaryWeb.ApiError.send(403, :token_cannot_renew_itself, "A minted tincture token cannot mint another")
 
       {:ok, ctx} ->
         conn
@@ -85,7 +85,7 @@ defmodule EmissaryWeb.TinctureController do
         conn
         |> put_resp_header("www-authenticate", "Bearer")
         |> put_status(401)
-        |> json(%{error: "unauthenticated"})
+        |> EmissaryWeb.ApiError.send(401, :unauthenticated, "Authentication required")
     end
   end
 
@@ -165,10 +165,10 @@ defmodule EmissaryWeb.TinctureController do
 
       cond do
         !is_binary(reference) or reference == "" ->
-          conn |> put_status(400) |> json(%{error: "missing reference"})
+          EmissaryWeb.ApiError.send(conn, 400, :invalid_params, "missing reference")
 
         !is_map(input) ->
-          conn |> put_status(400) |> json(%{error: "input must be an object"})
+          EmissaryWeb.ApiError.send(conn, 400, :invalid_params, "input must be an object")
 
         true ->
           tincture_ctx_base = Sanctum.build_tincture_context(auth_ctx, tincture)
@@ -189,7 +189,7 @@ defmodule EmissaryWeb.TinctureController do
       end
     else
       {:error, :not_found} ->
-        conn |> put_status(404) |> json(%{error: "Not Found"})
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
     end
   end
 
@@ -441,12 +441,12 @@ defmodule EmissaryWeb.TinctureController do
           telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, to_string(no_profile))
         )
 
-        conn
-        |> put_status(403)
-        |> json(%{
-          error: "consent_required",
-          detail: "this tincture has no #{route_name(opts[:route])} profile — grant it first"
-        })
+        EmissaryWeb.ApiError.send(
+          conn,
+          403,
+          :consent_required,
+          "this tincture has no #{route_name(opts[:route])} profile — grant it first"
+        )
 
       {:error, :engine_starting} ->
         duration_ms = duration_ms(start_time)
@@ -463,7 +463,7 @@ defmodule EmissaryWeb.TinctureController do
           telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "engine_starting")
         )
 
-        conn |> put_status(503) |> json(%{error: "service_unavailable", retry: true})
+        EmissaryWeb.ApiError.send(conn, 503, :service_unavailable, "Execution engine is starting — retry shortly")
 
       {:error, reason} ->
         duration_ms = duration_ms(start_time)
@@ -481,7 +481,7 @@ defmodule EmissaryWeb.TinctureController do
           telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, inspect(reason))
         )
 
-        conn |> put_status(500) |> json(%{error: "Execution failed"})
+        EmissaryWeb.ApiError.send(conn, 500, :execution_failed, "Execution failed")
     end
   end
 

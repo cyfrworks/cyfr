@@ -47,9 +47,11 @@ defmodule Emissary.MCP.Message do
     method_not_found: -32601,
     invalid_params: -32602,
     internal_error: -32603,
-    resource_not_found: -32602,
+    # MCP's own resource-not-found code. It once aliased -32602, so a
+    # client could not tell "that URI does not exist" from "your params
+    # were malformed".
+    resource_not_found: -32002,
     header_mismatch: -32020,
-    missing_required_client_capability: -32021,
     unsupported_protocol_version: -32022
   }
 

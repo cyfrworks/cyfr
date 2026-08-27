@@ -44,8 +44,11 @@ config :cyfr, Arca.Repo,
 config :cyfr,
   secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
-# Do not include metadata nor timestamps in development logs
-config :logger, :default_formatter, format: "[$level] $message\n"
+# No timestamps in development logs, but keep $metadata: LoggerContext's
+# request/user/athanor tags are exactly what debugging needs, and dropping
+# them made the structured-logging SSOT invisible in the one environment
+# where people read logs.
+config :logger, :default_formatter, format: "$metadata[$level] $message\n"
 
 # Enable telemetry console reporter in development
 config :cyfr, telemetry_console_enabled: true

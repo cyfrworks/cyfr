@@ -68,8 +68,11 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
       {:deny, retry_after} ->
         conn
         |> put_resp_header("retry-after", to_string(retry_after))
-        |> send_resp(429, "Rate limit exceeded. Try again in #{retry_after} seconds.")
-        |> halt()
+        |> EmissaryWeb.ApiError.halt(
+          429,
+          :rate_limited,
+          "Rate limit exceeded. Try again in #{retry_after} seconds."
+        )
     end
   end
 end

@@ -55,7 +55,7 @@ defmodule EmissaryWeb.WebhookController do
     cond do
       is_nil(webhook) ->
         # Defensive — verify plug should have halted before us.
-        conn |> put_status(500) |> json(%{error: "internal_error"})
+        EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
 
       not Sanctum.Tenancy.channel_active?(webhook.athanor_id, webhook.created_by) ->
         # The athanor is archived or the creator was denied on this server —
@@ -66,7 +66,7 @@ defmodule EmissaryWeb.WebhookController do
             "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
         )
 
-        conn |> put_status(404) |> json(%{error: "not_found"})
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
 
       true ->
         invoke_active(conn, webhook, conn.assigns[:raw_body])
@@ -89,14 +89,14 @@ defmodule EmissaryWeb.WebhookController do
           "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
         )
 
-        conn |> put_status(500) |> json(%{error: "internal_error"})
+        EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
 
       {:error, reason} ->
         Logger.error(
           "[WebhookInvoke] stored input_template invalid slug=#{webhook.slug} reason=#{inspect(reason)}"
         )
 
-        conn |> put_status(500) |> json(%{error: "internal_error"})
+        EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
     end
   end
 
@@ -237,7 +237,7 @@ defmodule EmissaryWeb.WebhookController do
           |> Map.put(:error, "task_spawn_failed: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
         )
 
-        conn |> put_status(503) |> json(%{error: "service_unavailable"})
+        EmissaryWeb.ApiError.send(conn, 503, :service_unavailable, "Service unavailable — try again shortly")
     end
   end
 

@@ -11,7 +11,7 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
 
   test "GET /t/access-token without credentials → 401", %{conn: conn} do
     conn = get(conn, "/t/access-token")
-    assert json_response(conn, 401)["error"] == "unauthenticated"
+    assert json_response(conn, 401)["code"] == "unauthenticated"
   end
 
   test "GET /t/access-token with a valid Bearer key → 200 + a usable ?_t= token",
@@ -49,6 +49,6 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
       |> json_response(200)
 
     renew = get(build_conn(), "/t/access-token?_t=#{minted["token"]}")
-    assert json_response(renew, 401)["error"] == "token_cannot_renew_itself"
+    assert json_response(renew, 403)["code"] == "token_cannot_renew_itself"
   end
 end

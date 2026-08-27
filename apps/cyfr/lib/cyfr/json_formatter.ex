@@ -28,15 +28,7 @@ defmodule Cyfr.JsonFormatter do
 
     fields =
       metadata
-      |> Keyword.take([
-        :request_id,
-        :user_id,
-        :athanor_id,
-        :auth_method,
-        :module,
-        :function,
-        :line
-      ])
+      |> Keyword.take(configured_metadata_keys())
       |> Enum.reduce(base, fn {k, v}, acc ->
         Map.put(acc, to_string(k), to_string(v))
       end)
@@ -44,6 +36,17 @@ defmodule Cyfr.JsonFormatter do
     case Jason.encode_to_iodata(fields) do
       {:ok, data} -> [data, ?\n]
       {:error, _} -> "#{inspect({date, time})} [#{level}] #{message}\n"
+    end
+  end
+
+  # The configured `:logger, :default_formatter` metadata list is the one
+  # roster (config.exs / runtime.exs set it); a hardcoded copy here meant
+  # adding a key required editing two files — and carried three keys the
+  # config never requested, which therefore never arrived.
+  defp configured_metadata_keys do
+    case Application.get_env(:logger, :default_formatter, [])[:metadata] do
+      keys when is_list(keys) -> keys
+      _ -> [:request_id, :user_id, :athanor_id, :auth_method]
     end
   end
 

@@ -500,7 +500,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         )
 
       body = json_response(conn, 404)
-      assert body["error"] == "Not Found"
+      assert body["code"] == "not_found"
     end
 
     test "rejects invoke with missing reference", %{conn: conn} do
@@ -523,7 +523,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         )
 
       body = json_response(conn, 404)
-      assert body["error"] == "Not Found"
+      assert body["code"] == "not_found"
     end
 
     test "OPTIONS preflight returns 204 with CORS headers", %{conn: conn} do

@@ -157,25 +157,15 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
   end
 
   defp deny_404(conn) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(404, ~s({"error":"not_found"}))
-    |> halt()
+    EmissaryWeb.ApiError.halt(conn, 404, :not_found, "Not found")
   end
 
   defp deny_401(conn) do
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(401, ~s({"error":"unauthorized"}))
-    |> halt()
+    EmissaryWeb.ApiError.halt(conn, 401, :unauthorized, "Signature verification failed")
   end
 
   defp deny_500(conn) do
     Logger.error("[VerifyWebhookSignature] internal error path=#{conn.request_path}")
-
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(500, ~s({"error":"internal_error"}))
-    |> halt()
+    EmissaryWeb.ApiError.halt(conn, 500, :internal_error, "Internal error")
   end
 end

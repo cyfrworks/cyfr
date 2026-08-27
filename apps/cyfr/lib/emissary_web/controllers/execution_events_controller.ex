@@ -15,14 +15,17 @@ defmodule EmissaryWeb.ExecutionEventsController do
 
   use EmissaryWeb, :controller
 
-  @keep_alive_interval_ms 15_000
+  @keep_alive_interval_ms EmissaryWeb.SSE.keep_alive_ms()
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
       not Cyfr.Execution.available?() ->
-        conn
-        |> put_status(503)
-        |> json(%{"error" => "Execution event streaming unavailable (Opus not loaded)"})
+        EmissaryWeb.ApiError.send(
+          conn,
+          503,
+          :execution_unavailable,
+          "Execution event streaming unavailable — the engine is starting"
+        )
 
       true ->
         ctx = conn.assigns[:context]
@@ -31,7 +34,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
              {:exec, %Arca.Execution{} = exec} <-
                {:exec, Arca.Execution.get_tenant(ctx, execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
-             :ok <- claim_stream_slot(ctx) do
+             :ok <- EmissaryWeb.SSE.claim_slot(:sse_slot, ctx, :execution_events_max_concurrent) do
           last_seq = parse_last_event_id(conn)
 
           conn
@@ -63,28 +66,6 @@ defmodule EmissaryWeb.ExecutionEventsController do
         end
     end
   end
-
-  # Same leash as `subscriptions/listen`: a per-user cap on concurrent
-  # streams and a hard deadline on each. The slot is a SubscriptionRegistry
-  # entry under a TAGGED key with its own budget — sharing the listen key
-  # would let one surface starve the other. (The tag is this controller's
-  # own; `Arca.Cache.Keys.exec_events/2` is a different store and a
-  # different key.) Registry entries die with this process, so a vanished
-  # client frees its slot without bookkeeping.
-  defp claim_stream_slot(ctx) do
-    key = {:sse_slot, ctx.athanor_id, ctx.user_id}
-    limit = Application.get_env(:cyfr, :execution_events_max_concurrent, 8)
-
-    if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do
-      {:error, :stream_limit}
-    else
-      {:ok, _} = Registry.register(Emissary.MCP.SubscriptionRegistry, key, :stream)
-      :ok
-    end
-  end
-
-  defp max_stream_ms,
-    do: Application.get_env(:cyfr, :execution_events_max_ms, :timer.minutes(30))
 
   # Single authorization chokepoint: `Sanctum.Context.authorize/3` with the
   # `{:execution, record}` resource performs require_permission(:storage_read)
@@ -127,7 +108,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
       Cyfr.Execution.unsubscribe_events(execution_id, exec)
       conn
     else
-      deadline = System.monotonic_time(:millisecond) + max_stream_ms()
+      deadline = EmissaryWeb.SSE.deadline(:execution_events_max_ms)
       event_loop(conn, execution_id, exec, deadline)
     end
   end

@@ -835,9 +835,24 @@ defmodule Prism.ConversationRunner do
 
     state
   rescue
-    _ -> %{state | running: false, execution_id: nil}
+    e ->
+      # Shutdown must not crash, but a failed cancel leaves the execution
+      # running server-side while this runner reports itself stopped —
+      # that orphan must be visible.
+      Logger.warning(
+        "[Prism.ConversationRunner] shutdown cancel failed for #{inspect(state.execution_id)}: " <>
+          Exception.message(e)
+      )
+
+      %{state | running: false, execution_id: nil}
   catch
-    :exit, _ -> %{state | running: false, execution_id: nil}
+    :exit, reason ->
+      Logger.warning(
+        "[Prism.ConversationRunner] shutdown cancel exited for #{inspect(state.execution_id)}: " <>
+          inspect(reason)
+      )
+
+      %{state | running: false, execution_id: nil}
   end
 
   # ---------------------------------------------------------------------------
@@ -1228,7 +1243,14 @@ defmodule Prism.ConversationRunner do
       reason: reason
     })
   rescue
-    _ -> :ok
+    # An approval decision's telemetry is compliance-relevant — dropping
+    # it must leave a trace, even though it must not fail the decision.
+    e ->
+      Logger.warning(
+        "[Prism.ConversationRunner] approval telemetry dropped: " <> Exception.message(e)
+      )
+
+      :ok
   end
 
   defp scope_atom(scope) when scope in [:once, :conversation, :always, :never], do: scope

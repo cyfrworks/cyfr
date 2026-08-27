@@ -556,10 +556,21 @@ defmodule Emissary.MCP.ExternalServer do
             #
             # The body is inspected, never reflected — it may carry internal
             # diagnostics or credentials echoed back at us.
-            if state.era == :modern and status in 400..499 and not modern_error?(resp_body) do
-              {:legacy, state}
-            else
-              {:error, "HTTP #{status}"}
+            cond do
+              # An auth rejection is never an era signal: a legacy retry
+              # re-sends the same refused credential, wastes a round-trip,
+              # and logs "speaks a pre-2026 revision" about a server whose
+              # only complaint is the bearer token. Say what it is.
+              status in [401, 403] ->
+                {:error,
+                 "HTTP #{status} — the server refused this connection's " <>
+                   "credentials; check the registered Authorization header"}
+
+              state.era == :modern and status in 400..499 and not modern_error?(resp_body) ->
+                {:legacy, state}
+
+              true ->
+                {:error, "HTTP #{status}"}
             end
 
           # SSRF/DNS validation failures are safe, descriptive strings.

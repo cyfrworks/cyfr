@@ -208,7 +208,9 @@ defmodule Emissary.MCP.RouterTest do
       }
 
       assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
-      assert message =~ "Failed to read resource"
+      # A handler's crafted string diagnosis passes through; an internal
+      # term would have been masked.
+      assert message =~ "No provider found"
     end
   end
 

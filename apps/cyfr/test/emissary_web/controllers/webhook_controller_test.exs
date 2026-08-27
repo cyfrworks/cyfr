@@ -77,7 +77,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
         |> post("/hooks/wh_does_not_exist", ~s({}))
 
       assert conn.status == 404
-      assert json_response(conn, 404)["error"] == "not_found"
+      assert json_response(conn, 404)["code"] == "not_found"
     end
 
     test "404 on disabled webhook (no enumeration leak)", %{conn: conn, ctx: ctx} do
@@ -135,7 +135,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
       conn2 = post_signed(conn, slug, secret, ~s({}))
       assert conn2.status == 404
-      assert json_response(conn2, 404)["error"] == "not_found"
+      assert json_response(conn2, 404)["code"] == "not_found"
       {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
 
       # a denied creator closes it too
@@ -160,7 +160,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
         |> post("/hooks/" <> slug, ~s({}))
 
       assert conn.status == 401
-      assert json_response(conn, 401)["error"] == "unauthorized"
+      assert json_response(conn, 401)["code"] == "unauthorized"
     end
 
     test "401 on signature mismatch", %{conn: conn, ctx: ctx} do

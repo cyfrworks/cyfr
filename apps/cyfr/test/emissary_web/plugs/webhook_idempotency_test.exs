@@ -94,7 +94,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotencyTest do
 
       assert result.halted
       assert result.status == 400
-      assert Jason.decode!(result.resp_body)["error"] == "missing_idempotency_key"
+      assert Jason.decode!(result.resp_body)["code"] == "missing_idempotency_key"
     end
 
     test "different keys do not collide", %{ctx: ctx} do

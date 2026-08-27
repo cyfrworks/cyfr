@@ -73,7 +73,10 @@ defmodule EmissaryWeb.Endpoint do
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  plug(Plug.Parsers,
+  # Plug.Parsers behind the wrapper that answers /mcp parser failures in
+  # JSON-RPC (-32700) and gates its content type; everything else keeps
+  # Phoenix's rendering.
+  plug(EmissaryWeb.Plugs.ParserErrors,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),

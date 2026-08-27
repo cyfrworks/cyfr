@@ -15,9 +15,16 @@ defmodule Cyfr.OtelTenantHandler do
 
   @handler_id "cyfr-otel-tenant"
 
+  # The :stop events, deliberately: Phoenix emits router_dispatch :start
+  # BEFORE the pipeline runs (deps/phoenix router.ex — the conn in the
+  # :start metadata predates every plug), so `assigns[:context]` — set by
+  # EmissaryWeb.Plugs.Authenticate inside the pipeline — was always nil
+  # there and no tenant attribute was ever written. The :stop metadata
+  # carries the post-pipeline conn; :endpoint :stop fires via
+  # register_before_send, so a request halted by auth still lands here.
   @events [
-    [:phoenix, :endpoint, :start],
-    [:phoenix, :router_dispatch, :start]
+    [:phoenix, :endpoint, :stop],
+    [:phoenix, :router_dispatch, :stop]
   ]
 
   @doc """
@@ -35,38 +42,44 @@ defmodule Cyfr.OtelTenantHandler do
   @doc false
   def handle_event(_event, _measurements, metadata, _config) do
     if otel_available?() do
-      conn = metadata[:conn]
+      attrs = attributes_from(metadata[:conn])
 
-      if conn && is_map(conn.assigns) do
-        ctx = conn.assigns[:context]
-
-        # Only a real Context carries tenant fields; guard up front so a stray
-        # non-struct assign fails fast/clearly instead of KeyError-ing into the
-        # rescue below.
-        if is_struct(ctx, Sanctum.Context) do
-          set_span_attributes(ctx)
-        end
+      if attrs != [] do
+        span_ctx = apply(OpenTelemetry.Tracer, :current_span_ctx, [])
+        apply(OpenTelemetry.Span, :set_attributes, [span_ctx, attrs])
       end
     end
+
+    :ok
   rescue
+    # Span attribution must never take a request down, but a failure here
+    # means tenant tracing is silently absent — visible at default levels,
+    # not buried at :debug.
     e ->
-      Logger.debug("[OtelTenantHandler] handle_event failed: #{Exception.message(e)}")
+      Logger.warning("[OtelTenantHandler] handle_event failed: #{Exception.message(e)}")
       :ok
   end
 
-  defp set_span_attributes(ctx) do
-    attrs =
-      [
-        {"tenant.athanor_id", ctx.athanor_id},
-        {"tenant.user_id", ctx.user_id}
-      ]
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
+  @doc false
+  # The pure half, split out so a test can assert what a conn yields
+  # without a live span.
+  def attributes_from(%Plug.Conn{assigns: assigns}) do
+    case assigns[:context] do
+      # Only a real Context carries tenant fields; a stray non-struct
+      # assign yields nothing rather than KeyError-ing into the rescue.
+      %Sanctum.Context{} = ctx ->
+        [
+          {"tenant.athanor_id", ctx.athanor_id},
+          {"tenant.user_id", ctx.user_id}
+        ]
+        |> Enum.reject(fn {_, v} -> is_nil(v) end)
 
-    if attrs != [] do
-      span_ctx = apply(OpenTelemetry.Tracer, :current_span_ctx, [])
-      apply(OpenTelemetry.Span, :set_attributes, [span_ctx, attrs])
+      _ ->
+        []
     end
   end
+
+  def attributes_from(_), do: []
 
   defp otel_available? do
     Code.ensure_loaded?(OpenTelemetry) and Code.ensure_loaded?(OpenTelemetry.Tracer)

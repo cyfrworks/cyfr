@@ -545,9 +545,24 @@ defmodule Locus.Builder do
   defp kill_os_process(nil), do: :ok
 
   defp kill_os_process(os_pid) do
-    # Kill the process group to clean up cargo and its children
-    System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true)
-    :ok
+    # Kill the process group to clean up cargo and its children. ESRCH
+    # (exit 1, already gone) is the expected case; any other failure means
+    # a cargo/npm tree may have leaked, and that must not be silent — this
+    # is the one zombie-process risk in the tree.
+    case System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      {out, code} ->
+        unless out =~ "No such process" do
+          Logger.warning(
+            "[Builder] process-group kill of #{os_pid} exited #{code}: #{String.trim(out)} — " <>
+              "a build toolchain process may have leaked"
+          )
+        end
+
+        :ok
+    end
   rescue
     e ->
       Logger.warning("[Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
