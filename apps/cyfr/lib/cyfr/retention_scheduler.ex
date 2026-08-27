@@ -6,10 +6,12 @@ defmodule Cyfr.RetentionScheduler do
   Periodic retention cleanup, enabled when retention is configured.
 
   When retention is disabled, this GenServer returns `:ignore` and never
-  starts. When enabled, it runs `Cyfr.Retention.cleanup_all_executions/2`,
-  `Cyfr.Retention.cleanup_all_logs/1` and `Cyfr.Retention.cleanup_all_builds/1`
-  on a configurable interval (default 6 hours) to prevent unbounded storage
-  growth.
+  starts. When enabled, each cycle runs `Cyfr.Retention.cleanup_all/1` —
+  every kind in `Cyfr.Retention.kinds/0`, every active athanor, each
+  inside its own context — plus the declared sweeps below, on a
+  configurable interval (default 6 hours) to prevent unbounded storage
+  growth. Every step runs behind one crash barrier: a fault in one is
+  logged and the cycle moves on.
   """
 
   use GenServer
@@ -58,87 +60,46 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   defp run_cleanup do
-    ctx = Sanctum.system_context()
+    run_step("retention cleanup", &run_retention/0)
 
-    try do
-      case Cyfr.Retention.cleanup_all_executions(ctx) do
-        {:ok, %{tenants: tenants, deleted: deleted, errors: []}} ->
-          if deleted > 0,
-            do:
-              Logger.info(
-                "[RetentionScheduler] Cleaned #{deleted} executions across #{tenants} tenants"
-              )
+    for {label, fun} <- sweeps(), do: run_step(label, fun)
+  end
 
-        {:ok, %{tenants: tenants, deleted: deleted, errors: errors}} ->
-          if deleted > 0,
-            do:
-              Logger.info(
-                "[RetentionScheduler] Cleaned #{deleted} executions across #{tenants} tenants"
-              )
+  # The declared sweep roster — recurring reclaims that are not per-kind
+  # retention policy: each is a `{label, fun}` the crash barrier runs.
+  defp sweeps do
+    [
+      {"webhook delivery sweep", &sweep_webhook_deliveries/0},
+      {"stale tmp sweep", &sweep_stale_tmp_files/0},
+      {"conversation blob orphan sweep", &sweep_conversation_blob_orphans/0},
+      {"health probe sweep", &sweep_health_probe_dir/0}
+    ]
+  end
 
-          for {athanor_id, reason} <- errors do
-            Logger.error(
-              "[RetentionScheduler] Cleanup failed athanor=#{athanor_id}: #{inspect(reason)}"
-            )
-          end
+  # One crash barrier for every step: retention must never take the
+  # server down, and one step's fault must not starve the rest.
+  defp run_step(label, fun) do
+    fun.()
+  rescue
+    e -> Logger.error("[RetentionScheduler] #{label} crashed: #{Exception.message(e)}")
+  end
 
-        {:ok, _} ->
-          :ok
-      end
-    rescue
-      e -> Logger.error("[RetentionScheduler] Execution cleanup crashed: #{Exception.message(e)}")
+  defp run_retention do
+    {:ok, %{tenants: tenants, deleted: deleted, errors: errors}} = Cyfr.Retention.cleanup_all()
+
+    cleaned = for {kind, count} <- deleted, count > 0, do: "#{count} #{kind}"
+
+    if cleaned != [] do
+      Logger.info(
+        "[RetentionScheduler] Cleaned #{Enum.join(cleaned, ", ")} across #{tenants} tenants"
+      )
     end
 
-    try do
-      case Cyfr.Retention.cleanup_all_logs() do
-        {:ok,
-         %{
-           mcp_logs_deleted: mcp,
-           policy_logs_deleted: policy,
-           conversations_deleted: conversations,
-           errors: errors
-         }} ->
-          if mcp + policy + conversations > 0,
-            do:
-              Logger.info(
-                "[RetentionScheduler] Cleaned #{mcp} MCP logs, #{policy} policy logs, " <>
-                  "#{conversations} conversations"
-              )
-
-          for {athanor_id, kind, reason} <- errors do
-            Logger.warning(
-              "[RetentionScheduler] #{kind} cleanup failed athanor=#{athanor_id}: " <>
-                inspect(reason)
-            )
-          end
-      end
-    rescue
-      e -> Logger.error("[RetentionScheduler] Log cleanup crashed: #{Exception.message(e)}")
+    for {athanor_id, kind, reason} <- errors do
+      Logger.warning(
+        "[RetentionScheduler] #{kind} cleanup failed athanor=#{athanor_id}: #{inspect(reason)}"
+      )
     end
-
-    try do
-      case Cyfr.Retention.cleanup_all_builds() do
-        {:ok, %{tenants: tenants, builds_deleted: deleted, errors: errors}} ->
-          if deleted > 0,
-            do:
-              Logger.info(
-                "[RetentionScheduler] Cleaned #{deleted} build records across #{tenants} tenants"
-              )
-
-          for {athanor_id, reason} <- errors do
-            Logger.warning(
-              "[RetentionScheduler] Build cleanup failed athanor=#{athanor_id}: #{inspect(reason)}"
-            )
-          end
-      end
-    rescue
-      e -> Logger.error("[RetentionScheduler] Build cleanup crashed: #{Exception.message(e)}")
-    end
-
-    sweep_webhook_deliveries()
-    sweep_stale_tmp_files()
-    sweep_conversation_blob_orphans()
-    sweep_health_probe_dir()
   end
 
   # The storage readiness probe overwrites one fixed key and cleans up
@@ -154,8 +115,6 @@ defmodule Cyfr.RetentionScheduler do
       {:error, reason} ->
         Logger.warning("[RetentionScheduler] Health-probe sweep failed: #{inspect(reason)}")
     end
-  rescue
-    e -> Logger.error("[RetentionScheduler] Health-probe sweep crashed: #{Exception.message(e)}")
   end
 
   # Conversation blob dirs no row backs (a blob delete that failed after
@@ -182,8 +141,6 @@ defmodule Cyfr.RetentionScheduler do
 
         :ok
     end
-  rescue
-    e -> Logger.error("[RetentionScheduler] Blob orphan sweep crashed: #{Exception.message(e)}")
   end
 
   # Orphaned atomic-write temp files are an adapter artifact; the facade
@@ -200,8 +157,6 @@ defmodule Cyfr.RetentionScheduler do
       {:error, reason} ->
         Logger.warning("[RetentionScheduler] Temp sweep failed: #{inspect(reason)}")
     end
-  rescue
-    e -> Logger.error("[RetentionScheduler] Temp sweep crashed: #{Exception.message(e)}")
   end
 
   # Webhook idempotency table sweep. Default TTL 24h — webhook senders that
@@ -211,22 +166,15 @@ defmodule Cyfr.RetentionScheduler do
     ttl = Application.get_env(:cyfr, :webhook_idempotency_ttl_seconds, 86_400)
     cutoff = DateTime.utc_now() |> DateTime.add(-ttl, :second)
 
-    try do
-      case Arca.WebhookDeliveryStorage.sweep(cutoff) do
-        {:ok, count} when count > 0 ->
-          Logger.info("[RetentionScheduler] Cleaned #{count} webhook delivery records")
+    case Arca.WebhookDeliveryStorage.sweep(cutoff) do
+      {:ok, count} when count > 0 ->
+        Logger.info("[RetentionScheduler] Cleaned #{count} webhook delivery records")
 
-        {:ok, _} ->
-          :ok
+      {:ok, _} ->
+        :ok
 
-        {:error, reason} ->
-          Logger.warning("[RetentionScheduler] Webhook delivery sweep failed: #{inspect(reason)}")
-      end
-    rescue
-      e ->
-        Logger.error(
-          "[RetentionScheduler] Webhook delivery sweep crashed: #{Exception.message(e)}"
-        )
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Webhook delivery sweep failed: #{inspect(reason)}")
     end
   end
 end

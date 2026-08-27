@@ -414,8 +414,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # Cleanup for tenant A with 1-day retention
-      {:ok, count} = Cyfr.Retention.cleanup_mcp_logs(ctx_a, days: 1)
-      assert count == 1
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1)
 
       # Tenant A's log is gone
       assert Arca.Repo.get(Arca.McpLog, "log_tenant_a") == nil
@@ -447,15 +446,8 @@ defmodule Arca.TenantIsolationTest do
           status: "success"
         })
 
-      {:ok, %{would_delete: count_a}} =
-        Cyfr.Retention.cleanup_mcp_logs(ctx_a, days: 1, dry_run: true)
-
-      assert count_a == 1
-
-      {:ok, %{would_delete: count_b}} =
-        Cyfr.Retention.cleanup_mcp_logs(ctx_b, days: 1, dry_run: true)
-
-      assert count_b == 1
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1, dry_run: true)
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_b, "mcp_log_days", value: 1, dry_run: true)
     end
   end
 
@@ -493,7 +485,7 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup tenant A, keeping 2
-      {:ok, count} = Cyfr.Retention.cleanup_executions(ctx_a, keep: 2)
+      {:ok, count} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 2)
       assert count == 3
 
       # Tenant A has 2
@@ -509,7 +501,7 @@ defmodule Arca.TenantIsolationTest do
       assert length(b_results) == 5
     end
 
-    test "cleanup_all_executions scoped to tenant" do
+    test "execution cleanup scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       for i <- 1..4 do
@@ -536,9 +528,8 @@ defmodule Arca.TenantIsolationTest do
           })
       end
 
-      # Cleanup all executions scoped to tenant A
-      {:ok, result} = Cyfr.Retention.cleanup_all_executions(ctx_a, keep: 1)
-      assert result.deleted == 3
+      # Cleanup scoped to tenant A — retention is per-athanor.
+      assert {:ok, 3} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 1)
 
       # Tenant B unaffected
       b_results =
@@ -574,9 +565,7 @@ defmodule Arca.TenantIsolationTest do
           })
       end
 
-      {:ok, result} = Cyfr.Retention.cleanup_executions(ctx_a, keep: 1, dry_run: true)
-      assert length(result.would_delete) == 2
-      assert result.would_keep == 1
+      assert {:ok, 2} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 1, dry_run: true)
 
       # All records still exist
       all_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)

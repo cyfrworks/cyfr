@@ -214,26 +214,17 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Deletes executions older than the newest `keep` records within an athanor.
-  Members are interchangeable, so retention keeps the N most recent
-  executions per athanor, not per user.
+  Deletes executions older than the newest `keep` records within an
+  athanor. Members are interchangeable, so retention keeps the N most
+  recent executions per athanor, not per user. The row-plane retention
+  convention: `{:ok, count}` — or `{:error, :database_error}` when the
+  store cannot answer.
   """
+  @spec delete_older_than(non_neg_integer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_older_than(keep, opts) when is_list(opts) do
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
-
-    keep_ids_query =
-      from e in __MODULE__,
-        where: e.athanor_id == ^athanor_id,
-        order_by: [desc: e.started_at],
-        limit: ^keep,
-        select: e.id
-
-    delete_query =
-      from e in __MODULE__,
-        where: e.athanor_id == ^athanor_id,
-        where: e.id not in subquery(keep_ids_query)
-
-    Arca.Repo.delete_all(delete_query)
+    {count, _} = Arca.Repo.delete_all(stale_query(keep, opts))
+    {:ok, count}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
@@ -243,10 +234,20 @@ defmodule Arca.Execution do
       {:error, :database_error}
   end
 
-  @doc """
-  Lists IDs that would be deleted within an athanor (for dry_run).
-  """
-  def ids_to_delete(keep, opts) when is_list(opts) do
+  @doc "How many rows `delete_older_than/2` would remove — the dry-run count."
+  @spec count_stale(non_neg_integer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def count_stale(keep, opts) when is_list(opts) do
+    {:ok, Arca.Repo.aggregate(stale_query(keep, opts), :count)}
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.Execution] Database error in count_stale: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  # Everything past the newest `keep` in the athanor — the one spelling
+  # both the delete and its dry-run count share.
+  defp stale_query(keep, opts) do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     keep_ids_query =
@@ -256,34 +257,9 @@ defmodule Arca.Execution do
         limit: ^keep,
         select: e.id
 
-    from(e in __MODULE__,
+    from e in __MODULE__,
       where: e.athanor_id == ^athanor_id,
-      where: e.id not in subquery(keep_ids_query),
-      select: e.id
-    )
-    |> Arca.Repo.all()
-  end
-
-  @doc """
-  Returns the distinct athanor ids that have execution records, scoped to
-  the given context's athanor (every athanor for :platform).
-  """
-  def distinct_athanors(%Sanctum.Context{} = ctx) do
-    import Arca.QueryHelpers, only: [where_tenant: 2]
-
-    query =
-      from(e in __MODULE__,
-        select: e.athanor_id,
-        distinct: true
-      )
-
-    query =
-      case ctx.scope do
-        :platform -> query
-        _ -> where_tenant(query, ctx)
-      end
-
-    Arca.Repo.all(query)
+      where: e.id not in subquery(keep_ids_query)
   end
 
   @doc """

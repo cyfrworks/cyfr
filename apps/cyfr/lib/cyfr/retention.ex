@@ -9,127 +9,81 @@ defmodule Cyfr.Retention do
   for how long.
 
   Retention is per athanor — the furnace owns its records, and every
-  member sees the same ones. This module owns the policy: the settings
-  file, the defaults, and which setting governs which entity. The row
-  mechanics live with each entity's storage (`Arca.Execution`,
-  `Arca.McpLog`, `Arca.PolicyLog`, `Arca.ConversationStorage`); the MCP
-  surface lives with its dispatcher
-  (`Emissary.MCP.Tools.RecordsProvider`).
+  member sees the same ones. This module owns the roster and the policy:
+  `kinds/0` names every retainable kind (`Cyfr.Retention.Kind` adapters
+  — the row mechanics live with each kind's store), and the settings
+  document, the scheduler loop (`Cyfr.RetentionScheduler`) and the MCP
+  `retention` tool's vocabulary
+  (`Emissary.MCP.Tools.RecordsProvider`) all derive from that roster, so
+  none of them can fall behind it.
 
   ## Storage
 
   An athanor's retention policy lives under the `"retention"` key of its
   settings document (`Sanctum.Tenancy.Athanors.settings/1` — the row's
-  JSON column), next to every other per-athanor setting. Settings are
-  shared by all members of the athanor; an athanor that never configured
-  retention gets the defaults below. Every key drives destructive
-  cleanup, so an unreadable settings document is an error the cleanup
-  walks skip — defaulting there could delete data the athanor asked to
-  keep.
+  JSON column), next to every other per-athanor setting; the keys are
+  each kind's `key/0`. Settings are shared by all members; an athanor
+  that never configured retention gets the defaults (each kind's, which
+  `config :cyfr, Cyfr.Retention` may override). Every key drives
+  destructive cleanup, so an unreadable settings document is an error
+  the cleanup walks skip — defaulting there could delete data the
+  athanor asked to keep.
 
-  ## Defaults
+  ## The roster walk
 
-  The defaults live in this module's attributes; application config may
-  override them:
+  `cleanup_all/1` walks `Sanctum.Tenancy.Athanors.list_active/0`: an
+  archived athanor's records freeze with it — archiving touches nothing,
+  purging is the deliberate reclaim, and retention resumes if the
+  furnace reopens.
 
-      config :cyfr, Cyfr.Retention,
-        executions: 10_000,    # Keep last N executions per athanor
-        builds: 100            # Keep last N builds per athanor
-
-  ## Programmatic Usage
+  ## Usage
 
       ctx = Sanctum.TestContext.local()
 
-      # Get the athanor's settings (or defaults)
       {:ok, settings} = Cyfr.Retention.get_settings(ctx)
-
-      # Update the athanor's settings
       :ok = Cyfr.Retention.set_settings(ctx, %{"executions" => 5})
 
-      # Clean up old executions in the athanor
-      {:ok, deleted_count} = Cyfr.Retention.cleanup_executions(ctx)
-
-      # Preview what would be deleted
-      {:ok, %{would_delete: ids}} = Cyfr.Retention.cleanup_executions(ctx, dry_run: true)
-
+      {:ok, deleted} = Cyfr.Retention.cleanup(ctx, "executions")
+      {:ok, would_delete} = Cyfr.Retention.cleanup(ctx, "executions", dry_run: true)
   """
 
   alias Sanctum.Context
 
-  @default_execution_retention 10_000
-  @default_build_retention 100
-  @default_mcp_log_days 30
-  @default_policy_log_days 30
-  @default_messages_days 365
+  @kinds [
+    Cyfr.Retention.Executions,
+    Cyfr.Retention.Builds,
+    Cyfr.Retention.McpLogs,
+    Cyfr.Retention.PolicyLogs,
+    Cyfr.Retention.Conversations
+  ]
 
-  # ============================================================================
-  # Configuration
-  # ============================================================================
-
-  @doc """
-  Get current retention settings (global defaults from config).
-
-  Returns a map with all retention configuration values.
-  """
-  @spec settings() :: %{
-          executions: non_neg_integer(),
-          builds: non_neg_integer(),
-          mcp_log_days: non_neg_integer(),
-          policy_log_days: non_neg_integer(),
-          messages_days: non_neg_integer()
-        }
-  def settings do
-    config = Application.get_env(:cyfr, __MODULE__, [])
-
-    %{
-      executions: Keyword.get(config, :executions, @default_execution_retention),
-      builds: Keyword.get(config, :builds, @default_build_retention),
-      mcp_log_days: Keyword.get(config, :mcp_log_days, @default_mcp_log_days),
-      policy_log_days: Keyword.get(config, :policy_log_days, @default_policy_log_days),
-      messages_days: Keyword.get(config, :messages_days, @default_messages_days)
-    }
-  end
+  @doc "The closed roster of retainable kinds — everything else derives from it."
+  @spec kinds() :: [module()]
+  def kinds, do: @kinds
 
   @doc """
-  Get retention settings for a context's athanor.
-
-  Reads `settings["retention"]` from the athanor's row, filling missing
-  keys from the global defaults. A missing row means the athanor never
-  configured retention — the defaults apply. An unreadable row is an
-  error, not the defaults: every setting drives destructive cleanup, and
-  a transient database failure must not silently shorten a policy the
+  Get retention settings for the context's athanor — one string key per
+  kind, missing keys filled from the kind's default. A missing row means
+  the athanor never configured retention; an unreadable row is an error,
+  not the defaults: every setting drives destructive cleanup, and a
+  transient database failure must not silently shorten a policy the
   athanor lengthened.
   """
-  @spec get_settings(Context.t()) :: {:ok, map()} | {:error, term()}
+  @spec get_settings(Context.t()) :: {:ok, %{String.t() => pos_integer()}} | {:error, term()}
   def get_settings(%Context{} = ctx) do
-    defaults = settings()
-
     case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
       {:ok, athanor} ->
-        user_settings =
+        configured =
           case Sanctum.Tenancy.Athanors.settings(athanor)["retention"] do
             %{} = map -> map
             _ -> %{}
           end
 
         {:ok,
-         %{
-           "executions" => user_settings["executions"] || defaults.executions,
-           "builds" => user_settings["builds"] || defaults.builds,
-           "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days,
-           "policy_log_days" => user_settings["policy_log_days"] || defaults.policy_log_days,
-           "messages_days" => user_settings["messages_days"] || defaults.messages_days
-         }}
+         Map.new(@kinds, fn kind -> {kind.key(), configured[kind.key()] || kind.default()} end)}
 
       {:error, :not_found} ->
-        {:ok,
-         %{
-           "executions" => defaults.executions,
-           "builds" => defaults.builds,
-           "mcp_log_days" => defaults.mcp_log_days,
-           "policy_log_days" => defaults.policy_log_days,
-           "messages_days" => defaults.messages_days
-         }}
+        {:ok, Map.new(@kinds, fn kind -> {kind.key(), kind.default()} end)}
 
       {:error, reason} ->
         Logger.warning(
@@ -142,25 +96,26 @@ defmodule Cyfr.Retention do
   end
 
   @doc """
-  Set retention settings for the context's athanor.
-
-  Writes the full policy under `settings["retention"]` on the athanor's
-  row. Only provided keys are updated; missing keys retain their current
-  values.
+  Set retention settings for the context's athanor. Only roster keys are
+  accepted, only positive integers (or integer strings) as values —
+  anything else refuses typed instead of silently keeping the old value.
+  Provided keys update; missing keys retain their current values.
   """
-  @spec set_settings(Context.t(), map()) :: :ok | {:error, term()}
+  @spec set_settings(Context.t(), map()) ::
+          :ok | {:error, {:unknown_setting, String.t()} | {:invalid_setting, String.t()} | term()}
   def set_settings(%Context{} = ctx, new_settings) when is_map(new_settings) do
-    with {:ok, current} <- get_settings(ctx),
+    with :ok <- validate_settings(new_settings),
+         {:ok, current} <- get_settings(ctx),
          {:ok, athanor} <- Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
-      updated = %{
-        "executions" => get_positive_int(new_settings, "executions", current["executions"]),
-        "builds" => get_positive_int(new_settings, "builds", current["builds"]),
-        "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"]),
-        "policy_log_days" =>
-          get_positive_int(new_settings, "policy_log_days", current["policy_log_days"]),
-        "messages_days" =>
-          get_positive_int(new_settings, "messages_days", current["messages_days"])
-      }
+      updated =
+        Map.new(@kinds, fn kind ->
+          key = kind.key()
+
+          case Map.fetch(new_settings, key) do
+            {:ok, value} -> {key, coerce_positive_int!(value)}
+            :error -> {key, current[key]}
+          end
+        end)
 
       case Sanctum.Tenancy.Athanors.put_settings(athanor, %{"retention" => updated}) do
         {:ok, _athanor} -> :ok
@@ -169,150 +124,83 @@ defmodule Cyfr.Retention do
     end
   end
 
-  defp get_positive_int(map, key, default) do
-    value = Map.get(map, key) || Map.get(map, String.to_existing_atom(key))
+  defp validate_settings(new_settings) do
+    known = MapSet.new(@kinds, & &1.key())
 
-    cond do
-      is_integer(value) and value > 0 -> value
-      is_binary(value) -> String.to_integer(value) |> max(1)
-      true -> default
-    end
-  rescue
-    _e in ArgumentError ->
-      Logger.warning("[Retention] Invalid setting for #{key}: not a valid integer")
-      default
-  end
-
-  # ============================================================================
-  # Execution Cleanup
-  # ============================================================================
-
-  @doc """
-  Clean up old execution records for a user.
-
-  Keeps the most recent N executions (based on started_at timestamp) and
-  deletes older ones via SQLite. N is configured via `:executions` setting.
-
-  ## Options
-
-  - `:keep` - Override the number of executions to keep (default from config)
-  - `:dry_run` - If true, returns what would be deleted without actually deleting
-
-  ## Returns
-
-  - `{:ok, deleted_count}` - Number of executions deleted
-  - `{:ok, %{would_delete: ids}}` - If dry_run is true
-  """
-  @spec cleanup_executions(Context.t(), keyword()) ::
-          {:ok, non_neg_integer() | map()} | {:error, term()}
-  def cleanup_executions(%Context{} = ctx, opts \\ []) do
-    with {:ok, user_settings} <- get_settings(ctx) do
-      keep = Keyword.get(opts, :keep, user_settings["executions"])
-      dry_run = Keyword.get(opts, :dry_run, false)
-
-      tenant_opts = [athanor_id: ctx.athanor_id]
-
-      if dry_run do
-        ids_to_delete = Arca.Execution.ids_to_delete(keep, tenant_opts)
-
-        total = length(Arca.Execution.list(athanor_id: ctx.athanor_id, limit: 999_999))
-
-        would_keep = min(total, keep)
-        {:ok, %{would_delete: ids_to_delete, would_keep: would_keep}}
-      else
-        case Arca.Execution.delete_older_than(keep, tenant_opts) do
-          {:error, _} = err -> err
-          {count, _} -> {:ok, count}
-        end
+    Enum.find_value(new_settings, :ok, fn {key, value} ->
+      cond do
+        not MapSet.member?(known, key) -> {:error, {:unknown_setting, key}}
+        not positive_int?(value) -> {:error, {:invalid_setting, key}}
+        true -> nil
       end
+    end)
+  end
+
+  defp positive_int?(value) when is_integer(value), do: value > 0
+
+  defp positive_int?(value) when is_binary(value) do
+    match?({n, ""} when n > 0, Integer.parse(value))
+  end
+
+  defp positive_int?(_), do: false
+
+  # Validated above — the bang is for the impossible arm.
+  defp coerce_positive_int!(value) when is_integer(value), do: value
+  defp coerce_positive_int!(value) when is_binary(value), do: String.to_integer(value)
+
+  @doc """
+  Apply one kind's policy inside the context's athanor: delete — or, with
+  `dry_run: true`, count — everything past the athanor's configured value
+  (`value:` overrides it for a one-off cleanup). Answers
+  `{:ok, affected_count}`, `{:error, {:unknown_kind, key}}` for a key
+  outside the roster, or the kind's own store error.
+  """
+  @spec cleanup(Context.t(), String.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def cleanup(%Context{} = ctx, key, opts \\ []) when is_binary(key) do
+    case Enum.find(@kinds, &(&1.key() == key)) do
+      nil ->
+        {:error, {:unknown_kind, key}}
+
+      kind ->
+        dry_run = Keyword.get(opts, :dry_run, false)
+
+        case Keyword.fetch(opts, :value) do
+          {:ok, value} when is_integer(value) and value > 0 ->
+            kind.prune(ctx, value, dry_run)
+
+          :error ->
+            with {:ok, settings} <- get_settings(ctx) do
+              kind.prune(ctx, settings[key], dry_run)
+            end
+        end
     end
   end
 
   @doc """
-  Clean up executions for every athanor.
-
-  Iterates through all athanors that have execution records and applies each
-  athanor's retention policy.
-
-  ## Options
-
-  Same as `cleanup_executions/2`
-
-  ## Returns
-
-  - `{:ok, %{tenants: count, deleted: count}}` - Summary of cleanup
+  Every kind's policy across every active athanor, each inside its own
+  context (its own settings). Answers per-kind totals and the
+  `{athanor_id, key, reason}` triples whose cleanup failed — a failure
+  in one athanor or kind never stops the walk.
   """
-  @spec cleanup_all_executions(Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def cleanup_all_executions(%Context{} = ctx, opts \\ []) do
-    dry_run = Keyword.get(opts, :dry_run, false)
-    tenants = Arca.Execution.distinct_athanors(ctx)
+  @spec cleanup_all(keyword()) :: {:ok, map()}
+  def cleanup_all(opts \\ []) do
+    athanors = Sanctum.Tenancy.Athanors.list_active()
 
-    {successes, failures} =
-      tenants
-      |> Enum.map(fn athanor_id ->
-        tenant_ctx = athanor_ctx(athanor_id, ctx.user_id)
+    {deleted, errors} =
+      Enum.reduce(athanors, {Map.new(@kinds, &{&1.key(), 0}), []}, fn athanor, acc ->
+        ctx = athanor_ctx(athanor.id)
 
-        {athanor_id, cleanup_executions(tenant_ctx, opts)}
-      end)
-      |> Enum.split_with(fn {_, result} -> match?({:ok, _}, result) end)
-
-    success_results = Enum.map(successes, fn {_, {:ok, r}} -> r end)
-
-    error_list =
-      Enum.map(failures, fn {athanor_id, {:error, reason}} ->
-        {athanor_id, reason}
+        Enum.reduce(@kinds, acc, fn kind, {deleted, errors} ->
+          case cleanup(ctx, kind.key(), opts) do
+            {:ok, count} -> {Map.update!(deleted, kind.key(), &(&1 + count)), errors}
+            {:error, reason} -> {deleted, [{athanor.id, kind.key(), reason} | errors]}
+          end
+        end)
       end)
 
-    if dry_run do
-      all_would_delete = Enum.flat_map(success_results, fn %{would_delete: ids} -> ids end)
-      {:ok, %{tenants: length(tenants), would_delete: all_would_delete, errors: error_list}}
-    else
-      {:ok, %{tenants: length(tenants), deleted: Enum.sum(success_results), errors: error_list}}
-    end
+    {:ok, %{tenants: length(athanors), deleted: deleted, errors: Enum.reverse(errors)}}
   end
-
-  @doc """
-  Clean up MCP logs, policy logs and stale conversations for every athanor
-  that has any, each inside its own context (its own retention settings).
-  Returns per-kind totals and the athanors whose cleanup failed.
-  """
-  @spec cleanup_all_logs(keyword()) :: {:ok, map()}
-  def cleanup_all_logs(opts \\ []) do
-    athanors =
-      (Arca.McpLog.distinct_athanors() ++
-         Arca.PolicyLog.distinct_athanors() ++ Arca.ConversationStorage.distinct_athanors())
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    results =
-      Enum.map(athanors, fn athanor_id ->
-        ctx = athanor_ctx(athanor_id)
-
-        {athanor_id, cleanup_mcp_logs(ctx, opts), cleanup_policy_logs(ctx, opts),
-         cleanup_conversations(ctx, opts)}
-      end)
-
-    mcp_deleted = results |> Enum.map(fn {_, r, _, _} -> count_of(r) end) |> Enum.sum()
-    policy_deleted = results |> Enum.map(fn {_, _, r, _} -> count_of(r) end) |> Enum.sum()
-    conversations_deleted = results |> Enum.map(fn {_, _, _, r} -> count_of(r) end) |> Enum.sum()
-
-    errors =
-      for {athanor_id, mcp, policy, conv} <- results,
-          {kind, {:error, reason}} <- [mcp_logs: mcp, policy_logs: policy, conversations: conv],
-          do: {athanor_id, kind, reason}
-
-    {:ok,
-     %{
-       tenants: length(athanors),
-       mcp_logs_deleted: mcp_deleted,
-       policy_logs_deleted: policy_deleted,
-       conversations_deleted: conversations_deleted,
-       errors: errors
-     }}
-  end
-
-  defp count_of({:ok, count}) when is_integer(count), do: count
-  defp count_of(_), do: 0
 
   @doc """
   Reclaim orphaned conversation blob directories across every active
@@ -326,173 +214,32 @@ defmodule Cyfr.Retention do
 
     results =
       Enum.map(athanors, fn athanor ->
-        ctx =
-          athanor_ctx(athanor.id)
-
-        {athanor.id, Arca.ConversationStorage.sweep_orphaned_blobs(ctx)}
+        {athanor.id, Arca.ConversationStorage.sweep_orphaned_blobs(athanor_ctx(athanor.id))}
       end)
 
     reclaimed =
-      results |> Enum.map(fn {_id, result} -> count_of(result) end) |> Enum.sum()
+      results
+      |> Enum.map(fn
+        {_id, {:ok, count}} when is_integer(count) -> count
+        {_id, _} -> 0
+      end)
+      |> Enum.sum()
 
     errors = for {athanor_id, {:error, reason}} <- results, do: {athanor_id, reason}
 
     {:ok, %{tenants: length(athanors), dirs_deleted: reclaimed, errors: errors}}
   end
 
-  # ============================================================================
-  # Build Cleanup
-  # ============================================================================
-
-  @doc """
-  Clean up old build records for a user.
-
-  Build records are `build_records` rows written by `Locus.MCP`
-  (`Cyfr.BuildRecords` owns the shape). The newest `keep` survive,
-  ordered by `started_at`.
-  """
-  @spec cleanup_builds(Context.t(), keyword()) ::
-          {:ok, non_neg_integer() | map()} | {:error, term()}
-  def cleanup_builds(%Context{} = ctx, opts \\ []) do
-    with {:ok, user_settings} <- get_settings(ctx) do
-      keep = Keyword.get(opts, :keep, user_settings["builds"])
-      dry_run = Keyword.get(opts, :dry_run, false)
-
-      Cyfr.BuildRecords.prune(ctx, keep, dry_run: dry_run)
-    end
-  end
-
-  @doc """
-  Clean up build records for every active athanor, each inside its own
-  context (its own retention settings). The walk is the athanor roster —
-  an archived athanor drops out by not being enumerated.
-  """
-  @spec cleanup_all_builds(keyword()) :: {:ok, map()}
-  def cleanup_all_builds(opts \\ []) do
-    athanors = Sanctum.Tenancy.Athanors.list_active()
-
-    results =
-      Enum.map(athanors, fn athanor ->
-        ctx =
-          athanor_ctx(athanor.id)
-
-        {athanor.id, cleanup_builds(ctx, opts)}
-      end)
-
-    deleted = results |> Enum.map(fn {_, r} -> count_of(r) end) |> Enum.sum()
-    errors = for {athanor_id, {:error, reason}} <- results, do: {athanor_id, reason}
-
-    {:ok, %{tenants: length(athanors), builds_deleted: deleted, errors: errors}}
-  end
-
-  # ============================================================================
-  # MCP Log Cleanup
-  # ============================================================================
-
-  @doc """
-  Clean up old MCP log records.
-
-  Deletes logs older than the configured `mcp_log_days` setting.
-
-  ## Options
-
-  - `:days` - Override the number of days to keep (default from config)
-  - `:dry_run` - If true, returns what would be deleted without actually deleting
-
-  ## Returns
-
-  - `{:ok, deleted_count}` - Number of logs deleted
-  - `{:ok, %{would_delete: count}}` - If dry_run is true
-  """
-  @spec cleanup_mcp_logs(Context.t(), keyword()) ::
-          {:ok, non_neg_integer() | map()} | {:error, term()}
-  def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
-    with {:ok, user_settings} <- get_settings(ctx) do
-      days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
-      dry_run = Keyword.get(opts, :dry_run, false)
-
-      cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-      tenant_opts = [athanor_id: ctx.athanor_id]
-
-      if dry_run do
-        with {:ok, count} <- Arca.McpLog.count_before(cutoff, tenant_opts) do
-          {:ok, %{would_delete: count}}
-        end
-      else
-        Arca.McpLog.delete_before(cutoff, tenant_opts)
-      end
-    end
-  end
-
-  @doc """
-  Clean up old policy enforcement log records.
-
-  Deletes logs older than the configured `policy_log_days` setting.
-
-  ## Options
-
-  - `:days` - Override the number of days to keep (default from config)
-  - `:dry_run` - If true, returns what would be deleted without actually deleting
-
-  ## Returns
-
-  - `{:ok, deleted_count}` - Number of logs deleted
-  - `{:ok, %{would_delete: count}}` - If dry_run is true
-  """
-  @spec cleanup_policy_logs(Context.t(), keyword()) ::
-          {:ok, non_neg_integer() | map()} | {:error, term()}
-  def cleanup_policy_logs(%Context{} = ctx, opts \\ []) do
-    with {:ok, user_settings} <- get_settings(ctx) do
-      days = Keyword.get(opts, :days, user_settings["policy_log_days"])
-      dry_run = Keyword.get(opts, :dry_run, false)
-
-      cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-      tenant_opts = [athanor_id: ctx.athanor_id]
-
-      if dry_run do
-        with {:ok, count} <- Arca.PolicyLog.count_before(cutoff, tenant_opts) do
-          {:ok, %{would_delete: count}}
-        end
-      else
-        Arca.PolicyLog.delete_before(cutoff, tenant_opts)
-      end
-    end
-  end
-
-  @doc """
-  Clean up the athanor's conversations whose last activity is older than
-  the configured `messages_days` (messages go with them). A conversation
-  with a running turn is never touched.
-
-  ## Options
-
-  - `:days` - Override the number of days to keep (default from config)
-  - `:dry_run` - If true, returns what would be deleted without deleting
-
-  ## Returns
-
-  - `{:ok, deleted_count}` / `{:ok, %{would_delete: count}}` on dry run
-  """
-  @spec cleanup_conversations(Context.t(), keyword()) ::
-          {:ok, non_neg_integer() | map()} | {:error, term()}
-  def cleanup_conversations(%Context{} = ctx, opts \\ []) do
-    with {:ok, user_settings} <- get_settings(ctx) do
-      days = Keyword.get(opts, :days, user_settings["messages_days"])
-      dry_run = Keyword.get(opts, :dry_run, false)
-      cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
-
-      if dry_run do
-        with {:ok, count} <- Arca.ConversationStorage.count_before(ctx, cutoff) do
-          {:ok, %{would_delete: count}}
-        end
-      else
-        Arca.ConversationStorage.delete_before(ctx, cutoff)
-      end
-    end
-  end
-
   # Each athanor's cleanup runs inside that athanor — its own settings,
-  # its own rows; the user_id is audit attribution only. One spelling.
-  defp athanor_ctx(athanor_id, user_id \\ "system"),
-    do: Sanctum.internal_context(user_id: user_id, athanor_id: athanor_id, scope: :athanor)
+  # its own rows; the user_id is audit attribution only. Least privilege:
+  # a deleter reads settings and drops rows and blobs, it executes
+  # nothing.
+  defp athanor_ctx(athanor_id, user_id \\ "system") do
+    Sanctum.internal_context(
+      user_id: user_id,
+      athanor_id: athanor_id,
+      scope: :athanor,
+      permissions: [:storage_read, :storage_write]
+    )
+  end
 end

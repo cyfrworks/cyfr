@@ -429,10 +429,6 @@ defmodule Arca.ConversationStorage do
     Repo.all(from(c in Conversation, where: not is_nil(c.execution_id)))
   end
 
-  @doc "The distinct athanor ids that have conversations (retention walks them)."
-  @spec distinct_athanors() :: [String.t()]
-  def distinct_athanors, do: QueryHelpers.distinct_athanors(Conversation)
-
   @doc """
   Delete the athanor's conversations whose last activity is older than
   `cutoff` — messages and attachment blobs included. The context is the

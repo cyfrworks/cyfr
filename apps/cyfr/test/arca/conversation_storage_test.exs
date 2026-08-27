@@ -255,6 +255,5 @@ defmodule Arca.ConversationStorageTest do
     ids = Conversations.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([running.id, fresh.id])
     assert [running.id] == Enum.map(Conversations.with_running_turn(), & &1.id)
-    assert "ath_a" in Conversations.distinct_athanors()
   end
 end

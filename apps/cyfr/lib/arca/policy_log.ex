@@ -161,14 +161,6 @@ defmodule Arca.PolicyLog do
   end
 
   @doc """
-  The distinct athanor ids that have log rows. Unscoped by design: the
-  retention scheduler iterates every athanor and cleans each inside its own
-  context.
-  """
-  @spec distinct_athanors() :: [String.t()]
-  def distinct_athanors, do: Arca.QueryHelpers.distinct_athanors(__MODULE__)
-
-  @doc """
   Deletes all policy logs with timestamps before the given datetime.
 
   Requires `:athanor_id` — deletion is always scoped to one athanor.

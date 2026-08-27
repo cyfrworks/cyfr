@@ -131,14 +131,11 @@ defmodule Arca.IntegrationTest do
 
       assert length(records) == 5
 
-      # 3. Run cleanup (dry_run first)
-      {:ok, dry_result} = Retention.cleanup_executions(ctx, dry_run: true)
-      assert length(dry_result.would_delete) == 2
-      assert dry_result.would_keep == 3
+      # 3. Run cleanup (dry_run first — counts, deletes nothing)
+      assert {:ok, 2} = Retention.cleanup(ctx, "executions", dry_run: true)
 
       # 4. Actually run cleanup
-      {:ok, count} = Retention.cleanup_executions(ctx)
-      assert count == 2
+      assert {:ok, 2} = Retention.cleanup(ctx, "executions")
 
       # 5. Verify only 3 remain
       records =
@@ -193,8 +190,7 @@ defmodule Arca.IntegrationTest do
           "dry_run" => true
         })
 
-      assert length(dry_result.would_delete) == 2
-      assert dry_result.would_keep == 2
+      assert dry_result.would_delete == 2
 
       # 4. Actual cleanup via MCP
       {:ok, cleanup_result} =
@@ -317,8 +313,7 @@ defmodule Arca.IntegrationTest do
 
       # A member cleans up keeping 2 — retention is per-athanor, so it applies
       # to the whole athanor's executions (6 → 2), regardless of creator.
-      {:ok, count} = Retention.cleanup_executions(user1_ctx, keep: 2)
-      assert count == 4
+      assert {:ok, 4} = Retention.cleanup(user1_ctx, "executions", value: 2)
 
       remaining = Arca.Execution.list(athanor_id: athanor, limit: 100)
 

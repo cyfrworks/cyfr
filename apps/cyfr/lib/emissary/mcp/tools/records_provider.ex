@@ -288,24 +288,22 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
               "enum" => ["get", "set", "cleanup"],
               "description" => "Action to perform"
             },
+            # Both the settable keys and the cleanup vocabulary derive from
+            # the retention roster (`Cyfr.Retention.kinds/0`), so a new kind
+            # is on this surface the moment it exists — the enum cannot fall
+            # behind the policy module again.
             "settings" => %{
               "type" => "object",
-              "properties" => %{
-                "executions" => %{
-                  "type" => "integer",
-                  "description" => "Number of executions to keep per athanor"
-                },
-                "builds" => %{
-                  "type" => "integer",
-                  "description" => "Number of builds to keep per athanor"
-                }
-              },
+              "properties" =>
+                Map.new(Cyfr.Retention.kinds(), fn kind ->
+                  {kind.key(), %{"type" => "integer", "description" => setting_description(kind)}}
+                end),
               "description" => "Retention settings (for set action)"
             },
             "cleanup_type" => %{
               "type" => "string",
-              "enum" => ["executions", "builds", "mcp_logs"],
-              "description" => "Type of data to clean up (for cleanup action)"
+              "enum" => Enum.map(Cyfr.Retention.kinds(), & &1.key()),
+              "description" => "Kind of records to clean up (for cleanup action)"
             },
             "dry_run" => %{
               "type" => "boolean",
@@ -608,6 +606,12 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:ok, new_settings} = Cyfr.Retention.get_settings(ctx)
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
+        {:error, {:unknown_setting, key}} ->
+          {:error, "Unknown retention setting: #{key}"}
+
+        {:error, {:invalid_setting, key}} ->
+          {:error, "Invalid value for retention setting #{key} — use a positive integer"}
+
         {:error, reason} ->
           Logger.error(
             "[Emissary.MCP.Tools.RecordsProvider] Failed to update retention settings: #{inspect(reason)}"
@@ -623,27 +627,17 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
-      result =
-        case cleanup_type do
-          "executions" -> Cyfr.Retention.cleanup_executions(ctx, dry_run: dry_run)
-          "builds" -> Cyfr.Retention.cleanup_builds(ctx, dry_run: dry_run)
-          "mcp_logs" -> Cyfr.Retention.cleanup_mcp_logs(ctx, dry_run: dry_run)
-          _ -> {:error, "Unknown cleanup_type: #{cleanup_type}"}
-        end
+      # One dispatch for every kind — the roster is `Cyfr.Retention`'s.
+      case Cyfr.Retention.cleanup(ctx, cleanup_type, dry_run: dry_run) do
+        {:ok, count} when dry_run ->
+          {:ok,
+           %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: count}}
 
-      case result do
-        {:ok, count} when is_integer(count) ->
+        {:ok, count} ->
           {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
 
-        {:ok, %{would_delete: ids} = info} ->
-          {:ok,
-           %{
-             action: "cleanup",
-             cleanup_type: cleanup_type,
-             dry_run: true,
-             would_delete: ids,
-             would_keep: info[:would_keep]
-           }}
+        {:error, {:unknown_kind, _}} ->
+          {:error, "Unknown cleanup_type: #{cleanup_type}"}
 
         {:error, reason} ->
           Logger.error("[Emissary.MCP.Tools.RecordsProvider] Cleanup failed: #{inspect(reason)}")
@@ -772,6 +766,15 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   # tenant-scoped stores, so an athanor-less context must be refused before it
   # can reach any athanor's rows (the storage backstop would raise,
   # this answers politely).
+  # The wire description of one retention setting, from its unit — no
+  # per-kind prose to keep in step with the roster.
+  defp setting_description(kind) do
+    case kind.unit() do
+      :keep -> "Newest records kept per athanor"
+      :days -> "Days of records kept per athanor"
+    end
+  end
+
   defp tenant_gate(ctx) do
     case Context.tenant_ok(ctx) do
       :ok -> :ok

@@ -78,7 +78,7 @@ defmodule Sanctum.Policy.EnforcementTest do
   end
 
   describe "retention" do
-    test "cleanup_policy_logs deletes rows older than policy_log_days", %{ctx: ctx} do
+    test "policy-log cleanup deletes rows older than policy_log_days", %{ctx: ctx} do
       assert :ok =
                Enforcement.record(%{
                  ctx: ctx,
@@ -99,8 +99,8 @@ defmodule Sanctum.Policy.EnforcementTest do
         set: [timestamp: old_ts]
       )
 
-      assert {:ok, %{would_delete: 1}} = Cyfr.Retention.cleanup_policy_logs(ctx, dry_run: true)
-      assert {:ok, 1} = Cyfr.Retention.cleanup_policy_logs(ctx)
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "policy_log_days", dry_run: true)
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "policy_log_days")
       assert rows_for(ctx, "catalyst:local.old") == []
     end
   end

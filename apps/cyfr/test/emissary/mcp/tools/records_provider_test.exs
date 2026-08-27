@@ -190,7 +190,35 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       assert result.action == "cleanup"
       assert result.dry_run == true
-      assert is_list(result.would_delete)
+      assert is_integer(result.would_delete)
+    end
+
+    test "the cleanup vocabulary and settable keys are the retention roster", %{ctx: _ctx} do
+      # A kind added to Cyfr.Retention.kinds/0 must be on this surface the
+      # moment it exists — the enum fell two kinds behind once.
+      retention =
+        Emissary.MCP.Tools.RecordsProvider.tools()
+        |> Enum.find(&(&1.name == "retention"))
+
+      roster = Enum.map(Cyfr.Retention.kinds(), & &1.key())
+
+      assert retention.input_schema["properties"]["cleanup_type"]["enum"] == roster
+
+      assert retention.input_schema["properties"]["settings"]["properties"]
+             |> Map.keys()
+             |> Enum.sort() == Enum.sort(roster)
+    end
+
+    test "every kind is cleanable through the tool", %{ctx: ctx} do
+      for kind <- Cyfr.Retention.kinds() do
+        assert {:ok, %{deleted: n}} =
+                 MCP.handle("retention", ctx, %{
+                   "action" => "cleanup",
+                   "cleanup_type" => kind.key()
+                 })
+
+        assert is_integer(n)
+      end
     end
 
     test "cleanup runs for executions", %{ctx: ctx} do

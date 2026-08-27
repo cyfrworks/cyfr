@@ -15,6 +15,9 @@ defmodule Cyfr.BuildRecords do
 
   import Ecto.Query
 
+  require Logger
+  require Arca.Repo.Errors
+
   alias Arca.QueryHelpers
   alias Arca.Schemas.BuildRecord
   alias Sanctum.Context
@@ -82,11 +85,12 @@ defmodule Cyfr.BuildRecords do
 
   @doc """
   Delete every build record past the newest `keep`, ordered by
-  `started_at`. `dry_run: true` names the ids instead of deleting.
-  Returns `{:ok, deleted_count}` or `{:ok, %{would_delete: ids}}`.
+  `started_at`. `dry_run: true` counts instead of deleting. The
+  row-plane retention convention: `{:ok, affected_count}` — or
+  `{:error, :database_error}` when the store cannot answer.
   """
   @spec prune(Context.t(), non_neg_integer(), keyword()) ::
-          {:ok, non_neg_integer() | %{would_delete: [String.t()]}}
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def prune(%Context{} = ctx, keep, opts \\ []) when is_integer(keep) and keep >= 0 do
     # SQLite has no bare OFFSET, so the survivors are the subquery: the
     # newest `keep` rows stay, everything else in the tenant goes.
@@ -103,11 +107,15 @@ defmodule Cyfr.BuildRecords do
       |> where([b], b.id not in subquery(keepers))
 
     if Keyword.get(opts, :dry_run, false) do
-      {:ok, %{would_delete: doomed_query |> select([b], b.id) |> Arca.Repo.all()}}
+      {:ok, Arca.Repo.aggregate(doomed_query, :count)}
     else
       {count, _} = Arca.Repo.delete_all(doomed_query)
       {:ok, count}
     end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Cyfr.BuildRecords] Database error in prune: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   defp to_map(%BuildRecord{} = r) do

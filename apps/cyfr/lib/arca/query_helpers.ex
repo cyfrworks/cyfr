@@ -103,14 +103,4 @@ defmodule Arca.QueryHelpers do
   def where_before(query, field, %DateTime{} = cutoff) when is_atom(field) do
     from(r in query, where: field(r, ^field) < ^cutoff)
   end
-
-  @doc """
-  Every athanor id holding rows of `schema` — unscoped by design: the
-  retention scheduler enumerates each athanor and cleans inside its own
-  context.
-  """
-  @spec distinct_athanors(module()) :: [String.t()]
-  def distinct_athanors(schema) when is_atom(schema) do
-    Arca.Repo.all(from(r in schema, select: r.athanor_id, distinct: true))
-  end
 end
