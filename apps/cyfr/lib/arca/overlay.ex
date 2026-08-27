@@ -456,14 +456,18 @@ defmodule Arca.Overlay do
   @doc """
   Delete one unit the athanor holds — a materialized copy or its own
   work, explicitly (`aqua.delete`, `reset all: true`). Where a seed
-  counterpart exists it shows through afterwards — deleting an
-  `:own_shadowing` unit is how the shipped one is revealed. An
+  counterpart exists it shows through afterwards, and the answer SAYS so:
+  `{:ok, :revealed_shipped}` when the delete just uncovered a shipped
+  unit (a surface that stays silent makes shipped units look deletable),
+  `{:ok, :deleted}` when the athanor's own work is simply gone — the
+  same disposition vocabulary `Compendium.Registry.delete/4` speaks. An
   unmaterialized shipped unit refuses as `{:error, :bundled}` (there is
   nothing of the athanor's to delete), nothing at all as
   `{:error, :not_found}`.
   """
   @spec drop_unit(Context.t(), Arca.Storage.path()) ::
-          :ok | {:error, :bundled | :not_found | :not_overlaid | term()}
+          {:ok, :deleted | :revealed_shipped}
+          | {:error, :bundled | :not_found | :not_overlaid | term()}
   def drop_unit(%Context{} = ctx, path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] ->
@@ -471,10 +475,19 @@ defmodule Arca.Overlay do
 
       loc ->
         case unit_status(ctx, path) do
-          {:ok, :seed} -> {:error, :bundled}
-          {:ok, :absent} -> {:error, :not_found}
-          {:ok, _materialized_or_own} -> delete_unit(ctx, loc)
-          {:error, _} = error -> error
+          {:ok, :seed} ->
+            {:error, :bundled}
+
+          {:ok, :absent} ->
+            {:error, :not_found}
+
+          {:ok, status} when status in [:materialized, :own, :own_shadowing] ->
+            with :ok <- delete_unit(ctx, loc) do
+              if status == :own, do: {:ok, :deleted}, else: {:ok, :revealed_shipped}
+            end
+
+          {:error, _} = error ->
+            error
         end
     end
   end

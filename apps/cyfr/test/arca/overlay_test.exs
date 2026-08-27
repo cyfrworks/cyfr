@@ -505,7 +505,7 @@ defmodule Arca.OverlayTest do
       # Own work with nothing underneath is simply gone.
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
-      assert :ok = Arca.Overlay.drop_unit(ctx, own)
+      assert {:ok, :deleted} = Arca.Overlay.drop_unit(ctx, own)
       assert Arca.Overlay.unit_status(ctx, own) == {:ok, :absent}
 
       # Own work shadowing a shipped counterpart: dropping it is the
@@ -517,7 +517,9 @@ defmodule Arca.OverlayTest do
       File.write!(Path.join(shipped, @sentinel), ~s({"type":"catalyst"}))
       File.write!(Path.join(shipped, "catalyst.wasm"), "SHIPPED")
       assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
-      assert :ok = Arca.Overlay.drop_unit(ctx, shadowing)
+      # The verb itself says what the delete uncovered — no caller has
+      # to re-derive the disposition from status atoms.
+      assert {:ok, :revealed_shipped} = Arca.Overlay.drop_unit(ctx, shadowing)
       assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :seed}
       assert {:ok, "SHIPPED"} = Arca.get(ctx, shadowing ++ ["catalyst.wasm"])
 

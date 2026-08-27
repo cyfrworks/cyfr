@@ -310,36 +310,28 @@ defmodule Compendium.MCP.AquaTool do
   # deletes it outright.
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
+    # One call: the overlay's drop verb owns the whole disposition — the
+    # bundled refusal, the not-found, and what the delete reveals — so
+    # this adapter only puts words on its answers (and the old
+    # status-then-drop pair's race window is gone with the second probe).
     with :ok <- validate_name(name) do
-      file = AquaPath.agent_file(name)
+      case Arca.Overlay.drop_unit(ctx, AquaPath.agent_file(name)) do
+        {:ok, :revealed_shipped} ->
+          {:ok, %{deleted: name, restored: "shipped"}}
 
-      case Arca.Overlay.unit_status(ctx, file) do
-        {:ok, :seed} ->
+        {:ok, :deleted} ->
+          {:ok, %{deleted: name}}
+
+        {:error, :bundled} ->
           {:error,
            "Agent '#{name}' ships with the server and cannot be deleted — " <>
              "disable it instead (update name=#{name} disabled=true)"}
 
-        {:ok, status} when status in [:materialized, :own, :own_shadowing] ->
-          case Arca.Overlay.drop_unit(ctx, file) do
-            :ok ->
-              # The status already says what the delete reveals: an edited
-              # copy or the athanor's own work over a shipped counterpart
-              # uncovers it; plain own work is simply gone.
-              if status in [:materialized, :own_shadowing] do
-                {:ok, %{deleted: name, restored: "shipped"}}
-              else
-                {:ok, %{deleted: name}}
-              end
-
-            {:error, reason} ->
-              {:error, "Failed to delete: #{inspect(reason)}"}
-          end
-
-        {:ok, :absent} ->
+        {:error, :not_found} ->
           {:error, "Agent '#{name}' not found"}
 
         {:error, reason} ->
-          {:error, "Failed to read agent status: #{inspect(reason)}"}
+          {:error, "Failed to delete: #{inspect(reason)}"}
       end
     end
   end
