@@ -172,6 +172,51 @@ defmodule Sanctum.Vault.OAuthGrantTest do
                })
     end
 
+    test "extra_params may not steer the flow's security parameters", %{ctx: ctx} do
+      :ok = Sanctum.ProviderCredentials.put(ctx, "acme", "cid", "cs")
+
+      # Each of these, if honoured, breaks the callback's own checks:
+      # "plain" downgrades PKCE, and a caller-chosen state or redirect_uri
+      # substitutes the values `complete/3` compares against.
+      for reserved <- ~w(code_challenge_method state redirect_uri client_id scope) do
+        assert {:error, {:reserved_extra_param, ^reserved}} =
+                 OAuthGrant.authorize_url(ctx, %{
+                   name: "Acme",
+                   provider: "acme",
+                   scopes: ["read"],
+                   endpoints: %{
+                     "authorize_url" => "https://acme.example/auth",
+                     "token_url" => "https://acme.example/token",
+                     "extra_params" => %{reserved => "attacker-chosen"}
+                   }
+                 })
+      end
+    end
+
+    test "a legitimate extra_param still rides along", %{ctx: ctx} do
+      :ok = Sanctum.ProviderCredentials.put(ctx, "acme", "cid", "cs")
+
+      assert {:ok, %{url: url, state: state}} =
+               OAuthGrant.authorize_url(ctx, %{
+                 name: "Acme",
+                 provider: "acme",
+                 scopes: ["read"],
+                 endpoints: %{
+                   "authorize_url" => "https://acme.example/auth",
+                   "token_url" => "https://acme.example/token",
+                   "extra_params" => %{"prompt" => "consent", "audience" => "acme-api"}
+                 }
+               })
+
+      query = URI.decode_query(URI.parse(url).query)
+      assert query["prompt"] == "consent"
+      assert query["audience"] == "acme-api"
+      # The server's own parameters are untouched by the merge.
+      assert query["state"] == state
+      assert query["code_challenge_method"] == "S256"
+      assert query["client_id"] == "cid"
+    end
+
     test "an unconfigured provider names oauth.set_client", %{ctx: ctx} do
       assert {:error, message} =
                OAuthGrant.authorize_url(ctx, %{

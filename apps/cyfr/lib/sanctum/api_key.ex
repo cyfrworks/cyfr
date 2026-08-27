@@ -234,19 +234,39 @@ defmodule Sanctum.ApiKey do
     ip_allowlist = Map.get(opts, :ip_allowlist)
     athanor_id = athanor!(ctx)
 
-    attrs = %{
-      name: name,
-      key_hash: hash_key(key),
-      key_prefix: String.slice(key, 0, 12),
-      type: to_string(key_type),
-      scope: safe_encode(scope_list),
-      rate_limit: Map.get(opts, :rate_limit),
-      ip_allowlist: if(ip_allowlist, do: safe_encode(ip_allowlist)),
-      capability: Map.get(opts, :capability_json),
-      created_by: ctx.user_id,
-      athanor_id: athanor_id
-    }
+    # An unencodable allowlist must not become a key: `safe_encode/1`'s "[]"
+    # fallback is fail-closed for `scope` (no permissions) but fail-OPEN
+    # here, because `validate/2` reads an empty allowlist as "no IP
+    # restriction" — the restriction the operator asked for would silently
+    # not exist.
+    with {:ok, allowlist_json} <- encode_allowlist(ip_allowlist) do
+      attrs = %{
+        name: name,
+        key_hash: hash_key(key),
+        key_prefix: String.slice(key, 0, 12),
+        type: to_string(key_type),
+        scope: safe_encode(scope_list),
+        rate_limit: Map.get(opts, :rate_limit),
+        ip_allowlist: allowlist_json,
+        capability: Map.get(opts, :capability_json),
+        created_by: ctx.user_id,
+        athanor_id: athanor_id
+      }
 
+      store_key(attrs, key, name, key_type, scope_list, now)
+    end
+  end
+
+  defp encode_allowlist(nil), do: {:ok, nil}
+
+  defp encode_allowlist(ip_allowlist) do
+    case Jason.encode(ip_allowlist) do
+      {:ok, json} -> {:ok, json}
+      {:error, _} -> {:error, :invalid_ip_allowlist}
+    end
+  end
+
+  defp store_key(attrs, key, name, key_type, scope_list, now) do
     case Arca.ApiKeyStorage.create_key(attrs) do
       :ok ->
         {:ok, %{api_key: key, name: name, type: key_type, scope: scope_list, created_at: now}}

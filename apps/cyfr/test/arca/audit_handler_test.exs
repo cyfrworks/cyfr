@@ -150,5 +150,70 @@ defmodule Arca.AuditHandlerTest do
 
       :telemetry.detach("test-pipeline-failure")
     end
+
+    # :telemetry detaches a handler that raises, permanently and silently —
+    # so anything escaping handle_event/4 would end auditing for that event
+    # for the life of the node. The per-sink rescue does not cover the work
+    # around the sinks.
+    test "a raise outside the sinks does not escape the handler" do
+      # A sink list that is not a list of modules makes the dispatch itself
+      # raise, outside the per-sink try/rescue.
+      Application.put_env(:cyfr, :audit_sinks, :not_a_list)
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   Arca.AuditHandler.handle_event(
+                     [:cyfr, :sanctum, :auth],
+                     %{count: 1},
+                     %{user_id: "u1"},
+                     nil
+                   )
+        end)
+
+      assert log =~ "handler raised"
+    end
+  end
+
+  describe "monitored events" do
+    test "a component reaching a credential is audited" do
+      test_pid = self()
+
+      defmodule SecretSink do
+        @behaviour Arca.AuditSink
+
+        @impl true
+        def handle_audit_event(event_name, measurements, metadata) do
+          send(metadata[:test_pid], {:audit, event_name, measurements})
+          :ok
+        end
+      end
+
+      Application.put_env(:cyfr, :audit_sinks, [SecretSink])
+
+      for event <- [[:cyfr, :opus, :secret, :accessed], [:cyfr, :opus, :secret, :denied]] do
+        Arca.AuditHandler.handle_event(
+          event,
+          %{count: 1},
+          %{test_pid: test_pid, user_id: "u1"},
+          nil
+        )
+
+        assert_receive {:audit, ^event, %{count: 1}}
+      end
+    end
+
+    test "the secret events are attached, not merely handled" do
+      # handle_event/4 answers whatever it is handed; what matters is that
+      # the roster actually subscribes to these event names.
+      attached =
+        :telemetry.list_handlers([:cyfr, :opus, :secret, :accessed]) ++
+          :telemetry.list_handlers([:cyfr, :opus, :secret, :denied])
+
+      ids = Enum.map(attached, & &1.id)
+
+      assert "audit-cyfr-opus-secret-accessed" in ids
+      assert "audit-cyfr-opus-secret-denied" in ids
+    end
   end
 end

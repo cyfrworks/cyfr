@@ -93,8 +93,16 @@ defmodule Sanctum.Vault.OAuthGrant do
 
       Arca.Cache.put({:vault_oauth_pending, state}, pending, @pending_ttl_ms)
 
+      # Provider-specific knobs go UNDER the parameters this server minted:
+      # `extra_params` is caller data (a Connection's stored endpoints), and
+      # merging it over the top would let it hand back its own `state`,
+      # `redirect_uri` or a `code_challenge_method` of "plain" — downgrading
+      # PKCE and substituting the very values the callback checks. Reserved
+      # keys are refused outright at validation, so this ordering is the
+      # belt behind that brace.
       query =
-        %{
+        (endpoints["extra_params"] || %{})
+        |> Map.merge(%{
           "client_id" => creds["client_id"],
           "redirect_uri" => redirect_uri,
           "response_type" => "code",
@@ -102,8 +110,7 @@ defmodule Sanctum.Vault.OAuthGrant do
           "state" => state,
           "code_challenge" => code_challenge,
           "code_challenge_method" => "S256"
-        }
-        |> Map.merge(endpoints["extra_params"] || %{})
+        })
 
       url = endpoints["authorize_url"] <> "?" <> URI.encode_query(query)
       {:ok, %{url: url, state: state, redirect_uri: redirect_uri}}
@@ -200,14 +207,33 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp validate_endpoints(%{"authorize_url" => auth, "token_url" => token} = endpoints)
        when is_binary(auth) and is_binary(token) do
-    if String.starts_with?(auth, "https://") and String.starts_with?(token, "https://") do
-      {:ok, endpoints}
-    else
-      {:error, :endpoints_must_use_https}
+    cond do
+      not (String.starts_with?(auth, "https://") and String.starts_with?(token, "https://")) ->
+        {:error, :endpoints_must_use_https}
+
+      reserved = reserved_extra_param(endpoints) ->
+        {:error, {:reserved_extra_param, reserved}}
+
+      true ->
+        {:ok, endpoints}
     end
   end
 
   defp validate_endpoints(_), do: {:error, :endpoints_required}
+
+  # The authorization parameters this server owns. `extra_params` exists for
+  # provider knobs (`access_type`, `prompt`, `audience`); naming one of these
+  # is either a misunderstanding or an attempt to steer the flow, and both
+  # deserve an answer rather than a silent drop.
+  @reserved_params ~w(client_id redirect_uri response_type scope state
+                      code_challenge code_challenge_method)
+
+  defp reserved_extra_param(endpoints) do
+    case endpoints["extra_params"] do
+      %{} = extra -> Enum.find(@reserved_params, &Map.has_key?(extra, &1))
+      _ -> nil
+    end
+  end
 
   # `fetch_for_oauth` speaks operator-facing string errors, including the
   # not-configured message that names oauth.set_client.
@@ -320,16 +346,21 @@ defmodule Sanctum.Vault.OAuthGrant do
                sealed
              ) do
           :ok ->
-            rebound = maybe_rebind(entry, target)
+            with {:ok, rebound} <- maybe_rebind(entry, target) do
+              if entry.status == "needs_reauth" do
+                Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
+              end
 
-            if entry.status == "needs_reauth" do
-              Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
+              broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
+
+              {:ok,
+               %{
+                 entry_id: entry.id,
+                 name: entry.name,
+                 provider: target.provider,
+                 rebound: rebound
+               }}
             end
-
-            broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
-
-            {:ok,
-             %{entry_id: entry.id, name: entry.name, provider: target.provider, rebound: rebound}}
 
           {:error, :payload_conflict} ->
             # A concurrent material write landed between authorize and
@@ -360,16 +391,17 @@ defmodule Sanctum.Vault.OAuthGrant do
                  sealed
                ) do
             :ok ->
-              rebound = maybe_rebind(entry, target)
-              broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
+              with {:ok, rebound} <- maybe_rebind(entry, target) do
+                broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
 
-              {:ok,
-               %{
-                 entry_id: entry.id,
-                 name: entry.name,
-                 provider: target.provider,
-                 rebound: rebound
-               }}
+                {:ok,
+                 %{
+                   entry_id: entry.id,
+                   name: entry.name,
+                   provider: target.provider,
+                   rebound: rebound
+                 }}
+              end
 
             {:error, reason} ->
               {:error, reason}
@@ -411,7 +443,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     if stored_endpoints == target.endpoints and
          Enum.sort(stored_scopes) ==
            Enum.sort(target.scopes) do
-      false
+      {:ok, false}
     else
       changes = %{
         oauth_endpoints: Jason.encode!(target.endpoints),
@@ -433,11 +465,16 @@ defmodule Sanctum.Vault.OAuthGrant do
           Arca.ProfileStorage.set_status(entry.athanor_id, profile_id, "needs_consent")
         end)
 
-        true
+        {:ok, true}
       else
         error ->
+          # The binding moved but the profiles that consented to the OLD
+          # binding may not have been flipped to needs_consent — so a wider
+          # grant could run under a consent nobody re-approved. Reporting
+          # success here is the one fail-open in the credential path: refuse
+          # instead, and let the caller surface it.
           Logger.error("[Vault.OAuthGrant] rebind bookkeeping failed: #{inspect(error)}")
-          true
+          {:error, :rebind_bookkeeping_failed}
       end
     end
   end

@@ -24,6 +24,11 @@ defmodule Arca.AuditHandler do
   - `[:cyfr, :opus, :execute, :start]` — execution begins
   - `[:cyfr, :opus, :execute, :stop]` — execution completes
   - `[:cyfr, :opus, :execute, :exception]` — execution fails
+  - `[:cyfr, :opus, :secret, :accessed]` — a component read a credential
+  - `[:cyfr, :opus, :secret, :denied]` — a component was refused one
+
+  The full roster is `@audit_events`; this list names the shapes, not every
+  entry.
   """
 
   use GenServer
@@ -45,7 +50,12 @@ defmodule Arca.AuditHandler do
     [:cyfr, :sanctum, :door, :denied],
     [:cyfr, :opus, :execute, :start],
     [:cyfr, :opus, :execute, :stop],
-    [:cyfr, :opus, :execute, :exception]
+    [:cyfr, :opus, :execute, :exception],
+    # A component reaching an operator's credential — and being refused one —
+    # is the event this product exists to make accountable. It was emitted
+    # from `Opus.Runtime`'s vault import and consumed by nothing.
+    [:cyfr, :opus, :secret, :accessed],
+    [:cyfr, :opus, :secret, :denied]
   ]
 
   def start_link(opts \\ []) do
@@ -76,7 +86,32 @@ defmodule Arca.AuditHandler do
     end
   end
 
-  def handle_event(event_name, measurements, metadata, _config) do
+  # `:telemetry` runs handlers in the emitting process and permanently
+  # DETACHES any handler that raises — so an exception anywhere in here ends
+  # auditing for that event, for the life of the node, silently. The
+  # per-sink rescue below covers the sinks; this covers everything else
+  # (context construction most of all, which validates and can raise).
+  # `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take the same
+  # precaution for the same reason.
+  def handle_event(event_name, measurements, metadata, config) do
+    do_handle_event(event_name, measurements, metadata, config)
+  rescue
+    e ->
+      Logger.error(
+        "[AuditHandler] handler raised for #{inspect(event_name)}: #{Exception.message(e)} — " <>
+          "the event was not audited; the handler stays attached"
+      )
+
+      :telemetry.execute(
+        [:cyfr, :audit, :pipeline_failure],
+        %{count: 1},
+        %{event: event_name}
+      )
+
+      :ok
+  end
+
+  defp do_handle_event(event_name, measurements, metadata, _config) do
     sinks = Application.get_env(:cyfr, :audit_sinks, [Arca.AuditSinks.Console])
 
     # Inject tenant context into metadata for downstream sinks

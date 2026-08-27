@@ -210,6 +210,34 @@ defmodule Opus.AsyncTrackerTest do
       assert results == []
       GenServer.stop(tracker)
     end
+
+    # A guest names the task ids, so it can name one that was never spawned.
+    # That must read as :unknown_task — the answer await/2 and await_any/2
+    # already give — and never take the tracker down with it, because the
+    # tracker dying fails the whole formula run.
+    test "an unknown task id is an error result, not a crash" do
+      {:ok, tracker} = AsyncTracker.start_link([])
+
+      assert {:ok, results} = AsyncTracker.await_all(tracker, ["task_never_spawned"], 1000)
+      assert results == [{"task_never_spawned", {:error, :unknown_task}}]
+      assert Process.alive?(tracker)
+
+      GenServer.stop(tracker)
+    end
+
+    test "an unknown id mixed with a real one still returns the real result" do
+      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, id} = AsyncTracker.spawn_task(tracker, fn -> :done end, "ref1")
+
+      assert {:ok, results} = AsyncTracker.await_all(tracker, [id, "task_bogus"], 5000)
+
+      result_map = Map.new(results)
+      assert result_map[id] == {:ok, :done}
+      assert result_map["task_bogus"] == {:error, :unknown_task}
+      assert Process.alive?(tracker)
+
+      GenServer.stop(tracker)
+    end
   end
 
   # ============================================================================
@@ -267,6 +295,56 @@ defmodule Opus.AsyncTrackerTest do
         )
 
       assert {:error, :timeout} = AsyncTracker.await_any(tracker, [id1, id2], 100)
+      GenServer.stop(tracker)
+    end
+
+    # A completion belonging to a task this await is NOT watching used to be
+    # handed back to the mailbox with `send(self(), msg)` and immediately
+    # re-received, spinning a core until something else arrived. The wait
+    # still ended at the right moment, so only the work done gives it away:
+    # a blocked `receive` costs almost nothing, a spin costs millions of
+    # reductions. A guest can trigger it by awaiting one task while another
+    # finishes.
+    test "a completion for an unwatched task does not spin the await" do
+      {:ok, tracker} = AsyncTracker.start_link([])
+
+      {:ok, watched} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(600)
+            :watched
+          end,
+          "ref-watched"
+        )
+
+      # Lands mid-await: late enough that the tracker is already blocked in
+      # the receive loop, early enough that the loop then has ~500ms left to
+      # spin. Completing before the await starts would be consumed by
+      # handle_info/2 and prove nothing.
+      {:ok, _unwatched} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(100)
+            :unwatched
+          end,
+          "ref-unwatched"
+        )
+
+      {:reductions, before} = Process.info(tracker, :reductions)
+
+      assert {:ok, ^watched, {:ok, :watched}, _pending} =
+               AsyncTracker.await_any(tracker, [watched], 10_000)
+
+      {:reductions, after_} = Process.info(tracker, :reductions)
+      burned = after_ - before
+
+      assert burned < 100_000,
+             "the tracker burned #{burned} reductions waiting ~600ms — it re-received " <>
+               "another task's completion in a loop instead of blocking on its own"
+
+      assert Process.alive?(tracker)
       GenServer.stop(tracker)
     end
 

@@ -212,6 +212,30 @@ defmodule Emissary.MCP.RouterTest do
       # term would have been masked.
       assert message =~ "No provider found"
     end
+
+    # A missing or non-string uri is a malformed request, and must be
+    # refused as one. ResourceRegistry.read/2 is guarded `when is_binary`,
+    # so these used to raise out of the request process and render as a 500
+    # through ErrorJSON — the shape ErrorRenderer reserves for genuine bugs.
+    for {label, params} <- [
+          {"no params at all", %{}},
+          {"a null uri", %{"uri" => nil}},
+          {"a numeric uri", %{"uri" => 42}},
+          {"an object uri", %{"uri" => %{"nested" => true}}},
+          {"an empty uri", %{"uri" => ""}}
+        ] do
+      test "refuses #{label} with invalid_params", %{context: ctx} do
+        msg = %Message{
+          type: :request,
+          id: 9,
+          method: "resources/read",
+          params: unquote(Macro.escape(params))
+        }
+
+        assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
+        assert message =~ "uri"
+      end
+    end
   end
 
   describe "dispatch/2 with unknown method" do

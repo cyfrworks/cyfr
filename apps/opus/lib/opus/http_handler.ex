@@ -143,6 +143,25 @@ defmodule Opus.HttpHandler do
   """
   @spec execute(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t()) :: String.t()
   def execute(json_request, edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
+    do_execute(json_request, edge, limits, ctx, component_ref)
+  rescue
+    # Keeps the moduledoc's "never raised" promise, the way
+    # `Opus.StorageHandler.dispatch_caught/6` keeps it for its own boundary.
+    # The guest controls this JSON: a non-string `method` or `url` reached
+    # `String.upcase/1` and `URI.parse/1` unguarded, and the raise took the
+    # Wasmex process with it — killing the whole execution instead of
+    # handing the guest a typed error it could act on. The message stays
+    # generic; the exception goes to the host log.
+    exception ->
+      Logger.error(
+        "[Opus.HttpHandler] #{component_ref} request raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      encode_error(:invalid_request, "Malformed HTTP request.")
+  end
+
+  defp do_execute(json_request, edge, limits, ctx, component_ref) do
     case HttpRequestValidation.validate(json_request, edge, limits, ctx, component_ref) do
       {:ok, request} ->
         perform_request(request, limits, component_ref, ctx)

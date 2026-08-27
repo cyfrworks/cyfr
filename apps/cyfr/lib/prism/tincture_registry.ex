@@ -309,22 +309,21 @@ defmodule Prism.TinctureRegistry do
   defp blocked_image?(_), do: false
 
   # When multiple versions of the same tincture exist, keep only the latest.
+  #
+  # `Compendium.Semver` is the one comparator. The split-on-"." key this
+  # replaced ran `Integer.parse/1` over each part, so "1.0.0-rc1" reduced to
+  # [1, 0, 0] — indistinguishable from "1.0.0". `Enum.max_by/2` returns the
+  # FIRST maximal element, so which of the two the tincture router served at
+  # /t/{athanor}/{publisher}/{name} came down to the order the storage walk
+  # happened to return, and the console could disagree with the router about
+  # what "latest" meant.
   defp pick_latest_versions(tinctures) do
     tinctures
     |> Enum.group_by(fn t -> {t.athanor_id, t.publisher, t.name} end)
     |> Enum.map(fn {_key, versions} ->
-      Enum.max_by(versions, fn t -> version_sort_key(t.version) end)
-    end)
-  end
-
-  defp version_sort_key(version) do
-    version
-    |> String.split(".")
-    |> Enum.map(fn part ->
-      case Integer.parse(part) do
-        {n, _} -> n
-        :error -> 0
-      end
+      versions
+      |> Compendium.Semver.sort_desc_by(&(&1.version || "0.0.0"))
+      |> hd()
     end)
   end
 end

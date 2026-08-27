@@ -604,8 +604,17 @@ defmodule EmissaryWeb.AuthControllerTest do
       session
     end
 
+    # The browser that started the flow, as LoginLive records it: the
+    # session's CSRF token. `browser_conn/1` seeds the same value so the
+    # request arrives as that browser.
+    @browser_binding "device-ticket-test-browser"
+
+    defp browser_conn(conn),
+      do: Plug.Test.init_test_session(conn, %{"_csrf_token" => @browser_binding})
+
     defp mint_ticket(payload) do
       ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      payload = Map.put_new(payload, :browser_binding, @browser_binding)
       Arca.Cache.put({:login_device_ticket, ticket}, payload, 60_000)
       ticket
     end
@@ -623,7 +632,7 @@ defmodule EmissaryWeb.AuthControllerTest do
           outcome: {:proceed, %{unsynced: ["ns1"], probe: :ok}}
         })
 
-      conn = get(conn, "/auth/device/complete/#{ticket}")
+      conn = get(browser_conn(conn), "/auth/device/complete/#{ticket}")
 
       assert redirected_to(conn) == "/"
       assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
@@ -640,11 +649,77 @@ defmodule EmissaryWeb.AuthControllerTest do
           outcome: {:needs_claim, "alice"}
         })
 
-      conn = get(conn, "/auth/device/complete/#{ticket}")
+      conn = get(browser_conn(conn), "/auth/device/complete/#{ticket}")
 
       assert redirected_to(conn) == "/claim-namespace"
       assert Plug.Conn.get_session(conn, :claim_suggested_username) == "alice"
       assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
+    end
+
+    # Without this, the ticket is a bearer credential for someone else's
+    # session: an attacker completes their own device flow, sends the link
+    # to a victim, and the victim's browser is signed in as the attacker —
+    # every document they then write lands in the attacker's athanor.
+    test "a ticket opened by a different browser signs nobody in", %{conn: conn} do
+      session = mint_session()
+
+      ticket =
+        mint_ticket(%{
+          session_token: session.token,
+          access_token: nil,
+          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+        })
+
+      other_browser =
+        Plug.Test.init_test_session(conn, %{"_csrf_token" => "a-different-browser"})
+
+      conn = get(other_browser, "/auth/device/complete/#{ticket}")
+
+      assert redirected_to(conn) == "/login"
+      refute Plug.Conn.get_session(conn, :sanctum_session_token)
+    end
+
+    test "a ticket that names no browser is refused" do
+      session = mint_session()
+
+      # Bypasses mint_ticket/1's binding, the way a ticket minted before the
+      # binding existed would look.
+      ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      Arca.Cache.put(
+        {:login_device_ticket, ticket},
+        %{
+          session_token: session.token,
+          access_token: nil,
+          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+        },
+        60_000
+      )
+
+      conn = get(browser_conn(build_conn()), "/auth/device/complete/#{ticket}")
+
+      assert redirected_to(conn) == "/login"
+      refute Plug.Conn.get_session(conn, :sanctum_session_token)
+    end
+
+    test "a refused ticket is spent, not left for the right browser", %{conn: conn} do
+      session = mint_session()
+
+      ticket =
+        mint_ticket(%{
+          session_token: session.token,
+          access_token: nil,
+          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+        })
+
+      wrong = Plug.Test.init_test_session(conn, %{"_csrf_token" => "a-different-browser"})
+      assert redirected_to(get(wrong, "/auth/device/complete/#{ticket}")) == "/login"
+
+      # The rightful browser now finds nothing: a wrong presentation burns
+      # the ticket rather than letting an attacker probe with it.
+      retry = get(browser_conn(build_conn()), "/auth/device/complete/#{ticket}")
+      assert redirected_to(retry) == "/login"
+      refute Plug.Conn.get_session(retry, :sanctum_session_token)
     end
   end
 end

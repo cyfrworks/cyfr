@@ -145,6 +145,42 @@ defmodule Prism.TinctureRegistryTest do
 
       GenServer.stop(pid)
     end
+
+    # A prerelease is older than its release. The split-on-"." key this
+    # replaced parsed "0-rc1" as 0, making the two versions compare EQUAL —
+    # and `Enum.max_by/2` keeps the first of equals, so which one the
+    # tincture router served depended on the order the storage walk returned
+    # them in.
+    test "a prerelease never outranks its release" do
+      for version <- ["1.0.0-rc1", "1.0.0"] do
+        dir = fixture_dir("ath_test", "local", "test-pre", version)
+        File.mkdir_p!(dir)
+
+        manifest = %{
+          "name" => "test-pre",
+          "type" => "tincture",
+          "version" => version,
+          "publisher" => "local",
+          "description" => "Prerelease ordering",
+          "tincture" => %{"entry" => "index.html", "public" => true}
+        }
+
+        File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      end
+
+      name = :test_prerelease
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+      :sys.get_state(pid)
+
+      served =
+        name
+        |> TinctureRegistry.list_tinctures(lookup("ath_test"))
+        |> Enum.find(&(&1.name == "test-pre"))
+
+      assert served.version == "1.0.0"
+
+      GenServer.stop(pid)
+    end
   end
 
   describe "reload/0" do

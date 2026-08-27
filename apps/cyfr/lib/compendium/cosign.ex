@@ -8,9 +8,21 @@ defmodule Compendium.Cosign do
   Reads configuration from `Application.get_env(:cyfr, :sigstore)`:
 
   - `verification: :keyed` — verify with a specific public key (`key_path`)
-  - `verification: :keyless` — verify via Sigstore's keyless (Fulcio + Rekor) flow
+  - `verification: :keyless` — verify via Sigstore's keyless (Fulcio + Rekor)
+    flow against a named signer: `identity` and `issuer` are regexps the
+    certificate must match (`CYFR_COSIGN_IDENTITY` / `CYFR_COSIGN_ISSUER`)
 
   Returns signer identity, issuer, and verification timestamp on success.
+
+  ## Keyless verification names a signer
+
+  Keyless verification used to pass `.*` for both the certificate identity
+  and the OIDC issuer, which accepts a signature from *anyone* who can get
+  a Sigstore certificate — that is, from anyone at all. "Verified" then
+  meant only "this artifact was signed", not "signed by someone this
+  operator trusts", while the row it wrote said `signature_verified: true`.
+  An operator who wants keyless now says whose signature counts; unset is
+  refused rather than quietly meaning "any".
   """
 
   require Logger
@@ -23,20 +35,30 @@ defmodule Compendium.Cosign do
   """
   @spec verify(String.t()) :: {:ok, map()} | {:error, String.t()}
   def verify(oci_ref) when is_binary(oci_ref) do
+    config = Application.get_env(:cyfr, :sigstore, verification: :keyless)
+
+    # What this server will accept as a signature is settled before we go
+    # looking for the tool: it is a property of the configuration, not of
+    # the machine, and it is the half that decides whether "verified" means
+    # anything.
+    with {:ok, args} <- build_args(oci_ref, config),
+         {:ok, cosign_path} <- find_cosign() do
+      run(cosign_path, args, oci_ref)
+    end
+  end
+
+  defp find_cosign do
     case System.find_executable("cosign") do
       nil ->
         {:error,
          "cosign not found in PATH. Install: https://docs.sigstore.dev/cosign/system_config/installation/"}
 
-      cosign_path ->
-        config = Application.get_env(:cyfr, :sigstore, verification: :keyless)
-        do_verify(cosign_path, oci_ref, config)
+      path ->
+        {:ok, path}
     end
   end
 
-  defp do_verify(cosign_path, oci_ref, config) do
-    args = build_args(oci_ref, config)
-
+  defp run(cosign_path, args, oci_ref) do
     case System.cmd(cosign_path, args, stderr_to_stdout: true) do
       {output, 0} ->
         parse_verify_output(output)
@@ -52,21 +74,38 @@ defmodule Compendium.Cosign do
         key_path = Keyword.fetch!(config, :key_path)
         # "--" terminates flag parsing so an oci_ref starting with "-" can never
         # be interpreted as a cosign flag (System.cmd is already non-shell).
-        ["verify", "--key", key_path, "--output", "json", "--", oci_ref]
+        {:ok, ["verify", "--key", key_path, "--output", "json", "--", oci_ref]}
 
       :keyless ->
-        [
-          "verify",
-          "--certificate-identity-regexp",
-          ".*",
-          "--certificate-oidc-issuer-regexp",
-          ".*",
-          "--output",
-          "json",
-          # "--" terminates flag parsing (see :keyed branch above).
-          "--",
-          oci_ref
-        ]
+        keyless_args(oci_ref, config)
+    end
+  end
+
+  defp keyless_args(oci_ref, config) do
+    identity = Keyword.get(config, :identity)
+    issuer = Keyword.get(config, :issuer)
+
+    if is_binary(identity) and identity != "" and is_binary(issuer) and issuer != "" do
+      {:ok,
+       [
+         "verify",
+         "--certificate-identity-regexp",
+         identity,
+         "--certificate-oidc-issuer-regexp",
+         issuer,
+         "--output",
+         "json",
+         # "--" terminates flag parsing (see :keyed branch above).
+         "--",
+         oci_ref
+       ]}
+    else
+      {:error,
+       "keyless signature verification needs a signer to check against: set " <>
+         "CYFR_COSIGN_IDENTITY and CYFR_COSIGN_ISSUER (regexps the signing " <>
+         "certificate must match), or CYFR_COSIGN_KEY for keyed verification. " <>
+         "Matching any identity would make \"verified\" mean only that someone, " <>
+         "somewhere, signed this."}
     end
   end
 
@@ -97,15 +136,16 @@ defmodule Compendium.Cosign do
          }}
 
       {:error, _} ->
-        # cosign succeeded but output wasn't JSON — still verified
-        Logger.debug("[Compendium.Cosign] cosign output was not JSON, treating as verified")
+        # `--output json` was asked for; anything else means this is not the
+        # cosign we think we are talking to. Reading an unparseable answer as
+        # a successful verification is the one direction that must not be
+        # guessed.
+        Logger.warning(
+          "[Compendium.Cosign] cosign exited 0 but its output was not JSON — " <>
+            "refusing to record a verification"
+        )
 
-        {:ok,
-         %{
-           identity: nil,
-           issuer: nil,
-           verified_at: DateTime.utc_now()
-         }}
+        {:error, "cosign returned an unreadable response"}
     end
   end
 end

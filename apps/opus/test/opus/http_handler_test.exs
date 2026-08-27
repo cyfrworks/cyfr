@@ -321,6 +321,35 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["type"] == "method_blocked"
     end
 
+    # The guest writes this JSON, so its field types are not to be trusted.
+    # A non-string method or url reached String.upcase/1 and URI.parse/1
+    # unguarded; the raise killed the Wasmex process and with it the whole
+    # execution, instead of handing the guest an error it could act on.
+    for {label, request} <- [
+          {"a numeric method", %{"method" => 1, "url" => "https://api.stripe.com/v1/charges"}},
+          {"a numeric url", %{"method" => "GET", "url" => 2}},
+          {"an object url", %{"method" => "GET", "url" => %{"href" => "https://x.test"}}},
+          {"a null method", %{"method" => nil, "url" => "https://api.stripe.com/v1/charges"}}
+        ] do
+      test "#{label} is a typed error, never a raise", %{
+        edge: edge,
+        limits: limits,
+        ctx: ctx,
+        component_ref: ref
+      } do
+        json =
+          Jason.encode!(
+            Map.merge(%{"headers" => %{}, "body" => ""}, unquote(Macro.escape(request)))
+          )
+
+        result = HttpHandler.execute(json, edge, limits, ctx, ref)
+        decoded = Jason.decode!(result)
+
+        assert is_binary(decoded["error"]["type"])
+        assert is_binary(decoded["error"]["message"])
+      end
+    end
+
     test "blocks request with oversized body", %{
       edge: edge,
       limits: limits,

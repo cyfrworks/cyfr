@@ -44,9 +44,25 @@ defmodule Opus.SecretMasker do
 
   """
   @spec mask(term(), [String.t()]) :: term()
-  def mask(output, []), do: output
+  def mask(output, secret_values) do
+    case usable_secrets(secret_values) do
+      [] -> output
+      secrets -> do_mask(output, secrets)
+    end
+  end
 
-  def mask(output, secret_values) when is_map(output) do
+  # A secret is replaceable only as a non-empty binary. `String.replace/3`
+  # with `""` inserts the marker between every character — corrupting the
+  # whole output rather than redacting anything — and a non-binary raises.
+  # Both shapes come from caller data (a vault field projected empty, a
+  # token bundle that carried a non-string), so they are filtered, not
+  # trusted.
+  defp usable_secrets(values) when is_list(values),
+    do: Enum.filter(values, &(is_binary(&1) and &1 != ""))
+
+  defp usable_secrets(_values), do: []
+
+  defp do_mask(output, secret_values) when is_map(output) do
     # Convert to JSON, mask, and convert back
     # This handles nested structures consistently
     case Jason.encode(output) do
@@ -74,21 +90,21 @@ defmodule Opus.SecretMasker do
     end
   end
 
-  def mask(output, secret_values) when is_binary(output) do
+  defp do_mask(output, secret_values) when is_binary(output) do
     mask_in_string(output, secret_values)
   end
 
-  def mask(output, secret_values) when is_list(output) do
-    Enum.map(output, fn item -> mask(item, secret_values) end)
+  defp do_mask(output, secret_values) when is_list(output) do
+    Enum.map(output, fn item -> do_mask(item, secret_values) end)
   end
 
-  def mask(output, _secret_values), do: output
+  defp do_mask(output, _secret_values), do: output
 
   # Mask secrets directly in a map (fallback for non-JSON-encodable maps)
   defp mask_map(map, secret_values) when is_map(map) do
     map
     |> Enum.map(fn {k, v} ->
-      {mask(k, secret_values), mask(v, secret_values)}
+      {do_mask(k, secret_values), do_mask(v, secret_values)}
     end)
     |> Map.new()
   end

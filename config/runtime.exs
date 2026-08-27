@@ -19,12 +19,33 @@ if config_env() != :test do
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
 
+  # A variable that is present but empty is not a value — it is a line an
+  # operator left blank, which is exactly what copying `.env.example`
+  # leaves behind. Dotenvy's plain types read `""` as a decision: `:integer`
+  # yields 0 and `:boolean` yields false, so `CYFR_SESSION_TTL_HOURS=` would
+  # mean "sessions never expire", `CYFR_MCP_RATE_LIMIT_MAX=` would mean
+  # "refuse every MCP request", and `CYFR_AUTO_MIGRATE=` would mean "never
+  # migrate". The `?` types answer nil for blank instead, so blank reads as
+  # unset here and unset takes the documented default.
+  #
+  # `||` is wrong for booleans (a real `false` would fall through to the
+  # default) and right for the others, since a real `0` is truthy in Elixir.
+  env_str = fn key, default -> env!(key, :string?, nil) || default end
+  env_int = fn key, default -> env!(key, :integer?, nil) || default end
+
+  env_bool = fn key, default ->
+    case env!(key, :boolean?, nil) do
+      nil -> default
+      value -> value
+    end
+  end
+
   # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
   # storage, repo) read the same Dotenvy-merged environment this file does.
-  getenv = fn key -> env!(key, :string, nil) end
+  getenv = fn key -> env_str.(key, nil) end
 
   # JSON log format for structured logging (Datadog, Splunk, ELK, Loki)
-  if env!("CYFR_LOG_FORMAT", :string, nil) == "json" do
+  if env_str.("CYFR_LOG_FORMAT", nil) == "json" do
     config :logger, :default_formatter,
       format: {Cyfr.JsonFormatter, :format},
       metadata: [:request_id, :user_id, :athanor_id, :auth_method]
@@ -35,20 +56,20 @@ if config_env() != :test do
   # CYFR_SECRET_KEY_BASE). Through Dotenvy like every other secret: it was
   # the one secret read with System.get_env/1, which silently ignored a
   # keyring an operator put in .env alongside everything else.
-  config :cyfr, :crypto_keyring_json, env!("CYFR_CRYPTO_KEYRING", :string, nil)
+  config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
 
   # Device label attached to registry credentials (unset = hostname).
-  config :cyfr, :device_label, env!("CYFR_DEVICE_LABEL", :string, nil)
+  config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
 
   # Whether the server migrates the database on boot (default: true). Several
   # nodes on one Postgres, or an operator who runs the schema step by hand
   # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
-  config :cyfr, :auto_migrate, env!("CYFR_AUTO_MIGRATE", :boolean, true)
+  config :cyfr, :auto_migrate, env_bool.("CYFR_AUTO_MIGRATE", true)
 
   # A headless node (default: false) serves the API, MCP and public tinctures
   # and no browser surface: every route on the browser pipeline answers 404.
   # Codex signs in through the session tool on /mcp, so it does not notice.
-  headless? = env!("CYFR_HEADLESS", :boolean, false)
+  headless? = env_bool.("CYFR_HEADLESS", false)
   config :cyfr, :headless, headless?
 
   # Maximum concurrent WASM executions (default: 128)
@@ -56,7 +77,7 @@ if config_env() != :test do
   # A quarter of the slots is reserved for chain children (a formula's hops);
   # that reserve must hold a chain of the full authority depth (8), so the
   # floor is 32 — below it a deep chain could wait on itself.
-  if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :integer, nil) do
+  if max_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS", nil) do
     if max_exec < 32 do
       raise ArgumentError,
             "CYFR_MAX_CONCURRENT_EXECUTIONS must be at least 32 (a quarter of the slots " <>
@@ -68,23 +89,23 @@ if config_env() != :test do
 
   # Maximum concurrent WASM executions per tenant (default: 16)
   # Bounds the blast radius of one athanor queueing many long-running executions
-  if max_tenant_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", :integer, nil) do
+  if max_tenant_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", nil) do
     config :cyfr, :max_concurrent_executions_per_tenant, max_tenant_exec
   end
 
   # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
   # Counts requests and SSE connection opens, not stream duration.
-  if mcp_rl_max = env!("CYFR_MCP_RATE_LIMIT_MAX", :integer, nil) do
+  if mcp_rl_max = env_int.("CYFR_MCP_RATE_LIMIT_MAX", nil) do
     config :cyfr, :mcp_rate_limit_max, mcp_rl_max
   end
 
-  if mcp_rl_window = env!("CYFR_MCP_RATE_LIMIT_WINDOW_MS", :integer, nil) do
+  if mcp_rl_window = env_int.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", nil) do
     config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
   end
 
   # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
   # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
-  if ttl_hours = env!("CYFR_SESSION_TTL_HOURS", :integer, nil) do
+  if ttl_hours = env_int.("CYFR_SESSION_TTL_HOURS", nil) do
     if ttl_hours < 0 do
       raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
     end
@@ -94,9 +115,14 @@ if config_env() != :test do
 
   # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
   # In production, this env var is required. In dev/test, the config file provides a static key.
-  env_key_base = env!("CYFR_SECRET_KEY_BASE", :string, nil)
+  # Blank reads as unset (see env_str above), so the prod guard below fires
+  # on `CYFR_SECRET_KEY_BASE=` — the line .env.example ships. It used to
+  # pass `""` through a truthiness check, leaving the documented raise dead
+  # and the endpoint holding an empty key base, with both signing salts
+  # derived from a publicly computable constant.
+  env_key_base = env_str.("CYFR_SECRET_KEY_BASE", nil)
 
-  if is_binary(env_key_base) and env_key_base != "" do
+  if env_key_base do
     config :cyfr, :secret_key_base, env_key_base
   end
 
@@ -121,10 +147,10 @@ if config_env() != :test do
       end
     end
 
-    emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
+    emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env_str.("CYFR_BIND_ADDRESS", "0.0.0.0"))
 
-    host = env!("CYFR_HOST", :string, "localhost")
-    port = env!("CYFR_PORT", :integer, 4000)
+    host = env_str.("CYFR_HOST", "localhost")
+    port = env_int.("CYFR_PORT", 4000)
 
     # Origins the browser will send for this deployment. We include both schemes
     # so the same compose stack works whether Caddy serves plain HTTP on :80 (a
@@ -167,7 +193,7 @@ if config_env() != :test do
     # CYFR_MCP_ALLOWED_ORIGINS (comma-separated) for embedding the PWA on a
     # different origin or running multiple frontends against the same server.
     extra_mcp_origins =
-      case env!("CYFR_MCP_ALLOWED_ORIGINS", :string, nil) do
+      case env_str.("CYFR_MCP_ALLOWED_ORIGINS", nil) do
         nil -> []
         s -> s |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
       end
@@ -176,13 +202,13 @@ if config_env() != :test do
 
     # Derive signing salts from secret_key_base (or use explicit env overrides)
     emissary_salt =
-      env!("CYFR_EMISSARY_SESSION_SALT", :string, nil) ||
+      env_str.("CYFR_EMISSARY_SESSION_SALT", nil) ||
         :crypto.hash(:sha256, "emissary_session" <> secret_key_base)
         |> Base.url_encode64(padding: false)
         |> binary_part(0, 16)
 
     lv_salt =
-      env!("CYFR_LV_SALT", :string, nil) ||
+      env_str.("CYFR_LV_SALT", nil) ||
         :crypto.hash(:sha256, "live_view" <> secret_key_base)
         |> Base.url_encode64(padding: false)
         |> binary_part(0, 16)
@@ -194,8 +220,18 @@ if config_env() != :test do
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
 
+    # Read once, as the boolean it is. Read as a string and tested for
+    # truthiness — as both sites below did — `"false"` is truthy, so the
+    # shipped `CYFR_BEHIND_PROXY=false` (uncommented in .env.example, and
+    # compose's default) turned X-Forwarded-For trust ON for the one
+    # deployment that has no proxy in front of it, and silenced the
+    # plain-HTTP warning meant for exactly that deployment. With XFF
+    # trusted, the client picks its own address: API-key IP allowlists and
+    # every IP-keyed rate limiter answer to whatever it sends.
+    behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
+
     # Warn if plain HTTP in production without a reverse proxy declaration
-    unless env!("CYFR_BEHIND_PROXY", :string, nil) do
+    unless behind_proxy? do
       IO.puts(
         :stderr,
         "[warning] CYFR is running plain HTTP in production. " <>
@@ -210,12 +246,12 @@ if config_env() != :test do
     # Caddy) the default of 1 hop is correct; stacking more layers requires
     # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
     # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
-    if env!("CYFR_BEHIND_PROXY", :string, nil) do
+    if behind_proxy? do
       config :cyfr, :trust_x_forwarded_for, true
 
-      config :cyfr, :trusted_proxy_hops, env!("CYFR_TRUSTED_PROXY_HOPS", :integer, 1)
+      config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
 
-      if cidrs = env!("CYFR_TRUSTED_PROXY_CIDRS", :string, nil) do
+      if cidrs = env_str.("CYFR_TRUSTED_PROXY_CIDRS", nil) do
         config :cyfr,
                :trusted_proxy_cidrs,
                cidrs |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
@@ -278,7 +314,7 @@ if config_env() != :test do
   # authentication configured while the wildcard default is in effect, so any
   # deployment with OAuth/OIDC enabled must set this. An empty value allows no
   # cross-origin callers at all (fail-closed).
-  if cors_origins = env!("CYFR_CORS_ALLOWED_ORIGINS", :string, nil) do
+  if cors_origins = env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
     config :cyfr,
            :cors_allowed_origins,
            cors_origins
@@ -299,7 +335,7 @@ if config_env() != :test do
   # MCP server on this list, never as a URL the bundled http catalyst fetches.
   config :cyfr,
          :private_egress_targets,
-         (env!("CYFR_PRIVATE_EGRESS_TARGETS", :string, nil) || "")
+         (env_str.("CYFR_PRIVATE_EGRESS_TARGETS", nil) || "")
          |> String.split(",")
          |> Enum.map(&String.trim/1)
          |> Enum.reject(&(&1 == ""))
@@ -308,8 +344,8 @@ if config_env() != :test do
   # Device flow (CLI and Prism) only needs client ID — no secret.
   # Ueberauth's leftover web-callback strategy is registered only when a
   # secret is also set (otherwise GET /auth/github 500s inside the strategy).
-  github_id = env!("CYFR_GITHUB_CLIENT_ID", :string, nil)
-  github_secret = env!("CYFR_GITHUB_CLIENT_SECRET", :string, nil)
+  github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
+  github_secret = env_str.("CYFR_GITHUB_CLIENT_SECRET", nil)
 
   if github_id && github_secret do
     config :ueberauth, Ueberauth.Strategy.Github.OAuth,
@@ -322,8 +358,8 @@ if config_env() != :test do
   # device-flow token endpoint rejects exchanges that omit client_secret
   # with {"error": "invalid_request"}. The leftover Ueberauth web-callback
   # strategy uses the same pair.
-  google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil)
-  google_secret = env!("CYFR_GOOGLE_CLIENT_SECRET", :string, nil)
+  google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
+  google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
 
   if google_id && google_secret do
     config :ueberauth, Ueberauth.Strategy.Google.OAuth,
@@ -351,17 +387,17 @@ if config_env() != :test do
   # cyfr.run issues per-user push tokens automatically via
   # `/v1/identity/probe` after login, so there is no static
   # username/password to configure at deploy time.
-  registry_url_config = env!("CYFR_REGISTRY_URL", :string, "cyfr.run")
+  registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
   config :cyfr, :registry_url, registry_url_config
 
   # The address this instance is reachable at from outside — needed to hand a
   # webhook sender an absolute URL, which behind a proxy or a tunnel is
   # neither the bind address nor any request's Host. Unset means the console
   # and the CLI show the path and say to set this.
-  config :cyfr, :public_url, env!("CYFR_PUBLIC_URL", :string, nil)
+  config :cyfr, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
 
   oci_registry_url_config =
-    env!("CYFR_OCI_REGISTRY_URL", :string, "registry.#{registry_url_config}")
+    env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
 
   config :cyfr, :oci_registry_url, oci_registry_url_config
 
@@ -377,7 +413,7 @@ if config_env() != :test do
   # gate). This is the bootstrap mechanism for any deployment — a solo operator
   # lists their own email; a shared server lists the platform staff.
   platform_admins =
-    (env!("CYFR_PLATFORM_ADMIN_EMAILS", :string, nil) || "")
+    (env_str.("CYFR_PLATFORM_ADMIN_EMAILS", nil) || "")
     |> String.split(",")
     |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
     |> Enum.reject(&(&1 == ""))
@@ -387,11 +423,11 @@ if config_env() != :test do
   # The public-door caps (Sanctum.Tenancy.Caps). Unset means off: a private
   # box needs none of them; a server whose door is `*` sets them.
   config :cyfr, :caps,
-    max_athanors: env!("CYFR_MAX_ATHANORS", :integer, nil),
-    max_groups_per_person: env!("CYFR_MAX_GROUPS_PER_PERSON", :integer, nil),
-    max_members_per_group: env!("CYFR_MAX_MEMBERS_PER_GROUP", :integer, nil),
-    mint_per_hour: env!("CYFR_MINT_PER_HOUR", :integer, nil),
-    athanor_storage_bytes: env!("CYFR_ATHANOR_STORAGE_BYTES", :integer, nil)
+    max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
+    max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
+    max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
+    mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
+    athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
 
   # Auto-configure the auth provider from the environment.
   # Priority: explicit config > GitHub/Google credentials > none.
@@ -482,19 +518,24 @@ if config_env() != :test do
       raise message
   end
 
-  # Sigstore Configuration
-  if cosign_key = env!("CYFR_COSIGN_KEY", :string, nil) do
+  # Sigstore Configuration. Keyless verification checks the signing
+  # certificate against a named identity and issuer (regexps); without both,
+  # `Compendium.Cosign` refuses rather than accepting any signer at all.
+  if cosign_key = env_str.("CYFR_COSIGN_KEY", nil) do
     config :cyfr, :sigstore,
       verification: :keyed,
       key_path: cosign_key,
-      password: env!("CYFR_COSIGN_PASSWORD", :string, nil)
+      password: env_str.("CYFR_COSIGN_PASSWORD", nil)
   else
-    config :cyfr, :sigstore, verification: :keyless
+    config :cyfr, :sigstore,
+      verification: :keyless,
+      identity: env_str.("CYFR_COSIGN_IDENTITY", nil),
+      issuer: env_str.("CYFR_COSIGN_ISSUER", nil)
   end
 
   # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is
   # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
-  if env!("CYFR_PROMETHEUS_METRICS", :string, nil) == "true" do
+  if env_str.("CYFR_PROMETHEUS_METRICS", nil) == "true" do
     config :cyfr, :prometheus_metrics_enabled, true
   end
 
@@ -502,7 +543,7 @@ if config_env() != :test do
   # Set CYFR_OTEL_ENABLED=true to enable distributed tracing.
   # Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT
   # (defaults to http://localhost:4318 for HTTP/protobuf).
-  if env!("CYFR_OTEL_ENABLED", :string, nil) == "true" do
+  if env_str.("CYFR_OTEL_ENABLED", nil) == "true" do
     config :cyfr, :opentelemetry_enabled, true
 
     config :opentelemetry,
@@ -512,7 +553,7 @@ if config_env() != :test do
 
     config :opentelemetry_exporter,
       otlp_protocol: :http_protobuf,
-      otlp_endpoint: env!("OTEL_EXPORTER_OTLP_ENDPOINT", :string, "http://localhost:4318")
+      otlp_endpoint: env_str.("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
   else
     config :opentelemetry,
       traces_exporter: :none

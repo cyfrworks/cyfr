@@ -61,8 +61,25 @@ defmodule EmissaryWeb.AuthController do
 
     case Arca.Cache.get(key) do
       {:ok, payload} ->
+        # Consumed whichever way the check goes: a ticket presented by the
+        # wrong browser is spent, not left for the right one to find.
         Arca.Cache.invalidate(key)
-        apply_device_ticket(conn, payload)
+
+        if same_browser?(conn, payload) do
+          apply_device_ticket(conn, payload)
+        else
+          Logger.warning(
+            "[AuthController] device ticket presented by a different browser than the one " <>
+              "that started the flow — refusing"
+          )
+
+          conn
+          |> SignInResponse.put_flash_if_available(
+            :error,
+            "That sign-in link was started in a different browser. Please sign in again."
+          )
+          |> redirect(to: "/login")
+        end
 
       :miss ->
         conn
@@ -79,6 +96,22 @@ defmodule EmissaryWeb.AuthController do
     |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
     |> redirect(to: "/login")
   end
+
+  # The ticket names the browser that minted it (LoginLive binds the
+  # session's CSRF token). Anything else — including a ticket minted before
+  # this check existed, or a session with no token to compare — is refused:
+  # an unbound ticket is a bearer credential for someone's whole session.
+  defp same_browser?(conn, %{browser_binding: binding}) when is_binary(binding) do
+    case get_session(conn, "_csrf_token") do
+      current when is_binary(current) and current != "" ->
+        Plug.Crypto.secure_compare(current, binding)
+
+      _ ->
+        false
+    end
+  end
+
+  defp same_browser?(_conn, _payload), do: false
 
   defp apply_device_ticket(conn, %{session_token: token, outcome: outcome} = payload)
        when is_binary(token) do

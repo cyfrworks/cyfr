@@ -197,11 +197,14 @@ defmodule Opus.AsyncTracker do
       new_state = cleanup_results(state, task_ids)
       {:reply, {:ok, results}, new_state}
     else
-      # Yield on pending tasks
+      # Yield on pending tasks. An id that names neither a result nor a live
+      # task is one the guest made up (or already awaited): it has no task
+      # struct to yield on, so it is dropped here and picked up by
+      # `build_ordered_results/3`'s `:unknown_task` default — the same answer
+      # `await/2` and `await_any/2` give. Looking it up regardless would
+      # dereference nil and take the tracker, and with it the whole run.
       pending_tasks =
-        Enum.map(pending_ids, fn id ->
-          {id, state.tasks[id].task}
-        end)
+        for id <- pending_ids, entry = state.tasks[id], do: {id, entry.task}
 
       task_structs = Enum.map(pending_tasks, fn {_id, task} -> task end)
       yield_results = Task.yield_many(task_structs, timeout_ms)
@@ -429,47 +432,62 @@ defmodule Opus.AsyncTracker do
   defp yield_first(pending_tasks, timeout_ms) do
     # Build a map of ref -> {task_id, task_entry}
     ref_map = Map.new(pending_tasks, fn {id, entry} -> {entry.ref, {id, entry}} end)
-    refs = Map.keys(ref_map)
 
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
-    do_yield_first(refs, ref_map, deadline)
+    do_yield_first(ref_map, deadline, [])
   end
 
-  defp do_yield_first([], _ref_map, _deadline), do: :timeout
-
-  defp do_yield_first(_refs, ref_map, deadline) do
+  # A completion for a task this await is not watching (another of the
+  # tracker's spawns) must not be consumed — but it must not be handed back
+  # to the mailbox mid-loop either: `send(self(), msg)` followed by a
+  # `receive` picks the very same message straight back up, spinning a core
+  # until the deadline, which a guest can trigger by awaiting one task while
+  # another finishes. Strays are held aside instead, verbatim, and requeued
+  # once the loop is done.
+  defp do_yield_first(ref_map, deadline, deferred) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     if remaining <= 0 do
+      requeue(deferred)
       :timeout
     else
       receive do
-        {ref, result} when is_reference(ref) ->
+        {ref, result} = message when is_reference(ref) ->
           case Map.fetch(ref_map, ref) do
             {:ok, {task_id, _entry}} ->
               Process.demonitor(ref, [:flush])
+              requeue(deferred)
               {:ok, task_id, result}
 
             :error ->
-              # Not one of our tasks — put it back and keep waiting
-              send(self(), {ref, result})
-              do_yield_first(nil, ref_map, deadline)
+              do_yield_first(ref_map, deadline, [message | deferred])
           end
 
-        {:DOWN, ref, :process, _pid, reason} when is_reference(ref) ->
+        {:DOWN, ref, :process, _pid, reason} = message when is_reference(ref) ->
           case Map.fetch(ref_map, ref) do
             {:ok, {task_id, _entry}} ->
+              requeue(deferred)
               {:error, task_id, format_crash_reason(reason)}
 
             :error ->
-              send(self(), {:DOWN, ref, :process, nil, reason})
-              do_yield_first(nil, ref_map, deadline)
+              do_yield_first(ref_map, deadline, [message | deferred])
           end
       after
-        remaining -> :timeout
+        remaining ->
+          requeue(deferred)
+          :timeout
       end
     end
+  end
+
+  # Back into the mailbox in arrival order, so the tracker's own
+  # `handle_info/2` still sees each completion exactly as it was sent.
+  defp requeue([]), do: :ok
+
+  defp requeue(deferred) do
+    deferred |> Enum.reverse() |> Enum.each(&send(self(), &1))
+    :ok
   end
 
   defp build_ordered_results(task_ids, results_map, _opts) do

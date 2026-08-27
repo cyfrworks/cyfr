@@ -488,9 +488,15 @@ defmodule Opus.Executor do
           do: Map.put(metadata, :resolver_digest, completed_record.resolver_digest),
           else: metadata
 
+      # The masked output is what leaves this module, not just what is
+      # recorded: the caller may be an MCP client, a parent formula (which
+      # hands it straight back into guest WASM), a tincture response or a
+      # webhook log. Redacting only the audit row would leave the credential
+      # readable everywhere a human or another component actually looks —
+      # and a public tincture's caller is anonymous by design.
       result = %{
         status: :completed,
-        output: output,
+        output: masked_output,
         metadata: metadata
       }
 

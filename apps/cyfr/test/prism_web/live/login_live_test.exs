@@ -125,7 +125,12 @@ defmodule PrismWeb.LoginLiveTest do
          }}
       )
 
-      {:ok, view, _} = live(conn, ~p"/login")
+      # One browser start to finish. The ticket is bound to the session that
+      # began the flow, so the visit that follows the redirect has to be the
+      # same browser — here, the same conn carrying the same cookie.
+      browser = get(conn, ~p"/login")
+
+      {:ok, view, _} = live(browser, ~p"/login")
 
       view
       |> element("button[phx-click=start][phx-value-provider=github]")
@@ -136,7 +141,7 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert String.starts_with?(path, "/auth/device/complete/")
 
-      landed = get(build_conn(), path)
+      landed = get(browser, path)
       assert redirected_to(landed) == "/"
       assert get_session(landed, :sanctum_session_token) == session.token
     end

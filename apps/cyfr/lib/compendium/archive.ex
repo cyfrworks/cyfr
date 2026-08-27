@@ -67,7 +67,13 @@ defmodule Compendium.Archive do
   """
   @spec create_tar_gz([{charlist(), binary()}]) :: {:ok, binary()} | :none
   def create_tar_gz(tar_entries) when is_list(tar_entries) do
-    tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{:rand.uniform(1_000_000)}.tar")
+    # The name has to be unguessable, not merely varied: this is a
+    # world-writable directory, and `:erl_tar.create/3` follows a symlink
+    # already sitting at the path it is told to write. `:rand.uniform/1` is
+    # a seeded per-process PRNG over a million values — cheap to predict and
+    # cheap to collide. `Locus.Builder.create_temp_dir/0` already does this
+    # correctly; same primitive here.
+    tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{scratch_id()}.tar")
 
     try do
       # arca:bypass-ok=D — tar written to the scratch path above.
@@ -87,4 +93,11 @@ defmodule Compendium.Archive do
       File.rm(tmp)
     end
   end
+
+  @doc """
+  An unguessable scratch-path suffix for a file or directory under the
+  shared temp dir — 64 bits from the CSPRNG, hex-encoded.
+  """
+  @spec scratch_id() :: String.t()
+  def scratch_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 end

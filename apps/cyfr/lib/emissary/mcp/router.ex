@@ -260,9 +260,35 @@ defmodule Emissary.MCP.Router do
     paginate(templates, "resourceTemplates", params)
   end
 
-  defp dispatch_method(ctx, "resources/read", params, _id) do
-    uri = params["uri"]
+  # `uri` is required and must be a non-empty string.
+  # `ResourceRegistry.read/2` is guarded `when is_binary(uri)`, so anything
+  # else used to raise a FunctionClauseError in the request process — and
+  # the controller rescues only UnauthorizedError, with no action_fallback
+  # behind it, so a deliberate rejection came back as a 500 through
+  # ErrorJSON. That is the one shape `EmissaryWeb.ErrorRenderer` says is
+  # always a bug. Answered as invalid_params here, whatever the caller sent.
+  defp dispatch_method(ctx, "resources/read", params, id) do
+    case params do
+      %{"uri" => uri} when is_binary(uri) and uri != "" ->
+        read_resource(ctx, uri, id)
 
+      %{"uri" => _} ->
+        {:error, :invalid_params, ~s(resources/read requires a non-empty string "uri")}
+
+      _ ->
+        {:error, :invalid_params, ~s(resources/read requires a "uri" parameter)}
+    end
+  end
+
+  # ============================================================================
+  # Unknown Method
+  # ============================================================================
+
+  defp dispatch_method(_ctx, method, _params, _id) do
+    {:error, :method_not_found, "Unknown method: #{method}"}
+  end
+
+  defp read_resource(ctx, uri, _id) do
     case ResourceRegistry.read(ctx, uri) do
       {:ok, content} ->
         mime_type = Map.get(content, :mimeType, "application/json")
@@ -302,14 +328,6 @@ defmodule Emissary.MCP.Router do
             {:error, :resource_not_found, "Resource not found or unreadable"}
         end
     end
-  end
-
-  # ============================================================================
-  # Unknown Method
-  # ============================================================================
-
-  defp dispatch_method(_ctx, method, _params, _id) do
-    {:error, :method_not_found, "Unknown method: #{method}"}
   end
 
   defp format_error_reason({:timeout, msg}) when is_binary(msg), do: msg

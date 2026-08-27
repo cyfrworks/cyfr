@@ -22,9 +22,14 @@ defmodule PrismWeb.LoginLive do
   @default_poll_interval_s 5
 
   @impl true
-  def mount(params, _session, socket) do
+  def mount(params, session, socket) do
     {:ok,
      socket
+     # The browser that starts the flow is the only one allowed to finish
+     # it. The session's CSRF token is the handle this origin already has
+     # on that browser; the ticket is bound to it at mint and checked at
+     # /auth/device/complete.
+     |> assign(:browser_binding, session["_csrf_token"])
      |> assign(:page_title, "Sign in")
      |> assign(:providers, available_providers())
      |> assign(:login_state, :idle)
@@ -145,7 +150,7 @@ defmodule PrismWeb.LoginLive do
 
   defp finish_poll(socket, {:ok, %{status: "complete", session_token: token} = result})
        when is_binary(token) do
-    ticket = mint_ticket(result)
+    ticket = mint_ticket(result, socket.assigns.browser_binding)
     {:noreply, redirect(socket, to: ~p"/auth/device/complete/#{ticket}")}
   end
 
@@ -178,13 +183,19 @@ defmodule PrismWeb.LoginLive do
     {:noreply, assign_idle(socket, "Couldn't complete sign-in. Try again in a moment.")}
   end
 
-  defp mint_ticket(result) do
+  defp mint_ticket(result, browser_binding) do
     ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     payload = %{
       session_token: result.session_token,
       access_token: Map.get(result, :access_token),
-      outcome: result.outcome
+      outcome: result.outcome,
+      # Whose browser this sign-in belongs to. Without it the ticket is a
+      # bearer credential for a whole session: whoever opens the URL within
+      # its lifetime is signed in as the person who completed the flow, so
+      # an attacker could finish their own device flow and hand the link to
+      # someone else, landing them in the attacker's account.
+      browser_binding: browser_binding
     }
 
     Arca.Cache.put({:login_device_ticket, ticket}, payload, @ticket_ttl_ms)
