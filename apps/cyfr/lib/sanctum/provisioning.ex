@@ -325,7 +325,23 @@ defmodule Sanctum.Provisioning do
         %{registered: registered} when registered > 0 ->
           Logger.info("[Provisioning] #{athanor.id}: registered #{registered} bundle version(s)")
 
-          case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx)) do
+        %{errors: errors} when errors > 0 ->
+          Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
+
+        _scan ->
+          :ok
+      end
+
+      # Deps and consents retry every boot, not only when the scan minted
+      # something — a transient registry outage at the previous sync must
+      # not leave the closure missing until the next release. Both are
+      # cheap no-ops when nothing is missing.
+      case missing_bundle_deps(ctx) do
+        [] ->
+          :ok
+
+        missing ->
+          case Pull.ensure_published_deps(ctx, missing) do
             %{failed: []} ->
               :ok
 
@@ -334,16 +350,9 @@ defmodule Sanctum.Provisioning do
                 "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(failed)}"
               )
           end
-
-          bootstrap_synced(ctx, athanor.id)
-
-        %{errors: errors} when errors > 0 ->
-          Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
-
-        _scan ->
-          :ok
       end
 
+      bootstrap_synced(ctx, athanor.id)
       collapse_pristine(ctx, athanor.id)
     end
 

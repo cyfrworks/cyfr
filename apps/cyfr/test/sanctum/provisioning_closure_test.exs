@@ -157,6 +157,44 @@ defmodule Sanctum.ProvisioningClosureTest do
     assert at == group.provisioned_at
   end
 
+  test "sync_seeds heals a missing dep even when the scan registers nothing new" do
+    n = System.unique_integer([:positive])
+    user_id = "github|https://github.com|resync-#{n}"
+
+    ctx =
+      Sanctum.Context.build(
+        user_id: user_id,
+        athanor_id: Sanctum.TestContext.athanor_id(),
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    assert {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Resync #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+
+    # A transient registry outage at the previous sync leaves one dep of
+    # the closure unpulled — dropping its row is exactly that state.
+    {:ok, claude} = Compendium.Registry.get_latest(in_group, "claude", "moonmoon69", "catalyst")
+
+    :ok =
+      Arca.ComponentStorage.delete_component(
+        in_group,
+        "claude",
+        claude.version,
+        "moonmoon69",
+        nil
+      )
+
+    # The next boot registers no new bundle versions; the closure must
+    # still heal.
+    assert :ok = Provisioning.sync_seeds()
+
+    assert {:ok, %{publisher: "moonmoon69"}} =
+             Compendium.Registry.get_latest(in_group, "claude", "moonmoon69", "catalyst")
+  end
+
   # ---- fixtures ---------------------------------------------------------------
 
   # One fixture catalyst per provider: a cyfr manifest (the OCI config blob),
