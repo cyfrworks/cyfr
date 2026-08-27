@@ -38,6 +38,23 @@ defmodule Arca.Repo.Errors do
   end
 
   @doc """
+  Run `fun`, mapping any database-adapter error to
+  `{:error, :database_error}` — the one row-plane spelling of "the store
+  could not answer" at a storage entry point. `tag` names the caller in
+  the log line.
+  """
+  @spec with_db_rescue(String.t(), (-> result)) :: result | {:error, :database_error}
+        when result: term()
+  def with_db_rescue(tag, fun) when is_binary(tag) and is_function(fun, 0) do
+    fun.()
+  rescue
+    e in db_errors() ->
+      require Logger
+      Logger.error("[#{tag}] database error: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
   Returns true if the exception represents a unique constraint violation.
 
   Works across both SQLite (`UNIQUE constraint failed`) and Postgres

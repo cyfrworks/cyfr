@@ -241,7 +241,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_del2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {count, _} = McpLog.delete_before(cutoff, athanor_id: "ath_test")
+      {:ok, count} = McpLog.delete_before(cutoff, athanor_id: "ath_test")
       assert count >= 1
 
       platform_ctx =
@@ -280,7 +280,7 @@ defmodule Arca.McpLogTest do
         )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {count, _} = McpLog.delete_before(cutoff, athanor_id: "ath_a")
+      {:ok, count} = McpLog.delete_before(cutoff, athanor_id: "ath_a")
       assert count >= 1
 
       platform_ctx =

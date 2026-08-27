@@ -3,7 +3,6 @@
 
 defmodule Cyfr.Retention do
   require Logger
-  require Arca.Repo.Errors
 
   @moduledoc """
   Retention policy for tenant data — which records an athanor keeps, and
@@ -416,15 +415,11 @@ defmodule Cyfr.Retention do
       tenant_opts = [athanor_id: ctx.athanor_id]
 
       if dry_run do
-        case Arca.McpLog.count_before(cutoff, tenant_opts) do
-          {:error, _} = err -> err
-          count -> {:ok, %{would_delete: count}}
+        with {:ok, count} <- Arca.McpLog.count_before(cutoff, tenant_opts) do
+          {:ok, %{would_delete: count}}
         end
       else
-        case Arca.McpLog.delete_before(cutoff, tenant_opts) do
-          {:error, _} = err -> err
-          {count, _} -> {:ok, count}
-        end
+        Arca.McpLog.delete_before(cutoff, tenant_opts)
       end
     end
   end
@@ -455,15 +450,11 @@ defmodule Cyfr.Retention do
       tenant_opts = [athanor_id: ctx.athanor_id]
 
       if dry_run do
-        case Arca.PolicyLog.count_before(cutoff, tenant_opts) do
-          {:error, _} = err -> err
-          count -> {:ok, %{would_delete: count}}
+        with {:ok, count} <- Arca.PolicyLog.count_before(cutoff, tenant_opts) do
+          {:ok, %{would_delete: count}}
         end
       else
-        case Arca.PolicyLog.delete_before(cutoff, tenant_opts) do
-          {:error, _} = err -> err
-          {count, _} -> {:ok, count}
-        end
+        Arca.PolicyLog.delete_before(cutoff, tenant_opts)
       end
     end
   end
@@ -491,16 +482,13 @@ defmodule Cyfr.Retention do
       cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
 
       if dry_run do
-        {:ok, %{would_delete: Arca.ConversationStorage.count_before(ctx, cutoff)}}
+        with {:ok, count} <- Arca.ConversationStorage.count_before(ctx, cutoff) do
+          {:ok, %{would_delete: count}}
+        end
       else
-        {count, _} = Arca.ConversationStorage.delete_before(ctx, cutoff)
-        {:ok, count}
+        Arca.ConversationStorage.delete_before(ctx, cutoff)
       end
     end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Cyfr.Retention] cleanup_conversations failed: #{Exception.message(e)}")
-      {:error, :database_error}
   end
 
   # Each athanor's cleanup runs inside that athanor — its own settings,

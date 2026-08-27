@@ -23,6 +23,17 @@ defmodule Arca.QueryHelpers do
   `where_athanor/2` is the plain filter for bare-key call sites (an athanor
   id string, no context to judge). Callers must not rely on any of these as
   the primary control.
+
+  ## The row-plane error convention
+
+  Three spellings, each at its own altitude, none interchangeable: a
+  database outage at a storage entry point is `{:error, :database_error}`
+  (`Arca.Repo.Errors.with_db_rescue/2`); an athanor-less context reaching
+  a storage backstop is an `ArgumentError` raise (`where_tenant/2`,
+  `where_athanor/2` — a bug upstream, never a value); and
+  `Sanctum.UnauthorizedError` stays the product boundary's word
+  (`Sanctum.Context.athanor!/1`). Retention primitives answer
+  `{:ok, count} | {:error, term}` — never a raw Ecto tuple.
   """
 
   import Ecto.Query
@@ -83,4 +94,23 @@ defmodule Arca.QueryHelpers do
   @spec maybe_put(keyword(), atom(), any()) :: keyword()
   def maybe_put(opts, _key, nil), do: opts
   def maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  @doc """
+  The retention window: rows whose `field` timestamp is before `cutoff` —
+  the one filter every `delete_before`/`count_before` pair speaks.
+  """
+  @spec where_before(Ecto.Queryable.t(), atom(), DateTime.t()) :: Ecto.Query.t()
+  def where_before(query, field, %DateTime{} = cutoff) when is_atom(field) do
+    from(r in query, where: field(r, ^field) < ^cutoff)
+  end
+
+  @doc """
+  Every athanor id holding rows of `schema` — unscoped by design: the
+  retention scheduler enumerates each athanor and cleans inside its own
+  context.
+  """
+  @spec distinct_athanors(module()) :: [String.t()]
+  def distinct_athanors(schema) when is_atom(schema) do
+    Arca.Repo.all(from(r in schema, select: r.athanor_id, distinct: true))
+  end
 end

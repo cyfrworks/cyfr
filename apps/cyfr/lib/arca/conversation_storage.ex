@@ -203,6 +203,15 @@ defmodule Arca.ConversationStorage do
         seq -> from(m in query, where: m.seq <= ^seq)
       end
 
+    # `:limit` bounds a read that would otherwise load every row of a
+    # long-lived conversation; unset loads all (turn assembly needs the
+    # whole transcript).
+    query =
+      case Keyword.get(opts, :limit) do
+        nil -> query
+        limit -> from(m in query, limit: ^limit)
+      end
+
     query
     |> QueryHelpers.where_tenant(ctx)
     |> Repo.all()
@@ -243,7 +252,7 @@ defmodule Arca.ConversationStorage do
   conversation that still carries the default title.
   """
   @spec append(Context.t(), String.t(), map()) ::
-          {:ok, Message.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Message.t()} | {:error, :not_found | :seq_conflict | Ecto.Changeset.t()}
   def append(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
     with {:ok, conv} <- get(ctx, conversation_id) do
       do_append(ctx, conv, attrs, 3)
@@ -301,9 +310,17 @@ defmodule Arca.ConversationStorage do
         {:ok, msg}
 
       {:error, %Ecto.Changeset{errors: errors} = changeset} ->
-        if Keyword.has_key?(errors, :conversation_id),
-          do: do_append(ctx, conv, attrs, retries - 1),
-          else: {:error, changeset}
+        # Only the (conversation_id, seq) unique race retries — any other
+        # changeset error on that field is a real refusal, not the race.
+        case Keyword.get(errors, :conversation_id) do
+          {_msg, meta} when is_list(meta) ->
+            if Keyword.get(meta, :constraint) == :unique,
+              do: do_append(ctx, conv, attrs, retries - 1),
+              else: {:error, changeset}
+
+          _other ->
+            {:error, changeset}
+        end
     end
   end
 
@@ -414,19 +431,24 @@ defmodule Arca.ConversationStorage do
 
   @doc "The distinct athanor ids that have conversations (retention walks them)."
   @spec distinct_athanors() :: [String.t()]
-  def distinct_athanors do
-    Repo.all(from(c in Conversation, select: c.athanor_id, distinct: true))
-  end
+  def distinct_athanors, do: QueryHelpers.distinct_athanors(Conversation)
 
   @doc """
   Delete the athanor's conversations whose last activity is older than
   `cutoff` — messages and attachment blobs included. The context is the
   athanor's (retention walks each with an internal context).
   """
-  @spec delete_before(Context.t(), DateTime.t()) :: {non_neg_integer(), nil}
+  @spec delete_before(Context.t(), DateTime.t()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_before(%Context{} = ctx, %DateTime{} = cutoff) do
     athanor_id = Context.athanor!(ctx)
 
+    Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.delete_before", fn ->
+      delete_before_rows(ctx, athanor_id, cutoff)
+    end)
+  end
+
+  defp delete_before_rows(ctx, athanor_id, cutoff) do
     stale =
       from(c in Conversation,
         where:
@@ -454,10 +476,11 @@ defmodule Arca.ConversationStorage do
       end)
 
     if deletable == [] do
-      {0, nil}
+      {:ok, 0}
     else
       Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
-      Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
+      {count, _} = Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
+      {:ok, count}
     end
   end
 
@@ -466,16 +489,22 @@ defmodule Arca.ConversationStorage do
   count, sharing its rule: a conversation with a running turn is never
   touched.
   """
-  @spec count_before(Context.t(), DateTime.t()) :: non_neg_integer()
+  @spec count_before(Context.t(), DateTime.t()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def count_before(%Context{} = ctx, %DateTime{} = cutoff) do
     athanor_id = Context.athanor!(ctx)
 
-    from(c in Conversation,
-      where:
-        c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
-          coalesce(c.last_message_at, c.inserted_at) < ^cutoff
-    )
-    |> Repo.aggregate(:count)
+    Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.count_before", fn ->
+      count =
+        from(c in Conversation,
+          where:
+            c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
+              coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+        )
+        |> Repo.aggregate(:count)
+
+      {:ok, count}
+    end)
   end
 
   # ---------------------------------------------------------------------------

@@ -249,7 +249,7 @@ defmodule Arca.ConversationStorageTest do
     :ok = Arca.put(ctx, Conversations.blob_root(stale.id) ++ ["msg_1", "note.txt"], "bytes")
 
     cutoff = DateTime.add(DateTime.utc_now(), -365 * 86_400, :second)
-    assert {1, nil} = Conversations.delete_before(ctx, cutoff)
+    assert {:ok, 1} = Conversations.delete_before(ctx, cutoff)
     refute Arca.exists?(ctx, Conversations.blob_root(stale.id) ++ ["msg_1", "note.txt"])
 
     ids = Conversations.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()

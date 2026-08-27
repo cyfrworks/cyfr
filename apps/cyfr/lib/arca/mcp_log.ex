@@ -31,8 +31,6 @@ defmodule Arca.McpLog do
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query
-  require Logger
-  require Arca.Repo.Errors
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -161,47 +159,46 @@ defmodule Arca.McpLog do
   context.
   """
   @spec distinct_athanors() :: [String.t()]
-  def distinct_athanors do
-    Arca.Repo.all(from(l in __MODULE__, select: l.athanor_id, distinct: true))
-  end
+  def distinct_athanors, do: Arca.QueryHelpers.distinct_athanors(__MODULE__)
 
   @doc """
   Deletes all MCP logs with timestamps before the given datetime.
 
   Requires `:athanor_id` — deletion is always scoped to one athanor.
 
-  Returns `{count, nil}` where count is the number of deleted records.
+  Returns `{:ok, count}` — or `{:error, :database_error}` when the store cannot answer.
   """
+  @spec delete_before(DateTime.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_before(%DateTime{} = datetime, opts) do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-    query =
-      from(l in __MODULE__,
-        where: l.timestamp < ^datetime,
-        where: l.athanor_id == ^athanor_id
-      )
+    Arca.Repo.Errors.with_db_rescue("Arca.McpLog.delete_before", fn ->
+      {count, _} =
+        __MODULE__
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.QueryHelpers.where_before(:timestamp, datetime)
+        |> Arca.Repo.delete_all()
 
-    Arca.Repo.delete_all(query)
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpLog] Database error in delete_before: #{Exception.message(e)}")
-      {:error, :database_error}
+      {:ok, count}
+    end)
   end
 
   @doc "How many rows `delete_before/2` would remove — the dry-run count."
-  @spec count_before(DateTime.t(), keyword()) :: non_neg_integer() | {:error, term()}
+  @spec count_before(DateTime.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def count_before(%DateTime{} = datetime, opts) do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-    from(l in __MODULE__,
-      where: l.timestamp < ^datetime,
-      where: l.athanor_id == ^athanor_id
-    )
-    |> Arca.Repo.aggregate(:count)
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpLog] Database error in count_before: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.McpLog.count_before", fn ->
+      count =
+        __MODULE__
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.QueryHelpers.where_before(:timestamp, datetime)
+        |> Arca.Repo.aggregate(:count)
+
+      {:ok, count}
+    end)
   end
 
   @doc """
