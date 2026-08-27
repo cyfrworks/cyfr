@@ -29,13 +29,14 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       for action <- ~w(create delete enable disable test refresh) do
-        assert {:error, message} =
+        assert {:error, reason} =
                  Emissary.MCP.ToolRegistry.call_external("mcp_servers", ctx, %{
                    "action" => action,
                    "name" => "some-server"
                  })
 
-        assert message =~ "admin", "expected admin denial for #{action}, got: #{message}"
+        assert reason == {:missing_permission, :admin},
+               "expected admin denial for #{action}, got: #{inspect(reason)}"
       end
     end
 
@@ -57,14 +58,14 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove) do
-        assert {:error, message} =
+        assert {:error, reason} =
                  Emissary.MCP.ToolRegistry.call_external("registry", ctx, %{
                    "action" => action,
                    "slug" => "someslug"
                  })
 
-        assert message =~ "component_manage",
-               "expected component_manage denial for #{action}, got: #{message}"
+        assert reason == {:missing_permission, :component_manage},
+               "expected component_manage denial for #{action}, got: #{inspect(reason)}"
       end
     end
 
@@ -150,13 +151,11 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
     test "denied for an execute-only context" do
       ctx = execute_only_ctx()
 
-      assert {:error, message} =
+      assert {:error, {:missing_permission, :admin}} =
                Emissary.MCP.ToolRegistry.call_external("system", ctx, %{
                  "action" => "notify",
                  "event" => "test.event"
                })
-
-      assert message =~ "admin"
     end
 
     test "status stays open" do

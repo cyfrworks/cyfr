@@ -70,7 +70,7 @@ defmodule Sanctum.MCP.OAuthTool do
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     case Sanctum.ProviderCredentials.list(ctx) do
       {:ok, rows} -> {:ok, %{providers: rows, count: length(rows)}}
-      {:error, reason} -> {:error, to_string(reason)}
+      {:error, reason} -> {:error, format_reason(reason)}
     end
   end
 
@@ -79,7 +79,7 @@ defmodule Sanctum.MCP.OAuthTool do
     case Sanctum.ProviderCredentials.delete(ctx, provider) do
       :ok -> {:ok, %{status: "ok", provider: provider, deleted: true}}
       {:error, :not_found} -> {:error, "No client credentials stored for provider '#{provider}'"}
-      {:error, reason} -> {:error, to_string(reason)}
+      {:error, reason} -> {:error, format_reason(reason)}
     end
   end
 
@@ -102,7 +102,7 @@ defmodule Sanctum.MCP.OAuthTool do
          }}
 
       {:error, reason} ->
-        {:error, to_string(reason)}
+        {:error, format_reason(reason)}
     end
   end
 
@@ -115,4 +115,13 @@ defmodule Sanctum.MCP.OAuthTool do
   end
 
   defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+
+  # An authorization refusal stays a vocabulary term — the dispatcher
+  # renders it with the auth code. `to_string/1` here used to crash on a
+  # refusal tuple whenever the annotation chokepoint was bypassed.
+  defp format_reason(reason) when is_binary(reason), do: reason
+
+  defp format_reason(reason) do
+    if Sanctum.Unauthorized.reason?(reason), do: reason, else: to_string(reason)
+  end
 end

@@ -106,6 +106,16 @@ defmodule EmissaryWeb.MCPController do
       "subscriptions/listen" -> listen(conn, ctx, params, request_id)
       _ -> handle_message(conn, ctx, params, request_id, start_time)
     end
+  rescue
+    # An authorization refusal that raised in the request process itself
+    # (outside the tool-task boundary, which converts its own) — answered
+    # in the JSON-RPC envelope as the auth error it is, never as a 500.
+    e in Sanctum.UnauthorizedError ->
+      respond_error(
+        conn,
+        :insufficient_permissions,
+        Message.encode_error(params["id"], :insufficient_permissions, Exception.message(e))
+      )
   end
 
   @doc """
@@ -577,6 +587,7 @@ defmodule EmissaryWeb.MCPController do
   # Answering `400` for both makes that undecidable.
   defp http_status_for(:method_not_found), do: 404
   defp http_status_for(:auth_required), do: 401
+  defp http_status_for(:insufficient_permissions), do: 403
   defp http_status_for(:rate_limited), do: 429
   defp http_status_for(_code), do: 400
 

@@ -189,7 +189,7 @@ defmodule Emissary.MCP.ToolRegistry do
   def call_external(name, ctx, args, opts \\ [])
 
   def call_external(name, %Context{plane: :guest}, _args, _opts) do
-    {:error, "Unauthorized: guest-plane context cannot make external-plane call to '#{name}'"}
+    {:error, {:guest_plane_call, name}}
   end
 
   def call_external(name, %Context{} = ctx, args, opts) when is_map(args) do
@@ -533,7 +533,7 @@ defmodule Emissary.MCP.ToolRegistry do
     case Map.get(annotation, :scope) do
       nil -> :ok
       :platform when ctx.platform_admin -> :ok
-      :platform -> {:error, "Unauthorized: platform admin required"}
+      :platform -> {:error, :platform_admin_required}
     end
   end
 
@@ -541,7 +541,7 @@ defmodule Emissary.MCP.ToolRegistry do
     if Emissary.MCP.ToolVisibility.admits?(annotation, ctx) do
       :ok
     else
-      {:error, "Unauthorized: tool '#{name}' requires authentication"}
+      {:error, {:tool_auth_required, name}}
     end
   end
 
@@ -640,7 +640,7 @@ defmodule Emissary.MCP.ToolRegistry do
                 # unknown names here, so this guards the in-process callers
                 # (FormulaHandler, LiveViews). Bare unknown names fall through
                 # so they still produce "Unknown tool".
-                {:error, "Unauthorized: tool '#{name}' requires authentication"}
+                {:error, {:tool_auth_required, name}}
 
               true ->
                 execute_tool_call(name, ctx, opts, fn ->
@@ -874,6 +874,13 @@ defmodule Emissary.MCP.ToolRegistry do
       case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
         {:ok, result} ->
           result
+
+        {:exit, {%Sanctum.UnauthorizedError{} = exception, _stacktrace}} ->
+          # An authorization refusal that surfaced as a raise inside the
+          # handler (`Context.athanor!/1`, `require_tenant!/1`) is a
+          # refusal, not a crash: no error log, and the router answers it
+          # with the auth error code instead of an isError "crashed" text.
+          {:error, {:unauthorized, Exception.message(exception)}}
 
         {:exit, {exception, stacktrace}} when is_exception(exception) ->
           Logger.error("Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}")

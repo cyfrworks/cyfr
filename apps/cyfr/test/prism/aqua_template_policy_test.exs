@@ -32,6 +32,10 @@ defmodule Prism.AquaTemplatePolicyTest do
              Enum.join(unreachable, "\n")
   end
 
+  # The "execution" entries come from Opus.MCP's registered tool — an
+  # app-scoped run has no Opus modules, so the registry has nothing to
+  # enumerate under that name.
+  @tag :requires_opus_modules
   test "the capability matrix offers reachable actions, with their real kinds" do
     catalog = Map.new(PrismWeb.AgentsLive.Catalog.enumerate_tool_actions())
 

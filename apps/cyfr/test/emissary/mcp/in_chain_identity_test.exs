@@ -146,8 +146,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
         authenticated: true
       })
 
-    assert {:error, msg} = ToolRegistry.call_external("component", ctx, %{"action" => "list"})
-    assert msg =~ "guest-plane context cannot make external-plane call"
+    assert {:error, {:guest_plane_call, "component"}} =
+             ToolRegistry.call_external("component", ctx, %{"action" => "list"})
   end
 
   test "call_in_chain denies an action the authority does not grant" do

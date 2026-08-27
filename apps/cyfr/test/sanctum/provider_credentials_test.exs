@@ -121,8 +121,10 @@ defmodule Sanctum.ProviderCredentialsTest do
     test "requires :vault_write" do
       ctx = narrow_ctx([:execute])
 
-      assert {:error, _} =
-               Sanctum.MCP.OAuthTool.handle(ctx, %{
+      # The tool surface refuses at the dispatch chokepoint, where the
+      # action's permission annotation is enforced.
+      assert {:error, {:missing_permission, :vault_write}} =
+               Emissary.MCP.ToolRegistry.call_external("oauth", ctx, %{
                  "action" => "set_client",
                  "provider" => "google",
                  "client_id" => "x"

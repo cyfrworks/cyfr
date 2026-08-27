@@ -123,10 +123,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   end
 
   defp tenant_gate(ctx) do
-    case Context.tenant_ok(ctx) do
-      :ok -> :ok
-      {:error, :missing_tenant} -> {:error, "Unauthorized: no resolved tenant"}
-    end
+    Context.tenant_ok(ctx)
   end
 
   defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])

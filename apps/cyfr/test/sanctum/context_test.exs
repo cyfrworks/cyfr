@@ -8,6 +8,7 @@ defmodule Sanctum.ContextTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
+  alias Sanctum.Unauthorized
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -168,7 +169,10 @@ defmodule Sanctum.ContextTest do
           auth_method: :api_key
         )
 
-      {:error, msg} = Context.require_permission(ctx, :execute)
+      assert {:error, {:missing_permission, :execute} = reason} =
+               Context.require_permission(ctx, :execute)
+
+      msg = Unauthorized.message(reason, :api_key)
       assert msg =~ "missing required permission 'execute'"
       assert msg =~ "recreate with --scope execute"
     end
@@ -184,7 +188,10 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      {:error, msg} = Context.require_permission(ctx, :execute)
+      assert {:error, {:missing_permission, :execute} = reason} =
+               Context.require_permission(ctx, :execute)
+
+      msg = Unauthorized.message(reason)
       assert msg =~ "missing required permission 'execute'"
       refute msg =~ "recreate"
     end
@@ -328,8 +335,9 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "u1", athanor_id: "ath_b"}
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, record})
-      assert msg =~ "tenant mismatch"
+
+      assert {:error, :tenant_mismatch} =
+               Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "allows same-tenant admin access to other user's execution" do
@@ -388,8 +396,8 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, %{}})
-      assert msg =~ "malformed execution resource"
+      assert {:error, {:malformed_resource, :execution}} =
+               Context.authorize(ctx, :storage_read, {:execution, %{}})
     end
 
     test "an untagged map carrying an athanor is refused, never downgraded" do
@@ -407,13 +415,10 @@ defmodule Sanctum.ContextTest do
       # the permission + tenant-presence path, silently skipping the
       # per-record athanor check the record calls for.
       record = %{athanor_id: "ath_other", user_id: "u1"}
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, record)
-      assert msg =~ "must be passed tagged"
+      assert {:error, :untagged_tenant_resource} = Context.authorize(ctx, :storage_read, record)
 
-      assert {:error, msg2} =
+      assert {:error, :untagged_tenant_resource} =
                Context.authorize(ctx, :storage_read, %{"athanor_id" => "ath_other"})
-
-      assert msg2 =~ "must be passed tagged"
     end
 
     test "{:execution, map} with no :user_id is rejected" do
@@ -427,10 +432,8 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} =
+      assert {:error, {:malformed_resource, :execution}} =
                Context.authorize(ctx, :storage_read, {:execution, %{athanor_id: "ath_a"}})
-
-      assert msg =~ "malformed execution resource"
     end
 
     test "{:tenant, non_map} payload is rejected" do
@@ -444,8 +447,8 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:tenant, "not-a-map"})
-      assert msg =~ "malformed tenant resource"
+      assert {:error, {:malformed_resource, :tenant}} =
+               Context.authorize(ctx, :storage_read, {:tenant, "not-a-map"})
     end
 
     test "wildcard/admin does NOT bypass per-record tenant check" do
@@ -460,8 +463,9 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "other_user", athanor_id: "ath_b"}
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, record})
-      assert msg =~ "tenant mismatch"
+
+      assert {:error, :tenant_mismatch} =
+               Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
     test "well-formed tagged resource still authorized (no regression)" do

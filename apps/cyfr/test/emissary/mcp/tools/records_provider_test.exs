@@ -134,8 +134,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "a platform context without an athanor answers a typed error, never raises" do
       ctx = Sanctum.Context.internal()
 
-      {:error, msg} = MCP.read(ctx, "arca://files/guest/x")
-      assert msg =~ "Unauthorized"
+      assert {:error, :missing_tenant} = MCP.read(ctx, "arca://files/guest/x")
     end
   end
 
@@ -368,25 +367,19 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       # (The old handler gate checked :storage_write too but answered with a
       # message claiming admin was required — the denial now names the real
       # permission.)
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
-          "action" => "set",
-          "settings" => %{"executions" => 5}
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "storage_write"
+      assert {:error, {:missing_permission, :storage_write}} =
+               Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
+                 "action" => "set",
+                 "settings" => %{"executions" => 5}
+               })
     end
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
-          "action" => "cleanup",
-          "cleanup_type" => "executions"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "admin"
+      assert {:error, {:missing_permission, :admin}} =
+               Emissary.MCP.ToolRegistry.call_external("retention", app_ctx, %{
+                 "action" => "cleanup",
+                 "cleanup_type" => "executions"
+               })
     end
   end
 
@@ -680,23 +673,19 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, msg} =
+      assert {:error, {:missing_permission, :storage_read}} =
                Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
-
-      assert msg =~ "Unauthorized"
     end
 
     test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, msg} =
+      assert {:error, {:missing_permission, :storage_read}} =
                Emissary.MCP.ToolRegistry.call_external("policy_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
-
-      assert msg =~ "Unauthorized"
     end
 
     test "correlate succeeds for a :storage_read context", %{ctx: ctx} do
@@ -727,10 +716,8 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, msg} =
+      assert {:error, {:missing_permission, :storage_read}} =
                Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{"action" => "stats"})
-
-      assert msg =~ "Unauthorized"
     end
 
     test "stats succeeds for a :storage_read context", %{ctx: ctx} do
@@ -773,9 +760,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         args = Map.put(extra_args.(action), "action", action)
 
         case Emissary.MCP.ToolRegistry.call_external(tool.name, no_perm_ctx, args) do
-          {:error, msg} ->
-            assert msg =~ "Unauthorized",
-                   "#{tool.name}.#{action} error is not a permission denial: #{inspect(msg)}"
+          {:error, reason} ->
+            assert Sanctum.Unauthorized.reason?(reason),
+                   "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
 
           other ->
             flunk(

@@ -94,11 +94,12 @@ defmodule Emissary.AuthChainIntegrationTest do
 
   describe "permission-gated actions enforce authorization" do
     test "record list denied without storage_read", %{conn: conn, limited_key: key} do
-      resp = conn |> mcp_call(key, "record", %{"action" => "list"}) |> json_response(200)
+      # An authorization refusal is a protocol error, not an isError result.
+      resp = conn |> mcp_call(key, "record", %{"action" => "list"}) |> json_response(403)
 
-      assert resp["result"]["isError"] == true
-      [content] = resp["result"]["content"]
-      assert content["text"] =~ "Unauthorized" or content["text"] =~ "permission"
+      assert resp["error"]["code"] == -33004
+      assert resp["error"]["message"] =~ "Unauthorized"
+      assert resp["error"]["message"] =~ "storage_read"
     end
 
     test "record list succeeds with storage_read", %{conn: conn, reader_key: key} do
@@ -111,11 +112,11 @@ defmodule Emissary.AuthChainIntegrationTest do
     end
 
     test "retention get denied without storage_read", %{conn: conn, limited_key: key} do
-      resp = conn |> mcp_call(key, "retention", %{"action" => "get"}) |> json_response(200)
+      resp = conn |> mcp_call(key, "retention", %{"action" => "get"}) |> json_response(403)
 
-      assert resp["result"]["isError"] == true
-      [content] = resp["result"]["content"]
-      assert content["text"] =~ "Unauthorized" or content["text"] =~ "permission"
+      assert resp["error"]["code"] == -33004
+      assert resp["error"]["message"] =~ "Unauthorized"
+      assert resp["error"]["message"] =~ "storage_read"
     end
 
     test "retention get succeeds with storage_read", %{conn: conn, reader_key: key} do
@@ -131,11 +132,10 @@ defmodule Emissary.AuthChainIntegrationTest do
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
-        |> json_response(200)
+        |> json_response(403)
 
-      assert resp["result"]["isError"] == true
-      [content] = resp["result"]["content"]
-      assert content["text"] =~ "Unauthorized"
+      assert resp["error"]["code"] == -33004
+      assert resp["error"]["message"] =~ "Unauthorized"
     end
 
     test "retention cleanup denied for non-admin key", %{conn: conn, reader_key: key} do
@@ -146,11 +146,10 @@ defmodule Emissary.AuthChainIntegrationTest do
           "cleanup_type" => "executions",
           "dry_run" => true
         })
-        |> json_response(200)
+        |> json_response(403)
 
-      assert resp["result"]["isError"] == true
-      [content] = resp["result"]["content"]
-      assert content["text"] =~ "Unauthorized"
+      assert resp["error"]["code"] == -33004
+      assert resp["error"]["message"] =~ "Unauthorized"
     end
   end
 

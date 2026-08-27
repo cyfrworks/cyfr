@@ -343,20 +343,16 @@ defmodule Sanctum.MCPTest do
     end
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
-      {:error, msg} = Emissary.MCP.ToolRegistry.call_external("key", ctx, %{"action" => "list"})
-      assert msg =~ "Unauthorized"
-      assert msg =~ "admin"
+      assert {:error, {:missing_permission, :admin}} =
+               Emissary.MCP.ToolRegistry.call_external("key", ctx, %{"action" => "list"})
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("key", ctx, %{
-          "action" => "get",
-          "name" => "test-key"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "admin"
+      assert {:error, {:missing_permission, :admin}} =
+               Emissary.MCP.ToolRegistry.call_external("key", ctx, %{
+                 "action" => "get",
+                 "name" => "test-key"
+               })
     end
   end
 

@@ -415,12 +415,10 @@ defmodule Opus.MCPTest do
     end
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
-      assert {:error, msg} =
+      assert {:error, :platform_admin_required} =
                Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
                  "action" => "force_release"
                })
-
-      assert msg =~ "platform admin required"
 
       [tool] =
         Emissary.MCP.ToolVisibility.filter_for_context(
@@ -476,7 +474,8 @@ defmodule Opus.MCPTest do
 
       case result do
         {:error, msg} ->
-          refute msg =~ "Unauthorized",
+          refute Sanctum.Unauthorized.reason?(msg) or
+                   (is_binary(msg) and msg =~ "Unauthorized"),
                  "run action should not require admin permissions"
 
         {:ok, _} ->
@@ -494,24 +493,18 @@ defmodule Opus.MCPTest do
     test "execution.status denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       # Through the dispatcher — the :execute gate lives in the action
       # annotation, enforced by ToolRegistry, not in the handler.
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
-          "action" => "status"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "execute"
+      assert {:error, {:missing_permission, :execute}} =
+               Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
+                 "action" => "status"
+               })
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
-          "action" => "cancel",
-          "execution_id" => "exec_nonexistent"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "execute"
+      assert {:error, {:missing_permission, :execute}} =
+               Emissary.MCP.ToolRegistry.call_external("execution", no_execute_ctx, %{
+                 "action" => "cancel",
+                 "execution_id" => "exec_nonexistent"
+               })
     end
 
     test "execution.status allowed with :execute permission", %{restricted_ctx: restricted_ctx} do

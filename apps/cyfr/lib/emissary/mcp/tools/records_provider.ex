@@ -132,7 +132,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   defp storage_ctx_gate(ctx) do
     if Arca.Storage.athanor_ready?(ctx),
       do: :ok,
-      else: {:error, "Unauthorized: no resolved tenant"}
+      else: {:error, :missing_tenant}
   end
 
   defp validate_segments(segments) do
@@ -644,9 +644,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:error, "Cleanup failed"}
       end
     else
-      # The only clause above is the tenant gate — surface its own words,
-      # as every other handler here does.
-      {:error, reason} when is_binary(reason) ->
+      # The only clause above is the tenant gate — pass its refusal term
+      # through; the dispatcher renders the vocabulary at the wire.
+      {:error, reason} ->
         {:error, reason}
     end
   end
@@ -776,10 +776,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   defp tenant_gate(ctx) do
-    case Context.tenant_ok(ctx) do
-      :ok -> :ok
-      {:error, :missing_tenant} -> {:error, "Unauthorized: no resolved tenant"}
-    end
+    Context.tenant_ok(ctx)
   end
 
   defp action_enum(tool) do

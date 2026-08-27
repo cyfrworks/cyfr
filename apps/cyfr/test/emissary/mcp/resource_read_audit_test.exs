@@ -75,7 +75,8 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
         {label, ctx} <- [anonymous: anonymous, permissionless: permissionless] do
       case ResourceRegistry.read(ctx, uri) do
         {:error, reason} ->
-          assert to_string(reason) =~ ~r/Authentication required|Unauthorized/,
+          assert Sanctum.Unauthorized.reason?(reason) or
+                   (is_binary(reason) and reason =~ ~r/Authentication required|Unauthorized/),
                  "#{label} read of #{uri} was refused with #{inspect(reason)} — " <>
                    "the gate must fire before any data access, not fall through " <>
                    "to a not-found"

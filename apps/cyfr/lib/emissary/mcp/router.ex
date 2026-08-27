@@ -211,17 +211,32 @@ defmodule Emissary.MCP.Router do
 
                     {:ok, call_result}
 
+                  # An authorization refusal is a protocol-level error with
+                  # the auth code, not a tool result: a client branches on
+                  # `-33004` (and the CLI on `-33001`) where an isError text
+                  # block gives it nothing to branch on. The raise path
+                  # arrives pre-rendered as `{:unauthorized, msg}`; the
+                  # tuple path as the `Sanctum.Unauthorized` vocabulary,
+                  # rendered to prose here — the wire boundary.
+                  {:error, {:unauthorized, msg}} ->
+                    {:error, :insufficient_permissions, msg}
+
                   {:error, reason} ->
-                    {:ok,
-                     %{
-                       "content" => [
-                         %{
-                           "type" => "text",
-                           "text" => format_error_reason(reason)
-                         }
-                       ],
-                       "isError" => true
-                     }}
+                    if Sanctum.Unauthorized.reason?(reason) do
+                      {:error, Sanctum.Unauthorized.code(reason),
+                       Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+                    else
+                      {:ok,
+                       %{
+                         "content" => [
+                           %{
+                             "type" => "text",
+                             "text" => format_error_reason(reason)
+                           }
+                         ],
+                         "isError" => true
+                       }}
+                    end
                 end
               end
           end

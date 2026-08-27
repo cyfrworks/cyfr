@@ -38,8 +38,13 @@ defmodule Sanctum.TinctureAccess do
         {:error, :not_found} -> {:error, :not_found}
       end
     else
-      {:error, "Unauthorized" <> _} -> {:error, :forbidden}
-      {:error, _} -> {:error, :not_found}
+      # An authorization refusal is 403; a malformed ref is an
+      # indistinguishable 404. Branching on the refusal vocabulary, not on
+      # the prose an English sentence happened to start with.
+      {:error, reason} ->
+        if Sanctum.Unauthorized.reason?(reason),
+          do: {:error, :forbidden},
+          else: {:error, :not_found}
     end
   end
 

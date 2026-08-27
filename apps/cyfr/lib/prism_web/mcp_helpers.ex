@@ -54,17 +54,22 @@ defmodule PrismWeb.MCPHelpers do
   @doc """
   One user-facing sentence for a tool failure.
 
-  Tool refusals are already sentences and pass through; anything else is
-  logged and generalized — internal terms never reach the page.
+  Tool refusals are already sentences and pass through; an authorization
+  refusal renders through its vocabulary; anything else is logged and
+  generalized — internal terms never reach the page.
   """
   def error_message(reason)
   def error_message(message) when is_binary(message), do: message
   def error_message(:no_context), do: "Not signed in."
 
   def error_message(reason) do
-    require Logger
-    Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
-    "The request failed — try again."
+    if Sanctum.Unauthorized.reason?(reason) do
+      Sanctum.Unauthorized.message(reason)
+    else
+      require Logger
+      Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
+      "The request failed — try again."
+    end
   end
 
   defp normalize_tool_call(tool_name, args) do

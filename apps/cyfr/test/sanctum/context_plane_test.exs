@@ -64,8 +64,7 @@ defmodule Sanctum.ContextPlaneTest do
       # The raw predicate still holds — it is the in-chain identity
       # conjunct — but the authorization gate does not.
       assert Context.has_permission?(guest, :admin)
-      assert {:error, message} = Context.require_permission(guest, :admin)
-      assert message =~ "guest-plane"
+      assert {:error, {:guest_plane, :admin}} = Context.require_permission(guest, :admin)
     end
 
     test "every permission is refused, not just wildcards" do
@@ -82,8 +81,9 @@ defmodule Sanctum.ContextPlaneTest do
     test "external plane fails closed, exactly like require_permission/2" do
       external = Context.build(%{user_id: "u", permissions: [:execute]})
       assert :ok = Context.require_permission_for_plane(external, :execute)
-      assert {:error, msg} = Context.require_permission_for_plane(external, :admin)
-      assert msg =~ "missing required permission"
+
+      assert {:error, {:missing_permission, :admin}} =
+               Context.require_permission_for_plane(external, :admin)
     end
 
     test "guest plane uses the identity conjunct, not the plane refusal" do
@@ -92,8 +92,8 @@ defmodule Sanctum.ContextPlaneTest do
       # applied upstream at the dispatch chokepoint)...
       assert :ok = Context.require_permission_for_plane(guest, :execute)
       # ...and refused when it does not — but never with the guest-plane error.
-      assert {:error, msg} = Context.require_permission_for_plane(guest, :admin)
-      refute msg =~ "guest-plane"
+      assert {:error, {:missing_permission, :admin}} =
+               Context.require_permission_for_plane(guest, :admin)
     end
   end
 end

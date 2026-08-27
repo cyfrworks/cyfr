@@ -1814,26 +1814,20 @@ defmodule Compendium.MCPTest do
     end
 
     test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
-          "action" => "create",
-          "name" => "test-comp",
-          "type" => "reagent"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "component_manage"
+      assert {:error, {:missing_permission, :component_manage}} =
+               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+                 "action" => "create",
+                 "name" => "test-comp",
+                 "type" => "reagent"
+               })
     end
 
     test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
-          "action" => "push",
-          "reference" => "reagent:local.test:0.1.0"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "component_manage"
+      assert {:error, {:missing_permission, :component_manage}} =
+               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+                 "action" => "push",
+                 "reference" => "reagent:local.test:0.1.0"
+               })
     end
 
     test "component.push is a person's act — an API key with every permission is still refused" do
@@ -1857,24 +1851,18 @@ defmodule Compendium.MCPTest do
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
-          "action" => "register"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "component_manage"
+      assert {:error, {:missing_permission, :component_manage}} =
+               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+                 "action" => "register"
+               })
     end
 
     test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} =
-        Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
-          "action" => "delete",
-          "reference" => "reagent:local.test:0.1.0"
-        })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "component_manage"
+      assert {:error, {:missing_permission, :component_manage}} =
+               Emissary.MCP.ToolRegistry.call_external("component", restricted_ctx, %{
+                 "action" => "delete",
+                 "reference" => "reagent:local.test:0.1.0"
+               })
     end
   end
 

@@ -7,6 +7,10 @@ defmodule Emissary.MCP.ToolRegistryTest.CrashingProvider do
   # rather than returning an error tuple.
   def handle(_tool, _ctx, %{"action" => "raise"}), do: raise("boom from provider")
   def handle(_tool, _ctx, %{"action" => "exit"}), do: exit(:provider_exit)
+
+  def handle(_tool, _ctx, %{"action" => "unauthorized"}),
+    do: raise(Sanctum.UnauthorizedError, action: :athanor_required)
+
   def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
 end
 
@@ -151,9 +155,9 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "rejects unauthenticated callers before reaching the external provider" do
       ctx = Context.build(authenticated: false, permissions: [])
 
-      assert {:error, message} = ToolRegistry.call_external("someserver:some_tool", ctx, %{})
-      assert message =~ "Unauthorized"
-      refute message =~ "Unknown tool"
+      # An auth refusal, never "Unknown tool" — the gate fires first.
+      assert {:error, {:tool_auth_required, "someserver:some_tool"}} =
+               ToolRegistry.call_external("someserver:some_tool", ctx, %{})
     end
 
     test "authenticated caller with a nonexistent server still gets Unknown tool" do
@@ -247,6 +251,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
         actions: %{
           "raise" => %{kind: :execute, planes: [:external]},
           "exit" => %{kind: :execute, planes: [:external]},
+          "unauthorized" => %{kind: :execute, planes: [:external]},
           "ok" => %{kind: :read, planes: [:external]}
         }
       }
@@ -287,6 +292,17 @@ defmodule Emissary.MCP.ToolRegistryTest do
                ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "exit"})
 
       assert message =~ "exited unexpectedly"
+      assert Process.alive?(self())
+    end
+
+    test "a raised UnauthorizedError is a refusal, never a crash" do
+      register_crashing_tool()
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, {:unauthorized, message}} =
+               ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
+
+      assert message =~ "athanor_required"
       assert Process.alive?(self())
     end
 

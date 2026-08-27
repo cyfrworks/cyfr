@@ -383,25 +383,16 @@ defmodule Sanctum.Context do
       :ok
 
   """
-  @spec require_permission(t(), atom()) :: :ok | {:error, String.t()}
+  @spec require_permission(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def require_permission(%__MODULE__{plane: :guest}, permission) do
-    {:error,
-     "Unauthorized: guest-plane context cannot authorize '#{permission}' " <>
-       "(external plane required)"}
+    {:error, {:guest_plane, permission}}
   end
 
   def require_permission(%__MODULE__{} = ctx, permission) do
     if has_permission?(ctx, permission) do
       :ok
     else
-      hint =
-        if ctx.auth_method == :api_key do
-          " (API key does not include this scope — recreate with --scope #{permission})"
-        else
-          ""
-        end
-
-      {:error, "Unauthorized: missing required permission '#{permission}'#{hint}"}
+      {:error, {:missing_permission, permission}}
     end
   end
 
@@ -416,12 +407,12 @@ defmodule Sanctum.Context do
   gate to serve a guest-planed context, and it never applies to
   external-plane callers, who keep the fail-closed `require_permission/2`.
   """
-  @spec require_identity_permission(t(), atom()) :: :ok | {:error, String.t()}
+  @spec require_identity_permission(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def require_identity_permission(%__MODULE__{} = ctx, permission) do
     if has_permission?(ctx, permission) do
       :ok
     else
-      {:error, "Unauthorized: missing required permission '#{permission}'"}
+      {:error, {:missing_permission, permission}}
     end
   end
 
@@ -434,7 +425,7 @@ defmodule Sanctum.Context do
   call this instead of hand-rolling the two-clause shim, so the rule lives in one
   place and cannot drift between them.
   """
-  @spec require_permission_for_plane(t(), atom()) :: :ok | {:error, String.t()}
+  @spec require_permission_for_plane(t(), atom()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def require_permission_for_plane(%__MODULE__{plane: :guest} = ctx, permission),
     do: require_identity_permission(ctx, permission)
 
@@ -582,13 +573,13 @@ defmodule Sanctum.Context do
       :ok
 
   """
-  @spec authorize(t(), atom(), term()) :: :ok | {:error, String.t()}
+  @spec authorize(t(), atom(), term()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def authorize(%__MODULE__{} = ctx, action), do: authorize(ctx, action, nil)
 
   # Unauthenticated contexts are never authorized. This MUST precede the
   # generic clause so an unauthenticated context is never authorized.
   def authorize(%__MODULE__{authenticated: false}, _action, _resource) do
-    {:error, "Unauthorized: authentication required"}
+    {:error, :unauthenticated}
   end
 
   def authorize(%__MODULE__{} = ctx, action, resource) do
@@ -633,7 +624,7 @@ defmodule Sanctum.Context do
   defp do_authorize(%__MODULE__{} = ctx, action, {tag, _})
        when tag in [:execution, :tenant] do
     log_denial(ctx, action, {tag, :malformed_resource})
-    {:error, "Unauthorized: malformed #{tag} resource (missing tenant/owner identity)"}
+    {:error, {:malformed_resource, tag}}
   end
 
   # An UNTAGGED value that visibly carries a tenant identity is the same
@@ -642,18 +633,12 @@ defmodule Sanctum.Context do
   # falling through would silently skip exactly that check.
   defp do_authorize(%__MODULE__{} = ctx, action, %{athanor_id: _}) do
     log_denial(ctx, action, {:untagged_tenant_resource, :refused})
-
-    {:error,
-     "Unauthorized: a tenant-bearing resource must be passed tagged " <>
-       "({:execution, record} or {:tenant, record})"}
+    {:error, :untagged_tenant_resource}
   end
 
   defp do_authorize(%__MODULE__{} = ctx, action, %{"athanor_id" => _}) do
     log_denial(ctx, action, {:untagged_tenant_resource, :refused})
-
-    {:error,
-     "Unauthorized: a tenant-bearing resource must be passed tagged " <>
-       "({:execution, record} or {:tenant, record})"}
+    {:error, :untagged_tenant_resource}
   end
 
   # Fallback: a resource shape that carries no tenant identity — `nil`, or an
@@ -691,11 +676,11 @@ defmodule Sanctum.Context do
 
   # Tenant-scope gate for the resource-less / fallback authorize paths.
   # Same chokepoint as `require_tenant!/1` (via `tenant_gate/1`); only the
-  # failure shape differs — `authorize/3` returns `{:error, String.t()}`.
+  # failure shape differs — `authorize/3` refuses with the vocabulary term.
   defp require_tenant_scope(%__MODULE__{} = ctx) do
     case tenant_gate(ctx) do
       :ok -> :ok
-      {:error, _} -> {:error, "Unauthorized: athanor membership required"}
+      {:error, _} -> {:error, :missing_tenant}
     end
   end
 

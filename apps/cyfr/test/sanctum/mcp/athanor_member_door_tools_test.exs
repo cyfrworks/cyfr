@@ -251,8 +251,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
   test "door.* is the operator's: refused for a member, hidden from tools/list, open to an admin",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
     member = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    assert {:error, msg} = call(member, "door", %{"action" => "list"})
-    assert msg =~ "platform admin required"
+    assert {:error, :platform_admin_required} = call(member, "door", %{"action" => "list"})
 
     admin = ctx.(ops, Athanors.home!().id, platform_admin: true)
     assert {:ok, %{entries: []}} = call(admin, "door", %{"action" => "list"})

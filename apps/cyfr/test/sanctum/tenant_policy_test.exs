@@ -35,8 +35,7 @@ defmodule Sanctum.TenantPolicyTest do
     test "rejects nil athanor_id even outside :platform scope" do
       ctx = %Context{user_id: "u1", athanor_id: nil}
 
-      assert {:error, "Unauthorized: a resolved athanor_id is required"} =
-               TenantPolicy.verify(ctx, %{athanor_id: "ath_acme"})
+      assert {:error, :missing_tenant} = TenantPolicy.verify(ctx, %{athanor_id: "ath_acme"})
     end
 
     test "enforces tenant equality when athanor_id is set" do
@@ -46,8 +45,7 @@ defmodule Sanctum.TenantPolicyTest do
       assert :ok = TenantPolicy.verify(ctx, %{athanor_id: "ath_acme"})
 
       # Mismatch → error
-      assert {:error, "Unauthorized: tenant mismatch"} =
-               TenantPolicy.verify(ctx, %{athanor_id: "ath_evil"})
+      assert {:error, :tenant_mismatch} = TenantPolicy.verify(ctx, %{athanor_id: "ath_evil"})
     end
 
     test "a record without an athanor is malformed and refused, never treated as a match" do
@@ -55,14 +53,11 @@ defmodule Sanctum.TenantPolicyTest do
 
       log =
         capture_log(fn ->
-          assert {:error, "Unauthorized: malformed record (no athanor)"} =
-                   TenantPolicy.verify(ctx, %{id: "x"})
+          assert {:error, :malformed_record} = TenantPolicy.verify(ctx, %{id: "x"})
 
-          assert {:error, "Unauthorized: malformed record (no athanor)"} =
-                   TenantPolicy.verify(ctx, %{athanor_id: nil})
+          assert {:error, :malformed_record} = TenantPolicy.verify(ctx, %{athanor_id: nil})
 
-          assert {:error, "Unauthorized: malformed record (no athanor)"} =
-                   TenantPolicy.verify(ctx, %{athanor_id: ""})
+          assert {:error, :malformed_record} = TenantPolicy.verify(ctx, %{athanor_id: ""})
         end)
 
       assert log =~ "Record without an athanor refused"

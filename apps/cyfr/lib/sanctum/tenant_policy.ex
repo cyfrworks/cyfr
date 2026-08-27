@@ -24,11 +24,11 @@ defmodule Sanctum.TenantPolicy do
   def require_athanor(%Context{athanor_id: ""}), do: {:error, :missing_tenant}
   def require_athanor(%Context{}), do: :ok
 
-  @spec verify(Context.t(), map()) :: :ok | {:error, String.t()}
+  @spec verify(Context.t(), map()) :: :ok | {:error, Sanctum.Unauthorized.reason()}
   def verify(%Context{scope: :platform}, _record), do: :ok
 
   def verify(%Context{athanor_id: athanor_id}, _record) when athanor_id in [nil, ""],
-    do: {:error, "Unauthorized: a resolved athanor_id is required"}
+    do: {:error, :missing_tenant}
 
   def verify(%Context{athanor_id: athanor_id} = ctx, %{athanor_id: record_athanor})
       when is_binary(record_athanor) and record_athanor != "" do
@@ -40,7 +40,7 @@ defmodule Sanctum.TenantPolicy do
           "ctx=#{athanor_id} record=#{record_athanor} user=#{ctx.user_id}"
       )
 
-      {:error, "Unauthorized: tenant mismatch"}
+      {:error, :tenant_mismatch}
     end
   end
 
@@ -50,6 +50,6 @@ defmodule Sanctum.TenantPolicy do
         "user=#{ctx.user_id} keys=#{inspect(record |> Map.keys() |> Enum.sort())}"
     )
 
-    {:error, "Unauthorized: malformed record (no athanor)"}
+    {:error, :malformed_record}
   end
 end

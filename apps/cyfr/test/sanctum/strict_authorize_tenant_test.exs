@@ -48,11 +48,10 @@ defmodule Sanctum.StrictAuthorizeTenantTest do
     end
 
     test "a record that names no athanor is malformed, never a same-tenant match", %{ctx: ctx} do
-      assert {:error, msg} = Context.authorize(ctx, :read, {:tenant, %{id: "x"}})
-      assert msg =~ "malformed record"
+      assert {:error, :malformed_record} = Context.authorize(ctx, :read, {:tenant, %{id: "x"}})
 
-      assert {:error, msg} = Context.authorize(ctx, :read, {:execution, %{user_id: "u1"}})
-      assert msg =~ "malformed record"
+      assert {:error, :malformed_record} =
+               Context.authorize(ctx, :read, {:execution, %{user_id: "u1"}})
     end
 
     test "permission-only (nil) — athanor-less context denied by tenant presence" do

@@ -59,6 +59,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
   defp refused?(result) do
     case result do
       {:error, :auth_required, _} -> true
+      {:error, :insufficient_permissions, message} -> message =~ "Unauthorized"
       {:error, message} when is_binary(message) -> message =~ "Unauthorized"
       {:ok, %{"isError" => true, "content" => [%{"text" => text} | _]}} -> text =~ "Unauthorized"
       _ -> false

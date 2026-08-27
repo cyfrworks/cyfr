@@ -4,6 +4,12 @@
 defmodule Sanctum.UnauthorizedError do
   @moduledoc """
   Raised when a context lacks required permissions or access level.
+
+  Carries a `Plug.Exception` status of 403, so a raise that escapes to the
+  endpoint renders as the authorization refusal it is — never a 500. The
+  MCP surface additionally maps it to the `:insufficient_permissions`
+  JSON-RPC code (the controller's rescue for the request process, the tool
+  registry's task boundary for handlers).
   """
 
   defexception [:permission, :action, :message]
@@ -25,4 +31,9 @@ defmodule Sanctum.UnauthorizedError do
         %__MODULE__{permission: nil, action: nil, message: "Unauthorized"}
     end
   end
+end
+
+defimpl Plug.Exception, for: Sanctum.UnauthorizedError do
+  def status(_exception), do: 403
+  def actions(_exception), do: []
 end
