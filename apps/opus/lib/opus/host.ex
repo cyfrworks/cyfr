@@ -3,16 +3,27 @@
 
 defmodule Opus.Host do
   @moduledoc """
-  What the runtime asks of the host: the seams where opus reaches into
-  cyfr while a component runs.
+  The **consent and record plane**: the seams a running component crosses
+  into the platform — a root authority resolved from a consent, an in-chain
+  tool call, a vault edge unsealed, a policy decision recorded, an execution
+  row opened and closed, an event delivered.
 
-  Every one of these is a delegate today — opus and cyfr are one release —
-  but they are the whole of what a runtime needs from the platform: a
-  root authority resolved from a consent, an in-chain tool call, a vault
-  edge unsealed, a policy decision recorded, an execution row opened and
-  closed. A worker on another node would implement exactly this surface
-  against the wire (`Sanctum.Authority.to_wire/1`); the runtime code above
-  it does not change.
+  Every one of these is a delegate today, because opus and cyfr are one
+  release. What they are not is the whole of what opus needs from cyfr.
+  This module used to say a worker on another node "would implement exactly
+  this surface", and that was wrong by two orders of magnitude: opus names
+  cyfr modules in ~270 places across the namespaces
+  `Opus.HostSurfaceTest` enumerates. A worker built to these eight
+  functions alone would come up with no blob storage, no cache, no schedule
+  table, no egress policy and no id generator.
+
+  The honest statement is narrower and still useful: **this is the plane a
+  component's execution crosses, and it is the one that would go over the
+  wire** (`Sanctum.Authority.to_wire/1`). The rest — storage, cache, the
+  row plane, network policy, the shared primitives under `Cyfr.` — is
+  infrastructure a worker would need a real client for, not a behaviour it
+  would implement. `Opus.HostSurfaceTest` keeps that list from growing
+  quietly.
   """
 
   alias Sanctum.Context
