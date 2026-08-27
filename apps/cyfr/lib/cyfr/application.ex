@@ -74,6 +74,9 @@ defmodule Cyfr.Application do
       # The cache table's one owner — before anything that might read
       # through it.
       Arca.Cache.Sweeper,
+      # Orders whole-unit replacement so two commits to one unit cannot
+      # interleave their clear-then-write (Arca.Overlay.UnitLock).
+      Arca.Overlay.UnitLock,
       # The write-behind for bookkeeping rows (allowed policy lines, MCP log
       # completions, vault last-used); right after the repo so it drains
       # before the repo goes down.

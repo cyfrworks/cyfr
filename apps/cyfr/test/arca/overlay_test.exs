@@ -10,6 +10,43 @@ defmodule Arca.OverlayTest.FailingCopyAdapter do
   def put(ctx, path, content), do: Arca.Adapters.Local.put(ctx, path, content)
 end
 
+defmodule Arca.OverlayTest.GatedCleanSlateAdapter do
+  @moduledoc false
+  # Holds one caller exactly where the lost-update window opens.
+  #
+  # `Arca.Overlay.clean_slate/2` begins by listing the unit, so blocking
+  # `list_typed/2` parks a commit after it has decided to replace the unit
+  # and before it deletes anything. That is the only interleaving that
+  # loses an acknowledged write, and racing two tasks will not produce it
+  # reliably — the window is microseconds wide.
+  use Arca.Storage.TestDouble
+
+  @gate {__MODULE__, :gate}
+
+  def arm(test_pid), do: :persistent_term.put(@gate, test_pid)
+  def disarm, do: :persistent_term.erase(@gate)
+
+  def list_typed(ctx, path) do
+    case :persistent_term.get(@gate, nil) do
+      nil ->
+        Arca.Adapters.Local.list_typed(ctx, path)
+
+      test_pid ->
+        # One caller only: the first to arrive takes the gate down.
+        disarm()
+        send(test_pid, {:at_clean_slate, self()})
+
+        receive do
+          :proceed -> :ok
+        after
+          10_000 -> :ok
+        end
+
+        Arca.Adapters.Local.list_typed(ctx, path)
+    end
+  end
+end
+
 defmodule Arca.OverlayTest.DownAdapter do
   @moduledoc false
   # A tenant adapter whose listings are down — the outage shape an object
@@ -631,6 +668,74 @@ defmodule Arca.OverlayTest do
       {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "components")
       assert statuses[@version_dir] == :materialized
       assert statuses[other_dir] == :materialized
+    end
+
+    # The test above races two DIFFERENT units, which never contended. Two
+    # writers into the SAME unmaterialized unit is where the bytes went:
+    # both see it incomplete, both materialize, and the second one's
+    # clean-slate deletes the file the first writer was already told had
+    # been written. Its caller had an :ok in hand.
+    #
+    # Driven rather than raced: the window is microseconds wide, so the
+    # adapter parks the second commit at the moment it is about to clear
+    # the unit and the test steps the two through the exact interleaving.
+    test "a commit cannot clear a unit under a write that already returned :ok", %{ctx: ctx} do
+      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
+
+      on_exit(fn ->
+        Arca.OverlayTest.GatedCleanSlateAdapter.disarm()
+        Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+      end)
+
+      Arca.OverlayTest.GatedCleanSlateAdapter.arm(self())
+
+      # Writer B: reaches clean_slate for the unit and parks there.
+      b = Task.async(fn -> Arca.put(ctx, @version_dir ++ ["from_b.txt"], "b") end)
+      assert_receive {:at_clean_slate, b_pid}, 10_000
+
+      # Writer A now runs to completion and is told its write landed.
+      a = Task.async(fn -> Arca.put(ctx, @version_dir ++ ["from_a.txt"], "a") end)
+
+      # With the unit lock, A waits on B — so release B and let both finish.
+      # Without it, A completes here while B is still parked, and B's
+      # clean_slate then deletes A's file.
+      Process.sleep(200)
+      send(b_pid, :proceed)
+
+      assert Task.await(b, 30_000) == :ok
+      assert Task.await(a, 30_000) == :ok
+
+      assert {:ok, "a"} == Arca.get(ctx, @version_dir ++ ["from_a.txt"]),
+             "from_a.txt was acknowledged and then cleared by a concurrent commit"
+
+      assert {:ok, "b"} == Arca.get(ctx, @version_dir ++ ["from_b.txt"])
+    end
+
+    test "concurrent first writes into one unit keep every acknowledged write", %{ctx: ctx} do
+      writers = 8
+
+      results =
+        1..writers
+        |> Enum.map(fn i ->
+          Task.async(fn -> {i, Arca.put(ctx, @version_dir ++ ["w#{i}.txt"], "body-#{i}")} end)
+        end)
+        |> Task.await_many(30_000)
+
+      acknowledged = for {i, :ok} <- results, do: i
+
+      assert length(acknowledged) == writers,
+             "some writes did not return :ok: #{inspect(results)}"
+
+      # Every write that returned :ok must still be readable. Anything less
+      # is a write this storage layer confirmed and then destroyed.
+      for i <- acknowledged do
+        assert {:ok, "body-#{i}"} == Arca.get(ctx, @version_dir ++ ["w#{i}.txt"]),
+               "w#{i}.txt was acknowledged and then lost to a concurrent materialization"
+      end
+
+      # And the seed content came along exactly once.
+      assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
     end
 
     test "a member-level write cannot forge a mark — meta/ is reserved", %{ctx: ctx} do

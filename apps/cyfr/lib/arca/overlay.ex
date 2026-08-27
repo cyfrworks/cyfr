@@ -619,7 +619,21 @@ defmodule Arca.Overlay do
             "with no sentinel:/origin: — the put is the commit"
   end
 
+  # Under the unit's lock: `clean_slate/2` clears the whole unit, so two of
+  # these interleaving means the second one deletes the first one's files —
+  # including files a caller has already been told were written. Nothing
+  # inside a single commit can detect that; they simply must not overlap.
   defp commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
+    Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit), fn ->
+      do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
+    end)
+  end
+
+  # The lock is per athanor and per unit: two athanors publishing the same
+  # component name are different trees and never contend.
+  defp lock_key(%Context{athanor_id: athanor_id}, unit), do: {athanor_id, unit}
+
+  defp do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
     internal = internal_ctx(ctx)
 
     with {:ok, sentinel_content} <- sentinel_bytes(internal, sentinel, source, override),
@@ -985,15 +999,36 @@ defmodule Arca.Overlay do
   # ingress: tree source from the seed side, droppings excluded, the cap
   # asked about the dragged-in bytes, origin marked. The commit owns
   # sentinel-last, wholesale replace and rollback.
-  defp materialize(ctx, {:dir, unit_dir, sentinel}) do
+  defp materialize(ctx, {:dir, unit_dir, sentinel} = loc) do
     seed_dir = seed(unit_dir)
 
+    # Under the same lock the commit takes, and re-asking the question that
+    # sent us here. `prepare_write/2` saw an unmaterialized unit, but a
+    # concurrent writer may have materialized it and written a file since —
+    # and materializing again would clear that file on the way to copying a
+    # seed the athanor already has. Whoever loses this race has nothing left
+    # to do.
+    Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit_dir), fn ->
+      if completed?(ctx, loc) do
+        :ok
+      else
+        do_materialize(ctx, unit_dir, sentinel, seed_dir)
+      end
+    end)
+  end
+
+  defp do_materialize(ctx, unit_dir, sentinel, seed_dir) do
     with :ok <- seed_sentinel_present(seed_dir, sentinel),
          {:ok, bytes} <- seed_unit_bytes(seed_dir),
          {:ok, _written} <-
-           commit_unit(ctx, unit_dir, {:tree, seed_dir, exclude: &excluded?/1},
-             cap: {:checked, bytes},
-             origin: :seed
+           do_commit_dir_unit(
+             ctx,
+             unit_dir,
+             sentinel,
+             {:tree, seed_dir, exclude: &excluded?/1},
+             {:checked, bytes},
+             :seed,
+             nil
            ) do
       Logger.info("[Arca.Overlay] materialized #{Enum.join(unit_dir, "/")} for #{ctx.athanor_id}")
 
