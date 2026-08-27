@@ -160,6 +160,11 @@ defmodule Compendium.Registry.Identity do
 
   defp confirm_namespace(_rest_host, _cred), do: nil
 
+  # The dot is a structural invariant of the claim flow, not a heuristic:
+  # publisher namespaces are claimed as DNS domain slugs (TXT-record
+  # verification — `Compendium.Registry.Client.claim_publisher_namespace`),
+  # so they always carry a dot; personal slugs are GitHub-style usernames,
+  # which never do. The REST payload offers no kind field to read instead.
   defp classify(slug) do
     if String.contains?(slug, "."), do: :publisher, else: :personal_or_reserved
   end

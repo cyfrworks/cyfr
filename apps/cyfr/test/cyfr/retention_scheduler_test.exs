@@ -50,4 +50,19 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert {:noreply, ^state} = RetentionScheduler.handle_info(:unexpected, state)
     end
   end
+
+  describe "the health-probe sweep" do
+    test "reclaims strays from the dir the controller owns — one spelling" do
+      # The sweep asks the writer where it writes (probe_dir/0), so a
+      # renamed probe dir cannot silently orphan the belt.
+      ctx = Sanctum.internal_context(user_id: "_test", permissions: [:storage_write])
+      probe_dir = EmissaryWeb.HealthController.probe_dir()
+      :ok = Arca.put(ctx, probe_dir ++ [".write_probe.legacy"], "stranded")
+
+      state = %{interval: :timer.hours(999)}
+      assert {:noreply, ^state} = RetentionScheduler.handle_continue(:first_run, state)
+
+      assert {:ok, []} = Arca.list_typed(ctx, probe_dir)
+    end
+  end
 end

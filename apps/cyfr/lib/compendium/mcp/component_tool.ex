@@ -763,16 +763,9 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Categories action - list available categories
   def handle(%Context{} = _ctx, %{"action" => "categories"}) do
-    {:ok,
-     %{
-       categories: [
-         %{name: "api-integrations", description: "External API connectors"},
-         %{name: "data-processing", description: "Data transformation and analysis"},
-         %{name: "ai-ml", description: "Machine learning and AI tools"},
-         %{name: "security", description: "Security and cryptography"},
-         %{name: "utilities", description: "General-purpose utilities"}
-       ]
-     }}
+    # The roster is the manifest module's — the field it describes is the
+    # manifest's `category`.
+    {:ok, %{categories: Compendium.Manifest.known_categories()}}
   end
 
   # Get blob action - get component WASM binary by digest

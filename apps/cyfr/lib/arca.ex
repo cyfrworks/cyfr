@@ -63,7 +63,7 @@ defmodule Arca do
   `{:materialize_failed, reason}` and `{:limit_reached,
   :athanor_storage_bytes, cap}` (copy-on-write materialization); plus the
   adapter vocabulary in `t:Arca.Storage.error/0`. `get_json/2` adds
-  `%Jason.DecodeError{}`.
+  `{:invalid_json, %Jason.DecodeError{}}`.
 
   Raises, reserved for programmer error: a malformed path (traversal or
   over-long segments — `ArgumentError` from `Cyfr.PathSafety`, at the
@@ -123,6 +123,7 @@ defmodule Arca do
       {:ok, "hello"}
 
   """
+  @spec get(Context.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
   def get(%Context{} = ctx, path),
     do: guarded(ctx, normalize(path), fn p -> adapter(p).get(ctx, p) end)
 
@@ -138,10 +139,15 @@ defmodule Arca do
       {:ok, %{"key" => "value"}}
 
   """
+  @spec get_json(Context.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
   def get_json(%Context{} = ctx, path) do
-    case get(ctx, path) do
-      {:ok, content} -> Jason.decode(content)
-      {:error, _} = error -> error
+    with {:ok, content} <- get(ctx, path) do
+      case Jason.decode(content) do
+        {:ok, data} -> {:ok, data}
+        # Tagged, so the facade vocabulary stays atoms and tagged tuples —
+        # never a bare library struct.
+        {:error, decode_error} -> {:error, {:invalid_json, decode_error}}
+      end
     end
   end
 
@@ -157,6 +163,7 @@ defmodule Arca do
       :ok
 
   """
+  @spec put(Context.t(), Arca.Storage.path(), binary()) :: :ok | {:error, term()}
   def put(%Context{} = ctx, path, content),
     do:
       mutating(ctx, normalize(path), {:create, byte_size(content)}, fn p ->
@@ -173,6 +180,7 @@ defmodule Arca do
       :ok
 
   """
+  @spec put_json(Context.t(), Arca.Storage.path(), term()) :: :ok | {:error, term()}
   def put_json(%Context{} = ctx, path, data) do
     case Jason.encode(data) do
       {:ok, json} -> put(ctx, path, json)
@@ -197,6 +205,7 @@ defmodule Arca do
       :ok
 
   """
+  @spec append(Context.t(), Arca.Storage.path(), binary()) :: :ok | {:error, term()}
   def append(%Context{} = ctx, path, content),
     do:
       mutating(ctx, normalize(path), {:create, byte_size(content)}, fn p ->
@@ -217,6 +226,7 @@ defmodule Arca do
       {:error, :not_found}
 
   """
+  @spec delete(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, path),
     do: mutating(ctx, normalize(path), :delete, fn p -> adapter(p).delete(ctx, p) end)
 
@@ -240,6 +250,7 @@ defmodule Arca do
   """
   # Names are the typed listing minus its kinds — one adapter callback, not
   # two spellings of the same walk.
+  @spec list(Context.t(), Arca.Storage.path()) :: {:ok, [String.t()]} | {:error, term()}
   def list(%Context{} = ctx, path) do
     with {:ok, entries} <- list_typed(ctx, path) do
       {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
@@ -253,6 +264,8 @@ defmodule Arca do
   know which adapter is configured or how it lays paths out. A path that is
   itself a file answers `{:error, :enotdir}`.
   """
+  @spec list_typed(Context.t(), Arca.Storage.path()) ::
+          {:ok, [{String.t(), :file | :dir}]} | {:error, term()}
   def list_typed(%Context{} = ctx, path),
     do: guarded(ctx, normalize(path), fn p -> adapter(p).list_typed(ctx, p) end)
 
@@ -261,6 +274,8 @@ defmodule Arca do
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
+  @spec usage(Context.t(), Arca.Storage.path()) ::
+          {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
   def usage(%Context{} = ctx, path),
     do: guarded(ctx, normalize(path), fn p -> adapter(p).usage(ctx, p) end)
 
@@ -289,6 +304,7 @@ defmodule Arca do
       false
 
   """
+  @spec exists?(Context.t(), Arca.Storage.path()) :: boolean()
   def exists?(%Context{} = ctx, path) do
     path = normalize(path)
 
@@ -320,6 +336,7 @@ defmodule Arca do
       :ok
 
   """
+  @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete_tree(%Context{} = ctx, path),
     do: mutating(ctx, normalize(path), :delete_tree, fn p -> adapter(p).delete_tree(ctx, p) end)
 
@@ -329,6 +346,8 @@ defmodule Arca do
   Returns full segment lists so callers can pass them straight to `get/2`.
   Order is unspecified.
   """
+  @spec list_recursive(Context.t(), Arca.Storage.path()) ::
+          {:ok, [Arca.Storage.path()]} | {:error, term()}
   def list_recursive(%Context{} = ctx, path),
     do: guarded(ctx, normalize(path), fn p -> adapter(p).list_recursive(ctx, p) end)
 
@@ -341,6 +360,8 @@ defmodule Arca do
 
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
+  @spec read_subtree(Context.t(), Arca.Storage.path()) ::
+          {:ok, [{Arca.Storage.path(), binary()}]} | {:error, term()}
   def read_subtree(%Context{} = ctx, path),
     do:
       guarded(ctx, normalize(path), fn p -> Arca.Storage.read_subtree_via(adapter(p), ctx, p) end)
@@ -362,6 +383,8 @@ defmodule Arca do
   file's bytes between the read and the write — how `Compendium.Fork`
   re-stamps the manifest without holding the whole tree in memory.
   """
+  @spec copy_tree(Context.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
+          {:ok, [Arca.Storage.path()]} | {:error, term()}
   def copy_tree(%Context{} = ctx, src, dest, opts \\ []) do
     exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
     transform = Keyword.get(opts, :transform, fn _relative, content -> content end)
@@ -402,6 +425,8 @@ defmodule Arca do
   Caller owns Content-Type, CSP, and caching headers; the adapter handles
   the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
   """
+  @spec serve_to_conn(Plug.Conn.t(), Context.t(), Arca.Storage.path(), keyword()) ::
+          {:ok, Plug.Conn.t()} | {:error, term()}
   def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []) do
     guarded(ctx, normalize(path), fn p -> adapter(p).serve_to_conn(conn, ctx, p, opts) end)
   end

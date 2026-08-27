@@ -479,7 +479,8 @@ defmodule Arca.IntegrationTest do
     test "get_json returns error for invalid JSON", %{ctx: ctx} do
       :ok = Arca.put(ctx, ["guest", "json_test", "invalid.json"], "not valid json {{{")
 
-      {:error, %Jason.DecodeError{}} = Arca.get_json(ctx, ["guest", "json_test", "invalid.json"])
+      {:error, {:invalid_json, %Jason.DecodeError{}}} =
+        Arca.get_json(ctx, ["guest", "json_test", "invalid.json"])
     end
   end
 end

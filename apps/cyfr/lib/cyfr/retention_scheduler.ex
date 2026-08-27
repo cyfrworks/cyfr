@@ -144,9 +144,10 @@ defmodule Cyfr.RetentionScheduler do
   # The storage readiness probe overwrites one fixed key and cleans up
   # after itself; this belt reclaims anything a failed delete (or the old
   # per-probe naming scheme) stranded. A racing probe's in-flight key may
-  # go with it — the probe treats that delete race as success.
+  # go with it — the probe treats that delete race as success. The writer
+  # owns the spelling of where it writes.
   defp sweep_health_probe_dir do
-    case Arca.delete_tree(Sanctum.system_context(), ["system", "health"]) do
+    case Arca.delete_tree(Sanctum.system_context(), EmissaryWeb.HealthController.probe_dir()) do
       :ok ->
         :ok
 

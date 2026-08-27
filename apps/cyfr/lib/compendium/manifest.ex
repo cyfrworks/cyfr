@@ -60,6 +60,23 @@ defmodule Compendium.Manifest do
 
   def decode_strict(_), do: {:error, :malformed_manifest}
 
+  @doc """
+  The suggested vocabulary for the manifest's `category` field — the one
+  roster the MCP categories action serves. The field itself is free
+  text (search filters on whatever a manifest declared); this names the
+  recommended values without enforcing them.
+  """
+  @spec known_categories() :: [%{name: String.t(), description: String.t()}]
+  def known_categories do
+    [
+      %{name: "api-integrations", description: "External API connectors"},
+      %{name: "data-processing", description: "Data transformation and analysis"},
+      %{name: "ai-ml", description: "Machine learning and AI tools"},
+      %{name: "security", description: "Security and cryptography"},
+      %{name: "utilities", description: "General-purpose utilities"}
+    ]
+  end
+
   defp elem_or_self({:error, reason}), do: reason
   defp elem_or_self(other), do: other
 end

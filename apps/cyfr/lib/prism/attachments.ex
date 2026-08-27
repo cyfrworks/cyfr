@@ -62,9 +62,10 @@ defmodule Prism.Attachments do
       |> Enum.with_index()
       |> Enum.reduce_while({:ok, []}, fn {file, index}, {:ok, refs} ->
         # The index prefix makes two same-named uploads distinct blobs —
-        # and distinctly addressable.
+        # and distinctly addressable. The path is blob_path/3's — the
+        # same spelling the read side and the rollback resolve.
         stored_name = "#{index}-#{safe_filename(file["filename"])}"
-        path = Arca.ConversationStorage.blob_root(conversation_id) ++ [message_id, stored_name]
+        {:ok, path} = blob_path(conversation_id, message_id, %{"stored_name" => stored_name})
         bytes = file["bytes"] || ""
 
         case Arca.put(ctx, path, bytes) do
