@@ -40,15 +40,27 @@ if config_env() != :test do
     end
   end
 
+  # Comma-separated lists: origins, CIDRs, egress targets, operator emails.
+  # The split-trim-reject-empty was written out five times; a list that reads
+  # one way in four places and another in the fifth is the shape of a
+  # security default that only mostly holds.
+  env_list = fn key ->
+    (env_str.(key, nil) || "")
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
   # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
 
   # JSON log format for structured logging (Datadog, Splunk, ELK, Loki)
   if env_str.("CYFR_LOG_FORMAT", nil) == "json" do
-    config :logger, :default_formatter,
-      format: {Cyfr.JsonFormatter, :format},
-      metadata: [:request_id, :user_id, :athanor_id, :auth_method]
+    # Only the format changes. `Config` deep-merges keyword values, so the
+    # `metadata:` roster set in config.exs carries through — repeating it
+    # here is a second copy that would go stale the first time one moved.
+    config :logger, :default_formatter, format: {Cyfr.JsonFormatter, :format}
   end
 
   # The explicit at-rest keyring, as JSON (parsed and pinned at boot by
@@ -192,11 +204,7 @@ if config_env() != :test do
     # check_origin above, plus any extra origins listed in
     # CYFR_MCP_ALLOWED_ORIGINS (comma-separated) for embedding the PWA on a
     # different origin or running multiple frontends against the same server.
-    extra_mcp_origins =
-      case env_str.("CYFR_MCP_ALLOWED_ORIGINS", nil) do
-        nil -> []
-        s -> s |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
-      end
+    extra_mcp_origins = env_list.("CYFR_MCP_ALLOWED_ORIGINS")
 
     config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins ++ extra_mcp_origins
 
@@ -251,10 +259,9 @@ if config_env() != :test do
 
       config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
 
-      if cidrs = env_str.("CYFR_TRUSTED_PROXY_CIDRS", nil) do
-        config :cyfr,
-               :trusted_proxy_cidrs,
-               cidrs |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+      case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
+        [] -> :ok
+        cidrs -> config :cyfr, :trusted_proxy_cidrs, cidrs
       end
     end
   end
@@ -314,13 +321,11 @@ if config_env() != :test do
   # authentication configured while the wildcard default is in effect, so any
   # deployment with OAuth/OIDC enabled must set this. An empty value allows no
   # cross-origin callers at all (fail-closed).
-  if cors_origins = env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
-    config :cyfr,
-           :cors_allowed_origins,
-           cors_origins
-           |> String.split(",")
-           |> Enum.map(&String.trim/1)
-           |> Enum.reject(&(&1 == ""))
+  # An empty value is a decision — no cross-origin callers at all — so it is
+  # distinguished from unset, which leaves the wildcard default in place for
+  # the boot guard to refuse alongside configured auth.
+  if env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
+    config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
   end
 
   # Private egress: the hostnames, IPs or CIDRs on the private network that
@@ -333,12 +338,7 @@ if config_env() != :test do
   # its consent's `egress.private_ips` (`Opus.EdgeGuard.allows_private_ip?/2`)
   # and nothing else, so a LAN device is reachable from a chain only as an
   # MCP server on this list, never as a URL the bundled http catalyst fetches.
-  config :cyfr,
-         :private_egress_targets,
-         (env_str.("CYFR_PRIVATE_EGRESS_TARGETS", nil) || "")
-         |> String.split(",")
-         |> Enum.map(&String.trim/1)
-         |> Enum.reject(&(&1 == ""))
+  config :cyfr, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
   # GitHub OAuth
   # Device flow (CLI and Prism) only needs client ID — no secret.
@@ -412,11 +412,8 @@ if config_env() != :test do
   # is granted a platform-scope membership (full access, bypasses the tenant
   # gate). This is the bootstrap mechanism for any deployment — a solo operator
   # lists their own email; a shared server lists the platform staff.
-  platform_admins =
-    (env_str.("CYFR_PLATFORM_ADMIN_EMAILS", nil) || "")
-    |> String.split(",")
-    |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
-    |> Enum.reject(&(&1 == ""))
+  # Downcased because the door compares addresses that way.
+  platform_admins = "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
 
   config :cyfr, :platform_admin_emails, platform_admins
 

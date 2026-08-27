@@ -32,8 +32,23 @@ defmodule Cyfr.OtelTenantHandler do
   """
   def attach do
     if otel_available?() do
-      :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{})
-      Logger.debug("[OtelTenantHandler] Attached to #{length(@events)} telemetry events")
+      # Handlers are global to the node. Attaching over an existing id
+      # answers `{:error, :already_exists}` and changes nothing, so a second
+      # boot (a release restart, a test that restarts :cyfr) would keep the
+      # first attach and log that it had attached. Detach first, and say so
+      # when the attach itself fails.
+      :telemetry.detach(@handler_id)
+
+      case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
+        :ok ->
+          Logger.debug("[OtelTenantHandler] Attached to #{length(@events)} telemetry events")
+
+        {:error, reason} ->
+          Logger.error(
+            "[OtelTenantHandler] attach failed: #{inspect(reason)} — " <>
+              "spans will carry no tenant attribution"
+          )
+      end
     else
       Logger.debug("[OtelTenantHandler] OpenTelemetry not loaded, skipping attach")
     end

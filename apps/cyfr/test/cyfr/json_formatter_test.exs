@@ -2,7 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Cyfr.JsonFormatterTest do
-  use ExUnit.Case, async: true
+  # One test rewrites the global :logger formatter config to prove the
+  # roster is read from it; that is not safe to run beside anything else.
+  use ExUnit.Case, async: false
 
   alias Cyfr.JsonFormatter
 
@@ -50,6 +52,40 @@ defmodule Cyfr.JsonFormatterTest do
 
       json = output |> IO.iodata_to_binary() |> String.trim() |> Jason.decode!()
       assert json["message"] == "multipart"
+    end
+
+    test "metadata values with no String.Chars implementation do not crash the handler" do
+      # `:pid` and `:mfa` are standard Logger metadata; a roster that names
+      # one used to raise Protocol.UndefinedError inside the formatter, which
+      # takes the logger handler down with it.
+      original = Application.get_env(:logger, :default_formatter)
+
+      on_exit(fn ->
+        Application.put_env(:logger, :default_formatter, original)
+        :persistent_term.erase({Cyfr.JsonFormatter, :metadata_keys})
+      end)
+
+      Application.put_env(:logger, :default_formatter,
+        format: {Cyfr.JsonFormatter, :format},
+        metadata: [:pid, :mfa, :count]
+      )
+
+      :persistent_term.erase({Cyfr.JsonFormatter, :metadata_keys})
+
+      output =
+        JsonFormatter.format(
+          :error,
+          "boom",
+          {{2026, 1, 1}, {0, 0, 0, 0}},
+          pid: self(),
+          mfa: {String, :split, 2},
+          count: 3
+        )
+
+      json = output |> IO.iodata_to_binary() |> String.trim() |> Jason.decode!()
+      assert json["pid"] == inspect(self())
+      assert json["mfa"] == inspect({String, :split, 2})
+      assert json["count"] == "3"
     end
 
     test "output ends with newline" do

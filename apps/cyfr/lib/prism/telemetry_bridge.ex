@@ -11,6 +11,13 @@ defmodule Prism.TelemetryBridge do
   The topics and the messages each one carries are named in `Cyfr.Topics`;
   each is scoped to the athanor the event's metadata names, so a server with
   many athanors isolates broadcasts to each athanor's subscribers.
+
+  Telemetry metadata is by convention whatever the emitter felt like
+  attaching, and this module forwards it verbatim to browser sessions. That
+  is a trust boundary, so every message goes through `Sanctum.Sanitizer`
+  on the way out: today's emitters carry only identifiers and outcomes, and
+  the next one to carry a credential name should not be the thing that finds
+  out.
   """
 
   use GenServer
@@ -30,8 +37,40 @@ defmodule Prism.TelemetryBridge do
     {:ok, %{}}
   end
 
+  # Handlers are global to the node, not owned by this process, so a restart
+  # would otherwise leave the pre-restart attach in place and `attach/4`
+  # would answer `{:error, :already_exists}` — silently, since nothing read
+  # the return value. Detaching first makes the attach mean what it says.
+  @impl true
+  def terminate(_reason, _state) do
+    for {_event, id} <- events(), do: :telemetry.detach(handler_id(id))
+    :ok
+  end
+
+  defp handler_id(id), do: "prism-#{id}"
+
   defp attach_handlers do
-    events = [
+    for {event, id} <- events() do
+      handler = handler_id(id)
+      :telemetry.detach(handler)
+
+      case :telemetry.attach(handler, event, &__MODULE__.handle_event/4, nil) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error(
+            "[TelemetryBridge] could not attach #{handler}: #{inspect(reason)} — " <>
+              "console updates for this event will not arrive"
+          )
+      end
+    end
+
+    :ok
+  end
+
+  defp events do
+    [
       {[:cyfr, :opus, :execute, :start], :execution_start},
       {[:cyfr, :opus, :execute, :stop], :execution_stop},
       {[:cyfr, :opus, :execute, :exception], :execution_exception},
@@ -47,15 +86,6 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
       {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop}
     ]
-
-    for {event, id} <- events do
-      :telemetry.attach(
-        "prism-#{id}",
-        event,
-        &__MODULE__.handle_event/4,
-        nil
-      )
-    end
   end
 
   def handle_event([:cyfr, :opus, :execute, :start], measurements, metadata, _config) do
@@ -156,7 +186,7 @@ defmodule Prism.TelemetryBridge do
   defp safe_broadcast(topic_fun, metadata, message) do
     case scoped_topic(topic_fun, metadata) do
       {:ok, topic} ->
-        case Phoenix.PubSub.broadcast(@pubsub, topic, message) do
+        case Phoenix.PubSub.broadcast(@pubsub, topic, Sanctum.Sanitizer.sanitize(message)) do
           :ok ->
             :ok
 

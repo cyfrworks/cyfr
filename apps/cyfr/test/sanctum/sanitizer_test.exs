@@ -156,4 +156,51 @@ defmodule Sanctum.SanitizerTest do
       end
     end
   end
+
+  describe "credentials that arrive as a header pair" do
+    test "a header list is redacted by name, not passed through" do
+      headers = [
+        {"authorization", "Bearer cyfr_live_abc"},
+        {"cookie", "_cyfr_key=deadbeef"},
+        {"x-cyfr-signature", "sha256=abcd"},
+        {"content-type", "application/json"}
+      ]
+
+      assert Sanctum.Sanitizer.sanitize(headers) == [
+               {"authorization", "[REDACTED]"},
+               {"cookie", "[REDACTED]"},
+               {"x-cyfr-signature", "[REDACTED]"},
+               {"content-type", "application/json"}
+             ]
+    end
+
+    test "the ordinary tagged-tuple shapes still traverse" do
+      assert Sanctum.Sanitizer.sanitize({:error, %{"password" => "hunter2", "id" => "x"}}) ==
+               {:error, %{"password" => "[REDACTED]", "id" => "x"}}
+
+      assert Sanctum.Sanitizer.sanitize({:ok, "fine"}) == {:ok, "fine"}
+    end
+  end
+
+  describe "keys sensitive only in full" do
+    test "an OAuth authorization code is redacted" do
+      assert Sanctum.Sanitizer.sanitize(%{"code" => "4/0Adeu5"}) == %{"code" => "[REDACTED]"}
+      assert Sanctum.Sanitizer.sensitive_key?(:code)
+      assert Sanctum.Sanitizer.sensitive_key?("code_verifier")
+    end
+
+    test "codes that are not credentials stay readable" do
+      refute Sanctum.Sanitizer.sensitive_key?("error_code")
+      refute Sanctum.Sanitizer.sensitive_key?("status_code")
+
+      # The PKCE challenge is the hash the verifier is checked against; it is
+      # public by design, and a log that hides it hides the useful half.
+      refute Sanctum.Sanitizer.sensitive_key?("code_challenge")
+    end
+
+    test "set-cookie and webhook signatures are covered" do
+      assert Sanctum.Sanitizer.sensitive_key?("set-cookie")
+      assert Sanctum.Sanitizer.sensitive_key?("x-hub-signature-256")
+    end
+  end
 end

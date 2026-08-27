@@ -42,7 +42,7 @@ defmodule Sanctum do
   present, so those are locked down.
   """
   @spec auth_configured?() :: boolean()
-  def auth_configured?, do: not is_nil(Application.get_env(:cyfr, :auth_provider))
+  def auth_configured?, do: not is_nil(Cyfr.RuntimeConfig.auth_provider())
 
   @doc """
   Server-internal context for background/system operations — sweepers, health

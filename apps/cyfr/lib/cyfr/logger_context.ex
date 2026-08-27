@@ -11,7 +11,21 @@ defmodule Cyfr.LoggerContext do
 
   Log aggregators (Datadog, Splunk, ELK) can filter by these fields
   without regex parsing.
+
+  This module also names the roster it sets — `keys/0`. Config files run
+  before application code is loaded and so must spell the list literally;
+  `Cyfr.LoggerRosterTest` binds the two together, and `Cyfr.JsonFormatter`
+  falls back to it.
   """
+
+  # Every key this module ever sets. A key the formatter's roster omits is
+  # written to the process dictionary and then dropped on the floor, which
+  # reads exactly like the value being nil.
+  @keys [:request_id, :user_id, :athanor_id, :auth_method]
+
+  @doc "The metadata keys this module sets, which the log roster must carry."
+  @spec keys() :: [atom()]
+  def keys, do: @keys
 
   @doc """
   Set Logger metadata from a Sanctum.Context struct.

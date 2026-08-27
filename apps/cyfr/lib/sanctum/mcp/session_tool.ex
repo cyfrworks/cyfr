@@ -288,7 +288,7 @@ defmodule Sanctum.MCP.SessionTool do
   # for this check,
   # so local dev without explicit config still works.
   defp device_flow_enabled? do
-    case Application.get_env(:cyfr, :auth_provider) do
+    case Cyfr.RuntimeConfig.auth_provider() do
       nil -> true
       Sanctum.Auth.OAuth -> true
       _ -> false

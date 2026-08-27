@@ -91,6 +91,20 @@ defmodule Cyfr.RuntimeConfig do
   def repo_adapter, do: Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3)
 
   @doc """
+  The configured auth provider module, or `nil` when the deployment runs
+  without sign-in.
+
+  The most security-load-bearing key in the system, and it was read raw at
+  six call sites — the boot guard, the plug, the login page, the callback,
+  the session tool, and `Sanctum.auth_configured?/0` — each spelling the
+  default itself. This module exists because, as it says of the cookie
+  flag, a security default spelled out at several call sites is several
+  chances to spell it differently.
+  """
+  @spec auth_provider() :: module() | nil
+  def auth_provider, do: Application.get_env(:cyfr, :auth_provider)
+
+  @doc """
   Browser cross-origin allowlist. Unset means the wildcard default — the
   single source of that default, read by both the CORS plug (enforcement)
   and the boot guard (which refuses a wildcard once an auth provider is

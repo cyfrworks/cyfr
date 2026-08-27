@@ -17,8 +17,15 @@ defmodule Sanctum.Sanitizer do
     private_key secret_key auth bearer credential credentials
     passwd pwd api-key x-api-key authorization session_token
     session_id registry_token cosign_key signing_key jwt client_secret
-    device_code stripe basic_auth
+    device_code stripe basic_auth cookie signature code_verifier
   )
+
+  # Keys sensitive only when they are the WHOLE key. `code` is the OAuth
+  # authorization code — a single-use credential — but it is also the tail of
+  # `error_code`, `status_code` and `code_challenge`, none of which are
+  # secret and all of which are worth reading in a log. Whole-token matching
+  # is not enough to tell those apart; exact matching is.
+  @exact_sensitive_keys ~w(code)
 
   @doc """
   Sanitize data by redacting values under sensitive keys.
@@ -72,6 +79,16 @@ defmodule Sanctum.Sanitizer do
   # credential, and the next one that does would not be protected.
   #
   # Structs match the clause above and never reach here.
+  #
+  # A 2-tuple is checked as a key/value pair first. `Plug.Conn`'s
+  # `req_headers` is a list of `{name, value}` — the single most likely shape
+  # for a credential to arrive in — and the general tuple clause below
+  # sanitizes each element independently, so the name was never consulted as
+  # a key and `{"authorization", "Bearer …"}` went to the log intact.
+  def sanitize({key, value}) when is_binary(key) or is_atom(key) do
+    if sensitive_key?(key), do: {key, "[REDACTED]"}, else: {key, sanitize(value)}
+  end
+
   def sanitize(data) when is_tuple(data) do
     data
     |> Tuple.to_list()
@@ -90,22 +107,26 @@ defmodule Sanctum.Sanitizer do
   the separator-stripped key, so smushed variants (`apiKey`, `x-api-key`) stay
   covered. The net effect removes the common false positives without
   under-redacting real secret keys (which always carry a token boundary).
+
+  A third rule covers keys sensitive only in full: `code` is an OAuth
+  authorization code, but `error_code` and `code_challenge` are not secrets.
   """
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_binary(key) do
     tokens = tokenize(key)
     normalized = String.downcase(key) |> String.replace(["-", "_"], "")
 
-    Enum.any?(@sensitive_keys, fn pattern ->
-      case tokenize(pattern) do
-        [single] ->
-          single in tokens
+    normalized in @exact_sensitive_keys or
+      Enum.any?(@sensitive_keys, fn pattern ->
+        case tokenize(pattern) do
+          [single] ->
+            single in tokens
 
-        _multi_word ->
-          pattern_normalized = String.downcase(pattern) |> String.replace(["-", "_"], "")
-          String.contains?(normalized, pattern_normalized)
-      end
-    end)
+          _multi_word ->
+            pattern_normalized = String.downcase(pattern) |> String.replace(["-", "_"], "")
+            String.contains?(normalized, pattern_normalized)
+        end
+      end)
   end
 
   def sensitive_key?(key) when is_atom(key) do

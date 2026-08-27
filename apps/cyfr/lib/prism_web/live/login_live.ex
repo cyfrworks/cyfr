@@ -234,7 +234,7 @@ defmodule PrismWeb.LoginLive do
   # The built-in provider offers GitHub and Google device flow; a deployment
   # with its own OIDC issuer authenticates through `/auth/oidcc`.
   defp available_providers do
-    case Application.get_env(:cyfr, :auth_provider) do
+    case Cyfr.RuntimeConfig.auth_provider() do
       Sanctum.Auth.OIDC ->
         [:oidcc]
 

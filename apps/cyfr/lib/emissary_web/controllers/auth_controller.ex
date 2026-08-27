@@ -385,7 +385,7 @@ defmodule EmissaryWeb.AuthController do
   defp authenticate_with_provider(auth) do
     # Dispatch generically to whatever module is configured. Both
     # Sanctum.Auth.OAuth and the configured auth provider implement authenticate/1.
-    case Application.get_env(:cyfr, :auth_provider) do
+    case Cyfr.RuntimeConfig.auth_provider() do
       nil ->
         {:error, :auth_provider_not_configured}
 

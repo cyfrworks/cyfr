@@ -111,7 +111,7 @@ defmodule EmissaryWeb.Endpoint do
       require Logger
 
       Logger.warning(
-        "[EmissaryWeb.Endpoint] No CYFR_SESSION_SALT set — session cookies " <>
+        "[EmissaryWeb.Endpoint] No CYFR_EMISSARY_SESSION_SALT set — session cookies " <>
           "are signed under the repo's default salt. Signing strength still " <>
           "comes from CYFR_SECRET_KEY_BASE; set an explicit salt to decouple " <>
           "this deployment's cookie domain from every other CYFR install."

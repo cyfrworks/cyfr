@@ -105,7 +105,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   end
 
   defp get_context(conn) do
-    auth_provider = Application.get_env(:cyfr, :auth_provider)
+    auth_provider = Cyfr.RuntimeConfig.auth_provider()
 
     if is_nil(auth_provider) do
       # No auth configured — the operator runs without sign-in. Requests reach
