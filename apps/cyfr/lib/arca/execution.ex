@@ -213,6 +213,54 @@ defmodule Arca.Execution do
   end
 
   @doc """
+  The executions a request id started, newest first, scoped to the caller's
+  athanor.
+
+  What `mcp_log.correlate` shows beside the log lines for a request. It
+  lives here, with the schema, because `Emissary.MCP.Tools.RecordsProvider`
+  was writing the Ecto for it inline — an MCP tool handler as a query
+  layer, and the only place in the transport namespace that touched the
+  Repo besides the health check's `SELECT 1`.
+  """
+  @spec list_by_request(Sanctum.Context.t(), String.t(), non_neg_integer()) :: [%__MODULE__{}]
+  def list_by_request(%Sanctum.Context{} = ctx, request_id, limit \\ 100)
+      when is_binary(request_id) do
+    from(e in __MODULE__,
+      where: e.request_id == ^request_id,
+      order_by: [desc: e.started_at],
+      limit: ^limit
+    )
+    # Scoped to the caller's athanor — no per-user narrowing (members are
+    # interchangeable), and no cross-athanor reach for an operator either:
+    # only a server-internal context reads unfiltered.
+    |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+    |> Arca.Repo.all()
+  end
+
+  @doc """
+  How many executions each of `request_ids` started, as a map — the fan-out
+  count `mcp_log.fan_outs` reports. Same tenant scoping as
+  `list_by_request/3`.
+  """
+  @spec count_by_request(Sanctum.Context.t(), [String.t()]) :: %{String.t() => non_neg_integer()}
+  def count_by_request(%Sanctum.Context{} = ctx, request_ids) when is_list(request_ids) do
+    case Enum.filter(request_ids, &is_binary/1) do
+      [] ->
+        %{}
+
+      ids ->
+        from(e in __MODULE__,
+          where: e.request_id in ^ids,
+          group_by: e.request_id,
+          select: {e.request_id, count(e.id)}
+        )
+        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+        |> Arca.Repo.all()
+        |> Map.new()
+    end
+  end
+
+  @doc """
   Deletes executions older than the newest `keep` records within an
   athanor. Members are interchangeable, so retention keeps the N most
   recent executions per athanor, not per user. The row-plane retention

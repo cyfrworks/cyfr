@@ -410,22 +410,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         |> Arca.McpLog.list()
         |> Enum.map(&mcp_log_to_map/1)
 
-      import Ecto.Query
-      import Arca.QueryHelpers, only: [where_tenant_unless_platform: 2, maybe_put: 3]
-
-      exec_query =
-        from(e in Arca.Execution,
-          where: e.request_id == ^request_id,
-          order_by: [desc: e.started_at],
-          limit: 100
-        )
-
-      # Scoped to the caller's athanor — no per-user narrowing (members are
-      # interchangeable), and no cross-athanor reach for an operator either:
-      # only a server-internal context reads unfiltered.
-      exec_query = where_tenant_unless_platform(exec_query, ctx)
-
-      executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
+      executions =
+        ctx
+        |> Arca.Execution.list_by_request(request_id)
+        |> Enum.map(&execution_to_map/1)
 
       policy_log_opts =
         [
@@ -461,27 +449,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     with :ok <- tenant_gate(ctx) do
       ids = Enum.filter(ids, &is_binary/1)
 
-      counts =
-        case ids do
-          [] ->
-            %{}
-
-          _ ->
-            import Ecto.Query
-            import Arca.QueryHelpers, only: [where_tenant_unless_platform: 2]
-
-            query =
-              from(e in Arca.Execution,
-                where: e.request_id in ^ids,
-                group_by: e.request_id,
-                select: {e.request_id, count(e.id)}
-              )
-
-            query
-            |> where_tenant_unless_platform(ctx)
-            |> Arca.Repo.all()
-            |> Map.new()
-        end
+      counts = Arca.Execution.count_by_request(ctx, ids)
 
       {:ok, %{counts: counts}}
     end
