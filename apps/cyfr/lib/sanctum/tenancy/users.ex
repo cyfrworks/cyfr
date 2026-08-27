@@ -16,8 +16,6 @@ defmodule Sanctum.Tenancy.Users do
   """
 
   import Ecto.Query, only: [from: 2]
-  require Logger
-  require Arca.Repo.Errors
 
   alias Arca.Schemas.User
   alias Sanctum.Tenancy.{Athanors, Members}
@@ -40,63 +38,59 @@ defmodule Sanctum.Tenancy.Users do
   """
   @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
   def upsert_from_provider(%{id: id, provider: provider} = info) when is_binary(id) do
-    now = DateTime.utc_now()
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.upsert_from_provider", fn ->
+      now = DateTime.utc_now()
 
-    seen = %{
-      email: Map.get(info, :email),
-      email_verified: verified_claim(Map.get(info, :verified)),
-      provider: to_string(provider),
-      display_name: Map.get(info, :name),
-      last_seen_at: now,
-      updated_at: now
-    }
+      seen = %{
+        email: Map.get(info, :email),
+        email_verified: verified_claim(Map.get(info, :verified)),
+        provider: to_string(provider),
+        display_name: Map.get(info, :name),
+        last_seen_at: now,
+        updated_at: now
+      }
 
-    case get(id) do
-      {:ok, user} ->
-        user |> User.changeset(seen) |> Arca.Repo.update()
+      case get(id) do
+        {:ok, user} ->
+          user |> User.changeset(seen) |> Arca.Repo.update()
 
-      {:error, :not_found} ->
-        %User{}
-        |> User.changeset(
-          Map.merge(seen, %{
-            id: id,
-            first_seen_at: now,
-            created_at: now,
-            prefs: Jason.encode!(%{})
-          })
-        )
-        |> Arca.Repo.insert()
-        |> case do
-          {:error, %Ecto.Changeset{}} = err ->
-            # A concurrent first sign-in of the same identity won the insert.
-            case get(id) do
-              {:ok, user} -> {:ok, user}
-              _ -> err
-            end
+        {:error, :not_found} ->
+          %User{}
+          |> User.changeset(
+            Map.merge(seen, %{
+              id: id,
+              first_seen_at: now,
+              created_at: now,
+              prefs: Jason.encode!(%{})
+            })
+          )
+          |> Arca.Repo.insert()
+          |> case do
+            {:error, %Ecto.Changeset{}} = err ->
+              # A concurrent first sign-in of the same identity won the insert.
+              case get(id) do
+                {:ok, user} -> {:ok, user}
+                _ -> err
+              end
 
-          other ->
-            other
-        end
+            other ->
+              other
+          end
 
-      {:error, _} = err ->
-        err
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Users: upsert failed (#{Exception.message(e)})")
-      {:error, :database_error}
+        {:error, _} = err ->
+          err
+      end
+    end)
   end
 
   @spec get(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id) and id != "" do
-    case Arca.Repo.get(User, id) do
-      nil -> {:error, :not_found}
-      user -> {:ok, user}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Users: get failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.get", fn ->
+      case Arca.Repo.get(User, id) do
+        nil -> {:error, :not_found}
+        user -> {:ok, user}
+      end
+    end)
   end
 
   def get(_), do: {:error, :not_found}
@@ -104,25 +98,23 @@ defmodule Sanctum.Tenancy.Users do
   @doc "Every identity that signed in with this (lowercased) email."
   @spec list_by_email(String.t()) :: [User.t()]
   def list_by_email(email) when is_binary(email) do
-    email = String.downcase(email)
-    Arca.Repo.all(from(u in User, where: u.email == ^email, order_by: [asc: u.first_seen_at]))
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Users: list_by_email failed (#{Exception.message(e)})")
-      []
+    # Deliberate default: an unanswerable read means "no identity known for
+    # this address" — callers then take the invite path, which grants nothing.
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.list_by_email", [], fn ->
+      email = String.downcase(email)
+      Arca.Repo.all(from(u in User, where: u.email == ^email, order_by: [asc: u.first_seen_at]))
+    end)
   end
 
   @doc "The identity whose cyfr.run namespace this is, if any."
   @spec get_by_namespace(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
   def get_by_namespace(namespace) when is_binary(namespace) and namespace != "" do
-    case Arca.Repo.get_by(User, namespace: namespace) do
-      nil -> {:error, :not_found}
-      user -> {:ok, user}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Users: get_by_namespace failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.get_by_namespace", fn ->
+      case Arca.Repo.get_by(User, namespace: namespace) do
+        nil -> {:error, :not_found}
+        user -> {:ok, user}
+      end
+    end)
   end
 
   @max_page 500
@@ -133,20 +125,20 @@ defmodule Sanctum.Tenancy.Users do
   """
   @spec list(keyword()) :: [User.t()]
   def list(opts \\ []) do
-    limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
-    offset = opts |> Keyword.get(:offset, 0) |> max(0)
+    # Deliberate default: the operator's people page — a display read that
+    # decides nothing; an outage renders an empty page, not a refusal.
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.list", [], fn ->
+      limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
+      offset = opts |> Keyword.get(:offset, 0) |> max(0)
 
-    Arca.Repo.all(
-      from(u in User,
-        order_by: [desc: u.last_seen_at, asc: u.id],
-        limit: ^limit,
-        offset: ^offset
+      Arca.Repo.all(
+        from(u in User,
+          order_by: [desc: u.last_seen_at, asc: u.id],
+          limit: ^limit,
+          offset: ^offset
+        )
       )
-    )
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Users: list failed (#{Exception.message(e)})")
-      []
+    end)
   end
 
   @doc """
@@ -279,14 +271,12 @@ defmodule Sanctum.Tenancy.Users do
   defp verified_claim(_), do: nil
 
   defp update(%User{} = user, attrs) do
-    attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.update", fn ->
+      attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())
 
-    user
-    |> User.changeset(attrs)
-    |> Arca.Repo.update()
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Users: update failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      user
+      |> User.changeset(attrs)
+      |> Arca.Repo.update()
+    end)
   end
 end

@@ -90,22 +90,20 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec get_key(String.t(), String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
   def get_key(name, athanor_id) do
-    query =
-      from(k in ApiKey,
-        where: k.name == ^name and k.revoked == ^false,
-        limit: 1,
-        select: ^@returned_fields
-      )
-      |> where_athanor(athanor_id)
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key", fn ->
+      query =
+        from(k in ApiKey,
+          where: k.name == ^name and k.revoked == ^false,
+          limit: 1,
+          select: ^@returned_fields
+        )
+        |> where_athanor(athanor_id)
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in get_key: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -115,18 +113,16 @@ defmodule Arca.ApiKeyStorage do
   @spec get_key_by_id(String.t(), String.t()) ::
           {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
   def get_key_by_id(athanor_id, id) when is_binary(id) do
-    query =
-      from(k in ApiKey, where: k.id == ^id and k.revoked == false)
-      |> where_athanor(athanor_id)
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_id", fn ->
+      query =
+        from(k in ApiKey, where: k.id == ^id and k.revoked == false)
+        |> where_athanor(athanor_id)
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in get_key_by_id: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -142,21 +138,19 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec get_key_by_hash(binary()) :: {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
   def get_key_by_hash(key_hash) do
-    query =
-      from(k in ApiKey,
-        where: k.key_hash == ^key_hash,
-        limit: 1,
-        select: ^@returned_fields
-      )
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_hash", fn ->
+      query =
+        from(k in ApiKey,
+          where: k.key_hash == ^key_hash,
+          limit: 1,
+          select: ^@returned_fields
+        )
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in get_key_by_hash: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -164,19 +158,17 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec list_keys(String.t()) :: {:ok, [ApiKey.t()]}
   def list_keys(athanor_id) do
-    query =
-      from(k in ApiKey,
-        where: k.revoked == ^false,
-        order_by: [asc: k.inserted_at],
-        select: ^@returned_fields
-      )
-      |> where_athanor(athanor_id)
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.list_keys", fn ->
+      query =
+        from(k in ApiKey,
+          where: k.revoked == ^false,
+          order_by: [asc: k.inserted_at],
+          select: ^@returned_fields
+        )
+        |> where_athanor(athanor_id)
 
-    {:ok, Arca.Repo.all(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in list_keys: #{Exception.message(e)}")
-      {:error, :database_error}
+      {:ok, Arca.Repo.all(query)}
+    end)
   end
 
   @doc """
@@ -184,20 +176,18 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec revoke_key(String.t(), String.t()) :: :ok | {:error, :not_found}
   def revoke_key(name, athanor_id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_key", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    query =
-      from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
-      |> where_athanor(athanor_id)
+      query =
+        from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
+        |> where_athanor(athanor_id)
 
-    case Arca.Repo.update_all(query, set: [revoked: true, updated_at: now]) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in revoke_key: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.update_all(query, set: [revoked: true, updated_at: now]) do
+        {0, _} -> {:error, :not_found}
+        {_, _} -> :ok
+      end
+    end)
   end
 
   @doc """
@@ -205,17 +195,12 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec revoke_all_created_by(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def revoke_all_created_by(user_id) when is_binary(user_id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    query = from(k in ApiKey, where: k.created_by == ^user_id and k.revoked == ^false)
-    {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ApiKeyStorage] Database error in revoke_all_created_by: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_all_created_by", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      query = from(k in ApiKey, where: k.created_by == ^user_id and k.revoked == ^false)
+      {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
+      {:ok, count}
+    end)
   end
 
   @doc """
@@ -223,17 +208,12 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec revoke_all_for_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def revoke_all_for_athanor(athanor_id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    query = from(k in ApiKey, where: k.revoked == ^false) |> where_athanor(athanor_id)
-    {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ApiKeyStorage] Database error in revoke_all_for_athanor: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_all_for_athanor", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      query = from(k in ApiKey, where: k.revoked == ^false) |> where_athanor(athanor_id)
+      {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
+      {:ok, count}
+    end)
   end
 
   @doc """
@@ -241,26 +221,24 @@ defmodule Arca.ApiKeyStorage do
   """
   @spec rotate_key(String.t(), String.t(), binary(), String.t()) :: :ok | {:error, :not_found}
   def rotate_key(name, athanor_id, new_key_hash, new_key_prefix) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.rotate_key", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    query =
-      from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
-      |> where_athanor(athanor_id)
+      query =
+        from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
+        |> where_athanor(athanor_id)
 
-    case Arca.Repo.update_all(query,
-           set: [
-             key_hash: new_key_hash,
-             key_prefix: new_key_prefix,
-             rotated_at: now,
-             updated_at: now
-           ]
-         ) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in rotate_key: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.update_all(query,
+             set: [
+               key_hash: new_key_hash,
+               key_prefix: new_key_prefix,
+               rotated_at: now,
+               updated_at: now
+             ]
+           ) do
+        {0, _} -> {:error, :not_found}
+        {_, _} -> :ok
+      end
+    end)
   end
 end

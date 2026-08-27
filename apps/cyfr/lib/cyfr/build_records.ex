@@ -15,8 +15,6 @@ defmodule Cyfr.BuildRecords do
 
   import Ecto.Query
 
-  require Logger
-  require Arca.Repo.Errors
 
   alias Arca.QueryHelpers
   alias Arca.Schemas.BuildRecord
@@ -92,30 +90,28 @@ defmodule Cyfr.BuildRecords do
   @spec prune(Context.t(), non_neg_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def prune(%Context{} = ctx, keep, opts \\ []) when is_integer(keep) and keep >= 0 do
-    # SQLite has no bare OFFSET, so the survivors are the subquery: the
-    # newest `keep` rows stay, everything else in the tenant goes.
-    keepers =
-      BuildRecord
-      |> QueryHelpers.where_tenant(ctx)
-      |> order_by([b], desc: b.started_at)
-      |> limit(^keep)
-      |> select([b], b.id)
+    Arca.Repo.Errors.with_db_rescue("Cyfr.BuildRecords.prune", fn ->
+      # SQLite has no bare OFFSET, so the survivors are the subquery: the
+      # newest `keep` rows stay, everything else in the tenant goes.
+      keepers =
+        BuildRecord
+        |> QueryHelpers.where_tenant(ctx)
+        |> order_by([b], desc: b.started_at)
+        |> limit(^keep)
+        |> select([b], b.id)
 
-    doomed_query =
-      BuildRecord
-      |> QueryHelpers.where_tenant(ctx)
-      |> where([b], b.id not in subquery(keepers))
+      doomed_query =
+        BuildRecord
+        |> QueryHelpers.where_tenant(ctx)
+        |> where([b], b.id not in subquery(keepers))
 
-    if Keyword.get(opts, :dry_run, false) do
-      {:ok, Arca.Repo.aggregate(doomed_query, :count)}
-    else
-      {count, _} = Arca.Repo.delete_all(doomed_query)
-      {:ok, count}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Cyfr.BuildRecords] Database error in prune: #{Exception.message(e)}")
-      {:error, :database_error}
+      if Keyword.get(opts, :dry_run, false) do
+        {:ok, Arca.Repo.aggregate(doomed_query, :count)}
+      else
+        {count, _} = Arca.Repo.delete_all(doomed_query)
+        {:ok, count}
+      end
+    end)
   end
 
   defp to_map(%BuildRecord{} = r) do

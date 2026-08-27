@@ -14,9 +14,6 @@ defmodule Arca.ConsentStorage do
 
   import Ecto.Query
 
-  require Arca.Repo.Errors
-  require Logger
-
   alias Arca.Schemas.Consent
   alias Arca.Schemas.ConsentVaultRef
 
@@ -103,14 +100,12 @@ defmodule Arca.ConsentStorage do
   end
 
   defp run_multi(multi, return_key) do
-    case Arca.Repo.transaction(multi) do
-      {:ok, done} -> {:ok, Map.fetch!(done, return_key)}
-      {:error, _step, reason, _done} -> {:error, reason}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.ConsentStorage] transaction failed: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.run_multi", fn ->
+      case Arca.Repo.transaction(multi) do
+        {:ok, done} -> {:ok, Map.fetch!(done, return_key)}
+        {:error, _step, reason, _done} -> {:error, reason}
+      end
+    end)
   end
 
   defp insert_refs([]), do: {0, nil}
@@ -120,25 +115,23 @@ defmodule Arca.ConsentStorage do
   @spec get_head(String.t(), String.t()) ::
           {:ok, Consent.t(), [ConsentVaultRef.t()]} | {:error, :not_found | :no_head | term()}
   def get_head(athanor_id, profile_id) do
-    with {:ok, profile} <- Arca.ProfileStorage.get(athanor_id, profile_id),
-         head_id when is_binary(head_id) <- profile.head_consent_id || {:error, :no_head},
-         %Consent{} = consent <-
-           Arca.Repo.get_by(Consent, id: head_id, athanor_id: athanor_id) do
-      refs =
-        Arca.Repo.all(
-          from r in ConsentVaultRef,
-            where: r.consent_id == ^head_id and r.athanor_id == ^athanor_id
-        )
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.get_head", fn ->
+      with {:ok, profile} <- Arca.ProfileStorage.get(athanor_id, profile_id),
+           head_id when is_binary(head_id) <- profile.head_consent_id || {:error, :no_head},
+           %Consent{} = consent <-
+             Arca.Repo.get_by(Consent, id: head_id, athanor_id: athanor_id) do
+        refs =
+          Arca.Repo.all(
+            from r in ConsentVaultRef,
+              where: r.consent_id == ^head_id and r.athanor_id == ^athanor_id
+          )
 
-      {:ok, consent, refs}
-    else
-      nil -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.ConsentStorage] get_head failed: #{Exception.message(e)}")
-      {:error, :database_error}
+        {:ok, consent, refs}
+      else
+        nil -> {:error, :not_found}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -151,25 +144,20 @@ defmodule Arca.ConsentStorage do
   @spec head_profiles_referencing(String.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, term()}
   def head_profiles_referencing(athanor_id, vault_entry_id) do
-    ids =
-      Arca.Repo.all(
-        from r in ConsentVaultRef,
-          join: c in Consent,
-          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
-          join: p in Arca.Schemas.Profile,
-          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
-          where: r.vault_entry_id == ^vault_entry_id and r.athanor_id == ^athanor_id,
-          distinct: true,
-          select: p.id
-      )
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_profiles_referencing", fn ->
+      ids =
+        Arca.Repo.all(
+          from r in ConsentVaultRef,
+            join: c in Consent,
+            on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+            join: p in Arca.Schemas.Profile,
+            on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+            where: r.vault_entry_id == ^vault_entry_id and r.athanor_id == ^athanor_id,
+            distinct: true,
+            select: p.id
+        )
 
-    {:ok, ids}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[Arca.ConsentStorage] head_profiles_referencing failed: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+      {:ok, ids}
+    end)
   end
 end

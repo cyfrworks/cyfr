@@ -381,25 +381,29 @@ defmodule Sanctum.Cipher.Rotation do
   defp schema_for(:oauth_provider_credentials), do: Arca.Schemas.OauthProviderCredential
 
   defp audit_table(table, col, primary) do
-    # nil excluded for tombstoned vault entries; the other ciphertext columns
-    # are non-null, so the filter is a no-op there.
-    rows =
-      from(r in schema_for(table), where: not is_nil(field(r, ^col)), select: field(r, ^col))
-      |> Arca.Repo.all()
+    # Deliberate default: the audit is a read-only operator report — a table
+    # the store cannot answer renders as an errored section, nothing acts on it.
+    Arca.Repo.Errors.with_db_rescue(
+      "CryptoRotation.audit_table(#{table})",
+      %{error: :database_error},
+      fn ->
+        # nil excluded for tombstoned vault entries; the other ciphertext columns
+        # are non-null, so the filter is a no-op there.
+        rows =
+          from(r in schema_for(table), where: not is_nil(field(r, ^col)), select: field(r, ^col))
+          |> Arca.Repo.all()
 
-    Enum.reduce(rows, %{total: 0, on_primary: 0, on_other: %{}, unknown: 0}, fn ct, a ->
-      a = %{a | total: a.total + 1}
+        Enum.reduce(rows, %{total: 0, on_primary: 0, on_other: %{}, unknown: 0}, fn ct, a ->
+          a = %{a | total: a.total + 1}
 
-      case Cipher.label(ct) do
-        {:ok, ^primary} -> %{a | on_primary: a.on_primary + 1}
-        {:ok, other} -> %{a | on_other: Map.update(a.on_other, other, 1, &(&1 + 1))}
-        :error -> %{a | unknown: a.unknown + 1}
+          case Cipher.label(ct) do
+            {:ok, ^primary} -> %{a | on_primary: a.on_primary + 1}
+            {:ok, other} -> %{a | on_other: Map.update(a.on_other, other, 1, &(&1 + 1))}
+            :error -> %{a | unknown: a.unknown + 1}
+          end
+        end)
       end
-    end)
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[CryptoRotation] audit #{table} DB error: #{Exception.message(e)}")
-      %{error: :database_error}
+    )
   end
 
   defp ensure_started do

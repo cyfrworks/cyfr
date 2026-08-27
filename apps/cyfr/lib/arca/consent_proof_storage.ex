@@ -11,21 +11,16 @@ defmodule Arca.ConsentProofStorage do
 
   import Ecto.Query
 
-  require Arca.Repo.Errors
-  require Logger
-
   alias Arca.Schemas.ConsentProof
 
   @spec insert(map()) :: :ok | {:error, term()}
   def insert(attrs) when is_map(attrs) do
-    case Arca.Repo.insert(struct(ConsentProof, attrs)) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.ConsentProofStorage] insert failed: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentProofStorage.insert", fn ->
+      case Arca.Repo.insert(struct(ConsentProof, attrs)) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
@@ -35,29 +30,29 @@ defmodule Arca.ConsentProofStorage do
   """
   @spec take(String.t()) :: {:ok, ConsentProof.t()} | {:error, :not_found}
   def take(token_hash) when is_binary(token_hash) do
-    case Arca.Repo.get(ConsentProof, token_hash) do
-      nil ->
-        {:error, :not_found}
+    # Deliberate default: an outage reads as an unusable proof (:not_found) —
+    # fail closed, a proof the store cannot confirm consumed never grants.
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentProofStorage.take", {:error, :not_found}, fn ->
+      case Arca.Repo.get(ConsentProof, token_hash) do
+        nil ->
+          {:error, :not_found}
 
-      row ->
-        case Arca.Repo.delete_all(from(p in ConsentProof, where: p.token_hash == ^token_hash)) do
-          {1, _} -> {:ok, row}
-          {0, _} -> {:error, :not_found}
-        end
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.ConsentProofStorage] take failed: #{Exception.message(e)}")
-      {:error, :not_found}
+        row ->
+          case Arca.Repo.delete_all(from(p in ConsentProof, where: p.token_hash == ^token_hash)) do
+            {1, _} -> {:ok, row}
+            {0, _} -> {:error, :not_found}
+          end
+      end
+    end)
   end
 
   @spec purge_expired(DateTime.t()) :: non_neg_integer()
   def purge_expired(now) do
-    {count, _} = Arca.Repo.delete_all(from(p in ConsentProof, where: p.expires_at <= ^now))
-    count
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.ConsentProofStorage] purge_expired failed: #{Exception.message(e)}")
-      0
+    # Deliberate default: housekeeping — a sweep the store missed is retried
+    # on the next cadence, and expired proofs stay refused by their timestamp.
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentProofStorage.purge_expired", 0, fn ->
+      {count, _} = Arca.Repo.delete_all(from(p in ConsentProof, where: p.expires_at <= ^now))
+      count
+    end)
   end
 end

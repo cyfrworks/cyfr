@@ -86,16 +86,14 @@ defmodule Arca.WebhookStorage do
   """
   @spec get_by_slug(String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
   def get_by_slug(slug) when is_binary(slug) do
-    query = from(w in Webhook, where: w.slug == ^slug, limit: 1)
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_slug", fn ->
+      query = from(w in Webhook, where: w.slug == ^slug, limit: 1)
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookStorage] Database error in get_by_slug: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -103,18 +101,16 @@ defmodule Arca.WebhookStorage do
   """
   @spec get_by_name(String.t(), String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
   def get_by_name(name, athanor_id) do
-    query =
-      from(w in Webhook, where: w.name == ^name and w.enabled == ^true, limit: 1)
-      |> where_athanor(athanor_id)
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_name", fn ->
+      query =
+        from(w in Webhook, where: w.name == ^name and w.enabled == ^true, limit: 1)
+        |> where_athanor(athanor_id)
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookStorage] Database error in get_by_name: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -126,34 +122,32 @@ defmodule Arca.WebhookStorage do
   """
   @spec list_webhooks(String.t()) :: {:ok, [Webhook.t()]} | {:error, term()}
   def list_webhooks(athanor_id) do
-    query =
-      from(w in Webhook,
-        where: w.enabled == ^true,
-        order_by: [asc: w.inserted_at],
-        select: [
-          :id,
-          :name,
-          :slug,
-          :target_ref,
-          :signature_header,
-          :timestamp_header,
-          :idempotency_key_header,
-          :input_template,
-          :description,
-          :enabled,
-          :rate_limit,
-          :rotated_at,
-          :inserted_at,
-          :updated_at
-        ]
-      )
-      |> where_athanor(athanor_id)
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.list_webhooks", fn ->
+      query =
+        from(w in Webhook,
+          where: w.enabled == ^true,
+          order_by: [asc: w.inserted_at],
+          select: [
+            :id,
+            :name,
+            :slug,
+            :target_ref,
+            :signature_header,
+            :timestamp_header,
+            :idempotency_key_header,
+            :input_template,
+            :description,
+            :enabled,
+            :rate_limit,
+            :rotated_at,
+            :inserted_at,
+            :updated_at
+          ]
+        )
+        |> where_athanor(athanor_id)
 
-    {:ok, Arca.Repo.all(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookStorage] Database error in list_webhooks: #{Exception.message(e)}")
-      {:error, :database_error}
+      {:ok, Arca.Repo.all(query)}
+    end)
   end
 
   @doc """
@@ -162,38 +156,36 @@ defmodule Arca.WebhookStorage do
   """
   @spec update_webhook(String.t(), String.t(), map()) :: :ok | {:error, :not_found}
   def update_webhook(name, athanor_id, fields) when is_map(fields) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.update_webhook", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    allowed =
-      fields
-      |> Map.take([
-        :target_ref,
-        :signature_header,
-        :timestamp_header,
-        :idempotency_key_header,
-        :input_template,
-        :description,
-        :rate_limit,
-        :profile_id
-      ])
-      |> Map.to_list()
+      allowed =
+        fields
+        |> Map.take([
+          :target_ref,
+          :signature_header,
+          :timestamp_header,
+          :idempotency_key_header,
+          :input_template,
+          :description,
+          :rate_limit,
+          :profile_id
+        ])
+        |> Map.to_list()
 
-    if allowed == [] do
-      {:error, :no_fields}
-    else
-      query =
-        from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
-        |> where_athanor(athanor_id)
+      if allowed == [] do
+        {:error, :no_fields}
+      else
+        query =
+          from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+          |> where_athanor(athanor_id)
 
-      case Arca.Repo.update_all(query, set: allowed ++ [updated_at: now]) do
-        {0, _} -> {:error, :not_found}
-        {_, _} -> :ok
+        case Arca.Repo.update_all(query, set: allowed ++ [updated_at: now]) do
+          {0, _} -> {:error, :not_found}
+          {_, _} -> :ok
+        end
       end
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookStorage] Database error in update_webhook: #{Exception.message(e)}")
-      {:error, :database_error}
+    end)
   end
 
   @doc """
@@ -201,20 +193,18 @@ defmodule Arca.WebhookStorage do
   """
   @spec set_disabled(String.t(), String.t()) :: :ok | {:error, :not_found}
   def set_disabled(name, athanor_id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.set_disabled", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    query =
-      from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
-      |> where_athanor(athanor_id)
+      query =
+        from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+        |> where_athanor(athanor_id)
 
-    case Arca.Repo.update_all(query, set: [enabled: false, updated_at: now]) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookStorage] Database error in set_disabled: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.update_all(query, set: [enabled: false, updated_at: now]) do
+        {0, _} -> {:error, :not_found}
+        {_, _} -> :ok
+      end
+    end)
   end
 
   @doc """
@@ -227,37 +217,35 @@ defmodule Arca.WebhookStorage do
   @spec rotate_secret(String.t(), String.t(), binary(), DateTime.t()) ::
           :ok | {:error, :not_found | :database_error}
   def rotate_secret(name, athanor_id, new_secret_encrypted, previous_expires_at) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.rotate_secret", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    query =
-      from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
-      |> where_athanor(athanor_id)
+      query =
+        from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+        |> where_athanor(athanor_id)
 
-    # Capture the outgoing secret so it stays valid through the grace window.
-    case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
-      nil ->
-        {:error, :not_found}
+      # Capture the outgoing secret so it stays valid through the grace window.
+      case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
+        nil ->
+          {:error, :not_found}
 
-      current_secret ->
-        result =
-          Arca.Repo.update_all(query,
-            set: [
-              secret_encrypted: new_secret_encrypted,
-              previous_secret_encrypted: current_secret,
-              previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
-              rotated_at: now,
-              updated_at: now
-            ]
-          )
+        current_secret ->
+          result =
+            Arca.Repo.update_all(query,
+              set: [
+                secret_encrypted: new_secret_encrypted,
+                previous_secret_encrypted: current_secret,
+                previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
+                rotated_at: now,
+                updated_at: now
+              ]
+            )
 
-        case result do
-          {0, _} -> {:error, :not_found}
-          {_, _} -> :ok
-        end
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookStorage] Database error in rotate_secret: #{Exception.message(e)}")
-      {:error, :database_error}
+          case result do
+            {0, _} -> {:error, :not_found}
+            {_, _} -> :ok
+          end
+      end
+    end)
   end
 end

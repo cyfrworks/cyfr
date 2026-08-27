@@ -12,8 +12,6 @@ defmodule Arca.SessionStorage do
   Session metadata (user_id, email, provider, permissions) is stored as plaintext.
   """
 
-  require Logger
-  require Arca.Repo.Errors
   import Ecto.Query
 
   alias Arca.Schemas.Session
@@ -27,30 +25,28 @@ defmodule Arca.SessionStorage do
   """
   @spec create_session(binary(), map()) :: :ok | {:error, :database_error}
   def create_session(token_hash, attrs) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.create_session", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    row = %{
-      id: Ecto.UUID.generate(),
-      token_hash: token_hash,
-      token_prefix: attrs[:token_prefix],
-      user_id: attrs.user_id,
-      email: attrs[:email],
-      provider: attrs.provider,
-      permissions: attrs.permissions,
-      # A nil athanor is a real state: the session exists from sign-in on,
-      # before the caller's athanor is resolved. Membership re-resolution
-      # runs on the next load; nothing is coerced.
-      athanor_id: attrs[:athanor_id],
-      expires_at: attrs.expires_at,
-      inserted_at: Map.get(attrs, :inserted_at, now)
-    }
+      row = %{
+        id: Ecto.UUID.generate(),
+        token_hash: token_hash,
+        token_prefix: attrs[:token_prefix],
+        user_id: attrs.user_id,
+        email: attrs[:email],
+        provider: attrs.provider,
+        permissions: attrs.permissions,
+        # A nil athanor is a real state: the session exists from sign-in on,
+        # before the caller's athanor is resolved. Membership re-resolution
+        # runs on the next load; nothing is coerced.
+        athanor_id: attrs[:athanor_id],
+        expires_at: attrs.expires_at,
+        inserted_at: Map.get(attrs, :inserted_at, now)
+      }
 
-    Arca.Repo.insert_all(Session, [row])
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in create_session: #{Exception.message(e)}")
-      {:error, :database_error}
+      Arca.Repo.insert_all(Session, [row])
+      :ok
+    end)
   end
 
   @doc """
@@ -60,36 +56,31 @@ defmodule Arca.SessionStorage do
   """
   @spec get_session(binary()) :: {:ok, Session.t()} | {:error, :not_found | :database_error}
   def get_session(token_hash) do
-    now = DateTime.utc_now()
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.get_session", fn ->
+      now = DateTime.utc_now()
 
-    # Select a struct with everything except the secret token_hash/token_prefix.
-    query =
-      from(s in Session,
-        where: s.token_hash == ^token_hash and s.expires_at > ^now,
-        limit: 1,
-        select: [
-          :id,
-          :user_id,
-          :email,
-          :provider,
-          :permissions,
-          :athanor_id,
-          :expires_at,
-          :inserted_at
-        ]
-      )
+      # Select a struct with everything except the secret token_hash/token_prefix.
+      query =
+        from(s in Session,
+          where: s.token_hash == ^token_hash and s.expires_at > ^now,
+          limit: 1,
+          select: [
+            :id,
+            :user_id,
+            :email,
+            :provider,
+            :permissions,
+            :athanor_id,
+            :expires_at,
+            :inserted_at
+          ]
+        )
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[Arca.SessionStorage] Error in get_session: #{inspect(e.__struct__)}: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -97,16 +88,14 @@ defmodule Arca.SessionStorage do
   """
   @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
   def refresh_session(token_hash, new_expires_at) do
-    query = from(s in Session, where: s.token_hash == ^token_hash)
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.refresh_session", fn ->
+      query = from(s in Session, where: s.token_hash == ^token_hash)
 
-    case Arca.Repo.update_all(query, set: [expires_at: new_expires_at]) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in refresh_session: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.update_all(query, set: [expires_at: new_expires_at]) do
+        {0, _} -> {:error, :not_found}
+        {_, _} -> :ok
+      end
+    end)
   end
 
   @doc """
@@ -114,13 +103,11 @@ defmodule Arca.SessionStorage do
   """
   @spec delete_session(binary()) :: :ok | {:error, :database_error}
   def delete_session(token_hash) do
-    query = from(s in Session, where: s.token_hash == ^token_hash)
-    Arca.Repo.delete_all(query)
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_session", fn ->
+      query = from(s in Session, where: s.token_hash == ^token_hash)
+      Arca.Repo.delete_all(query)
+      :ok
+    end)
   end
 
   @doc """
@@ -129,16 +116,14 @@ defmodule Arca.SessionStorage do
   """
   @spec update_athanor(binary(), String.t()) :: :ok | {:error, :not_found | :database_error}
   def update_athanor(token_hash, athanor_id) when is_binary(athanor_id) do
-    query = from(s in Session, where: s.token_hash == ^token_hash)
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.update_athanor", fn ->
+      query = from(s in Session, where: s.token_hash == ^token_hash)
 
-    case Arca.Repo.update_all(query, set: [athanor_id: athanor_id]) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in update_athanor: #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.update_all(query, set: [athanor_id: athanor_id]) do
+        {0, _} -> {:error, :not_found}
+        {_, _} -> :ok
+      end
+    end)
   end
 
   @doc """
@@ -146,12 +131,10 @@ defmodule Arca.SessionStorage do
   """
   @spec delete_by_user(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_by_user(user_id) when is_binary(user_id) do
-    {count, _} = Arca.Repo.delete_all(from(s in Session, where: s.user_id == ^user_id))
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in delete_by_user: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_by_user", fn ->
+      {count, _} = Arca.Repo.delete_all(from(s in Session, where: s.user_id == ^user_id))
+      {:ok, count}
+    end)
   end
 
   @doc """
@@ -162,11 +145,11 @@ defmodule Arca.SessionStorage do
   """
   @spec hashes_by_user(String.t()) :: [binary()]
   def hashes_by_user(user_id) when is_binary(user_id) do
-    Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in hashes_by_user: #{Exception.message(e)}")
-      []
+    # Deliberate fail-open to []: the revocation's delete still runs, and a
+    # memo entry this read missed dies with the memo TTL — never a grant.
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.hashes_by_user", [], fn ->
+      Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
+    end)
   end
 
   @doc """
@@ -176,17 +159,12 @@ defmodule Arca.SessionStorage do
   """
   @spec cleanup_expired_sessions() :: {:ok, non_neg_integer()}
   def cleanup_expired_sessions do
-    now = DateTime.utc_now()
-    query = from(s in Session, where: s.expires_at <= ^now)
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.cleanup_expired_sessions", fn ->
+      now = DateTime.utc_now()
+      query = from(s in Session, where: s.expires_at <= ^now)
 
-    {count, _} = Arca.Repo.delete_all(query)
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+      {count, _} = Arca.Repo.delete_all(query)
+      {:ok, count}
+    end)
   end
 end

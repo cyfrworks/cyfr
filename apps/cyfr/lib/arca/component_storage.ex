@@ -14,8 +14,6 @@ defmodule Arca.ComponentStorage do
   to enforce tenant isolation via `where_tenant/3`.
   """
 
-  require Logger
-  require Arca.Repo.Errors
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
@@ -194,15 +192,11 @@ defmodule Arca.ComponentStorage do
       )
       |> where_tenant(ctx)
 
-    Arca.Repo.one(query) != nil
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ComponentStorage] Database error in has_remaining_versions?: #{Exception.message(e)}"
-      )
-
-      # Fail safe: assume versions remain, don't delete name-level entries
-      true
+    # Fail safe: on a store outage assume versions remain, so name-level
+    # grants/policies are never deleted on an unanswerable read.
+    Arca.Repo.Errors.with_db_rescue("ComponentStorage.has_remaining_versions?", true, fn ->
+      Arca.Repo.one(query) != nil
+    end)
   end
 
   @doc """
@@ -319,13 +313,9 @@ defmodule Arca.ComponentStorage do
 
   # One rescue for the module's typed-refusal contract: DB errors log with
   # the operation's name and answer `{:error, :database_error}`
-  # (`has_remaining_versions?/3` keeps its own fail-safe rescue — its
+  # (`has_remaining_versions?/3` uses the default-returning variant — its
   # fallback is `true`, not an error tuple).
   defp rescuing_db(op, fun) do
-    fun.()
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ComponentStorage] Database error in #{op}: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("ComponentStorage.#{op}", fun)
   end
 end

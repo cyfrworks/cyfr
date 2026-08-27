@@ -55,6 +55,28 @@ defmodule Arca.Repo.Errors do
   end
 
   @doc """
+  Like `with_db_rescue/2`, but answers `default` instead of
+  `{:error, :database_error}` when the store cannot answer.
+
+  A default-returner is a DELIBERATE fail-open: the caller has decided
+  that, during an outage, this read may answer as if nothing were there
+  (an empty roster, a zero count, a not-found). That decision must be
+  justified where it is made — every call site carries a one-line comment
+  saying why the default is safe there. Reads that decide anything
+  (admission, caps, archival) must use `with_db_rescue/2` and refuse.
+  """
+  @spec with_db_rescue(String.t(), default, (-> result)) :: result | default
+        when result: term(), default: term()
+  def with_db_rescue(tag, default, fun) when is_binary(tag) and is_function(fun, 0) do
+    fun.()
+  rescue
+    e in db_errors() ->
+      require Logger
+      Logger.error("[#{tag}] database error: #{Exception.message(e)}")
+      default
+  end
+
+  @doc """
   Returns true if the exception represents a unique constraint violation.
 
   Works across both SQLite (`UNIQUE constraint failed`) and Postgres

@@ -14,8 +14,6 @@ defmodule Arca.WebhookDeliveryStorage do
   is enabled; otherwise the table grows (single-user volumes are negligible).
   """
 
-  require Arca.Repo.Errors
-  require Logger
   import Ecto.Query
 
   alias Arca.Schemas.WebhookDelivery
@@ -30,32 +28,29 @@ defmodule Arca.WebhookDeliveryStorage do
           :fresh | {:duplicate, DateTime.t() | binary()} | {:error, term()}
   def record(webhook_id, idempotency_key)
       when is_binary(webhook_id) and is_binary(idempotency_key) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.record", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    row = %{
-      id: Ecto.UUID.generate(),
-      webhook_id: webhook_id,
-      idempotency_key: idempotency_key,
-      first_seen_at: now
-    }
+      row = %{
+        id: Ecto.UUID.generate(),
+        webhook_id: webhook_id,
+        idempotency_key: idempotency_key,
+        first_seen_at: now
+      }
 
-    case Arca.Repo.insert_all(WebhookDelivery, [row], on_conflict: :nothing) do
-      {1, _} ->
-        :fresh
+      case Arca.Repo.insert_all(WebhookDelivery, [row], on_conflict: :nothing) do
+        {1, _} ->
+          :fresh
 
-      {0, _} ->
-        # Conflict — fetch the existing row's timestamp.
-        case lookup_first_seen(webhook_id, idempotency_key) do
-          {:ok, ts} -> {:duplicate, ts}
-          # Defensive: row vanished between insert and lookup. Treat as fresh.
-          :missing -> :fresh
-        end
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookDeliveryStorage] Database error in record: #{Exception.message(e)}")
-
-      {:error, :database_error}
+        {0, _} ->
+          # Conflict — fetch the existing row's timestamp.
+          case lookup_first_seen(webhook_id, idempotency_key) do
+            {:ok, ts} -> {:duplicate, ts}
+            # Defensive: row vanished between insert and lookup. Treat as fresh.
+            :missing -> :fresh
+          end
+      end
+    end)
   end
 
   @doc """
@@ -64,14 +59,11 @@ defmodule Arca.WebhookDeliveryStorage do
   """
   @spec sweep(DateTime.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep(%DateTime{} = older_than) do
-    query = from d in WebhookDelivery, where: d.first_seen_at < ^older_than
-    {count, _} = Arca.Repo.delete_all(query)
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[WebhookDeliveryStorage] Database error in sweep: #{Exception.message(e)}")
-
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.sweep", fn ->
+      query = from d in WebhookDelivery, where: d.first_seen_at < ^older_than
+      {count, _} = Arca.Repo.delete_all(query)
+      {:ok, count}
+    end)
   end
 
   defp lookup_first_seen(webhook_id, key) do

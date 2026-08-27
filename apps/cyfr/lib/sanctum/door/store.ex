@@ -15,8 +15,6 @@ defmodule Sanctum.Door.Store do
   """
 
   import Ecto.Query, only: [from: 2]
-  require Logger
-  require Arca.Repo.Errors
 
   alias Arca.Schemas.ServerAllowlistEntry, as: Entry
 
@@ -25,21 +23,23 @@ defmodule Sanctum.Door.Store do
   @doc "Every entry, allowed and requested, newest first."
   @spec list() :: [Entry.t()]
   def list do
-    Arca.Repo.all(from(e in Entry, order_by: [desc: e.created_at]))
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Door.Store: list failed (#{Exception.message(e)})")
-      []
+    # Deliberate default: an admin display read — admission itself goes
+    # through find/2, whose outage answer is an error the door refuses on.
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.list", [], fn ->
+      Arca.Repo.all(from(e in Entry, order_by: [desc: e.created_at]))
+    end)
   end
 
   @doc "The pending requests, oldest first."
   @spec requests() :: [Entry.t()]
   def requests do
-    Arca.Repo.all(from(e in Entry, where: e.status == "requested", order_by: [asc: e.created_at]))
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Door.Store: requests failed (#{Exception.message(e)})")
-      []
+    # Deliberate default: a display read for the operator's queue — a request
+    # a blinked read hides is still a row and shows on the next render.
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.requests", [], fn ->
+      Arca.Repo.all(
+        from(e in Entry, where: e.status == "requested", order_by: [asc: e.created_at])
+      )
+    end)
   end
 
   @spec get(String.t()) :: {:ok, Entry.t()} | {:error, :not_found}
@@ -196,14 +196,12 @@ defmodule Sanctum.Door.Store do
   # ---- internal --------------------------------------------------------------
 
   defp find(kind, value) do
-    case Arca.Repo.get_by(Entry, kind: kind, value: value) do
-      nil -> {:error, :not_found}
-      entry -> {:ok, entry}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Door.Store: read failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.find", fn ->
+      case Arca.Repo.get_by(Entry, kind: kind, value: value) do
+        nil -> {:error, :not_found}
+        entry -> {:ok, entry}
+      end
+    end)
   end
 
   defp upsert(kind, value, attrs) do
@@ -217,27 +215,23 @@ defmodule Sanctum.Door.Store do
   end
 
   defp insert(attrs) do
-    now = DateTime.utc_now()
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.insert", fn ->
+      now = DateTime.utc_now()
 
-    %Entry{}
-    |> Entry.changeset(
-      Map.merge(attrs, %{id: "door_" <> Ecto.UUID.generate(), created_at: now, updated_at: now})
-    )
-    |> Arca.Repo.insert()
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Door.Store: insert failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      %Entry{}
+      |> Entry.changeset(
+        Map.merge(attrs, %{id: "door_" <> Ecto.UUID.generate(), created_at: now, updated_at: now})
+      )
+      |> Arca.Repo.insert()
+    end)
   end
 
   defp update(%Entry{} = entry, attrs) do
-    entry
-    |> Entry.changeset(Map.put(attrs, :updated_at, DateTime.utc_now()))
-    |> Arca.Repo.update()
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Door.Store: update failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.update", fn ->
+      entry
+      |> Entry.changeset(Map.put(attrs, :updated_at, DateTime.utc_now()))
+      |> Arca.Repo.update()
+    end)
   end
 
   defp downcase(nil), do: nil

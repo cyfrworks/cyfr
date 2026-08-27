@@ -30,8 +30,6 @@ defmodule Arca.Execution do
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query
-  require Logger
-  require Arca.Repo.Errors
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -223,26 +221,19 @@ defmodule Arca.Execution do
   @spec delete_older_than(non_neg_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_older_than(keep, opts) when is_list(opts) do
-    {count, _} = Arca.Repo.delete_all(stale_query(keep, opts))
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[Arca.Execution] Database error in delete_older_than: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.delete_older_than", fn ->
+      {count, _} = Arca.Repo.delete_all(stale_query(keep, opts))
+      {:ok, count}
+    end)
   end
 
   @doc "How many rows `delete_older_than/2` would remove — the dry-run count."
   @spec count_stale(non_neg_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_stale(keep, opts) when is_list(opts) do
-    {:ok, Arca.Repo.aggregate(stale_query(keep, opts), :count)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.Execution] Database error in count_stale: #{Exception.message(e)}")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Arca.Execution.count_stale", fn ->
+      {:ok, Arca.Repo.aggregate(stale_query(keep, opts), :count)}
+    end)
   end
 
   # Everything past the newest `keep` in the athanor — the one spelling

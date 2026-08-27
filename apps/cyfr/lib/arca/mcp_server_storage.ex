@@ -20,8 +20,6 @@ defmodule Arca.McpServerStorage do
   - inserted_at/updated_at: Timestamps
   """
 
-  require Logger
-  require Arca.Repo.Errors
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
@@ -53,15 +51,13 @@ defmodule Arca.McpServerStorage do
   """
   @spec list(Context.t()) :: {:ok, [McpServer.t()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    query =
-      from(s in McpServer, order_by: [asc: s.name])
-      |> where_tenant(ctx)
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.list", fn ->
+      query =
+        from(s in McpServer, order_by: [asc: s.name])
+        |> where_tenant(ctx)
 
-    {:ok, Arca.Repo.all(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpServerStorage] Error in list: #{Exception.message(e)}")
-      {:error, :database_error}
+      {:ok, Arca.Repo.all(query)}
+    end)
   end
 
   @doc """
@@ -70,18 +66,16 @@ defmodule Arca.McpServerStorage do
   @spec get(Context.t(), String.t()) ::
           {:ok, McpServer.t()} | {:error, :not_found | :database_error}
   def get(%Context{} = ctx, name) when is_binary(name) do
-    query =
-      from(s in McpServer, where: s.name == ^name, limit: 1)
-      |> where_tenant(ctx)
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get", fn ->
+      query =
+        from(s in McpServer, where: s.name == ^name, limit: 1)
+        |> where_tenant(ctx)
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpServerStorage] Error in get(#{name}): #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -92,34 +86,32 @@ defmodule Arca.McpServerStorage do
   """
   @spec put(Context.t(), map()) :: {:ok, McpServer.t()} | {:error, term()}
   def put(%Context{} = ctx, attrs) when is_map(attrs) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.put", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    attrs =
-      attrs
-      |> Map.put_new(:id, Emissary.UUID7.generate())
-      |> Map.put_new(:enabled, true)
-      |> Map.put_new(:config_json, "{}")
-      |> Map.put(:athanor_id, ctx.athanor_id)
-      |> Map.put_new(:inserted_at, now)
-      |> Map.put(:updated_at, now)
+      attrs =
+        attrs
+        |> Map.put_new(:id, Emissary.UUID7.generate())
+        |> Map.put_new(:enabled, true)
+        |> Map.put_new(:config_json, "{}")
+        |> Map.put(:athanor_id, ctx.athanor_id)
+        |> Map.put_new(:inserted_at, now)
+        |> Map.put(:updated_at, now)
 
-    Arca.Repo.insert_all(
-      McpServer,
-      [attrs],
-      on_conflict: {:replace, [:url, :config_json, :enabled, :updated_at]},
-      conflict_target: [:athanor_id, :name]
-    )
-    |> case do
-      {n, _} when n in [0, 1] ->
-        {:ok, struct(McpServer, attrs)}
+      Arca.Repo.insert_all(
+        McpServer,
+        [attrs],
+        on_conflict: {:replace, [:url, :config_json, :enabled, :updated_at]},
+        conflict_target: [:athanor_id, :name]
+      )
+      |> case do
+        {n, _} when n in [0, 1] ->
+          {:ok, struct(McpServer, attrs)}
 
-      error ->
-        {:error, error}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpServerStorage] Error in put: #{Exception.message(e)}")
-      {:error, :database_error}
+        error ->
+          {:error, error}
+      end
+    end)
   end
 
   @doc """
@@ -127,18 +119,16 @@ defmodule Arca.McpServerStorage do
   """
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, name) when is_binary(name) do
-    query =
-      from(s in McpServer, where: s.name == ^name)
-      |> where_tenant(ctx)
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.delete", fn ->
+      query =
+        from(s in McpServer, where: s.name == ^name)
+        |> where_tenant(ctx)
 
-    case Arca.Repo.delete_all(query) do
-      {_count, _} -> :ok
-      error -> {:error, error}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpServerStorage] Error in delete(#{name}): #{Exception.message(e)}")
-      {:error, :database_error}
+      case Arca.Repo.delete_all(query) do
+        {_count, _} -> :ok
+        error -> {:error, error}
+      end
+    end)
   end
 
   @doc """
@@ -147,26 +137,23 @@ defmodule Arca.McpServerStorage do
   @spec update(Context.t(), String.t(), map()) ::
           {:ok, McpServer.t()} | {:error, term()}
   def update(%Context{} = ctx, name, updates) when is_binary(name) and is_map(updates) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.update", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    set =
-      updates
-      |> Map.take([:url, :config_json, :enabled])
-      |> Map.put(:updated_at, now)
-      |> Enum.to_list()
+      set =
+        updates
+        |> Map.take([:url, :config_json, :enabled])
+        |> Map.put(:updated_at, now)
+        |> Enum.to_list()
 
-    query =
-      from(s in McpServer, where: s.name == ^name)
-      |> where_tenant(ctx)
+      query =
+        from(s in McpServer, where: s.name == ^name)
+        |> where_tenant(ctx)
 
-    case Arca.Repo.update_all(query, set: set) do
-      {0, _} -> {:error, :not_found}
-      {_n, _} -> get(ctx, name)
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.McpServerStorage] Error in update(#{name}): #{Exception.message(e)}")
-
-      {:error, :database_error}
+      case Arca.Repo.update_all(query, set: set) do
+        {0, _} -> {:error, :not_found}
+        {_n, _} -> get(ctx, name)
+      end
+    end)
   end
 end

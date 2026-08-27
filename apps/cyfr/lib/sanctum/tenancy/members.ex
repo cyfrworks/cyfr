@@ -24,8 +24,6 @@ defmodule Sanctum.Tenancy.Members do
   """
 
   import Ecto.Query
-  require Logger
-  require Arca.Repo.Errors
 
   alias Arca.Schemas.{Membership, User}
   alias Sanctum.Tenancy.{Athanors, Users}
@@ -40,29 +38,27 @@ defmodule Sanctum.Tenancy.Members do
   the `"athanor"` scope and must name an existing athanor.
   """
   def create(attrs) do
-    now = DateTime.utc_now()
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.create", fn ->
+      now = DateTime.utc_now()
 
-    attrs =
-      attrs
-      |> Map.new()
-      |> Map.put_new(:id, generate_id())
-      |> Map.put_new(:created_at, now)
-      |> Map.put_new(:updated_at, now)
+      attrs =
+        attrs
+        |> Map.new()
+        |> Map.put_new(:id, generate_id())
+        |> Map.put_new(:created_at, now)
+        |> Map.put_new(:updated_at, now)
 
-    changeset = Membership.changeset(%Membership{}, attrs)
+      changeset = Membership.changeset(%Membership{}, attrs)
 
-    # The row also carries a foreign key, but SQLite reports a violation
-    # without naming it, so the changeset could not translate it. Checking
-    # here answers the same way on both adapters.
-    if changeset.valid? and missing_athanor?(changeset) do
-      {:error, Ecto.Changeset.add_error(changeset, :athanor_id, "does not exist")}
-    else
-      Arca.Repo.insert(changeset)
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: create failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      # The row also carries a foreign key, but SQLite reports a violation
+      # without naming it, so the changeset could not translate it. Checking
+      # here answers the same way on both adapters.
+      if changeset.valid? and missing_athanor?(changeset) do
+        {:error, Ecto.Changeset.add_error(changeset, :athanor_id, "does not exist")}
+      else
+        Arca.Repo.insert(changeset)
+      end
+    end)
   end
 
   @doc """
@@ -117,11 +113,9 @@ defmodule Sanctum.Tenancy.Members do
   @doc "Every platform-admin row — the server's operators, as the rows say."
   @spec list_platform() :: {:ok, [Membership.t()]} | {:error, :database_error}
   def list_platform do
-    {:ok, Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: list_platform failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.list_platform", fn ->
+      {:ok, Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))}
+    end)
   end
 
   @doc """
@@ -139,29 +133,25 @@ defmodule Sanctum.Tenancy.Members do
   """
   @spec revoke_platform(String.t()) :: :ok | {:error, :database_error}
   def revoke_platform(user_id) when is_binary(user_id) do
-    {count, _} =
-      Arca.Repo.delete_all(
-        from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
-      )
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.revoke_platform", fn ->
+      {count, _} =
+        Arca.Repo.delete_all(
+          from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
+        )
 
-    if count > 0, do: Sanctum.Session.revoke_all_for_user(user_id)
+      if count > 0, do: Sanctum.Session.revoke_all_for_user(user_id)
 
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: revoke_platform failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      :ok
+    end)
   end
 
   def get(id) do
-    case Arca.Repo.get(Membership, id) do
-      nil -> {:error, :not_found}
-      membership -> {:ok, membership}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: get failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.get", fn ->
+      case Arca.Repo.get(Membership, id) do
+        nil -> {:error, :not_found}
+        membership -> {:ok, membership}
+      end
+    end)
   end
 
   @doc "Is `user_id` an active member of the athanor?"
@@ -288,49 +278,47 @@ defmodule Sanctum.Tenancy.Members do
   @spec activate_invited(User.t()) :: {:ok, non_neg_integer()}
   def activate_invited(%User{email: email, email_verified: verified, id: user_id})
       when is_binary(email) and verified != false do
-    now = DateTime.utc_now()
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.activate_invited", fn ->
+      now = DateTime.utc_now()
 
-    invited =
-      from(m in Membership,
-        where: m.email == ^email and m.status == "invited" and m.scope == "athanor"
-      )
+      invited =
+        from(m in Membership,
+          where: m.email == ^email and m.status == "invited" and m.scope == "athanor"
+        )
 
-    # An invitation for an athanor the person is already an active member of
-    # is superseded. Written as a subquery, not a join: SQLite refuses joins
-    # on DELETE.
-    superseded =
-      from(m in invited,
-        where:
-          m.athanor_id in subquery(
-            from(a in Membership,
-              where: a.user_id == ^user_id and a.scope == "athanor" and a.status == "active",
-              select: a.athanor_id
+      # An invitation for an athanor the person is already an active member of
+      # is superseded. Written as a subquery, not a join: SQLite refuses joins
+      # on DELETE.
+      superseded =
+        from(m in invited,
+          where:
+            m.athanor_id in subquery(
+              from(a in Membership,
+                where: a.user_id == ^user_id and a.scope == "athanor" and a.status == "active",
+                select: a.athanor_id
+              )
             )
-          )
-      )
+        )
 
-    {:ok, athanor_ids} =
-      Arca.Repo.transaction(fn ->
-        Arca.Repo.delete_all(superseded)
+      {:ok, athanor_ids} =
+        Arca.Repo.transaction(fn ->
+          Arca.Repo.delete_all(superseded)
 
-        {_n, ids} =
-          Arca.Repo.update_all(from(m in invited, select: m.athanor_id),
-            set: [user_id: user_id, status: "active", email: nil, updated_at: now]
-          )
+          {_n, ids} =
+            Arca.Repo.update_all(from(m in invited, select: m.athanor_id),
+              set: [user_id: user_id, status: "active", email: nil, updated_at: now]
+            )
 
-        ids
-      end)
+          ids
+        end)
 
-    for athanor_id <- athanor_ids do
-      broadcast_change(user_id, athanor_id, :joined)
-      Sanctum.Notify.member_changed(athanor_id)
-    end
+      for athanor_id <- athanor_ids do
+        broadcast_change(user_id, athanor_id, :joined)
+        Sanctum.Notify.member_changed(athanor_id)
+      end
 
-    {:ok, length(athanor_ids)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: activate_invited failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      {:ok, length(athanor_ids)}
+    end)
   end
 
   def activate_invited(_user), do: {:ok, 0}
@@ -344,37 +332,35 @@ defmodule Sanctum.Tenancy.Members do
   """
   @spec withdraw_invites_for_email(String.t() | nil) :: non_neg_integer()
   def withdraw_invites_for_email(email) when is_binary(email) and email != "" do
-    email = String.downcase(String.trim(email))
+    # Deliberate default: the deny's best-effort sweep — a withdrawal the
+    # store missed leaves invited rows, not seats: activation re-checks the
+    # door, which now denies the address.
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.withdraw_invites_for_email", 0, fn ->
+      email = String.downcase(String.trim(email))
 
-    query =
-      from(m in Membership,
-        where: m.email == ^email and m.status == "invited" and m.scope == "athanor",
-        select: m.athanor_id
-      )
+      query =
+        from(m in Membership,
+          where: m.email == ^email and m.status == "invited" and m.scope == "athanor",
+          select: m.athanor_id
+        )
 
-    {_n, athanor_ids} = Arca.Repo.delete_all(query)
-    athanor_ids = athanor_ids || []
+      {_n, athanor_ids} = Arca.Repo.delete_all(query)
+      athanor_ids = athanor_ids || []
 
-    for athanor_id <- athanor_ids, is_binary(athanor_id) do
-      Sanctum.Notify.member_changed(athanor_id)
-    end
+      for athanor_id <- athanor_ids, is_binary(athanor_id) do
+        Sanctum.Notify.member_changed(athanor_id)
+      end
 
-    length(athanor_ids)
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: withdraw_invites failed (#{Exception.message(e)})")
-
-      0
+      length(athanor_ids)
+    end)
   end
 
   def withdraw_invites_for_email(_), do: 0
 
   def remove(%Membership{} = membership) do
-    Arca.Repo.delete(membership)
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: remove failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.remove", fn ->
+      Arca.Repo.delete(membership)
+    end)
   end
 
   @doc """
@@ -414,24 +400,22 @@ defmodule Sanctum.Tenancy.Members do
   """
   @spec remove_all_for_user(String.t()) :: :ok | {:error, :database_error}
   def remove_all_for_user(user_id) when is_binary(user_id) do
-    rows = Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id))
-    Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.remove_all_for_user", fn ->
+      rows = Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id))
+      Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
 
-    for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
-      broadcast_change(user_id, athanor_id, :left)
-      Sanctum.Notify.member_changed(athanor_id)
+      for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
+        broadcast_change(user_id, athanor_id, :left)
+        Sanctum.Notify.member_changed(athanor_id)
 
-      case Athanors.get(athanor_id) do
-        {:ok, athanor} -> archive_when_empty(athanor)
-        _ -> :ok
+        case Athanors.get(athanor_id) do
+          {:ok, athanor} -> archive_when_empty(athanor)
+          _ -> :ok
+        end
       end
-    end
 
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: remove_all failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      :ok
+    end)
   end
 
   @max_page 500
@@ -444,48 +428,44 @@ defmodule Sanctum.Tenancy.Members do
   """
   @spec list_by_athanor(String.t(), keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list_by_athanor(athanor_id, opts \\ []) when is_binary(athanor_id) do
-    limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
-    offset = opts |> Keyword.get(:offset, 0) |> max(0)
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.list_by_athanor", fn ->
+      limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
+      offset = opts |> Keyword.get(:offset, 0) |> max(0)
 
-    {:ok,
-     Arca.Repo.all(
-      from(m in Membership,
-        left_join: u in User,
-        on: u.id == m.user_id,
-        where: m.athanor_id == ^athanor_id and m.scope == "athanor",
-        order_by: [asc: m.created_at, asc: m.id],
-        limit: ^limit,
-        offset: ^offset,
-        select: %{
-          user_id: m.user_id,
-          email: coalesce(m.email, u.email),
-          display_name: u.display_name,
-          namespace: u.namespace,
-          status: m.status,
-          added_by: m.added_by,
-          since: m.created_at
-        }
-      )
-     )}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: list_by_athanor failed (#{Exception.message(e)})")
-      {:error, :database_error}
+      {:ok,
+       Arca.Repo.all(
+         from(m in Membership,
+           left_join: u in User,
+           on: u.id == m.user_id,
+           where: m.athanor_id == ^athanor_id and m.scope == "athanor",
+           order_by: [asc: m.created_at, asc: m.id],
+           limit: ^limit,
+           offset: ^offset,
+           select: %{
+             user_id: m.user_id,
+             email: coalesce(m.email, u.email),
+             display_name: u.display_name,
+             namespace: u.namespace,
+             status: m.status,
+             added_by: m.added_by,
+             since: m.created_at
+           }
+         )
+       )}
+    end)
   end
 
   @doc "Every row of a person: platform and athanor, active only. Uncapped."
   @spec list_by_user(String.t()) :: {:ok, [Membership.t()]} | {:error, :database_error}
   def list_by_user(user_id) do
-    {:ok,
-     from(m in Membership,
-       where: m.user_id == ^user_id and m.status == "active",
-       order_by: [desc: m.created_at]
-     )
-     |> Arca.Repo.all()}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: list_by_user failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.list_by_user", fn ->
+      {:ok,
+       from(m in Membership,
+         where: m.user_id == ^user_id and m.status == "active",
+         order_by: [desc: m.created_at]
+       )
+       |> Arca.Repo.all()}
+    end)
   end
 
   @doc """
@@ -495,34 +475,30 @@ defmodule Sanctum.Tenancy.Members do
   """
   @spec count_by_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def count_by_athanor(athanor_id) do
-    {:ok,
-     Arca.Repo.one(
-       from(m in Membership,
-         where: m.athanor_id == ^athanor_id and m.status == "active",
-         select: count(m.id)
-       )
-     ) || 0}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: count_by_athanor failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.count_by_athanor", fn ->
+      {:ok,
+       Arca.Repo.one(
+         from(m in Membership,
+           where: m.athanor_id == ^athanor_id and m.status == "active",
+           select: count(m.id)
+         )
+       ) || 0}
+    end)
   end
 
   # Every seat the athanor has handed out — active members and pending
   # invitations — which is what the member cap bounds; an invitation is a
   # seat someone will take.
   defp count_seats(athanor_id) do
-    {:ok,
-     Arca.Repo.one(
-       from(m in Membership,
-         where: m.athanor_id == ^athanor_id and m.scope == "athanor",
-         select: count(m.id)
-       )
-     ) || 0}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: count_seats failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.count_seats", fn ->
+      {:ok,
+       Arca.Repo.one(
+         from(m in Membership,
+           where: m.athanor_id == ^athanor_id and m.scope == "athanor",
+           select: count(m.id)
+         )
+       ) || 0}
+    end)
   end
 
   @doc "The PubSub topic a person's LiveViews subscribe to for their own membership changes."
@@ -559,43 +535,39 @@ defmodule Sanctum.Tenancy.Members do
   defp archive_when_empty(_), do: :ok
 
   defp find(user_id, scope, athanor_id) do
-    query =
-      from(m in Membership,
-        where: m.user_id == ^user_id and m.scope == ^scope,
-        order_by: [asc: m.created_at, asc: m.id],
-        limit: 1
-      )
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.find", fn ->
+      query =
+        from(m in Membership,
+          where: m.user_id == ^user_id and m.scope == ^scope,
+          order_by: [asc: m.created_at, asc: m.id],
+          limit: 1
+        )
 
-    query =
-      case athanor_id do
-        nil -> from(m in query, where: is_nil(m.athanor_id))
-        id -> from(m in query, where: m.athanor_id == ^id)
+      query =
+        case athanor_id do
+          nil -> from(m in query, where: is_nil(m.athanor_id))
+          id -> from(m in query, where: m.athanor_id == ^id)
+        end
+
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        membership -> {:ok, membership}
       end
-
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      membership -> {:ok, membership}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: find failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    end)
   end
 
   defp find_invited(email, athanor_id) do
-    case Arca.Repo.one(
-           from(m in Membership,
-             where: m.email == ^email and m.athanor_id == ^athanor_id and m.status == "invited",
-             limit: 1
-           )
-         ) do
-      nil -> {:error, :not_found}
-      membership -> {:ok, membership}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("Sanctum.Tenancy.Members: find_invited failed (#{Exception.message(e)})")
-      {:error, :database_error}
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.find_invited", fn ->
+      case Arca.Repo.one(
+             from(m in Membership,
+               where: m.email == ^email and m.athanor_id == ^athanor_id and m.status == "invited",
+               limit: 1
+             )
+           ) do
+        nil -> {:error, :not_found}
+        membership -> {:ok, membership}
+      end
+    end)
   end
 
   defp missing_athanor?(changeset) do
