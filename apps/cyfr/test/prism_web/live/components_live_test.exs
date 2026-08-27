@@ -60,7 +60,7 @@ defmodule PrismWeb.ComponentsLiveTest do
       Arca.delete_tree(ctx, ["components", "reagents", "local", "shelf-tool"])
     end)
 
-    %{errors: 0} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
 
     {:ok, conn: conn, ctx: ctx}
   end

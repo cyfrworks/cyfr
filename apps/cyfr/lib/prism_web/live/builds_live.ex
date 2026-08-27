@@ -92,12 +92,24 @@ defmodule PrismWeb.BuildsLive do
             []
         end
 
-      component_refs = discover_local_components(socket.assigns.context)
+      socket =
+        case discover_local_components(socket.assigns.context) do
+          {:ok, component_refs} ->
+            assign(socket, :components, component_refs)
+
+          {:error, reason} ->
+            # An unreadable tree is an outage, not an empty picker — say so
+            # rather than showing a roster with nothing in it.
+            Logger.warning("[BuildsLive] component discovery failed: #{inspect(reason)}")
+
+            socket
+            |> assign(:components, [])
+            |> put_flash(:error, "Component discovery failed — storage is unreachable")
+        end
 
       {:noreply,
        socket
        |> assign(:toolchains, toolchains)
-       |> assign(:components, component_refs)
        |> assign(:loading, false)}
     else
       {:noreply, socket}
@@ -177,25 +189,29 @@ defmodule PrismWeb.BuildsLive do
     # can never diverge from the scanner. Manifest-less version dirs
     # rightly vanish: a scaffold always writes the manifest, so a dir
     # without one was never buildable.
-    ctx
-    |> Compendium.AutoIndexer.discover()
-    |> Enum.flat_map(fn segments ->
-      case Compendium.ComponentPath.parse(segments) do
-        {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
-          [
-            Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-              type: type,
-              namespace: publisher,
-              name: name,
-              version: version
-            })
-          ]
+    with {:ok, segment_lists} <- Compendium.AutoIndexer.discover(ctx) do
+      refs =
+        segment_lists
+        |> Enum.flat_map(fn segments ->
+          case Compendium.ComponentPath.parse(segments) do
+            {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
+              [
+                Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+                  type: type,
+                  namespace: publisher,
+                  name: name,
+                  version: version
+                })
+              ]
 
-        :error ->
-          []
-      end
-    end)
-    |> Enum.sort()
+            :error ->
+              []
+          end
+        end)
+        |> Enum.sort()
+
+      {:ok, refs}
+    end
   end
 
   defp build_phase_color(:preparing), do: "bg-yellow-400"

@@ -54,7 +54,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
 
     # The scan mints the bundle rows through the seed overlay — no copies.
-    %{errors: 0} = Compendium.AutoIndexer.scan(ctx: ctx)
+    {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
 
     {:ok, ctx: ctx}
   end

@@ -133,17 +133,25 @@ defmodule Compendium.Scaffold do
     path =
       component_base_path(name, type, version) ++ [Compendium.ComponentPath.manifest_name()]
 
-    cond do
-      not Arca.exists?(ctx, path) ->
-        :ok
+    if Arca.exists?(ctx, path) do
+      # The name exists in the union — a seed-catalog outage must refuse
+      # loudly here, not fall through to the generic "already exists" and
+      # send someone deleting what a release ships.
+      case Compendium.Provenance.shipped_versions(type, name) do
+        {:ok, shipped} ->
+          if version in shipped do
+            {:error,
+             "#{local_ref(type, name, version)} is bundled with the server — edit it in place " <>
+               "(your athanor gets its own copy on first write), or scaffold a new version or name"}
+          else
+            {:error, "Component already exists: #{local_ref(type, name, version)}"}
+          end
 
-      version in Compendium.Provenance.shipped_versions(type, name) ->
-        {:error,
-         "#{local_ref(type, name, version)} is bundled with the server — edit it in place " <>
-           "(your athanor gets its own copy on first write), or scaffold a new version or name"}
-
-      true ->
-        {:error, "Component already exists: #{local_ref(type, name, version)}"}
+        {:error, reason} ->
+          {:error, "Cannot scaffold right now — seed media unreadable: #{inspect(reason)}"}
+      end
+    else
+      :ok
     end
   end
 

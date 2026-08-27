@@ -371,43 +371,48 @@ defmodule Compendium.Registry do
 
   Removes SQLite rows with `source: "filesystem"` that are not in the given
   set of currently-discovered `{name, version, publisher}` tuples.
+
+  Returns `{:ok, pruned_count}` — or `{:error, term}` when the existing
+  rows cannot be listed (the row-plane convention; a store that cannot
+  answer must not read as "nothing is stale").
   """
+  @spec prune_stale_entries(Context.t(), [{String.t(), String.t(), String.t()}]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
-    # Get all filesystem-registered components
-    {:ok, existing} =
-      Arca.ComponentStorage.list_components(ctx,
-        source: Compendium.Source.filesystem(),
-        limit: :none
-      )
+    with {:ok, existing} <-
+           Arca.ComponentStorage.list_components(ctx,
+             source: Compendium.Source.filesystem(),
+             limit: :none
+           ) do
+      discovered_set = MapSet.new(discovered_components)
 
-    discovered_set = MapSet.new(discovered_components)
+      stale =
+        Enum.filter(existing, fn comp ->
+          publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
+          not MapSet.member?(discovered_set, {comp.name, comp.version, publisher})
+        end)
 
-    stale =
-      Enum.filter(existing, fn comp ->
+      for comp <- stale do
         publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-        not MapSet.member?(discovered_set, {comp.name, comp.version, publisher})
+        # DB-only cleanup: remove the registry entry.
+        # Do NOT delete filesystem files — prune is an automatic process that runs
+        # during scan/register. If a component temporarily fails to be discovered
+        # (mid-edit, transient error), we must not destroy user source files.
+        # File deletion only happens via explicit `component.delete` (Registry.delete).
+        Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
+      end
+
+      # After all deletions, clean up name-level entries for components with no remaining versions
+      stale
+      |> Enum.uniq_by(fn comp ->
+        {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))}
       end)
+      |> Enum.each(fn comp -> Compendium.Cascade.name_removed(ctx, comp) end)
 
-    for comp <- stale do
-      publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-      # DB-only cleanup: remove the registry entry.
-      # Do NOT delete filesystem files — prune is an automatic process that runs
-      # during scan/register. If a component temporarily fails to be discovered
-      # (mid-edit, transient error), we must not destroy user source files.
-      # File deletion only happens via explicit `component.delete` (Registry.delete).
-      Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
+      if stale != [], do: invalidate_executor_caches(ctx)
+
+      {:ok, length(stale)}
     end
-
-    # After all deletions, clean up name-level entries for components with no remaining versions
-    stale
-    |> Enum.uniq_by(fn comp ->
-      {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))}
-    end)
-    |> Enum.each(fn comp -> Compendium.Cascade.name_removed(ctx, comp) end)
-
-    if stale != [], do: invalidate_executor_caches(ctx)
-
-    length(stale)
   end
 
   @doc """
@@ -616,7 +621,18 @@ defmodule Compendium.Registry do
       {:ok, component} ->
         with {:ok, disposition} <- delete_disposition(ctx, component),
              :ok <- cleanup_component_associations(ctx, component) do
-          Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
+          # Delete exactly the row that was dispositioned and whose bytes
+          # were just removed — the same name:version can exist as another
+          # component_type, and a nil-typed delete would take that row too
+          # while its bytes survive.
+          Arca.ComponentStorage.delete_component(
+            ctx,
+            name,
+            version,
+            ComponentPath.normalize_publisher(Map.get(component, :publisher)),
+            Map.get(component, :component_type)
+          )
+
           Compendium.Cascade.name_removed(ctx, component)
           invalidate_executor_caches(ctx)
 

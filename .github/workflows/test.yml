@@ -243,7 +243,7 @@ jobs:
           fetch-depth: 0
       # Install media must be clean: build droppings under seed/ would be
       # excluded from every copy-on-write materialization but still counted
-      # by its cap pre-check (Arca.Overlay.check_cap/2) — a spurious refusal.
+      # by its cap pre-check (Arca.Overlay.check_commit_cap/2) — a spurious refusal.
       - name: Seed ships no build droppings
         run: |
           set -uo pipefail

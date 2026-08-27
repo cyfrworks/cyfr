@@ -42,7 +42,7 @@ defmodule Compendium.AutoIndexer do
 
   ## Returns
 
-  A summary map with counts and per-component details:
+  `{:ok, summary}` — a map with counts and per-component details:
   - `:components` - List of per-component results (name, version, type, status)
   - `:registered` - Number of newly registered components
   - `:unchanged` - Number of components skipped (digest unchanged)
@@ -50,13 +50,30 @@ defmodule Compendium.AutoIndexer do
   - `:errors` - Number of registration failures
   - `:total` - Total components discovered
   - `:elapsed_ms` - Time taken in milliseconds
+
+  Or `{:error, {:discovery_failed, reason}}` when the components tree
+  cannot be listed at all. A discovery outage registers nothing and —
+  critically — prunes nothing: an unreadable tree is not an empty one,
+  and treating it as empty would delete every filesystem-sourced row.
   """
   def scan(opts) do
     start_time = System.monotonic_time(:millisecond)
     ctx = Keyword.fetch!(opts, :ctx)
 
-    version_segment_lists = discover(ctx)
+    case discover(ctx) do
+      {:ok, version_segment_lists} ->
+        {:ok, do_scan(ctx, version_segment_lists, start_time)}
 
+      {:error, reason} ->
+        Logger.warning(
+          "[AutoIndexer] Discovery failed; nothing registered or pruned: #{inspect(reason)}"
+        )
+
+        {:error, {:discovery_failed, reason}}
+    end
+  end
+
+  defp do_scan(ctx, version_segment_lists, start_time) do
     {results, discovered} =
       Enum.reduce(
         version_segment_lists,
@@ -139,8 +156,18 @@ defmodule Compendium.AutoIndexer do
         end
       )
 
-    # Prune stale filesystem entries
-    pruned = Registry.prune_stale_entries(ctx, discovered)
+    # Prune stale filesystem entries. A prune fault never fails the scan —
+    # the registrations above already landed — but it is reported, never
+    # read as "nothing was stale".
+    {pruned, prune_error} =
+      case Registry.prune_stale_entries(ctx, discovered) do
+        {:ok, pruned} ->
+          {pruned, nil}
+
+        {:error, reason} ->
+          Logger.warning("[AutoIndexer] Prune failed: #{inspect(reason)}")
+          {0, reason}
+      end
 
     elapsed = System.monotonic_time(:millisecond) - start_time
     total = results.registered + results.unchanged
@@ -172,7 +199,7 @@ defmodule Compendium.AutoIndexer do
       Prism.TinctureRegistry.reload()
     end
 
-    %{
+    summary = %{
       components: Enum.reverse(results.components),
       registered: results.registered,
       unchanged: results.unchanged,
@@ -182,6 +209,8 @@ defmodule Compendium.AutoIndexer do
       elapsed_ms: elapsed,
       scanned_dirs: [%{path: "components/", via: "Arca.list_recursive"}]
     }
+
+    if prune_error, do: Map.put(summary, :prune_error, inspect(prune_error)), else: summary
   end
 
   # ============================================================================
@@ -205,23 +234,23 @@ defmodule Compendium.AutoIndexer do
   UNION (`Arca.Overlay`): bundled version directories the athanor has not
   materialized are discovered — and stay discovered — so their rows
   survive every prune without a byte copied.
+
+  A listing outage answers `{:error, term}`, never an empty roster — an
+  unreadable tree read as empty would prune every filesystem row and show
+  a build picker with nothing in it.
   """
-  @spec discover(Sanctum.Context.t()) :: [[String.t()]]
+  @spec discover(Sanctum.Context.t()) :: {:ok, [[String.t()]]} | {:error, term()}
   def discover(ctx) do
     root = Compendium.ComponentPath.base_prefix()
 
-    case Arca.list_recursive(ctx, root) do
-      {:ok, leaves} ->
-        leaves
-        |> Compendium.ComponentPath.manifest_leaves()
-        # Drop the manifest filename to get the version directory.
-        |> Enum.map(&Enum.drop(&1, -1))
-        |> Enum.uniq()
-        |> Enum.filter(&allowed_segments?/1)
-
-      {:error, reason} ->
-        Logger.warning("[AutoIndexer] Cannot list #{Enum.join(root, "/")}: #{inspect(reason)}")
-        []
+    with {:ok, leaves} <- Arca.list_recursive(ctx, root) do
+      {:ok,
+       leaves
+       |> Compendium.ComponentPath.manifest_leaves()
+       # Drop the manifest filename to get the version directory.
+       |> Enum.map(&Enum.drop(&1, -1))
+       |> Enum.uniq()
+       |> Enum.filter(&allowed_segments?/1)}
     end
   end
 

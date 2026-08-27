@@ -268,8 +268,10 @@ defmodule Sanctum.Provisioning do
     with :ok <- bundle_present(ctx) do
       # A component that fails registration is logged by the scan and
       # skipped; the consent bootstrap's `all_minted` is the gate that
-      # decides whether what registered is enough to provision.
-      {:ok, AutoIndexer.scan(ctx: ctx)}
+      # decides whether what registered is enough to provision. A
+      # discovery outage is the scan's own typed error and fails the
+      # provisioning step loudly.
+      AutoIndexer.scan(ctx: ctx)
     end
   end
 
@@ -322,14 +324,17 @@ defmodule Sanctum.Provisioning do
       ctx = seed_ctx(athanor.id)
 
       case AutoIndexer.scan(ctx: ctx) do
-        %{registered: registered} when registered > 0 ->
+        {:ok, %{registered: registered}} when registered > 0 ->
           Logger.info("[Provisioning] #{athanor.id}: registered #{registered} bundle version(s)")
 
-        %{errors: errors} when errors > 0 ->
+        {:ok, %{errors: errors}} when errors > 0 ->
           Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
 
-        _scan ->
+        {:ok, _scan} ->
           :ok
+
+        {:error, reason} ->
+          Logger.warning("[Provisioning] #{athanor.id}: bundle sync skipped — #{inspect(reason)}")
       end
 
       # Deps and consents retry every boot, not only when the scan minted

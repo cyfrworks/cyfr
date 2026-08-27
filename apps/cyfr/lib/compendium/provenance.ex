@@ -186,14 +186,8 @@ defmodule Compendium.Provenance do
            ]}
           | {:error, term()}
   def annotate(%Context{} = ctx, rows) when is_list(rows) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components") do
-      catalog =
-        rows
-        |> Enum.reject(&remote_row?/1)
-        |> Enum.map(&{type_of(&1), &1.name})
-        |> Enum.uniq()
-        |> Map.new(fn {type, name} -> {{type, name}, shipped_versions(type, name)} end)
-
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
+         {:ok, catalog} <- shipped_catalog(rows) do
       annotated =
         Enum.map(rows, fn row ->
           base =
@@ -281,6 +275,22 @@ defmodule Compendium.Provenance do
     end
   end
 
+  # The release catalog for every distinct non-remote {type, name} in the
+  # rows — one seed listing each, and the first listing fault fails the
+  # whole annotate (a partially-lying catalog is worse than no answer).
+  defp shipped_catalog(rows) do
+    rows
+    |> Enum.reject(&remote_row?/1)
+    |> Enum.map(&{type_of(&1), &1.name})
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, %{}}, fn {type, name}, {:ok, acc} ->
+      case shipped_versions(type, name) do
+        {:ok, versions} -> {:cont, {:ok, Map.put(acc, {type, name}, versions)}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
   defp remote_row?(row), do: Compendium.Source.remote?(Map.get(row, :source))
 
   defp type_of(row), do: to_string(Map.get(row, :component_type, ""))
@@ -301,19 +311,20 @@ defmodule Compendium.Provenance do
   The versions this install's seed bundle ships for a local name — the
   release catalog, read straight from the seed tree, newest first
   (semver-descending; unparsable directory names sort last, by string).
+
+  A seed tree that cannot be listed answers `{:error, term}`, never an
+  empty catalog — "ships nothing" during an outage would read as
+  `superseded: false` on every row and misroute scaffold's shipped-name
+  refusal.
   """
-  @spec shipped_versions(String.t(), String.t()) :: [String.t()]
+  @spec shipped_versions(String.t(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def shipped_versions(type, name) when is_binary(type) and is_binary(name) do
     prefix =
       Arca.Storage.seed_prefix("components") ++
         [ComponentPath.type_plural(type), ComponentPath.default_publisher(), name]
 
-    case Arca.list_typed(Sanctum.system_context(), prefix) do
-      {:ok, entries} ->
-        sort_versions_desc(for {version, :dir} <- entries, do: version)
-
-      {:error, _} ->
-        []
+    with {:ok, entries} <- Arca.list_typed(Sanctum.system_context(), prefix) do
+      {:ok, sort_versions_desc(for {version, :dir} <- entries, do: version)}
     end
   end
 

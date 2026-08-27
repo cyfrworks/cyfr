@@ -11,7 +11,7 @@ defmodule Prism.AttachmentsTest.FailingAdapter do
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
   defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
   defdelegate usage(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(ctx, path, conn, opts), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
   def put(_ctx, _path, "FAIL-THIS-WRITE"), do: {:error, :enospc}
   defdelegate put(ctx, path, content), to: Arca.Adapters.Local
@@ -27,7 +27,7 @@ defmodule Prism.AttachmentsTest.UnverifiableUsageAdapter do
   defdelegate exists?(ctx, path), to: Arca.Adapters.Local
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
   defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate serve_to_conn(ctx, path, conn, opts), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
   def usage(_ctx, _path), do: {:error, {:usage_walk, "unreachable", :eacces}}
 end

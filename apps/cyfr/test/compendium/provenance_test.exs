@@ -111,8 +111,8 @@ defmodule Compendium.ProvenanceTest do
   end
 
   test "shipped_versions/2 reads the release catalog from the seed", %{ctx: _ctx} do
-    assert Provenance.shipped_versions("reagent", "bundled-tool") == ["1.0.0"]
-    assert Provenance.shipped_versions("reagent", "nope") == []
+    assert Provenance.shipped_versions("reagent", "bundled-tool") == {:ok, ["1.0.0"]}
+    assert Provenance.shipped_versions("reagent", "nope") == {:ok, []}
   end
 
   test "overview/1 answers the whole athanor with catalog and superseded flags", %{ctx: ctx} do
@@ -177,7 +177,7 @@ defmodule Compendium.ProvenanceTest do
     assert Arca.exists?(ctx, @bundled_dir ++ ["reagent.wasm"])
 
     # And the next scan registers nothing new: there is nothing to resurrect.
-    assert %{registered: 0} = Compendium.AutoIndexer.scan(ctx: ctx)
+    assert {:ok, %{registered: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     assert Provenance.of(ctx, bundled) == {:ok, :bundled}
   end
 

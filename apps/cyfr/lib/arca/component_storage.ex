@@ -29,8 +29,15 @@ defmodule Arca.ComponentStorage do
   """
   def get_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
       when is_binary(name) and is_binary(version) do
+    # `limit: 1` over a filter that may match two rows (the same
+    # name:version can exist as two component_types) — the order_by keeps
+    # the pick deterministic on every adapter.
     query =
-      from(c in Component, where: c.name == ^name and c.version == ^version, limit: 1)
+      from(c in Component,
+        where: c.name == ^name and c.version == ^version,
+        order_by: [desc: c.inserted_at, asc: c.id],
+        limit: 1
+      )
       |> where_tenant(ctx)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query

@@ -442,104 +442,14 @@ defmodule Compendium.MCP.ComponentTool do
       "Scanning component directories..."
     )
 
-    result = Compendium.AutoIndexer.scan(ctx: ctx)
+    case Compendium.AutoIndexer.scan(ctx: ctx) do
+      {:ok, result} ->
+        finish_register(ctx, register_id, result)
 
-    # Broadcast per-component status
-    Enum.each(result.components, fn comp ->
-      status = comp[:status] || comp["status"]
-      name = comp[:name] || comp["name"]
-      version = comp[:version] || comp["version"]
-
-      case status do
-        "registered" ->
-          broadcast_register_progress(
-            ctx,
-            register_id,
-            :registered,
-            "Registered #{name}:#{version}"
-          )
-
-        "unchanged" ->
-          broadcast_register_progress(
-            ctx,
-            register_id,
-            :unchanged,
-            "Unchanged #{name}:#{version}"
-          )
-
-        _ ->
-          :ok
-      end
-    end)
-
-    if result.pruned > 0 do
-      broadcast_register_progress(
-        ctx,
-        register_id,
-        :pruning,
-        "Pruned #{result.pruned} stale component(s)"
-      )
+      {:error, {:discovery_failed, reason}} ->
+        broadcast_register_progress(ctx, register_id, :error, "Component scan failed")
+        {:error, "Component scan failed — storage unreachable: #{inspect(reason)}"}
     end
-
-    broadcast_register_progress(
-      ctx,
-      register_id,
-      :checking_deps,
-      "Checking dependencies..."
-    )
-
-    dep_info = check_register_deps(ctx, result.components, register_id)
-
-    broadcast_register_progress(
-      ctx,
-      register_id,
-      :complete,
-      "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
-    )
-
-    broadcast_components_changed(ctx)
-
-    # A freshly registered local component gets its baseline consent at
-    # once — provisioning mints for the seed bundle, this mints for what a
-    # person registers later — so it is invocable without a manual step.
-    minted = bootstrap_registered(ctx, result.components)
-
-    dep_fields =
-      case dep_info do
-        {:error, {:dependency_check_failed, reason}} ->
-          %{
-            pulled_dependencies: [],
-            failed_pulls: [],
-            missing_local_deps: [],
-            optional_missing: [],
-            dependency_check_error: reason
-          }
-
-        %{} = info ->
-          Map.take(info, [
-            :pulled_dependencies,
-            :failed_pulls,
-            :missing_local_deps,
-            :optional_missing
-          ])
-      end
-
-    {:ok,
-     Map.merge(
-       %{
-         status: "scanned",
-         components: result.components,
-         registered: result.registered,
-         unchanged: result.unchanged,
-         pruned: result.pruned,
-         errors: result.errors,
-         total: result.total,
-         elapsed_ms: result.elapsed_ms,
-         scanned_dirs: result.scanned_dirs,
-         bootstrapped: minted
-       },
-       dep_fields
-     )}
   end
 
   # List action - list all installed components (local-only, no remote search)
@@ -664,22 +574,14 @@ defmodule Compendium.MCP.ComponentTool do
            Sanctum.ComponentRef.parse(reference),
          {:ok, component} <-
            Arca.ComponentStorage.get_component(ctx, cref.name, cref.version, cref.namespace, nil),
-         {:ok, overlay} <- Compendium.Provenance.status(ctx, component) do
+         {:ok, overlay} <- Compendium.Provenance.status(ctx, component),
+         {:ok, shipped} <- status_shipped_versions(overlay, component, cref) do
       drift =
         case overlay.drift do
           :pristine -> %{drift: "pristine"}
           {:modified, diff} -> %{drift: "modified", diff: format_diff(diff)}
           nil -> %{}
         end
-
-      shipped =
-        if overlay.provenance == :remote,
-          do: [],
-          else:
-            Compendium.Provenance.shipped_versions(
-              to_string(Map.get(component, :component_type, "")),
-              cref.name
-            )
 
       lineage =
         case Compendium.Provenance.upstream_status(ctx, component) do
@@ -927,6 +829,116 @@ defmodule Compendium.MCP.ComponentTool do
   # Missing action
   def handle(_ctx, _args) do
     {:error, "Missing required argument: action"}
+  end
+
+  defp finish_register(ctx, register_id, result) do
+    # Broadcast per-component status
+    Enum.each(result.components, fn comp ->
+      status = comp[:status] || comp["status"]
+      name = comp[:name] || comp["name"]
+      version = comp[:version] || comp["version"]
+
+      case status do
+        "registered" ->
+          broadcast_register_progress(
+            ctx,
+            register_id,
+            :registered,
+            "Registered #{name}:#{version}"
+          )
+
+        "unchanged" ->
+          broadcast_register_progress(
+            ctx,
+            register_id,
+            :unchanged,
+            "Unchanged #{name}:#{version}"
+          )
+
+        _ ->
+          :ok
+      end
+    end)
+
+    if result.pruned > 0 do
+      broadcast_register_progress(
+        ctx,
+        register_id,
+        :pruning,
+        "Pruned #{result.pruned} stale component(s)"
+      )
+    end
+
+    broadcast_register_progress(
+      ctx,
+      register_id,
+      :checking_deps,
+      "Checking dependencies..."
+    )
+
+    dep_info = check_register_deps(ctx, result.components, register_id)
+
+    broadcast_register_progress(
+      ctx,
+      register_id,
+      :complete,
+      "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
+    )
+
+    broadcast_components_changed(ctx)
+
+    # A freshly registered local component gets its baseline consent at
+    # once — provisioning mints for the seed bundle, this mints for what a
+    # person registers later — so it is invocable without a manual step.
+    minted = bootstrap_registered(ctx, result.components)
+
+    dep_fields =
+      case dep_info do
+        {:error, {:dependency_check_failed, reason}} ->
+          %{
+            pulled_dependencies: [],
+            failed_pulls: [],
+            missing_local_deps: [],
+            optional_missing: [],
+            dependency_check_error: reason
+          }
+
+        %{} = info ->
+          Map.take(info, [
+            :pulled_dependencies,
+            :failed_pulls,
+            :missing_local_deps,
+            :optional_missing
+          ])
+      end
+
+    {:ok,
+     Map.merge(
+       %{
+         status: "scanned",
+         components: result.components,
+         registered: result.registered,
+         unchanged: result.unchanged,
+         pruned: result.pruned,
+         errors: result.errors,
+         total: result.total,
+         elapsed_ms: result.elapsed_ms,
+         scanned_dirs: result.scanned_dirs,
+         bootstrapped: minted
+       },
+       dep_fields
+     )}
+  end
+
+  # A remote row has no seed counterpart to catalog; everything else asks
+  # the seed tree, and a listing fault propagates into the status error.
+  defp status_shipped_versions(%{provenance: :remote}, _component, _cref), do: {:ok, []}
+
+  defp status_shipped_versions(_overlay, component, cref) do
+    Compendium.Provenance.shipped_versions(
+      to_string(Map.get(component, :component_type, "")),
+      cref.name
+    )
   end
 
   # ============================================================================

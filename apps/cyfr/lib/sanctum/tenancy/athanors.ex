@@ -320,7 +320,13 @@ defmodule Sanctum.Tenancy.Athanors do
     with {:ok, current} <- get(athanor.id) do
       if current.status == "archived" do
         ctx = Sanctum.internal_context(athanor_id: current.id, scope: :athanor)
-        Arca.delete_tree(ctx, [])
+
+        with :ok <- Arca.delete_tree(ctx, []) do
+          # The write gate invalidates the whole-tree counter, but the
+          # empty path names no scope, so the per-scope pairs would
+          # otherwise survive until their TTL — drop them all.
+          Arca.Usage.invalidate(current.id)
+        end
       else
         {:error, :not_archived}
       end

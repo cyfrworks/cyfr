@@ -493,6 +493,40 @@ defmodule Compendium.RegistryTest do
     test "returns error for non-existent component", %{ctx: ctx} do
       assert {:error, :not_found} = Registry.delete(ctx, "nonexistent", "1.0.0")
     end
+
+    test "deleting one type leaves the same name:version of another type whole", %{ctx: ctx} do
+      # The upsert conflict target includes component_type, so the same
+      # name:version legitimately exists twice — the delete must take
+      # exactly the row it dispositioned, bytes and all.
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "dual-type",
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "dual-type",
+          version: "1.0.0",
+          type: "catalyst"
+        })
+
+      assert {:ok, :deleted} = Registry.delete(ctx, "dual-type", "1.0.0")
+
+      {:ok, rows} = Arca.ComponentStorage.list_components(ctx, name: "dual-type", limit: :none)
+      assert [row] = rows
+
+      path =
+        Compendium.ComponentPath.artifact_path(
+          row.component_type,
+          "local",
+          "dual-type",
+          "1.0.0"
+        )
+
+      assert Arca.exists?(ctx, path)
+    end
   end
 
   describe "publish_bytes/3 source field" do
@@ -672,7 +706,7 @@ defmodule Compendium.RegistryTest do
         |> Enum.map(&{&1.name, &1.version, Map.get(&1, :publisher, "local")})
 
       # Prune with only other entries in discovered set — should remove stale-tool
-      pruned = Registry.prune_stale_entries(ctx, other_entries)
+      {:ok, pruned} = Registry.prune_stale_entries(ctx, other_entries)
       assert pruned >= 1
 
       # Verify stale-tool is gone
@@ -698,7 +732,7 @@ defmodule Compendium.RegistryTest do
       all_discovered = Enum.map(all_fs, &{&1.name, &1.version, Map.get(&1, :publisher, "local")})
 
       # Prune with all entries in discovered set — should not remove anything
-      pruned = Registry.prune_stale_entries(ctx, all_discovered)
+      {:ok, pruned} = Registry.prune_stale_entries(ctx, all_discovered)
       assert pruned == 0
 
       {:ok, result} = Registry.search(ctx, %{query: "keep-tool"})
@@ -738,7 +772,7 @@ defmodule Compendium.RegistryTest do
         |> Enum.reject(&(&1.name == "tree-test"))
         |> Enum.map(&{&1.name, &1.version, Map.get(&1, :publisher, "local")})
 
-      pruned = Registry.prune_stale_entries(ctx, other_entries)
+      {:ok, pruned} = Registry.prune_stale_entries(ctx, other_entries)
       assert pruned >= 1
 
       # prune_stale_entries is DB-only cleanup — filesystem files are preserved
