@@ -84,4 +84,60 @@ defmodule Cyfr.IngressInventoryTest do
       #{stale |> MapSet.to_list() |> Enum.sort() |> Enum.join("\n  ")}
     """
   end
+
+  # Which ingresses go through `Cyfr.Execution` rather than naming the
+  # engine. The port exists so cyfr has no compile-time path into Opus —
+  # but two ingresses that ship INSIDE opus called `Opus.run_root/5`
+  # directly, so a stubbed `:execution_impl` intercepted neither, and
+  # neither passed the readiness gate. Being in the same app is not a
+  # reason to skip the door; it is only a reason it was easy to.
+  @ingress_files ~w(
+    apps/opus/lib/opus/mcp.ex
+    apps/opus/lib/opus/cron_scheduler.ex
+    apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
+    apps/cyfr/lib/emissary/tincture/invoke.ex
+  )
+
+  # The engine's own internals and its facade — where execution IS defined,
+  # and the module the port dispatches to.
+  @engine_internals ~w(
+    apps/opus/lib/opus.ex
+    apps/opus/lib/opus/chain.ex
+    apps/opus/lib/opus/executor.ex
+    apps/opus/lib/opus/formula_handler.ex
+  )
+
+  test "every ingress starts its root through the port" do
+    root = Path.expand("../../../..", __DIR__)
+
+    direct =
+      Enum.filter(@ingress_files, fn file ->
+        root
+        |> Path.join(file)
+        |> File.read!()
+        |> String.split("\n")
+        |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
+        |> Enum.any?(&String.match?(&1, ~r/\bOpus\.(run_root|run_root_edge|run_child)\(/))
+      end)
+
+    assert direct == [],
+           """
+           These ingresses name the engine directly instead of Cyfr.Execution:
+
+             #{Enum.join(direct, "\n  ")}
+
+           A stubbed :execution_impl does not intercept those calls, and they
+           skip Cyfr.Execution.available?/0 — so a headless build answers them
+           by crashing rather than by refusing.
+           """
+  end
+
+  test "the ingress roster and the engine internals do not overlap" do
+    assert MapSet.disjoint?(MapSet.new(@ingress_files), MapSet.new(@engine_internals))
+
+    for file <- @ingress_files ++ @engine_internals do
+      assert Map.has_key?(@allowed, file),
+             "#{file} is named here but missing from @allowed — the two rosters must agree"
+    end
+  end
 end

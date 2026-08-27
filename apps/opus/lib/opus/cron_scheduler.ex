@@ -496,8 +496,10 @@ defmodule Opus.CronScheduler do
            # A schedule fires under its bound profile's consent —
            # the binding is enforced at create/update and by the
            # NOT NULL column.
+           # Through the port for the same reason the MCP ingress is: one
+           # door into "start a root", whoever is knocking.
            run_result =
-             Opus.run_root(ctx, schedule.profile_id, exec_reference, input,
+             Cyfr.Execution.run_root(ctx, schedule.profile_id, exec_reference, input,
                execution_id: execution_id,
                class: :background
              )

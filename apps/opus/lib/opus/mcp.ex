@@ -591,7 +591,11 @@ defmodule Opus.MCP do
   defp run_root_formatted(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
-    case Opus.run_root(ctx, selector, reference, input, opts) do
+    # Through the port, not straight into the engine beside it. Every
+    # ingress starts a root the same way — a stub `:execution_impl`
+    # intercepts this one too, and the readiness gate applies — even
+    # though this module ships inside the engine it is calling.
+    case Cyfr.Execution.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when is_nil(selector) ->
         {:error,
          "consent_required: " <>
