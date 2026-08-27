@@ -139,7 +139,7 @@ defmodule Compendium.Pull do
   defp pull(ctx, ref) do
     with {:ok, oci_ref} <- oci_reference_for(ref),
          {:ok, %{component_ref: pulled_ref}} <- Client.pull(ctx, oci_ref),
-         {:ok, component, _} <- Compendium.MCP.Shared.resolve_component(ctx, pulled_ref) do
+         {:ok, component, _} <- Compendium.Component.resolve_component(ctx, pulled_ref) do
       {:ok, component}
     end
   end
@@ -149,18 +149,21 @@ defmodule Compendium.Pull do
 
   defp to_oci_ref(%Sanctum.ComponentRef{version: nil} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
-    {:ok, oci_ref} = Reference.from_component_ref(cref, registry)
 
-    case resolve_latest_oci_tag(oci_ref) do
-      {:ok, tag} -> {:ok, Reference.to_string(%{oci_ref | tag: tag})}
-      {:error, _} -> {:ok, Reference.to_string(oci_ref)}
+    with {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
+      case resolve_latest_oci_tag(oci_ref) do
+        {:ok, tag} -> {:ok, Reference.to_string(%{oci_ref | tag: tag})}
+        {:error, _} -> {:ok, Reference.to_string(oci_ref)}
+      end
     end
   end
 
   defp to_oci_ref(%Sanctum.ComponentRef{} = cref) do
     registry = Compendium.RegistryHost.canonical_host()
-    {:ok, oci_ref} = Reference.from_component_ref(cref, registry)
-    {:ok, Reference.to_string(oci_ref)}
+
+    with {:ok, oci_ref} <- Reference.from_component_ref(cref, registry) do
+      {:ok, Reference.to_string(oci_ref)}
+    end
   end
 
   # Resolve the latest semver tag from an OCI repository (for versionless pulls).

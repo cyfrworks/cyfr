@@ -31,17 +31,9 @@ defmodule Compendium.Component do
     with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
       case resolve_component(ctx, resolved_ref) do
         {:ok, component, ref} ->
-          canonical_ref =
-            Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-              type: ref.type,
-              namespace: ref.namespace,
-              name: ref.name,
-              version: ref.version
-            })
-
           result =
             component
-            |> Map.put("component_ref", canonical_ref)
+            |> Map.put("component_ref", canonical_ref(ref))
             |> Map.put("type", ref.type)
 
           result =
@@ -84,13 +76,7 @@ defmodule Compendium.Component do
     with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
       case resolve_component(ctx, resolved_ref) do
         {:ok, component, ref} ->
-          canonical_ref =
-            Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-              type: ref.type,
-              namespace: ref.namespace,
-              name: ref.name,
-              version: ref.version
-            })
+          canonical_ref = canonical_ref(ref)
 
           manifest = component[:manifest] || component["manifest"] || %{}
           manifest = decode_manifest(manifest)
@@ -131,10 +117,22 @@ defmodule Compendium.Component do
   end
 
   # ============================================================================
-  # Private — Component Resolution
+  # Component Resolution — the one owner
   # ============================================================================
 
-  defp resolve_component(ctx, reference) do
+  @doc """
+  Resolve a component reference string into its registry row and a ref map
+  carrying the actually-resolved version. A versionless reference resolves
+  to the most recent version (`Registry.get_latest/4`, then a re-fetch so
+  the manifest is included). Every error — malformed reference, not found,
+  storage fault — is a human-readable `{:error, binary}`, never a raise.
+
+  The one resolver: the MCP tool modules delegate here
+  (`Compendium.MCP.Shared`), so internal callers and the tool surface can
+  never drift.
+  """
+  @spec resolve_component(Context.t(), term()) :: {:ok, map(), map()} | {:error, String.t()}
+  def resolve_component(%Context{} = ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
         result =
@@ -176,7 +174,15 @@ defmodule Compendium.Component do
     end
   end
 
-  defp parse_reference(reference) when is_binary(reference) do
+  @doc """
+  Parse a canonical component reference (`type:namespace.name:version`)
+  into `{:ok, namespace, name, version, type}` for registry lookup — the
+  namespace doubles as the publisher filter; type and version may be nil.
+  """
+  @spec parse_reference(term()) ::
+          {:ok, String.t(), String.t(), String.t() | nil, String.t() | nil}
+          | {:error, String.t()}
+  def parse_reference(reference) when is_binary(reference) do
     case Sanctum.ComponentRef.parse(reference) do
       {:ok, %Sanctum.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
         {:ok, namespace, name, version, type}
@@ -186,7 +192,16 @@ defmodule Compendium.Component do
     end
   end
 
-  defp parse_reference(_), do: {:error, "Reference must be a string"}
+  def parse_reference(_), do: {:error, "Reference must be a string"}
+
+  defp canonical_ref(ref) do
+    Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+      type: ref.type,
+      namespace: ref.namespace,
+      name: ref.name,
+      version: ref.version
+    })
+  end
 
   # ============================================================================
   # Private — Dependency Enrichment

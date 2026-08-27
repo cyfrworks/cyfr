@@ -6,74 +6,14 @@ defmodule Compendium.MCP.Shared do
   Helpers shared across the Compendium MCP tool modules
   (`Compendium.MCP` facade, `ComponentTool`, `AquaTool`, `RegistryTool`).
 
-  These are moved verbatim from the original `Compendium.MCP` module to
-  preserve behaviour exactly; only their visibility changed from `defp`
-  to `def` so the tool modules can call them.
+  Component resolution delegates to `Compendium.Component` — the one
+  resolver, so the tool surface and internal callers can never drift.
   """
 
   alias Sanctum.Context
-  alias Compendium.Registry
 
-  # Resolves a component reference string into a component map and a ref map
-  # with the actual resolved version. When the parsed version is nil
-  # (e.g., bare name without version), resolves to the most recent published
-  # version via Registry.get_latest/4.
-  def resolve_component(ctx, reference) do
-    case parse_reference(reference) do
-      {:ok, namespace, name, version, type} ->
-        result =
-          if version == nil do
-            # get_latest uses list action which omits manifest; resolve version
-            # then re-fetch with get to include manifest
-            case Registry.get_latest(ctx, name, namespace, type) do
-              {:ok, component} ->
-                resolved_version = component[:version]
-
-                if resolved_version do
-                  Registry.get(ctx, name, resolved_version, namespace, type)
-                else
-                  {:ok, component}
-                end
-
-              error ->
-                error
-            end
-          else
-            Registry.get(ctx, name, version, namespace, type)
-          end
-
-        case result do
-          {:ok, component} ->
-            resolved_version = component[:version] || version
-            resolved_type = type || component[:component_type] || component[:type]
-
-            {:ok, component,
-             %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
-
-          {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # Parse a component reference using the canonical format (type:namespace.name:version).
-  # Returns {:ok, namespace, name, version, type} for database lookup.
-  # The namespace is used as the publisher filter for disambiguation.
-  # The type may be nil when not specified in the ref.
-  def parse_reference(reference) when is_binary(reference) do
-    case Sanctum.ComponentRef.parse(reference) do
-      {:ok, %Sanctum.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
-        {:ok, namespace, name, version, type}
-
-      {:error, reason} ->
-        {:error, "Invalid reference format: #{reference}. #{reason}"}
-    end
-  end
-
-  def parse_reference(_), do: {:error, "Reference must be a string"}
+  defdelegate resolve_component(ctx, reference), to: Compendium.Component
+  defdelegate parse_reference(reference), to: Compendium.Component
 
   # Canonical formatter shared with Compendium.OCI.Client (oci/client.ex:101-103).
   # Errors.to_string/1 produces "Policy acceptance required on cyfr.run
