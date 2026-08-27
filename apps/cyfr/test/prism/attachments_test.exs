@@ -169,7 +169,7 @@ defmodule Prism.AttachmentsTest do
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 10)
     # The usage cache is suite-shared per athanor and now survives writes
     # (bumped, not dropped) — start this cap check from a fresh walk.
-    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
+    Arca.Usage.invalidate(ctx.athanor_id)
     ok = [%{"filename" => "small", "media_type" => "text/plain", "bytes" => "12345"}]
     assert {:ok, _} = Attachments.store(ctx, "c", "m1", ok)
     over = [%{"filename" => "more", "media_type" => "text/plain", "bytes" => "1234567"}]
@@ -182,7 +182,7 @@ defmodule Prism.AttachmentsTest do
     # CLOSED with :storage_unverifiable — the member must see the honest,
     # transient message, not \"storing failed\".
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000)
-    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
+    Arca.Usage.invalidate(ctx.athanor_id)
 
     prev = Application.get_env(:cyfr, :storage_adapter)
     Application.put_env(:cyfr, :storage_adapter, Prism.AttachmentsTest.UnverifiableUsageAdapter)

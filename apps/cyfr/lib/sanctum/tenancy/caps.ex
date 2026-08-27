@@ -67,7 +67,6 @@ defmodule Sanctum.Tenancy.Caps do
   # overwrite — the safe direction), and deletes drop it so reclaimed space
   # is recomputed. The TTL bounds the overwrite drift and backstops bytes
   # that arrive without passing through Arca at all.
-  @athanor_usage_ttl_ms :timer.minutes(5)
 
   @doc """
   `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
@@ -114,34 +113,24 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
+  # The cache discipline is `Arca.Usage`'s; the fail-closed mapping is
+  # this cap's own: a walk that cannot answer must refuse the write —
+  # treating an unreadable tree as empty would let writes march past the
+  # ceiling. The failure is never cached: the next check walks again.
   defp athanor_bytes(%{athanor_id: id} = ctx) when is_binary(id) and id != "" do
-    key = Arca.Cache.Keys.athanor_usage(id)
-
-    case Arca.Cache.get(key) do
-      {:ok, bytes} when is_integer(bytes) ->
+    case Arca.Usage.athanor_bytes(ctx) do
+      {:ok, bytes} ->
         {:ok, bytes}
 
-      _ ->
-        case Arca.usage(ctx, []) do
-          {:ok, %{bytes: bytes}} when is_integer(bytes) ->
-            Arca.Cache.put(key, bytes, @athanor_usage_ttl_ms)
-            {:ok, bytes}
+      {:error, reason} ->
+        require Logger
 
-          other ->
-            # Fail CLOSED: this only runs with a cap configured, and a
-            # walk that cannot answer must refuse the write — treating an
-            # unreadable tree as empty would let writes march past the
-            # ceiling. The failure is never cached: the next check walks
-            # again.
-            require Logger
+        Logger.warning(
+          "[Sanctum.Tenancy.Caps] usage walk failed for #{ctx.athanor_id}: " <>
+            "#{inspect(reason)}; refusing capped writes until it answers"
+        )
 
-            Logger.warning(
-              "[Sanctum.Tenancy.Caps] usage walk failed for #{ctx.athanor_id}: " <>
-                "#{inspect(other)}; refusing capped writes until it answers"
-            )
-
-            {:error, :storage_unverifiable}
-        end
+        {:error, :storage_unverifiable}
     end
   end
 

@@ -503,59 +503,17 @@ defmodule Arca do
       true ->
         # Copy-on-write for the seed-overlaid roots happens inside the
         # `Arca.Overlay` decorator's own put/append/delete callbacks —
-        # this seam only gates, dispatches and accounts.
+        # this seam only gates, dispatches and accounts. Accounting is
+        # universal — every tenant write lands here, so a new writer
+        # cannot forget — while the cap itself is CHECKED only by the
+        # user-ingress writers, by design; `Arca.Usage` owns the cache
+        # discipline, `Sanctum.Tenancy.Caps.check_storage/2` the policy
+        # and its roster.
         result = guarded(ctx, path, fun)
-        account_usage(ctx, path, kind, result)
+        Arca.Usage.account(ctx, path, kind, result)
         result
     end
   end
-
-  # Accounting is universal — every tenant write lands here — but the cap
-  # itself is CHECKED only by the user-ingress writers, by design; see
-  # `Sanctum.Tenancy.Caps.check_storage/2` for the policy and its roster.
-  #
-  # The cached athanor total stays O(1) per write: a successful put/append
-  # BUMPS the cached bytes by what was written (an overwrite over-counts —
-  # the safe direction — until the entry's own TTL walks the tree afresh;
-  # `bump_existing` never extends a TTL). Deletes and failed writes drop
-  # the entry instead, so reclaimed space is recomputed accurately and a
-  # partial write can never be under-counted. Invalidating on every write
-  # — the previous scheme — made each subsequent cap check re-walk the
-  # whole tree: O(total files) per write under sustained writing.
-  defp account_usage(%Context{athanor_id: athanor_id}, path, kind, result)
-       when is_binary(athanor_id) and athanor_id != "" do
-    if Arca.Storage.classify(path) == :tenant do
-      whole = Arca.Cache.Keys.athanor_usage(athanor_id)
-      scope = List.first(path)
-
-      case {kind, result} do
-        {{:create, bytes}, :ok} ->
-          Arca.Cache.bump_existing(whole, bytes)
-
-          # The per-scope pair backs the public quota. The file count bumps
-          # unconditionally — an overwrite over-counts a file the same safe
-          # direction the bytes over-count — and the TTL walks it true again.
-          if scope do
-            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope), bytes)
-            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_files(athanor_id, scope), 1)
-          end
-
-        _delete_or_failed ->
-          Arca.Cache.invalidate(whole)
-
-          # Both scope counters go together: dropping only one would leave a
-          # stale count that never recovers inside its TTL.
-          if scope do
-            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope))
-            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_files(athanor_id, scope))
-          end
-      end
-    end
-
-    :ok
-  end
-
-  defp account_usage(_ctx, _path, _kind, _result), do: :ok
 
   # Seed media is server install media read straight from local disk
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever

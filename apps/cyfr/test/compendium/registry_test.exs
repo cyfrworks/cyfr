@@ -1011,7 +1011,7 @@ defmodule Compendium.RegistryTest do
     test "refuses when the extracted tree would pass the athanor cap", %{ctx: ctx} do
       prev_caps = Application.get_env(:cyfr, :caps)
       Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
-      Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
+      Arca.Usage.invalidate(ctx.athanor_id)
 
       on_exit(fn ->
         if prev_caps,

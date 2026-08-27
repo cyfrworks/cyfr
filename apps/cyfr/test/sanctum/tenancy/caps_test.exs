@@ -179,7 +179,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     end)
 
     ctx = Sanctum.TestContext.local()
-    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
+    Arca.Usage.invalidate(ctx.athanor_id)
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
 
     # A walk that cannot answer must refuse the write — treating the tree

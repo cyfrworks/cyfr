@@ -392,30 +392,12 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  @scope_usage_ttl_ms :timer.minutes(5)
-
-  # Read-through on the per-scope counters `Arca` bumps on every tenant
-  # write and drops on deletes — the same discipline as the athanor byte
-  # cap's cache, so the public path stops paying a recursive walk per write.
-  defp scope_usage(%{athanor_id: athanor_id} = ctx, [physical_scope] = scope_root) do
-    bytes_key = Arca.Cache.Keys.scope_usage_bytes(athanor_id, physical_scope)
-    files_key = Arca.Cache.Keys.scope_usage_files(athanor_id, physical_scope)
-
-    with {:ok, bytes} when is_integer(bytes) <- Arca.Cache.get(bytes_key),
-         {:ok, files} when is_integer(files) <- Arca.Cache.get(files_key) do
-      {:ok, %{files: files, bytes: bytes}}
-    else
-      _ ->
-        case Arca.usage(ctx, scope_root) do
-          {:ok, %{files: files, bytes: bytes} = usage} ->
-            Arca.Cache.put(bytes_key, bytes, @scope_usage_ttl_ms)
-            Arca.Cache.put(files_key, files, @scope_usage_ttl_ms)
-            {:ok, usage}
-
-          other ->
-            other
-        end
-    end
+  # Read-through on the per-scope counters `Arca` keeps current per write
+  # — `Arca.Usage` owns the discipline and the one TTL; the fail-closed
+  # public quota vs fail-open file backstop asymmetry stays at the call
+  # sites above.
+  defp scope_usage(ctx, [physical_scope] = _scope_root) do
+    Arca.Usage.scope_usage(ctx, physical_scope)
   end
 
   defp storage_root(path) do
