@@ -235,25 +235,10 @@ defmodule PrismWeb.LoginLive do
   # with its own OIDC issuer authenticates through `/auth/oidcc`.
   defp available_providers do
     case Cyfr.RuntimeConfig.auth_provider() do
-      Sanctum.Auth.OIDC ->
-        [:oidcc]
-
-      _ ->
-        Enum.filter([:github, :google], &provider_configured?/1)
+      Sanctum.Auth.OIDC -> [:oidcc]
+      _ -> DeviceFlow.configured_providers()
     end
   end
-
-  # App-env only: runtime.exs resolves CYFR_* through Dotenvy's merged .env
-  # sources, which are not exported to the OS environment.
-  defp provider_configured?(:github), do: present?(Application.get_env(:cyfr, :github_client_id))
-
-  defp provider_configured?(:google) do
-    present?(Application.get_env(:cyfr, :google_client_id)) and
-      present?(Application.get_env(:cyfr, :google_client_secret))
-  end
-
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present?(_), do: false
 
   # Map an auth redirect (`/login?error=<code>`) to a user-facing banner.
   defp error_from_params(%{"error" => "no_athanor"}),

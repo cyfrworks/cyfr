@@ -164,7 +164,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
       {:error, :not_found} ->
         with {:ok, slug} <- resolve_slug(nil, "Home") do
-          insert_row(%{
+          %{
             id: generate_id(),
             kind: "group",
             name: "Home",
@@ -173,11 +173,26 @@ defmodule Sanctum.Tenancy.Athanors do
             created_by: "system",
             created_at: DateTime.utc_now(),
             updated_at: DateTime.utc_now()
-          })
+          }
+          |> insert_row()
+          |> or_read_the_winner()
         end
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  # Two callers can find no Home and both go on to mint one. The
+  # `athanors_home_index` partial unique index means exactly one insert
+  # lands; the loser's job is to read the row that did, not to report a
+  # broken install to whoever is booting the server.
+  defp or_read_the_winner({:ok, _} = ok), do: ok
+
+  defp or_read_the_winner({:error, _} = err) do
+    case home() do
+      {:ok, athanor} -> {:ok, athanor}
+      _ -> err
     end
   end
 

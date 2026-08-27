@@ -44,10 +44,16 @@ defmodule Sanctum.Door.Store do
 
   @spec get(String.t()) :: {:ok, Entry.t()} | {:error, :not_found}
   def get(id) when is_binary(id) do
-    case Arca.Repo.get(Entry, id) do
-      nil -> {:error, :not_found}
-      entry -> {:ok, entry}
-    end
+    # Refusing, not defaulting: during a store outage "no such entry" is a
+    # different answer from "we could not look", and the door is where that
+    # difference decides who gets in. Every other read here already said so;
+    # these two were the exceptions.
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.get", fn ->
+      case Arca.Repo.get(Entry, id) do
+        nil -> {:error, :not_found}
+        entry -> {:ok, entry}
+      end
+    end)
   end
 
   @doc """
@@ -90,10 +96,12 @@ defmodule Sanctum.Door.Store do
   @doc "Delete an entry by id."
   @spec remove(String.t()) :: :ok | {:error, :not_found}
   def remove(id) when is_binary(id) do
-    case Arca.Repo.delete_all(from(e in Entry, where: e.id == ^id)) do
-      {0, _} -> {:error, :not_found}
-      _ -> :ok
-    end
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.remove", fn ->
+      case Arca.Repo.delete_all(from(e in Entry, where: e.id == ^id)) do
+        {0, _} -> {:error, :not_found}
+        _ -> :ok
+      end
+    end)
   end
 
   @doc """

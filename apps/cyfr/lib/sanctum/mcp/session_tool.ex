@@ -192,6 +192,9 @@ defmodule Sanctum.MCP.SessionTool do
         {:error, {:device_code_request_failed, reason}} ->
           Logger.error("[Sanctum.MCP] Device flow network error: #{inspect(reason)}")
           {:error, "Device flow request failed: #{inspect(reason)}"}
+
+        {:error, {:unknown_provider, name}} ->
+          {:error, unknown_provider_message(name)}
       end
     else
       {:error, device_flow_disabled_message()}
@@ -232,6 +235,9 @@ defmodule Sanctum.MCP.SessionTool do
           Logger.error("[Sanctum.MCP] Token exchange network error: #{inspect(reason)}")
           {:error, "Token exchange failed: #{inspect(reason)}"}
 
+        {:error, {:unknown_provider, name}} ->
+          {:error, unknown_provider_message(name)}
+
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to poll for token: #{inspect(reason)}")
           {:error, "Failed to poll for token: #{inspect(reason)}"}
@@ -247,6 +253,14 @@ defmodule Sanctum.MCP.SessionTool do
 
   def handle(_ctx, _args) do
     {:error, Emissary.MCP.ToolProvider.invalid_action("session", action_enum())}
+  end
+
+  # `provider` on device_init/device_poll comes straight from the caller. A
+  # name this server does not know is a mistake worth naming, not a crash and
+  # not an inspect of an internal tuple.
+  defp unknown_provider_message(name) do
+    "Unknown sign-in provider #{inspect(to_string(name))}. " <>
+      "This server knows: #{Enum.join(Sanctum.Auth.DeviceFlow.providers(), ", ")}."
   end
 
   # session.whoami helpers: derive display fields from the Context without

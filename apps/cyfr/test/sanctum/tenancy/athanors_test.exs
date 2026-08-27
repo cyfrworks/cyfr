@@ -23,6 +23,29 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     athanor
   end
 
+  describe "ensure_home/0" do
+    test "is idempotent — repeated callers get the one Home" do
+      # Boot sync, a member leaving, and an operator's first request all call
+      # this, and each of them finding no Home is the normal case rather than
+      # the exceptional one. (The genuinely concurrent version of this — two
+      # callers both finding none and both inserting — cannot be driven from
+      # here: the sandbox runs every task over one connection, so the writes
+      # serialize. `athanors_home_index` is what makes exactly one land, and
+      # `ensure_home/0` reads the winner's row rather than returning the
+      # loser's constraint error.)
+      assert {:ok, first} = Athanors.ensure_home()
+      assert first.home == true
+
+      for _ <- 1..5 do
+        assert {:ok, again} = Athanors.ensure_home()
+        assert again.id == first.id
+      end
+
+      assert {:ok, home} = Athanors.home()
+      assert home.id == first.id
+    end
+  end
+
   describe "create/1" do
     test "mints an ath_ id and defaults to active" do
       athanor = group!()

@@ -178,7 +178,12 @@ defmodule Sanctum.MCP.DoorTool do
        %{id: id, removed: true, ejected: ejected}
        |> with_restore_note(restored)}
     else
-      {:error, :not_found} -> {:error, "Entry not found"}
+      {:error, :not_found} ->
+        {:error, "Entry not found"}
+
+      {:error, reason} ->
+        Logger.error("[Sanctum.MCP] door.remove failed: #{inspect(reason)}")
+        {:error, "Failed to remove the entry"}
     end
   end
 

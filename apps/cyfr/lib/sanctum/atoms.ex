@@ -39,8 +39,17 @@ defmodule Sanctum.Atoms do
   @spec known_permissions() :: [String.t()]
   def known_permissions, do: @known_permissions
 
-  # Known provider atoms
-  @known_providers ~w(github google okta azure local oidc)
+  # The sign-in providers, listed only so their atoms exist before anything
+  # converts one. It had drifted to `okta azure local oidc`: three providers
+  # this server has never had, and `oidc` where the generic-OIDC provider is
+  # spelled `:oidcc` everywhere else — so the one name the list needed to
+  # guarantee was the one it did not carry. `Sanctum.ProviderVocabularyTest`
+  # binds it to the device-flow roster.
+  @known_providers ~w(github google oidcc)
+
+  @doc "The sign-in provider vocabulary as strings."
+  @spec providers() :: [String.t()]
+  def providers, do: @known_providers
 
   # The tenancy scopes, in one place: an athanor scope names an athanor, the
   # platform scope names none (the server's operator).

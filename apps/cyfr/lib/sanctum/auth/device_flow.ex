@@ -37,6 +37,11 @@ defmodule Sanctum.Auth.DeviceFlow do
   alias Sanctum.Auth.Identity
   alias Sanctum.{Context, Session}
 
+  # The roster this module knows how to speak to. `@provider_urls` below is
+  # keyed by the same names; a provider in one and not the other is the
+  # drift `providers/0` used to invite by spelling its own list.
+  @known_providers ~w(github google)
+
   # Device-flow endpoints — per-provider URLs and scopes.
   @provider_urls %{
     github: %{
@@ -82,14 +87,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   """
   @spec init_device_flow(provider()) :: {:ok, device_code_response()} | {:error, term()}
   def init_device_flow(provider) do
-    provider = normalize_provider(provider)
-
-    case get_client_id(provider) do
-      nil ->
-        {:error, {:client_id_not_configured, provider}}
-
-      client_id ->
-        request_device_code(provider, client_id)
+    with {:ok, provider, client_id} <- usable(provider) do
+      request_device_code(provider, client_id)
     end
   end
 
@@ -136,43 +135,37 @@ defmodule Sanctum.Auth.DeviceFlow do
   """
   @spec poll_for_session(provider(), String.t()) :: {:ok, map()} | {:error, term()}
   def poll_for_session(provider, device_code) do
-    provider = normalize_provider(provider)
+    with {:ok, provider, client_id} <- usable(provider) do
+      case request_token(provider, client_id, device_code) do
+        {:ok, tokens} ->
+          # Got tokens: user info, the door, what sign-in records, then the
+          # one decision both sign-in paths take.
+          with {:ok, user_info} <- fetch_user_info(provider, tokens),
+               {:ok, user, ctx} <- admit(user_info, provider) do
+            {:ok, complete(user, ctx, user_info, provider, tokens.access_token)}
+          else
+            {:error, :user_not_allowed} ->
+              {:ok, %{status: "denied"}}
 
-    case get_client_id(provider) do
-      nil ->
-        {:error, {:client_id_not_configured, provider}}
+            error ->
+              error
+          end
 
-      client_id ->
-        case request_token(provider, client_id, device_code) do
-          {:ok, tokens} ->
-            # Got tokens: user info, the door, what sign-in records, then the
-            # one decision both sign-in paths take.
-            with {:ok, user_info} <- fetch_user_info(provider, tokens),
-                 {:ok, user, ctx} <- admit(user_info, provider) do
-              {:ok, complete(user, ctx, user_info, provider, tokens.access_token)}
-            else
-              {:error, :user_not_allowed} ->
-                {:ok, %{status: "denied"}}
+        {:error, :authorization_pending} ->
+          {:ok, %{status: "pending"}}
 
-              error ->
-                error
-            end
+        {:error, :slow_down} ->
+          {:ok, %{status: "pending", slow_down: true}}
 
-          {:error, :authorization_pending} ->
-            {:ok, %{status: "pending"}}
+        {:error, :expired_token} ->
+          {:ok, %{status: "expired"}}
 
-          {:error, :slow_down} ->
-            {:ok, %{status: "pending", slow_down: true}}
+        {:error, :access_denied} ->
+          {:ok, %{status: "denied"}}
 
-          {:error, :expired_token} ->
-            {:ok, %{status: "expired"}}
-
-          {:error, :access_denied} ->
-            {:ok, %{status: "denied"}}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -195,42 +188,36 @@ defmodule Sanctum.Auth.DeviceFlow do
   """
   @spec poll_for_access_token(provider(), String.t()) :: {:ok, map()} | {:error, term()}
   def poll_for_access_token(provider, device_code) do
-    provider = normalize_provider(provider)
+    with {:ok, provider, client_id} <- usable(provider) do
+      case request_token(provider, client_id, device_code) do
+        {:ok, tokens} ->
+          with {:ok, user_info} <- fetch_user_info(provider, tokens) do
+            {:ok,
+             %{
+               status: "complete",
+               access_token: tokens.access_token,
+               subject: to_string(user_info.id),
+               provider: provider
+             }}
+          else
+            error -> error
+          end
 
-    case get_client_id(provider) do
-      nil ->
-        {:error, {:client_id_not_configured, provider}}
+        {:error, :authorization_pending} ->
+          {:ok, %{status: "pending"}}
 
-      client_id ->
-        case request_token(provider, client_id, device_code) do
-          {:ok, tokens} ->
-            with {:ok, user_info} <- fetch_user_info(provider, tokens) do
-              {:ok,
-               %{
-                 status: "complete",
-                 access_token: tokens.access_token,
-                 subject: to_string(user_info.id),
-                 provider: provider
-               }}
-            else
-              error -> error
-            end
+        {:error, :slow_down} ->
+          {:ok, %{status: "pending", slow_down: true}}
 
-          {:error, :authorization_pending} ->
-            {:ok, %{status: "pending"}}
+        {:error, :expired_token} ->
+          {:ok, %{status: "expired"}}
 
-          {:error, :slow_down} ->
-            {:ok, %{status: "pending", slow_down: true}}
+        {:error, :access_denied} ->
+          {:ok, %{status: "denied"}}
 
-          {:error, :expired_token} ->
-            {:ok, %{status: "expired"}}
-
-          {:error, :access_denied} ->
-            {:ok, %{status: "denied"}}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -605,16 +592,63 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp get_client_secret(:google), do: Application.get_env(:cyfr, :google_client_secret)
 
   @doc """
-  The device-flow providers this server can sign a person in with — the
-  one roster; the web surfaces validate against it instead of each
-  carrying its own ["github", "google"] literal.
+  The device-flow providers this module knows how to speak to — the one
+  roster; the web surfaces validate against it instead of each carrying
+  its own ["github", "google"] literal.
+
+  Knowing a provider is not the same as being able to use it. For the
+  subset the operator has actually supplied credentials for, which is what
+  a sign-in page should offer, see `configured_providers/0`.
   """
   @spec providers() :: [String.t()]
-  def providers, do: ~w(github google)
+  def providers, do: @known_providers
 
   @doc "Whether `value` names a known device-flow provider."
   @spec provider?(term()) :: boolean()
-  def provider?(value), do: value in providers()
+  def provider?(value) when is_binary(value), do: value in @known_providers
+  def provider?(value) when is_atom(value), do: Atom.to_string(value) in @known_providers
+  def provider?(_), do: false
+
+  @doc """
+  The providers this server can actually start a flow with, as atoms.
+
+  The sign-in page had its own copy of this test, and the two had already
+  come apart: this module treats Google as usable on a client id alone
+  while the page also required the secret — which Google's token endpoint
+  requires, so the page was right and a flow started from anywhere else
+  would have failed at the token exchange.
+  """
+  @spec configured_providers() :: [atom()]
+  def configured_providers, do: Enum.filter([:github, :google], &configured?/1)
+
+  # GitHub issues device-flow apps without a secret by design; Google's token
+  # endpoint requires one, so a Google client id on its own is not a usable
+  # provider.
+  defp configured?(:github), do: present?(get_client_id(:github))
+
+  defp configured?(:google),
+    do: present?(get_client_id(:google)) and present?(get_client_secret(:google))
+
+  defp configured?(_), do: false
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_), do: false
+
+  # The one gate every flow verb passes: a known provider, with credentials
+  # this server can actually present. It was written out three times as a
+  # bare `get_client_id` nil-check, which had no clause for a name this
+  # module does not know — and `session_tool`'s `device_init` takes its
+  # `provider` argument straight from the caller, so an unknown one was a
+  # FunctionClauseError out of an MCP tool rather than a refusal.
+  defp usable(provider) do
+    provider = normalize_provider(provider)
+
+    cond do
+      not provider?(provider) -> {:error, {:unknown_provider, provider}}
+      not configured?(provider) -> {:error, {:client_id_not_configured, provider}}
+      true -> {:ok, provider, get_client_id(provider)}
+    end
+  end
 
   defp normalize_provider("github"), do: :github
   defp normalize_provider(:github), do: :github
