@@ -169,24 +169,25 @@ defmodule Compendium.Registry do
          :ok <- validate_manifest_capability_blocks(manifest_map),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
-             # Runs after validation, before any Arca write — same ordering
-             # guarantee as the WASM path, where the check precedes
-             # store_wasm. The storage cap sees the measured decompressed
-             # total, not the archive size: the extracted tree is what
-             # actually lands in the athanor.
+             # The unit commit itself checks the storage cap against the
+             # measured decompressed total (the extracted tree is what
+             # actually lands); this hook keeps only release immutability,
+             # still after validation and before any Arca write.
              before_store: fn validation ->
-               with :ok <- Sanctum.Tenancy.Caps.check_storage(ctx, validation.size) do
-                 check_release_immutable(
-                   ctx,
-                   name,
-                   version,
-                   validation.digest,
-                   manifest_bytes,
-                   publisher,
-                   "tincture"
-                 )
-               end
-             end
+               check_release_immutable(
+                 ctx,
+                 name,
+                 version,
+                 validation.digest,
+                 manifest_bytes,
+                 publisher,
+                 "tincture"
+               )
+             end,
+             # The metadata manifest — the pull path's authoritative config
+             # blob — is the commit's sentinel when present; absent, the
+             # archive's own manifest completes the unit.
+             sentinel: manifest_bytes
            ),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
@@ -644,7 +645,8 @@ defmodule Compendium.Registry do
           case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
             :ok ->
               with {:ok, validation} <- Compendium.TinctureValidator.validate(tmp_dir),
-                   :ok <- before_store.(validation) do
+                   :ok <- before_store.(validation),
+                   {:ok, entries} <- collect_tincture_entries(tmp_dir, tmp_dir) do
                 version_dir =
                   Compendium.ComponentPath.version_dir(
                     "tincture",
@@ -653,15 +655,31 @@ defmodule Compendium.Registry do
                     version
                   )
 
-                case store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir) do
-                  :ok ->
+                # One unit commit: the validated files stream from the
+                # scratch dir one at a time (lazy reads keep the memory
+                # bound), the manifest sentinel lands last, a partial
+                # write rolls back — the registry never records a healthy
+                # component whose stored files miss its digest.
+                source =
+                  {:files,
+                   Enum.map(entries, fn {rel, path} ->
+                     {rel, fn -> read_scratch(tmp_dir, path) end}
+                   end)}
+
+                case Arca.Overlay.commit_unit(ctx, version_dir, source,
+                       cap: {:checked, validation.size},
+                       sentinel: Keyword.get(opts, :sentinel)
+                     ) do
+                  {:ok, _written} ->
                     {:ok, validation}
 
+                  {:error, {:limit_reached, _, _} = cap} ->
+                    {:error, cap}
+
+                  {:error, :storage_unverifiable} = unverifiable ->
+                    unverifiable
+
                   {:error, reason} ->
-                    # A partial write must never register: the stored files
-                    # would not match the component's digest. Best-effort
-                    # cleanup so a retry starts from an empty version dir.
-                    Arca.delete_tree(ctx, version_dir)
                     {:error, {:tincture_store_failed, reason}}
                 end
               end
@@ -700,43 +718,22 @@ defmodule Compendium.Registry do
     )
   end
 
-  # arca:bypass-ok=D — walks the tar-extract tmp dir set up by
-  # `extract_and_store_tincture/5` and writes each file back through
-  # `Arca.put/3`. Once this returns, no Arca content lives on local FS.
-  #
-  # Halts on the first failed write and returns the error: a partially
-  # stored tincture must abort registration, or the registry would record a
-  # healthy component whose stored files do not match its digest. The
-  # manifest — the unit's completion sentinel — lands LAST, the same
-  # discipline as `Arca.put_files/2`, spelled locally because the bytes
-  # stream from the scratch dir one file at a time.
-  defp store_tincture_files(ctx, base_dir, current_dir, arca_base) do
-    with {:ok, entries} <- collect_tincture_entries(base_dir, current_dir, arca_base) do
-      {sentinel, rest} =
-        Enum.split_with(entries, fn {segments, _path} ->
-          List.last(segments) == ComponentPath.manifest_name()
-        end)
+  # arca:bypass-ok=D — read a tar-extract scratch file for the commit's
+  # lazy write; a vanished or unreadable scratch entry aborts the commit.
+  defp read_scratch(base_dir, path) do
+    case File.read(path) do
+      {:ok, content} ->
+        {:ok, content}
 
-      Enum.reduce_while(rest ++ sentinel, :ok, fn {segments, path}, :ok ->
-        # arca:bypass-ok=D — read the scratch file for the Arca write.
-        result =
-          case File.read(path) do
-            {:ok, content} ->
-              Arca.put(ctx, segments, content)
-
-            {:error, reason} ->
-              {:error, {:tincture_read_failed, Path.relative_to(path, base_dir), reason}}
-          end
-
-        case result do
-          :ok -> {:cont, :ok}
-          {:error, _} = error -> {:halt, error}
-        end
-      end)
+      {:error, reason} ->
+        {:error, {:tincture_read_failed, Path.relative_to(path, base_dir), reason}}
     end
   end
 
-  defp collect_tincture_entries(base_dir, current_dir, arca_base) do
+  # Walks the tar-extract scratch dir into `{relative_segments, path}`
+  # pairs for the unit commit — validation-side exclusions and the
+  # symlink backstop live here; the write discipline is the commit's.
+  defp collect_tincture_entries(base_dir, current_dir) do
     current_dir
     # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
@@ -754,14 +751,14 @@ defmodule Compendium.Registry do
 
         # arca:bypass-ok=D — walk the scratch tree.
         File.dir?(path) ->
-          case collect_tincture_entries(base_dir, path, arca_base) do
+          case collect_tincture_entries(base_dir, path) do
             {:ok, sub} -> {:cont, {:ok, acc ++ sub}}
             {:error, _} = error -> {:halt, error}
           end
 
         true ->
           rel = Path.relative_to(path, base_dir)
-          {:cont, {:ok, acc ++ [{arca_base ++ String.split(rel, "/"), path}]}}
+          {:cont, {:ok, acc ++ [{String.split(rel, "/"), path}]}}
       end
     end)
   end
