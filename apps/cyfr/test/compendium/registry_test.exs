@@ -483,7 +483,7 @@ defmodule Compendium.RegistryTest do
           type: "reagent"
         })
 
-      assert :ok = Registry.delete(ctx, "delete-test", "1.0.0")
+      assert {:ok, _} = Registry.delete(ctx, "delete-test", "1.0.0")
       assert {:error, :not_found} = Registry.get(ctx, "delete-test", "1.0.0")
     end
 
@@ -940,7 +940,7 @@ defmodule Compendium.RegistryTest do
       assert {:ok, _} = Arca.get(ctx_other, storage_path)
 
       # Delete the component
-      assert :ok = Registry.delete(ctx_other, "other-cleanup-test", "1.0.0")
+      assert {:ok, _} = Registry.delete(ctx_other, "other-cleanup-test", "1.0.0")
 
       # Verify the version directory is cleaned up
       assert {:error, _} = Arca.get(ctx_other, storage_path)

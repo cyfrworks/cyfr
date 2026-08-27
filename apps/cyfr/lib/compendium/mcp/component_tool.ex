@@ -594,9 +594,15 @@ defmodule Compendium.MCP.ComponentTool do
 
       {:ok, cref} ->
         case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
-          :ok ->
+          {:ok, :deleted} ->
             broadcast_components_changed(ctx)
             {:ok, %{status: "deleted", reference: reference}}
+
+          {:ok, :revealed_shipped} ->
+            broadcast_components_changed(ctx)
+            # The athanor's copy is gone; the shipped version shows
+            # through again — same wording as aqua's delete.
+            {:ok, %{status: "deleted", reference: reference, restored: "shipped"}}
 
           {:error, :not_found} ->
             {:error, "Component not found: #{reference}"}

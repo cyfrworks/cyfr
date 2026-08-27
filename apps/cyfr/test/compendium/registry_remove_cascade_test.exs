@@ -82,7 +82,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     {:ok, entry} =
       Sanctum.Vault.create(ctx, %{name: "survivor", kind: "api_key", fields: %{"k" => "v"}})
 
-    :ok = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
+    {:ok, _} = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
 
     {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
     assert profile.status == "revoked"
@@ -109,7 +109,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
         profile_id: profile
       })
 
-    :ok = Compendium.Registry.delete(ctx, "cascade-hooked", "1.0.0", "local")
+    {:ok, _} = Compendium.Registry.delete(ctx, "cascade-hooked", "1.0.0", "local")
 
     {:ok, live} = Arca.WebhookStorage.list_webhooks(ctx.athanor_id)
 
@@ -121,7 +121,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     publish!(ctx, "cascade-multi", "1.0.1")
     {profile_id, _} = seed_profile!(ctx, "reagent:local.cascade-multi")
 
-    :ok = Compendium.Registry.delete(ctx, "cascade-multi", "1.0.0", "local")
+    {:ok, _} = Compendium.Registry.delete(ctx, "cascade-multi", "1.0.0", "local")
 
     {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
     assert profile.status == "active"
@@ -132,7 +132,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     publish!(ctx, "cascade-b", "1.0.0")
     {other_id, _} = seed_profile!(ctx, "reagent:local.cascade-b")
 
-    :ok = Compendium.Registry.delete(ctx, "cascade-a", "1.0.0", "local")
+    {:ok, _} = Compendium.Registry.delete(ctx, "cascade-a", "1.0.0", "local")
 
     {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, other_id)
     assert profile.status == "active"

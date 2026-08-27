@@ -74,9 +74,12 @@ defmodule Sanctum.Tenancy.Caps do
   `:athanor_storage_bytes` cap (or the cap is off). The one place the cap is
   computed — and, deliberately, enforced only at the user-ingress writers:
   authenticated WASM writes (`Opus.StorageHandler`), chat attachments
-  (`Prism.Attachments`), the two `Compendium.Registry` publish paths, and
-  the overlay's copy-on-write materialization (`Arca.Overlay`).
-  Server-driven writers — fork, build-artifact stores, OCI pulls — write
+  (`Prism.Attachments`), and every unit commit that states
+  `cap: {:checked, bytes}` — the `Compendium.Registry` publish paths
+  (which the OCI pull rides, whole incoming unit counted) and the
+  overlay's copy-on-write materialization (`Arca.Overlay.commit_unit/4`,
+  where each ingress's policy is a required, visible argument).
+  Cap-exempt writers — scaffold, fork, build-artifact stores — write
   uncapped by design: they move operator-shipped or build-derived bytes,
   and failing them half-completes a provision or a publish, which is
   worse than any over-cap state. Their bytes still count — usage

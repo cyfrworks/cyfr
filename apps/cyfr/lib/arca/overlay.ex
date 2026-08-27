@@ -699,6 +699,13 @@ defmodule Arca.Overlay do
     )
   end
 
+  # The dir-unit order — sentinel, THEN mark — is the opposite of the
+  # file-unit CoW's mark-then-put, and deliberately so: here the commit
+  # controls the "after", so the mark lands only once completeness is
+  # durable ("marked ⇒ completed copy" holds by construction), the crash
+  # window between the two degrades to :own_shadowing (bytes kept), and a
+  # failed mark write still fails the commit into its rollback. Do not
+  # unify the two orders.
   defp maybe_record_origin(_internal, _unit, :none), do: :ok
   defp maybe_record_origin(internal, unit, :seed), do: record_origin(internal, unit)
 
@@ -718,8 +725,16 @@ defmodule Arca.Overlay do
   # whole unit first (droppings excluded, the storage cap asked about the
   # materialization bytes, the sentinel copied last). A write AT a file
   # unit that shadows a seed file for the first time records its origin
-  # mark — before the put, so a crash in between leaves a mark without a
-  # completed file, which every reader ignores (fails toward :seed). Only
+  # mark — BEFORE the put, the opposite order from the dir-unit commit's
+  # sentinel-then-mark, and deliberately so: a file unit's completion
+  # event is the caller's own atomic put, which the overlay has no
+  # "after" hook on — a mark that failed to land after the put would
+  # never be retried and the copy would read as member work forever.
+  # Mark-first is self-healing: a crash in between leaves a mark without
+  # a completed file, which every reader ignores (fails toward :seed),
+  # and the completing retry re-marks idempotently. Each order puts the
+  # mark on the side of its completion event the overlay controls; both
+  # fail toward the athanor keeping its bytes. Do not unify them. Only
   # the internal-write scope is exempt — that is what keeps the copy from
   # recursing.
   defp prepare_write(%Context{} = ctx, path) do

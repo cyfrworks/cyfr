@@ -254,7 +254,7 @@ defmodule Compendium.ProvenanceTest do
     assert Provenance.of(ctx, own) == {:ok, :user}
     assert {:error, :not_bundled} = Registry.reset(ctx, "mine-first", "1.0.0")
 
-    assert :ok = Registry.delete(ctx, "mine-first", "1.0.0")
+    assert {:ok, _} = Registry.delete(ctx, "mine-first", "1.0.0")
     assert {:ok, ^shipped_wasm} = Arca.get(ctx, own_dir ++ ["reagent.wasm"])
   end
 
@@ -388,7 +388,7 @@ defmodule Compendium.ProvenanceTest do
         type: "reagent"
       })
 
-    assert :ok = Registry.delete(ctx, "gone-tool", "1.0.0")
+    assert {:ok, _} = Registry.delete(ctx, "gone-tool", "1.0.0")
     assert {:error, :not_found} = Registry.get(ctx, "gone-tool", "1.0.0")
 
     refute Arca.exists?(ctx, [

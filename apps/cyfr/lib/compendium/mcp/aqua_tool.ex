@@ -490,6 +490,8 @@ defmodule Compendium.MCP.AquaTool do
         prompt: Map.get(args, "content", "")
       }
 
+      # An agent is a file unit: the one atomic put IS the unit commit —
+      # no sentinel, no rollback needed, the overlay's file CoW applies.
       case Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(agent)) do
         :ok ->
           base = %{created: name, type: type_name(role)}

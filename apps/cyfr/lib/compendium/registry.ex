@@ -595,49 +595,72 @@ defmodule Compendium.Registry do
   revert is `reset/4`. A `:user`/`:remote` component deletes bytes FIRST
   (any storage failure keeps the row, so the DB can never claim a
   deletion the tree didn't make), then the row and its associations.
+  Answers `{:ok, :deleted}` — or `{:ok, :revealed_shipped}` when the
+  deleted unit was the athanor's own work shadowing a shipped
+  counterpart, which the delete has just uncovered (the next scan
+  re-registers it as bundled): the surface must say so, or shipped
+  components look deletable.
 
   Optionally pass a publisher to disambiguate components with the same
   name/version.
   """
+  @spec delete(Context.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, :deleted | :revealed_shipped}
+          | {:error, :not_found | :bundled | :bundled_modified | term()}
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
       {:ok, component} ->
-        case Compendium.Provenance.of(ctx, component) do
-          {:ok, :bundled} ->
-            {:error, :bundled}
+        with {:ok, disposition} <- delete_disposition(ctx, component),
+             :ok <- cleanup_component_associations(ctx, component) do
+          Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
+          Compendium.Cascade.name_removed(ctx, component)
+          invalidate_executor_caches(ctx)
 
-          {:ok, :bundled_modified} ->
-            {:error, :bundled_modified}
+          :telemetry.execute(
+            [:cyfr, :compendium, :component, :remove],
+            %{system_time: System.system_time()},
+            %{
+              name: name,
+              version: version,
+              publisher: Map.get(component, :publisher) || publisher_filter,
+              component_type: Map.get(component, :component_type),
+              athanor_id: ctx.athanor_id,
+              user_id: ctx.user_id
+            }
+          )
 
-          {:error, _} = error ->
-            error
-
-          {:ok, _user_or_remote} ->
-            with :ok <- cleanup_component_associations(ctx, component) do
-              Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
-              Compendium.Cascade.name_removed(ctx, component)
-              invalidate_executor_caches(ctx)
-
-              :telemetry.execute(
-                [:cyfr, :compendium, :component, :remove],
-                %{system_time: System.system_time()},
-                %{
-                  name: name,
-                  version: version,
-                  publisher: Map.get(component, :publisher) || publisher_filter,
-                  component_type: Map.get(component, :component_type),
-                  athanor_id: ctx.athanor_id,
-                  user_id: ctx.user_id
-                }
-              )
-
-              :ok
-            end
+          {:ok, disposition}
         end
 
       {:error, :not_found} ->
         {:error, :not_found}
+    end
+  end
+
+  # Provenance decides the refusals; the overlay's unit state says what a
+  # permitted delete uncovers. The extra probe runs only for the
+  # athanor's own units — remote rows have no seed counterpart to reveal.
+  defp delete_disposition(ctx, component) do
+    case Compendium.Provenance.of(ctx, component) do
+      {:ok, :bundled} ->
+        {:error, :bundled}
+
+      {:ok, :bundled_modified} ->
+        {:error, :bundled_modified}
+
+      {:ok, :remote} ->
+        {:ok, :deleted}
+
+      {:ok, :user} ->
+        case Arca.Overlay.unit_status(ctx, Compendium.Provenance.version_dir(component)) do
+          {:ok, :own_shadowing} -> {:ok, :revealed_shipped}
+          {:ok, _own_or_absent} -> {:ok, :deleted}
+          {:error, _} = error -> error
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 
