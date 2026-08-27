@@ -153,6 +153,31 @@ defmodule Sanctum.ComponentRef do
   end
 
   @doc """
+  Build a reference from its parts, without going through a struct.
+
+  Most callers holding a type, a namespace and a name spelled the grammar
+  themselves — a `"tincture:"` prefix glued to a publisher and a name
+  appeared twelve times, so
+  the one place that knows a ref is `type:namespace.name` (optionally
+  `:version`) was twelve places. This is that place.
+
+      iex> Sanctum.ComponentRef.build("tincture", "acme", "docs")
+      "tincture:acme.docs"
+
+      iex> Sanctum.ComponentRef.build("reagent", "local", "fetch", "1.2.0")
+      "reagent:local.fetch:1.2.0"
+  """
+  @spec build(String.t(), String.t(), String.t(), String.t() | nil) :: String.t()
+  def build(type, namespace, name, version \\ nil) do
+    __MODULE__.to_string(%__MODULE__{
+      type: type,
+      namespace: namespace,
+      name: name,
+      version: version
+    })
+  end
+
+  @doc """
   Normalize a component reference string to canonical format.
 
   Parses the input and returns the canonical string. The type prefix is

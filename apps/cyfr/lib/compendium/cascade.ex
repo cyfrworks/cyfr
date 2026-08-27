@@ -29,7 +29,7 @@ defmodule Compendium.Cascade do
 
     unless Arca.ComponentStorage.has_remaining_versions?(ctx, comp.name, publisher) do
       component_type = Map.get(comp, :component_type, "")
-      name_ref = "#{component_type}:#{publisher}.#{comp.name}"
+      name_ref = Sanctum.ComponentRef.build(component_type, publisher, comp.name)
 
       revoke_profiles(ctx, name_ref)
       disable_registrations(ctx, name_ref)

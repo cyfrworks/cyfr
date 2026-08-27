@@ -239,7 +239,14 @@ defmodule PrismWeb.ShellLive do
 
       true ->
         socket = assign(socket, :report_submitting, true)
-        ref = "tincture:#{tincture.publisher}.#{tincture.name}:#{tincture.version}"
+
+        ref =
+          Sanctum.ComponentRef.build(
+            "tincture",
+            tincture.publisher,
+            tincture.name,
+            tincture.version
+          )
 
         args = %{
           "action" => "report",
@@ -370,7 +377,7 @@ defmodule PrismWeb.ShellLive do
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
-        ref = "tincture:#{t.publisher}.#{t.name}"
+        ref = Sanctum.ComponentRef.build("tincture", t.publisher, t.name)
 
         public =
           case Sanctum.Consent.Source.impl().profiles(ctx, ref) do

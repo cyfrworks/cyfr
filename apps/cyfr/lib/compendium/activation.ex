@@ -151,7 +151,7 @@ defmodule Compendium.Activation do
     publisher = Compendium.ComponentPath.normalize_publisher(field(component, :publisher))
     name = field(component, :name)
 
-    "#{type}:#{publisher}.#{name}"
+    Sanctum.ComponentRef.build(type, publisher, name)
   end
 
   # ============================================================================

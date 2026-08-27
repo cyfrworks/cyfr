@@ -85,7 +85,7 @@ defmodule Sanctum.TinctureAccess do
   # public exactly when an active public profile exists for it — what
   # profile.publish mints and profile.revoke retires.
   defp tincture_public?(ctx, publisher, tincture_name) do
-    ref = "tincture:#{publisher}.#{tincture_name}"
+    ref = Sanctum.ComponentRef.build("tincture", publisher, tincture_name)
 
     case Sanctum.Consent.Source.impl().profiles(ctx, ref) do
       {:ok, profiles} ->

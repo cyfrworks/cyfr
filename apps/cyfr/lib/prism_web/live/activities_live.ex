@@ -277,7 +277,10 @@ defmodule PrismWeb.ActivitiesLive do
       "tincture" ->
         publisher = input["publisher"] || input[:publisher]
         name = input["tincture_name"] || input[:tincture_name]
-        if publisher && name, do: "tincture:#{publisher}.#{name}", else: "tincture/invoke"
+
+        if publisher && name,
+          do: Sanctum.ComponentRef.build("tincture", publisher, name),
+          else: "tincture/invoke"
 
       "schedule" ->
         sid = input["schedule_id"] || input[:schedule_id]

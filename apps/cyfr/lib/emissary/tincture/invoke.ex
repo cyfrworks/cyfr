@@ -60,7 +60,7 @@ defmodule Emissary.Tincture.Invoke do
   defp do_run(auth_ctx, tincture, reference, input, opts) do
     route = Keyword.fetch!(opts, :route)
     method = Keyword.fetch!(opts, :method)
-    tincture_ref = "tincture:#{tincture.publisher}.#{tincture.name}"
+    tincture_ref = Sanctum.ComponentRef.build("tincture", tincture.publisher, tincture.name)
 
     ctx = %{Sanctum.build_tincture_context(auth_ctx, tincture) | request_id: request_id()}
 

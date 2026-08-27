@@ -182,7 +182,9 @@ defmodule Sanctum.Consent.BlobBuilder do
     case Compendium.DependencyResolver.extract_from_manifest(manifest, node_key) do
       {:ok, deps} ->
         deps
-        |> Enum.map(fn dep -> "#{dep.dep_type}:#{dep.dep_namespace}.#{dep.dep_name}" end)
+        |> Enum.map(fn dep ->
+          Sanctum.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
+        end)
         |> Enum.uniq()
         |> Enum.reject(&(&1 == node_key))
 

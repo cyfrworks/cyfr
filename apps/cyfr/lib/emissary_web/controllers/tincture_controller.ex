@@ -162,7 +162,7 @@ defmodule EmissaryWeb.TinctureController do
 
     with {:ok, tincture, visibility, auth_ctx} <-
            resolve_tincture(conn, athanor, publisher, tincture_name) do
-      tincture_ref = "tincture:#{publisher}.#{tincture_name}"
+      tincture_ref = Sanctum.ComponentRef.build("tincture", publisher, tincture_name)
 
       _ = tincture_ref
 

@@ -1559,17 +1559,19 @@ defmodule Compendium.MCP.ComponentTool do
     end
   end
 
+  # A component with no manifest is left alone rather than given one made of
+  # discovered media. Everything else goes through `Compendium.Manifest`,
+  # which owns manifest decoding — the strict form, because a manifest that
+  # will not parse must also be left alone rather than replaced by a
+  # media-only map.
   defp parse_manifest_for_enrichment(nil), do: :error
-  defp parse_manifest_for_enrichment(map) when is_map(map), do: {:ok, map}
 
-  defp parse_manifest_for_enrichment(text) when is_binary(text) do
-    case Jason.decode(text) do
-      {:ok, map} when is_map(map) -> {:ok, map}
-      _ -> :error
+  defp parse_manifest_for_enrichment(raw) do
+    case Compendium.Manifest.decode_strict(raw) do
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> :error
     end
   end
-
-  defp parse_manifest_for_enrichment(_), do: :error
 
   defp merge_discovered_into_manifest(manifest, discovered) do
     tincture_block = manifest["tincture"] || %{}

@@ -740,7 +740,7 @@ defmodule PrismWeb.RegistryLive do
     ns = c["_namespace"] || cf(c, "namespace_slug") || ""
     n = cf(c, "name") || ""
     v = cf(c, "version") || ""
-    "#{t}:#{ns}.#{n}:#{v}"
+    Sanctum.ComponentRef.build(t, ns, n, v)
   end
 
   defp badge_class(c) do
