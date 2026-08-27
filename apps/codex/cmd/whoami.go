@@ -32,17 +32,17 @@ registry tool. Both actions are called; partial results are surfaced if one
 fails.`,
 	Example: `  cyfr whoami
   cyfr whoami --json`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		session, sessionErr := client.CallTool("session", map[string]any{
+		session, sessionErr := client.CallTool(cmd.Context(), "session", map[string]any{
 			"action": "whoami",
 		})
 		if sessionErr != nil {
-			handleToolError(sessionErr)
+			return handleToolError(sessionErr)
 		}
 
-		registry, registryErr := client.CallTool("registry", map[string]any{
+		registry, registryErr := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action": "whoami",
 		})
 		// Don't abort on registry errors — the local identity is still useful.
@@ -51,10 +51,11 @@ fails.`,
 
 		if flagJSON {
 			output.JSON(composed)
-			return
+			return nil
 		}
 
 		renderWhoami(composed, registryErr)
+		return nil
 	},
 }
 

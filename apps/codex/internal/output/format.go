@@ -60,18 +60,6 @@ func Success(msg string) {
 	fmt.Println(msg)
 }
 
-// Error prints an error message to stderr and exits.
-func Error(msg string) {
-	fmt.Fprintln(os.Stderr, "Error: "+msg)
-	os.Exit(1)
-}
-
-// Errorf prints a formatted error message to stderr and exits.
-func Errorf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
-	os.Exit(1)
-}
-
 // Debugf writes a diagnostic line to stderr only when CYFR_DEBUG is set. Used to
 // make otherwise-silent fallbacks (offline MCP init, config-save failures)
 // observable without adding noise to normal runs.

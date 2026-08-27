@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -37,11 +38,10 @@ func joinTypeShorthand(args []string) []string {
 //
 // Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
 // reject them (personal slugs are bare; '@' is invalid anywhere in a ref).
-func parseReference(rawRef string, compType string) string {
+func parseReference(rawRef string, compType string) (string, error) {
 	// Reject local file paths — components must be registered first
 	if strings.HasSuffix(rawRef, ".wasm") || strings.HasPrefix(rawRef, "./") || strings.HasPrefix(rawRef, "/") {
-		output.Error("Local file execution is no longer supported. Register the component first:\n  cyfr register\n  cyfr run <reference>")
-		return ""
+		return "", errors.New("Local file execution is no longer supported. Register the component first:\n  cyfr register\n  cyfr run <reference>")
 	}
 
 	// If --type flag given and ref has no type prefix, prepend it
@@ -50,13 +50,13 @@ func parseReference(rawRef string, compType string) string {
 			firstPart := rawRef[:colonIdx]
 			if !strings.Contains(firstPart, ".") && ref.IsTypePrefix(firstPart) {
 				// Already has a type prefix, pass through
-				return rawRef
+				return rawRef, nil
 			}
 		}
 		rawRef = compType + ":" + rawRef
 	}
 
-	return rawRef
+	return rawRef, nil
 }
 
 func init() {
@@ -91,47 +91,47 @@ Run without arguments for interactive selection.`,
   cyfr run --list
   cyfr run --logs exec_abc123
   cyfr run --cancel exec_abc123`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
 		if listFlag, _ := cmd.Flags().GetBool("list"); listFlag {
-			result, err := client.CallTool("execution", map[string]any{
+			result, err := client.CallTool(cmd.Context(), "execution", map[string]any{
 				"action": "list",
 			})
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
 			} else {
 				output.KeyValue(result)
 			}
-			return
+			return nil
 		}
 
 		if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
-			result, err := client.CallTool("execution", map[string]any{
+			result, err := client.CallTool(cmd.Context(), "execution", map[string]any{
 				"action":       "logs",
 				"execution_id": logsID,
 			})
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
 			} else {
 				output.KeyValue(result)
 			}
-			return
+			return nil
 		}
 
 		if cancelID, _ := cmd.Flags().GetString("cancel"); cancelID != "" {
-			result, err := client.CallTool("execution", map[string]any{
+			result, err := client.CallTool(cmd.Context(), "execution", map[string]any{
 				"action":       "cancel",
 				"execution_id": cancelID,
 			})
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -139,7 +139,7 @@ Run without arguments for interactive selection.`,
 				fmt.Println("Execution cancelled.")
 			}
 			_ = result
-			return
+			return nil
 		}
 
 		var refString string
@@ -151,30 +151,37 @@ Run without arguments for interactive selection.`,
 			args = joinTypeShorthand(args)
 			compType, _ := cmd.Flags().GetString("type")
 			rawRef := args[0]
-			refString = parseReference(rawRef, compType)
+			var err error
+			refString, err = parseReference(rawRef, compType)
+			if err != nil {
+				return err
+			}
 
 			// Resolve missing version for registry refs
-			refString = resolveComponentRef(client, refString)
+			refString, err = resolveComponentRef(cmd.Context(), client, refString)
+			if err != nil {
+				return err
+			}
 
 			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
 				if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-					output.Errorf("Invalid JSON input: %v", err)
+					return fmt.Errorf("Invalid JSON input: %v", err)
 				}
 			}
 		case prompt.IsInteractive(flagNoInteractive):
-			compOpts, err := prompt.FetchComponents(client)
+			compOpts, err := prompt.FetchComponents(cmd.Context(), client)
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if len(compOpts) == 0 {
-				output.Error("No components found. Register one first.")
+				return errors.New("No components found. Register one first.")
 			}
 			selected, err := prompt.SelectOne("Select a component to run", compOpts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			refString = selected
 
@@ -183,7 +190,7 @@ Run without arguments for interactive selection.`,
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			if supplyInput {
 				inputStr, err := prompt.InputText("JSON input", `{"key":"value"}`)
@@ -191,16 +198,16 @@ Run without arguments for interactive selection.`,
 					if prompt.IsAborted(err) {
 						os.Exit(130)
 					}
-					output.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %v", err)
 				}
 				if inputStr != "" {
 					if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-						output.Errorf("Invalid JSON input: %v", err)
+						return fmt.Errorf("Invalid JSON input: %v", err)
 					}
 				}
 			}
 		default:
-			output.Error("Usage: cyfr run <reference>")
+			return errors.New("Usage: cyfr run <reference>")
 		}
 
 		toolArgs := map[string]any{
@@ -216,9 +223,9 @@ Run without arguments for interactive selection.`,
 			toolArgs["profile"] = profile
 		}
 
-		result, err2 := client.CallTool("execution", toolArgs)
+		result, err2 := client.CallTool(cmd.Context(), "execution", toolArgs)
 		if err2 != nil {
-			handleToolError(err2)
+			return handleToolError(err2)
 		}
 
 		if flagJSON {
@@ -226,5 +233,6 @@ Run without arguments for interactive selection.`,
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }

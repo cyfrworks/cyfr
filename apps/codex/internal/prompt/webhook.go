@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -114,8 +115,8 @@ func validateInputTemplateJSON(s string) error {
 }
 
 // FetchWebhooks calls webhook list and returns options for selection.
-func FetchWebhooks(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("webhook", map[string]any{"action": "list"})
+func FetchWebhooks(ctx context.Context, client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool(ctx, "webhook", map[string]any{"action": "list"})
 	if err != nil {
 		return nil, err
 	}

@@ -27,6 +27,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/cyfr/codex/internal/output"
@@ -82,17 +83,18 @@ namespace is claimed, and which publisher namespaces the user is a member of.
 
 Alias for the registry half of ` + "`cyfr whoami`" + ` — use this form when
 you only want the registry state.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{"action": "whoami"})
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{"action": "whoami"})
 		if err != nil {
-			handleToolError(err, "Registry whoami failed")
+			return handleToolError(err, "Registry whoami failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -128,12 +130,13 @@ server-side behavior is idempotent — a fresh DeviceFlow on an already-valid
 session re-runs the probe, re-populates CredentialStore entries, and
 returns the same session_id back.`,
 	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(cmd.ErrOrStderr(),
 			"`cyfr registry probe` currently forwards to `cyfr login` — see "+
 				"`cyfr registry probe --help` for the rationale.")
 		fmt.Fprintln(cmd.ErrOrStderr(),
 			"Run `cyfr login` to refresh push tokens for your namespaces.")
+		return nil
 	},
 }
 
@@ -149,23 +152,24 @@ reserved), DNS verification status, and the provider that originally claimed
 it. Works without a push token.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry get-namespace stripe.com",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action": "get_namespace",
 			"slug":   slug,
 		})
 		if err != nil {
-			handleToolError(err, "get-namespace failed")
+			return handleToolError(err, "get-namespace failed")
 		}
 
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -187,23 +191,24 @@ _cyfr-verify.<domain>; run ` + "`cyfr registry publisher verify <domain>`" + ` o
 the record is live.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry publisher claim acme.com",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action": "claim_publisher",
 			"slug":   slug,
 		})
 		if err != nil {
-			handleToolError(err, "Publisher claim failed")
+			return handleToolError(err, "Publisher claim failed")
 		}
 
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -216,23 +221,24 @@ cyfr.run issues the first push token for it — stored server-side in the
 user's CredentialStore so ` + "`cyfr push`" + ` can use it immediately.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry publisher verify acme.com",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action": "verify_publisher",
 			"slug":   slug,
 		})
 		if err != nil {
-			handleToolError(err, "Publisher verify failed")
+			return handleToolError(err, "Publisher verify failed")
 		}
 
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -250,22 +256,23 @@ var registryTokensListCmd = &cobra.Command{
 	Short:   "List push tokens for a namespace",
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry tokens list alice",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action": "tokens_list",
 			"slug":   slug,
 		})
 		if err != nil {
-			handleToolError(err, "tokens list failed")
+			return handleToolError(err, "tokens list failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -277,7 +284,7 @@ per-device or per-CI tokens — each token can be revoked independently via
 ` + "`tokens revoke`" + `. Rate limited to 10 tokens per hour per bearer.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry tokens issue acme.com --label laptop",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
 		args2 := map[string]any{
@@ -289,15 +296,16 @@ per-device or per-CI tokens — each token can be revoked independently via
 		}
 
 		client := newClient()
-		result, err := client.CallTool("registry", args2)
+		result, err := client.CallTool(cmd.Context(), "registry", args2)
 		if err != nil {
-			handleToolError(err, "tokens issue failed")
+			return handleToolError(err, "tokens issue failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -309,24 +317,25 @@ using the revoked token returns 401. Does not affect tokens held by other
 members of the namespace.`,
 	Args:    cobra.ExactArgs(2),
 	Example: "  cyfr registry tokens revoke acme.com 01H8K9XZ...",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 		tokenID := args[1]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action":   "tokens_revoke",
 			"slug":     slug,
 			"token_id": tokenID,
 		})
 		if err != nil {
-			handleToolError(err, "tokens revoke failed")
+			return handleToolError(err, "tokens revoke failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Revoked token %s for namespace %s\n", tokenID, slug)
+		return nil
 	},
 }
 
@@ -351,22 +360,23 @@ var registryMembersListCmd = &cobra.Command{
 	Short:   "List members of a publisher namespace",
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry members list acme.com",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action": "members_list",
 			"slug":   slug,
 		})
 		if err != nil {
-			handleToolError(err, "members list failed")
+			return handleToolError(err, "members list failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		output.KeyValue(result)
+		return nil
 	},
 }
 
@@ -375,7 +385,7 @@ var registryMembersAddCmd = &cobra.Command{
 	Short:   "Add a member to a publisher namespace (admin-only)",
 	Args:    cobra.ExactArgs(2),
 	Example: "  cyfr registry members add acme.com alice --role member",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 		target := args[1]
 		role := flagMemberRole
@@ -383,24 +393,25 @@ var registryMembersAddCmd = &cobra.Command{
 			role = "member"
 		}
 		if role != "admin" && role != "member" {
-			output.Errorf("Invalid role %q — must be 'admin' or 'member'.", role)
+			return fmt.Errorf("Invalid role %q — must be 'admin' or 'member'.", role)
 		}
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action":               "members_add",
 			"slug":                 slug,
 			"target_personal_slug": target,
 			"role":                 role,
 		})
 		if err != nil {
-			handleToolError(err, "members add failed")
+			return handleToolError(err, "members add failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Added %s to %s as %s\n", target, slug, role)
+		return nil
 	},
 }
 
@@ -412,32 +423,33 @@ removing the last admin returns 409 ` + "`sole_admin`" + ` — promote another
 member first.`,
 	Args:    cobra.ExactArgs(2),
 	Example: "  cyfr registry members update acme.com alice --role admin",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 		target := args[1]
 		role := flagMemberRole
 		if role == "" {
-			output.Error("--role is required (admin or member)")
+			return errors.New("--role is required (admin or member)")
 		}
 		if role != "admin" && role != "member" {
-			output.Errorf("Invalid role %q — must be 'admin' or 'member'.", role)
+			return fmt.Errorf("Invalid role %q — must be 'admin' or 'member'.", role)
 		}
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action":               "members_update",
 			"slug":                 slug,
 			"target_personal_slug": target,
 			"role":                 role,
 		})
 		if err != nil {
-			handleToolError(err, "members update failed")
+			return handleToolError(err, "members update failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Updated %s in %s to %s\n", target, slug, role)
+		return nil
 	},
 }
 
@@ -449,23 +461,24 @@ namespace — next-request effective. Sole-admin protection applies: removing
 the last admin returns 409 ` + "`sole_admin`" + `.`,
 	Args:    cobra.ExactArgs(2),
 	Example: "  cyfr registry members remove acme.com alice",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 		target := args[1]
 
 		client := newClient()
-		result, err := client.CallTool("registry", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "registry", map[string]any{
 			"action":               "members_remove",
 			"slug":                 slug,
 			"target_personal_slug": target,
 		})
 		if err != nil {
-			handleToolError(err, "members remove failed")
+			return handleToolError(err, "members remove failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Removed %s from %s\n", target, slug)
+		return nil
 	},
 }

@@ -43,7 +43,7 @@ func TestDiscover_AcceptsMatchingVersion(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	if err := c.Discover(); err != nil {
+	if err := c.Discover(t.Context()); err != nil {
 		t.Fatalf("Discover failed: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestDiscover_RejectsUnsupportedProtocol(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	err := c.Discover()
+	err := c.Discover(t.Context())
 	if err == nil {
 		t.Fatal("expected error for unsupported protocol version")
 	}
@@ -113,7 +113,7 @@ func TestCallTool_TextContentJSON(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	result, err := c.CallTool("test-tool", nil)
+	result, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCallTool_PlainText(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	result, err := c.CallTool("test-tool", nil)
+	result, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestCallTool_IsError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err == nil {
 		t.Fatal("expected error for isError response")
 	}
@@ -189,7 +189,7 @@ func TestCallTool_RPCError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err == nil {
 		t.Fatal("expected error for RPC error response")
 	}
@@ -215,7 +215,7 @@ func TestCallTool_UnknownMethodIsNotASessionProblem(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	c.SessionID = "a-perfectly-good-credential"
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -241,7 +241,7 @@ func TestCallTool_AuthRequired(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if !errors.Is(err, ErrAuthRequired) {
 		t.Errorf("expected ErrAuthRequired, got %v", err)
 	}
@@ -255,7 +255,7 @@ func TestCallTool_Bare404(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err == nil {
 		t.Fatal("expected error for bare 404")
 	}
@@ -305,7 +305,7 @@ func TestCallTool_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
@@ -331,7 +331,7 @@ func TestListTools(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	tools, err := c.ListTools()
+	tools, err := c.ListTools(t.Context())
 	if err != nil {
 		t.Fatalf("ListTools failed: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestCallTool_NilArgsSerialized(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.CallTool("test-tool", nil)
+	_, err := c.CallTool(t.Context(), "test-tool", nil)
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestRoutingHeaders_MirrorTheBody(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, _ = c.CallTool("system", map[string]any{"action": "status"})
+	_, _ = c.CallTool(t.Context(), "system", map[string]any{"action": "status"})
 
 	if gotMethod != "tools/call" {
 		t.Errorf("expected Mcp-Method tools/call, got %q", gotMethod)
@@ -477,5 +477,5 @@ func TestRequestHeaders(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	c.SessionID = "my-session"
-	_, _ = c.ListTools()
+	_, _ = c.ListTools(t.Context())
 }

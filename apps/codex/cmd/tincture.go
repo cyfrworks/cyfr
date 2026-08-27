@@ -13,10 +13,11 @@ import (
 // leading '@', uppercase, or illegal characters) before the MCP call. The
 // server enforces the same rules; this early check gives the user a clearer
 // inline error without a round-trip. Mirrors Sanctum.ComponentRef.validate_namespace/1.
-func validateTincturePublisher(slug string) {
+func validateTincturePublisher(slug string) error {
 	if err := ref.ValidateNamespace(slug); err != nil {
-		output.Errorf("Invalid publisher %q: %v", slug, err)
+		return fmt.Errorf("Invalid publisher %q: %v", slug, err)
 	}
+	return nil
 }
 
 // tincturePublicPath is the public URL path the tincture_visibility tool
@@ -56,7 +57,7 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 	Use:   "set <publisher> <name> <true|false>",
 	Short: "Retired — publishing is a consent decision",
 	Args:  cobra.ArbitraryArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Visibility is not a policy bit anymore: public-ness IS an active
 		// public profile. Point old muscle memory at the consent walk
 		// instead of round-tripping to a server verb that no longer exists.
@@ -65,6 +66,7 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 		fmt.Fprintln(os.Stderr, "  To unpublish: run profile.revoke on the tincture's public profile")
 		fmt.Fprintln(os.Stderr, "  To check:     cyfr tincture visibility get <publisher> <name>")
 		os.Exit(1)
+		return nil
 	},
 }
 
@@ -73,24 +75,26 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 	Short:   "Check tincture visibility",
 	Example: `  cyfr tincture visibility get local my-dashboard`,
 	Args:    cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		publisher := args[0]
 		name := args[1]
 
-		validateTincturePublisher(publisher)
+		if err := validateTincturePublisher(publisher); err != nil {
+			return err
+		}
 
 		client := newClient()
-		result, err := client.CallTool("tincture_visibility", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "tincture_visibility", map[string]any{
 			"action":    "get",
 			"publisher": publisher,
 			"name":      name,
 		})
 		if err != nil {
-			handleToolError(err, "Visibility query failed")
+			return handleToolError(err, "Visibility query failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		public := result["public"]
 		if public == true {
@@ -98,5 +102,6 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 		} else {
 			fmt.Printf("%s/%s: private (Prism shell only)\n", publisher, name)
 		}
+		return nil
 	},
 }

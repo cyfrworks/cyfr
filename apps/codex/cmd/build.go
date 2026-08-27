@@ -36,25 +36,28 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
   cyfr build compile c local.my-api:0.1.0
   cyfr build compile t:local.my-dashboard:0.1.0`,
 	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		args = joinTypeShorthand(args)
-		normalized := resolveComponentRef(client, args[0])
+		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
+		if err != nil {
+			return err
+		}
 		buildID := randomHex(8)
 
 		fmt.Fprintf(os.Stderr, "Compiling %s...\n", normalized)
 
-		result, err := client.CallToolWithProgress("build", map[string]any{
+		result, err := client.CallToolWithProgress(cmd.Context(), "build", map[string]any{
 			"action":    "compile",
 			"reference": normalized,
 			"build_id":  buildID,
 		}, progressPrinter())
 		if err != nil {
-			handleToolError(err, "Compile failed")
+			return handleToolError(err, "Compile failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		status := strVal(result, "status")
@@ -67,25 +70,10 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
 		if s, ok := size.(float64); ok {
 			fmt.Printf("Size: %.0f bytes\n", s)
 		}
-		if registered, ok := result["registered"].(float64); ok && registered > 0 {
-			fmt.Printf("Registered: %.0f component(s)\n", registered)
+		if registration := strVal(result, "registration"); registration != "" && registration != "done" {
+			fmt.Printf("Registration: %s (the server registers the artifact in the background; check 'cyfr component list')\n", registration)
 		}
-		if pulled, ok := result["pulled_dependencies"].([]any); ok && len(pulled) > 0 {
-			fmt.Printf("Pulled dependencies:\n")
-			for _, p := range pulled {
-				fmt.Printf("  + %s\n", p)
-			}
-		}
-		if failed, ok := result["failed_pulls"].([]any); ok && len(failed) > 0 {
-			fmt.Fprintf(os.Stderr, "Failed to pull:\n")
-			for _, f := range failed {
-				fmt.Fprintf(os.Stderr, "  ! %s\n", f)
-			}
-		}
-		if regErr, ok := result["registration_error"].(string); ok {
-			fmt.Fprintf(os.Stderr, "\nWarning: compiled successfully but registration failed:\n  %s\n", regErr)
-			fmt.Fprintln(os.Stderr, "Check cyfr-manifest.json and re-run 'cyfr register' to debug.")
-		}
+		return nil
 	},
 }
 
@@ -94,23 +82,23 @@ var buildToolchainsCmd = &cobra.Command{
 	Short: "List available build toolchains",
 	Long:  "Show which compilation toolchains are installed and available.",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("build", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "build", map[string]any{
 			"action": "toolchains",
 		})
 		if err != nil {
-			handleToolError(err, "Toolchains query failed")
+			return handleToolError(err, "Toolchains query failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		toolchains, ok := result["toolchains"].(map[string]any)
 		if !ok {
 			fmt.Println("No toolchain information available.")
-			return
+			return nil
 		}
 
 		for name, info := range toolchains {
@@ -128,6 +116,7 @@ var buildToolchainsCmd = &cobra.Command{
 			}
 			fmt.Printf("%-10s available=%s  %s\n", name, available, desc)
 		}
+		return nil
 	},
 }
 
@@ -136,19 +125,20 @@ var buildValidateCmd = &cobra.Command{
 	Short: "Validate a WASM binary",
 	Long:  "Validate a base64-encoded WASM binary and show its metadata.",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("build", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "build", map[string]any{
 			"action":      "validate",
 			"wasm_base64": args[0],
 		})
 		if err != nil {
-			handleToolError(err, "Validate failed")
+			return handleToolError(err, "Validate failed")
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }

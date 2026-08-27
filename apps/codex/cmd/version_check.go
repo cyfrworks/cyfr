@@ -10,6 +10,7 @@ import (
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/release"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -36,7 +37,7 @@ func upgradeNotice() string {
 		return ""
 	}
 	latest := cachedLatest()
-	if latest == "" || !release.IsNewer(latest, Version) {
+	if latest == "" || !release.IsNewer(latest, version.Version) {
 		return ""
 	}
 	return fmt.Sprintf("** %s available — run 'cyfr upgrade' to update", latest)

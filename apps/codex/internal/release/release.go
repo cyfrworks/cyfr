@@ -8,7 +8,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// httpClient bounds the GitHub API call on its own, so a caller passing
+// context.Background() (as `cyfr upgrade` reasonably may) still cannot hang
+// on a stalled connection. `http.DefaultClient` has no timeout at all.
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // bareSemver is the only shape a release tag may take: MAJOR.MINOR.PATCH
 // with no prefix, which also skips the legacy `v*` and `porta-v*` tags.
@@ -29,7 +35,7 @@ func Latest(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

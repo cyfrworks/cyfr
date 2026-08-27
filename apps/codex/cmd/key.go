@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -45,7 +46,7 @@ Default scopes per type (applied when --scope is omitted):
 	Example: `  cyfr key create --name my-service --type service
   cyfr key create --name ci-runner --type application --scope execute,component_read
   cyfr key create --name prod --type admin --rate-limit 100/1m --ip-allowlist 10.0.0.0/8`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
 		keyType, _ := cmd.Flags().GetString("type")
 		scope, _ := cmd.Flags().GetStringSlice("scope")
@@ -55,7 +56,7 @@ Default scopes per type (applied when --scope is omitted):
 		// If --name not provided, try interactive mode
 		if name == "" {
 			if !prompt.IsInteractive(flagNoInteractive) {
-				output.Error("--name is required. Usage: cyfr key create --name <name>")
+				return errors.New("--name is required. Usage: cyfr key create --name <name>")
 			}
 
 			form, err := prompt.RunKeyCreateForm()
@@ -63,7 +64,7 @@ Default scopes per type (applied when --scope is omitted):
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			name = form.Name
 			keyType = form.Type
@@ -94,15 +95,16 @@ Default scopes per type (applied when --scope is omitted):
 		}
 
 		client := newClient()
-		result, err := client.CallTool("key", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "key", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -112,20 +114,21 @@ var keyGetCmd = &cobra.Command{
 	Long:    "Show metadata for an API key including type, scopes, and rate limits.",
 	Example: "  cyfr key get my-service",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("key", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
 			"action": "get",
 			"name":   args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -134,19 +137,20 @@ var keyListCmd = &cobra.Command{
 	Short:   "List all API keys",
 	Long:    "List all API keys with their names, types, and creation dates.",
 	Example: "  cyfr key list",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("key", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
 			"action": "list",
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -156,7 +160,7 @@ var keyRevokeCmd = &cobra.Command{
 	Long:    "Permanently revoke an API key. Existing sessions using this key will be invalidated. Run without arguments for interactive selection.",
 	Example: "  cyfr key revoke my-service",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
 		switch {
@@ -164,43 +168,43 @@ var keyRevokeCmd = &cobra.Command{
 			name = args[0]
 		case prompt.IsInteractive(flagNoInteractive):
 			client := newClient()
-			opts, err := prompt.FetchKeys(client)
+			opts, err := prompt.FetchKeys(cmd.Context(), client)
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if len(opts) == 0 {
-				output.Error("No keys found. Create one with 'cyfr key create'.")
+				return errors.New("No keys found. Create one with 'cyfr key create'.")
 			}
 			selected, err := prompt.SelectOne("Select a key to revoke", opts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			confirmed, err := prompt.Confirm(fmt.Sprintf("Revoke key '%s'? This cannot be undone.", selected))
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			if !confirmed {
 				fmt.Println("Cancelled.")
-				return
+				return nil
 			}
 			name = selected
 		default:
-			output.Error("Usage: cyfr key revoke <name>")
+			return errors.New("Usage: cyfr key revoke <name>")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("key", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
 			"action": "revoke",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -208,6 +212,7 @@ var keyRevokeCmd = &cobra.Command{
 			fmt.Printf("Key '%s' revoked.\n", name)
 		}
 		_ = result
+		return nil
 	},
 }
 
@@ -217,7 +222,7 @@ var keyRotateCmd = &cobra.Command{
 	Long:    "Generate a new key value for an existing key name. The old value stops working immediately. Run without arguments for interactive selection.",
 	Example: "  cyfr key rotate my-service",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
 		switch {
@@ -225,48 +230,49 @@ var keyRotateCmd = &cobra.Command{
 			name = args[0]
 		case prompt.IsInteractive(flagNoInteractive):
 			client := newClient()
-			opts, err := prompt.FetchKeys(client)
+			opts, err := prompt.FetchKeys(cmd.Context(), client)
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if len(opts) == 0 {
-				output.Error("No keys found. Create one with 'cyfr key create'.")
+				return errors.New("No keys found. Create one with 'cyfr key create'.")
 			}
 			selected, err := prompt.SelectOne("Select a key to rotate", opts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			confirmed, err := prompt.Confirm(fmt.Sprintf("Rotate key '%s'? The old value stops working immediately.", selected))
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			if !confirmed {
 				fmt.Println("Cancelled.")
-				return
+				return nil
 			}
 			name = selected
 		default:
-			output.Error("Usage: cyfr key rotate <name>")
+			return errors.New("Usage: cyfr key rotate <name>")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("key", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "key", map[string]any{
 			"action": "rotate",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }

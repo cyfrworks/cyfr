@@ -36,14 +36,14 @@ var athanorCmd = &cobra.Command{
 var athanorListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the athanors you belong to",
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("athanor", map[string]any{"action": "list"})
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{"action": "list"})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		athanors, _ := result["athanors"].([]any)
 		for _, raw := range athanors {
@@ -53,6 +53,7 @@ var athanorListCmd = &cobra.Command{
 			}
 			fmt.Printf("%-40s %-7s %-20s %s\n", str(a["id"]), str(a["kind"]), str(a["route"]), str(a["name"]))
 		}
+		return nil
 	},
 }
 
@@ -60,18 +61,18 @@ var athanorGetCmd = &cobra.Command{
 	Use:   "get [athanor]",
 	Short: "Show an athanor (the one in focus when omitted)",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := map[string]any{"action": "get"}
 		if len(args) == 1 {
 			payload["athanor"] = args[0]
 		}
-		result, err := newClient().CallTool("athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("%s (%s) — %s, %s, %d member(s)\n",
 			str(result["name"]), str(result["route"]), str(result["kind"]), str(result["status"]),
@@ -79,6 +80,7 @@ var athanorGetCmd = &cobra.Command{
 		if result["provisioned_at"] == nil {
 			fmt.Println("  not provisioned yet — `cyfr athanor provision` retries")
 		}
+		return nil
 	},
 }
 
@@ -86,21 +88,22 @@ var athanorCreateCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Create a group — you are its first member",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := map[string]any{"action": "create", "name": args[0]}
 		if slug, _ := cmd.Flags().GetString("slug"); slug != "" {
 			payload["slug"] = slug
 		}
-		result, err := newClient().CallTool("athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Created %s (%s) — `cyfr athanor use %s` to work there.\n",
 			str(result["name"]), str(result["route"]), str(result["route"]))
+		return nil
 	},
 }
 
@@ -108,18 +111,19 @@ var athanorRenameCmd = &cobra.Command{
 	Use:   "rename <athanor> <name>",
 	Short: "Rename an athanor (its slug stays)",
 	Args:  cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("athanor", map[string]any{
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{
 			"action": "rename", "athanor": args[0], "name": args[1],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Renamed to %s\n", str(result["name"]))
+		return nil
 	},
 }
 
@@ -127,18 +131,19 @@ var athanorArchiveCmd = &cobra.Command{
 	Use:   "archive <athanor>",
 	Short: "Archive a group (nothing is deleted; every ingress refuses it)",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("athanor", map[string]any{
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{
 			"action": "archive", "athanor": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Archived %s\n", str(result["name"]))
+		return nil
 	},
 }
 
@@ -146,18 +151,19 @@ var athanorUnarchiveCmd = &cobra.Command{
 	Use:   "unarchive <athanor>",
 	Short: "Reopen an archived group",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("athanor", map[string]any{
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "athanor", map[string]any{
 			"action": "unarchive", "athanor": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Reopened %s\n", str(result["name"]))
+		return nil
 	},
 }
 
@@ -167,30 +173,31 @@ var athanorSettingsCmd = &cobra.Command{
 	Long: "Settings merge one level deep: `--set aqua.answer_mode=all` changes that one key " +
 		"under `aqua` and leaves the rest of `aqua` alone; `--set aqua.answer_mode=` deletes it.",
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		pairs, _ := cmd.Flags().GetStringArray("set")
 		if len(pairs) == 0 {
 			fmt.Fprintln(cmd.ErrOrStderr(), "nothing to set — pass at least one --set key=value")
-			return
+			return nil
 		}
 		settings, err := parseSettings(pairs)
 		if err != nil {
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-			return
+			return nil
 		}
 		payload := map[string]any{"action": "settings", "settings": settings}
 		if len(args) == 1 {
 			payload["athanor"] = args[0]
 		}
-		result, err := newClient().CallTool("athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Settings updated for %s\n", str(result["name"]))
+		return nil
 	},
 }
 
@@ -198,20 +205,21 @@ var athanorProvisionCmd = &cobra.Command{
 	Use:   "provision [athanor]",
 	Short: "Retry a provisioning that failed (idempotent)",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := map[string]any{"action": "provision"}
 		if len(args) == 1 {
 			payload["athanor"] = args[0]
 		}
-		result, err := newClient().CallTool("athanor", payload)
+		result, err := newClient().CallTool(cmd.Context(), "athanor", payload)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Provisioned %s\n", str(result["name"]))
+		return nil
 	},
 }
 
@@ -257,18 +265,19 @@ var athanorUseCmd = &cobra.Command{
 	Use:   "use <athanor>",
 	Short: "Point this session at an athanor (an id, a group slug, or @namespace)",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("session", map[string]any{
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "session", map[string]any{
 			"action": "use", "athanor": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		athanor, _ := result["athanor"].(map[string]any)
 		fmt.Printf("Now working in %s (%s)\n", str(athanor["name"]), str(athanor["route"]))
+		return nil
 	},
 }

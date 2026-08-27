@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -20,24 +21,25 @@ var callCmd = &cobra.Command{
   cyfr call component '{"action":"search","query":"sentiment"}'
   cyfr call vault '{"action":"list"}'`,
 	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		toolName := args[0]
 
 		var toolArgs map[string]any
 		if len(args) > 1 {
 			if err := json.Unmarshal([]byte(args[1]), &toolArgs); err != nil {
-				output.Errorf("Invalid JSON: %v", err)
+				return fmt.Errorf("Invalid JSON: %v", err)
 			}
 		} else {
 			toolArgs = map[string]any{}
 		}
 
 		client := newClient()
-		result, err := client.CallTool(toolName, toolArgs)
+		result, err := client.CallTool(cmd.Context(), toolName, toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		output.JSON(result)
+		return nil
 	},
 }

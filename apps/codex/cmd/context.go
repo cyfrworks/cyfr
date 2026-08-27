@@ -30,15 +30,15 @@ var contextListCmd = &cobra.Command{
 	Short:   "Show all contexts",
 	Long:    "Show all configured server contexts. The active context is marked with an asterisk (*).",
 	Example: "  cyfr context list",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
-			output.Errorf("Failed to load config: %v", err)
+			return fmt.Errorf("Failed to load config: %v", err)
 		}
 
 		if flagJSON {
 			output.JSON(cfg)
-			return
+			return nil
 		}
 
 		for name, ctx := range cfg.Contexts {
@@ -48,6 +48,7 @@ var contextListCmd = &cobra.Command{
 			}
 			fmt.Printf("%s%-15s %s\n", marker, name, ctx.URL)
 		}
+		return nil
 	},
 }
 
@@ -57,24 +58,25 @@ var contextSetCmd = &cobra.Command{
 	Long:    "Set the named context as the active server connection for all subsequent commands.",
 	Example: "  cyfr context set production",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
 		cfg, err := config.Load()
 		if err != nil {
-			output.Errorf("Failed to load config: %v", err)
+			return fmt.Errorf("Failed to load config: %v", err)
 		}
 
 		if _, ok := cfg.Contexts[name]; !ok {
-			output.Errorf("Context '%s' not found. Use 'cyfr context add' first.", name)
+			return fmt.Errorf("Context '%s' not found. Use 'cyfr context add' first.", name)
 		}
 
 		cfg.CurrentContext = name
 		if err := cfg.Save(); err != nil {
-			output.Errorf("Failed to save config: %v", err)
+			return fmt.Errorf("Failed to save config: %v", err)
 		}
 
 		fmt.Printf("Switched to context '%s' (%s)\n", name, cfg.Contexts[name].URL)
+		return nil
 	},
 }
 
@@ -86,25 +88,26 @@ var contextAddCmd = &cobra.Command{
   cyfr context add cloud https://cyfr.example.com
   cyfr context add enterprise https://cyfr.corp.internal:4000`,
 	Args: cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		url := args[1]
 
 		if err := validateContextURL(url); err != nil {
-			output.Errorf("Invalid server URL: %v", err)
+			return fmt.Errorf("Invalid server URL: %v", err)
 		}
 
 		cfg, err := config.Load()
 		if err != nil {
-			output.Errorf("Failed to load config: %v", err)
+			return fmt.Errorf("Failed to load config: %v", err)
 		}
 
 		cfg.Contexts[name] = &config.Context{URL: url}
 		if err := cfg.Save(); err != nil {
-			output.Errorf("Failed to save config: %v", err)
+			return fmt.Errorf("Failed to save config: %v", err)
 		}
 
 		fmt.Printf("Added context '%s' (%s)\n", name, url)
+		return nil
 	},
 }
 

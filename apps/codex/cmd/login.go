@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -37,7 +39,7 @@ your namespace is your identity on every server, and required before you
 can push components. Later logins do not need cyfr.run to be reachable.`,
 	Example: `  cyfr login
   cyfr login --provider google`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		provider := flagLoginProvider
 
 		// When the user didn't explicitly pass --provider and we're attached
@@ -50,30 +52,30 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 				{Label: "Google", Value: "google"},
 			})
 			if err != nil {
-				output.Errorf("Provider selection cancelled: %v", err)
+				return fmt.Errorf("Provider selection cancelled: %v", err)
 			}
 			provider = choice
 		}
 
 		if provider != "github" && provider != "google" {
-			output.Errorf("Unsupported provider %q — use 'github' or 'google'.", provider)
+			return fmt.Errorf("Unsupported provider %q — use 'github' or 'google'.", provider)
 		}
 
 		client := newClient()
 
 		// Confirm the server speaks a revision we understand before starting a
 		// device flow that would otherwise fail confusingly later.
-		if err := client.Discover(); err != nil {
-			output.Errorf("Failed to connect: %v", err)
+		if err := client.Discover(cmd.Context()); err != nil {
+			return fmt.Errorf("Failed to connect: %v", err)
 		}
 
 		// Start device flow
-		result, err := client.CallTool("session", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "session", map[string]any{
 			"action":   "device_init",
 			"provider": provider,
 		})
 		if err != nil {
-			output.Errorf("Failed to start login: %v", err)
+			return fmt.Errorf("Failed to start login: %v", err)
 		}
 
 		// Show user code and verification URL
@@ -102,12 +104,12 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		// Poll for completion
 		for {
 			if time.Now().After(deadline) {
-				output.Errorf("Login timed out after %.0f seconds. Run `cyfr login` to try again.", expiresIn)
+				return fmt.Errorf("Login timed out after %.0f seconds. Run `cyfr login` to try again.", expiresIn)
 			}
 
 			time.Sleep(time.Duration(interval) * time.Second)
 
-			pollResult, err := client.CallTool("session", map[string]any{
+			pollResult, err := client.CallTool(cmd.Context(), "session", map[string]any{
 				"action":      "device_poll",
 				"device_code": deviceCode,
 				"provider":    provider,
@@ -182,7 +184,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 						os.Exit(1)
 					}
 
-					if !runLegalAcceptInteractive(client, provider, accessToken) {
+					if !runLegalAcceptInteractive(cmd.Context(), client, provider, accessToken) {
 						fmt.Fprintln(os.Stderr,
 							"Policy acceptance is required. Run `cyfr login` to try again.")
 						os.Exit(1)
@@ -193,7 +195,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 					// CredentialStore for authenticated callers, so a single
 					// call replaces what session.device_poll's internal probe
 					// would have done if acceptance had been current.
-					probeResult, perr := client.CallTool("registry", map[string]any{
+					probeResult, perr := client.CallTool(cmd.Context(), "registry", map[string]any{
 						"action":       "probe",
 						"provider":     provider,
 						"access_token": accessToken,
@@ -236,7 +238,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 						os.Exit(1)
 					}
 
-					if !promptAndClaimPersonalNamespace(client, provider, accessToken, suggested) {
+					if !promptAndClaimPersonalNamespace(cmd.Context(), client, provider, accessToken, suggested) {
 						// User declined or exhausted retries — login is incomplete.
 						fmt.Fprintln(os.Stderr,
 							"Personal namespace claim is required. Run `cyfr login` to try again.")
@@ -271,13 +273,13 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 				if flagJSON {
 					output.JSON(pollResult)
 				}
-				return
+				return nil
 
 			case "expired":
-				output.Error("Device code expired. Run 'cyfr login' again.")
+				return errors.New("Device code expired. Run 'cyfr login' again.")
 
 			case "denied":
-				output.Error("Authorization denied.")
+				return errors.New("Authorization denied.")
 
 			case "registry_unavailable", "error":
 				// A first sign-in needs cyfr.run once, to find or claim the
@@ -288,7 +290,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 				if msg == "" {
 					msg = "cyfr.run could not be reached. Run `cyfr login` again in a moment."
 				}
-				output.Error(msg)
+				return errors.New(msg)
 
 			default:
 				// "pending" or unknown — keep polling
@@ -306,7 +308,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 // tool surfaces errors as plain strings rather than structured codes, so
 // this function inspects substrings of the error message to distinguish
 // slug_taken from other failure modes.
-func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, suggested string) bool {
+func promptAndClaimPersonalNamespace(ctx context.Context, client *mcp.Client, provider, accessToken, suggested string) bool {
 	if !prompt.IsInteractive(flagNoInteractive) {
 		fmt.Fprintln(os.Stderr,
 			"cyfr.run requires a personal namespace claim on first login. "+
@@ -344,7 +346,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 			"access_token": accessToken,
 		}
 
-		result, err := client.CallTool("registry", args)
+		result, err := client.CallTool(ctx, "registry", args)
 		if err == nil {
 			if slug, ok := result["slug"].(string); ok {
 				fmt.Printf("Claimed personal namespace: %s\n", slug)
@@ -398,7 +400,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 			// in the terminal, prompt y/n per doc, then call
 			// registry.legal_accept and loop back to retry the claim with
 			// the same access_token.
-			if !runLegalAcceptInteractive(client, provider, accessToken) {
+			if !runLegalAcceptInteractive(ctx, client, provider, accessToken) {
 				return false
 			}
 			// Don't mark this attempt against the 5-attempt budget — the
@@ -423,7 +425,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 // false if the user bails or any step fails.
 //
 // This is the codex-CLI counterpart to the web flow's LegalAcceptController.
-func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string) bool {
+func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider, accessToken string) bool {
 	if !prompt.IsInteractive(flagNoInteractive) {
 		fmt.Fprintln(os.Stderr,
 			"cyfr.run requires policy acceptance before claiming a namespace. "+
@@ -432,7 +434,7 @@ func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string)
 		return false
 	}
 
-	verRaw, err := client.CallTool("registry", map[string]any{
+	verRaw, err := client.CallTool(ctx, "registry", map[string]any{
 		"action": "legal_version",
 	})
 	if err != nil {
@@ -468,7 +470,7 @@ func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string)
 			continue
 		}
 
-		body, err := client.CallTool("registry", map[string]any{
+		body, err := client.CallTool(ctx, "registry", map[string]any{
 			"action": "legal_page",
 			"name":   name,
 		})
@@ -500,7 +502,7 @@ func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string)
 		}
 	}
 
-	_, err = client.CallTool("registry", map[string]any{
+	_, err = client.CallTool(ctx, "registry", map[string]any{
 		"action":         "legal_accept",
 		"provider":       provider,
 		"access_token":   accessToken,
@@ -570,7 +572,7 @@ var logoutCmd = &cobra.Command{
 	GroupID: "identity",
 	Long:    "Invalidate the current session on the server and remove the cached session token from local config.",
 	Example: "  cyfr logout",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
 		// Clear saved session locally first — even if the server call fails
@@ -581,7 +583,7 @@ var logoutCmd = &cobra.Command{
 			_ = cfg.Save()
 		}
 
-		result, err := client.CallTool("session", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "session", map[string]any{
 			"action": "logout",
 		})
 		if err != nil {
@@ -591,7 +593,7 @@ var logoutCmd = &cobra.Command{
 			} else {
 				fmt.Println("Logged out successfully.")
 			}
-			return
+			return nil
 		}
 
 		if flagJSON {
@@ -599,6 +601,7 @@ var logoutCmd = &cobra.Command{
 		} else {
 			fmt.Println("Logged out successfully.")
 		}
+		return nil
 	},
 }
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -50,7 +51,7 @@ var scheduleCreateCmd = &cobra.Command{
   cyfr schedule create --name processor --cron "*/5 * * * *" --ref "reagent:local.proc" --input '{"key":"value"}'
   cyfr schedule create --name pinned --cron "0 * * * *" --ref "catalyst:local.reporter:1.0.0"
   cyfr schedule create  # interactive mode`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
 		name, _ := cmd.Flags().GetString("name")
@@ -61,8 +62,7 @@ var scheduleCreateCmd = &cobra.Command{
 		// Interactive mode if flags not provided
 		if name == "" || cron == "" || refStr == "" {
 			if !prompt.IsInteractive(flagNoInteractive) {
-				output.Error("Usage: cyfr schedule create --name <name> --cron '<expr>' --ref <reference>")
-				return
+				return errors.New("Usage: cyfr schedule create --name <name> --cron '<expr>' --ref <reference>")
 			}
 
 			if name == "" {
@@ -72,7 +72,7 @@ var scheduleCreateCmd = &cobra.Command{
 					if prompt.IsAborted(err) {
 						os.Exit(130)
 					}
-					output.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %v", err)
 				}
 			}
 
@@ -83,25 +83,24 @@ var scheduleCreateCmd = &cobra.Command{
 					if prompt.IsAborted(err) {
 						os.Exit(130)
 					}
-					output.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %v", err)
 				}
 			}
 
 			if refStr == "" {
-				compOpts, err := prompt.FetchComponents(client)
+				compOpts, err := prompt.FetchComponents(cmd.Context(), client)
 				if err != nil {
-					handleToolError(err)
+					return handleToolError(err)
 				}
 				if len(compOpts) == 0 {
-					output.Error("No components found. Register one first.")
-					return
+					return errors.New("No components found. Register one first.")
 				}
 				refStr, err = prompt.SelectOne("Select a component", compOpts)
 				if err != nil {
 					if prompt.IsAborted(err) {
 						os.Exit(130)
 					}
-					output.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %v", err)
 				}
 			}
 		}
@@ -116,14 +115,14 @@ var scheduleCreateCmd = &cobra.Command{
 		if inputStr != "" {
 			var inputMap map[string]any
 			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
-				output.Errorf("Invalid JSON input: %v", err)
+				return fmt.Errorf("Invalid JSON input: %v", err)
 			}
 			toolArgs["input"] = inputMap
 		}
 
-		result, err := client.CallTool("schedule", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "schedule", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -132,20 +131,21 @@ var scheduleCreateCmd = &cobra.Command{
 			fmt.Println("Schedule created.")
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
 var scheduleListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List cron schedules",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("schedule", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
 			"action": "list",
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -153,6 +153,7 @@ var scheduleListCmd = &cobra.Command{
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -162,15 +163,15 @@ var scheduleGetCmd = &cobra.Command{
 	Example: `  cyfr schedule get my-schedule
   cyfr schedule get 550e8400-e29b-41d4-a716-446655440000`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("schedule", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
 			"action":      "get",
 			"schedule_id": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -178,6 +179,7 @@ var scheduleGetCmd = &cobra.Command{
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -189,7 +191,7 @@ var scheduleUpdateCmd = &cobra.Command{
   cyfr schedule update my-schedule --ref "catalyst:local.reporter" --name new-name
   cyfr schedule update my-schedule --input '{"key":"new-value"}'`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
 		toolArgs := map[string]any{
@@ -213,14 +215,14 @@ var scheduleUpdateCmd = &cobra.Command{
 			inputStr, _ := cmd.Flags().GetString("input")
 			var inputMap map[string]any
 			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
-				output.Errorf("Invalid JSON input: %v", err)
+				return fmt.Errorf("Invalid JSON input: %v", err)
 			}
 			toolArgs["input"] = inputMap
 		}
 
-		result, err := client.CallTool("schedule", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "schedule", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -229,6 +231,7 @@ var scheduleUpdateCmd = &cobra.Command{
 			fmt.Println("Schedule updated.")
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -236,15 +239,15 @@ var schedulePauseCmd = &cobra.Command{
 	Use:   "pause <id|name>",
 	Short: "Pause a cron schedule",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("schedule", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
 			"action":      "pause",
 			"schedule_id": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -253,6 +256,7 @@ var schedulePauseCmd = &cobra.Command{
 			fmt.Println("Schedule paused.")
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -260,15 +264,15 @@ var scheduleResumeCmd = &cobra.Command{
 	Use:   "resume <id|name>",
 	Short: "Resume a paused cron schedule",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("schedule", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
 			"action":      "resume",
 			"schedule_id": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -277,6 +281,7 @@ var scheduleResumeCmd = &cobra.Command{
 			fmt.Println("Schedule resumed.")
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -284,15 +289,15 @@ var scheduleDeleteCmd = &cobra.Command{
 	Use:   "delete <id|name>",
 	Short: "Delete a cron schedule",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("schedule", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "schedule", map[string]any{
 			"action":      "delete",
 			"schedule_id": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -301,5 +306,6 @@ var scheduleDeleteCmd = &cobra.Command{
 			fmt.Println("Schedule deleted.")
 			_ = result
 		}
+		return nil
 	},
 }

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -47,7 +49,7 @@ Header values can reference a stored Connection with the vault: prefix.`,
 	Example: `  cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"vault:notion-key"}}'
   cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'`,
 	Args: cobra.RangeArgs(0, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 		var config map[string]any
 
@@ -55,7 +57,7 @@ Header values can reference a stored Connection with the vault: prefix.`,
 		case len(args) >= 2:
 			name = args[0]
 			if err := json.Unmarshal([]byte(args[1]), &config); err != nil {
-				output.Errorf("Invalid JSON config: %v", err)
+				return fmt.Errorf("Invalid JSON config: %v", err)
 			}
 		case len(args) == 1:
 			// Could be just a name (interactive config) or just JSON
@@ -66,13 +68,13 @@ Header values can reference a stored Connection with the vault: prefix.`,
 					if prompt.IsAborted(err) {
 						os.Exit(130)
 					}
-					output.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %v", err)
 				}
 				if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-					output.Errorf("Invalid JSON config: %v", err)
+					return fmt.Errorf("Invalid JSON config: %v", err)
 				}
 			} else {
-				output.Error("Usage: cyfr mcp add <name> '<config-json>'")
+				return errors.New("Usage: cyfr mcp add <name> '<config-json>'")
 			}
 		case prompt.IsInteractive(flagNoInteractive):
 			var err error
@@ -81,37 +83,37 @@ Header values can reference a stored Connection with the vault: prefix.`,
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			configStr, err := prompt.InputText("Config JSON", `{"url":"https://"}`)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-				output.Errorf("Invalid JSON config: %v", err)
+				return fmt.Errorf("Invalid JSON config: %v", err)
 			}
 		default:
-			output.Error("Usage: cyfr mcp add <name> '<config-json>'")
+			return errors.New("Usage: cyfr mcp add <name> '<config-json>'")
 		}
 
 		if config == nil {
-			output.Error("Config JSON is required.")
+			return errors.New("Config JSON is required.")
 		}
 		if _, ok := config["url"]; !ok {
-			output.Error("Config must include a \"url\" field.")
+			return errors.New("Config must include a \"url\" field.")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "create",
 			"name":   name,
 			"config": config,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -137,6 +139,7 @@ Header values can reference a stored Connection with the vault: prefix.`,
 				}
 			}
 		}
+		return nil
 	},
 }
 
@@ -147,31 +150,36 @@ var mcpRemoveCmd = &cobra.Command{
 	Long:    "Remove an external MCP server configuration and disconnect. Its tools will no longer appear in tools/list.",
 	Example: "  cyfr mcp remove notion",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
 		switch {
 		case len(args) >= 1:
 			name = args[0]
 		case prompt.IsInteractive(flagNoInteractive):
-			name = selectServer("Select a server to remove")
+			var err error
+			name, err = selectServer(cmd.Context(), "Select a server to remove")
+			if err != nil {
+				return err
+			}
 		default:
-			output.Error("Usage: cyfr mcp remove <name>")
+			return errors.New("Usage: cyfr mcp remove <name>")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "delete",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			fmt.Printf("Server '%s' removed.\n", name)
 		}
+		return nil
 	},
 }
 
@@ -180,13 +188,13 @@ var mcpListCmd = &cobra.Command{
 	Aliases: []string{"ls"},
 	Short:   "List configured MCP servers",
 	Example: "  cyfr mcp list",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "list",
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -194,7 +202,7 @@ var mcpListCmd = &cobra.Command{
 			servers, ok := result["servers"].([]any)
 			if !ok || len(servers) == 0 {
 				fmt.Println("No MCP servers configured.")
-				return
+				return nil
 			}
 			for _, s := range servers {
 				srv, ok := s.(map[string]any)
@@ -211,6 +219,7 @@ var mcpListCmd = &cobra.Command{
 					srv["name"], srv["status"], enabled, srv["tool_count"])
 			}
 		}
+		return nil
 	},
 }
 
@@ -220,31 +229,36 @@ var mcpGetCmd = &cobra.Command{
 	Long:    "Show detailed information about an external MCP server, including its configuration, status, and discovered tools.",
 	Example: "  cyfr mcp get notion",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
 		switch {
 		case len(args) >= 1:
 			name = args[0]
 		case prompt.IsInteractive(flagNoInteractive):
-			name = selectServer("Select a server")
+			var err error
+			name, err = selectServer(cmd.Context(), "Select a server")
+			if err != nil {
+				return err
+			}
 		default:
-			output.Error("Usage: cyfr mcp get <name>")
+			return errors.New("Usage: cyfr mcp get <name>")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "get",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -254,31 +268,36 @@ var mcpTestCmd = &cobra.Command{
 	Long:    "Re-initialize the connection to an MCP server and report success/failure with capabilities.",
 	Example: "  cyfr mcp test notion",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
 		switch {
 		case len(args) >= 1:
 			name = args[0]
 		case prompt.IsInteractive(flagNoInteractive):
-			name = selectServer("Select a server to test")
+			var err error
+			name, err = selectServer(cmd.Context(), "Select a server to test")
+			if err != nil {
+				return err
+			}
 		default:
-			output.Error("Usage: cyfr mcp test <name>")
+			return errors.New("Usage: cyfr mcp test <name>")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "test",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -287,20 +306,21 @@ var mcpEnableCmd = &cobra.Command{
 	Short:   "Enable a disabled MCP server",
 	Example: "  cyfr mcp enable notion",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "enable",
 			"name":   args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			fmt.Printf("Server '%s' enabled.\n", args[0])
 		}
+		return nil
 	},
 }
 
@@ -309,20 +329,21 @@ var mcpDisableCmd = &cobra.Command{
 	Short:   "Disable an MCP server without removing it",
 	Example: "  cyfr mcp disable notion",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", map[string]any{
 			"action": "disable",
 			"name":   args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			fmt.Printf("Server '%s' disabled.\n", args[0])
 		}
+		return nil
 	},
 }
 
@@ -333,7 +354,7 @@ var mcpRefreshCmd = &cobra.Command{
 	Example: `  cyfr mcp refresh          # refresh all
   cyfr mcp refresh notion   # refresh one`,
 	Args: cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		toolArgs := map[string]any{
 			"action": "refresh",
 		}
@@ -342,9 +363,9 @@ var mcpRefreshCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool("mcp_servers", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "mcp_servers", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -365,22 +386,23 @@ var mcpRefreshCmd = &cobra.Command{
 				}
 			}
 		}
+		return nil
 	},
 }
 
 // selectServer fetches the server list and prompts the user to choose one.
-func selectServer(label string) string {
+func selectServer(ctx context.Context, label string) (string, error) {
 	client := newClient()
-	result, err := client.CallTool("mcp_servers", map[string]any{
+	result, err := client.CallTool(ctx, "mcp_servers", map[string]any{
 		"action": "list",
 	})
 	if err != nil {
-		handleToolError(err)
+		return "", handleToolError(err)
 	}
 
 	servers, ok := result["servers"].([]any)
 	if !ok || len(servers) == 0 {
-		output.Error("No MCP servers configured.")
+		return "", errors.New("No MCP servers configured.")
 	}
 
 	opts := make([]prompt.Option, 0, len(servers))
@@ -404,7 +426,7 @@ func selectServer(label string) string {
 		if prompt.IsAborted(err) {
 			os.Exit(130)
 		}
-		output.Errorf("Prompt failed: %v", err)
+		return "", fmt.Errorf("Prompt failed: %v", err)
 	}
-	return selected
+	return selected, nil
 }

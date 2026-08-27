@@ -5,14 +5,8 @@ import (
 	"os"
 
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
-)
-
-var (
-	// Set via ldflags at build time.
-	Version = "dev"
-	Commit  = "none"
-	Date    = "unknown"
 )
 
 func init() {
@@ -29,24 +23,24 @@ var statusCmd = &cobra.Command{
 	Example: `  cyfr status
   cyfr status --scope sanctum
   cyfr status --json`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, _ := cmd.Flags().GetString("scope")
 
 		client := newClient()
-		result, err := client.CallTool("system", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "system", map[string]any{
 			"action": "status",
 			"scope":  scope,
 		})
 		if err != nil {
-			handleToolError(err, "Failed to connect")
+			return handleToolError(err, "Failed to connect")
 		}
 		if flagJSON {
-			result["cli_version"] = Version
-			result["cli_commit"] = Commit
-			result["cli_date"] = Date
+			result["cli_version"] = version.Version
+			result["cli_commit"] = version.Commit
+			result["cli_date"] = version.Date
 			output.JSON(result)
 		} else {
-			fmt.Printf("cyfr v%s (commit: %s, built: %s)\n\n", Version, Commit, Date)
+			fmt.Printf("cyfr v%s (commit: %s, built: %s)\n\n", version.Version, version.Commit, version.Date)
 			output.KeyValue(result)
 
 			// Hint if registry is not reachable
@@ -60,6 +54,7 @@ var statusCmd = &cobra.Command{
 				fmt.Println("\n" + n)
 			}
 		}
+		return nil
 	},
 }
 
@@ -71,20 +66,21 @@ var notifyCmd = &cobra.Command{
 	Example: `  cyfr notify deployment.complete https://hooks.slack.com/T0/B0/xxx
   cyfr notify audit.export https://example.com/webhook`,
 	Args: cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("system", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "system", map[string]any{
 			"action": "notify",
 			"event":  args[0],
 			"target": args[1],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }

@@ -24,16 +24,16 @@ afterwards to consent a component's declared needs before it can run.`,
 	Example: `  cyfr register
   cyfr register --json`,
 	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		registerID := randomHex(8)
 
-		result, err := client.CallToolWithProgress("component", map[string]any{
+		result, err := client.CallToolWithProgress(cmd.Context(), "component", map[string]any{
 			"action":      "register",
 			"register_id": registerID,
 		}, progressPrinter())
 		if err != nil {
-			handleToolError(err, "Register failed")
+			return handleToolError(err, "Register failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -52,6 +52,7 @@ afterwards to consent a component's declared needs before it can run.`,
 				fmt.Fprintf(os.Stderr, "  - Server scanned: %v\n", dirs)
 			}
 		}
+		return nil
 	},
 }
 

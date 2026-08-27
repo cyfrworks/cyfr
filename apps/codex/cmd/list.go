@@ -21,7 +21,7 @@ var listCmd = &cobra.Command{
   cyfr list --type catalyst
   cyfr list --json`,
 	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		toolArgs := map[string]any{
 			"action": "list",
@@ -29,20 +29,20 @@ var listCmd = &cobra.Command{
 		if t, _ := cmd.Flags().GetString("type"); t != "" {
 			toolArgs["type"] = t
 		}
-		result, err := client.CallTool("component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
 		if err != nil {
-			handleToolError(err, "List failed")
+			return handleToolError(err, "List failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		components, ok := result["components"].([]any)
 		if !ok || len(components) == 0 {
 			fmt.Println("No components installed.")
 			fmt.Println("\nHint: use 'cyfr register' to index local components or 'cyfr pull <ref>' to download from the registry.")
-			return
+			return nil
 		}
 
 		headers := []string{"REFERENCE", "TYPE", "DESCRIPTION"}
@@ -64,6 +64,7 @@ var listCmd = &cobra.Command{
 		}
 		output.Table(headers, rows)
 		fmt.Fprintf(cmd.ErrOrStderr(), "\n%d component(s) installed.\n", len(rows))
+		return nil
 	},
 }
 

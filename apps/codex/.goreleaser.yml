@@ -15,9 +15,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/cyfr/codex/cmd.Version={{.Version}}
-      - -X github.com/cyfr/codex/cmd.Commit={{.Commit}}
-      - -X github.com/cyfr/codex/cmd.Date={{.Date}}
+      - -X github.com/cyfr/codex/internal/version.Version={{.Version}}
+      - -X github.com/cyfr/codex/internal/version.Commit={{.Commit}}
+      - -X github.com/cyfr/codex/internal/version.Date={{.Date}}
 
 archives:
   - name_template: "cyfr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -29,6 +29,11 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  # The scaffold tarball carries docker-compose.yml, Dockerfile.node and the
+  # bridge source that `cyfr up` builds and runs — it must be in the signed
+  # checksum manifest, not just attached beside it.
+  extra_files:
+    - glob: cyfr-scaffold.tar.gz
 
 signs:
   - cmd: cosign

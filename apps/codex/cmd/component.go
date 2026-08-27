@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -48,24 +50,24 @@ var searchCmd = &cobra.Command{
   cyfr search supabase --versions
   cyfr search "http client" --json`,
 	Args: cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
 			"action": "search",
 			"query":  strings.Join(args, " "),
 		})
 		if err != nil {
-			handleToolError(err, "Search failed")
+			return handleToolError(err, "Search failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		components, ok := result["components"].([]any)
 		if !ok || len(components) == 0 {
 			fmt.Println("No components found.")
-			return
+			return nil
 		}
 
 		// Server handles deduplication and version merging.
@@ -179,6 +181,7 @@ var searchCmd = &cobra.Command{
 		if note, ok := result["note"].(string); ok && note != "" {
 			fmt.Fprintf(os.Stderr, "\nWarning: %s\n", note)
 		}
+		return nil
 	},
 }
 
@@ -191,7 +194,7 @@ var inspectCmd = &cobra.Command{
   cyfr inspect c local.claude:0.1.0
   cyfr inspect local.sentiment:1.0.0`,
 	Args: cobra.RangeArgs(0, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		var normalized string
 		var originalInput string
@@ -200,25 +203,29 @@ var inspectCmd = &cobra.Command{
 		case len(args) >= 1:
 			args = joinTypeShorthand(args)
 			originalInput = args[0]
-			normalized = resolveComponentRef(client, args[0])
-		case prompt.IsInteractive(flagNoInteractive):
-			opts, err := prompt.FetchComponents(client)
+			var err error
+			normalized, err = resolveComponentRef(cmd.Context(), client, args[0])
 			if err != nil {
-				handleToolError(err)
+				return err
+			}
+		case prompt.IsInteractive(flagNoInteractive):
+			opts, err := prompt.FetchComponents(cmd.Context(), client)
+			if err != nil {
+				return handleToolError(err)
 			}
 			if len(opts) == 0 {
-				output.Error("No components found. Register one first.")
+				return errors.New("No components found. Register one first.")
 			}
 			selected, err := prompt.SelectOne("Select a component to inspect", opts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			normalized = selected
 		default:
-			output.Error("Usage: cyfr inspect <reference>")
+			return errors.New("Usage: cyfr inspect <reference>")
 		}
 
 		callArgs := map[string]any{
@@ -228,9 +235,9 @@ var inspectCmd = &cobra.Command{
 		if includeReadme, _ := cmd.Flags().GetBool("readme"); includeReadme {
 			callArgs["include_readme"] = true
 		}
-		result, err := client.CallTool("component", callArgs)
+		result, err := client.CallTool(cmd.Context(), "component", callArgs)
 		if err != nil {
-			handleToolError(err, "Inspect failed")
+			return handleToolError(err, "Inspect failed")
 		}
 		printResolutionFeedback(result, originalInput)
 		if flagJSON {
@@ -243,6 +250,7 @@ var inspectCmd = &cobra.Command{
 				fmt.Println(readme)
 			}
 		}
+		return nil
 	},
 }
 
@@ -255,20 +263,23 @@ var pullCmd = &cobra.Command{
   cyfr pull cyfr.sentiment:1.0.0
   cyfr pull ghcr.io/youruser/cyfr/catalysts/claude:0.1.0`,
 	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		args = joinTypeShorthand(args)
 		client := newClient()
 		originalInput := args[0]
-		normalized := resolveComponentRef(client, args[0])
+		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
+		if err != nil {
+			return err
+		}
 		progressID := randomHex(8)
 
-		result, err := client.CallToolWithProgress("component", map[string]any{
+		result, err := client.CallToolWithProgress(cmd.Context(), "component", map[string]any{
 			"action":      "pull",
 			"reference":   normalized,
 			"progress_id": progressID,
 		}, progressPrinter())
 		if err != nil {
-			handleToolError(err, "Pull failed")
+			return handleToolError(err, "Pull failed")
 		}
 		printResolutionFeedback(result, originalInput)
 		if flagJSON {
@@ -277,6 +288,7 @@ var pullCmd = &cobra.Command{
 			output.KeyValue(result)
 			printDependencyInfo(result)
 		}
+		return nil
 	},
 }
 
@@ -289,13 +301,16 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 	Example: `  cyfr push c:local.claude:0.2.0
   cyfr push r:local.sentiment:1.0.0 --registry ghcr.io/youruser`,
 	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		args = joinTypeShorthand(args)
 		client := newClient()
-		normalized := resolveComponentRef(client, args[0])
+		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
+		if err != nil {
+			return err
+		}
 
 		if !ref.ParseRef(normalized).HasVersion {
-			output.Error("Pushing requires an explicit version (e.g., c:local.claude:0.1.0)")
+			return errors.New("Pushing requires an explicit version (e.g., c:local.claude:0.1.0)")
 		}
 
 		progressID := randomHex(8)
@@ -308,15 +323,16 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
 			toolArgs["registry"] = registry
 		}
-		result, err := client.CallToolWithProgress("component", toolArgs, progressPrinter())
+		result, err := client.CallToolWithProgress(cmd.Context(), "component", toolArgs, progressPrinter())
 		if err != nil {
-			handleToolError(err, "Push failed")
+			return handleToolError(err, "Push failed")
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -334,7 +350,7 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
   cyfr new tincture my-dashboard
   cyfr new tincture my-dashboard --template react`,
 	Args: cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		componentType := ref.ExpandType(args[0])
 		name := args[1]
 		version, _ := cmd.Flags().GetString("version")
@@ -351,13 +367,13 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 		}
 
 		client := newClient()
-		result, err := client.CallTool("component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
 		if err != nil {
-			handleToolError(err, "Scaffold failed")
+			return handleToolError(err, "Scaffold failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		reference := strVal(result, "reference")
@@ -379,6 +395,7 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 				}
 			}
 		}
+		return nil
 	},
 }
 
@@ -394,10 +411,13 @@ Copies source code, manifest, and compiled artifact. Requires source code
   cyfr fork r:cyfr.sentiment:1.0.0 --name my-sentiment
   cyfr fork c:acme.my-tool:1.0.0 --version 0.1.0`,
 	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		args = joinTypeShorthand(args)
 		client := newClient()
-		normalized := resolveComponentRef(client, args[0])
+		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
+		if err != nil {
+			return err
+		}
 
 		toolArgs := map[string]any{
 			"action":    "fork",
@@ -410,13 +430,13 @@ Copies source code, manifest, and compiled artifact. Requires source code
 			toolArgs["version"] = version
 		}
 
-		result, err := client.CallTool("component", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "component", toolArgs)
 		if err != nil {
-			handleToolError(err, "Fork failed")
+			return handleToolError(err, "Fork failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		reference := strVal(result, "reference")
@@ -439,6 +459,7 @@ Copies source code, manifest, and compiled artifact. Requires source code
 				}
 			}
 		}
+		return nil
 	},
 }
 
@@ -457,27 +478,31 @@ token for the component's namespace (i.e. you are the publisher).`,
 	Example: `  cyfr deprecate c:alice.widget:1.0.0 --reason "use v2 — better schemas"
   cyfr deprecate r:acme.com.http:2.0.0 --reason "security fix in 2.1.0"`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		normalized := resolveComponentRef(client, args[0])
+		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
+		if err != nil {
+			return err
+		}
 		if !ref.ParseRef(normalized).HasVersion {
-			output.Error("Deprecate requires a pinned version (e.g., c:alice.widget:1.0.0)")
+			return errors.New("Deprecate requires a pinned version (e.g., c:alice.widget:1.0.0)")
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
 			"action":    "deprecate",
 			"reference": normalized,
 			"reason":    reason,
 		})
 		if err != nil {
-			handleToolError(err, "Deprecate failed")
+			return handleToolError(err, "Deprecate failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Printf("Deprecated %s\n  reason: %s\n", normalized, reason)
+		return nil
 	},
 }
 
@@ -496,31 +521,35 @@ token for the component's namespace.`,
 	Example: `  cyfr yank c:alice.widget:1.0.0
   cyfr yank r:acme.com.http:2.0.0 --reason "accidental push"`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		normalized := resolveComponentRef(client, args[0])
+		normalized, err := resolveComponentRef(cmd.Context(), client, args[0])
+		if err != nil {
+			return err
+		}
 		if !ref.ParseRef(normalized).HasVersion {
-			output.Error("Yank requires a pinned version (e.g., c:alice.widget:1.0.0)")
+			return errors.New("Yank requires a pinned version (e.g., c:alice.widget:1.0.0)")
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
 			"action":    "yank",
 			"reference": normalized,
 			"reason":    reason,
 		})
 		if err != nil {
-			handleToolError(err, "Yank failed")
+			return handleToolError(err, "Yank failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		if reason == "" {
 			fmt.Printf("Yanked %s\n", normalized)
 		} else {
 			fmt.Printf("Yanked %s\n  reason: %s\n", normalized, reason)
 		}
+		return nil
 	},
 }
 
@@ -538,20 +567,21 @@ var registryDiscoverCmd = &cobra.Command{
 	Example: `  cyfr registry discover ghcr.io/youruser
   cyfr registry discover docker.io/library`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
 			"action":   "discover",
 			"registry": args[0],
 		})
 		if err != nil {
-			handleToolError(err, "Discover failed")
+			return handleToolError(err, "Discover failed")
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -756,17 +786,17 @@ func resolveAllVersions(_ *mcp.Client, s string) []string {
 //
 // Refs containing '@' are passed through unchanged — see resolveAllVersions
 // for the rationale.
-func resolveComponentRef(client *mcp.Client, s string) string {
+func resolveComponentRef(ctx context.Context, client *mcp.Client, s string) (string, error) {
 	parsed := ref.ParseRef(s)
 	if parsed.HasVersion {
-		return s
+		return s, nil
 	}
 
 	// Version is missing — resolve it.
 	if !prompt.IsInteractive(flagNoInteractive) {
 		// Non-interactive: pass through to server for auto-resolution.
 		// The server-side Compendium.Resolver will resolve to latest version.
-		return s
+		return s, nil
 	}
 
 	componentType := ""
@@ -774,19 +804,18 @@ func resolveComponentRef(client *mcp.Client, s string) string {
 		componentType = ref.ExpandType(parsed.Type)
 	}
 
-	versions, err := prompt.FetchVersions(client, parsed.Name, parsed.Namespace, componentType)
+	versions, err := prompt.FetchVersions(ctx, client, parsed.Name, parsed.Namespace, componentType)
 	if err != nil {
-		output.Errorf("Failed to fetch versions: %v", err)
-		return ""
+		return "", fmt.Errorf("Failed to fetch versions: %v", err)
 	}
 
 	if len(versions) == 0 {
 		// No known versions — pass through for server-side resolution (e.g. pull from registry).
-		return s
+		return s, nil
 	}
 
 	// Auto-resolve to latest version (versions are sorted descending).
 	resolved := parsed.WithVersion(versions[0])
 	fmt.Printf("Resolved to latest: %s\n", resolved)
-	return resolved
+	return resolved, nil
 }

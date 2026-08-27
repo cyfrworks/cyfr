@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,8 +14,8 @@ import (
 // Each option's value is the full component_ref (e.g. "catalyst:local.claude:0.1.0").
 // Uses the "list" action which runs locally and is fast, rather than "search"
 // which may hit the remote registry.
-func FetchComponents(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("component", map[string]any{
+func FetchComponents(ctx context.Context, client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool(ctx, "component", map[string]any{
 		"action": "list",
 	})
 	if err != nil {
@@ -83,7 +84,7 @@ func extractComponents(result map[string]any) ([]Option, error) {
 // namespace/type. It calls the component search tool and filters results to
 // exact name (and optionally namespace) matches, returning a slice of version
 // strings.
-func FetchVersions(client *mcp.Client, name, namespace, componentType string) ([]string, error) {
+func FetchVersions(ctx context.Context, client *mcp.Client, name, namespace, componentType string) ([]string, error) {
 	args := map[string]any{
 		"action": "search",
 		"query":  name,
@@ -92,7 +93,7 @@ func FetchVersions(client *mcp.Client, name, namespace, componentType string) ([
 		args["type"] = componentType
 	}
 
-	result, err := client.CallTool("component", args)
+	result, err := client.CallTool(ctx, "component", args)
 	if err != nil {
 		return nil, fmt.Errorf("fetch versions: %w", err)
 	}
@@ -134,8 +135,8 @@ func FetchVersions(client *mcp.Client, name, namespace, componentType string) ([
 }
 
 // FetchKeys calls key list and returns options for selection.
-func FetchKeys(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("key", map[string]any{
+func FetchKeys(ctx context.Context, client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool(ctx, "key", map[string]any{
 		"action": "list",
 	})
 	if err != nil {
@@ -145,8 +146,8 @@ func FetchKeys(client *mcp.Client) ([]Option, error) {
 }
 
 // FetchGuides calls aqua list and returns options for selection.
-func FetchGuides(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("aqua", map[string]any{
+func FetchGuides(ctx context.Context, client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool(ctx, "aqua", map[string]any{
 		"action": "list",
 	})
 	if err != nil {

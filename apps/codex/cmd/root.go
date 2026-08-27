@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +38,10 @@ from the terminal or scripts.`,
 			_ = activeClient.Close()
 		}
 	},
+	// Commands report failures by returning an error (cobra prints it as
+	// "Error: …" on stderr); a failure is not a usage mistake, so no help
+	// text dump rides along.
+	SilenceUsage: true,
 }
 
 func init() {
@@ -52,13 +58,14 @@ func init() {
 		&cobra.Group{ID: "admin", Title: "Administration:"},
 	)
 
-	rootCmd.Version = Version
+	rootCmd.Version = version.Version
 	rootCmd.SetUsageFunc(customUsage)
 }
 
-// Execute runs the root command.
-func Execute() error {
-	return rootCmd.Execute()
+// Execute runs the root command under the process context, so every request
+// a command makes is cancellable by Ctrl-C / SIGTERM.
+func Execute(ctx context.Context) error {
+	return rootCmd.ExecuteContext(ctx)
 }
 
 // newClient creates an MCP client from config.
@@ -98,23 +105,21 @@ func newClient() *mcp.Client {
 	return client
 }
 
-// handleToolError checks for well-known error sentinels and prints a helpful
-// message, otherwise falls back to a contextual or generic error.
+// handleToolError maps well-known error sentinels to a helpful message,
+// otherwise falls back to a contextual or generic error. Commands return the
+// result so cobra prints it and main exits non-zero.
 // Pass an optional context string (e.g. "Register failed") for the fallback.
-func handleToolError(err error, context ...string) {
+func handleToolError(err error, context ...string) error {
 	if errors.Is(err, mcp.ErrAuthRequired) {
-		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
-		return
+		return errors.New("Not logged in. Run 'cyfr login' to authenticate.")
 	}
 	if msg, ok := explainConsentError(err); ok {
-		output.Error(msg)
-		return
+		return errors.New(msg)
 	}
 	if len(context) > 0 && context[0] != "" {
-		output.Errorf("%s: %v", context[0], err)
-	} else {
-		output.Errorf("Failed: %v", err)
+		return fmt.Errorf("%s: %w", context[0], err)
 	}
+	return fmt.Errorf("Failed: %w", err)
 }
 
 // The four §4.3 payloads cross every boundary as "tag: {json}". Render

@@ -35,26 +35,26 @@ var profileListCmd = &cobra.Command{
 	Use:   "list <reference>",
 	Short: "List a component's profiles",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("profile", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "profile", map[string]any{
 			"action": "list",
 			"ref":    args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		profiles, _ := result["profiles"].([]any)
 		if len(profiles) == 0 {
 			fmt.Println("No profiles — this component has never been granted.")
-			return
+			return nil
 		}
 
 		for _, entry := range profiles {
@@ -71,6 +71,7 @@ var profileListCmd = &cobra.Command{
 			fmt.Printf("%-38s %-8s %-12s consent rev %s\n",
 				str(p["id"]), str(p["kind"]), str(p["status"]), rev)
 		}
+		return nil
 	},
 }
 
@@ -79,23 +80,24 @@ var profileRevokeCmd = &cobra.Command{
 	Short: "Revoke a profile",
 	Long:  "Revocation takes effect on the next run. Executions already running complete.",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool("profile", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "profile", map[string]any{
 			"action":     "revoke",
 			"profile_id": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		output.Success(fmt.Sprintf("Revoked %s. Takes effect on the next run.", args[0]))
+		return nil
 	},
 }
 
@@ -107,16 +109,16 @@ var profileGrantCmd = &cobra.Command{
 	Example: `  cyfr profile grant c:moonmoon69.gmail
   cyfr profile grant f:local.daily-report --connection @ingress=vlt_abc123`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		ref := args[0]
 
-		plan, err := client.CallTool("profile", map[string]any{
+		plan, err := client.CallTool(cmd.Context(), "profile", map[string]any{
 			"action": "plan",
 			"ref":    ref,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		bindings, err := collectBindings(cmd, plan)
@@ -124,17 +126,17 @@ var profileGrantCmd = &cobra.Command{
 			if prompt.IsAborted(err) {
 				os.Exit(130)
 			}
-			output.Errorf("%v", err)
+			return err
 		}
 
 		decisions := map[string]any{"ref": ref, "bindings": bindings}
 
-		preview, err := client.CallTool("profile", map[string]any{
+		preview, err := client.CallTool(cmd.Context(), "profile", map[string]any{
 			"action":    "preview",
 			"decisions": decisions,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		renderPreview(preview)
@@ -143,11 +145,11 @@ var profileGrantCmd = &cobra.Command{
 			ok, cerr := prompt.Confirm("Grant these permissions?")
 			if cerr != nil || !ok {
 				fmt.Println("Not granted.")
-				return
+				return nil
 			}
 		}
 
-		result, err := client.CallTool("profile", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "profile", map[string]any{
 			"action":                    "commit",
 			"decisions":                 decisions,
 			"plan_token":                plan["plan_token"],
@@ -156,15 +158,16 @@ var profileGrantCmd = &cobra.Command{
 			"expected_consent_revision": plan["expected_consent_revision"],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		output.Success(fmt.Sprintf("Granted. Consent rev %s.", str(result["revision"])))
+		return nil
 	},
 }
 

@@ -1,13 +1,14 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
-	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -22,10 +23,10 @@ var updateCmd = &cobra.Command{
 	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory. Also ensures that docker-compose.yml has all the volume mounts and fields the cyfr server requires, adding any missing ones in place.",
 	GroupID: "server",
 	Example: "  cyfr update",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Require cyfr.yaml in current directory
 		if _, err := os.Stat("cyfr.yaml"); err != nil {
-			output.Errorf("Not in a cyfr project directory (no cyfr.yaml found).\nRun 'cyfr init' to create a new project.")
+			return errors.New("Not in a cyfr project directory (no cyfr.yaml found).\nRun 'cyfr init' to create a new project.")
 		}
 
 		fmt.Println("Updating project scaffold files...")
@@ -52,8 +53,8 @@ var updateCmd = &cobra.Command{
 		}
 
 		// Update scaffold files
-		if err := scaffold.Update(Version); err != nil {
-			output.Errorf("Failed to update scaffold files: %v", err)
+		if err := scaffold.Update(version.Version); err != nil {
+			return fmt.Errorf("Failed to update scaffold files: %v", err)
 		}
 
 		fmt.Println("Scaffold files updated (component-guide.md, tincture-guide.md, integration-guide.md, wit/, aqua/).")
@@ -69,6 +70,7 @@ var updateCmd = &cobra.Command{
 			fmt.Printf("Added missing fields to docker-compose.yml: %v\n", added)
 		}
 		warnMissingStackServices("docker-compose.yml")
+		return nil
 	},
 }
 

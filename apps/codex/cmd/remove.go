@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -22,32 +23,36 @@ var removeCmd = &cobra.Command{
   cyfr remove r local.sentiment:1.0.0
   cyfr remove`,
 	Args: cobra.RangeArgs(0, 2),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		var normalized string
 
 		switch {
 		case len(args) >= 1:
 			args = joinTypeShorthand(args)
-			normalized = resolveComponentRef(client, args[0])
-		case prompt.IsInteractive(flagNoInteractive):
-			opts, err := prompt.FetchComponents(client)
+			var err error
+			normalized, err = resolveComponentRef(cmd.Context(), client, args[0])
 			if err != nil {
-				handleToolError(err)
+				return err
+			}
+		case prompt.IsInteractive(flagNoInteractive):
+			opts, err := prompt.FetchComponents(cmd.Context(), client)
+			if err != nil {
+				return handleToolError(err)
 			}
 			if len(opts) == 0 {
-				output.Error("No components found. Nothing to remove.")
+				return errors.New("No components found. Nothing to remove.")
 			}
 			selected, err := prompt.SelectOne("Select a component to remove", opts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			normalized = selected
 		default:
-			output.Error("Usage: cyfr remove <reference>")
+			return errors.New("Usage: cyfr remove <reference>")
 		}
 
 		// Confirm before removing
@@ -57,20 +62,20 @@ var removeCmd = &cobra.Command{
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			if !confirmed {
 				fmt.Println("Cancelled.")
-				return
+				return nil
 			}
 		}
 
-		result, err := client.CallTool("component", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "component", map[string]any{
 			"action":    "delete",
 			"reference": normalized,
 		})
 		if err != nil {
-			handleToolError(err, "Delete failed")
+			return handleToolError(err, "Delete failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -80,5 +85,6 @@ var removeCmd = &cobra.Command{
 				fmt.Printf("Note: %s\n", note)
 			}
 		}
+		return nil
 	},
 }

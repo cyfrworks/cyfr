@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,9 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
+
+	"github.com/cyfr/codex/internal/version"
 )
 
 const protocolVersion = "2026-07-28"
@@ -33,6 +37,12 @@ func NewClient(baseURL string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		httpClient: &http.Client{
+			// A hung server must never hang the CLI (or a script driving it)
+			// indefinitely. The bound covers the whole exchange including a
+			// progress stream; the server brutal-kills a tool call at five
+			// minutes, so ten leaves room for the stream to drain. Per-call
+			// deadlines travel in the request context.
+			Timeout: 10 * time.Minute,
 			// Never follow an HTTPS->HTTP downgrade (it would leak the session
 			// token over plaintext), and cap redirect chains so a misbehaving
 			// or hostile server can't bounce us indefinitely.
@@ -73,7 +83,7 @@ func (c *Client) Close() error {
 // none of them is ours. There is no handshake to perform — every request carries
 // its own version — so this is purely a compatibility check a caller may run
 // once, and never a precondition for anything else.
-func (c *Client) Discover() error {
+func (c *Client) Discover(ctx context.Context) error {
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      int(c.nextID.Add(1)),
@@ -81,7 +91,7 @@ func (c *Client) Discover() error {
 		Params:  map[string]any{},
 	}
 
-	resp, err := c.doRequest(req)
+	resp, err := c.doRequest(ctx, req)
 	if err != nil {
 		return fmt.Errorf("server/discover: %w", err)
 	}
@@ -176,8 +186,10 @@ func withMeta(params any, progressToken string) map[string]any {
 	meta := map[string]any{
 		"io.modelcontextprotocol/protocolVersion": protocolVersion,
 		"io.modelcontextprotocol/clientInfo": map[string]any{
-			"name":    "cyfr",
-			"version": "0.1.0",
+			"name": "cyfr",
+			// The ldflags-injected build version — a hardcoded literal here
+			// once announced 0.1.0 from every build.
+			"version": version.Version,
 		},
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 	}
@@ -191,8 +203,8 @@ func withMeta(params any, progressToken string) map[string]any {
 }
 
 // CallTool invokes an MCP tool and returns the raw result.
-func (c *Client) CallTool(name string, args map[string]any) (map[string]any, error) {
-	return c.CallToolWithProgress(name, args, nil)
+func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
+	return c.CallToolWithProgress(ctx, name, args, nil)
 }
 
 // CallToolWithProgress invokes a tool and reports progress as it arrives.
@@ -200,7 +212,7 @@ func (c *Client) CallTool(name string, args map[string]any) (map[string]any, err
 // Progress travels on this request's own response stream. There is no separate
 // stream to open and no id to correlate by hand: passing a handler is what opts
 // in, and every notification on the stream belongs to this call.
-func (c *Client) CallToolWithProgress(name string, args map[string]any, onProgress ProgressFunc) (map[string]any, error) {
+func (c *Client) CallToolWithProgress(ctx context.Context, name string, args map[string]any, onProgress ProgressFunc) (map[string]any, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
@@ -219,13 +231,13 @@ func (c *Client) CallToolWithProgress(name string, args map[string]any, onProgre
 		progressToken = fmt.Sprintf("prog-%d", req.ID)
 	}
 
-	resp, err := c.doRequestOnce(req, progressToken, onProgress)
+	resp, err := c.doRequestOnce(ctx, req, progressToken, onProgress)
 	if err != nil {
 		return nil, err
 	}
 
 	if resp.Error != nil {
-		return nil, fmt.Errorf("%s", resp.Error.Message)
+		return nil, rpcError(resp.Error)
 	}
 
 	// Parse the result - it contains content blocks
@@ -271,14 +283,14 @@ func (c *Client) CallToolWithProgress(name string, args map[string]any, onProgre
 }
 
 // ListTools returns the list of available MCP tools.
-func (c *Client) ListTools() ([]Tool, error) {
+func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      int(c.nextID.Add(1)),
 		Method:  "tools/list",
 	}
 
-	resp, err := c.doRequest(req)
+	resp, err := c.doRequest(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("list tools: %w", err)
 	}
@@ -301,7 +313,7 @@ func (c *Client) ListTools() ([]Tool, error) {
 }
 
 // sendNotification sends a JSON-RPC notification (no id, no response expected).
-func (c *Client) sendNotification(method string, params any) error {
+func (c *Client) sendNotification(ctx context.Context, method string, params any) error {
 	notif := JSONRPCNotification{
 		JSONRPC: "2.0",
 		Method:  method,
@@ -313,7 +325,7 @@ func (c *Client) sendNotification(method string, params any) error {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/mcp", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/mcp", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create notification request: %w", err)
 	}
@@ -338,18 +350,30 @@ func (c *Client) sendNotification(method string, params any) error {
 	return nil
 }
 
-func (c *Client) doRequest(req JSONRPCRequest) (*JSONRPCResponse, error) {
+func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse, error) {
 	// No retry-on-expiry: the credential authenticates each request on its own,
 	// so a rejected one will be rejected again. A revoked or expired token needs
 	// `cyfr login`, not a re-handshake.
-	return c.doRequestOnce(req, "", nil)
+	return c.doRequestOnce(ctx, req, "", nil)
+}
+
+// rpcError maps a JSON-RPC error object to a Go error, preserving the
+// sentinel identity the auth code carries: `errors.Is(err, ErrAuthRequired)`
+// must hold wherever -33001 arrived — a 4xx envelope or a 200 body alike.
+// The old `fmt.Errorf("%s", …)` wrappers erased it, so the login hint only
+// worked by the coincidence that auth errors happened to ride a 401.
+func rpcError(e *JSONRPCError) error {
+	if e.Code == -33001 {
+		return fmt.Errorf("%w: %s", ErrAuthRequired, e.Message)
+	}
+	return fmt.Errorf("%s", e.Message)
 }
 
 // ProgressFunc receives the params of a notifications/progress sent while a
 // request was being served.
 type ProgressFunc func(params map[string]any)
 
-func (c *Client) doRequestOnce(req JSONRPCRequest, progressToken string, onProgress ProgressFunc) (*JSONRPCResponse, error) {
+func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progressToken string, onProgress ProgressFunc) (*JSONRPCResponse, error) {
 	req.Params = withMeta(req.Params, progressToken)
 
 	body, err := json.Marshal(req)
@@ -357,7 +381,7 @@ func (c *Client) doRequestOnce(req JSONRPCRequest, progressToken string, onProgr
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/mcp", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/mcp", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -388,10 +412,7 @@ func (c *Client) doRequestOnce(req JSONRPCRequest, progressToken string, onProgr
 		// hit a method the server does not have.
 		var errResp JSONRPCResponse
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil {
-			if errResp.Error.Code == -33001 {
-				return nil, ErrAuthRequired
-			}
-			return nil, fmt.Errorf("%s", errResp.Error.Message)
+			return nil, rpcError(errResp.Error)
 		}
 		return nil, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, string(respBody))
 	}

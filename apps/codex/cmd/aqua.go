@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -28,19 +29,20 @@ var aquaListCmd = &cobra.Command{
 	Long:  "List all available AQUA agents and documentation guides.",
 	Example: `  cyfr aqua list
   cyfr aqua list --json`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("aqua", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "aqua", map[string]any{
 			"action": "list",
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -52,7 +54,7 @@ var aquaGetCmd = &cobra.Command{
   cyfr aqua get tincture-guide
   cyfr aqua get aqua_builder --json`,
 	Args: cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
 
 		switch {
@@ -60,37 +62,38 @@ var aquaGetCmd = &cobra.Command{
 			name = args[0]
 		case prompt.IsInteractive(flagNoInteractive):
 			client := newClient()
-			opts, err := prompt.FetchGuides(client)
+			opts, err := prompt.FetchGuides(cmd.Context(), client)
 			if err != nil {
-				handleToolError(err)
+				return handleToolError(err)
 			}
 			if len(opts) == 0 {
-				output.Error("No agents or guides found.")
+				return errors.New("No agents or guides found.")
 			}
 			selected, err := prompt.SelectOne("Select an agent or guide", opts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			name = selected
 		default:
-			output.Error("Usage: cyfr aqua get <name>")
+			return errors.New("Usage: cyfr aqua get <name>")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("aqua", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "aqua", map[string]any{
 			"action": "get",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			fmt.Println(result["content"])
 		}
+		return nil
 	},
 }

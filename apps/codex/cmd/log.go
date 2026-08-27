@@ -35,7 +35,7 @@ var logListCmd = &cobra.Command{
   cyfr log list --tool execution --status error
   cyfr log list --since 2026-03-01T00:00:00Z --limit 50
   cyfr log list --request req_01H...   # every call in one request's chain`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 		toolArgs := map[string]any{
 			"action": "list",
@@ -57,13 +57,13 @@ var logListCmd = &cobra.Command{
 			toolArgs["request_id"] = v
 		}
 
-		result, err := client.CallTool("mcp_log", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "mcp_log", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 
 		logs, _ := result["logs"].([]any)
@@ -81,6 +81,7 @@ var logListCmd = &cobra.Command{
 			rows = append(rows, row)
 		}
 		output.Table(headers, rows)
+		return nil
 	},
 }
 
@@ -90,20 +91,21 @@ var logGetCmd = &cobra.Command{
 	Long:    "Show all fields for a single MCP request log including input and output payloads.",
 	Example: "  cyfr log get req_01abc123",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("mcp_log", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_log", map[string]any{
 			"action": "get",
 			"id":     args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -113,19 +115,20 @@ var logCorrelateCmd = &cobra.Command{
 	Long:    "Show all related records (executions, policy logs) for a given request ID.",
 	Example: "  cyfr log correlate req_01abc123",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("mcp_log", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "mcp_log", map[string]any{
 			"action":     "correlate",
 			"request_id": args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }

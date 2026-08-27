@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
-	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -47,9 +47,9 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 	Example: `  cyfr init
   cyfr init --force
   cyfr up`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
-		releaseBuild := Version != "dev" && Version != ""
+		releaseBuild := version.Version != "dev" && version.Version != ""
 
 		// On --force, drop the tarball-managed deploy files so scaffold.Download
 		// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
@@ -66,8 +66,8 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		// Download scaffold files (non-fatal): guides, wit/, aqua/, and the
 		// deploy files (docker-compose.yml, Caddyfile, .env.example,
 		// Dockerfile.node). Idempotent — existing files kept. No-op for dev
-		// builds (Version=="dev"/"").
-		if err := scaffold.Download(Version); err != nil {
+		// builds (version.Version=="dev"/"").
+		if err := scaffold.Download(version.Version); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
 
@@ -101,7 +101,7 @@ database_path: ./data/cyfr.db
 		configCreated := false
 		if !fileExists("cyfr.yaml") {
 			if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
-				output.Errorf("Failed to write cyfr.yaml: %v", err)
+				return fmt.Errorf("Failed to write cyfr.yaml: %v", err)
 			}
 			configCreated = true
 		}
@@ -116,15 +116,15 @@ database_path: ./data/cyfr.db
 		if envExampleExists && !fileExists(".env") {
 			tmpl, err := os.ReadFile(".env.example")
 			if err != nil {
-				output.Errorf("Failed to read .env.example: %v", err)
+				return fmt.Errorf("Failed to read .env.example: %v", err)
 			}
 			secretKey, err := generateSecretKey()
 			if err != nil {
-				output.Errorf("Failed to generate secret key: %v", err)
+				return fmt.Errorf("Failed to generate secret key: %v", err)
 			}
 			bridgeToken, err := generateSecretKey()
 			if err != nil {
-				output.Errorf("Failed to generate mcp-bridge token: %v", err)
+				return fmt.Errorf("Failed to generate mcp-bridge token: %v", err)
 			}
 
 			host := "localhost"
@@ -149,7 +149,7 @@ database_path: ./data/cyfr.db
 			adminEmailConfigured = adminEmail != ""
 
 			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, bridgeToken, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
-				output.Errorf("Failed to write .env: %v", err)
+				return fmt.Errorf("Failed to write .env: %v", err)
 			}
 			envCreated = true
 		}
@@ -169,7 +169,7 @@ database_path: ./data/cyfr.db
 `
 		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
 			if err := os.WriteFile(".gitignore", []byte(gitignoreContent), 0644); err != nil {
-				output.Errorf("Failed to write .gitignore: %v", err)
+				return fmt.Errorf("Failed to write .gitignore: %v", err)
 			}
 			gitignoreCreated = true
 		}
@@ -244,6 +244,7 @@ database_path: ./data/cyfr.db
 		} else {
 			fmt.Println("Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 		}
+		return nil
 	},
 }
 
@@ -342,7 +343,7 @@ Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bri
 
 When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts cyfr on :80/:443. Otherwise cyfr is reachable directly at http://localhost:4000.`,
 	Example: `  cyfr up`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Registry auth is per-user: `cyfr login` (device flow) after
 		// `cyfr context add`, and cyfr.run mints push tokens via the identity
 		// probe. There are no static registry credentials to configure.
@@ -360,7 +361,7 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
-			output.Errorf("Failed to start: %v", err)
+			return fmt.Errorf("Failed to start: %v", err)
 		}
 		fmt.Println("CYFR server started.")
 
@@ -403,6 +404,7 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: server did not become healthy within 30s. Check 'docker compose logs'.\n")
 		}
+		return nil
 	},
 }
 
@@ -412,17 +414,18 @@ var downCmd = &cobra.Command{
 	GroupID: "server",
 	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the tls-profile caddy service so a stack started with `cyfr up` in TLS mode is fully torn down.",
 	Example: "  cyfr down",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Always pass --profile tls so down considers the opt-in caddy too;
 		// harmless if it isn't running.
 		c := exec.Command("docker", "compose", "--profile", "tls", "down")
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
-			output.Errorf("Failed to stop: %v", err)
+			return fmt.Errorf("Failed to stop: %v", err)
 		}
 
 		fmt.Println("CYFR server stopped.")
+		return nil
 	},
 }
 

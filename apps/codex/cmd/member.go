@@ -37,14 +37,14 @@ func memberArgs(cmd *cobra.Command, action string) map[string]any {
 var memberListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the members",
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("member", memberArgs(cmd, "list"))
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "member", memberArgs(cmd, "list"))
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		members, _ := result["members"].([]any)
 		for _, raw := range members {
@@ -58,6 +58,7 @@ var memberListCmd = &cobra.Command{
 			}
 			fmt.Printf("%-8s %-30s %s\n", str(m["status"]), str(m["email"]), who)
 		}
+		return nil
 	},
 }
 
@@ -65,18 +66,19 @@ var memberAddCmd = &cobra.Command{
 	Use:   "add <email|user_id>",
 	Short: "Add someone",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := memberArgs(cmd, "add")
 		payload[memberKey(args[0])] = args[0]
-		result, err := newClient().CallTool("member", payload)
+		result, err := newClient().CallTool(cmd.Context(), "member", payload)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Println("Added. If they have never signed in here, the seat waits for them.")
+		return nil
 	},
 }
 
@@ -84,34 +86,36 @@ var memberRemoveCmd = &cobra.Command{
 	Use:   "remove <email|user_id>",
 	Short: "Remove someone",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		payload := memberArgs(cmd, "remove")
 		payload[memberKey(args[0])] = args[0]
-		result, err := newClient().CallTool("member", payload)
+		result, err := newClient().CallTool(cmd.Context(), "member", payload)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Println("Removed.")
+		return nil
 	},
 }
 
 var memberLeaveCmd = &cobra.Command{
 	Use:   "leave",
 	Short: "Leave the group",
-	Run: func(cmd *cobra.Command, args []string) {
-		result, err := newClient().CallTool("member", memberArgs(cmd, "leave"))
+	RunE: func(cmd *cobra.Command, args []string) error {
+		result, err := newClient().CallTool(cmd.Context(), "member", memberArgs(cmd, "leave"))
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		fmt.Println("Left.")
+		return nil
 	},
 }
 

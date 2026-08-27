@@ -9,9 +9,10 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
-	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/release"
+	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -24,15 +25,17 @@ var upgradeCmd = &cobra.Command{
 	Short:   "Upgrade the CYFR Codex binary",
 	Long:    "Upgrade the CYFR Codex binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
 	GroupID: "server",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Find the latest published CYFR release (bare-semver version).
-		latest, err := release.Latest(context.Background())
+		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
+		defer cancel()
+		latest, err := release.Latest(ctx)
 		if err != nil {
-			output.Errorf("Failed to check for updates: %v", err)
+			return fmt.Errorf("Failed to check for updates: %v", err)
 		}
 
 		// Compare to the current version — only upgrade if not already current.
-		current := strings.TrimPrefix(Version, "v")
+		current := strings.TrimPrefix(version.Version, "v")
 		cliUpToDate := current == latest
 
 		if cliUpToDate {
@@ -57,7 +60,7 @@ var upgradeCmd = &cobra.Command{
 				update.Stdout = os.Stdout
 				update.Stderr = os.Stderr
 				if err := update.Run(); err != nil {
-					output.Errorf("brew update failed: %v", err)
+					return fmt.Errorf("brew update failed: %v", err)
 				}
 
 				upgrade := exec.Command("brew", "upgrade", "--cask", "cyfr")
@@ -117,12 +120,12 @@ var upgradeCmd = &cobra.Command{
 						fmt.Printf("Install script failed: %v\n", err)
 						fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/%s\n", latest)
 					}
-					return
+					return nil
 				}
 
 				shPath, err := exec.LookPath("sh")
 				if err != nil {
-					output.Errorf("sh not found in PATH: %v", err)
+					return fmt.Errorf("sh not found in PATH: %v", err)
 				}
 				// syscall.Exec replaces this process; control never returns on
 				// success. The installer's stdout/stderr inherit our terminal.
@@ -130,11 +133,12 @@ var upgradeCmd = &cobra.Command{
 					fmt.Printf("Failed to launch installer: %v\n", err)
 					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/%s\n", latest)
 				}
-				return
+				return nil
 			}
 		}
 
 		fmt.Println("\nRun 'cyfr update' in each project directory to pull the latest Docker images and update scaffold files.")
+		return nil
 	},
 }
 

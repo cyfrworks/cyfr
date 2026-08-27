@@ -2,7 +2,11 @@ package scaffold
 
 import (
 	"archive/tar"
+	"bufio"
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,9 +17,11 @@ import (
 )
 
 const (
-	urlTemplate    = "https://github.com/cyfrworks/cyfr/releases/download/%s/cyfr-scaffold.tar.gz"
-	maxFileSize    = 10 << 20 // 10 MB per file
-	requestTimeout = 60 * time.Second
+	urlTemplate      = "https://github.com/cyfrworks/cyfr/releases/download/%s/cyfr-scaffold.tar.gz"
+	checksumTemplate = "https://github.com/cyfrworks/cyfr/releases/download/%s/checksums.txt"
+	maxFileSize      = 10 << 20 // 10 MB per file
+	maxTarballSize   = 64 << 20 // 64 MB whole tarball
+	requestTimeout   = 60 * time.Second
 )
 
 // Download fetches the scaffold tarball for the given version and extracts it
@@ -82,6 +88,16 @@ func extract(version string, overwriteManaged bool) error {
 	url := fmt.Sprintf(urlTemplate, version)
 
 	client := &http.Client{Timeout: requestTimeout}
+
+	// The tarball carries docker-compose.yml, Dockerfile.node and the bridge
+	// source that `cyfr up` will build and run — verify it against the
+	// release's cosign-signed checksums.txt before extracting a byte. The
+	// release binary itself gets the same treatment from install.sh.
+	want, err := fetchScaffoldChecksum(client, version)
+	if err != nil {
+		return err
+	}
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("download scaffold: %w", err)
@@ -92,7 +108,20 @@ func extract(version string, overwriteManaged bool) error {
 		return fmt.Errorf("download scaffold: HTTP %d from %s", resp.StatusCode, url)
 	}
 
-	gr, err := gzip.NewReader(resp.Body)
+	tarball, err := io.ReadAll(io.LimitReader(resp.Body, maxTarballSize+1))
+	if err != nil {
+		return fmt.Errorf("download scaffold: %w", err)
+	}
+	if len(tarball) > maxTarballSize {
+		return fmt.Errorf("download scaffold: exceeds the %d-byte limit", int64(maxTarballSize))
+	}
+
+	got := sha256.Sum256(tarball)
+	if hex.EncodeToString(got[:]) != want {
+		return fmt.Errorf("scaffold checksum mismatch for %s: the download does not match the release's checksums.txt", version)
+	}
+
+	gr, err := gzip.NewReader(bytes.NewReader(tarball))
 	if err != nil {
 		return fmt.Errorf("decompress scaffold: %w", err)
 	}
@@ -164,4 +193,35 @@ func extract(version string, overwriteManaged bool) error {
 	}
 
 	return nil
+}
+
+// fetchScaffoldChecksum reads the release's checksums.txt and returns the
+// expected sha256 (hex) for cyfr-scaffold.tar.gz. A release without an
+// entry fails closed — the CLI and the release ship in lockstep, so a
+// missing line means a broken release, never an older layout to tolerate.
+func fetchScaffoldChecksum(client *http.Client, version string) (string, error) {
+	url := fmt.Sprintf(checksumTemplate, version)
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("download checksums.txt: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download checksums.txt: HTTP %d from %s", resp.StatusCode, url)
+	}
+
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 1<<20))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 2 && filepath.Base(fields[1]) == "cyfr-scaffold.tar.gz" {
+			return strings.ToLower(fields[0]), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read checksums.txt: %w", err)
+	}
+
+	return "", fmt.Errorf("checksums.txt for %s has no cyfr-scaffold.tar.gz entry", version)
 }

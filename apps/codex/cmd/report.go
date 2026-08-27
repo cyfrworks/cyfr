@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -45,25 +46,25 @@ Reports appear in the admin UI. Categories:
 	Example: `  cyfr report c:alice.malware:1.0.0 --category malware --details "ships with eval()"
   cyfr report --namespace badactor --category impersonation --details "impersonates @bob"`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		category, _ := cmd.Flags().GetString("category")
 		details, _ := cmd.Flags().GetString("details")
 		namespace, _ := cmd.Flags().GetString("namespace")
 
 		category = strings.ToLower(strings.TrimSpace(category))
 		if !validReportCategories[category] {
-			output.Error("Invalid --category. Must be one of: impersonation, malware, dmca, spam, other.")
+			return errors.New("Invalid --category. Must be one of: impersonation, malware, dmca, spam, other.")
 		}
 
 		var componentRef string
 		if len(args) == 1 {
 			componentRef = args[0]
 			if !ref.ParseRef(componentRef).HasVersion {
-				output.Error("Component ref must be fully qualified with a version (e.g., c:alice.widget:1.0.0).")
+				return errors.New("Component ref must be fully qualified with a version (e.g., c:alice.widget:1.0.0).")
 			}
 		}
 		if componentRef == "" && namespace == "" {
-			output.Error("Provide either a component ref or --namespace.")
+			return errors.New("Provide either a component ref or --namespace.")
 		}
 
 		client := newClient()
@@ -79,18 +80,19 @@ Reports appear in the admin UI. Categories:
 			toolArgs["target_namespace"] = namespace
 		}
 
-		result, err := client.CallTool("registry", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "registry", toolArgs)
 		if err != nil {
-			handleToolError(err, "Report failed")
+			return handleToolError(err, "Report failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-			return
+			return nil
 		}
 		if id, ok := result["id"].(string); ok {
 			fmt.Printf("Report filed: %s\n", id)
 		} else {
 			fmt.Println("Report filed.")
 		}
+		return nil
 	},
 }

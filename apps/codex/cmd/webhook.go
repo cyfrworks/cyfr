@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -59,7 +61,7 @@ Run without --name for an interactive form.`,
 	Example: `  cyfr webhook create --name github-push --target f:local.handle-github-push
   cyfr webhook create --name slack-alerts --target f:local.notify --input '{"channel":"alerts"}'
   cyfr webhook create --name stripe --target f:local.handle-stripe --signature-header stripe-signature`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
 		target, _ := cmd.Flags().GetString("target")
 		sigHeader, _ := cmd.Flags().GetString("signature-header")
@@ -72,7 +74,7 @@ Run without --name for an interactive form.`,
 
 		if name == "" {
 			if !prompt.IsInteractive(flagNoInteractive) {
-				output.Error("--name is required. Usage: cyfr webhook create --name <name> --target <ref>")
+				return errors.New("--name is required. Usage: cyfr webhook create --name <name> --target <ref>")
 			}
 
 			form, err := prompt.RunWebhookCreateForm()
@@ -80,7 +82,7 @@ Run without --name for an interactive form.`,
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
-				output.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %v", err)
 			}
 			name = form.Name
 			target = form.TargetRef
@@ -97,17 +99,17 @@ Run without --name for an interactive form.`,
 
 			parsed, err := parseInputTemplate(form.InputTemplate, "")
 			if err != nil {
-				output.Errorf("Invalid input_template: %v", err)
+				return fmt.Errorf("Invalid input_template: %v", err)
 			}
 			inputTemplate = parsed
 		} else {
 			if target == "" {
-				output.Error("--target is required when --name is set. Usage: cyfr webhook create --name <name> --target <ref>")
+				return errors.New("--target is required when --name is set. Usage: cyfr webhook create --name <name> --target <ref>")
 			}
 
 			parsed, err := parseInputTemplate(inputJSON, inputFile)
 			if err != nil {
-				output.Errorf("Invalid input_template: %v", err)
+				return fmt.Errorf("Invalid input_template: %v", err)
 			}
 			inputTemplate = parsed
 		}
@@ -131,9 +133,9 @@ Run without --name for an interactive form.`,
 		}
 
 		client := newClient()
-		result, err := client.CallTool("webhook", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "webhook", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 
 		if flagJSON {
@@ -141,6 +143,7 @@ Run without --name for an interactive form.`,
 		} else {
 			renderWebhookCreated(result)
 		}
+		return nil
 	},
 }
 
@@ -150,20 +153,21 @@ var webhookGetCmd = &cobra.Command{
 	Long:    "Show metadata for a webhook including target component, signature header, and input template. The HMAC secret is never returned.",
 	Example: "  cyfr webhook get github-push",
 	Args:    cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("webhook", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
 			"action": "get",
 			"name":   args[0],
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			renderWebhookDetail(result)
 		}
+		return nil
 	},
 }
 
@@ -172,19 +176,20 @@ var webhookListCmd = &cobra.Command{
 	Short:   "List all webhooks",
 	Long:    "List all webhooks with their names, target components, and URLs. HMAC secrets are never shown.",
 	Example: "  cyfr webhook list",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool("webhook", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
 			"action": "list",
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			renderWebhookList(result)
 		}
+		return nil
 	},
 }
 
@@ -197,7 +202,7 @@ use 'cyfr webhook rotate' to replace it.`,
 	Example: `  cyfr webhook update github-push --target f:local.new-handler
   cyfr webhook update slack-alerts --input '{"channel":"on-call"}'`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
 		toolArgs := map[string]any{
@@ -223,7 +228,7 @@ use 'cyfr webhook rotate' to replace it.`,
 		if inputJSON != "" || inputFile != "" {
 			parsed, err := parseInputTemplate(inputJSON, inputFile)
 			if err != nil {
-				output.Errorf("Invalid input_template: %v", err)
+				return fmt.Errorf("Invalid input_template: %v", err)
 			}
 			if parsed != nil {
 				toolArgs["input_template"] = parsed
@@ -232,13 +237,13 @@ use 'cyfr webhook rotate' to replace it.`,
 
 		// Reject no-op updates client-side (server will too, but a clearer message helps).
 		if len(toolArgs) <= 2 {
-			output.Error("No fields to update. Pass at least one of --target, --signature-header, --rate-limit, --description, --input, or --input-file.")
+			return errors.New("No fields to update. Pass at least one of --target, --signature-header, --rate-limit, --description, --input, or --input-file.")
 		}
 
 		client := newClient()
-		result, err := client.CallTool("webhook", toolArgs)
+		result, err := client.CallTool(cmd.Context(), "webhook", toolArgs)
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -246,6 +251,7 @@ use 'cyfr webhook rotate' to replace it.`,
 			fmt.Printf("Webhook '%s' updated.\n", name)
 			output.KeyValue(result)
 		}
+		return nil
 	},
 }
 
@@ -255,16 +261,19 @@ var webhookRevokeCmd = &cobra.Command{
 	Long:    "Disable a webhook so its URL stops accepting POSTs. The audit trail is preserved. Run without arguments for interactive selection.",
 	Example: "  cyfr webhook revoke github-push",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
-		name := selectWebhookName(args, "Select a webhook to revoke", "Revoke webhook '%s'? The URL stops accepting POSTs.")
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to revoke", "Revoke webhook '%s'? The URL stops accepting POSTs.")
+		if err != nil {
+			return err
+		}
 
 		client := newClient()
-		result, err := client.CallTool("webhook", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
 			"action": "revoke",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -272,6 +281,7 @@ var webhookRevokeCmd = &cobra.Command{
 			fmt.Printf("Webhook '%s' revoked.\n", name)
 		}
 		_ = result
+		return nil
 	},
 }
 
@@ -281,22 +291,26 @@ var webhookRotateCmd = &cobra.Command{
 	Long:    "Generate a new HMAC secret. The old secret stops working immediately. Update the sender's configuration with the new secret. Run without arguments for interactive selection.",
 	Example: "  cyfr webhook rotate github-push",
 	Args:    cobra.RangeArgs(0, 1),
-	Run: func(cmd *cobra.Command, args []string) {
-		name := selectWebhookName(args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret stops working immediately.")
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret stops working immediately.")
+		if err != nil {
+			return err
+		}
 
 		client := newClient()
-		result, err := client.CallTool("webhook", map[string]any{
+		result, err := client.CallTool(cmd.Context(), "webhook", map[string]any{
 			"action": "rotate",
 			"name":   name,
 		})
 		if err != nil {
-			handleToolError(err)
+			return handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
 			renderWebhookRotated(result)
 		}
+		return nil
 	},
 }
 
@@ -346,41 +360,40 @@ func parseInputTemplate(inline, file string) (map[string]any, error) {
 	return obj, nil
 }
 
-func selectWebhookName(args []string, promptTitle, confirmTemplate string) string {
+func selectWebhookName(ctx context.Context, args []string, promptTitle, confirmTemplate string) (string, error) {
 	switch {
 	case len(args) >= 1:
-		return args[0]
+		return args[0], nil
 	case prompt.IsInteractive(flagNoInteractive):
 		client := newClient()
-		opts, err := prompt.FetchWebhooks(client)
+		opts, err := prompt.FetchWebhooks(ctx, client)
 		if err != nil {
-			handleToolError(err)
+			return "", handleToolError(err)
 		}
 		if len(opts) == 0 {
-			output.Error("No webhooks found. Create one with 'cyfr webhook create'.")
+			return "", errors.New("No webhooks found. Create one with 'cyfr webhook create'.")
 		}
 		selected, err := prompt.SelectOne(promptTitle, opts)
 		if err != nil {
 			if prompt.IsAborted(err) {
 				os.Exit(130)
 			}
-			output.Errorf("Prompt failed: %v", err)
+			return "", fmt.Errorf("Prompt failed: %v", err)
 		}
 		confirmed, err := prompt.Confirm(fmt.Sprintf(confirmTemplate, selected))
 		if err != nil {
 			if prompt.IsAborted(err) {
 				os.Exit(130)
 			}
-			output.Errorf("Prompt failed: %v", err)
+			return "", fmt.Errorf("Prompt failed: %v", err)
 		}
 		if !confirmed {
 			fmt.Println("Cancelled.")
 			os.Exit(0)
 		}
-		return selected
+		return selected, nil
 	default:
-		output.Error("Usage: provide <name> or run interactively")
-		return "" // unreachable
+		return "", errors.New("Usage: provide <name> or run interactively")
 	}
 }
 
