@@ -277,7 +277,7 @@ defmodule Prism.TinctureRegistry do
       name = manifest["name"]
       version = manifest["version"] || "0.1.0"
 
-      entry = tincture_block["entry"] || "index.html"
+      entry_result = Cyfr.TinctureHelpers.entry_of(manifest)
       icon = tincture_block["icon"] || "palette"
       window = tincture_block["window"] || %{}
       tagline = tincture_block["tagline"]
@@ -295,8 +295,18 @@ defmodule Prism.TinctureRegistry do
           _ -> discovered.previews
         end
 
-      case blocked_image_refs(media_icon, media_previews) do
-        [] ->
+      # The same reading publish and serve use. Indexing a tincture whose
+      # entry the serve side will refuse lists something that 404s on the
+      # first click — and says nothing about why.
+      case {entry_result, blocked_image_refs(media_icon, media_previews)} do
+        {{:error, message}, _} ->
+          Logger.warning(
+            "TinctureRegistry: skipping tincture at #{Enum.join(manifest_segs, "/")} — #{message}"
+          )
+
+          []
+
+        {{:ok, entry}, []} ->
           [
             %{
               name: name,
@@ -318,7 +328,7 @@ defmodule Prism.TinctureRegistry do
             }
           ]
 
-        refs ->
+        {_entry, refs} ->
           Logger.warning(
             "TinctureRegistry: skipping tincture at #{Enum.join(manifest_segs, "/")} — raster " <>
               "image assets are blocked until CSAM hash matching ships. Offending refs: " <>

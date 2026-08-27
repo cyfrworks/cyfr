@@ -80,6 +80,69 @@ defmodule Cyfr.TinctureHelpers do
   @media_preview_extensions ~w(svg png)
   @media_preview_count 6
 
+  @doc "The manifest path the entry lives at: `tincture.entry`."
+  @spec entry_field() :: [String.t()]
+  def entry_field, do: ["tincture", "entry"]
+
+  @doc "What a tincture serves when its manifest names no entry."
+  @spec default_entry() :: String.t()
+  def default_entry, do: "index.html"
+
+  @doc """
+  The entry a manifest names, or the default — one reading, for publish and
+  for serve.
+
+  These were three separate rules. Publish checked path safety only, serve
+  added a denylist and refused dotfiles, and the registry's indexer checked
+  nothing at all — so a manifest with `entry: "cyfr-manifest.json"` or
+  `entry: ".env"` published cleanly, indexed cleanly, and 404'd the first
+  time anyone opened it. A rule that only the last reader applies is a rule
+  the author finds out about last.
+  """
+  @spec entry_of(map()) :: {:ok, String.t()} | {:error, String.t()}
+  def entry_of(manifest) when is_map(manifest) do
+    manifest |> get_in(entry_field()) |> validate_entry()
+  end
+
+  @spec validate_entry(term()) :: {:ok, String.t()} | {:error, String.t()}
+  def validate_entry(nil), do: {:ok, default_entry()}
+  def validate_entry(""), do: {:ok, default_entry()}
+
+  # Path safety answers first: it covers traversal, absolute paths and null
+  # bytes, and its refusals name what is actually wrong. A `../escape.html`
+  # begins with a dot, so a dotfile check placed above would refuse it for
+  # the least useful of its several reasons.
+  def validate_entry(entry) when is_binary(entry) do
+    with :ok <- path_safe(entry) do
+      cond do
+        entry in @denylist ->
+          {:error, "entry must not be a reserved file (#{Enum.join(@denylist, ", ")})"}
+
+        String.starts_with?(entry, ".") ->
+          {:error, "entry must not be a dotfile"}
+
+        true ->
+          {:ok, entry}
+      end
+    end
+  end
+
+  def validate_entry(_other), do: {:error, "entry must be a string"}
+
+  defp path_safe(entry) do
+    case Cyfr.PathSafety.validate_relative_path(entry) do
+      :ok ->
+        :ok
+
+      {:error, message} ->
+        cond do
+          message =~ "null bytes" -> {:error, "entry must not contain null bytes"}
+          message =~ "Absolute paths" -> {:error, "entry must be a relative path"}
+          true -> {:error, "entry must not contain '..'"}
+        end
+    end
+  end
+
   @doc "The media directory inside a tincture version, as segments."
   @spec media_dir() :: [String.t()]
   def media_dir, do: ["public", "media"]
@@ -138,13 +201,9 @@ defmodule Cyfr.TinctureHelpers do
   """
   @spec resolve_entry(map()) :: {:ok, String.t()} | :error
   def resolve_entry(tincture) do
-    entry = get_in(tincture.manifest, ["tincture", "entry"]) || "index.html"
-
-    cond do
-      entry in @denylist -> :error
-      String.starts_with?(entry, ".") -> :error
-      Cyfr.PathSafety.validate_relative_path(entry) != :ok -> :error
-      true -> {:ok, entry}
+    case entry_of(tincture.manifest) do
+      {:ok, entry} -> {:ok, entry}
+      {:error, _message} -> :error
     end
   end
 

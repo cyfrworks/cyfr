@@ -244,6 +244,32 @@ defmodule Compendium.ForkTest do
     end
   end
 
+  describe "unparseable source manifest" do
+    # A fork's whole point is that the copy carries its own name and
+    # version. A manifest that will not parse cannot be given them, and
+    # copying it unchanged — as this used to — produces a component that
+    # still claims the identity it was forked FROM: same publisher, same
+    # name, same version, no forked_from. That reads as a successful fork
+    # and is not one.
+    test "refuses rather than copying the source's identity", %{ctx: ctx} do
+      create_source_component("catalyst", "acme", "bad-manifest", "1.0.0")
+
+      manifest_path =
+        Compendium.ComponentPath.version_dir("catalyst", "acme", "bad-manifest", "1.0.0") ++
+          [Compendium.ComponentPath.manifest_name()]
+
+      :ok = Arca.Overlay.with_internal_writes(fn -> Arca.put(ctx, manifest_path, "{not json") end)
+
+      source_ref = parse_ref!("c:acme.bad-manifest:1.0.0")
+      assert {:error, reason} = Fork.fork(ctx, source_ref)
+      assert inspect(reason) =~ "not a JSON object"
+
+      # And nothing was written under the target's name.
+      target = Compendium.ComponentPath.version_dir("catalyst", "local", "bad-manifest", "1.0.0")
+      refute Arca.exists?(ctx, target ++ [Compendium.ComponentPath.manifest_name()])
+    end
+  end
+
   describe "component not found" do
     test "errors when component is not pulled locally", %{ctx: ctx} do
       source_ref = parse_ref!("c:acme.nonexistent:1.0.0")

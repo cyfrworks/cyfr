@@ -143,14 +143,15 @@ defmodule Compendium.Fork do
   # cap-exempt (the `Sanctum.Tenancy.Caps` roster).
   defp do_fork(ctx, source_base, target_base, target_name, target_version, source_ref_str) do
     with {:ok, source_manifest} <- Arca.get(ctx, source_base ++ [ComponentPath.manifest_name()]),
+         {:ok, sentinel} <-
+           rewrite_manifest(source_manifest, target_name, target_version, source_ref_str),
          {:ok, written} <-
            Arca.Overlay.commit_unit(
              ctx,
              target_base,
              {:tree, source_base, exclude: &Arca.Storage.build_dropping?/1},
              cap: :exempt,
-             sentinel:
-               rewrite_manifest(source_manifest, target_name, target_version, source_ref_str)
+             sentinel: sentinel
            ) do
       {:ok, written |> Enum.map(&Path.join(target_base ++ &1)) |> Enum.sort()}
     end
@@ -160,19 +161,28 @@ defmodule Compendium.Fork do
   # Manifest Rewrite
   # ============================================================================
 
+  # A fork's whole point is that the copy carries its OWN name and version.
+  # A manifest that will not parse cannot be given them — and copying it
+  # unchanged, as this used to, produces a component that says it is the one
+  # it was forked from: same publisher, same name, same version, no
+  # forked_from. That reads as a successful fork and is not one, so it
+  # refuses instead.
   defp rewrite_manifest(manifest_json, name, version, forked_from) do
     case Jason.decode(manifest_json) do
-      {:ok, manifest} ->
-        manifest
-        |> Map.put("publisher", ComponentPath.default_publisher())
-        |> Map.put("name", name)
-        |> Map.put("version", version)
-        |> Map.put("forked_from", forked_from)
-        |> Jason.encode!(pretty: true)
+      {:ok, manifest} when is_map(manifest) ->
+        {:ok,
+         manifest
+         |> Map.put("publisher", ComponentPath.default_publisher())
+         |> Map.put("name", name)
+         |> Map.put("version", version)
+         |> Map.put("forked_from", forked_from)
+         |> Jason.encode!(pretty: true)}
 
-      {:error, _} ->
-        # If manifest is not valid JSON, copy as-is
-        manifest_json
+      _ ->
+        {:error,
+         {:invalid_manifest,
+          "the source's #{ComponentPath.manifest_name()} is not a JSON object — " <>
+            "a fork cannot be renamed into one that will not parse"}}
     end
   end
 

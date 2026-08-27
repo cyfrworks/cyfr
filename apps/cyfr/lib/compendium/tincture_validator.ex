@@ -102,9 +102,7 @@ defmodule Compendium.TinctureValidator do
   # the module-level note above. The Arca-routed validator (used by the
   # indexer) is `validate_from_pairs/1`.
   defp check_entry(dir, manifest) do
-    entry = get_in(manifest, ["tincture", "entry"]) || "index.html"
-
-    with :ok <- validate_entry_path(entry) do
+    with {:ok, entry} <- Cyfr.TinctureHelpers.entry_of(manifest) do
       path = Path.join(dir, entry)
       resolved = Path.expand(path)
       base = Path.expand(dir)
@@ -124,20 +122,6 @@ defmodule Compendium.TinctureValidator do
 
   # Traversal rules come from Cyfr.PathSafety (the repo-wide SSOT); keep the
   # user-facing messages this validator has always produced.
-  defp validate_entry_path(entry) do
-    case Cyfr.PathSafety.validate_relative_path(entry) do
-      :ok ->
-        :ok
-
-      {:error, message} ->
-        cond do
-          message =~ "null bytes" -> {:error, "entry must not contain null bytes"}
-          message =~ "Absolute paths" -> {:error, "entry must be a relative path"}
-          true -> {:error, "entry must not contain '..'"}
-        end
-    end
-  end
-
   # _s is reserved by the tincture asset router for signed-token path prefixes.
   @reserved_dirs ~w(_s)
 
@@ -228,9 +212,7 @@ defmodule Compendium.TinctureValidator do
   end
 
   defp check_entry_in_pairs(files, manifest) do
-    entry = get_in(manifest, ["tincture", "entry"]) || "index.html"
-
-    with :ok <- validate_entry_path(entry) do
+    with {:ok, entry} <- Cyfr.TinctureHelpers.entry_of(manifest) do
       if Map.has_key?(files, entry) do
         :ok
       else

@@ -186,4 +186,37 @@ defmodule Compendium.TinctureValidatorTest do
 
     dir
   end
+
+  describe "the entry rule is one rule" do
+    # Publish checked path safety only; serve added a denylist and refused
+    # dotfiles; the indexer checked nothing. So `entry: "cyfr-manifest.json"`
+    # published cleanly, indexed cleanly, and 404'd the first time anyone
+    # opened it — the author finding out last, from a blank page.
+    test "an entry the serve side refuses does not pass validation" do
+      for entry <- ["cyfr-manifest.json", "data.db", "schema.sql", ".env"] do
+        assert {:error, _} = Cyfr.TinctureHelpers.validate_entry(entry),
+               "#{entry} must be refused at publish, not only at serve"
+
+        assert Cyfr.TinctureHelpers.resolve_entry(%{
+                 manifest: %{"tincture" => %{"entry" => entry}}
+               }) == :error
+      end
+    end
+
+    test "an ordinary entry passes both, and an absent one defaults" do
+      assert {:ok, "app.html"} = Cyfr.TinctureHelpers.validate_entry("app.html")
+      assert {:ok, "index.html"} = Cyfr.TinctureHelpers.validate_entry(nil)
+      assert {:ok, "index.html"} = Cyfr.TinctureHelpers.entry_of(%{})
+
+      assert Cyfr.TinctureHelpers.resolve_entry(%{manifest: %{}}) ==
+               {:ok, Cyfr.TinctureHelpers.default_entry()}
+    end
+
+    test "path safety speaks before the dotfile rule" do
+      # `../escape.html` is a dotfile by prefix and a traversal by meaning;
+      # the traversal is what the author needs told.
+      assert {:error, message} = Cyfr.TinctureHelpers.validate_entry("../escape.html")
+      assert message =~ "'..'"
+    end
+  end
 end
