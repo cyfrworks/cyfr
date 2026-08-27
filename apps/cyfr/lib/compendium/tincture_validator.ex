@@ -59,7 +59,10 @@ defmodule Compendium.TinctureValidator do
   @spec validate_from_pairs([{[String.t()], binary()}]) ::
           {:ok, map()} | {:error, String.t()}
   def validate_from_pairs(pairs) when is_list(pairs) do
-    files = Map.new(pairs, fn {segs, content} -> {Enum.join(segs, "/"), content} end)
+    files =
+      pairs
+      |> Enum.reject(fn {segs, _content} -> segs |> List.last() |> excluded?() end)
+      |> Map.new(fn {segs, content} -> {Enum.join(segs, "/"), content} end)
 
     with {:ok, raw} <- fetch_pair(files, Compendium.ComponentPath.manifest_name()),
          {:ok, manifest} <- decode_json(raw),
@@ -125,6 +128,22 @@ defmodule Compendium.TinctureValidator do
   # _s is reserved by the tincture asset router for signed-token path prefixes.
   @reserved_dirs ~w(_s)
 
+  # SQLite runtime artifacts: a tincture may ship `data.db` as an asset, but
+  # its write-ahead log and shared-memory file are a snapshot of one process's
+  # in-flight state and are never stored. The exclusion lived in
+  # `Compendium.Registry`, applied when collecting files to write — after this
+  # module had already hashed them. So the digest recorded at publish covered
+  # bytes the store then dropped, and re-validating the stored tree could
+  # never reproduce it. One rule, applied before the hash, on both paths.
+  @excluded_files ~w(data.db-wal data.db-shm)
+
+  @doc """
+  Whether a shipped file is excluded from a tincture: never hashed, never
+  stored. Takes a path or a bare name; the basename decides.
+  """
+  @spec excluded?(String.t()) :: boolean()
+  def excluded?(path) when is_binary(path), do: Path.basename(path) in @excluded_files
+
   # arca:bypass-ok=D — tar-extract tmp dir scan; see module note.
   defp check_reserved_dirs(dir) do
     case File.ls(dir) do
@@ -146,6 +165,7 @@ defmodule Compendium.TinctureValidator do
     files =
       directory_path
       |> list_files_recursive()
+      |> Enum.reject(&excluded?/1)
       |> Enum.sort()
 
     {chunks, total_size} =

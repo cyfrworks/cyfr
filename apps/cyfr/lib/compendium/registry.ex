@@ -735,10 +735,6 @@ defmodule Compendium.Registry do
 
   # Extract a tincture tar+gzip archive, validate it, and store files to Arca.
   # Returns {:ok, %{digest, size, exports}} on success.
-  # Strip SQLite runtime artifacts defensively; `data.db` itself is allowed
-  # as a regular shipped asset.
-  @tincture_excluded_on_pull ~w(data.db-wal data.db-shm)
-
   defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version, opts) do
     # Hook between validation and the first Arca write. Callers use it to
     # refuse a publish without leaving extracted files behind.
@@ -861,7 +857,9 @@ defmodule Compendium.Registry do
     current_dir
     # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
-    |> Enum.reject(&(&1 in @tincture_excluded_on_pull))
+    # The validator owns which files a tincture excludes, so what is hashed
+    # and what is stored cannot come apart.
+    |> Enum.reject(&Compendium.TinctureValidator.excluded?/1)
     |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
       path = Path.join(current_dir, entry)
 

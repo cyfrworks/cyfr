@@ -166,6 +166,57 @@ defmodule Compendium.TinctureValidatorTest do
 
   # -- Helpers --
 
+  describe "excluded files" do
+    test "the two walkers agree on the digest, and the excluded bytes are in neither",
+         %{base: base} do
+      # The exclusion used to live in `Compendium.Registry`, applied when
+      # collecting files to WRITE — after this module had already hashed
+      # them. So the digest recorded at publish covered bytes the store then
+      # dropped, and re-validating the stored tree could never reproduce it.
+      dir = setup_valid_tincture(base, "with-sqlite-artifacts")
+      assert {:ok, clean} = TinctureValidator.validate(dir)
+
+      File.write!(Path.join(dir, "data.db-wal"), String.duplicate("w", 4096))
+      File.write!(Path.join(dir, "data.db-shm"), String.duplicate("s", 512))
+
+      assert {:ok, with_artifacts} = TinctureValidator.validate(dir)
+
+      assert with_artifacts.digest == clean.digest,
+             "a file that is never stored must not change the digest"
+
+      assert with_artifacts.size == clean.size
+
+      # The pair-based path — the one that re-reads the STORED tree — must
+      # land on the same digest, which is the whole point.
+      pairs =
+        for path <- Path.wildcard(Path.join(dir, "**/*")),
+            not File.dir?(path),
+            do: {path |> Path.relative_to(dir) |> String.split("/"), File.read!(path)}
+
+      assert {:ok, from_pairs} = TinctureValidator.validate_from_pairs(pairs)
+      assert from_pairs.digest == clean.digest
+      assert from_pairs.size == clean.size
+    end
+
+    test "data.db itself is a shipped asset and is hashed", %{base: base} do
+      dir = setup_valid_tincture(base, "with-db")
+      assert {:ok, before} = TinctureValidator.validate(dir)
+
+      File.write!(Path.join(dir, "data.db"), "sqlite-bytes")
+      assert {:ok, after_db} = TinctureValidator.validate(dir)
+
+      refute after_db.digest == before.digest
+      assert after_db.size > before.size
+    end
+
+    test "excluded?/1 decides on the basename" do
+      assert TinctureValidator.excluded?("data.db-wal")
+      assert TinctureValidator.excluded?("nested/dir/data.db-shm")
+      refute TinctureValidator.excluded?("data.db")
+      refute TinctureValidator.excluded?("index.html")
+    end
+  end
+
   defp setup_valid_tincture(base, suffix \\ "valid") do
     dir = Path.join(base, suffix)
     File.mkdir_p!(dir)
