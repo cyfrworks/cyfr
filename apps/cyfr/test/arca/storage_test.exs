@@ -399,4 +399,25 @@ defmodule Arca.StorageTest do
       assert :ok = Arca.delete_tree(ctx, ["guest", "depth_gate_tree"])
     end
   end
+
+  describe "read_subtree_via/4" do
+    defmodule HangingAdapter do
+      @moduledoc false
+      def list_recursive(_ctx, path), do: {:ok, [path ++ ["stuck.txt"]]}
+      def list_typed(_ctx, _path), do: {:ok, []}
+
+      def get(_ctx, _path) do
+        Process.sleep(:infinity)
+      end
+    end
+
+    test "a leaf read that hangs past the deadline is a typed error, not an exit" do
+      # The callers of a bulk read are request handlers; a hung adapter must
+      # answer as an error tuple — never kill the caller.
+      ctx = Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
+
+      assert {:error, {:subtree_read_failed, ["guest", "sub", "stuck.txt"], :timeout}} =
+               Storage.read_subtree_via(HangingAdapter, ctx, ["guest", "sub"], timeout: 50)
+    end
+  end
 end

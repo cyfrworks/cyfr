@@ -666,7 +666,10 @@ defmodule Arca.Storage do
   Memory-bounded: bytes are buffered in-memory. Use `serve_to_conn/4` for
   large single-file streaming. Concurrency comes from the
   `:read_subtree_concurrency` config (default 10), overridable per call
-  with `:concurrency`.
+  with `:concurrency`; the per-leaf read deadline is `:timeout` (default
+  30s). A leaf read that hangs past the deadline or crashes answers
+  `{:error, {:subtree_read_failed, leaf, reason}}` — never an exit in the
+  caller.
   """
   @spec read_subtree_via(module(), Context.t(), path(), keyword()) ::
           {:ok, [{path(), binary()}]} | error()
@@ -684,18 +687,28 @@ defmodule Arca.Storage do
             Keyword.get(opts, :concurrency) ||
               Application.get_env(:cyfr, :read_subtree_concurrency, 10)
 
+          # `:kill_task` (with `:zip_input_on_exit` naming the leaf) turns a
+          # hung or crashed per-leaf read into a typed error instead of
+          # killing the caller — the contract promises a tuple, and the
+          # callers of a bulk read are request handlers, not supervisors.
           leaves
           |> Task.async_stream(fn segs -> {segs, adapter.get(ctx, segs)} end,
             max_concurrency: concurrency,
-            timeout: 30_000,
+            timeout: Keyword.get(opts, :timeout, 30_000),
+            on_timeout: :kill_task,
+            zip_input_on_exit: true,
             ordered: true
           )
-          |> Enum.reduce_while([], fn {:ok, {segs, result}}, acc ->
-            case result do
-              {:ok, content} -> {:cont, [{Enum.drop(segs, length(path)), content} | acc]}
-              {:error, :not_found} -> {:cont, acc}
-              {:error, reason} -> {:halt, {:error, reason}}
-            end
+          |> Enum.reduce_while([], fn
+            {:ok, {segs, result}}, acc ->
+              case result do
+                {:ok, content} -> {:cont, [{Enum.drop(segs, length(path)), content} | acc]}
+                {:error, :not_found} -> {:cont, acc}
+                {:error, reason} -> {:halt, {:error, reason}}
+              end
+
+            {:exit, {segs, reason}}, _acc ->
+              {:halt, {:error, {:subtree_read_failed, segs, reason}}}
           end)
           |> case do
             {:error, _} = error -> error
