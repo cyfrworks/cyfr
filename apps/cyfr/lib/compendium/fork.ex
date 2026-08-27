@@ -163,7 +163,7 @@ defmodule Compendium.Fork do
         exclude: &(Arca.Storage.build_dropping?(&1) or &1 == manifest)
       )
 
-    with :ok <- copy,
+    with {:ok, _copied} <- copy,
          {:ok, source_manifest} <- Arca.get(ctx, source_base ++ manifest),
          :ok <-
            Arca.put(

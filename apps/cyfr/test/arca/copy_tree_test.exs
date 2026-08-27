@@ -82,7 +82,7 @@ defmodule Arca.CopyTreeTest do
     :ok = Arca.put(ctx, ["guest", "src", "a.txt"], "A")
     :ok = Arca.put(ctx, ["guest", "src", "sub", "b.txt"], "B")
 
-    assert :ok = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"])
+    assert {:ok, _} = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"])
 
     assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
     assert {:ok, "B"} = Arca.get(ctx, ["guest", "dest", "sub", "b.txt"])
@@ -95,7 +95,7 @@ defmodule Arca.CopyTreeTest do
     :ok = Arca.put(ctx, ["guest", "src", "target", "debug", "junk.o"], "JUNK")
 
     exclude = fn relative -> "target" in relative end
-    assert :ok = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"], exclude: exclude)
+    assert {:ok, _} = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"], exclude: exclude)
 
     assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
     assert {:error, :not_found} = Arca.get(ctx, ["guest", "dest", "target", "debug", "junk.o"])
@@ -114,7 +114,7 @@ defmodule Arca.CopyTreeTest do
     ctx = Sanctum.TestContext.local()
     :ok = Arca.put(ctx, ["guest", "src", "a.txt"], "A")
 
-    assert :ok = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"])
+    assert {:ok, _} = Arca.copy_tree(ctx, ["guest", "src"], ["guest", "dest"])
     assert {:ok, "A"} = Arca.get(ctx, ["guest", "dest", "a.txt"])
     assert {:error, :not_found} = Arca.get(ctx, ["guest", "dest", "ghost.txt"])
   end
@@ -146,7 +146,7 @@ defmodule Arca.CopyTreeTest do
     src = Arca.Storage.seed_prefix("components") ++ ["catalysts", "local"]
     dest = ["components", "catalysts", "local"]
 
-    assert :ok = Arca.copy_tree(internal, src, dest)
+    assert {:ok, _} = Arca.copy_tree(internal, src, dest)
 
     dest_leaf = dest ++ ["x", "1.0.0", "cyfr-manifest.json"]
     assert_received {:adapter_put, ^dest_leaf}

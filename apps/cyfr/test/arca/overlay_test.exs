@@ -729,6 +729,151 @@ defmodule Arca.OverlayTest do
     end
   end
 
+  describe "commit_unit/4 — the one way a unit lands" do
+    @own_dir ["components", "catalysts", "local", "committed", "1.0.0"]
+
+    test "files source: sentinel lands last; write order is the return", %{ctx: ctx} do
+      files = [
+        {[@sentinel], ~s({"type":"catalyst"})},
+        {["a.txt"], "A"},
+        {["sub", "b.txt"], fn -> {:ok, "B"} end}
+      ]
+
+      assert {:ok, written} =
+               Arca.Overlay.commit_unit(ctx, @own_dir, {:files, files}, cap: :exempt)
+
+      # The sentinel is written last whatever the list order said.
+      assert List.last(written) == [@sentinel]
+      assert Enum.sort(written) == Enum.sort([["a.txt"], ["sub", "b.txt"], [@sentinel]])
+      assert Arca.Overlay.unit_status(ctx, @own_dir) == {:ok, :own}
+      assert {:ok, "B"} = Arca.get(ctx, @own_dir ++ ["sub", "b.txt"])
+    end
+
+    test "a mid-list failure rolls the whole unit back — no partial, no mark", %{ctx: ctx} do
+      files = [
+        {[@sentinel], ~s({"type":"catalyst"})},
+        {["a.txt"], "A"},
+        {["b.txt"], fn -> {:error, :enospc} end}
+      ]
+
+      assert {:error, :enospc} =
+               Arca.Overlay.commit_unit(ctx, @own_dir, {:files, files}, cap: :exempt)
+
+      assert {:ok, []} = Arca.list_recursive(ctx, Enum.take(@own_dir, 4))
+      refute Arca.exists?(ctx, @own_dir ++ ["a.txt"])
+      assert Arca.Overlay.unit_status(ctx, @own_dir) == {:ok, :absent}
+    end
+
+    test "a dir unit without sentinel bytes refuses before any write", %{ctx: ctx} do
+      assert {:error, :missing_sentinel} =
+               Arca.Overlay.commit_unit(ctx, @own_dir, {:files, [{["a.txt"], "A"}]}, cap: :exempt)
+
+      refute Arca.exists?(ctx, @own_dir ++ ["a.txt"])
+    end
+
+    test "cap refuses before the first write", %{ctx: ctx} do
+      prev = Application.get_env(:cyfr, :caps)
+      Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:cyfr, :caps, prev),
+          else: Application.delete_env(:cyfr, :caps)
+
+        Arca.Cache.delete_match({:athanor_usage, :_, :_})
+      end)
+
+      files = [{[@sentinel], ~s({"type":"catalyst"})}, {["a.txt"], "AAAA"}]
+
+      assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
+               Arca.Overlay.commit_unit(ctx, @own_dir, {:files, files}, cap: {:checked, 4096})
+
+      refute Arca.exists?(ctx, @own_dir ++ ["a.txt"])
+    end
+
+    test "a commit replaces the unit wholesale — stale files do not survive", %{ctx: ctx} do
+      first = [{[@sentinel], ~s({"v":1})}, {["old.txt"], "OLD"}]
+      assert {:ok, _} = Arca.Overlay.commit_unit(ctx, @own_dir, {:files, first}, cap: :exempt)
+
+      second = [{[@sentinel], ~s({"v":2})}, {["new.txt"], "NEW"}]
+      assert {:ok, _} = Arca.Overlay.commit_unit(ctx, @own_dir, {:files, second}, cap: :exempt)
+
+      refute Arca.exists?(ctx, @own_dir ++ ["old.txt"])
+      assert {:ok, "NEW"} = Arca.get(ctx, @own_dir ++ ["new.txt"])
+      assert {:ok, ~s({"v":2})} = Arca.get(ctx, @own_dir ++ [@sentinel])
+    end
+
+    test "tree source: streams another Arca tree; sentinel: overrides its manifest", %{ctx: ctx} do
+      src = ["guest", "staging"]
+      :ok = Arca.put(ctx, src ++ ["a.txt"], "A")
+      :ok = Arca.put(ctx, src ++ [@sentinel], ~s({"stale":true}))
+
+      assert {:ok, written} =
+               Arca.Overlay.commit_unit(ctx, @own_dir, {:tree, src, []},
+                 cap: :exempt,
+                 sentinel: ~s({"stamped":true})
+               )
+
+      assert List.last(written) == [@sentinel]
+      assert {:ok, ~s({"stamped":true})} = Arca.get(ctx, @own_dir ++ [@sentinel])
+      assert {:ok, "A"} = Arca.get(ctx, @own_dir ++ ["a.txt"])
+    end
+
+    test "default origin is none — a committed unit over a seed counterpart shadows",
+         %{ctx: ctx} do
+      files = [{[@sentinel], ~s({"mine":true})}, {["own.txt"], "MINE"}]
+
+      assert {:ok, _} =
+               Arca.Overlay.commit_unit(ctx, @version_dir, {:files, files}, cap: :exempt)
+
+      # No origin mark: the athanor's own work, which reset refuses.
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :own_shadowing}
+      assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, @version_dir)
+    end
+
+    test "origin: :seed marks the commit as a materialized copy", %{ctx: ctx} do
+      seed_src = ["seed" | @version_dir]
+
+      system =
+        Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
+
+      assert {:ok, _} =
+               Arca.Overlay.commit_unit(
+                 system,
+                 @version_dir,
+                 {:tree, seed_src, exclude: &Arca.Storage.build_dropping?/1},
+                 cap: :exempt,
+                 origin: :seed
+               )
+
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
+    end
+
+    test "a file unit is one plain put — sentinel/origin refused, CoW mark untouched",
+         %{ctx: ctx} do
+      agent = ["aqua", "agents", "mine.md"]
+
+      assert {:ok, [[]]} =
+               Arca.Overlay.commit_unit(ctx, agent, {:files, [{[], "# mine"}]}, cap: :exempt)
+
+      assert {:ok, "# mine"} = Arca.get(ctx, agent)
+      assert Arca.Overlay.unit_status(ctx, agent) == {:ok, :own}
+
+      assert_raise ArgumentError, ~r/the put is the commit/, fn ->
+        Arca.Overlay.commit_unit(ctx, agent, {:files, [{[], "x"}]},
+          cap: :exempt,
+          origin: :seed
+        )
+      end
+    end
+
+    test "a non-unit path is a programmer error", %{ctx: ctx} do
+      assert_raise ArgumentError, ~r/needs a unit path/, fn ->
+        Arca.Overlay.commit_unit(ctx, ["components", "catalysts"], {:files, []}, cap: :exempt)
+      end
+    end
+  end
+
   describe "a tenant adapter outage propagates — the union never lies" do
     # A union answer needs both sides: an outage answering seed-only would
     # be a plausible listing silently missing the athanor's files, and a

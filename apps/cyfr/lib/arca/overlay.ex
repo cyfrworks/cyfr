@@ -33,18 +33,18 @@ defmodule Arca.Overlay do
   consulted for the materialization bytes), then lands. Deleting an
   unmaterialized bundle path is refused as `{:error, :bundled}`.
 
-  ## The sentinel — crash-safe materialization
+  ## The sentinel — crash-safe unit commits
 
   "Completed" is a fact the tree itself records: every valid directory
-  unit carries its sentinel file, and materialization copies it LAST. A
-  crash or failure mid-copy leaves the unit without its sentinel, so it
-  keeps reading as unmaterialized — the seed stays fully visible, and the
-  partial copy's bytes are the seed's own, so even direct reads stay
-  consistent — and the next write simply re-copies over the partial
-  remains (an error return also rolls the partial copy back). No hidden
-  marker file: the sentinel is an ordinary, digest-counted member of the
-  unit. A file unit is atomic by construction — a single put — and counts
-  as completed when the tenant file exists.
+  unit carries its sentinel file, and `commit_unit/4` — the one way a
+  unit lands, for scaffold, fork, the tincture store, publish, OCI pull
+  and seed materialization alike — writes it LAST. A crash or failure
+  mid-commit leaves the unit without its sentinel, so it keeps reading
+  as incomplete, and an error return rolls the partial back; the next
+  commit replaces whatever remains wholesale. No hidden marker file: the
+  sentinel is an ordinary, digest-counted member of the unit. A file
+  unit is atomic by construction — a single put — and counts as
+  completed when the tenant file exists.
 
   Provisioning therefore copies nothing: a new athanor's overlaid scopes
   are empty on disk and complete through the facade, and the storage cap
@@ -519,6 +519,198 @@ defmodule Arca.Overlay do
   end
 
   # ---------------------------------------------------------------------------
+  # Commit — the one way a unit lands: whole, or not at all.
+  # ---------------------------------------------------------------------------
+
+  @typedoc """
+  What a unit commit writes: explicit relative files — bytes, or a lazy
+  read for sources streamed from outside Arca (a scratch dir) — or
+  another Arca tree, streamed one file at a time.
+  """
+  @type commit_source ::
+          {:files,
+           [
+             {relative :: Arca.Storage.path(), binary() | (-> {:ok, binary()} | {:error, term()})}
+           ]}
+          | {:tree, src :: Arca.Storage.path(), [{:exclude, (Arca.Storage.path() -> boolean())}]}
+
+  @doc """
+  Land one whole unit: refuse-or-replace, write the non-sentinel files,
+  sentinel LAST, origin mark only for the seed materializer — and on any
+  error, delete the partial. Every ingress that lays a unit (scaffold,
+  fork, the tincture store, publish, OCI pull, seed materialization)
+  commits through here, so sentinel-last, rollback, cap policy and
+  usage accounting are one implementation, not a discipline each caller
+  re-spells.
+
+  Options:
+
+    * `cap:` (required) — `:exempt` or `{:checked, bytes}`. Every call
+      site states its policy, so the uncapped-by-design set stays
+      explicit (`Sanctum.Tenancy.Caps` documents the roster).
+    * `sentinel:` — the sentinel's bytes, overriding any sentinel entry
+      the source carries (a fork's re-stamped manifest, a pull's
+      authoritative config blob). A dir-unit commit with sentinel bytes
+      from neither place refuses as `{:error, :missing_sentinel}` before
+      any write.
+    * `origin: :seed` — stamp the origin mark after the sentinel: the
+      materializer's option, nobody else's (`:none` default).
+
+  A file unit commits as one plain facade put — atomic by construction,
+  the file CoW mark untouched — and refuses `sentinel:`/`origin:`. A
+  dir-unit commit over existing tenant content replaces it whole (stale
+  files from a prior partial or an overwritten pull do not survive). A
+  commit over an unmaterialized seed-backed unit writes plainly and
+  classifies `:own_shadowing` — copying the seed first would only
+  manufacture stale files under fully-specified new content.
+
+  Returns the written relatives in write order, sentinel last.
+  """
+  @spec commit_unit(Context.t(), Arca.Storage.path(), commit_source(), keyword()) ::
+          {:ok, [Arca.Storage.path()]} | {:error, term()}
+  def commit_unit(%Context{} = ctx, unit, source, opts) do
+    cap = Keyword.fetch!(opts, :cap)
+    origin = Keyword.get(opts, :origin, :none)
+    override = Keyword.get(opts, :sentinel)
+
+    case Arca.Storage.locate(unit) do
+      {:file, ^unit} ->
+        commit_file_unit(ctx, unit, source, cap, origin, override)
+
+      {:dir, ^unit, sentinel} ->
+        commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
+
+      other ->
+        raise ArgumentError,
+              "commit_unit needs a unit path; #{inspect(unit)} locates to #{inspect(other)}"
+    end
+  end
+
+  # A file unit's completing write IS the caller's one atomic put: no
+  # sentinel, no rollback (failure leaves the previous bytes), and the
+  # plain facade path so the file CoW mark-then-put applies untouched.
+  defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, :none, nil) do
+    with {:ok, bytes} <- resolve_content(content),
+         :ok <- check_commit_cap(ctx, cap),
+         :ok <- Arca.put(ctx, unit, bytes) do
+      {:ok, [[]]}
+    end
+  end
+
+  defp commit_file_unit(_ctx, unit, _source, _cap, _origin, _override) do
+    raise ArgumentError,
+          "a file unit (#{Enum.join(unit, "/")}) commits as {:files, [{[], bytes}]} " <>
+            "with no sentinel:/origin: — the put is the commit"
+  end
+
+  defp commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
+    internal = internal_ctx(ctx)
+
+    with {:ok, sentinel_content} <- sentinel_bytes(internal, sentinel, source, override),
+         :ok <- check_commit_cap(ctx, cap) do
+      result =
+        with_internal_writes(fn ->
+          with :ok <- clean_slate(internal, unit),
+               {:ok, written} <- write_source(internal, unit, sentinel, source),
+               # The completion mark: the sentinel lands last, so a crash
+               # anywhere above leaves the unit reading as incomplete and
+               # the rollback (or the next commit) clears the remains.
+               :ok <- Arca.put(internal, unit ++ [sentinel], sentinel_content),
+               :ok <- maybe_record_origin(internal, unit, origin) do
+            {:ok, written ++ [[sentinel]]}
+          end
+        end)
+
+      case result do
+        {:ok, _written} = ok ->
+          ok
+
+        {:error, reason} = error ->
+          with_internal_writes(fn -> rollback(ctx, unit, reason) end)
+          error
+      end
+    end
+  end
+
+  # Resolved before any write: a commit that could never be completed
+  # must not move a byte.
+  defp sentinel_bytes(_internal, _sentinel, _source, override) when is_binary(override),
+    do: {:ok, override}
+
+  defp sentinel_bytes(_internal, sentinel, {:files, files}, nil) do
+    case List.keyfind(files, [sentinel], 0) do
+      {_rel, content} -> resolve_content(content)
+      nil -> {:error, :missing_sentinel}
+    end
+  end
+
+  defp sentinel_bytes(internal, sentinel, {:tree, src, _opts}, nil) do
+    case Arca.get(internal, src ++ [sentinel]) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, :not_found} -> {:error, :missing_sentinel}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp resolve_content(bytes) when is_binary(bytes), do: {:ok, bytes}
+  defp resolve_content(thunk) when is_function(thunk, 0), do: thunk.()
+
+  defp check_commit_cap(_ctx, :exempt), do: :ok
+
+  defp check_commit_cap(ctx, {:checked, bytes}) when is_integer(bytes) and bytes >= 0,
+    do: Sanctum.Tenancy.Caps.check_storage(ctx, bytes)
+
+  # A commit replaces the unit whole: stale files from a prior partial or
+  # an overwritten pull must not survive beside the new content. Probed
+  # first so a fresh-target commit never invalidates the usage counters
+  # for nothing.
+  defp clean_slate(internal, unit) do
+    case tenant().list_typed(internal, unit) do
+      {:ok, [_ | _]} -> Arca.delete_tree(internal, unit)
+      {:ok, []} -> :ok
+      # A file where the unit's tree belongs — replaced like any content.
+      {:error, :enotdir} -> Arca.delete(internal, unit)
+      {:error, _} = error -> error
+    end
+  end
+
+  defp write_source(internal, unit, sentinel, {:files, files}) do
+    files
+    |> Enum.reject(fn {rel, _content} -> rel == [sentinel] end)
+    |> Enum.reduce_while({:ok, []}, fn {rel, content}, {:ok, acc} ->
+      with {:ok, bytes} <- resolve_content(content),
+           :ok <- Arca.put(internal, unit ++ rel, bytes) do
+        {:cont, {:ok, [rel | acc]}}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, written} -> {:ok, Enum.reverse(written)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp write_source(internal, unit, sentinel, {:tree, src, opts}) do
+    exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
+
+    Arca.copy_tree(internal, src, unit,
+      exclude: fn relative -> relative == [sentinel] or exclude.(relative) end
+    )
+  end
+
+  defp maybe_record_origin(_internal, _unit, :none), do: :ok
+  defp maybe_record_origin(internal, unit, :seed), do: record_origin(internal, unit)
+
+  # An internal context focused on the caller's athanor, writing back
+  # THROUGH the facade so every committed byte passes the facade's usage
+  # accounting like any other write. The user_id is attribution only —
+  # the exemption is the lexical internal-write scope.
+  defp internal_ctx(%Context{} = ctx) do
+    Sanctum.internal_context(user_id: "_overlay", athanor_id: ctx.athanor_id, scope: :athanor)
+  end
+
+  # ---------------------------------------------------------------------------
   # Copy-on-write and the delete refusal
   # ---------------------------------------------------------------------------
 
@@ -758,77 +950,48 @@ defmodule Arca.Overlay do
     end
   end
 
+  # The seed materializer is a commit_unit caller like every other
+  # ingress: tree source from the seed side, droppings excluded, the cap
+  # asked about the dragged-in bytes, origin marked. The commit owns
+  # sentinel-last, wholesale replace and rollback.
   defp materialize(ctx, {:dir, unit_dir, sentinel}) do
     seed_dir = seed(unit_dir)
 
     with :ok <- seed_sentinel_present(seed_dir, sentinel),
-         :ok <- check_cap(ctx, seed_dir) do
-      # An internal context focused on the caller's athanor, writing back
-      # THROUGH the facade so every copied byte passes the facade's usage
-      # accounting like any other write. The user_id is attribution only —
-      # the copy-on-write exemption is the lexical scope.
-      internal =
-        Sanctum.internal_context(
-          user_id: "_overlay",
-          athanor_id: ctx.athanor_id,
-          scope: :athanor
-        )
+         {:ok, bytes} <- seed_unit_bytes(seed_dir),
+         {:ok, _written} <-
+           commit_unit(ctx, unit_dir, {:tree, seed_dir, exclude: &excluded?/1},
+             cap: {:checked, bytes},
+             origin: :seed
+           ) do
+      Logger.info("[Arca.Overlay] materialized #{Enum.join(unit_dir, "/")} for #{ctx.athanor_id}")
 
-      copy =
-        with_internal_writes(fn ->
-          with :ok <-
-                 Arca.copy_tree(internal, seed_dir, unit_dir,
-                   exclude: &(excluded?(&1) or &1 == [sentinel])
-                 ),
-               # The completion mark: the sentinel lands last, so a crash
-               # anywhere above leaves the unit reading as unmaterialized
-               # and the next write re-copies over the partial remains.
-               {:ok, bytes} <- seed_get(unit_dir ++ [sentinel]),
-               :ok <- Arca.put(internal, unit_dir ++ [sentinel], bytes) do
-            # The origin mark lands after the sentinel: mark present means
-            # a completed COPY (a crash in between reads as the athanor's
-            # own — the direction that never destroys its bytes).
-            record_origin(internal, unit_dir)
-          end
-        end)
-
-      case copy do
-        :ok ->
-          Logger.info(
-            "[Arca.Overlay] materialized #{Enum.join(unit_dir, "/")} for #{ctx.athanor_id}"
-          )
-
-          :ok
-
-        {:error, reason} ->
-          with_internal_writes(fn -> rollback(ctx, unit_dir, reason) end)
-          {:error, {:materialize_failed, reason}}
-      end
+      :ok
+    else
+      # The cap refusals keep their facade shapes; everything else wears
+      # the materializer's documented vocabulary.
+      {:error, {:limit_reached, _, _}} = cap -> cap
+      {:error, :storage_unverifiable} = unverifiable -> unverifiable
+      {:error, {:materialize_failed, _}} = wrapped -> wrapped
+      {:error, reason} -> {:error, {:materialize_failed, reason}}
     end
   end
 
-  # A failed copy must not linger: without its sentinel the partial unit
-  # already reads as unmaterialized, but its bytes would count against the
-  # cap and confuse direct reads of paths the copy never reached. If the
-  # rollback itself fails, the unit is stuck holding a partial copy — say
-  # so loudly; the next successful materialization overwrites it.
+  # A failed commit must not linger: without its sentinel the partial unit
+  # already reads as incomplete, but its bytes would count against the
+  # cap and confuse direct reads of paths the write never reached. If the
+  # rollback itself fails, the unit is stuck holding a partial — say so
+  # loudly; the next successful commit replaces it wholesale.
   defp rollback(ctx, unit_dir, reason) do
-    internal =
-      Sanctum.internal_context(
-        user_id: "_overlay",
-        athanor_id: ctx.athanor_id,
-        scope: :athanor
-      )
-
-    case Arca.delete_tree(internal, unit_dir) do
+    case Arca.delete_tree(internal_ctx(ctx), unit_dir) do
       :ok ->
         :ok
 
       {:error, rollback_reason} ->
         Logger.error(
-          "[Arca.Overlay] materialization of #{Enum.join(unit_dir, "/")} failed " <>
+          "[Arca.Overlay] unit commit at #{Enum.join(unit_dir, "/")} failed " <>
             "(#{inspect(reason)}) AND its rollback failed (#{inspect(rollback_reason)}) — " <>
-            "a partial copy remains until the next materialization overwrites it"
+            "a partial remains until the next commit replaces it"
         )
 
         :ok
@@ -850,9 +1013,9 @@ defmodule Arca.Overlay do
   # The walk counts droppings the copy then excludes — an over-count in
   # the safe direction; CI keeps the seed free of droppings so it stays
   # theoretical.
-  defp check_cap(ctx, seed_dir) do
+  defp seed_unit_bytes(seed_dir) do
     case Arca.Adapters.Local.usage(seed_ctx(), seed_dir) do
-      {:ok, %{bytes: bytes}} -> Sanctum.Tenancy.Caps.check_storage(ctx, bytes)
+      {:ok, %{bytes: bytes}} -> {:ok, bytes}
       {:error, reason} -> {:error, {:materialize_failed, {:seed_usage, reason}}}
     end
   end

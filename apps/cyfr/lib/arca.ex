@@ -389,7 +389,8 @@ defmodule Arca do
   `put/3` under `dest`, preserving relative layout — one file in memory at a
   time. Adapter-agnostic (Local FS or object store). Content-only — the
   source is left untouched, so a *move* is a successful `copy_tree/3`
-  followed by `delete_tree/2`. Returns `:ok` or the first `{:error, reason}`.
+  followed by `delete_tree/2`. Returns `{:ok, copied_relatives}` in copy
+  order, or the first `{:error, reason}`.
 
   `exclude: fn relative_segments -> boolean end` skips matching files before
   their content is ever read — how `Arca.Overlay.materialize/2` keeps build
@@ -408,23 +409,27 @@ defmodule Arca do
       leaves
       |> Enum.map(&Enum.drop(&1, length(src)))
       |> Enum.reject(exclude)
-      |> Enum.reduce_while(:ok, fn relative, :ok ->
+      |> Enum.reduce_while({:ok, []}, fn relative, {:ok, acc} ->
         case get(ctx, src ++ relative) do
           {:ok, content} ->
             case put(ctx, dest ++ relative, transform.(relative, content)) do
-              :ok -> {:cont, :ok}
+              :ok -> {:cont, {:ok, [relative | acc]}}
               {:error, reason} -> {:halt, {:error, reason}}
             end
 
           # File vanished between list and read — skip; concurrent delete is
           # unusual but not an error condition for a tree copy.
           {:error, :not_found} ->
-            {:cont, :ok}
+            {:cont, {:ok, acc}}
 
           {:error, reason} ->
             {:halt, {:error, reason}}
         end
       end)
+      |> case do
+        {:ok, copied} -> {:ok, Enum.reverse(copied)}
+        {:error, _} = error -> error
+      end
     end
   end
 
