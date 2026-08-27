@@ -656,12 +656,11 @@ defmodule PrismWeb.ComponentsLive do
     end)
     |> Enum.map(fn {{name, publisher, type}, local_versions} ->
       sorted =
-        Enum.sort_by(local_versions, fn v -> comp_field(v, :version) || "0.0.0" end, fn a, b ->
-          case Version.compare(a, b) do
-            :gt -> true
-            _ -> false
-          end
-        end)
+        Enum.sort_by(
+          local_versions,
+          fn v -> comp_field(v, :version) || "0.0.0" end,
+          &(Compendium.Semver.compare(&1, &2) != :lt)
+        )
 
       latest = hd(sorted)
 
@@ -679,12 +678,10 @@ defmodule PrismWeb.ComponentsLive do
 
       all_versions =
         (sorted ++ remote_only)
-        |> Enum.sort_by(fn v -> comp_field(v, :version) || "0.0.0" end, fn a, b ->
-          case Version.compare(a, b) do
-            :gt -> true
-            _ -> false
-          end
-        end)
+        |> Enum.sort_by(
+          fn v -> comp_field(v, :version) || "0.0.0" end,
+          &(Compendium.Semver.compare(&1, &2) != :lt)
+        )
 
       %{
         name: name,
@@ -834,12 +831,11 @@ defmodule PrismWeb.ComponentsLive do
     end)
     |> Enum.map(fn {name_ref, versions} ->
       sorted =
-        Enum.sort_by(versions, fn v -> comp_field(v, :version) || "0.0.0" end, fn a, b ->
-          case Version.compare(a, b) do
-            :gt -> true
-            _ -> false
-          end
-        end)
+        Enum.sort_by(
+          versions,
+          fn v -> comp_field(v, :version) || "0.0.0" end,
+          &(Compendium.Semver.compare(&1, &2) != :lt)
+        )
 
       latest = hd(sorted)
 

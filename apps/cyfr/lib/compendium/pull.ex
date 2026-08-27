@@ -177,10 +177,12 @@ defmodule Compendium.Pull do
           {:ok, %{"tags" => tags}} when is_list(tags) ->
             # Descending Version-aware sort (prereleases order correctly:
             # 1.0.0-rc1 < 1.0.0), so the head is the latest release.
+            # Non-semver tags drop entirely — a remote's "latest" or
+            # "1.2.3.4" is never a release candidate.
             semver_tags =
               tags
-              |> Enum.filter(&semver_tag?/1)
-              |> Enum.sort(fn a, b -> not version_gt?(b, a) end)
+              |> Enum.filter(&Compendium.Semver.semver?/1)
+              |> Compendium.Semver.sort_desc()
 
             case semver_tags do
               [latest | _] -> {:ok, latest}
@@ -193,15 +195,6 @@ defmodule Compendium.Pull do
 
       _ ->
         {:error, :tags_fetch_failed}
-    end
-  end
-
-  defp semver_tag?(tag), do: Regex.match?(~r/^\d+\.\d+\.\d+/, tag)
-
-  defp version_gt?(a, b) when is_binary(a) and is_binary(b) do
-    case {Version.parse(a), Version.parse(b)} do
-      {{:ok, va}, {:ok, vb}} -> Version.compare(va, vb) == :gt
-      _ -> a > b
     end
   end
 end

@@ -520,15 +520,15 @@ defmodule Compendium.Registry do
 
   @doc """
   The semver-latest of a list of rows, `inserted_at` as the tiebreak —
-  the one comparator every "latest" answer shares. Raises on a version
-  string `Version.compare/2` cannot parse, as registered versions are
-  validated semver.
+  the one place ROWS (not bare strings) are ordered. Registered versions
+  are validated semver; the comparator (`Compendium.Semver`) is total
+  regardless.
   """
   @spec latest_of([map()]) :: map() | nil
   def latest_of(rows) when is_list(rows) do
     rows
     |> Enum.sort(fn a, b ->
-      case Version.compare(a.version, b.version) do
+      case Compendium.Semver.compare(a.version, b.version) do
         :gt -> true
         :lt -> false
         :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt

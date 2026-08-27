@@ -1405,7 +1405,7 @@ defmodule Compendium.MCP.ComponentTool do
             Map.put(acc, key, {version, comp})
 
           {existing_version, _existing_comp} ->
-            if version_gt?(version, existing_version) do
+            if Compendium.Semver.gt?(version, existing_version) do
               Map.put(acc, key, {version, comp})
             else
               acc
@@ -1432,7 +1432,7 @@ defmodule Compendium.MCP.ComponentTool do
 
         case Map.get(remote_by_identity, key) do
           {remote_version, _remote_comp} ->
-            update_available = version_gt?(remote_version, local_version)
+            update_available = Compendium.Semver.gt?(remote_version, local_version)
 
             comp
             |> Map.put(:local_version, local_version)
@@ -1506,16 +1506,6 @@ defmodule Compendium.MCP.ComponentTool do
     {comp["name"] || comp[:name],
      comp["publisher"] || comp[:publisher] || comp["namespace_slug"] || comp[:namespace_slug],
      comp["component_type"] || comp[:component_type]}
-  end
-
-  defp version_gt?(nil, _), do: false
-  defp version_gt?(_, nil), do: true
-
-  defp version_gt?(a, b) when is_binary(a) and is_binary(b) do
-    case {Version.parse(a), Version.parse(b)} do
-      {{:ok, va}, {:ok, vb}} -> Version.compare(va, vb) == :gt
-      _ -> a > b
-    end
   end
 
   # ============================================================================

@@ -92,17 +92,11 @@ defmodule Compendium.Provenance do
     end
   end
 
-  # A strictly newer shipped version exists than the row's own. Registered
-  # versions are validated semver; an unparsable seed directory name never
-  # supersedes anything.
+  # A strictly newer shipped version exists than the row's own — the
+  # conservative predicate: an unparsable seed directory name never
+  # supersedes anything (Compendium.Semver.strictly_newer?/2).
   defp superseded?([], _version), do: false
-
-  defp superseded?([newest | _], version) do
-    case {Version.parse(newest), Version.parse(version)} do
-      {{:ok, n}, {:ok, v}} -> Version.compare(n, v) == :gt
-      _ -> false
-    end
-  end
+  defp superseded?([newest | _], version), do: Compendium.Semver.strictly_newer?(newest, version)
 
   @doc """
   One component's whole overlay answer in ONE unit probe (`diff_unit/2`
@@ -334,17 +328,7 @@ defmodule Compendium.Provenance do
     end
   end
 
-  # Semver-descending; unparsable names sort last, by string.
-  defp sort_versions_desc(versions) do
-    Enum.sort(versions, fn a, b ->
-      case {Version.parse(a), Version.parse(b)} do
-        {{:ok, va}, {:ok, vb}} -> Version.compare(va, vb) == :gt
-        {{:ok, _}, :error} -> true
-        {:error, {:ok, _}} -> false
-        {:error, :error} -> a >= b
-      end
-    end)
-  end
+  defp sort_versions_desc(versions), do: Compendium.Semver.sort_desc(versions)
 
   @doc false
   @spec version_dir(map()) :: [String.t()]
