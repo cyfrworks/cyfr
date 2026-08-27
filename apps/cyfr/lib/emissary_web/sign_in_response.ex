@@ -30,8 +30,7 @@ defmodule EmissaryWeb.SignInResponse do
 
   import Plug.Conn
 
-  import Phoenix.Controller,
-    only: [redirect: 2, json: 2]
+  import Phoenix.Controller, only: [redirect: 2]
 
   require Logger
 
@@ -172,9 +171,18 @@ defmodule EmissaryWeb.SignInResponse do
           {:error, reason} ->
             Logger.error("[EmissaryWeb.SignInResponse] session create failed: #{inspect(reason)}")
 
-            conn
-            |> put_status(:internal_server_error)
-            |> json(%{error: "session_error", message: "Unable to process request"})
+            # A page, not JSON. This module's whole contract is that every
+            # outcome of a browser sign-in is a redirect or a page, and this
+            # arm was dumping an error object into the person's window —
+            # in a third envelope shape besides, neither ApiError's nor the
+            # JSON-RPC one.
+            EmissaryWeb.MinimalPage.send_page(
+              conn,
+              500,
+              "Couldn't finish signing in",
+              "<p>The session could not be created. Please try again.</p>" <>
+                "<p><a href=\"/login\">Back to sign-in</a></p>"
+            )
         end
 
       {:token, token} ->

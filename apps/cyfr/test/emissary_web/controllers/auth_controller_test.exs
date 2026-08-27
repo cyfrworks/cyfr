@@ -503,7 +503,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> delete(~p"/auth/logout")
 
       # Empty bearer token should fall through to missing_token
-      assert json_response(conn, 400)["error"] == "missing_token"
+      assert json_response(conn, 400)["code"] == "missing_token"
     end
 
     test "refuses a token in the request body", %{conn: conn} do
@@ -524,7 +524,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> put_req_header("content-type", "application/json")
         |> delete(~p"/auth/logout", Jason.encode!(%{"token" => "nonexistent_token"}))
 
-      assert json_response(conn, 400)["error"] == "missing_token"
+      assert json_response(conn, 400)["code"] == "missing_token"
     end
 
     test "accepts token via Bearer header", %{conn: conn} do
@@ -543,8 +543,8 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "returns unauthorized when no token provided", %{conn: conn} do
       conn = get(conn, ~p"/auth/whoami")
 
-      assert json_response(conn, 401)["error"] == "unauthorized"
-      assert json_response(conn, 401)["message"] == "No session token provided"
+      assert json_response(conn, 401)["code"] == "auth_required"
+      assert json_response(conn, 401)["error"] == "No session token provided"
     end
 
     test "returns invalid_session for nonexistent token", %{conn: conn} do
@@ -553,7 +553,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> put_req_header("authorization", "Bearer nonexistent_token")
         |> get(~p"/auth/whoami")
 
-      assert json_response(conn, 401)["error"] == "invalid_session"
+      assert json_response(conn, 401)["code"] == "invalid_session"
     end
 
     test "returns session info for valid token", %{conn: conn} do

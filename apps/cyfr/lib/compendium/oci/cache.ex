@@ -10,7 +10,6 @@ defmodule Compendium.OCI.Cache do
 
   - `cache/oci/blobs/sha256/<hex>` — raw blob content
   - `cache/oci/manifests/<registry>/<repo>/<tag>.json` — cached manifest envelopes
-  - `cache/oci/index.json` — ref-to-digest mapping with timestamps
 
   Tag refs re-check digest via HEAD; digest refs are immutable.
   """
@@ -19,9 +18,9 @@ defmodule Compendium.OCI.Cache do
 
   alias Compendium.OCI.Blob, as: BlobUtil
 
-  # The global root this cache lives under — one spelling for the four
-  # segment builders below (membership in `Arca.Storage.global_prefixes/0`
-  # is witnessed in the tests).
+  # The global root this cache lives under — one spelling for the segment
+  # builders below (membership in `Arca.Storage.global_prefixes/0` is
+  # witnessed in the tests).
   @cache_root "cache"
 
   # All cache operations run under a single global storage context.
@@ -109,7 +108,7 @@ defmodule Compendium.OCI.Cache do
 
     with {:ok, entry} <- Jason.encode(payload),
          :ok <- Arca.put(ctx(), manifest_segments(registry, repository, tag), entry) do
-      update_index(registry, repository, tag, digest)
+      :ok
     else
       {:error, %Jason.EncodeError{} = err} ->
         Logger.warning("[OCI.Cache.put_manifest] Failed to encode entry: #{inspect(err)}")
@@ -151,49 +150,5 @@ defmodule Compendium.OCI.Cache do
   defp manifest_segments(registry, repository, tag) do
     safe_repo = String.replace(repository, "/", "_")
     [@cache_root, "oci", "manifests", registry, safe_repo, "#{tag}.json"]
-  end
-
-  defp index_segments, do: [@cache_root, "oci", "index.json"]
-
-  defp index_key(registry, repository, tag), do: "#{registry}/#{repository}:#{tag}"
-
-  defp read_index do
-    case Arca.get(ctx(), index_segments()) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, index} when is_map(index) -> {:ok, index}
-          _ -> {:ok, %{}}
-        end
-
-      {:error, _} ->
-        {:ok, %{}}
-    end
-  end
-
-  defp update_index(registry, repository, tag, digest) do
-    {:ok, index} = read_index()
-    key = index_key(registry, repository, tag)
-
-    updated =
-      Map.put(index, key, %{
-        "digest" => digest,
-        "updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
-
-    case Jason.encode(updated, pretty: true) do
-      {:ok, json} ->
-        case Arca.put(ctx(), index_segments(), json) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[OCI.Cache.update_index] Failed to update index: #{inspect(reason)}")
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        Logger.warning("[OCI.Cache.update_index] Failed to encode index: #{inspect(reason)}")
-        {:error, {:json_encode, reason}}
-    end
   end
 end

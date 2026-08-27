@@ -46,6 +46,8 @@ defmodule Emissary.MCP.Router do
 
   """
 
+  require Logger
+
   alias Emissary.MCP.{Message, Protocol, ToolRegistry, ResourceRegistry, InputValidator}
   alias Emissary.MCP.ToolVisibility
 
@@ -305,7 +307,6 @@ defmodule Emissary.MCP.Router do
         {:ok, cacheable(%{"contents" => [content_entry]}, @resource_ttl_ms, @resource_scope)}
 
       {:error, reason} ->
-        require Logger
         Logger.warning("[MCP.Router] resource read failed: #{inspect(reason)}")
 
         cond do
@@ -330,11 +331,21 @@ defmodule Emissary.MCP.Router do
     end
   end
 
+  # The same policy `resources/read` applies forty lines up, and for the
+  # same reason: a binary reason is a handler's crafted, client-safe
+  # diagnosis, and anything else is an internal term — an exit tuple, a
+  # struct, a changeset — that belongs in the log rather than in a reply to
+  # whoever called the tool. `inspect/1` on the catch-all made this the one
+  # place in the module where they were reflected.
   defp format_error_reason({:timeout, msg}) when is_binary(msg), do: msg
   defp format_error_reason({:crashed, msg}) when is_binary(msg), do: msg
   defp format_error_reason({:exit, msg}) when is_binary(msg), do: msg
   defp format_error_reason(reason) when is_binary(reason), do: reason
-  defp format_error_reason(reason), do: inspect(reason)
+
+  defp format_error_reason(reason) do
+    Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
+    "The tool call failed."
+  end
 
   defp binary_mime?("application/octet-stream"), do: true
   defp binary_mime?("image/" <> _), do: true

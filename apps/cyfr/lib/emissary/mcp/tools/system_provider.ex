@@ -326,19 +326,21 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     end
   end
 
+  # Through `Cyfr.Network` like every other outbound call in this tree. The
+  # raw `:httpc.request/4` this replaces passed no `ssl:` options at all —
+  # no verify_peer, no CA store, no hostname check — so its TLS posture was
+  # whatever the release's OTP defaults happened to be, and it was the one
+  # egress that skipped the SSRF and DNS-pinning policy the others share.
   defp do_probe_registry_health do
     url = registry_url()
 
-    case :httpc.request(
-           :get,
-           {~c"https://#{url}/health", []},
-           [{:timeout, 3_000}, {:connect_timeout, 3_000}],
-           []
+    case Cyfr.Network.pinned_request(:get, "https://#{url}/health", [], nil,
+           receive_timeout: 3_000
          ) do
-      {:ok, {{_version, 200, _reason}, _headers, _body}} ->
+      {:ok, 200, _headers, _body} ->
         "ok"
 
-      {:ok, {{_version, status_code, _reason}, _headers, _body}} ->
+      {:ok, status_code, _headers, _body} ->
         Logger.warning("Registry health check returned status #{status_code}")
         "error"
 
