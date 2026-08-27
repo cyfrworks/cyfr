@@ -37,14 +37,14 @@ defmodule Arca.ApiKeyStorageTest do
       attrs = key_attrs("test-key", athanor_id)
       assert :ok = ApiKeyStorage.create_key(attrs)
 
-      assert {:ok, key} = ApiKeyStorage.get_key("test-key", athanor_id)
+      assert {:ok, key} = ApiKeyStorage.get_key(athanor_id, "test-key")
       assert key.name == "test-key"
       assert key.type == "secret"
       assert key.revoked == false
     end
 
     test "returns not_found for missing key", %{athanor_id: athanor_id} do
-      assert {:error, :not_found} = ApiKeyStorage.get_key("missing", athanor_id)
+      assert {:error, :not_found} = ApiKeyStorage.get_key(athanor_id, "missing")
     end
 
     test "duplicate name returns already_exists", %{athanor_id: athanor_id} do
@@ -91,17 +91,17 @@ defmodule Arca.ApiKeyStorageTest do
     test "revokes a key so it's no longer retrievable", %{athanor_id: athanor_id} do
       :ok = ApiKeyStorage.create_key(key_attrs("revoke-me", athanor_id))
 
-      assert :ok = ApiKeyStorage.revoke_key("revoke-me", athanor_id)
-      assert {:error, :not_found} = ApiKeyStorage.get_key("revoke-me", athanor_id)
+      assert :ok = ApiKeyStorage.revoke_key(athanor_id, "revoke-me")
+      assert {:error, :not_found} = ApiKeyStorage.get_key(athanor_id, "revoke-me")
     end
 
     test "returns not_found for missing key", %{athanor_id: athanor_id} do
-      assert {:error, :not_found} = ApiKeyStorage.revoke_key("nope", athanor_id)
+      assert {:error, :not_found} = ApiKeyStorage.revoke_key(athanor_id, "nope")
     end
 
     test "revoked key excluded from list", %{athanor_id: athanor_id} do
       :ok = ApiKeyStorage.create_key(key_attrs("revoke-list", athanor_id))
-      :ok = ApiKeyStorage.revoke_key("revoke-list", athanor_id)
+      :ok = ApiKeyStorage.revoke_key(athanor_id, "revoke-list")
 
       {:ok, keys} = ApiKeyStorage.list_keys(athanor_id)
       refute Enum.any?(keys, &(&1.name == "revoke-list"))
@@ -116,7 +116,7 @@ defmodule Arca.ApiKeyStorageTest do
       new_prefix = "cyfr_sk_rotated"
 
       assert :ok =
-               ApiKeyStorage.rotate_key("rotate-me", athanor_id, new_hash, new_prefix)
+               ApiKeyStorage.rotate_key(athanor_id, "rotate-me", new_hash, new_prefix)
 
       {:ok, key} = ApiKeyStorage.get_key_by_hash(new_hash)
       assert key.name == "rotate-me"
@@ -127,7 +127,7 @@ defmodule Arca.ApiKeyStorageTest do
       new_hash = :crypto.hash(:sha256, "nope")
 
       assert {:error, :not_found} =
-               ApiKeyStorage.rotate_key("nope", athanor_id, new_hash, "pfx")
+               ApiKeyStorage.rotate_key(athanor_id, "nope", new_hash, "pfx")
     end
   end
 
@@ -136,8 +136,8 @@ defmodule Arca.ApiKeyStorageTest do
       :ok = ApiKeyStorage.create_key(key_attrs("shared-name", "ath_alpha"))
       :ok = ApiKeyStorage.create_key(key_attrs("shared-name", "ath_beta"))
 
-      {:ok, key_a} = ApiKeyStorage.get_key("shared-name", "ath_alpha")
-      {:ok, key_b} = ApiKeyStorage.get_key("shared-name", "ath_beta")
+      {:ok, key_a} = ApiKeyStorage.get_key("ath_alpha", "shared-name")
+      {:ok, key_b} = ApiKeyStorage.get_key("ath_beta", "shared-name")
       assert key_a.athanor_id != key_b.athanor_id
 
       {:ok, a_keys} = ApiKeyStorage.list_keys("ath_alpha")

@@ -123,7 +123,7 @@ defmodule Sanctum.Webhook do
   """
   @spec get(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case WebhookStorage.get_by_name(name, athanor!(ctx)) do
+    case WebhookStorage.get_by_name(athanor!(ctx), name) do
       {:ok, row} -> {:ok, public_view(row)}
       {:error, :not_found} -> {:error, :not_found}
     end
@@ -153,7 +153,7 @@ defmodule Sanctum.Webhook do
     with {:ok, normalized} <- normalize_update_attrs(attrs),
          :ok <- maybe_validate_target_ref(ctx, normalized),
          :ok <- maybe_authorize_profile_binding(ctx, name, athanor_id, normalized),
-         :ok <- WebhookStorage.update_webhook(name, athanor_id, normalized) do
+         :ok <- WebhookStorage.update_webhook(athanor_id, name, normalized) do
       get(ctx, name)
     end
   end
@@ -177,7 +177,7 @@ defmodule Sanctum.Webhook do
               {:ok, ref}
 
             _ ->
-              case WebhookStorage.get_by_name(name, athanor_id) do
+              case WebhookStorage.get_by_name(athanor_id, name) do
                 {:ok, row} -> {:ok, row.target_ref}
                 {:error, _} = error -> error
               end
@@ -194,7 +194,7 @@ defmodule Sanctum.Webhook do
   """
   @spec revoke(Context.t(), String.t()) :: :ok | {:error, :not_found}
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    WebhookStorage.set_disabled(name, athanor!(ctx))
+    WebhookStorage.set_disabled(athanor!(ctx), name)
   end
 
   @doc """
@@ -220,8 +220,8 @@ defmodule Sanctum.Webhook do
            Sanctum.Cipher.encrypt(new_secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),
          :ok <-
            WebhookStorage.rotate_secret(
-             name,
              athanor_id,
+             name,
              new_secret_encrypted,
              previous_expires_at
            ) do

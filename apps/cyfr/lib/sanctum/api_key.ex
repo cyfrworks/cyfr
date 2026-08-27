@@ -310,7 +310,7 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, athanor!(ctx)) do
+    case Arca.ApiKeyStorage.get_key(athanor!(ctx), name) do
       {:ok, row} -> {:ok, redact_key(row)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, :database_error} -> {:error, :database_error}
@@ -335,7 +335,7 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    Arca.ApiKeyStorage.revoke_key(name, athanor!(ctx))
+    Arca.ApiKeyStorage.revoke_key(athanor!(ctx), name)
   end
 
   @doc "Revoke every live key a person created — part of denying them on this server."
@@ -356,7 +356,7 @@ defmodule Sanctum.ApiKey do
   def rotate(%Context{} = ctx, name) when is_binary(name) do
     athanor_id = athanor!(ctx)
 
-    case Arca.ApiKeyStorage.get_key(name, athanor_id) do
+    case Arca.ApiKeyStorage.get_key(athanor_id, name) do
       {:ok, row} ->
         case parse_key_type(row.type) do
           {:ok, key_type} ->
@@ -365,8 +365,8 @@ defmodule Sanctum.ApiKey do
             scope_list = decode_json(row.scope, [])
 
             case Arca.ApiKeyStorage.rotate_key(
-                   name,
                    athanor_id,
+                   name,
                    hash_key(new_key),
                    String.slice(new_key, 0, 12)
                  ) do

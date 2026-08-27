@@ -36,7 +36,7 @@ defmodule Arca.WebhookStorageTest do
       attrs = wh_attrs("test-hook", athanor_id)
       assert :ok = WebhookStorage.create_webhook(attrs)
 
-      assert {:ok, hook} = WebhookStorage.get_by_name("test-hook", athanor_id)
+      assert {:ok, hook} = WebhookStorage.get_by_name(athanor_id, "test-hook")
       assert hook.name == "test-hook"
       assert hook.slug == attrs.slug
       assert hook.target_ref == "f:local.handler"
@@ -45,7 +45,7 @@ defmodule Arca.WebhookStorageTest do
     end
 
     test "returns not_found for missing webhook", %{athanor_id: athanor_id} do
-      assert {:error, :not_found} = WebhookStorage.get_by_name("missing", athanor_id)
+      assert {:error, :not_found} = WebhookStorage.get_by_name(athanor_id, "missing")
     end
 
     test "duplicate name returns already_exists", %{athanor_id: athanor_id} do
@@ -78,7 +78,7 @@ defmodule Arca.WebhookStorageTest do
          %{athanor_id: athanor_id} do
       attrs = wh_attrs("disabled-hook", athanor_id)
       :ok = WebhookStorage.create_webhook(attrs)
-      :ok = WebhookStorage.set_disabled("disabled-hook", athanor_id)
+      :ok = WebhookStorage.set_disabled(athanor_id, "disabled-hook")
 
       assert {:ok, hook} = WebhookStorage.get_by_slug(attrs.slug)
       assert hook.enabled == false
@@ -102,7 +102,7 @@ defmodule Arca.WebhookStorageTest do
 
     test "excludes disabled webhooks", %{athanor_id: athanor_id} do
       :ok = WebhookStorage.create_webhook(wh_attrs("hidden", athanor_id))
-      :ok = WebhookStorage.set_disabled("hidden", athanor_id)
+      :ok = WebhookStorage.set_disabled(athanor_id, "hidden")
 
       {:ok, hooks} = WebhookStorage.list_webhooks(athanor_id)
       refute Enum.any?(hooks, &(&1.name == "hidden"))
@@ -115,13 +115,11 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(attrs)
 
       assert :ok =
-               WebhookStorage.update_webhook(
-                 "update-me",
-                 athanor_id,
-                 %{input_template: ~s({"channel":"alerts"})}
-               )
+               WebhookStorage.update_webhook(athanor_id, "update-me", %{
+                 input_template: ~s({"channel":"alerts"})
+               })
 
-      assert {:ok, hook} = WebhookStorage.get_by_name("update-me", athanor_id)
+      assert {:ok, hook} = WebhookStorage.get_by_name(athanor_id, "update-me")
       assert hook.input_template == ~s({"channel":"alerts"})
       assert hook.secret_encrypted == attrs.secret_encrypted
     end
@@ -130,14 +128,14 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(wh_attrs("no-fields", athanor_id))
 
       assert {:error, :no_fields} =
-               WebhookStorage.update_webhook("no-fields", athanor_id, %{
+               WebhookStorage.update_webhook(athanor_id, "no-fields", %{
                  not_allowed: "x"
                })
     end
 
     test "returns not_found for missing webhook", %{athanor_id: athanor_id} do
       assert {:error, :not_found} =
-               WebhookStorage.update_webhook("missing", athanor_id, %{
+               WebhookStorage.update_webhook(athanor_id, "missing", %{
                  description: "x"
                })
     end
@@ -149,13 +147,13 @@ defmodule Arca.WebhookStorageTest do
       attrs = wh_attrs("dis", athanor_id)
       :ok = WebhookStorage.create_webhook(attrs)
 
-      assert :ok = WebhookStorage.set_disabled("dis", athanor_id)
-      assert {:error, :not_found} = WebhookStorage.get_by_name("dis", athanor_id)
+      assert :ok = WebhookStorage.set_disabled(athanor_id, "dis")
+      assert {:error, :not_found} = WebhookStorage.get_by_name(athanor_id, "dis")
       assert {:ok, %{enabled: false}} = WebhookStorage.get_by_slug(attrs.slug)
     end
 
     test "returns not_found for missing webhook", %{athanor_id: athanor_id} do
-      assert {:error, :not_found} = WebhookStorage.set_disabled("nope", athanor_id)
+      assert {:error, :not_found} = WebhookStorage.set_disabled(athanor_id, "nope")
     end
   end
 
@@ -171,8 +169,8 @@ defmodule Arca.WebhookStorageTest do
 
       assert :ok =
                WebhookStorage.rotate_secret(
-                 "rotate-me",
                  athanor_id,
+                 "rotate-me",
                  new_secret,
                  grace_until
                )
@@ -191,8 +189,8 @@ defmodule Arca.WebhookStorageTest do
 
       assert {:error, :not_found} =
                WebhookStorage.rotate_secret(
-                 "nope",
                  athanor_id,
+                 "nope",
                  new_secret,
                  grace_until
                )
@@ -204,8 +202,8 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(wh_attrs("shared-name", "ath_alpha"))
       :ok = WebhookStorage.create_webhook(wh_attrs("shared-name", "ath_beta"))
 
-      {:ok, hook_a} = WebhookStorage.get_by_name("shared-name", "ath_alpha")
-      {:ok, hook_b} = WebhookStorage.get_by_name("shared-name", "ath_beta")
+      {:ok, hook_a} = WebhookStorage.get_by_name("ath_alpha", "shared-name")
+      {:ok, hook_b} = WebhookStorage.get_by_name("ath_beta", "shared-name")
       assert hook_a.athanor_id != hook_b.athanor_id
 
       {:ok, list_a} = WebhookStorage.list_webhooks("ath_alpha")

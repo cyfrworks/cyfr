@@ -71,7 +71,7 @@ defmodule Compendium.Cascade do
         webhooks
         |> Enum.filter(&targets?(&1.target_ref, name_ref))
         |> Enum.each(fn webhook ->
-          Arca.WebhookStorage.set_disabled(webhook.name, athanor_id)
+          Arca.WebhookStorage.set_disabled(athanor_id, webhook.name)
         end)
 
       _ ->
