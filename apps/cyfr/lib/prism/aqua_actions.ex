@@ -69,6 +69,10 @@ defmodule Prism.AquaActions do
 
   @id_re ~r/^[\w.\-]+$/
 
+  # A generous ceiling for a pasted code block, and a bound on what a model
+  # can push through the LiveView channel into a browser in one action.
+  @max_clipboard_bytes 100_000
+
   @doc """
   Strip every `aqua-actions` block (closed or mid-stream) from a text chunk
   for display. Safe-for-rendering — does not parse or validate.
@@ -188,8 +192,17 @@ defmodule Prism.AquaActions do
 
   defp validate_kind("ui.copy_clipboard", obj, _policy) do
     case Map.get(obj, "text") do
-      text when is_binary(text) -> {:ok, %{kind: "copy_clipboard", text: text}}
-      _ -> {:error, "ui.copy_clipboard: requires string 'text'"}
+      text when is_binary(text) ->
+        if byte_size(text) > @max_clipboard_bytes do
+          {:error,
+           "ui.copy_clipboard: 'text' exceeds #{@max_clipboard_bytes} bytes " <>
+             "(got #{byte_size(text)})"}
+        else
+          {:ok, %{kind: "copy_clipboard", text: sanitize_clipboard(text)}}
+        end
+
+      _ ->
+        {:error, "ui.copy_clipboard: requires string 'text'"}
     end
   end
 
@@ -419,6 +432,18 @@ defmodule Prism.AquaActions do
       routes ->
         routes
     end
+  end
+
+  # The clipboard is the one action whose output leaves the browser: whatever
+  # lands there can be pasted anywhere, and a terminal treats a carriage
+  # return or a trailing newline as Enter — so model-written text ending in
+  # one runs on paste without a second keystroke. Newlines and tabs inside
+  # the text stay (a pasted code block needs them); what goes is every other
+  # C0 control character, and any run of them at the end.
+  defp sanitize_clipboard(text) do
+    text
+    |> String.replace(~r/[\x00-\x08\x0B-\x1F\x7F]/, "")
+    |> String.trim_trailing("\n")
   end
 
   defp check_id_shape(value, kind, key) do

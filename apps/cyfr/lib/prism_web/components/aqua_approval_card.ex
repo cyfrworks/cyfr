@@ -25,7 +25,10 @@ defmodule PrismWeb.AquaApprovalCard do
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
   case (`:write`) stays calm and the loud styling is reserved for the loud
-  kinds.
+  kinds. For `:destructive` and `:external` the call itself — tool, action
+  and arguments — is shown expanded rather than folded away: the title and
+  summary above it are written by the model, and someone approving on the
+  strength of that sentence should be looking at what it will actually run.
 
   All execution and side effects live in the runner; this component is
   purely presentational + dispatch-by-event.
@@ -77,8 +80,18 @@ defmodule PrismWeb.AquaApprovalCard do
       </div>
 
       <%= if @proposal do %>
-        <details class="text-[11px] text-gray-500 mb-2">
-          <summary class="cursor-pointer hover:text-gray-300">Show details</summary>
+        <%!-- The title and summary above are written by the model; this is
+        what will actually run. For a destructive or external action the two
+        must not be a click apart — someone approving on the strength of a
+        sentence the model wrote should be looking at the call it wrote
+        beside it. --%>
+        <details
+          class={["text-[11px] mb-2", details_tone(@kind)]}
+          open={@kind in [:destructive, :external]}
+        >
+          <summary class="cursor-pointer hover:text-gray-300">
+            {if @kind in [:destructive, :external], do: "This will run", else: "Show details"}
+          </summary>
           <div class="mt-1 px-2 py-1.5 bg-gray-950 border border-gray-800 rounded font-mono text-gray-400 break-all">
             {@proposal[:tool] || @proposal["tool"]}.{@proposal[:action] || @proposal["action"]}
             <%= for {k, v} <- @proposal[:args] || @proposal["args"] || %{} do %>
@@ -307,6 +320,11 @@ defmodule PrismWeb.AquaApprovalCard do
   defp kind_border(:external), do: "border-l-amber-500"
   defp kind_border(:destructive), do: "border-l-red-500"
   defp kind_border(_), do: "border-l-gray-500"
+
+  # An action that deletes or leaves the machine gets its call shown at
+  # readable contrast, not the dim aside the common kinds use.
+  defp details_tone(kind) when kind in [:destructive, :external], do: "text-gray-300"
+  defp details_tone(_), do: "text-gray-500"
 
   defp kind_pill(:read), do: "bg-emerald-900/60 text-emerald-200"
   defp kind_pill(:write), do: "bg-slate-700/70 text-slate-200"

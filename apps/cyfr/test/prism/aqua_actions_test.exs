@@ -382,4 +382,46 @@ defmodule Prism.AquaActionsTest do
       assert pos_pull < pos_register
     end
   end
+
+  describe "ui.copy_clipboard" do
+    defp clipboard(text) do
+      json = Jason.encode!([%{"kind" => "ui.copy_clipboard", "text" => text}])
+      AquaActions.parse("```aqua-actions\n#{json}\n```", @policy)
+    end
+
+    test "ordinary text passes through, newlines and tabs intact" do
+      body = "def run do\n\tIO.puts(:ok)\nend"
+      assert %{intents: [%{kind: "copy_clipboard", text: ^body}], drops: []} = clipboard(body)
+    end
+
+    test "a trailing newline is stripped" do
+      # The clipboard is the one action whose output leaves the browser, and
+      # a terminal treats a trailing newline as Enter: model-written text
+      # ending in one runs on paste without a second keystroke.
+      assert %{intents: [%{text: "rm -rf /tmp/x"}]} = clipboard("rm -rf /tmp/x\n")
+      assert %{intents: [%{text: "rm -rf /tmp/x"}]} = clipboard("rm -rf /tmp/x\n\n\n")
+    end
+
+    test "carriage returns and other control characters are removed" do
+      assert %{intents: [%{text: "echo hiecho bye"}]} = clipboard("echo hi\recho bye")
+      assert %{intents: [%{text: "ab"}]} = clipboard("a\x00\x07\x1bb")
+    end
+
+    test "oversized text is dropped by name" do
+      assert %{intents: [], drops: [%{reason: reason}]} =
+               clipboard(String.duplicate("x", 100_001))
+
+      assert reason =~ "ui.copy_clipboard"
+      assert reason =~ "100000"
+
+      assert %{intents: [%{kind: "copy_clipboard"}], drops: []} =
+               clipboard(String.duplicate("x", 100_000))
+    end
+
+    test "a non-string is dropped" do
+      block = "```aqua-actions\n[{\"kind\":\"ui.copy_clipboard\",\"text\":42}]\n```"
+      assert %{intents: [], drops: [%{reason: reason}]} = AquaActions.parse(block, @policy)
+      assert reason =~ "requires string"
+    end
+  end
 end
