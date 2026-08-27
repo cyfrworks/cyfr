@@ -104,7 +104,7 @@ defmodule Opus.HttpStreamHandlerTest do
       result = func.("not-json")
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_json"
       assert decoded["error"]["message"] =~ "Invalid JSON"
     end
 
@@ -270,7 +270,7 @@ defmodule Opus.HttpStreamHandlerTest do
 
       decoded = request_fn.(request) |> Jason.decode!()
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "do not support 'multipart'"
     end
   end

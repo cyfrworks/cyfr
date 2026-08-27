@@ -353,7 +353,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute("not-json", edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_json"
       assert decoded["error"]["message"] =~ "Invalid JSON"
     end
 
@@ -367,7 +367,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "must include"
     end
 
@@ -381,7 +381,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "missing hostname"
     end
 
@@ -495,7 +495,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "Invalid base64"
     end
 
@@ -566,7 +566,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "both 'body' and 'multipart'"
     end
 
@@ -595,7 +595,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "Invalid base64"
     end
 
@@ -651,7 +651,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
       assert decoded["error"]["message"] =~ "must include 'name'"
     end
   end
@@ -916,7 +916,7 @@ defmodule Opus.HttpHandlerTest do
       result = HttpHandler.execute(request, edge, limits, ctx, ref)
       decoded = Jason.decode!(result)
 
-      assert decoded["error"]["type"] == "http_error"
+      assert decoded["error"]["type"] == "invalid_request"
     end
   end
 end

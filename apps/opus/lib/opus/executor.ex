@@ -1066,7 +1066,7 @@ defmodule Opus.Executor do
     target_id = opts[:root_execution_id] || opts[:parent_execution_id]
 
     if target_id do
-      case Opus.Remediation.analyze(ctx, reason) do
+      case Opus.Remediation.analyze(reason) do
         {:setup_required, remediation} ->
           Opus.ExecutionEventBuffer.push(
             target_id,

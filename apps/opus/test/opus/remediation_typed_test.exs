@@ -26,7 +26,7 @@ defmodule Opus.RemediationTypedTest do
         reason: :unbound_need
       }
 
-      assert {:setup_required, remediation} = Remediation.analyze(ctx, {:setup_required, payload})
+      assert {:setup_required, remediation} = Remediation.analyze({:setup_required, payload})
 
       assert remediation["component_ref"] == "catalyst:local.gmail"
       assert remediation["profile_id"] == "prof-x"
@@ -46,7 +46,7 @@ defmodule Opus.RemediationTypedTest do
         reason: :unresolvable_target
       }
 
-      assert {:setup_required, remediation} = Remediation.analyze(ctx, {:setup_required, payload})
+      assert {:setup_required, remediation} = Remediation.analyze({:setup_required, payload})
 
       assert remediation["message"] =~ "needs setup"
       refute Enum.any?(remediation["issues"], &(&1["type"] == "unbound_need"))
@@ -58,7 +58,7 @@ defmodule Opus.RemediationTypedTest do
       payload = %{profile_id: "prof-z", current_revision: 3, shape_diff: []}
 
       assert {:setup_required, remediation} =
-               Remediation.analyze(ctx, {:consent_required, payload})
+               Remediation.analyze({:consent_required, payload})
 
       assert remediation["profile_id"] == "prof-z"
       assert remediation["message"] =~ "permissions changed"
@@ -69,9 +69,9 @@ defmodule Opus.RemediationTypedTest do
 
   describe "the envelope is unchanged" do
     test "non-setup terms still report as such", %{ctx: ctx} do
-      assert :not_setup_error = Remediation.analyze(ctx, "some unrelated failure")
-      assert :not_setup_error = Remediation.analyze(ctx, {:something_else, %{}})
-      assert :not_setup_error = Remediation.analyze(ctx, nil)
+      assert :not_setup_error = Remediation.analyze("some unrelated failure")
+      assert :not_setup_error = Remediation.analyze({:something_else, %{}})
+      assert :not_setup_error = Remediation.analyze(nil)
     end
 
     test "every typed remediation carries the keys the surfaces read", %{ctx: ctx} do
@@ -79,7 +79,7 @@ defmodule Opus.RemediationTypedTest do
             {:setup_required, %{profile_id: "p", node_ref: "r", need: "n", reason: :x}},
             {:consent_required, %{profile_id: "p", current_revision: 1, shape_diff: []}}
           ] do
-        assert {:setup_required, remediation} = Remediation.analyze(ctx, term)
+        assert {:setup_required, remediation} = Remediation.analyze(term)
 
         for key <- ["component_ref", "message", "setup_command", "issues"] do
           assert Map.has_key?(remediation, key), "#{inspect(term)} lost #{key}"

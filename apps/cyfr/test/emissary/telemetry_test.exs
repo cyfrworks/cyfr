@@ -126,4 +126,24 @@ defmodule Emissary.TelemetryTest do
       assert metadata.tool == "resources"
     end
   end
+  describe "emitted execution-ingress events are metered" do
+    # The forward test above stops a metric with no emitter; this stops the
+    # reverse — an emitted event no metric consumes. Both webhook and
+    # tincture invokes were emitted into the void for a while.
+    test "every execution ingress has a metric over its event" do
+      event_names = Enum.map(EmissaryWeb.Telemetry.metrics(), &metric_event/1)
+
+      for event <- [
+            [:cyfr, :emissary, :webhook, :invoke, :stop],
+            [:cyfr, :emissary, :webhook, :verify_failed],
+            [:cyfr, :emissary, :tincture, :invoke, :stop],
+            [:cyfr, :sanctum, :policy, :decision]
+          ] do
+        assert event in event_names,
+               "#{inspect(event)} is emitted but no metric consumes it"
+      end
+    end
+
+    defp metric_event(metric), do: metric.event_name
+  end
 end

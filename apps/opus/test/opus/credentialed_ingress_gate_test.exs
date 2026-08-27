@@ -134,14 +134,14 @@ defmodule Opus.CredentialedIngressGateTest do
     # path when no profile exists. This pins which is which, so a change
     # in routing has to be deliberate.
     # The console tincture surface shares the :tincture flag — one
-    # ingress, two transports, so one kill switch turns both off.
+    # ingress, two transports, and since the extraction ONE implementation
+    # (Emissary.Tincture.Invoke), so one kill switch and one row here.
     @ingresses [
       {:mcp, "apps/opus/lib/opus/mcp.ex", :falls_back},
       {:cron, "apps/opus/lib/opus/cron_scheduler.ex", :no_fallback_when_bound},
       {:webhook, "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},
-      {:tincture, "apps/cyfr/lib/emissary_web/controllers/tincture_controller.ex", :falls_back},
-      {:tincture, "apps/cyfr/lib/prism_web/live/shell_live.ex", :falls_back}
+      {:tincture, "apps/cyfr/lib/emissary/tincture/invoke.ex", :falls_back}
     ]
 
     test "each ingress routes through the chain" do

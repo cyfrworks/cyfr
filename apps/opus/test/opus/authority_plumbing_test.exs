@@ -15,7 +15,7 @@ defmodule Opus.AuthorityPlumbingTest do
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.authority-plumb:0.1.0"
-  @telemetry_event [:opus, :runtime, :authority_entered]
+  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
 
   setup do
     Arca.Cache.init()

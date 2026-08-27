@@ -14,7 +14,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
   @moduletag timeout: 120_000
 
-  @telemetry_event [:opus, :runtime, :authority_entered]
+  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
   @probe_node "formula:local.nested-probe"
 
   setup do

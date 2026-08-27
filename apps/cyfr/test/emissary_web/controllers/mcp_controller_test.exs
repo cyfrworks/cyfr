@@ -108,16 +108,14 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      assert json_response(conn, 200)
       response = json_response(conn, 200)
 
       [content] = response["result"]["content"]
-      result = Jason.decode!(content["text"])
 
-      # Should have attempted delivery (will fail since endpoint doesn't exist)
-      assert result["delivered"] == false
-      assert result["target"] == "http://localhost:9999/webhook"
-      assert result["event"] == "test.event"
+      # Delivery fails (the endpoint does not exist) and a failed delivery
+      # is a failed tool call now, naming the target.
+      assert response["result"]["isError"] == true
+      assert content["text"] =~ "http://localhost:9999/webhook"
     end
 
     test "calls session whoami tool", %{conn: conn} do

@@ -27,10 +27,18 @@ defmodule Prism.TopicsTest do
   defp ctx(athanor_id), do: %Context{user_id: "u1", athanor_id: athanor_id}
 
   describe "athanor-scoped topics" do
-    test "every one carries the tenant prefix" do
+    test "every one carries the tenant prefix and the prism: vocabulary" do
       for fun <- @scoped_1 do
-        assert String.starts_with?(apply(Topics, fun, [ctx("ath_1")]), "tenant:ath_1:"),
+        topic = apply(Topics, fun, [ctx("ath_1")])
+
+        assert String.starts_with?(topic, "tenant:ath_1:"),
                "#{fun}/1 is not tenant-prefixed"
+
+        # One vocabulary: three topics once skipped the prefix, and
+        # "schedules" vs "prism:schedules" were one word apart with
+        # different message shapes.
+        assert String.starts_with?(topic, "tenant:ath_1:prism:"),
+               "#{fun}/1 does not use the prism: vocabulary"
       end
 
       for fun <- @scoped_2 do

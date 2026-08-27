@@ -1,0 +1,28 @@
+{
+  "comment": "Verdict-level binding between Sanctum.ComponentRef (Elixir, the canonical grammar) and internal/ref (Go, the CLI's pre-flight copy). Both test suites read this file and must reach the same verdict on every case; the string-presence drift test pins the regex literals, this pins what the regexes are FOR. Every case carries a full type:namespace.name:version ref so both sides exercise the same strictness — the sides differ deliberately on MISSING segments (the CLI accepts typeless/bare refs and infers elsewhere; the server refuses them), and that presence-rule difference is each side's own tests' business, not this file's.",
+  "cases": [
+    { "ref": "catalyst:local.hello:1.0.0", "valid": true, "type": "catalyst", "namespace": "local", "name": "hello", "version": "1.0.0" },
+    { "ref": "c:local.hello:1.0.0", "valid": true, "type": "catalyst", "namespace": "local", "name": "hello", "version": "1.0.0" },
+    { "ref": "r:alice.data-fetcher:0.2.1", "valid": true, "type": "reagent", "namespace": "alice", "name": "data-fetcher", "version": "0.2.1" },
+    { "ref": "f:stripe.com.payments:2.0.0-rc.1", "valid": true, "type": "formula", "namespace": "stripe.com", "name": "payments", "version": "2.0.0-rc.1" },
+    { "ref": "t:api.stripe.com.widget:0.1.0+build.5", "valid": true, "type": "tincture", "namespace": "api.stripe.com", "name": "widget", "version": "0.1.0+build.5" },
+    { "ref": "reagent:a.b:1.0.0", "valid": true, "type": "reagent", "namespace": "a", "name": "b", "version": "1.0.0" },
+    { "ref": "c:my-ns.my-tool:10.20.30", "valid": true, "type": "catalyst", "namespace": "my-ns", "name": "my-tool", "version": "10.20.30" },
+
+    { "ref": "c:@alice.hello:1.0.0", "valid": false, "why": "'@' is invalid anywhere — personal slugs are bare" },
+    { "ref": "c:local.hello:latest", "valid": false, "why": "'latest' is not a version" },
+    { "ref": "c:local.hello:1.0:0", "valid": false, "why": "not semver" },
+    { "ref": "c:local.hello:v1.0.0", "valid": false, "why": "no v prefix" },
+    { "ref": "c:local.-hello:1.0.0", "valid": false, "why": "name must not lead with a hyphen" },
+    { "ref": "c:local.hello-:1.0.0", "valid": false, "why": "name must not end with a hyphen" },
+    { "ref": "c:local.Hello:1.0.0", "valid": false, "why": "names are lowercase" },
+    { "ref": "c:-alice.hello:1.0.0", "valid": false, "why": "personal slug must not lead with a hyphen" },
+    { "ref": "c:al--ice.hello:1.0.0", "valid": false, "why": "personal slug forbids consecutive hyphens" },
+    { "ref": "c:this-slug-is-a-full-forty-characters-abc.hello:1.0.0", "valid": false, "why": "personal slug exceeds 39 chars" },
+    { "ref": "c:localhost.hello:1.0.0", "valid": true, "type": "catalyst", "namespace": "localhost", "name": "hello", "version": "1.0.0", "why-note": "dotless 'localhost' is a bare slug on both sides — the localhost refusal applies to the dotted publisher shape only" },
+    { "ref": "c:stripe..com.hello:1.0.0", "valid": false, "why": "publisher must not contain empty labels" },
+    { "ref": "c:.stripe.com.hello:1.0.0", "valid": false, "why": "publisher must not lead with a dot" },
+    { "ref": "c:127.0.0.1.hello:1.0.0", "valid": false, "why": "publisher must not be an IP address" },
+    { "ref": "c:stripe.com..hello:1.0.0", "valid": false, "why": "empty label before name" }
+  ]
+}

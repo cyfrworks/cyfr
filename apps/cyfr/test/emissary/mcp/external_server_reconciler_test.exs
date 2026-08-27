@@ -19,7 +19,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
 
     :telemetry.attach(
       handler_id,
-      [:emissary, :external_server, :reconciled],
+      [:cyfr, :emissary, :external_server, :reconciled],
       fn _event, _measure, metadata, _cfg -> send(test_pid, {:reconciled, metadata}) end,
       nil
     )

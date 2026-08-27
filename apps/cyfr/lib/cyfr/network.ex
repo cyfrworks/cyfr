@@ -87,14 +87,80 @@ defmodule Cyfr.Network do
   @spec resolve_and_validate(String.t(), keyword()) ::
           {:ok, :inet.ip_address(), URI.t()} | {:error, String.t()}
   def resolve_and_validate(url, opts \\ []) do
-    uri = URI.parse(url)
-
-    with :ok <- validate_scheme(uri.scheme),
-         :ok <- validate_host_present(uri.host),
-         {:ok, ip_tuple} <- resolve_host(uri.host),
-         :ok <- validate_ip(ip_tuple, uri.host, Keyword.get(opts, :allow_private, false)) do
-      {:ok, ip_tuple, uri}
+    case pin(url, translate_legacy_opts(opts)) do
+      {:ok, %{ip_tuple: ip_tuple, uri: uri}} -> {:ok, ip_tuple, uri}
+      {:error, _type, message} -> {:error, message}
     end
+  end
+
+  @doc """
+  Resolve, validate and PIN a URL for an outbound request — the ONE
+  implementation of the resolve→validate→pin sequence, for both outbound
+  planes: the host's own calls (OCI, cyfr.run, external MCP) and the WASM
+  guest's `cyfr:http` handlers, which pass their consent policy as a
+  function. The two planes used to carry separate copies of the DNS
+  ladder and the pinned-URL/Req-option construction — and the guest copy
+  silently inherited Req's auto-retry and auto-decode defaults.
+
+  Returns `{:ok, %{ip: String.t(), ip_tuple: tuple, uri: URI.t(),
+  req_opts: keyword()}}` — `req_opts` carries the pinned URL and the full
+  fail-closed transport policy (`redirect/retry/compressed/decode_body`
+  all off; the validated IP as the connection target with the original
+  hostname preserved for SNI/cert/Host) ready for `Req.request/1` after
+  the caller adds its method/headers/body — or `{:error, type, message}`
+  with `type` in `:invalid_url | :dns_error | :private_ip_blocked`.
+
+  ## Options
+
+    * `:private_policy` — `:deny` (default) | `:allow_all` | `:operator`
+      (the `CYFR_PRIVATE_EGRESS_TARGETS` allowlist) | `{:fun, (ip_tuple ->
+      boolean)}` (the guest's consent check). Link-local is always
+      blocked, whatever the policy — that range is the cloud metadata
+      endpoint.
+    * `:receive_timeout` — ms (default 30_000)
+    * `:protocols` — Mint protocols list (e.g. `[:http1]`)
+    * `:transport_opts` — extra Mint transport opts
+  """
+  @spec pin(String.t(), keyword()) ::
+          {:ok, %{ip: String.t(), ip_tuple: :inet.ip_address(), uri: URI.t(), req_opts: keyword()}}
+          | {:error, atom(), String.t()}
+  def pin(url, opts \\ []) do
+    uri = URI.parse(url)
+    policy = Keyword.get(opts, :private_policy, :deny)
+
+    with :ok <- check_scheme(uri.scheme),
+         :ok <- check_host(uri.host),
+         {:ok, ip_tuple} <- resolve_typed(uri.host),
+         :ok <- check_ip(ip_tuple, uri.host, policy) do
+      ip = format_ip(ip_tuple)
+
+      req_opts =
+        [
+          url: URI.to_string(%{uri | host: bracket_ip(ip)}),
+          compressed: false,
+          decode_body: false,
+          redirect: false,
+          retry: false,
+          connect_options:
+            [hostname: uri.host]
+            |> maybe_put(:protocols, Keyword.get(opts, :protocols))
+            |> maybe_put(:transport_opts, Keyword.get(opts, :transport_opts)),
+          receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
+        ]
+
+      {:ok, %{ip: ip, ip_tuple: ip_tuple, uri: uri, req_opts: req_opts}}
+    end
+  end
+
+  defp translate_legacy_opts(opts) do
+    policy =
+      case Keyword.get(opts, :allow_private, false) do
+        true -> :allow_all
+        :policy -> :operator
+        _ -> :deny
+      end
+
+    opts |> Keyword.delete(:allow_private) |> Keyword.put(:private_policy, policy)
   end
 
   @doc """
@@ -119,45 +185,27 @@ defmodule Cyfr.Network do
   @spec pinned_request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
           {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
   def pinned_request(method, url, headers \\ [], body \\ nil, opts \\ []) do
-    case resolve_and_validate(url, opts) do
-      {:ok, ip_tuple, uri} -> do_pinned_request(method, uri, ip_tuple, headers, body, opts)
-      {:error, reason} -> {:error, reason}
-    end
-  end
+    # The identity semantics matter here: no accept-encoding and no decode
+    # (OCI digest verification hashes the body as received), no redirects,
+    # no Req-level retry — `pin/2` bakes exactly that policy in.
+    case pin(url, translate_legacy_opts(opts)) do
+      {:ok, %{req_opts: req_opts}} ->
+        req_opts =
+          req_opts
+          |> Keyword.put(:method, method)
+          |> Keyword.put(:headers, headers)
+          |> maybe_put(:body, body)
 
-  defp do_pinned_request(method, %URI{} = uri, ip_tuple, headers, body, opts) do
-    pinned_url = URI.to_string(%{uri | host: bracket_ip(format_ip(ip_tuple))})
+        case Req.request(req_opts) do
+          {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
+            {:ok, status, flatten_headers(resp_headers), resp_body}
 
-    connect_options =
-      [hostname: uri.host]
-      |> maybe_put(:protocols, Keyword.get(opts, :protocols))
-      |> maybe_put(:transport_opts, Keyword.get(opts, :transport_opts))
+          {:error, reason} ->
+            {:error, reason}
+        end
 
-    req_opts =
-      [
-        method: method,
-        url: pinned_url,
-        headers: headers,
-        # Match the prior Finch-direct semantics exactly: do NOT advertise
-        # accept-encoding (so the server returns identity bytes — critical for
-        # OCI blob digest verification, which hashes the body as received) and
-        # do NOT decode the body (callers parse it themselves). Also no redirect
-        # following and no Req-level retry — callers own those.
-        compressed: false,
-        decode_body: false,
-        redirect: false,
-        retry: false,
-        connect_options: connect_options,
-        receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
-      ]
-      |> maybe_put(:body, body)
-
-    case Req.request(req_opts) do
-      {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
-        {:ok, status, flatten_headers(resp_headers), resp_body}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _type, message} ->
+        {:error, message}
     end
   end
 
@@ -185,15 +233,15 @@ defmodule Cyfr.Network do
 
   defp flatten_headers(headers) when is_list(headers), do: headers
 
-  defp validate_scheme(scheme) when scheme in ["http", "https"], do: :ok
-  defp validate_scheme(nil), do: {:error, "missing URL scheme"}
-  defp validate_scheme(scheme), do: {:error, "blocked URL scheme: #{scheme}"}
+  defp check_scheme(scheme) when scheme in ["http", "https"], do: :ok
+  defp check_scheme(nil), do: {:error, :invalid_url, "missing URL scheme"}
+  defp check_scheme(scheme), do: {:error, :invalid_url, "blocked URL scheme: #{scheme}"}
 
-  defp validate_host_present(nil), do: {:error, "missing hostname"}
-  defp validate_host_present(""), do: {:error, "missing hostname"}
-  defp validate_host_present(_), do: :ok
+  defp check_host(nil), do: {:error, :invalid_url, "missing hostname"}
+  defp check_host(""), do: {:error, :invalid_url, "missing hostname"}
+  defp check_host(_), do: :ok
 
-  defp resolve_host(hostname) do
+  defp resolve_typed(hostname) do
     charlist = String.to_charlist(hostname)
 
     case :inet.getaddr(charlist, :inet) do
@@ -206,30 +254,34 @@ defmodule Cyfr.Network do
             {:ok, ip_tuple}
 
           {:error, reason} ->
-            {:error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
+            {:error, :dns_error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
         end
     end
   end
 
-  defp validate_ip(ip_tuple, hostname, allow_private) do
+  defp check_ip(ip_tuple, hostname, policy) do
     if private_ip?(ip_tuple) do
-      if Sanctum.Cidr.link_local?(ip_tuple) do
+      cond do
         # 169.254.0.0/16 always blocked — cloud metadata endpoint
-        {:error, "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
-      else
-        if private_permitted?(allow_private, hostname, ip_tuple) do
+        Sanctum.Cidr.link_local?(ip_tuple) ->
+          {:error, :private_ip_blocked,
+           "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
+
+        private_permitted?(policy, hostname, ip_tuple) ->
           :ok
-        else
-          {:error, "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
-        end
+
+        true ->
+          {:error, :private_ip_blocked,
+           "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
       end
     else
       :ok
     end
   end
 
-  defp private_permitted?(true, _hostname, _ip), do: true
-  defp private_permitted?(:policy, hostname, ip), do: private_allowed?(hostname, ip)
+  defp private_permitted?(:allow_all, _hostname, _ip), do: true
+  defp private_permitted?(:operator, hostname, ip), do: private_allowed?(hostname, ip)
+  defp private_permitted?({:fun, fun}, _hostname, ip) when is_function(fun, 1), do: fun.(ip)
   defp private_permitted?(_, _hostname, _ip), do: false
 
   @doc """

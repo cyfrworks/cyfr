@@ -21,6 +21,13 @@ defmodule PrismWeb.ApiKeysLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Subscribe once, at mount — handle_params re-fires on every patch,
+    # and PubSub's :duplicate registry would deliver every message twice.
+    if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.api_keys(ctx))
+    end
+
     socket =
       socket
       |> assign(:page_title, "API Keys")
@@ -160,8 +167,6 @@ defmodule PrismWeb.ApiKeysLive do
   @impl true
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.api_keys(ctx))
       {:noreply, socket |> fetch_keys() |> assign(:loading, false)}
     else
       {:noreply, socket}

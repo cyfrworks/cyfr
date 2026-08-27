@@ -316,24 +316,25 @@ defmodule Opus.FormulaHandler do
   defp encode_child_error({:invalid_reference, reason}),
     do: encode_error(:invalid_request, "Invalid reference: #{inspect(reason)}")
 
-  defp encode_child_error({:setup_required, payload}) do
-    encode_error_with_remediation(
-      :setup_required,
-      "Dependency cannot be satisfied: #{payload.node_ref}",
-      %{
-        "issue" => "The consent names a dependency the installed world cannot satisfy",
-        "node_ref" => payload.node_ref,
-        "need" => payload.need,
-        "reason" => reason_string(payload.reason)
-      }
-    )
+  defp encode_child_error({:setup_required, payload} = reason) do
+    # One remediation shape on the wire, whichever dispatch path failed:
+    # Opus.Remediation owns it (component-guide documents that shape).
+    # This clause used to hand-roll a second, incompatible object.
+    case Opus.Remediation.analyze(reason) do
+      {:setup_required, remediation} ->
+        encode_error_with_remediation(
+          :setup_required,
+          "Dependency cannot be satisfied: #{payload.node_ref}",
+          remediation
+        )
+
+      :not_setup_error ->
+        encode_error(:dispatch_error, stringify_reason(reason))
+    end
   end
 
   defp encode_child_error(reason),
     do: encode_error(:dispatch_error, stringify_reason(reason))
-
-  defp reason_string(reason) when is_atom(reason) or is_binary(reason), do: to_string(reason)
-  defp reason_string(reason), do: inspect(reason)
 
   defp dispatch_via_registry(json_request, %Context{} = ctx, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
@@ -360,7 +361,7 @@ defmodule Opus.FormulaHandler do
 
             # Analyze the raw term: the typed setup/consent tuples carry the
             # structural cause, and stringifying first would hide it.
-            case Opus.Remediation.analyze(ctx, reason) do
+            case Opus.Remediation.analyze(reason) do
               {:setup_required, remediation} ->
                 maybe_emit_setup_event(
                   root_execution_id,

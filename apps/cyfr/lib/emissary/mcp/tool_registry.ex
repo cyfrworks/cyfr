@@ -455,7 +455,7 @@ defmodule Emissary.MCP.ToolRegistry do
         )
 
         :telemetry.execute(
-          [:sanctum, :tool_server, :description_drift],
+          [:cyfr, :sanctum, :tool_server, :description_drift],
           %{count: 1},
           %{server: grant.server_name, profile_id: authority.profile_id}
         )

@@ -206,10 +206,7 @@ defmodule Sanctum.Session do
 
     case get_session_direct(token) do
       {:ok, row} ->
-        case row_to_context(row, surface) do
-          {:error, :namespace_unavailable} = err -> err
-          %Context{} = ctx -> {:ok, ctx}
-        end
+        row_to_context(row, surface)
 
       {:error, :not_found} ->
         {:error, :invalid_session}
@@ -411,6 +408,8 @@ defmodule Sanctum.Session do
 
   defp hash_token(token), do: :crypto.hash(:sha256, token)
 
+  # One return shape — {:ok, ctx} | {:error, :namespace_unavailable} — so
+  # the caller stops discriminating structurally on struct-vs-tuple.
   defp row_to_context(row, surface) do
     permissions =
       case Jason.decode(row.permissions || "[]") do
@@ -434,36 +433,40 @@ defmodule Sanctum.Session do
         # The session's athanor rides along: it is a fact of the sign-in, not
         # of the claim, and tincture access (which is not tenant
         # administration) is granted on it.
-        Context.build(
-          user_id: row.user_id,
-          email: row.email,
-          provider: row.provider,
-          athanor_id: row.athanor_id,
-          authenticated: false
-        )
+        {:ok,
+         Context.build(
+           user_id: row.user_id,
+           email: row.email,
+           provider: row.provider,
+           athanor_id: row.athanor_id,
+           authenticated: false
+         )}
 
       {:ok, ns} ->
-        Context.build(
-          user_id: row.user_id,
-          email: row.email,
-          provider: row.provider,
-          namespace: ns,
-          permissions: permissions,
-          # The persisted athanor is a STARTING POINT, never trusted on its
-          # own: revalidate/1 re-checks it against current memberships. A nil
-          # means the session was never resolved (no membership at create
-          # time); revalidation re-reads memberships and the tenant gate still
-          # bounces a genuinely athanor-less user.
-          athanor_id: row.athanor_id,
-          scope: :athanor,
-          auth_method: surface_auth_method(surface),
-          authenticated: true
-        )
-        # Re-validate the persisted athanor against the person's CURRENT
-        # standing so a denial, a revoked membership or an archived athanor
-        # takes effect immediately (no waiting for TTL). Keeps the selected
-        # athanor when still authorized; re-derives the platform capability.
-        |> Sanctum.Tenancy.revalidate()
+        ctx =
+          Context.build(
+            user_id: row.user_id,
+            email: row.email,
+            provider: row.provider,
+            namespace: ns,
+            permissions: permissions,
+            # The persisted athanor is a STARTING POINT, never trusted on its
+            # own: revalidate/1 re-checks it against current memberships. A nil
+            # means the session was never resolved (no membership at create
+            # time); revalidation re-reads memberships and the tenant gate still
+            # bounces a genuinely athanor-less user.
+            athanor_id: row.athanor_id,
+            scope: :athanor,
+            auth_method: surface_auth_method(surface),
+            authenticated: true
+          )
+          # Re-validate the persisted athanor against the person's CURRENT
+          # standing so a denial, a revoked membership or an archived athanor
+          # takes effect immediately (no waiting for TTL). Keeps the selected
+          # athanor when still authorized; re-derives the platform capability.
+          |> Sanctum.Tenancy.revalidate()
+
+        {:ok, ctx}
 
       {:error, _reason} ->
         # The users row could not be read — distinct from "not claimed".

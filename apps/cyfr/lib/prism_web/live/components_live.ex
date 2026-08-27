@@ -97,10 +97,8 @@ defmodule PrismWeb.ComponentsLive do
   def handle_event("pull", %{"ref" => ref}, socket) do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Prism.Topics.progress(progress_id, socket.assigns[:context])
-    )
+    socket =
+      resubscribe(socket, :progress_topic, Prism.Topics.progress(progress_id, socket.assigns[:context]))
 
     socket =
       socket
@@ -149,10 +147,8 @@ defmodule PrismWeb.ComponentsLive do
   def handle_event("register", _params, socket) do
     register_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Prism.Topics.register(register_id, socket.assigns[:context])
-    )
+    socket =
+      resubscribe(socket, :register_topic, Prism.Topics.register(register_id, socket.assigns[:context]))
 
     socket =
       socket
@@ -242,10 +238,8 @@ defmodule PrismWeb.ComponentsLive do
   def handle_event("push", %{"ref" => ref}, socket) do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Prism.Topics.progress(progress_id, socket.assigns[:context])
-    )
+    socket =
+      resubscribe(socket, :progress_topic, Prism.Topics.progress(progress_id, socket.assigns[:context]))
 
     socket =
       socket
@@ -1629,5 +1623,17 @@ defmodule PrismWeb.ComponentsLive do
       </div>
     </div>
     """
+  end
+  # Each pull/register/push subscribes to a fresh random progress topic.
+  # Dropping the previous topic's subscription first keeps N operations
+  # from leaking N live subscriptions for the socket's lifetime (the
+  # unsub-then-sub idiom the topbar's athanor topics use).
+  defp resubscribe(socket, key, topic) do
+    if old = socket.assigns[key] do
+      Phoenix.PubSub.unsubscribe(Emissary.PubSub, old)
+    end
+
+    Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
+    assign(socket, key, topic)
   end
 end

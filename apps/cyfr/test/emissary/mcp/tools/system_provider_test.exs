@@ -240,11 +240,11 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
   end
 
   describe "handle/3 - notify action success" do
-    test "returns notification details on failure for localhost (SSRF blocked)" do
+    test "an SSRF-blocked target is a tool error naming the target" do
       ctx = Sanctum.TestContext.local()
 
       # localhost is blocked by SSRF validation
-      {:ok, result} =
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
@@ -252,27 +252,25 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
           "payload" => %{"key" => "value"}
         })
 
-      assert result.delivered == false
-      assert result.target == "http://localhost:9999/unreachable"
-      assert result.event == "test.event"
-      assert is_binary(result.error)
-      assert result.error =~ "validation failed"
+      assert message =~ "http://localhost:9999/unreachable"
+      assert message =~ "validation failed"
     end
   end
 
   describe "handle/3 - notify action with unreachable target" do
-    test "returns delivered: false with error" do
+    test "returns a tool error" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} =
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
           "target" => "http://unreachable.invalid/webhook"
         })
 
-      assert result.delivered == false
-      assert is_binary(result.error)
+      # A failed or blocked delivery is a failed tool call now — the old
+      # {:ok, delivered: false} rendered as a success.
+      assert is_binary(message)
     end
   end
 
@@ -280,57 +278,61 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "blocks cloud metadata endpoint (169.254.169.254)" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} =
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
           "target" => "http://169.254.169.254/latest/meta-data/"
         })
 
-      assert result.delivered == false
-      assert result.error =~ "validation failed"
+      # A failed or blocked delivery is a failed tool call now — the old
+      # {:ok, delivered: false} rendered as a success.
+      assert is_binary(message)
     end
 
     test "blocks private IP (10.0.0.1)" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} =
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
           "target" => "http://10.0.0.1/internal"
         })
 
-      assert result.delivered == false
-      assert result.error =~ "validation failed"
+      # A failed or blocked delivery is a failed tool call now — the old
+      # {:ok, delivered: false} rendered as a success.
+      assert is_binary(message)
     end
 
     test "blocks loopback (127.0.0.1)" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} =
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
           "target" => "http://127.0.0.1/admin"
         })
 
-      assert result.delivered == false
-      assert result.error =~ "validation failed"
+      # A failed or blocked delivery is a failed tool call now — the old
+      # {:ok, delivered: false} rendered as a success.
+      assert is_binary(message)
     end
 
     test "blocks file:// scheme" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} =
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
           "target" => "file:///etc/passwd"
         })
 
-      assert result.delivered == false
-      assert result.error =~ "validation failed"
+      # A failed or blocked delivery is a failed tool call now — the old
+      # {:ok, delivered: false} rendered as a success.
+      assert is_binary(message)
     end
   end
 
@@ -362,15 +364,16 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "nil payload uses empty map" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} =
+      # Should not crash with nil payload; the unreachable target is a
+      # clean tool error, not a raise.
+      {:error, message} =
         SystemProvider.handle("system", ctx, %{
           "action" => "notify",
           "event" => "test.event",
           "target" => "http://unreachable.invalid/test"
         })
 
-      # Should not crash with nil payload
-      assert is_map(result)
+      assert is_binary(message)
     end
   end
 

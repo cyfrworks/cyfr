@@ -11,8 +11,6 @@ defmodule Opus.Remediation do
   (`profile.plan`) — granting is the sheet's job, not a per-field patch.
   """
 
-  alias Sanctum.Context
-
   @type issue :: %{
           String.t() => term()
         }
@@ -24,11 +22,11 @@ defmodule Opus.Remediation do
   @doc """
   Analyze a failed sub-component execution into operator remediation.
   """
-  @spec analyze(Context.t(), String.t() | tuple()) ::
+  @spec analyze(String.t() | tuple()) ::
           {:setup_required, remediation()} | :not_setup_error
-  def analyze(ctx, error)
+  def analyze(error)
 
-  def analyze(%Context{}, {:setup_required, %{} = payload}) do
+  def analyze({:setup_required, %{} = payload}) do
     component_ref = payload[:node_ref] || payload["node_ref"] || ""
     need = payload[:need] || payload["need"] || ""
     reason = payload[:reason] || payload["reason"]
@@ -61,7 +59,7 @@ defmodule Opus.Remediation do
     {:setup_required, Map.put(base, "issues", issues)}
   end
 
-  def analyze(%Context{}, {:consent_required, %{} = payload}) do
+  def analyze({:consent_required, %{} = payload}) do
     profile_id = payload[:profile_id] || payload["profile_id"]
     revision = payload[:current_revision] || payload["current_revision"]
 
@@ -87,7 +85,7 @@ defmodule Opus.Remediation do
      }}
   end
 
-  def analyze(_ctx, _reason), do: :not_setup_error
+  def analyze(_reason), do: :not_setup_error
 
   defp setup_message("", reason),
     do: "This app needs setup before it can run (#{inspect(reason)})"

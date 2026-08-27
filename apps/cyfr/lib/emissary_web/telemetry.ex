@@ -10,7 +10,7 @@ defmodule EmissaryWeb.Telemetry do
     - Tags: `:transport`, `:lifecycle` (created/terminated)
 
   - `cyfr.emissary.request.duration` - Request processing time
-    - Tags: `:method`, `:tool`, `:status` (success/error)
+    - Tags: `:method`, `:tool`, `:status` (success/error/cancelled)
     - Unit: milliseconds
 
   """
@@ -58,6 +58,35 @@ defmodule EmissaryWeb.Telemetry do
         unit: {:native, :millisecond},
         reporter_options: [buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000]],
         description: "MCP request processing duration"
+      ),
+
+      # Execution ingresses. Both were emitted and consumed by nothing —
+      # two of the three credentialed run surfaces were un-metered.
+      distribution("cyfr.emissary.webhook.invoke.stop.duration_ms",
+        event_name: [:cyfr, :emissary, :webhook, :invoke, :stop],
+        measurement: :duration_ms,
+        tags: [:status],
+        unit: :millisecond,
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000]],
+        description: "Webhook invoke duration"
+      ),
+      counter("cyfr.emissary.webhook.verify_failed.count",
+        event_name: [:cyfr, :emissary, :webhook, :verify_failed],
+        tags: [:reason],
+        description: "Webhook signature verification failures"
+      ),
+      distribution("cyfr.emissary.tincture.invoke.stop.duration_ms",
+        event_name: [:cyfr, :emissary, :tincture, :invoke, :stop],
+        measurement: :duration_ms,
+        tags: [:status],
+        unit: :millisecond,
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000]],
+        description: "Tincture invoke duration (HTTP and console surfaces)"
+      ),
+      counter("cyfr.sanctum.policy.decision.count",
+        event_name: [:cyfr, :sanctum, :policy, :decision],
+        tags: [:decision],
+        description: "Policy decisions"
       ),
 
       # Phoenix Metrics

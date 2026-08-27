@@ -258,7 +258,7 @@ defmodule Sanctum.VaultTest do
 
   describe "broadcasts" do
     test "every mutation announces itself on the tenant vault topic", %{ctx: ctx} do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("vault:changed", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.vault_changed(ctx))
 
       view = create!(ctx)
       assert_receive {:vault_entry_changed, _, :create}

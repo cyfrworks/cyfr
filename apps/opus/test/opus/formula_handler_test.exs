@@ -1104,8 +1104,13 @@ defmodule Opus.FormulaHandlerTest do
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "setup_required"
-      assert parsed["error"]["remediation"]["node_ref"] == "catalyst:local.no-policy-test:0.1.0"
-      assert parsed["error"]["remediation"]["reason"] == "unresolvable_target"
+
+      # One remediation shape on the wire, whichever dispatch path failed —
+      # Opus.Remediation's, the one component-guide documents.
+      remediation = parsed["error"]["remediation"]
+      assert remediation["component_ref"] == "catalyst:local.no-policy-test:0.1.0"
+      assert remediation["setup_command"] =~ "profile grant"
+      assert is_list(remediation["issues"])
     end
 
     test "normal errors remain unchanged when not a setup issue", %{ctx: ctx} do

@@ -57,12 +57,12 @@ defmodule Opus.HttpRequestValidationTest do
     end
 
     test "rejects invalid JSON" do
-      assert {:error, :http_error, "Invalid JSON request"} =
+      assert {:error, :invalid_json, "Invalid JSON request"} =
                validate("not-json", localhost_edge(), EdgeFixtures.limits())
     end
 
     test "rejects request missing method/url" do
-      assert {:error, :http_error, "Invalid request: must include 'method' and 'url'"} =
+      assert {:error, :invalid_request, "Invalid request: must include 'method' and 'url'"} =
                validate(
                  Jason.encode!(%{"url" => "http://localhost/x"}),
                  localhost_edge(),
@@ -71,7 +71,7 @@ defmodule Opus.HttpRequestValidationTest do
     end
 
     test "rejects URL without hostname" do
-      assert {:error, :http_error, "Invalid URL: missing hostname"} =
+      assert {:error, :invalid_request, "Invalid URL: missing hostname"} =
                validate(
                  encode(%{"url" => "http:///path"}),
                  localhost_edge(),
@@ -149,7 +149,7 @@ defmodule Opus.HttpRequestValidationTest do
           "multipart" => [%{"name" => "model", "value" => "whisper-1"}]
         })
 
-      assert {:error, :http_error, "Streaming requests do not support 'multipart'"} =
+      assert {:error, :invalid_request, "Streaming requests do not support 'multipart'"} =
                validate(
                  request,
                  localhost_edge(),

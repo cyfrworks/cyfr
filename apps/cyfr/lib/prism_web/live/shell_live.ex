@@ -538,13 +538,17 @@ defmodule PrismWeb.ShellLive do
 
   defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
 
-  # The HTTP invoke route carries TinctureRateLimit at 120/min keyed by IP;
-  # this is the same capability reached from a LiveView socket, keyed by
-  # person instead. The two are deliberately separate budgets, not one shared
-  # one — the keys differ, so a signed-in person has 120 here and 120 there.
-  # Same limiter table, same bucket vocabulary, same config override.
+  # The HTTP invoke route carries TinctureRateLimit keyed by IP; this is the
+  # same capability reached from a LiveView socket, keyed by person instead.
+  # The two are deliberately separate budgets, not one shared one — the keys
+  # differ, so a signed-in person has a full budget here and there. Same
+  # limiter table, same bucket vocabulary, same config override, and the
+  # default number comes from the plug so the two cannot drift.
   defp invoke_throttled?(ctx, tincture) do
-    max = Application.get_env(:cyfr, :tincture_rate_limit_max) || 120
+    max =
+      Application.get_env(:cyfr, :tincture_rate_limit_max) ||
+        EmissaryWeb.Plugs.TinctureRateLimit.default_invoke_max()
+
     key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}
 
     match?({:deny, _}, Cyfr.RateLimiter.check(key, max, 60_000))
@@ -554,112 +558,37 @@ defmodule PrismWeb.ShellLive do
     reference = get_in(msg, ["payload", "reference"])
     input = get_in(msg, ["payload", "input"]) || %{}
 
-    tincture_ref = "tincture:#{tincture.publisher}.#{tincture.name}"
+    if invoke_throttled?(socket.assigns.context, tincture) do
+      response = %{type: "cyfr:response", id: msg["id"], error: "rate limited — retry shortly"}
+      {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+    else
+      # One implementation for both invoke surfaces (the HTTP route is the
+      # other) — validation, context, logging, telemetry and the readiness
+      # gate live in Emissary.Tincture.Invoke. Before the extraction this
+      # surface emitted no telemetry, so console invocations were invisible
+      # to the activity feed. The console shell is an owner surface: the
+      # protected-route profile roots the invocation whatever the
+      # tincture's public visibility, and there is no client IP to pass —
+      # the socket authenticated the person instead.
+      result =
+        Emissary.Tincture.Invoke.run(socket.assigns.context, tincture, reference, input,
+          route: :protected,
+          method: "LIVE /shell/invoke"
+        )
 
-    cond do
-      !is_binary(reference) or reference == "" ->
-        response = %{type: "cyfr:response", id: msg["id"], error: "missing reference"}
-        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+      response =
+        case result do
+          {:ok, ok} ->
+            %{type: "cyfr:response", id: msg["id"], result: ok}
 
-      !is_map(input) ->
-        response = %{type: "cyfr:response", id: msg["id"], error: "input must be an object"}
-        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+          {:error, :consent_required, message} ->
+            %{type: "cyfr:response", id: msg["id"], error: "consent_required: " <> message}
 
-      invoke_throttled?(socket.assigns.context, tincture) ->
-        response = %{
-          type: "cyfr:response",
-          id: msg["id"],
-          error: "rate limited — retry shortly"
-        }
-
-        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
-      true ->
-        tincture_ctx_base = Sanctum.build_tincture_context(socket.assigns.context, tincture)
-        request_id = Emissary.UUID7.request_id()
-        tincture_ctx = %{tincture_ctx_base | request_id: request_id}
-
-        # The console invoke is a run ingress like the HTTP one, so it files
-        # the same request-log rows; the method names this surface.
-        Emissary.MCP.RequestLog.safe_log_started(tincture_ctx, request_id, %{
-          tool: "tincture",
-          action: "invoke",
-          method: "LIVE /shell/invoke",
-          input: %{
-            publisher: tincture.publisher,
-            tincture_name: tincture.name,
-            reference: reference,
-            input: input
-          }
-        })
-
-        start_time = System.monotonic_time()
-
-        # The console shell is an owner surface: a protected-route profile
-        # roots the invocation, and a tincture without one does not run —
-        # granting it is the fix, and the error says so.
-        run_result =
-          Cyfr.Execution.run_root_edge(tincture_ctx, tincture_ref, reference, input,
-            route: :protected
-          )
-
-        duration_ms =
-          System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
-        case run_result do
-          {:ok, result} ->
-            Emissary.MCP.RequestLog.safe_log_completed(tincture_ctx, request_id, %{
-              output: result.output,
-              duration_ms: duration_ms,
-              routed_to: "opus"
-            })
-
-            response = %{
-              type: "cyfr:response",
-              id: msg["id"],
-              result: %{
-                status: result.status,
-                output: result.output,
-                execution_id: result.metadata.execution_id,
-                duration_ms: result.metadata.duration_ms
-              }
-            }
-
-            {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
-          {:error, no_profile} when no_profile in [:no_profile, :no_public_profile] ->
-            Emissary.MCP.RequestLog.safe_log_failed(tincture_ctx, request_id, %{
-              error: to_string(no_profile),
-              duration_ms: duration_ms,
-              routed_to: "opus"
-            })
-
-            response = %{
-              type: "cyfr:response",
-              id: msg["id"],
-              error: "consent_required: this tincture has no profile — grant it first"
-            }
-
-            {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
-          {:error, reason} ->
-            Emissary.MCP.RequestLog.safe_log_failed(tincture_ctx, request_id, %{
-              error:
-                if(is_binary(reason),
-                  do: reason,
-                  else: inspect(Sanctum.Sanitizer.sanitize(reason))
-                ),
-              duration_ms: duration_ms,
-              routed_to: "opus"
-            })
-
-            Logger.warning("[ShellLive] invoke error for #{tincture.name}: #{inspect(reason)}")
-            # Chain errors are tuples; executor errors are strings. Neither
-            # leaks internal structure to the client.
-            error_msg = if is_binary(reason), do: reason, else: "Execution failed"
-            response = %{type: "cyfr:response", id: msg["id"], error: error_msg}
-            {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+          {:error, _code, message} ->
+            %{type: "cyfr:response", id: msg["id"], error: message}
         end
+
+      {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
     end
   end
 

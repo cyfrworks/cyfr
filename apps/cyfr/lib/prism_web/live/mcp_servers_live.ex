@@ -38,6 +38,13 @@ defmodule PrismWeb.McpServersLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Subscribe once, at mount — handle_params re-fires on every patch,
+    # and PubSub's :duplicate registry would deliver every message twice.
+    if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.mcp_servers(ctx))
+    end
+
     socket =
       socket
       |> assign(:page_title, "MCP Servers")
@@ -261,8 +268,6 @@ defmodule PrismWeb.McpServersLive do
   @impl true
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.mcp_servers(ctx))
       {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
     else
       {:noreply, socket}

@@ -250,26 +250,17 @@ defmodule Opus.HttpHandler do
   end
 
   defp build_req_opts(request, limits) do
-    timeout = request_timeout(limits)
-
-    # Pin the connection to the IP validated by HttpRequestValidation by
-    # substituting it for the hostname in the URL, while preserving the
-    # original hostname for TLS SNI / certificate verification / the Host
-    # header (Mint's :hostname connect option). This closes the DNS-rebinding
-    # TOCTOU gap that re-resolving request.url would reopen, and — because
-    # SNI/Host are preserved — does not break CDN routing (which only rejects
-    # bare-IP connections that drop SNI).
-    uri = URI.parse(request.url)
-    pinned_url = URI.to_string(%{uri | host: Cyfr.Network.bracket_ip(request.ip)})
-
-    base_opts = [
-      method: request.method_atom,
-      url: pinned_url,
-      headers: request.headers,
-      redirect: false,
-      receive_timeout: timeout,
-      connect_options: [hostname: uri.host, protocols: [:http1]]
-    ]
+    # The pinned URL and the fail-closed transport policy come from
+    # `Cyfr.Network.pin/2` via validation (`request.pin_req_opts`) — one
+    # implementation of IP pinning for both outbound planes. Rebuilding
+    # options here once silently inherited Req's auto-retry and
+    # auto-decode defaults, so a guest fetch could hit the wire four
+    # times and its response size was measured on re-encoded bytes.
+    base_opts =
+      request.pin_req_opts
+      |> Keyword.put(:method, request.method_atom)
+      |> Keyword.put(:headers, request.headers)
+      |> Keyword.put(:receive_timeout, request_timeout(limits))
 
     cond do
       # Multipart request
@@ -391,7 +382,9 @@ defmodule Opus.HttpHandler do
   # Private: Telemetry
   # ============================================================================
 
-  defp emit_telemetry(component_ref, request, status, duration_ms) do
+  @doc false
+  # Shared with HttpStreamHandler so both egress paths emit one event.
+  def emit_telemetry(component_ref, request, status, duration_ms) do
     :telemetry.execute(
       [:cyfr, :opus, :http, :request],
       %{duration_ms: duration_ms, system_time: System.system_time()},

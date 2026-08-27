@@ -5,14 +5,14 @@ defmodule Opus.HttpStreamHandler do
   @moduledoc """
   Polling-based streaming HTTP handler for WASM components.
 
-  Provides `cyfr:http/stream` host functions that enable WASM components to
+  Provides `cyfr:http/streaming` host functions that enable WASM components to
   consume streaming HTTP responses (e.g., Server-Sent Events from OpenAI).
 
   ## Interface
 
-      cyfr:http/stream.request(json) -> handle_id (string)
-      cyfr:http/stream.read(handle_id) -> chunk_json (string)
-      cyfr:http/stream.close(handle_id) -> result (string)
+      cyfr:http/streaming.request(json) -> handle_id (string)
+      cyfr:http/streaming.read(handle_id) -> chunk_json (string)
+      cyfr:http/streaming.close(handle_id) -> result (string)
 
   ## Flow
 
@@ -61,7 +61,7 @@ defmodule Opus.HttpStreamHandler do
   # ============================================================================
 
   @doc """
-  Build Wasmex import map for the `cyfr:http/stream` host functions.
+  Build Wasmex import map for the `cyfr:http/streaming` host functions.
 
   Returns a map with `request`, `read`, and `close` functions.
   """
@@ -229,34 +229,44 @@ defmodule Opus.HttpStreamHandler do
     safe_encode(%{"handle" => handle_id})
   end
 
-  defp perform_streaming_request(request, buffer, _component_ref, timeout_ms, max_response_size) do
-    # Pin the connection to the IP validated by HttpRequestValidation by
-    # substituting it for the hostname, while preserving the original hostname
-    # for TLS SNI / certificate verification / the Host header (Mint's
-    # :hostname connect option). This closes the DNS-rebinding TOCTOU gap that
-    # re-resolving request.url would reopen; preserving SNI/Host keeps CDN
-    # routing working (CDNs only reject bare-IP connections that drop SNI).
-    # Mirrors HttpHandler.build_req_opts/2.
-    uri = URI.parse(request.url)
-    pinned_url = URI.to_string(%{uri | host: Cyfr.Network.bracket_ip(request.ip)})
+  defp perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size) do
+    # The pinned URL and transport policy come from `Cyfr.Network.pin/2`
+    # via validation — same seam as the buffered fetch path.
+    req_opts =
+      request.pin_req_opts
+      |> Keyword.put(:method, request.method_atom)
+      |> Keyword.put(:headers, request.headers)
+      |> Keyword.put(:receive_timeout, timeout_ms)
+      |> Keyword.put(:into, :self)
+      |> then(fn opts ->
+        if request.body != "", do: Keyword.put(opts, :body, request.body), else: opts
+      end)
 
-    req_opts = [
-      method: request.method_atom,
-      url: pinned_url,
-      headers: request.headers,
-      body: if(request.body != "", do: request.body, else: nil),
-      redirect: false,
-      receive_timeout: timeout_ms,
-      connect_options: [hostname: uri.host, protocols: [:http1]],
-      into: :self
-    ]
+    start_time = System.monotonic_time(:millisecond)
 
     case Req.request(req_opts) do
       {:ok, response} ->
+        # The stream path emits the same [:cyfr, :opus, :http, :request]
+        # event the fetch path always did — it emitted nothing before, so
+        # streamed egress was invisible to telemetry.
+        HttpHandler.emit_telemetry(
+          component_ref,
+          request,
+          response.status,
+          System.monotonic_time(:millisecond) - start_time
+        )
+
         # Collect streaming chunks
         collect_stream_chunks(response, buffer, timeout_ms, max_response_size)
 
       {:error, _exception} ->
+        HttpHandler.emit_telemetry(
+          component_ref,
+          request,
+          :error,
+          System.monotonic_time(:millisecond) - start_time
+        )
+
         Agent.update(buffer, fn state -> %{state | done: true} end)
     end
   end

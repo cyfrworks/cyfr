@@ -89,7 +89,7 @@ defmodule Prism.Topics do
   Distinct from `schedules/1`, which carries changes to the schedule rows.
   """
   @spec schedule_runs(athanor()) :: String.t()
-  def schedule_runs(athanor), do: PubSub.topic("prism:schedules", athanor)
+  def schedule_runs(athanor), do: PubSub.topic("prism:schedule_runs", athanor)
 
   @doc """
   Tincture invocation lifecycle.
@@ -130,7 +130,7 @@ defmodule Prism.Topics do
   Messages: `:mcp_servers_changed`.
   """
   @spec mcp_servers(athanor()) :: String.t()
-  def mcp_servers(athanor), do: PubSub.topic("mcp_servers", athanor)
+  def mcp_servers(athanor), do: PubSub.topic("prism:mcp_servers", athanor)
 
   @doc """
   Schedule rows changed — created, edited, paused, removed.
@@ -139,7 +139,7 @@ defmodule Prism.Topics do
   carries firings.
   """
   @spec schedules(athanor()) :: String.t()
-  def schedules(athanor), do: PubSub.topic("schedules", athanor)
+  def schedules(athanor), do: PubSub.topic("prism:schedules", athanor)
 
   @doc """
   A vault entry in this athanor changed.
@@ -148,7 +148,7 @@ defmodule Prism.Topics do
   counterpart is `vault_changed_global/0`.
   """
   @spec vault_changed(athanor()) :: String.t()
-  def vault_changed(athanor), do: PubSub.topic("vault:changed", athanor)
+  def vault_changed(athanor), do: PubSub.topic("prism:vault_changed", athanor)
 
   # ---------------------------------------------------------------------------
   # Athanor-scoped — one subject at a time

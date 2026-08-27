@@ -9,13 +9,17 @@ on:
     paths:
       - 'apps/codex/**'
       # TestRenderEnvFileShippedTemplate binds `cyfr init` to the shipped
-      # template — a template-only edit must run the Go tests.
+      # template, and TestSharedFixtureVerdicts binds internal/ref to the
+      # shared component-ref fixture — an edit to either must run the Go
+      # tests.
       - '.env.example'
+      - 'tests/fixtures/**'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
       - 'apps/codex/**'
       - '.env.example'
+      - 'tests/fixtures/**'
       - '.github/workflows/codex-ci.yml'
 
 permissions:

@@ -34,6 +34,15 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
 
   import Plug.Conn
 
+  # The invoke budget both surfaces share as their DEFAULT (config override:
+  # :tincture_rate_limit_max). The HTTP pipeline keys it by IP through this
+  # plug; the console shell keys the same budget by person — deliberately
+  # separate buckets, one number.
+  @default_invoke_max 120
+
+  @doc "The default per-window invoke budget (both ingress surfaces)."
+  def default_invoke_max, do: @default_invoke_max
+
   def init(opts) do
     %{
       bucket: Keyword.fetch!(opts, :bucket),

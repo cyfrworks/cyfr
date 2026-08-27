@@ -330,6 +330,11 @@ defmodule Sanctum.Vault do
   defp rotation_oauth(%{"v" => 2} = current, nil), do: {:ok, current["oauth"]}
   defp rotation_oauth(%{"v" => 2}, oauth) when is_map(oauth), do: {:ok, oauth}
 
+  # Total, like every validator here: a non-map :oauth is a typed refusal,
+  # not a FunctionClauseError out of a public API.
+  defp rotation_oauth(%{"v" => 2}, _oauth),
+    do: {:error, "oauth must be an object when supplied"}
+
   defp put_change(changes, key, params, encoder) do
     case Map.fetch(params, key) do
       {:ok, value} -> Map.put(changes, key, encoder.(value))

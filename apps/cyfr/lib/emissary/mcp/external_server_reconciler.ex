@@ -14,7 +14,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   closed if the credential is gone.
 
   Reconcile failures are **not** swallowed: a raise or transient storage error
-  emits `[:emissary, :external_server, :reconcile_failed]` telemetry and is
+  emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
   retried (fast retries, then a periodic sweep), because dropping one would
   leave a revoked credential flowing until the server process restarts.
   """
@@ -96,7 +96,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
       {:error, reason} ->
         :telemetry.execute(
-          [:emissary, :external_server, :reconcile_failed],
+          [:cyfr, :emissary, :external_server, :reconcile_failed],
           %{count: 1},
           %{athanor_id: athanor_id, entry_id: entry_id, reason: inspect(reason)}
         )
@@ -152,7 +152,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
         Emissary.MCP.ExternalServerSupervisor.stop(server.name, athanor_id)
 
         :telemetry.execute(
-          [:emissary, :external_server, :reconciled],
+          [:cyfr, :emissary, :external_server, :reconciled],
           %{count: 1},
           %{server: server.name, athanor_id: athanor_id, entry_id: entry_id}
         )

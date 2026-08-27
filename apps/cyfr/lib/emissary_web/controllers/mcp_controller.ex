@@ -43,7 +43,7 @@ defmodule EmissaryWeb.MCPController do
 
   Emits `[:cyfr, :emissary, :request]` on every request with:
   - Measurements: `%{duration: native_time, duration_ms: integer}`
-  - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error, action: String.t() | nil, request_id: String.t()}`
+  - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error | :cancelled, action: String.t() | nil, request_id: String.t()}`
   """
 
   use EmissaryWeb, :controller

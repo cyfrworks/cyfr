@@ -1229,7 +1229,7 @@ defmodule Prism.ConversationRunner do
     proposal = proposal_of(approval_intent(msg)) || %{tool: nil, action: nil}
     intent = approval_intent(msg)
 
-    :telemetry.execute([:prism, :aqua, :approval], %{count: 1}, %{
+    :telemetry.execute([:cyfr, :prism, :aqua, :approval], %{count: 1}, %{
       id: msg.id,
       decision: outcome,
       scope: scope_atom(scope),

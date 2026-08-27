@@ -129,4 +129,34 @@ defmodule Compendium.GuideProtocolDriftTest do
              "integration-guide.md does not show the required `#{key}` field."
     end
   end
+  # The invoke error-type table is the same class of authority: the agent
+  # writes formulas that branch on these. The guide once documented two
+  # types no code produced (`invalid_type`, `execution_failed`) and omitted
+  # five that are — so generated error handling matched nothing.
+  test "component-guide's invoke error table matches Opus.FormulaHandler's vocabulary" do
+    handler =
+      File.read!(Path.join(@project_root, "apps/opus/lib/opus/formula_handler.ex"))
+
+    produced =
+      Regex.scan(~r/encode_error(?:_with_remediation)?\(:(\w+)/, handler)
+      |> Enum.map(fn [_, t] -> t end)
+      |> Kernel.++(Regex.scan(~r/"type" => "(\w+)"/, handler) |> Enum.map(fn [_, t] -> t end))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    guide = guide("component-guide.md")
+
+    [_, table] = String.split(guide, "### Invoke Error Types", parts: 2)
+    [table, _] = String.split(table, "\n\n`setup_required`", parts: 2)
+
+    documented =
+      Regex.scan(~r/^\| `(\w+)` \|/m, table)
+      |> Enum.map(fn [_, t] -> t end)
+      |> Enum.sort()
+
+    assert documented == produced,
+           "component-guide.md's invoke error table drifted from " <>
+             "Opus.FormulaHandler: documented #{inspect(documented)}, " <>
+             "produced #{inspect(produced)}"
+  end
 end

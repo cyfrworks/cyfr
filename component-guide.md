@@ -690,7 +690,8 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 ### `cyfr:http/fetch` — `request(json) -> string`
 Request: `{"method": "POST", "url": "...", "headers": {...}, "body": "..."}`
 Success: `{"status": 200, "headers": {...}, "body": "..."}`
-Error: `{"error": {"type": "domain_blocked|rate_limited|timeout|private_ip_blocked|request_too_large|response_too_large", "message": "..."}}`
+Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|request_too_large|response_too_large|http_error", "message": "..."}}`
+(`invalid_json`/`invalid_request` are the same malformed-input types every host interface uses; `http_error` is a transport failure after validation passed.)
 
 **Binary data** — base64 encode request body and/or request base64 response:
 ```json
@@ -1221,12 +1222,15 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 |------------|-------|
 | `invalid_json` | Request not valid JSON |
 | `invalid_request` | Missing required fields (`tool`, `action`, `args`) |
-| `invalid_type` | Type not reagent/catalyst/formula |
 | `setup_required` | A need with no live Connection bound — includes `remediation` field |
-| `execution_failed` | Sub-component panicked or timed out |
-| `resource_limit` | `max_concurrent_tasks` exceeded |
+| `dispatch_error` | The dispatched call itself failed (bad reference, refused by the host, sub-component error) |
+| `spawn_failed` | An async task could not be started |
+| `task_failed` | A spawned task ended in failure (including a sub-component panic) |
+| `cancel_failed` | A cancel request could not stop the task |
+| `resource_limit` | `max_concurrent_tasks`, emit size, or emit rate exceeded |
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
+| `unknown` | The host produced a result in an unexpected shape |
 
 `setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.
 

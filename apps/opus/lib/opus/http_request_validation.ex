@@ -6,17 +6,19 @@ defmodule Opus.HttpRequestValidation do
   Shared pre-flight validation for the guest-facing HTTP host functions.
 
   `Opus.HttpHandler` (`cyfr:http/fetch`) and `Opus.HttpStreamHandler`
-  (`cyfr:http/stream`) sit on the same trust boundary and must enforce the
+  (`cyfr:http/streaming`) sit on the same trust boundary and must enforce the
   same checks in the same order. This module is the single path both go
   through before any network I/O:
 
       parse → method → scheme → domain → body decode → request size →
-      DNS resolve + private-IP validation → method atom
+      egress rate limit → DNS resolve + private-IP validation → method atom
 
-  The private/reserved-IP range policy lives in `Cyfr.Network.private_ip?/1`
-  — no range table is duplicated here or in the handlers.
+  The resolve→validate→pin sequence itself lives in `Cyfr.Network.pin/2` —
+  neither the range table nor the DNS ladder nor the pinned transport
+  policy is duplicated here or in the handlers; this module contributes
+  only the consent policy (`egress.private_ips` via `Opus.EdgeGuard`).
 
-  `validate/4` returns a validated request map (including the pinned IP and
+  `validate/6` returns a validated request map (including the pinned IP and
   the Req method atom) that each handler then executes its own way (buffered
   fetch vs. polling stream). Handlers own transport, response handling, and
   telemetry; every pre-flight decision lives here.
@@ -49,7 +51,8 @@ defmodule Opus.HttpRequestValidation do
           body_encoding: String.t() | nil,
           response_encoding: String.t() | nil,
           multipart: list() | nil,
-          ip: String.t()
+          ip: String.t(),
+          pin_req_opts: keyword()
         }
 
   @doc """
@@ -75,9 +78,30 @@ defmodule Opus.HttpRequestValidation do
          {:ok, request} <- decode_request_body(request),
          :ok <- EdgeGuard.check_request_size(limits, request),
          :ok <- check_egress_rate(ctx, component_ref, limits),
-         {:ok, ip} <- resolve_and_validate_ip(request.hostname, edge),
+         {:ok, pin} <- pin_url(request.url, edge),
          {:ok, method_atom} <- validated_method_atom(request.method) do
-      {:ok, request |> Map.put(:ip, ip) |> Map.put(:method_atom, method_atom)}
+      {:ok,
+       request
+       |> Map.put(:ip, pin.ip)
+       |> Map.put(:pin_req_opts, pin.req_opts)
+       |> Map.put(:method_atom, method_atom)}
+    end
+  end
+
+  # The one resolve→validate→pin call, with the guest's consent policy
+  # closed over the edge. `pin_req_opts` carries the pinned URL and the
+  # full fail-closed transport policy — before this the handlers rebuilt
+  # their own Req options and silently inherited Req's auto-retry (one
+  # fetch could become four wire requests, invisible to the rate limiter)
+  # and auto-decode (response size measured on re-encoded bytes).
+  defp pin_url(url, edge) do
+    case Cyfr.Network.pin(url,
+           private_policy: {:fun, &EdgeGuard.allows_private_ip?(edge, &1)},
+           protocols: [:http1]
+         ) do
+      {:ok, pin} -> {:ok, pin}
+      {:error, :invalid_url, message} -> {:error, :invalid_request, message}
+      {:error, type, message} -> {:error, type, message}
     end
   end
 
@@ -108,34 +132,19 @@ defmodule Opus.HttpRequestValidation do
   end
 
   @doc """
-  Resolve hostname to IP and validate it is not a private address.
+  Resolve a hostname to a validated IP under the edge's consent policy.
 
-  DNS resolves once, then the IP is checked against `Cyfr.Network`'s
-  private/reserved ranges. Returns `{:ok, ip_string}` for public IPs or
-  `{:error, type, message}`.
-
-  When an edge is provided as the second argument, private IPs listed in
-  its `egress.private_ips` are permitted (except `169.254.0.0/16` which is
-  always blocked). A nil edge denies every private IP.
+  A thin wrapper over `Cyfr.Network.pin/2` kept for callers that want the
+  IP alone; `validate/6` pins the whole request. Private IPs listed in the
+  edge's `egress.private_ips` are permitted (except `169.254.0.0/16`,
+  always blocked); a nil edge denies every private IP.
   """
   @spec resolve_and_validate_ip(String.t(), Edge.t() | nil) ::
           {:ok, String.t()} | {:error, atom(), String.t()}
   def resolve_and_validate_ip(hostname, edge \\ nil) do
-    hostname_charlist = String.to_charlist(hostname)
-
-    # Try IPv4 first, then fall back to IPv6
-    case :inet.getaddr(hostname_charlist, :inet) do
-      {:ok, ip_tuple} ->
-        validate_resolved_ip(ip_tuple, hostname, edge)
-
-      {:error, _ipv4_reason} ->
-        case :inet.getaddr(hostname_charlist, :inet6) do
-          {:ok, ip_tuple} ->
-            validate_resolved_ip(ip_tuple, hostname, edge)
-
-          {:error, reason} ->
-            {:error, :dns_error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
-        end
+    case pin_url("https://" <> hostname, edge) do
+      {:ok, %{ip: ip}} -> {:ok, ip}
+      {:error, type, message} -> {:error, type, message}
     end
   end
 
@@ -172,14 +181,14 @@ defmodule Opus.HttpRequestValidation do
         hostname = uri.host
 
         if is_nil(hostname) or hostname == "" do
-          {:error, :http_error, "Invalid URL: missing hostname"}
+          {:error, :invalid_request, "Invalid URL: missing hostname"}
         else
           multipart = parse_multipart(req["multipart"])
           body = req["body"] || ""
 
           # Body and multipart are mutually exclusive
           if multipart != nil and body != "" do
-            {:error, :http_error, "Request cannot have both 'body' and 'multipart'"}
+            {:error, :invalid_request, "Request cannot have both 'body' and 'multipart'"}
           else
             {:ok,
              %{
@@ -196,10 +205,10 @@ defmodule Opus.HttpRequestValidation do
         end
 
       {:ok, _} ->
-        {:error, :http_error, "Invalid request: must include 'method' and 'url'"}
+        {:error, :invalid_request, "Invalid request: must include 'method' and 'url'"}
 
       {:error, _} ->
-        {:error, :http_error, "Invalid JSON request"}
+        {:error, :invalid_json, "Invalid JSON request"}
     end
   end
 
@@ -219,7 +228,7 @@ defmodule Opus.HttpRequestValidation do
   # The streaming transport cannot send multipart bodies; rejecting loudly
   # beats silently dropping the parts.
   defp check_multipart_allowed(%{multipart: parts}, false) when is_list(parts) do
-    {:error, :http_error, "Streaming requests do not support 'multipart'"}
+    {:error, :invalid_request, "Streaming requests do not support 'multipart'"}
   end
 
   defp check_multipart_allowed(_request, _allow), do: :ok
@@ -234,7 +243,7 @@ defmodule Opus.HttpRequestValidation do
         {:ok, %{request | multipart: decoded_parts}}
 
       {:error, message} ->
-        {:error, :http_error, message}
+        {:error, :invalid_request, message}
     end
   end
 
@@ -245,7 +254,7 @@ defmodule Opus.HttpRequestValidation do
         {:ok, %{request | body: decoded, body_encoding: "decoded"}}
 
       :error ->
-        {:error, :http_error, "Invalid base64 in request body"}
+        {:error, :invalid_request, "Invalid base64 in request body"}
     end
   end
 
@@ -334,21 +343,4 @@ defmodule Opus.HttpRequestValidation do
     end
   end
 
-  # ============================================================================
-  # Private: IP Validation
-  # ============================================================================
-
-  defp validate_resolved_ip(ip_tuple, hostname, edge) do
-    if Cyfr.Network.private_ip?(ip_tuple) do
-      # Check if the edge allows this specific private IP
-      if EdgeGuard.allows_private_ip?(edge, ip_tuple) do
-        {:ok, :inet.ntoa(ip_tuple) |> to_string()}
-      else
-        {:error, :private_ip_blocked,
-         "Connection to private IP #{:inet.ntoa(ip_tuple)} blocked (resolved from #{hostname})"}
-      end
-    else
-      {:ok, :inet.ntoa(ip_tuple) |> to_string()}
-    end
-  end
 end

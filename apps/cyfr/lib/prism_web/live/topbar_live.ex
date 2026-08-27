@@ -61,17 +61,30 @@ defmodule PrismWeb.TopbarLive do
             if ui_mode == "dev", do: subscribe_indicators(ctx)
           end
 
+          # The dead render assigns only cheap defaults; every DB read,
+          # cache write and tool call waits for the connected mount — this
+          # LiveView renders on EVERY page, and the loads below (athanor
+          # list, door queue, the dev indicators with their registry
+          # health probe) used to run on the dead render AND again on
+          # connect, putting up to two 3s-timeout HTTP calls on the first
+          # byte of every page.
+          socket =
+            socket
+            |> assign(:context, ctx)
+            |> assign(:personal_namespace_slug, ctx.namespace)
+            |> assign(:authenticated, true)
+            |> assign(:session_token, token)
+            |> assign(:ui_mode, ui_mode)
+            |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
+            |> assign(:badges, %{})
+            |> assign(:platform_requests, 0)
+            |> assign(:athanors, [])
+
+          if connected?(socket) do
+            send(self(), :load_topbar)
+          end
+
           socket
-          |> assign(:context, ctx)
-          |> assign(:personal_namespace_slug, ctx.namespace)
-          |> assign(:authenticated, true)
-          |> assign(:session_token, token)
-          |> assign(:ui_mode, ui_mode)
-          |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
-          # Opening an athanor reads its badge; the others stay.
-          |> assign(:badges, Prism.Tray.clear(token, ctx.athanor_id))
-          |> assign(:platform_requests, platform_requests(ctx))
-          |> load_athanors(ctx)
 
         _ ->
           socket
@@ -95,9 +108,9 @@ defmodule PrismWeb.TopbarLive do
      |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
      |> assign(:upcoming_schedules, [])
      |> assign(:in_flight_builds, [])
-     |> assign(:recent_tinctures, [])
-     |> load_initial_state(), layout: false}
+     |> assign(:recent_tinctures, []), layout: false}
   end
+
 
   # The live indicators are dev's: their fan-in is subscribed only there.
   defp subscribe_indicators(ctx) do
@@ -148,6 +161,21 @@ defmodule PrismWeb.TopbarLive do
   # ============================================================================
   # PubSub fan-in
   # ============================================================================
+
+  @impl true
+  def handle_info(:load_topbar, socket) do
+    ctx = socket.assigns.context
+
+    socket =
+      socket
+      # Opening an athanor reads its badge; the others stay.
+      |> assign(:badges, Prism.Tray.clear(socket.assigns.session_token, ctx.athanor_id))
+      |> assign(:platform_requests, platform_requests(ctx))
+      |> load_athanors(ctx)
+      |> load_initial_state()
+
+    {:noreply, socket}
+  end
 
   @impl true
   def handle_info({:request, _meta, _meas}, socket) do

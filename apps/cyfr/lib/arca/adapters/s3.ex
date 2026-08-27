@@ -330,7 +330,10 @@ defmodule Arca.Adapters.S3 do
   # Sign and send one request. Everything S3-bound goes through here: one
   # header set, one SigV4 signing, one Req call — an operation contributes
   # only its method, URL, body, and any extra headers the signature must
-  # cover.
+  # cover. Transport policy is explicit: `retry: false` (callers own retry,
+  # same as Cyfr.Network's outbound path — Req's silent :safe_transient
+  # default re-sent GETs up to three times) and a configured receive
+  # timeout instead of Req's unstated 15s.
   defp signed_request(method, url, body, extra_headers \\ []) do
     base_headers =
       [{"host", host_for(url)}, {"x-amz-content-sha256", sha256_hex(body)}] ++ extra_headers
@@ -351,7 +354,15 @@ defmodule Arca.Adapters.S3 do
 
     headers = Enum.map(signed, fn {k, v} -> {to_string(k), to_string(v)} end)
 
-    Req.request(method: method, url: url, headers: headers, body: body, decode_body: false)
+    Req.request(
+      method: method,
+      url: url,
+      headers: headers,
+      body: body,
+      decode_body: false,
+      retry: false,
+      receive_timeout: Application.get_env(:cyfr, :s3_receive_timeout_ms, 60_000)
+    )
   end
 
   defp request(method, key, body \\ ""), do: signed_request(method, build_url(key), body)
@@ -538,7 +549,21 @@ defmodule Arca.Adapters.S3 do
   defp host_only("http://" <> rest), do: String.split(rest, "/", parts: 2) |> List.first()
   defp host_only(other), do: other
 
-  defp host_for(url), do: URI.parse(url).host
+  # RFC 9110 §7.2: the Host header carries the port when it is not the
+  # scheme default. SigV4 stays valid either way (the signer canonicalizes
+  # the header we send, and the server verifies against what arrived), but
+  # dropping the port disagreed with `host_only/1`'s virtual-host URLs and
+  # broke any vhost-routing proxy in front of a non-default-port endpoint.
+  defp host_for(url) do
+    case URI.parse(url) do
+      %URI{host: host, port: port, scheme: scheme}
+      when is_integer(port) and is_binary(scheme) ->
+        if URI.default_port(scheme) == port, do: host, else: "#{host}:#{port}"
+
+      %URI{host: host} ->
+        host
+    end
+  end
 
   defp encode_key(key) do
     key

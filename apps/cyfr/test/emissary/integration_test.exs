@@ -357,14 +357,13 @@ defmodule Emissary.IntegrationTest do
 
       response = json_response(notify_conn, 200)
       [content] = response["result"]["content"]
-      result = Jason.decode!(content["text"])
 
-      # Verify response structure (delivery will fail but structure should be correct)
-      assert result["target"] == "http://localhost:19999/webhook-test"
-      assert result["event"] == "test.integration.event"
-      # Delivery fails because endpoint doesn't exist
-      assert result["delivered"] == false
-      assert is_binary(result["error"])
+      # A failed delivery is a failed tool call now — the old
+      # {"delivered": false} rendered as a success the caller's happy
+      # path swallowed.
+      assert response["result"]["isError"] == true
+      assert content["text"] =~ "http://localhost:19999/webhook-test"
+      assert content["text"] =~ "delivery"
     end
 
     test "system notify fails gracefully with missing target", %{conn: conn} do

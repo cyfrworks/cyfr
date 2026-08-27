@@ -103,7 +103,7 @@ defmodule Opus.Runtime do
 
     if authority do
       :telemetry.execute(
-        [:opus, :runtime, :authority_entered],
+        [:cyfr, :opus, :runtime, :authority_entered],
         %{},
         %{
           authority: authority,

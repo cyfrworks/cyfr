@@ -24,9 +24,6 @@ defmodule EmissaryWeb.TinctureController do
   defp route_for(:public), do: :public
   defp route_for(_), do: :protected
 
-  require Logger
-
-  alias Emissary.MCP.RequestLog
   alias Sanctum.TinctureAccess
 
   # The signed prefix a private tincture's own assets are fetched under: the
@@ -163,29 +160,31 @@ defmodule EmissaryWeb.TinctureController do
            resolve_tincture(conn, athanor, publisher, tincture_name) do
       tincture_ref = "tincture:#{publisher}.#{tincture_name}"
 
-      cond do
-        !is_binary(reference) or reference == "" ->
-          EmissaryWeb.ApiError.send(conn, 400, :invalid_params, "missing reference")
+      _ = tincture_ref
 
-        !is_map(input) ->
-          EmissaryWeb.ApiError.send(conn, 400, :invalid_params, "input must be an object")
+      # One implementation for both invoke surfaces (the console shell is
+      # the other) — validation, context, logging, telemetry and the
+      # readiness gate live in Emissary.Tincture.Invoke; this surface only
+      # renders its outcomes.
+      case Emissary.Tincture.Invoke.run(auth_ctx, tincture, reference, input,
+             route: route_for(visibility),
+             method: "POST /t/invoke",
+             client_ip: Sanctum.ClientIp.resolve(conn)
+           ) do
+        {:ok, result} ->
+          json(conn, result)
 
-        true ->
-          tincture_ctx_base = Sanctum.build_tincture_context(auth_ctx, tincture)
-          request_id = Emissary.UUID7.request_id()
-          tincture_ctx = %{tincture_ctx_base | request_id: request_id}
+        {:error, :invalid_params, msg} ->
+          EmissaryWeb.ApiError.send(conn, 400, :invalid_params, msg)
 
-          run_logged_invoke(
-            conn,
-            tincture_ctx,
-            request_id,
-            publisher,
-            tincture_name,
-            reference,
-            input,
-            tincture_ref: tincture_ref,
-            route: route_for(visibility)
-          )
+        {:error, :consent_required, msg} ->
+          EmissaryWeb.ApiError.send(conn, 403, :consent_required, msg)
+
+        {:error, :service_unavailable, msg} ->
+          EmissaryWeb.ApiError.send(conn, 503, :service_unavailable, msg)
+
+        {:error, :execution_failed, msg} ->
+          EmissaryWeb.ApiError.send(conn, 500, :execution_failed, msg)
       end
     else
       {:error, :not_found} ->
@@ -337,166 +336,4 @@ defmodule EmissaryWeb.TinctureController do
 
   defp valid_connect_domain?(_), do: false
 
-  # Build a scoped execution context for tincture invoke.
-  #
-  # Preserves the actual user_id from the auth context (for audit trails).
-  # For public/unauthenticated access, uses the tincture identity as user_id.
-  # Permissions are limited to [:execute] regardless of the original context.
-  # Tincture execution context is built by `Sanctum.build_tincture_context/2`
-  # (single source of truth, shared with the Prism shell).
-
-  # Run the invoke with full request logging (Arca.McpLog) and telemetry.
-  # Logging is best-effort via RequestLog.safe_log_*; failures never block
-  # or fail the underlying invocation.
-  defp run_logged_invoke(
-         conn,
-         ctx,
-         request_id,
-         publisher,
-         tincture_name,
-         reference,
-         input,
-         opts
-       ) do
-    tincture_ref = opts[:tincture_ref] || "tincture:#{publisher}.#{tincture_name}"
-
-    log_input = %{
-      publisher: publisher,
-      tincture_name: tincture_name,
-      reference: reference,
-      input: input
-    }
-
-    telemetry_meta = %{
-      request_id: request_id,
-      tincture_ref: tincture_ref,
-      reference: reference,
-      athanor_id: ctx.athanor_id,
-      user_id: ctx.user_id
-    }
-
-    RequestLog.safe_log_started(ctx, request_id, %{
-      tool: "tincture",
-      action: "invoke",
-      method: "POST /t/invoke",
-      input: log_input
-    })
-
-    start_time = System.monotonic_time()
-
-    :telemetry.execute(
-      [:cyfr, :emissary, :tincture, :invoke, :start],
-      %{system_time: System.system_time()},
-      telemetry_meta
-    )
-
-    # The tincture's profile owns the authority, selected by the route —
-    # a public URL selects the public profile whatever cookies the caller
-    # holds, and a tincture without the route's profile does not run.
-    run_result =
-      if engine_ready?() do
-        Cyfr.Execution.run_root_edge(ctx, tincture_ref, reference, input,
-          route: opts[:route],
-          client_ip: Sanctum.ClientIp.resolve(conn)
-        )
-      else
-        {:error, :engine_starting}
-      end
-
-    case run_result do
-      {:ok, result} ->
-        duration_ms = duration_ms(start_time)
-
-        RequestLog.safe_log_completed(ctx, request_id, %{
-          output: result.output,
-          duration_ms: duration_ms,
-          routed_to: "opus"
-        })
-
-        :telemetry.execute(
-          [:cyfr, :emissary, :tincture, :invoke, :stop],
-          %{duration_ms: duration_ms},
-          Map.put(telemetry_meta, :status, :ok)
-        )
-
-        json(conn, %{
-          status: result.status,
-          output: result.output,
-          execution_id: result.metadata.execution_id,
-          duration_ms: result.metadata.duration_ms
-        })
-
-      {:error, no_profile} when no_profile in [:no_profile, :no_public_profile] ->
-        duration_ms = duration_ms(start_time)
-
-        RequestLog.safe_log_failed(ctx, request_id, %{
-          error: to_string(no_profile),
-          duration_ms: duration_ms,
-          routed_to: "opus"
-        })
-
-        :telemetry.execute(
-          [:cyfr, :emissary, :tincture, :invoke, :stop],
-          %{duration_ms: duration_ms},
-          telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, to_string(no_profile))
-        )
-
-        EmissaryWeb.ApiError.send(
-          conn,
-          403,
-          :consent_required,
-          "this tincture has no #{route_name(opts[:route])} profile — grant it first"
-        )
-
-      {:error, :engine_starting} ->
-        duration_ms = duration_ms(start_time)
-
-        RequestLog.safe_log_failed(ctx, request_id, %{
-          error: "engine_starting",
-          duration_ms: duration_ms,
-          routed_to: "opus"
-        })
-
-        :telemetry.execute(
-          [:cyfr, :emissary, :tincture, :invoke, :stop],
-          %{duration_ms: duration_ms},
-          telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "engine_starting")
-        )
-
-        EmissaryWeb.ApiError.send(conn, 503, :service_unavailable, "Execution engine is starting — retry shortly")
-
-      {:error, reason} ->
-        duration_ms = duration_ms(start_time)
-        Logger.warning("[TinctureInvoke] error: #{inspect(reason)}")
-
-        RequestLog.safe_log_failed(ctx, request_id, %{
-          error: inspect(reason),
-          duration_ms: duration_ms,
-          routed_to: "opus"
-        })
-
-        :telemetry.execute(
-          [:cyfr, :emissary, :tincture, :invoke, :stop],
-          %{duration_ms: duration_ms},
-          telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, inspect(reason))
-        )
-
-        EmissaryWeb.ApiError.send(conn, 500, :execution_failed, "Execution failed")
-    end
-  end
-
-  # The release starts :cyfr (binding this endpoint) before :opus brings up
-  # the execution machinery; a request in that window would noproc-crash
-  # mid-flight. Process liveness — not module presence — is the readiness
-  # signal.
-  defp engine_ready?, do: Cyfr.Execution.available?()
-
-  defp duration_ms(start_time) do
-    System.monotonic_time()
-    |> Kernel.-(start_time)
-    |> System.convert_time_unit(:native, :millisecond)
-  end
-
-  defp route_name(:public), do: "public"
-  defp route_name(_), do: "owner"
 end

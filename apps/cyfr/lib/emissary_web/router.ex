@@ -195,7 +195,7 @@ defmodule EmissaryWeb.Router do
     # must never be counted or answered 429 without CORS headers.
     plug EmissaryWeb.Plugs.TinctureRateLimit,
       bucket: :invoke,
-      max_requests: 120,
+      max_requests: EmissaryWeb.Plugs.TinctureRateLimit.default_invoke_max(),
       window_ms: 60_000
   end
 

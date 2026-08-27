@@ -24,6 +24,13 @@ defmodule PrismWeb.WebhooksLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Subscribe once, at mount — handle_params re-fires on every patch,
+    # and PubSub's :duplicate registry would deliver every message twice.
+    if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.webhooks(ctx))
+    end
+
     {:ok,
      socket
      |> assign(:page_title, "Webhooks")
@@ -48,8 +55,6 @@ defmodule PrismWeb.WebhooksLive do
   @impl true
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.webhooks(ctx))
       send(self(), :load_data)
       {:noreply, assign(socket, :loading, true)}
     else

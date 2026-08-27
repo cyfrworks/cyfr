@@ -250,16 +250,18 @@ defmodule Emissary.MCP.Tools.SystemProvider do
              }}
 
           {:error, reason} ->
-            {:ok,
-             %{
-               delivered: false,
-               target: target,
-               event: event,
-               error: reason
-             }}
+            # A failed delivery is a failed tool call — {:ok, delivered:
+            # false} rendered as isError: false, so the caller's happy
+            # path swallowed it. The reason is a crafted string from the
+            # pinned request path (SSRF refusals, transport prose), never
+            # a raw term.
+            {:error, "notification delivery to #{target} failed: #{reason_text(reason)}"}
         end
     end
   end
+
+  defp reason_text(reason) when is_binary(reason), do: reason
+  defp reason_text(reason), do: inspect(Sanctum.Sanitizer.sanitize(reason))
 
   # ============================================================================
   # Tools List Filtering
@@ -291,7 +293,25 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     |> Map.put(:registry, check_registry_health())
   end
 
+  # Memoized: this is an outbound HTTPS probe with 3s connect + 3s read
+  # timeouts, and system/status is called from the dev topbar on page
+  # loads — per-call probing put that latency on the page and hammered
+  # the registry. Registry health does not change per request.
+  @registry_health_ttl_ms 30_000
+
   defp check_registry_health do
+    case Arca.Cache.get(:registry_health) do
+      {:ok, cached} ->
+        cached
+
+      :miss ->
+        health = probe_registry_health()
+        Arca.Cache.put(:registry_health, health, @registry_health_ttl_ms)
+        health
+    end
+  end
+
+  defp probe_registry_health do
     url = registry_url()
 
     case :httpc.request(

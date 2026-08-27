@@ -328,10 +328,14 @@ defmodule Locus.Builder do
   Return the Cargo.toml content for a given component type.
 
   Delegates to `Compendium.Scaffold.cargo_toml_for/2` — the canonical
-  template — omitting the `cyfr:oauth` WIT dep: the build sandbox
-  materializes only the WIT worlds every component type needs, and a user
-  project that uses oauth carries its own Cargo.toml, which
-  `merge_cargo_toml/2` treats as authoritative for WIT deps.
+  template — omitting the `cyfr:oauth` WIT dep from the GENERATED
+  Cargo.toml. The sandbox still materializes the full catalyst WIT tree
+  (`copy_wit_files/2` copies everything `Compendium.WITSource.files/1`
+  returns, oauth included — the world imports it, so the files must
+  exist); what this omission controls is only which packages the
+  generated manifest binds. A user project that uses oauth carries its
+  own Cargo.toml, which `merge_cargo_toml/2` treats as authoritative for
+  WIT deps.
   """
   def cargo_toml_for(type) do
     Compendium.Scaffold.cargo_toml_for(type, include_oauth_wit: false)

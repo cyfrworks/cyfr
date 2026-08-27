@@ -28,8 +28,10 @@ defmodule Cyfr.IngressInventoryTest do
     "apps/opus/lib/opus/mcp.ex" => :mcp,
     "apps/opus/lib/opus/cron_scheduler.ex" => :cron,
     "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
-    "apps/cyfr/lib/emissary_web/controllers/tincture_controller.ex" => :tincture,
-    "apps/cyfr/lib/prism_web/live/shell_live.ex" => :tincture_console,
+    # One implementation behind two tincture surfaces (the HTTP controller
+    # and the console shell render its outcomes; neither calls run_root
+    # itself any more).
+    "apps/cyfr/lib/emissary/tincture/invoke.ex" => :tincture,
     # Formula children run under the parent's authority, never their own.
     "apps/opus/lib/opus/formula_handler.ex" => :in_chain
   }

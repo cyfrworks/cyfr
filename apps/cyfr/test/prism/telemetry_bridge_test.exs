@@ -59,7 +59,7 @@ defmodule Prism.TelemetryBridgeTest do
 
     test "a failed schedule fire reaches the athanor's notify topic (the tray)" do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(@athanor))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:schedules"))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:schedule_runs"))
 
       :telemetry.execute([:cyfr, :opus, :schedule, :failed], %{count: 1}, %{
         schedule_id: "sched_x",

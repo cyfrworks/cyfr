@@ -11,7 +11,7 @@ defmodule Opus.MCPCutoverTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
-  @telemetry_event [:opus, :runtime, :authority_entered]
+  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
   @node "reagent:local.cutover-math"
 
   setup do
