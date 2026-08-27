@@ -49,14 +49,37 @@ defmodule Sanctum.Tenancy do
   (`Sanctum.Context.tenant_ok/1`).
   """
   @spec resolve_into(Context.t(), keyword()) :: Context.t()
-  def resolve_into(ctx, opts \\ [])
-
-  def resolve_into(%Context{athanor_id: athanor_id} = ctx, opts)
-      when is_binary(athanor_id) and athanor_id != "" do
-    if Keyword.get(opts, :force, false), do: do_resolve(ctx), else: ctx
+  def resolve_into(ctx, opts \\ []) do
+    ctx |> resolve_status(opts) |> unwrap(ctx)
   end
 
-  def resolve_into(%Context{} = ctx, _opts), do: do_resolve(ctx)
+  @doc """
+  `resolve_into/2`, but distinguishes a membership read that FAILED from a
+  person who genuinely belongs to no athanor.
+
+  Both leave the context athanor-less, and the tenant gate refuses both —
+  so a database blip rendered as `403 "User has no athanor. Contact your
+  administrator."`, a permanent-sounding answer to a transient fault, and
+  the person is told to ask an operator about something no operator can
+  fix. `Sanctum.Caller` has `:unavailable` in its refusal vocabulary for
+  exactly this, and `PrismWeb.AuthHelpers.disposition/1` already says a
+  transient read must never read as signed-out; this is the read that
+  could not say so.
+  """
+  @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
+  def resolve_status(ctx, opts \\ [])
+
+  def resolve_status(%Context{athanor_id: athanor_id} = ctx, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
+    if Keyword.get(opts, :force, false), do: do_resolve(ctx), else: {:ok, ctx}
+  end
+
+  def resolve_status(%Context{} = ctx, _opts), do: do_resolve(ctx)
+
+  # The Context-returning contract most callers want: a failed read leaves
+  # the context as it was, and the tenant gate downstream still refuses it.
+  defp unwrap({:ok, ctx}, _fallback), do: ctx
+  defp unwrap({:error, :unavailable}, fallback), do: fallback
 
   @doc """
   The athanors the context may work in — the rows behind the caller's own
@@ -85,17 +108,17 @@ defmodule Sanctum.Tenancy do
         module ->
           case module.resolve(ctx.user_id) do
             %{athanor_id: athanor_id} ->
-              %{ctx | athanor_id: athanor_id, scope: :athanor}
+              {:ok, %{ctx | athanor_id: athanor_id, scope: :athanor}}
 
             :no_membership ->
-              ctx
+              {:ok, ctx}
 
             {:error, reason} ->
               Logger.error(
                 "[Sanctum.Tenancy] resolve override failed for #{ctx.user_id}: #{inspect(reason)}"
               )
 
-              ctx
+              {:error, :unavailable}
           end
       end
     end
@@ -106,11 +129,11 @@ defmodule Sanctum.Tenancy do
   defp resolve_from_memberships(%Context{user_id: user_id} = ctx) do
     with {:ok, user} <- user_row(user_id),
          {:ok, memberships} <- Members.list_by_user(user_id) do
-      apply_membership(ctx, memberships, user)
+      {:ok, apply_membership(ctx, memberships, user)}
     else
       {:error, reason} ->
         Logger.error("[Sanctum.Tenancy] resolve failed for #{user_id}: #{inspect(reason)}")
-        ctx
+        {:error, :unavailable}
     end
   end
 

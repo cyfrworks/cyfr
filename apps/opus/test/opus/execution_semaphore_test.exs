@@ -643,6 +643,39 @@ defmodule Opus.ExecutionSemaphoreTest do
     end
   end
 
+  describe "status/0 when the semaphore is unavailable" do
+    # The fallback exists so a down semaphore does not take the caller with
+    # it — but it dropped `:tenants`, and Opus.MCP reads `status.tenants` to
+    # show a member their own athanor's count. A member asking for status at
+    # exactly the wrong moment got a KeyError out of the clause meant to
+    # save them.
+    test "the fallback carries the same keys as a live reply" do
+      live = ExecutionSemaphore.status()
+      refute Map.has_key?(live, :error)
+
+      # Unregistering the name makes the next call exit with :noproc at once,
+      # which is the branch a genuinely dead semaphore takes — without a
+      # timeout to wait out or a supervisor restart to race.
+      pid = Process.whereis(ExecutionSemaphore)
+      Process.unregister(ExecutionSemaphore)
+
+      down =
+        try do
+          ExecutionSemaphore.status()
+        after
+          Process.register(pid, ExecutionSemaphore)
+        end
+
+      assert down.error == :unavailable
+
+      assert Map.keys(live) -- Map.keys(down) == [],
+             "the unavailable fallback is missing keys the live reply has — a reader that " <>
+               "narrows the live shape crashes on the fallback"
+
+      assert down.tenants == %{}
+    end
+  end
+
   describe "stale sweeper" do
     test "sweeper message is handled without error" do
       # Manually trigger the sweep message; the status call is ordered after
@@ -651,6 +684,69 @@ defmodule Opus.ExecutionSemaphoreTest do
 
       status = ExecutionSemaphore.status()
       assert is_integer(status.max)
+    end
+
+    # The sweep is a backstop for a slot whose :DOWN never arrived, not a
+    # time limit on execution. It runs at ten minutes while the platform
+    # ceiling allows a thirty-minute timeout, so on an age test alone a
+    # consented long run loses its slot while still running: the execution
+    # carries on uncounted, the caps over-admit, and its own release later
+    # finds nothing to give back.
+    test "a still-running holder past the hold limit keeps its slot" do
+      [holder] = acquire_from_processes(1)
+      assert ExecutionSemaphore.status().active == 1
+
+      backdate_holds(20 * 60 * 1000)
+      send(Process.whereis(ExecutionSemaphore), :sweep_stale)
+
+      assert ExecutionSemaphore.status().active == 1,
+             "a live execution's slot was swept — the semaphore now over-admits"
+
+      assert Process.alive?(holder)
+      release_holders([holder])
+    end
+
+    test "a holder that is gone still has its slot reclaimed" do
+      [holder] = acquire_from_processes(1)
+      assert ExecutionSemaphore.status().active == 1
+
+      backdate_holds(20 * 60 * 1000)
+
+      # Kill it and drop the monitor's :DOWN before the semaphore sees it —
+      # exactly the leak the sweep exists to clean up.
+      ref = Process.monitor(holder)
+      swallow_down(ExecutionSemaphore, holder)
+      Process.exit(holder, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+
+      send(Process.whereis(ExecutionSemaphore), :sweep_stale)
+
+      assert wait_until(fn -> ExecutionSemaphore.status().active == 0 end),
+             "an abandoned slot was never reclaimed"
+    end
+
+    defp backdate_holds(by_ms) do
+      :sys.replace_state(Process.whereis(ExecutionSemaphore), fn state ->
+        monitors =
+          Map.new(state.monitors, fn {pid, {ref, acquired_at, tenant, class}} ->
+            {pid, {ref, acquired_at - by_ms, tenant, class}}
+          end)
+
+        %{state | monitors: monitors}
+      end)
+    end
+
+    # Demonitor the semaphore's own watch on `pid` so its :DOWN never
+    # arrives, leaving the entry behind for the sweep to find.
+    defp swallow_down(server, pid) do
+      :sys.replace_state(Process.whereis(server), fn state ->
+        case state.monitors[pid] do
+          {ref, _acquired_at, _tenant, _class} -> Process.demonitor(ref, [:flush])
+          _ -> :ok
+        end
+
+        state
+      end)
     end
   end
 

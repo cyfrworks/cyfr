@@ -679,19 +679,22 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       :ok
     end
 
-    test "logs error and returns 403 when membership resolution fails", %{conn: conn} do
+    # A membership read that FAILED is not a person who has no athanor.
+    # Both end with an athanor-less context, but 403 "contact your
+    # administrator" is a permanent-sounding answer to a transient fault,
+    # and sends the person to an operator who cannot see it. The session
+    # path already answered 503 for the same failure; this one does now too.
+    test "a failed membership read is 503, not 403", %{conn: conn} do
       import ExUnit.CaptureLog
 
       log =
         capture_log(fn ->
           conn = Authenticate.call(conn, [])
 
-          # User has no athanor and membership resolution failed → reject with
-          # 403 (missing_tenant).
           assert conn.halted
-          assert conn.status == 403
+          assert conn.status == 503
           body = Jason.decode!(conn.resp_body)
-          assert body["error"]["message"] =~ "no athanor"
+          refute body["error"]["message"] =~ "no athanor"
         end)
 
       # Resolution + its error logging is centralized in Sanctum.Tenancy.

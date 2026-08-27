@@ -181,6 +181,15 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         )
 
         {:error, :missing_tenant}
+
+      # The membership read failed. That is not "you have no athanor" — it is
+      # "we could not find out", and answering 403 tells the person to ask an
+      # operator about a fault an operator cannot see. Same answer the session
+      # path already gives for the same underlying failure.
+      {:error, :unavailable} ->
+        Logger.error("[Authenticate] membership read failed for #{ctx.user_id} — answering 503")
+
+        {:error, :auth_provider_error}
     end
   end
 

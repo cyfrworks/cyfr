@@ -162,8 +162,27 @@ defmodule Opus.ExecutionSemaphore do
     try do
       GenServer.call(__MODULE__, :status)
     catch
+      # Same keys as the live reply, so a reader can narrow or render this
+      # without asking whether the semaphore answered. The one that mattered
+      # was `:tenants`: `Opus.MCP` reads `status.tenants` to show a member
+      # their own athanor's count, and its absence here was a KeyError at
+      # exactly the moment this clause exists to survive.
       :exit, _reason ->
-        %{max: 0, active: 0, available: 0, queued: 0, holders: [], error: :unavailable}
+        %{
+          max: 0,
+          active: 0,
+          available: 0,
+          child_reserve: 0,
+          root_active: 0,
+          child_active: 0,
+          background_active: 0,
+          queued: 0,
+          queued_by_class: %{root: 0, child: 0, background: 0},
+          holders: [],
+          tenant_max: 0,
+          tenants: %{},
+          error: :unavailable
+        }
     end
   end
 
@@ -663,19 +682,31 @@ defmodule Opus.ExecutionSemaphore do
 
   defp sweep_stale_holders(%{monitors: monitors} = state) when map_size(monitors) == 0, do: state
 
+  # The backstop for a slot whose `:DOWN` never arrived — NOT a time limit on
+  # execution. A holder that is still alive keeps its slot however long it
+  # has held it: the platform ceiling allows a 30-minute timeout
+  # (`Sanctum.Policy.Ceiling`) and this sweep runs at ten, so an age test
+  # alone releases the slot of a consented execution that is still running.
+  # The execution does not stop — it just stops being counted, which
+  # over-admits past both the global cap and its tenant's, and its own
+  # release then finds nothing to give back.
+  #
+  # `Opus.ExecutionSweeper` draws the same distinction for execution rows:
+  # a lapsed lease is only swept once the process behind it is gone.
   defp sweep_stale_holders(state) do
     now = System.monotonic_time(:millisecond)
 
     stale_pids =
-      Enum.filter(state.monitors, fn {_pid, {_ref, acquired_at, _tenant, _class}} ->
-        now - acquired_at > @max_hold_ms
+      state.monitors
+      |> Enum.filter(fn {pid, {_ref, acquired_at, _tenant, _class}} ->
+        now - acquired_at > @max_hold_ms and not Process.alive?(pid)
       end)
       |> Enum.map(fn {pid, _} -> pid end)
 
     if stale_pids != [] do
       Logger.warning(
-        "[Opus.ExecutionSemaphore] Sweeping #{length(stale_pids)} stale slot(s) held " <>
-          ">#{div(@max_hold_ms, 60_000)}min: #{inspect(stale_pids)}"
+        "[Opus.ExecutionSemaphore] Sweeping #{length(stale_pids)} abandoned slot(s) whose " <>
+          "holder is gone and whose DOWN never arrived: #{inspect(stale_pids)}"
       )
     end
 

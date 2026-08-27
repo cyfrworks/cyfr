@@ -131,14 +131,23 @@ defmodule Sanctum.Caller do
   end
 
   def establish_context(%Context{} = ctx, opts) do
-    ctx =
-      ctx
-      |> Sanctum.Tenancy.resolve_into()
-      |> ensure_namespace()
-
-    with :ok <- tenant_ok(ctx),
+    # A membership read that failed and a person who belongs to no athanor
+    # both leave the context athanor-less, and the tenant gate below refuses
+    # both — but they are not the same refusal. The first is retryable and
+    # says so; the second used to speak for it, telling someone to contact
+    # an operator about a database blip.
+    with {:ok, ctx} <- resolve(ctx),
+         ctx = ensure_namespace(ctx),
+         :ok <- tenant_ok(ctx),
          {:ok, ctx} <- focus(ctx, Keyword.get(opts, :focus)) do
       {:ok, ctx}
+    end
+  end
+
+  defp resolve(ctx) do
+    case Sanctum.Tenancy.resolve_status(ctx) do
+      {:ok, ctx} -> {:ok, ctx}
+      {:error, :unavailable} -> {:error, :unavailable}
     end
   end
 

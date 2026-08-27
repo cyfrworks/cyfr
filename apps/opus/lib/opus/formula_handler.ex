@@ -727,8 +727,18 @@ defmodule Opus.FormulaHandler do
     case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> execution_id, %{
            rate_limit: limit
          }) do
-      {:ok, _remaining} -> :ok
-      {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
+      {:ok, _remaining} ->
+        :ok
+
+      {:error, :rate_limited, _retry_after} ->
+        {:error, :emit_rate_limited}
+
+      # The limiter's third answer (`Opus.RateLimiter.check/3`'s spec names
+      # it): an athanor-less context cannot be metered. Unmatched, it was a
+      # CaseClauseError raised inside the emit host function — the executor
+      # and the egress gate both handle it, and both deny.
+      {:error, :missing_tenant} ->
+        {:error, :emit_rate_limited}
     end
   catch
     # A dead or unreachable limiter fails CLOSED, same as the executor's

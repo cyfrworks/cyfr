@@ -229,7 +229,20 @@ defmodule Opus.ExecutionEventBuffer do
   @impl true
   def init({execution_id, athanor_id}) do
     Process.flag(:trap_exit, true)
-    {:ok, %{execution_id: execution_id, athanor_id: athanor_id, events: []}, @idle_timeout}
+
+    # Resume from what is cached rather than starting empty. This process
+    # stops after two minutes idle and `terminate/2` merges its events into
+    # the cache, whose TTL is ten — so a long execution that goes quiet and
+    # then emits again restarts here, and an empty start would put that one
+    # new event over the whole history, erasing the replay a reconnecting
+    # SSE client asks for with Last-Event-ID.
+    events =
+      case Arca.Cache.get(Arca.Cache.Keys.exec_events(execution_id, athanor_id)) do
+        {:ok, cached} when is_list(cached) -> cached
+        _ -> []
+      end
+
+    {:ok, %{execution_id: execution_id, athanor_id: athanor_id, events: events}, @idle_timeout}
   end
 
   @impl true

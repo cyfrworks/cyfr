@@ -61,4 +61,37 @@ defmodule Opus.ExecutionEventBufferTest do
     assert_raise ArgumentError, fn -> ExecutionEventBuffer.since(exec_id, 0, nil) end
     assert_raise ArgumentError, fn -> ExecutionEventBuffer.topic(exec_id, %{}) end
   end
+
+  # A buffer stops after two minutes idle and merges its events into the
+  # cache, whose TTL is ten. A long execution that goes quiet and then emits
+  # again restarts the process — which used to begin with an empty list and
+  # put that one new event over the whole history, so a client reconnecting
+  # with Last-Event-ID replayed a run that appeared to start in the middle.
+  test "a buffer that restarts resumes the history instead of erasing it" do
+    exec_id = "exec_evt_restart_#{System.unique_integer([:positive])}"
+    record = %{id: exec_id, athanor_id: "ath_evt_x"}
+
+    :ok = ExecutionEventBuffer.push(exec_id, %{"kind" => "text_delta", "n" => 1}, 1, record)
+    :ok = ExecutionEventBuffer.push(exec_id, %{"kind" => "text_delta", "n" => 2}, 2, record)
+    ExecutionEventBuffer.flush(exec_id)
+
+    assert length(ExecutionEventBuffer.since(exec_id, 0, "ath_evt_x")) == 2
+
+    # Exactly what the idle timeout does: a normal stop, terminate/2 merging
+    # into the cache, and the registry entry gone.
+    [{pid, _}] = Registry.lookup(Opus.ExecutionEventBuffer.Registry, exec_id)
+    ref = Process.monitor(pid)
+    send(pid, :timeout)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+
+    # The next event restarts the buffer.
+    :ok = ExecutionEventBuffer.push(exec_id, %{"kind" => "text_delta", "n" => 3}, 3, record)
+    ExecutionEventBuffer.flush(exec_id)
+
+    replayed = ExecutionEventBuffer.since(exec_id, 0, "ath_evt_x")
+
+    assert length(replayed) == 3,
+           "the restarted buffer replayed #{length(replayed)} event(s) — the history before " <>
+             "the idle gap was overwritten"
+  end
 end
