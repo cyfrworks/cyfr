@@ -90,6 +90,13 @@ defmodule Cyfr.Application do
       # supervised here. Guarded because cyfr does not depend on locus at
       # compile time (the umbrella dependency runs the other way).
       build_limiter_child(),
+      # And its own task pool. A component build is `cargo component build`
+      # or npm+Vite — minutes, not milliseconds — and it used to run on
+      # Emissary.TaskSupervisor, the pool that also serves MCP tool
+      # dispatch, progress pumping and webhook invocation. A few concurrent
+      # builds there are request capacity spent on something that is not a
+      # request.
+      {Task.Supervisor, name: Locus.TaskSupervisor},
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},

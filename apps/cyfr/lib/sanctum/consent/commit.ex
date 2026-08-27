@@ -678,7 +678,7 @@ defmodule Sanctum.Consent.Commit do
   defp put_projection(map, key, values), do: Map.put(map, key, Enum.sort(values))
 
   defp persist(ctx, prep, blob_json, refs, activation_json, granted_via) do
-    profile_id = prep.profile_id || Emissary.UUID7.generate_id("prof")
+    profile_id = prep.profile_id || Cyfr.UUID7.generate_id("prof")
 
     attrs = %{
       athanor_id: ctx.athanor_id,

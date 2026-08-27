@@ -142,7 +142,7 @@ defmodule Prism.ConversationRunner do
   @doc "The PubSub topic a thread's viewers subscribe to, tenant-prefixed."
   @spec topic(String.t(), String.t()) :: String.t()
   def topic(conversation_id, athanor_id),
-    do: Prism.Topics.conversation(conversation_id, athanor_id)
+    do: Cyfr.Topics.conversation(conversation_id, athanor_id)
 
   @doc "Subscribe the calling process to a conversation's broadcasts."
   @spec subscribe(String.t(), String.t()) :: :ok

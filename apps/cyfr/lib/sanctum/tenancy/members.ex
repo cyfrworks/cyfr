@@ -44,7 +44,7 @@ defmodule Sanctum.Tenancy.Members do
       attrs =
         attrs
         |> Map.new()
-        |> Map.put_new(:id, Emissary.UUID7.generate_id("mem"))
+        |> Map.put_new(:id, Cyfr.UUID7.generate_id("mem"))
         |> Map.put_new(:created_at, now)
         |> Map.put_new(:updated_at, now)
 

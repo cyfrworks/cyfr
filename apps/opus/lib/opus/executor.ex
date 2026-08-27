@@ -69,7 +69,7 @@ defmodule Opus.Executor do
       when is_binary(reference) and is_map(input) do
     # Ensure request_id exists — MCP callers already have one from ToolRegistry,
     # but direct callers (tincture invoke, cron, etc.) may not.
-    ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Emissary.UUID7.request_id()}
+    ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
 
     # Resolve flexible refs (version-less) to pinned refs before execution.
     # The executor always works with exact-version references.

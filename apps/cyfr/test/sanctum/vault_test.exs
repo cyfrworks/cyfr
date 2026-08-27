@@ -175,7 +175,7 @@ defmodule Sanctum.VaultTest do
     end
 
     test "a retired v1 pointer row cannot rotate — recreate the entry", %{ctx: ctx} do
-      id = Emissary.UUID7.generate_id("vlt")
+      id = Cyfr.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
       pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})
       {:ok, sealed} = Sanctum.Cipher.encrypt(pointer, aad)
@@ -258,7 +258,7 @@ defmodule Sanctum.VaultTest do
 
   describe "broadcasts" do
     test "every mutation announces itself on the tenant vault topic", %{ctx: ctx} do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.vault_changed(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed(ctx))
 
       view = create!(ctx)
       assert_receive {:vault_entry_changed, _, :create}

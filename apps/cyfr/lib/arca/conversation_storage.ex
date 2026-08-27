@@ -68,7 +68,7 @@ defmodule Arca.ConversationStorage do
 
     %Conversation{}
     |> Conversation.changeset(%{
-      id: attrs[:id] || Emissary.UUID7.generate_id("conv"),
+      id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
       athanor_id: ctx.athanor_id,
       title: attrs[:title] || @default_title,
       created_by: ctx.user_id || "system"
@@ -275,7 +275,7 @@ defmodule Arca.ConversationStorage do
 
         changeset =
           Message.changeset(%Message{}, %{
-            id: attrs[:id] || Emissary.UUID7.generate_id("msg"),
+            id: attrs[:id] || Cyfr.UUID7.generate_id("msg"),
             conversation_id: conv.id,
             athanor_id: ctx.athanor_id,
             seq: seq,

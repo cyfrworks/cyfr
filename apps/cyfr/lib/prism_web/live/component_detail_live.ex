@@ -27,7 +27,7 @@ defmodule PrismWeb.ComponentDetailLive do
   def mount(%{"ref" => ref}, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.components(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.components(ctx))
     end
 
     {:ok,

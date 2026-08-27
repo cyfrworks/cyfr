@@ -131,7 +131,7 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    build_id = args["build_id"] || Emissary.UUID7.generate_id("build")
+    build_id = args["build_id"] || Cyfr.UUID7.generate_id("build")
 
     if args["async"] == true do
       start_async_compile(ctx, reference, build_id)
@@ -191,7 +191,7 @@ defmodule Locus.MCP do
       :ok ->
         logger_metadata = Cyfr.LoggerContext.capture()
 
-        Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+        Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
 
           case run_compile(ctx, reference, build_id) do
@@ -265,7 +265,7 @@ defmodule Locus.MCP do
             # Task.start.
             logger_metadata = Cyfr.LoggerContext.capture()
 
-            Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+            Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
               Cyfr.LoggerContext.restore(logger_metadata)
 
               outcome =
@@ -486,7 +486,7 @@ defmodule Locus.MCP do
       if build_id do
         Phoenix.PubSub.broadcast(
           Emissary.PubSub,
-          Prism.Topics.build(build_id, ctx),
+          Cyfr.Topics.build(build_id, ctx),
           {:build_progress,
            %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
         )

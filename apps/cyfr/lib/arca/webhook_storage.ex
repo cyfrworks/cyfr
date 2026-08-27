@@ -43,7 +43,7 @@ defmodule Arca.WebhookStorage do
     row = %{
       # "whk", not "wh": webhook SLUGS are minted as "wh_<random>"
       # (Sanctum.Webhook), and the row id must never read as one.
-      id: Emissary.UUID7.generate_id("whk"),
+      id: Cyfr.UUID7.generate_id("whk"),
       name: attrs.name,
       slug: attrs.slug,
       target_ref: attrs.target_ref,

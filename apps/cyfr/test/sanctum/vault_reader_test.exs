@@ -16,7 +16,7 @@ defmodule Sanctum.VaultReaderTest do
   end
 
   defp mint_material_entry(ctx, fields, over \\ %{}) do
-    id = Emissary.UUID7.generate_id("vlt")
+    id = Cyfr.UUID7.generate_id("vlt")
     hint = Map.get(over, :provider_hint, "")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, hint)
 
@@ -86,7 +86,7 @@ defmodule Sanctum.VaultReaderTest do
     end
 
     test "a payload with unknown keys is refused at decode", %{ctx: ctx} do
-      id = Emissary.UUID7.generate_id("vlt")
+      id = Cyfr.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":1}), aad)
 
@@ -164,7 +164,7 @@ defmodule Sanctum.VaultReaderTest do
 
   describe "v1 legacy pointers" do
     test "a pointer fails closed as retired — nothing dispenses", %{ctx: ctx} do
-      id = Emissary.UUID7.generate_id("vlt")
+      id = Cyfr.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.athanor_id, id, "legacy")
 
       pointer = ~s({"v":1,"legacy":{"secrets":[{"name":"PTR_KEY","scope":"project"}]}})

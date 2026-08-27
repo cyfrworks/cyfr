@@ -8,7 +8,7 @@ defmodule Prism.TelemetryBridge do
   Attaches to existing telemetry events and broadcasts to PubSub topics
   that LiveViews can subscribe to for real-time updates.
 
-  The topics and the messages each one carries are named in `Prism.Topics`;
+  The topics and the messages each one carries are named in `Cyfr.Topics`;
   each is scoped to the athanor the event's metadata names, so a server with
   many athanors isolates broadcasts to each athanor's subscribers.
   """
@@ -16,7 +16,7 @@ defmodule Prism.TelemetryBridge do
   use GenServer
   require Logger
 
-  alias Prism.Topics
+  alias Cyfr.Topics
 
   @pubsub Emissary.PubSub
 

@@ -5,7 +5,7 @@ defmodule Emissary.MCP.RequestLogTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.RequestLog
-  alias Emissary.UUID7
+  alias Cyfr.UUID7
 
   setup do
     # Checkout the Ecto sandbox to isolate SQLite data between tests

@@ -19,7 +19,7 @@ defmodule Arca.VaultStorage do
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.put", fn ->
       _ = Map.fetch!(attrs, :athanor_id)
-      row = Map.put_new(attrs, :id, Emissary.UUID7.generate_id("vlt"))
+      row = Map.put_new(attrs, :id, Cyfr.UUID7.generate_id("vlt"))
 
       struct(VaultEntry, row)
       |> Arca.Repo.insert()

@@ -585,7 +585,7 @@ defmodule Emissary.MCP.ToolRegistry do
     # transport already carries it; an internal caller has none, so it becomes
     # its own root.
     own_root? = is_nil(ctx.request_id)
-    ctx = if own_root?, do: %{ctx | request_id: Emissary.UUID7.request_id()}, else: ctx
+    ctx = if own_root?, do: %{ctx | request_id: Cyfr.UUID7.request_id()}, else: ctx
 
     # Who logs what: a transport logs the request it received, and each
     # in-chain call logs itself. Without the second arm nothing recorded a
@@ -602,7 +602,7 @@ defmodule Emissary.MCP.ToolRegistry do
     call_id =
       cond do
         not should_log? -> nil
-        in_chain? -> Emissary.UUID7.generate_id("call")
+        in_chain? -> Cyfr.UUID7.generate_id("call")
         true -> ctx.request_id
       end
 

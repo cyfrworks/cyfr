@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.TopicsTest do
+defmodule Cyfr.TopicsTest do
   use ExUnit.Case, async: true
 
-  alias Prism.Topics
+  alias Cyfr.Topics
   alias Sanctum.Context
 
   @scoped_1 [

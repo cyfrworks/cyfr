@@ -83,7 +83,7 @@ defmodule Sanctum.Vault do
          {:ok, kind} <- required_kind(params),
          :ok <- check_name_free(ctx, name),
          {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)) do
-      id = Emissary.UUID7.generate_id("vlt")
+      id = Cyfr.UUID7.generate_id("vlt")
       hint = Map.get(params, :provider_hint, "")
       aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
@@ -362,7 +362,7 @@ defmodule Sanctum.Vault do
   defp broadcast(ctx, entry_id, verb) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Prism.Topics.vault_changed(ctx),
+      Cyfr.Topics.vault_changed(ctx),
       {:vault_entry_changed, entry_id, verb}
     )
 
@@ -371,7 +371,7 @@ defmodule Sanctum.Vault do
     # the external-MCP reconciler — still see every mutation.
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Prism.Topics.vault_changed_global(),
+      Cyfr.Topics.vault_changed_global(),
       {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb}
     )
   end

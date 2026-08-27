@@ -16,7 +16,7 @@ defmodule PrismWeb.ActivitiesLive do
 
   use PrismWeb, :live_view
 
-  alias Prism.Topics
+  alias Cyfr.Topics
 
   alias Phoenix.LiveView.JS
 

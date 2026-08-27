@@ -1,9 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.UUID7 do
+defmodule Cyfr.UUID7 do
   @moduledoc """
   UUID v7 generator compliant with RFC 9562.
+
+  The repo-wide id generator. It lived under `Emissary` — the MCP and HTTP
+  namespace — while Arca minted rows with it, Sanctum minted tenancy and
+  vault ids, and Opus and Locus minted execution and build ids: every
+  persistence path in the system reached into the transport namespace for
+  a primitive that has nothing to do with transport. It is glue, so it
+  lives with the glue.
 
   UUID v7 provides time-ordered, random UUIDs suitable for database keys
   and correlation IDs. The format guarantees:
@@ -30,22 +37,22 @@ defmodule Emissary.UUID7 do
   ## Usage
 
       # Generate a raw UUID v7
-      iex> Emissary.UUID7.generate()
+      iex> Cyfr.UUID7.generate()
       "018f3d3c-5b10-7abc-8def-123456789012"
 
       # Generate a prefixed ID
-      iex> Emissary.UUID7.generate_id("req")
+      iex> Cyfr.UUID7.generate_id("req")
       "req_018f3d3c-5b10-7abc-8def-123456789012"
 
       # Standard prefixes
-      iex> Emissary.UUID7.request_id()
+      iex> Cyfr.UUID7.request_id()
       "req_018f3d3c-..."
 
-      iex> Emissary.UUID7.execution_id()
+      iex> Cyfr.UUID7.execution_id()
       "exec_018f3d3c-..."
 
 
-      iex> Emissary.UUID7.build_id()
+      iex> Cyfr.UUID7.build_id()
       "build_018f3d3c-..."
   """
 
@@ -60,7 +67,7 @@ defmodule Emissary.UUID7 do
 
   ## Examples
 
-      iex> uuid = Emissary.UUID7.generate()
+      iex> uuid = Cyfr.UUID7.generate()
       iex> String.length(uuid)
       36
       iex> String.at(uuid, 14)
@@ -115,11 +122,11 @@ defmodule Emissary.UUID7 do
 
   ## Examples
 
-      iex> id = Emissary.UUID7.generate_id("req")
+      iex> id = Cyfr.UUID7.generate_id("req")
       iex> String.starts_with?(id, "req_")
       true
 
-      iex> id = Emissary.UUID7.generate_id("exec")
+      iex> id = Cyfr.UUID7.generate_id("exec")
       iex> String.starts_with?(id, "exec_")
       true
 

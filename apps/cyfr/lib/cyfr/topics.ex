@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.Topics do
+defmodule Cyfr.Topics do
   @moduledoc """
   Every PubSub topic in the system, named once, with the messages each one
   carries.

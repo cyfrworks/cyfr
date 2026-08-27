@@ -16,7 +16,7 @@ defmodule PrismWeb.ComponentsLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.components(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.components(ctx))
     end
 
     socket =
@@ -101,7 +101,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :progress_topic,
-        Prism.Topics.progress(progress_id, socket.assigns[:context])
+        Cyfr.Topics.progress(progress_id, socket.assigns[:context])
       )
 
     socket =
@@ -159,7 +159,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :register_topic,
-        Prism.Topics.register(register_id, socket.assigns[:context])
+        Cyfr.Topics.register(register_id, socket.assigns[:context])
       )
 
     socket =
@@ -258,7 +258,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :progress_topic,
-        Prism.Topics.progress(progress_id, socket.assigns[:context])
+        Cyfr.Topics.progress(progress_id, socket.assigns[:context])
       )
 
     socket =
@@ -374,7 +374,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Prism.Topics.register(socket.assigns.register_id, socket.assigns[:context])
+        Cyfr.Topics.register(socket.assigns.register_id, socket.assigns[:context])
       )
     end
 
@@ -394,7 +394,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Prism.Topics.register(socket.assigns.register_id, socket.assigns[:context])
+        Cyfr.Topics.register(socket.assigns.register_id, socket.assigns[:context])
       )
     end
 
@@ -589,7 +589,7 @@ defmodule PrismWeb.ComponentsLive do
     if socket.assigns.progress_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Prism.Topics.progress(socket.assigns.progress_id, socket.assigns[:context])
+        Cyfr.Topics.progress(socket.assigns.progress_id, socket.assigns[:context])
       )
     end
   end

@@ -58,7 +58,7 @@ defmodule Arca.ConsentStorage do
   defp revision_row(attrs, athanor_id) do
     attrs
     |> Map.put(:athanor_id, athanor_id)
-    |> Map.put_new(:id, Emissary.UUID7.generate_id("cons"))
+    |> Map.put_new(:id, Cyfr.UUID7.generate_id("cons"))
     |> Map.put_new(:granted_at, DateTime.utc_now())
   end
 

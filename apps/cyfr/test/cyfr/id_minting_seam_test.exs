@@ -4,14 +4,14 @@
 defmodule Cyfr.IdMintingSeamTest do
   @moduledoc """
   Mechanical guard for the one spelling of row-id minting:
-  `Emissary.UUID7.generate_id("<prefix>")`. Style follows
+  `Cyfr.UUID7.generate_id("<prefix>")`. Style follows
   `Arca.DbRescueSeamTest`: read the sources, compare literals — a failure
-  means a bare `Emissary.UUID7.generate()` or `Ecto.UUID.generate()` crept
+  means a bare `Cyfr.UUID7.generate()` or `Ecto.UUID.generate()` crept
   into a mint site; give the id its prefix instead, so every id in the
   system says what it names.
 
   Scope is `apps/cyfr/lib` (the other umbrella apps belong to another
-  workstream); `Emissary.UUID7` itself is the generator's home and the one
+  workstream); `Cyfr.UUID7` itself is the generator's home and the one
   file allowed to spell the raw call.
   """
   use ExUnit.Case, async: true
@@ -20,13 +20,13 @@ defmodule Cyfr.IdMintingSeamTest do
 
   # Bare (unprefixed) generator calls. `generate_id(` never matches: the
   # pattern requires the empty argument list right after `generate`.
-  @bare_pattern ~r/\b(?:Emissary\.UUID7|Ecto\.UUID)\.generate\(\)/
+  @bare_pattern ~r/\b(?:Cyfr\.UUID7|Ecto\.UUID)\.generate\(\)/
 
   # Files allowed to keep a bare call, with how many sites and why.
   @allowed %{
     # The generator's own home: `generate_id/1` composes the prefix around
     # the raw UUID; the moduledoc and a doctest show the raw form.
-    "apps/cyfr/lib/emissary/uuid7.ex" => 2
+    "apps/cyfr/lib/cyfr/uuid7.ex" => 2
   }
 
   test "bare UUID minting exists only at the enumerated exceptions" do
@@ -45,12 +45,12 @@ defmodule Cyfr.IdMintingSeamTest do
 
     assert new_sites == [],
            """
-           Bare `Emissary.UUID7.generate()` / `Ecto.UUID.generate()` outside
+           Bare `Cyfr.UUID7.generate()` / `Ecto.UUID.generate()` outside
            this test's allowlist:
 
            #{Enum.map_join(Enum.sort(new_sites), "\n", fn {f, n} -> "  #{f} (+#{n})" end)}
 
-           Mint row ids through `Emissary.UUID7.generate_id("<prefix>")` so
+           Mint row ids through `Cyfr.UUID7.generate_id("<prefix>")` so
            every id carries the kind it names. Only a site that genuinely
            needs an unprefixed UUID belongs in the allowlist above, with a
            comment saying why.

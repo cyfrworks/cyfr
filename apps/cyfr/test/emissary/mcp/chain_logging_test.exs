@@ -91,7 +91,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   end
 
   test "an in-chain call gets its own row, filed under the request that started it", %{ctx: ctx} do
-    request_id = Emissary.UUID7.request_id()
+    request_id = Cyfr.UUID7.request_id()
     ctx = %{ctx | request_id: request_id}
 
     # The transport's own row, as `EmissaryWeb.MCPController` writes it: the
@@ -127,7 +127,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   end
 
   test "a call the transport already logged is not logged twice", %{ctx: ctx} do
-    request_id = Emissary.UUID7.request_id()
+    request_id = Cyfr.UUID7.request_id()
     ctx = %{ctx | request_id: request_id}
 
     :ok =

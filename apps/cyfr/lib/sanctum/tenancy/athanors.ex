@@ -609,5 +609,5 @@ defmodule Sanctum.Tenancy.Athanors do
   @spec athanor_id?(term()) :: boolean()
   def athanor_id?(value), do: is_binary(value) and String.starts_with?(value, "ath_")
 
-  defp generate_id, do: Emissary.UUID7.generate_id("ath")
+  defp generate_id, do: Cyfr.UUID7.generate_id("ath")
 end

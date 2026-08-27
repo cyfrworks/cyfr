@@ -1123,7 +1123,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Prism.Topics.register(register_id, ctx),
+           Cyfr.Topics.register(register_id, ctx),
            {:register_progress, payload}
          ) do
       :ok ->
@@ -1192,7 +1192,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   defp broadcast_components_changed(ctx) do
-    topic = Prism.Topics.components(ctx)
+    topic = Cyfr.Topics.components(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
   end
 
@@ -1205,7 +1205,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Phoenix.PubSub.broadcast(
            Emissary.PubSub,
-           Prism.Topics.progress(progress_id, ctx),
+           Cyfr.Topics.progress(progress_id, ctx),
            {:progress, payload}
          ) do
       :ok ->

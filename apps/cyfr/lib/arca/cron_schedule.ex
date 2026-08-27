@@ -47,7 +47,7 @@ defmodule Arca.CronSchedule do
 
     attrs =
       attrs
-      |> Map.put_new(:id, Emissary.UUID7.generate_id("sched"))
+      |> Map.put_new(:id, Cyfr.UUID7.generate_id("sched"))
       |> Map.put_new(:created_at, now)
       |> Map.put_new(:updated_at, now)
 

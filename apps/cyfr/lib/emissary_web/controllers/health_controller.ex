@@ -157,7 +157,7 @@ defmodule EmissaryWeb.HealthController do
   end
 
   defp check_pubsub do
-    topic = Prism.Topics.health_check(System.unique_integer([:positive]))
+    topic = Cyfr.Topics.health_check(System.unique_integer([:positive]))
 
     Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :ping)

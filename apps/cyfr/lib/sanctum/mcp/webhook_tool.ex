@@ -236,7 +236,7 @@ defmodule Sanctum.MCP.WebhookTool do
   # --- helpers ---
 
   defp broadcast_webhooks_changed(ctx) do
-    topic = Prism.Topics.webhooks(ctx)
+    topic = Cyfr.Topics.webhooks(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :webhooks_changed)
   end
 

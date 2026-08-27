@@ -148,7 +148,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp granted_by(_), do: "system:bootstrap"
 
   defp insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs) do
-    profile_id = Emissary.UUID7.generate_id("prof")
+    profile_id = Cyfr.UUID7.generate_id("prof")
 
     # Profile and first revision commit together — a failed consent leg
     # must not leave an orphan profile with a NULL head.

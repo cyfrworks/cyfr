@@ -19,7 +19,7 @@ defmodule Cyfr.RecordSinkTest do
   defp policy_attrs(overrides) do
     Map.merge(
       %{
-        id: Emissary.UUID7.generate_id("plog"),
+        id: Cyfr.UUID7.generate_id("plog"),
         user_id: "u1",
         athanor_id: "ath_a",
         timestamp: DateTime.utc_now(),
@@ -32,7 +32,7 @@ defmodule Cyfr.RecordSinkTest do
   end
 
   test "queued rows land on flush, in one batch" do
-    ids = for _ <- 1..5, do: Emissary.UUID7.generate_id("plog")
+    ids = for _ <- 1..5, do: Cyfr.UUID7.generate_id("plog")
     for id <- ids, do: :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
 
     # Nothing is written until the sink drains.
@@ -43,7 +43,7 @@ defmodule Cyfr.RecordSinkTest do
   end
 
   test "an invalid row is dropped without taking the batch with it" do
-    good = Emissary.UUID7.generate_id("plog")
+    good = Cyfr.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: good})})
     :ok = RecordSink.enqueue({:policy_log, %{id: "plog_bad"}})
     :ok = RecordSink.flush()
@@ -55,7 +55,7 @@ defmodule Cyfr.RecordSinkTest do
 
   test "an MCP log completion reaches the started row" do
     ctx = Sanctum.TestContext.local()
-    call_id = Emissary.UUID7.generate_id("call")
+    call_id = Cyfr.UUID7.generate_id("call")
 
     :ok =
       Emissary.MCP.RequestLog.log_started(ctx, call_id, %{
@@ -91,7 +91,7 @@ defmodule Cyfr.RecordSinkTest do
 
   test "inline mode writes in the caller" do
     Application.put_env(:cyfr, :record_sink_inline, true)
-    id = Emissary.UUID7.generate_id("plog")
+    id = Cyfr.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
     assert Enum.any?(Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100), &(&1.id == id))
   end

@@ -51,7 +51,7 @@ defmodule EmissaryWeb.MCPController do
   alias Emissary.MCP
   alias Emissary.MCP.{Message, Progress, RequestLog, Subscriptions}
   require Logger
-  alias Emissary.UUID7
+  alias Cyfr.UUID7
 
   @protocol_version Emissary.MCP.Protocol.version()
   @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()

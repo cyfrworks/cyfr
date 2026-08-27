@@ -35,7 +35,7 @@ defmodule Arca.ProviderCredentialStorage do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row = %{
-        id: Emissary.UUID7.generate_id("opc"),
+        id: Cyfr.UUID7.generate_id("opc"),
         athanor_id: Map.fetch!(attrs, :athanor_id),
         provider: Map.fetch!(attrs, :provider),
         payload_ciphertext: Map.fetch!(attrs, :payload_ciphertext),

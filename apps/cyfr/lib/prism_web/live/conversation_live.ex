@@ -564,7 +564,7 @@ defmodule PrismWeb.ConversationLive do
   # the message; the runner then only records the refs.
   defp send_message(socket, message, files) do
     ctx = socket.assigns.context
-    message_id = Emissary.UUID7.generate_id("msg")
+    message_id = Cyfr.UUID7.generate_id("msg")
 
     with {:ok, conv} <- current_or_new(socket),
          {:ok, refs} <- Prism.Attachments.store(ctx, conv.id, message_id, files),

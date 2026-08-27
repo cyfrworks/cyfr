@@ -298,7 +298,7 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp apply_grant(%{target: %{kind: :new} = target} = pending, bundle) do
     with {:ok, json} <- Payload.encode_material(%{}, bundle) do
-      id = Emissary.UUID7.generate_id("vlt")
+      id = Cyfr.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(pending.athanor_id, id, target.provider)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
@@ -486,13 +486,13 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp broadcast(pending, entry_id, verb) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Prism.Topics.vault_changed(pending.athanor_id),
+      Cyfr.Topics.vault_changed(pending.athanor_id),
       {:vault_entry_changed, entry_id, verb}
     )
 
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
-      Prism.Topics.vault_changed_global(),
+      Cyfr.Topics.vault_changed_global(),
       {:vault_entry_changed_global, pending.athanor_id, entry_id, verb}
     )
   end

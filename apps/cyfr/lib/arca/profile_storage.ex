@@ -18,7 +18,7 @@ defmodule Arca.ProfileStorage do
       # A profile without an athanor is a construction bug — fail here, not
       # at the NOT NULL constraint.
       _ = Map.fetch!(attrs, :athanor_id)
-      row = Map.put_new(attrs, :id, Emissary.UUID7.generate_id("prof"))
+      row = Map.put_new(attrs, :id, Cyfr.UUID7.generate_id("prof"))
 
       struct(Profile, row)
       |> Arca.Repo.insert()

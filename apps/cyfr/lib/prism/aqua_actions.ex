@@ -236,7 +236,7 @@ defmodule Prism.AquaActions do
       {:ok,
        %{
          kind: "request_approval",
-         id: Emissary.UUID7.generate_id("apr"),
+         id: Cyfr.UUID7.generate_id("apr"),
          title: title,
          summary: summary,
          # Risk derived from the action's `kind`, not from the policy mode

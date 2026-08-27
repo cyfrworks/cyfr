@@ -644,7 +644,7 @@ defmodule Emissary.MCP.McpServersTool do
   # `subscriptions/listen` stream is a listener too. The event was never
   # console-specific.
   defp broadcast_mcp_servers_changed(ctx) do
-    topic = Prism.Topics.mcp_servers(ctx)
+    topic = Cyfr.Topics.mcp_servers(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :mcp_servers_changed)
   end
 end

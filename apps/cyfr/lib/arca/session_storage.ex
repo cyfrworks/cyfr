@@ -29,7 +29,7 @@ defmodule Arca.SessionStorage do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row = %{
-        id: Emissary.UUID7.generate_id("ses"),
+        id: Cyfr.UUID7.generate_id("ses"),
         token_hash: token_hash,
         token_prefix: attrs[:token_prefix],
         user_id: attrs.user_id,

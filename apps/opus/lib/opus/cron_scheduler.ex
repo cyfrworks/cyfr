@@ -464,7 +464,7 @@ defmodule Opus.CronScheduler do
                )
            end
 
-           request_id = Emissary.UUID7.request_id()
+           request_id = Cyfr.UUID7.request_id()
            ctx = %{ctx | request_id: request_id}
 
            Emissary.MCP.RequestLog.safe_log_started(ctx, request_id, %{
@@ -734,7 +734,7 @@ defmodule Opus.CronScheduler do
   end
 
   defp broadcast_update(ctx) do
-    topic = Prism.Topics.schedules(ctx)
+    topic = Cyfr.Topics.schedules(ctx)
 
     case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :schedules_updated) do
       :ok ->

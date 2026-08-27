@@ -197,7 +197,7 @@ defmodule Sanctum.MCP.KeyTool do
     do: {:error, "Invalid key type: #{invalid}. Use: application, service, or admin"}
 
   defp broadcast_api_keys_changed(ctx) do
-    topic = Prism.Topics.api_keys(ctx)
+    topic = Cyfr.Topics.api_keys(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
   end
 

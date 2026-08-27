@@ -8,6 +8,6 @@ defmodule Emissary do
 
   Emissary owns the transport and dispatch; each namespace registers its own
   tools/resources (see `Emissary.MCP.ToolProvider`). Also home to
-  `Emissary.UUID7`, the repo-wide RFC 9562 v7 id generator.
+  `Cyfr.UUID7`, the repo-wide RFC 9562 v7 id generator.
   """
 end

@@ -34,7 +34,7 @@ defmodule PrismWeb.TopbarLive do
 
   use PrismWeb, :live_view
 
-  alias Prism.Topics
+  alias Cyfr.Topics
 
   require Logger
 

@@ -24,7 +24,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   }
 
   defp mint_oauth_entry(ctx, oauth, over \\ %{}) do
-    id = Emissary.UUID7.generate_id("vlt")
+    id = Cyfr.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, "google")
 
     {:ok, json} = Payload.encode_material(%{}, oauth)

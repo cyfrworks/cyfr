@@ -8,7 +8,7 @@ defmodule Sanctum.PubSub do
   Prefixes every topic with `"tenant:<athanor_id>:"` so broadcasts are
   isolated per athanor. This module owns the prefix and the refusal; it does
   not own the vocabulary — every topic name, and the messages each carries,
-  is named in `Prism.Topics`, including the handful that are deliberately
+  is named in `Cyfr.Topics`, including the handful that are deliberately
   global.
   """
 

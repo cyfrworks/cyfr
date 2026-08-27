@@ -186,7 +186,7 @@ defmodule Emissary.Tincture.Invoke do
     )
   end
 
-  defp request_id, do: Emissary.UUID7.request_id()
+  defp request_id, do: Cyfr.UUID7.request_id()
 
   defp route_name(:public), do: "public"
   defp route_name(_), do: "protected"

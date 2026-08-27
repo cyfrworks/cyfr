@@ -42,7 +42,7 @@ defmodule PrismWeb.McpServersLive do
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
       ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Prism.Topics.mcp_servers(ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.mcp_servers(ctx))
     end
 
     socket =

@@ -33,7 +33,7 @@ defmodule PrismWeb.BuildsLive do
 
     Phoenix.PubSub.subscribe(
       Emissary.PubSub,
-      Prism.Topics.build(build_id, socket.assigns[:context])
+      Cyfr.Topics.build(build_id, socket.assigns[:context])
     )
 
     socket =
@@ -131,11 +131,11 @@ defmodule PrismWeb.BuildsLive do
     if socket.assigns.build_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Prism.Topics.build(socket.assigns.build_id, socket.assigns[:context])
+        Cyfr.Topics.build(socket.assigns.build_id, socket.assigns[:context])
       )
     end
 
-    topic = Prism.Topics.components(socket.assigns[:context])
+    topic = Cyfr.Topics.components(socket.assigns[:context])
 
     case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed) do
       :ok ->
@@ -157,7 +157,7 @@ defmodule PrismWeb.BuildsLive do
     if socket.assigns.build_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
-        Prism.Topics.build(socket.assigns.build_id, socket.assigns[:context])
+        Cyfr.Topics.build(socket.assigns.build_id, socket.assigns[:context])
       )
     end
 

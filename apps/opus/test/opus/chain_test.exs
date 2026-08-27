@@ -399,7 +399,7 @@ defmodule Opus.ChainTest do
     end
 
     defp revoked_vault_entry(ctx) do
-      id = Emissary.UUID7.generate_id("vlt")
+      id = Cyfr.UUID7.generate_id("vlt")
       aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, json} = Sanctum.Vault.Payload.encode_material(%{"api_key" => "sk-gone"}, nil)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)

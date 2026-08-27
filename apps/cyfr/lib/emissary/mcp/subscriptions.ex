@@ -58,7 +58,7 @@ defmodule Emissary.MCP.Subscriptions do
   def listen(%Context{} = ctx, filter) when is_map(filter) do
     acknowledged =
       if truthy?(filter["toolsListChanged"]) do
-        Phoenix.PubSub.subscribe(@pubsub, Prism.Topics.mcp_servers(ctx))
+        Phoenix.PubSub.subscribe(@pubsub, Cyfr.Topics.mcp_servers(ctx))
         %{"toolsListChanged" => true}
       else
         %{}

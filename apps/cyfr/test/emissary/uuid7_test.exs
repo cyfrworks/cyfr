@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.UUID7Test do
+defmodule Cyfr.UUID7Test do
   use ExUnit.Case, async: true
 
-  alias Emissary.UUID7
+  alias Cyfr.UUID7
 
   # ============================================================================
   # Format Tests
