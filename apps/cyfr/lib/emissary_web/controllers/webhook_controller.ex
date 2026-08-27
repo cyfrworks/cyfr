@@ -75,6 +75,8 @@ defmodule EmissaryWeb.WebhookController do
 
   defp invoke_active(conn, webhook, raw_body) do
     request_id = Emissary.UUID7.request_id()
+    # Same key on the log lines as on the RequestLog row this run files.
+    Cyfr.LoggerContext.set_request_id(request_id)
     ctx = build_webhook_context(webhook, request_id)
 
     with :ok <- Sanctum.Context.tenant_ok(ctx),

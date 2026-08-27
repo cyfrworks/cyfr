@@ -45,7 +45,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
     else
       conn = fetch_session(conn)
 
-      case get_session(conn, :sanctum_session_token) do
+      case get_session(conn, EmissaryWeb.SignInResponse.session_key()) do
         token when is_binary(token) and token != "" -> gate(conn, token)
         _ -> conn
       end
@@ -71,13 +71,13 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
 
       {:error, {:claim_pending, _ctx}} ->
         conn
-        |> Phoenix.Controller.redirect(to: "/claim-namespace")
+        |> Phoenix.Controller.redirect(to: PrismWeb.AuthHelpers.claim_path())
         |> halt()
 
       {:error, {:denied, _ctx}} ->
         conn
         |> configure_session(drop: true)
-        |> Phoenix.Controller.redirect(to: "/login")
+        |> Phoenix.Controller.redirect(to: PrismWeb.AuthHelpers.sign_in_path())
         |> halt()
 
       {:error, :unavailable} ->

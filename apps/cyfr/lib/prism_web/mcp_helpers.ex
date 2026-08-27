@@ -17,6 +17,8 @@ defmodule PrismWeb.MCPHelpers do
   site alone.
   """
 
+  require Logger
+
   @doc """
   Call an MCP tool using the context from socket assigns.
 
@@ -62,11 +64,15 @@ defmodule PrismWeb.MCPHelpers do
   def error_message(message) when is_binary(message), do: message
   def error_message(:no_context), do: "Not signed in."
 
+  def error_message(%Compendium.OCI.Errors{} = err),
+    do: Compendium.MCP.Shared.to_error_string(err)
+
+  def error_message(%{message: msg}) when is_binary(msg), do: msg
+
   def error_message(reason) do
     if Sanctum.Unauthorized.reason?(reason) do
       Sanctum.Unauthorized.message(reason)
     else
-      require Logger
       Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
       "The request failed — try again."
     end

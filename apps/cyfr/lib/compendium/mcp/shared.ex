@@ -10,6 +10,8 @@ defmodule Compendium.MCP.Shared do
   resolver, so the tool surface and internal callers can never drift.
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   defdelegate resolve_component(ctx, reference), to: Compendium.Component
@@ -34,7 +36,16 @@ defmodule Compendium.MCP.Shared do
     do: "the provider access token expired or was revoked — sign in again"
 
   def to_error_string(err) when is_binary(err), do: err
-  def to_error_string(err), do: inspect(err)
+
+  # Atoms are refusal vocabulary — safe words by construction. Anything
+  # else is an internal term: logged here, never rendered.
+  def to_error_string(err) when is_atom(err) and not is_nil(err) and not is_boolean(err),
+    do: err |> Atom.to_string() |> String.replace("_", " ")
+
+  def to_error_string(err) do
+    Logger.warning("[Compendium.MCP.Shared] unrenderable error: #{inspect(err)}")
+    "The registry request failed — try again."
+  end
 
   # Find a bearer scoped to a specific namespace.
   def namespace_bearer(%Context{user_id: user_id}, slug)

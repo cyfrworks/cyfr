@@ -198,7 +198,7 @@ defmodule PrismWeb.ActivitiesLive do
         socket
         |> assign(:logs, [])
         |> assign(:loading, false)
-        |> assign(:error, "Failed to load activity: #{inspect(reason)}")
+        |> assign(:error, "Failed to load activity: #{error_message(reason)}")
     end
   end
 
@@ -296,12 +296,6 @@ defmodule PrismWeb.ActivitiesLive do
     end
   end
 
-  defp truncate_id(nil), do: "-"
-
-  defp truncate_id(id) when is_binary(id) and byte_size(id) > 14,
-    do: String.slice(id, 0, 14) <> "…"
-
-  defp truncate_id(id), do: id
 
   defp type_class("catalyst"), do: "bg-purple-900/30 text-purple-300"
   defp type_class("reagent"), do: "bg-blue-900/30 text-blue-300"
@@ -438,7 +432,7 @@ defmodule PrismWeb.ActivitiesLive do
                   {format_duration(f(log, :duration_ms))}
                 </td>
                 <td class="px-4 py-2 text-sm whitespace-nowrap">
-                  <span class="text-blue-400 font-mono text-xs" title={id}>{truncate_id(id)}</span>
+                  <span class="text-blue-400 font-mono text-xs" title={id}>{truncate(id, 14)}</span>
                 </td>
                 <td class="px-4 py-2 text-sm whitespace-nowrap">
                   <span class="text-xs text-gray-400" title={f(log, :timestamp)}>
@@ -551,7 +545,7 @@ defmodule PrismWeb.ActivitiesLive do
                 {format_duration(f(exec, :duration_ms))}
               </span>
               <span class="text-gray-600 text-xs font-mono whitespace-nowrap" title={f(exec, :id)}>
-                {truncate_id(f(exec, :id))}
+                {truncate(f(exec, :id), 14)}
               </span>
             </div>
           <% end %>

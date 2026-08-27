@@ -83,7 +83,7 @@ defmodule PrismWeb.McpServersLive do
            |> put_flash(:info, "Server '#{name}' added.")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed to add: #{inspect(reason)}")}
+          {:noreply, put_flash(socket, :error, "Failed to add: #{error_message(reason)}")}
       end
     else
       {:name, _} ->
@@ -114,7 +114,7 @@ defmodule PrismWeb.McpServersLive do
          )}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to register the bridge: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to register the bridge: #{error_message(reason)}")}
     end
   end
 
@@ -138,7 +138,7 @@ defmodule PrismWeb.McpServersLive do
            |> put_flash(:info, "Backend '#{name}' added.")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Bridge: #{inspect(reason)}")}
+          {:noreply, put_flash(socket, :error, "Bridge: #{error_message(reason)}")}
       end
     end
   end
@@ -149,7 +149,7 @@ defmodule PrismWeb.McpServersLive do
         {:noreply, socket |> refresh_backends() |> put_flash(:info, "Backend '#{name}' removed.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Bridge: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Bridge: #{error_message(reason)}")}
     end
   end
 
@@ -160,7 +160,7 @@ defmodule PrismWeb.McpServersLive do
          socket |> refresh_backends() |> put_flash(:info, "Backend '#{name}' restarted.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Bridge: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Bridge: #{error_message(reason)}")}
     end
   end
 
@@ -184,7 +184,7 @@ defmodule PrismWeb.McpServersLive do
          |> put_flash(:info, "Server '#{name}' deleted.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to delete: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to delete: #{error_message(reason)}")}
     end
   end
 
@@ -196,7 +196,7 @@ defmodule PrismWeb.McpServersLive do
         {:noreply, refresh_servers(socket)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
   end
 
@@ -211,7 +211,7 @@ defmodule PrismWeb.McpServersLive do
          |> put_flash(:info, "Test #{name}: #{status}")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Test failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Test failed: #{error_message(reason)}")}
     end
   end
 
@@ -224,7 +224,7 @@ defmodule PrismWeb.McpServersLive do
          |> put_flash(:info, "Refreshed #{name}.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Refresh failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Refresh failed: #{error_message(reason)}")}
     end
   end
 

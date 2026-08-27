@@ -33,8 +33,39 @@ defmodule PrismWeb.DisplayHelpers do
 
   def principal_label(other), do: inspect(other)
 
-  defp short_id(id) when byte_size(id) > 24, do: String.slice(id, 0, 24) <> "…"
-  defp short_id(id), do: id
+  defp short_id(id), do: truncate(id, 24)
+
+  @doc """
+  Truncate a value for a table cell: at most `max` characters plus an
+  ellipsis. `nil` renders as "-".
+  """
+  def truncate(value, max)
+  def truncate(nil, _max), do: "-"
+
+  def truncate(s, max) when is_binary(s) and byte_size(s) > max,
+    do: String.slice(s, 0, max) <> "…"
+
+  def truncate(s, _max), do: to_string(s)
+
+  @doc """
+  Format a timestamp for display. `:time` gives "14:03" for inline,
+  same-day surfaces; `:datetime` gives "2026-08-27 14:03 UTC". Accepts a
+  `DateTime` or an ISO8601 string; nil and unparseable values pass
+  through as "" and the original string respectively.
+  """
+  def format_time(value, style)
+  def format_time(nil, _style), do: ""
+  def format_time(%DateTime{} = dt, :time), do: Calendar.strftime(dt, "%H:%M")
+  def format_time(%DateTime{} = dt, :datetime), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
+
+  def format_time(iso, style) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _} -> format_time(dt, style)
+      _ -> iso
+    end
+  end
+
+  def format_time(_, _style), do: ""
 
   @doc """
   Format an execution reference for display. Non-binary values render via

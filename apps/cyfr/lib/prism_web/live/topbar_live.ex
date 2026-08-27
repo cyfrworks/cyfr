@@ -44,7 +44,7 @@ defmodule PrismWeb.TopbarLive do
 
   @impl true
   def mount(_params, session, socket) do
-    token = session["sanctum_session_token"]
+    token = session[to_string(EmissaryWeb.SignInResponse.session_key())]
 
     socket =
       case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
@@ -86,6 +86,10 @@ defmodule PrismWeb.TopbarLive do
 
           socket
 
+        # Every refusal renders as the signed-out topbar on purpose: this
+        # is a nested layout LiveView on every page — redirecting here
+        # would fight the page's own gate, which owns the bounce
+        # (AuthHelpers.disposition/1).
         _ ->
           socket
           |> assign(:context, nil)
@@ -110,7 +114,6 @@ defmodule PrismWeb.TopbarLive do
      |> assign(:in_flight_builds, [])
      |> assign(:recent_tinctures, []), layout: false}
   end
-
 
   # The live indicators are dev's: their fan-in is subscribed only there.
   defp subscribe_indicators(ctx) do
@@ -154,7 +157,8 @@ defmodule PrismWeb.TopbarLive do
         {:noreply, socket |> assign(:open_popover, nil) |> load_athanors(socket.assigns.context)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not create the group: #{inspect(reason)}")}
+        {:noreply,
+         put_flash(socket, :error, "Could not create the group: #{error_message(reason)}")}
     end
   end
 

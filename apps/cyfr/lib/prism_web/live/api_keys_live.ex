@@ -129,7 +129,7 @@ defmodule PrismWeb.ApiKeysLive do
          |> put_flash(:info, "API key created. Copy it now — it won't be shown again.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to create: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to create: #{error_message(reason)}")}
     end
   end
 
@@ -147,7 +147,7 @@ defmodule PrismWeb.ApiKeysLive do
          |> put_flash(:info, "API key revoked.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to revoke: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to revoke: #{error_message(reason)}")}
     end
   end
 
@@ -160,7 +160,7 @@ defmodule PrismWeb.ApiKeysLive do
          |> put_flash(:info, "API key rotated. Copy the new key now.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to rotate: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to rotate: #{error_message(reason)}")}
     end
   end
 

@@ -128,7 +128,7 @@ defmodule PrismWeb.EnforcementsLive do
         socket
         |> assign(:logs, [])
         |> assign(:loading, false)
-        |> assign(:error, "Failed to load enforcement: #{inspect(reason)}")
+        |> assign(:error, "Failed to load enforcement: #{error_message(reason)}")
     end
   end
 
@@ -204,9 +204,6 @@ defmodule PrismWeb.EnforcementsLive do
   defp decision_status("denied"), do: "failed"
   defp decision_status(_), do: "pending"
 
-  defp truncate(nil), do: "—"
-  defp truncate(s) when is_binary(s) and byte_size(s) > 60, do: String.slice(s, 0, 60) <> "…"
-  defp truncate(s), do: to_string(s)
 
   # ============================================================================
   # Render
@@ -332,7 +329,7 @@ defmodule PrismWeb.EnforcementsLive do
                   {f(log, :component_ref) || "—"}
                 </td>
                 <td class="px-4 py-2 text-xs text-gray-400 italic">
-                  {truncate(f(log, :decision_reason))}
+                  {truncate(f(log, :decision_reason), 60)}
                 </td>
               </tr>
             <% end %>

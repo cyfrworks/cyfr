@@ -10,6 +10,8 @@ defmodule PrismWeb.MembersLive do
 
   use PrismWeb, :live_view
 
+  require Logger
+
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -54,7 +56,7 @@ defmodule PrismWeb.MembersLive do
          )}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not add: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not add: #{error_message(reason)}")}
     end
   end
 
@@ -64,7 +66,7 @@ defmodule PrismWeb.MembersLive do
         {:noreply, socket |> load() |> put_flash(:info, "Removed.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not remove: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not remove: #{error_message(reason)}")}
     end
   end
 
@@ -74,7 +76,7 @@ defmodule PrismWeb.MembersLive do
         {:noreply, socket |> load() |> put_flash(:info, "Invitation withdrawn.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not withdraw: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not withdraw: #{error_message(reason)}")}
     end
   end
 
@@ -84,7 +86,7 @@ defmodule PrismWeb.MembersLive do
         {:noreply, redirect(socket, to: "/")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not leave: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not leave: #{error_message(reason)}")}
     end
   end
 
@@ -98,7 +100,7 @@ defmodule PrismWeb.MembersLive do
          |> put_flash(:info, "Group created — you are its first member.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not create: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not create: #{error_message(reason)}")}
     end
   end
 
@@ -113,7 +115,7 @@ defmodule PrismWeb.MembersLive do
         {:noreply, redirect(socket, to: "/")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not switch: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not switch: #{error_message(reason)}")}
     end
   end
 
@@ -130,7 +132,10 @@ defmodule PrismWeb.MembersLive do
     {:noreply, load(socket)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[MembersLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   # What leaving actually does, said before it happens: the last member out
   # archives the group, and Home is retired for the record — the server

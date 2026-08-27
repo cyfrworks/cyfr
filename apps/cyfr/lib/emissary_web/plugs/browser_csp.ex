@@ -41,12 +41,6 @@ defmodule EmissaryWeb.Plugs.BrowserCSP do
     |> put_resp_header("x-frame-options", "SAMEORIGIN")
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("referrer-policy", "strict-origin-when-cross-origin")
-    |> maybe_hsts()
+    |> EmissaryWeb.Plugs.ApiSecurityHeaders.maybe_hsts()
   end
-
-  defp maybe_hsts(%Plug.Conn{scheme: :https} = conn) do
-    put_resp_header(conn, "strict-transport-security", "max-age=63072000; includeSubDomains")
-  end
-
-  defp maybe_hsts(conn), do: conn
 end

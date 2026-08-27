@@ -20,6 +20,18 @@ defmodule EmissaryWeb.ErrorRenderer do
 
   `code` is an atom from `Emissary.MCP.Message`'s tables. Each renderer maps it
   to whatever its wire format calls an error code.
+
+  The full rejection vocabulary, for every surface:
+
+    * **`EmissaryWeb.MCPError`** — `/mcp` and anything else speaking
+      JSON-RPC. Every deliberate rejection is a JSON-RPC error object.
+    * **`EmissaryWeb.ApiError`** — every *deliberate* rejection on an
+      ordinary HTTP route: `{"code": slug, "error": prose}`, one shape
+      whether the refusal came from a plug or a controller.
+    * **`EmissaryWeb.ErrorJSON`** — *unhandled* errors only: an exception
+      nobody rescued, a route nobody defined. Phoenix renders it; no code
+      in this repo calls it. A deliberate rejection rendered through
+      ErrorJSON is a bug — it means a refusal is masquerading as a crash.
   """
 
   @doc "Render an error body and set the status."

@@ -131,7 +131,7 @@ defmodule PrismWeb.ExecutionsLive do
         {:noreply, put_flash(socket, :info, "Cancellation requested.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Cancel failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Cancel failed: #{error_message(reason)}")}
     end
   end
 
@@ -221,7 +221,7 @@ defmodule PrismWeb.ExecutionsLive do
         |> assign(:executions, [])
         |> assign(:groups, [])
         |> assign(:loading, false)
-        |> assign(:error, "Failed to load executions: #{inspect(reason)}")
+        |> assign(:error, "Failed to load executions: #{error_message(reason)}")
 
       _ ->
         socket

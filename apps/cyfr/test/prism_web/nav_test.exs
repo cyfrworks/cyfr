@@ -37,4 +37,22 @@ defmodule PrismWeb.NavTest do
     assert Nav.dom_id("nav", "api_keys") == "nav-api-keys"
     assert Nav.dom_id("drawer-nav", "mcp_servers") == "drawer-nav-mcp-servers"
   end
+
+  test "every nav destination is a routed page" do
+    # The sidebar, the drawer and the palette all derive from Nav; a nav
+    # item whose path the router does not serve is a dead link on every
+    # one of them. Dev mode is the full set.
+    route_paths =
+      EmissaryWeb.Router
+      |> Phoenix.Router.routes()
+      |> Enum.map(& &1.path)
+      |> MapSet.new()
+
+    for item <- Nav.items("dev") do
+      expected = "/a/:athanor" <> item.path
+
+      assert MapSet.member?(route_paths, expected),
+             "nav item #{item.key} points at #{item.path}, but no route serves #{expected}"
+    end
+  end
 end

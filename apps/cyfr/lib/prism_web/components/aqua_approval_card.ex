@@ -296,11 +296,7 @@ defmodule PrismWeb.AquaApprovalCard do
   defp action_kind(%{action_kind: k}) when is_binary(k), do: safe_atom(k)
   defp action_kind(_), do: nil
 
-  defp safe_atom(s) do
-    String.to_existing_atom(s)
-  rescue
-    ArgumentError -> nil
-  end
+  defp safe_atom(s), do: PrismWeb.AgentsLive.Catalog.existing_atom(s)
 
   # Colour ramp: `:read` is calm green (rare on cards), `:write` is near-neutral
   # slate (the common case — shouldn't spike cortisol), `:execute` amber,
@@ -333,6 +329,5 @@ defmodule PrismWeb.AquaApprovalCard do
   defp approve_button_class(:destructive), do: "bg-red-700 text-white hover:bg-red-600"
   defp approve_button_class(_), do: "bg-blue-700 text-white hover:bg-blue-600"
 
-  defp format_time(%DateTime{} = ts), do: Calendar.strftime(ts, "%H:%M")
-  defp format_time(_), do: ""
+  defp format_time(ts), do: PrismWeb.DisplayHelpers.format_time(ts, :time)
 end

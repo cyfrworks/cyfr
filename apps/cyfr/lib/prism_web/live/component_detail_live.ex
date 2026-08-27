@@ -90,11 +90,11 @@ defmodule PrismWeb.ComponentDetailLive do
          |> put_flash(:info, "Execution started.")
          |> push_navigate(to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/activities"))}
 
-      {:ok, result} ->
-        {:noreply, put_flash(socket, :info, "Execution started: #{inspect(result)}")}
+      {:ok, _result} ->
+        {:noreply, put_flash(socket, :info, "Execution started.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to execute: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to execute: #{error_message(reason)}")}
     end
   end
 
@@ -150,7 +150,7 @@ defmodule PrismWeb.ComponentDetailLive do
             {:noreply,
              socket
              |> assign(:report_submitting, false)
-             |> assign(:report_error, format_err(reason))}
+             |> assign(:report_error, error_message(reason))}
         end
     end
   end
@@ -173,9 +173,6 @@ defmodule PrismWeb.ComponentDetailLive do
     {:noreply, socket}
   end
 
-  defp format_err(reason) when is_binary(reason), do: reason
-  defp format_err(%{message: msg}) when is_binary(msg), do: msg
-  defp format_err(other), do: inspect(other)
 
   @impl true
   def render(assigns) do

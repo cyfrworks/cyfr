@@ -64,6 +64,9 @@ defmodule Emissary.Tincture.Invoke do
 
     ctx = %{Sanctum.build_tincture_context(auth_ctx, tincture) | request_id: request_id()}
 
+    # Same key on the log lines as on the RequestLog row this run files.
+    Cyfr.LoggerContext.set_request_id(ctx.request_id)
+
     telemetry_meta = %{
       request_id: ctx.request_id,
       tincture_ref: tincture_ref,

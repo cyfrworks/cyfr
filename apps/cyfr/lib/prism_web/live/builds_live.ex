@@ -69,7 +69,7 @@ defmodule PrismWeb.BuildsLive do
         {:noreply, assign(socket, :build_output, result)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Validation failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Validation failed: #{error_message(reason)}")}
     end
   end
 
@@ -161,7 +161,7 @@ defmodule PrismWeb.BuildsLive do
      |> assign(:build_output, %{error: reason})
      |> assign(:building, false)
      |> assign(:build_id, nil)
-     |> put_flash(:error, "Build failed: #{inspect(reason)}")}
+     |> put_flash(:error, "Build failed: #{error_message(reason)}")}
   end
 
   def handle_info({:task_timeout, :build}, socket) do

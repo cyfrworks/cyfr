@@ -379,7 +379,7 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:registering, false)
      |> assign(:register_id, nil)
      |> assign(:register_log, [])
-     |> put_flash(:error, "Register failed: #{inspect(reason)}")}
+     |> put_flash(:error, "Register failed: #{error_message(reason)}")}
   end
 
   def handle_info({:do_search, query}, socket) do
@@ -413,7 +413,7 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:error, reason}))
      |> assign(:progress_id, nil)
      |> assign(:progress_log, [])
-     |> put_flash(:error, "Failed to pull #{ref}: #{inspect(reason)}")}
+     |> put_flash(:error, "Failed to pull #{ref}: #{error_message(reason)}")}
   end
 
   def handle_info({:push_complete, _ref, {:ok, result}}, socket) do

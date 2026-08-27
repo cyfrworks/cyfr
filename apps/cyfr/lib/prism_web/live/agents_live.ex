@@ -16,6 +16,8 @@ defmodule PrismWeb.AgentsLive do
 
   use PrismWeb, :live_view
 
+  require Logger
+
   alias PrismWeb.AgentsLive.Catalog
 
   @list_models_ref "formula:local.list-models"
@@ -64,7 +66,7 @@ defmodule PrismWeb.AgentsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Create failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
     end
   end
 
@@ -87,7 +89,7 @@ defmodule PrismWeb.AgentsLive do
         {:noreply, assign(socket, :editor_creating_sub_for, nil)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Create failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
     end
   end
 
@@ -112,7 +114,7 @@ defmodule PrismWeb.AgentsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Update failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
     end
   end
 
@@ -128,7 +130,7 @@ defmodule PrismWeb.AgentsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Delete failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
     end
   end
 
@@ -210,7 +212,7 @@ defmodule PrismWeb.AgentsLive do
         {:noreply, assign(socket, :editor_editing_prompt, nil)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Save failed: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Save failed: #{error_message(reason)}")}
     end
   end
 
@@ -313,7 +315,10 @@ defmodule PrismWeb.AgentsLive do
     {:noreply, assign(socket, :models_loaded, true)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[AgentsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   # ============================================================================
   # Helpers
@@ -330,7 +335,7 @@ defmodule PrismWeb.AgentsLive do
         socket
 
       {:error, reason} ->
-        put_flash(socket, :error, "Update failed: #{inspect(reason)}")
+        put_flash(socket, :error, "Update failed: #{error_message(reason)}")
     end
   end
 

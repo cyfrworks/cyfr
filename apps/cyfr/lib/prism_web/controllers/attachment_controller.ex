@@ -29,7 +29,7 @@ defmodule PrismWeb.AttachmentController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv application/json)
 
   def show(conn, %{"athanor" => route, "message_id" => message_id, "filename" => filename}) do
-    token = get_session(conn, :sanctum_session_token)
+    token = get_session(conn, EmissaryWeb.SignInResponse.session_key())
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),
@@ -43,10 +43,17 @@ defmodule PrismWeb.AttachmentController do
       |> put_resp_header("cache-control", "private, no-store")
       |> serve(ctx, path)
     else
-      {:error, :unauthenticated} -> redirect(conn, to: "/login")
-      {:error, :unavailable} -> send_resp(conn, 503, "Try again shortly")
-      # A pre-claim or denied session has no attachments to see.
-      _ -> send_resp(conn, 404, "Not found")
+      {:error, refusal} ->
+        case PrismWeb.AuthHelpers.disposition(refusal) do
+          :sign_in -> redirect(conn, to: PrismWeb.AuthHelpers.sign_in_path())
+          :unavailable -> send_resp(conn, 503, "Try again shortly")
+          # A pre-claim session, or one with nowhere to work, has no
+          # attachments to see.
+          _ -> send_resp(conn, 404, "Not found")
+        end
+
+      _ ->
+        send_resp(conn, 404, "Not found")
     end
   end
 

@@ -331,9 +331,9 @@ defmodule PrismWeb.ConnectionsLive do
   defp fmt(reason) when is_binary(reason), do: reason
   defp fmt(reason), do: inspect(reason)
 
-  defp status_color("active"), do: "text-emerald-500"
-  defp status_color("needs_reauth"), do: "text-amber-500"
-  defp status_color(_), do: "text-red-500"
+  defp status_class("active"), do: "text-emerald-500"
+  defp status_class("needs_reauth"), do: "text-amber-500"
+  defp status_class(_), do: "text-red-500"
 
   # ---------------------------------------------------------------------------
   # Render
@@ -482,7 +482,7 @@ defmodule PrismWeb.ConnectionsLive do
             </span>
           </:col>
           <:col :let={entry} label="Status">
-            <span class={["text-xs font-medium", status_color(entry.status)]}>
+            <span class={["text-xs font-medium", status_class(entry.status)]}>
               {entry.status}
             </span>
           </:col>

@@ -136,7 +136,7 @@ defmodule PrismWeb.SettingsLive do
          |> put_flash(:info, ok_message)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Door: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Door: #{error_message(reason)}")}
     end
   end
 

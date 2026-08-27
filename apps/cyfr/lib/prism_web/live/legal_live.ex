@@ -85,8 +85,13 @@ defmodule PrismWeb.LegalLive do
         {:noreply,
          socket
          |> assign(:loading, false)
-         |> assign(:error, format_err(err))}
+         |> assign(:error, error_message(err))}
     end
+  end
+
+  def handle_info(msg, socket) do
+    Logger.debug("[LegalLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
   end
 
   @impl true
@@ -152,6 +157,4 @@ defmodule PrismWeb.LegalLive do
 
   defp normalize_tab(_), do: "terms"
 
-  defp format_err(err) when is_binary(err), do: err
-  defp format_err(err), do: inspect(err)
 end

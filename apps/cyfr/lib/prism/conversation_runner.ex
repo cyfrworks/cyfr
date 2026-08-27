@@ -802,7 +802,7 @@ defmodule Prism.ConversationRunner do
   def handle_info(:idle, state), do: {:noreply, touch(state)}
 
   def handle_info(msg, state) do
-    Logger.debug("[Prism.ConversationRunner] unexpected message: #{inspect(msg)}")
+    Logger.warning("[Prism.ConversationRunner] unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
 

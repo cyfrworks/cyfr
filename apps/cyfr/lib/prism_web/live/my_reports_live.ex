@@ -91,8 +91,13 @@ defmodule PrismWeb.MyReportsLive do
         {:noreply,
          socket
          |> assign(:loading, false)
-         |> assign(:error, format_err(err))}
+         |> assign(:error, error_message(err))}
     end
+  end
+
+  def handle_info(msg, socket) do
+    Logger.debug("[MyReportsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
   end
 
   @impl true
@@ -140,15 +145,15 @@ defmodule PrismWeb.MyReportsLive do
                 </span>
               </div>
               <p class="text-xs text-gray-500 mt-1">
-                {r["category"]} · filed {format_time(r["created_at"])}
+                {r["category"]} · filed {format_time(r["created_at"], :datetime)}
               </p>
             </div>
             <div class="text-xs text-gray-500 text-right shrink-0">
               <span :if={r["sla_due_at"] && r["status"] == "open"}>
-                SLA: {format_time(r["sla_due_at"])}
+                SLA: {format_time(r["sla_due_at"], :datetime)}
               </span>
               <span :if={r["resolved_at"]}>
-                closed {format_time(r["resolved_at"])}
+                closed {format_time(r["resolved_at"], :datetime)}
               </span>
             </div>
           </div>
@@ -194,17 +199,5 @@ defmodule PrismWeb.MyReportsLive do
   defp badge_class("dismissed"), do: "bg-gray-800 text-gray-400 border border-gray-700"
   defp badge_class(_), do: "bg-gray-800 text-gray-400 border border-gray-700"
 
-  defp format_time(nil), do: ""
 
-  defp format_time(iso) when is_binary(iso) do
-    case DateTime.from_iso8601(iso) do
-      {:ok, dt, _} -> Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
-      _ -> iso
-    end
-  end
-
-  defp format_time(_), do: ""
-
-  defp format_err(err) when is_binary(err), do: err
-  defp format_err(err), do: inspect(err)
 end

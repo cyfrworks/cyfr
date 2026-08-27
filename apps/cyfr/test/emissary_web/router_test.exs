@@ -50,48 +50,27 @@ defmodule EmissaryWeb.RouterTest do
     end
   end
 
-  describe "pipeline definitions" do
-    # Pipeline configuration is verified at the router module level
-    # These tests ensure the pipelines are defined and routes are accessible
+  describe "pipelines on the wire-facing routes" do
+    test "POST /mcp rides :mcp and /api/health rides :api" do
+      assert %{pipe_through: pipelines} = Phoenix.Router.route_info(Router, "POST", "/mcp", nil)
+      assert :mcp in pipelines
 
-    test "api pipeline is defined" do
-      # Verify the :api pipeline exists by checking that the route is accessible
-      routes = Phoenix.Router.routes(Router)
+      assert %{pipe_through: pipelines} =
+               Phoenix.Router.route_info(Router, "GET", "/api/health", nil)
 
-      health_route =
-        Enum.find(routes, fn route ->
-          route.path == "/api/health"
-        end)
-
-      # Route exists and is properly configured
-      assert health_route
-      assert health_route.plug == EmissaryWeb.HealthController
+      assert :api in pipelines
     end
 
-    test "mcp pipeline is defined" do
-      routes = Phoenix.Router.routes(Router)
+    test "the 405 methods on /mcp ride the same pipeline as POST" do
+      # GET /mcp is the retired notification stream, kept routed only to
+      # answer 405 — it must see the same plugs as the live method, not a
+      # phantom SSE pipeline.
+      %{pipe_through: post_pipelines} = Phoenix.Router.route_info(Router, "POST", "/mcp", nil)
 
-      mcp_route =
-        Enum.find(routes, fn route ->
-          route.path == "/mcp" and route.verb == :post
-        end)
-
-      # Route exists and is properly configured
-      assert mcp_route
-      assert mcp_route.plug == EmissaryWeb.MCPController
-    end
-
-    test "mcp_sse pipeline is defined" do
-      routes = Phoenix.Router.routes(Router)
-
-      sse_route =
-        Enum.find(routes, fn route ->
-          route.path == "/mcp" and route.verb == :get
-        end)
-
-      # Route exists and is properly configured
-      assert sse_route
-      assert sse_route.plug == EmissaryWeb.MCPController
+      for verb <- ["GET", "DELETE"] do
+        assert %{pipe_through: ^post_pipelines} =
+                 Phoenix.Router.route_info(Router, verb, "/mcp", nil)
+      end
     end
   end
 end

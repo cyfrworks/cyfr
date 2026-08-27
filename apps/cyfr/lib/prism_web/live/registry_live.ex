@@ -112,7 +112,7 @@ defmodule PrismWeb.RegistryLive do
       String.length(argument) > 4_000 ->
         {:noreply, assign(socket, :appeal_error, "Argument exceeds 4000 characters.")}
 
-      provider not in ["github", "google"] ->
+      not Sanctum.Auth.DeviceFlow.provider?(provider) ->
         {:noreply, assign(socket, :appeal_error, "Pick a supported provider.")}
 
       true ->
@@ -138,7 +138,7 @@ defmodule PrismWeb.RegistryLive do
             {:noreply,
              socket
              |> assign(:appeal_state, :form)
-             |> assign(:appeal_error, "Couldn't start provider login: #{format_err(reason)}")}
+             |> assign(:appeal_error, "Couldn't start provider login: #{error_message(reason)}")}
         end
     end
   end
@@ -167,7 +167,7 @@ defmodule PrismWeb.RegistryLive do
              |> load_registry()}
 
           {:error, err} ->
-            {:noreply, put_flash(socket, :error, "Deprecate failed: #{format_err(err)}")}
+            {:noreply, put_flash(socket, :error, "Deprecate failed: #{error_message(err)}")}
         end
     end
   end
@@ -191,7 +191,7 @@ defmodule PrismWeb.RegistryLive do
            |> load_registry()}
 
         {:error, err} ->
-          {:noreply, put_flash(socket, :error, "Yank failed: #{format_err(err)}")}
+          {:noreply, put_flash(socket, :error, "Yank failed: #{error_message(err)}")}
       end
     end
   end
@@ -238,7 +238,7 @@ defmodule PrismWeb.RegistryLive do
 
           {:error, reason} ->
             Logger.warning("[RegistryLive] appeal poll error: #{inspect(reason)}")
-            {:noreply, assign(socket, :appeal_error, format_err(reason))}
+            {:noreply, assign(socket, :appeal_error, error_message(reason))}
         end
 
       _ ->
@@ -281,7 +281,7 @@ defmodule PrismWeb.RegistryLive do
         {:noreply,
          socket
          |> assign(:appeal_state, :form)
-         |> assign(:appeal_error, "Submit failed: #{format_err(err)}")}
+         |> assign(:appeal_error, "Submit failed: #{error_message(err)}")}
     end
   end
 
@@ -310,7 +310,7 @@ defmodule PrismWeb.RegistryLive do
         |> assign(:namespaces, namespaces)
         |> assign(:components, [])
         |> assign(:loading, false)
-        |> assign(:error, format_err(err))
+        |> assign(:error, error_message(err))
     end
   end
 
@@ -721,9 +721,7 @@ defmodule PrismWeb.RegistryLive do
   # ============================================================================
 
   defp cf(c, key) when is_map(c) do
-    c[key] || c[String.to_existing_atom(key)]
-  rescue
-    _ -> nil
+    c[key] || c[PrismWeb.AgentsLive.Catalog.existing_atom(key)]
   end
 
   defp status(c), do: cf(c, "status") || "active"
@@ -755,7 +753,4 @@ defmodule PrismWeb.RegistryLive do
     "#{base} #{color}"
   end
 
-  defp format_err(%Compendium.OCI.Errors{message: msg}) when is_binary(msg), do: msg
-  defp format_err(err) when is_binary(err), do: err
-  defp format_err(err), do: inspect(err)
 end

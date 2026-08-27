@@ -22,21 +22,9 @@ defmodule PrismWeb.LiveAuth do
   import Phoenix.Component
 
   def on_mount(:require_auth, _params, session, socket) do
-    token = session["sanctum_session_token"]
+    token = session[to_string(EmissaryWeb.SignInResponse.session_key())]
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
-      # A valid session whose person has not claimed a namespace yet: the
-      # claim gate comes first. The HTTP plug sends the first GET there;
-      # the LiveView socket never passes the router, so the connected
-      # mount is gated here.
-      {:error, {:claim_pending, _ctx}} ->
-        {:halt, redirect(socket, to: "/claim-namespace")}
-
-      # A namespace but no standing: denied at the door since the session
-      # was minted.
-      {:error, {:denied, _ctx}} ->
-        {:halt, redirect(socket, to: "/login")}
-
       {:ok, ctx} ->
         slug = ctx.namespace
 
@@ -53,16 +41,20 @@ defmodule PrismWeb.LiveAuth do
          |> assign(:ui_mode, ui_mode(ctx))
          |> attach_hook(:sanctum_standing, :handle_info, &standing_changed/2)}
 
-      {:error, reason} when reason in [:no_athanor, :not_member, :archived, :not_found] ->
-        {:halt, redirect(socket, to: "/login?error=no_athanor")}
+      # The decision table lives in AuthHelpers.disposition/1; this gate
+      # renders each disposition as a redirect. The HTTP plug sends the
+      # first GET to the claim gate; the LiveView socket never passes the
+      # router, so the connected mount is gated here too.
+      {:error, refusal} ->
+        path =
+          case PrismWeb.AuthHelpers.disposition(refusal) do
+            :claim -> PrismWeb.AuthHelpers.claim_path()
+            :sign_in -> PrismWeb.AuthHelpers.sign_in_path()
+            :no_workspace -> PrismWeb.AuthHelpers.sign_in_path() <> "?error=no_athanor"
+            :unavailable -> PrismWeb.AuthHelpers.sign_in_path() <> "?error=unavailable"
+          end
 
-      # A transient failure reading who the person is: say so, never bounce
-      # them into a claim they have already made.
-      {:error, :unavailable} ->
-        {:halt, redirect(socket, to: "/login?error=unavailable")}
-
-      {:error, :unauthenticated} ->
-        {:halt, redirect(socket, to: "/login")}
+        {:halt, redirect(socket, to: path)}
     end
   end
 
@@ -108,6 +100,7 @@ defmodule PrismWeb.LiveAuth do
       {:error, _} -> {:halt, redirect(socket, to: "/")}
     end
   end
+
   defp standing_changed({:session_created, _}, socket), do: {:halt, socket}
   defp standing_changed(_msg, socket), do: {:cont, socket}
 end

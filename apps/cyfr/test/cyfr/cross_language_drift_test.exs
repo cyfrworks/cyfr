@@ -101,4 +101,41 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert elixir =~ "localhost"
     assert go =~ ~s(ns == "localhost")
   end
+
+  # ==========================================================================
+  # §4.3 authority-error vocabulary: one tag set across three boundaries
+  # ==========================================================================
+
+  test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
+    # Sanctum.Consent declares the vocabulary; Opus.MCP flattens the tuples
+    # to "tag: {json}" strings for the wire; codex parses that prefix back.
+    # A tag added or renamed on one side silently stops being explained (Go)
+    # or stops crossing the boundary (opus) — this pins all three rosters.
+    consent = read!("apps/cyfr/lib/sanctum/consent.ex")
+    opus_mcp = read!("apps/opus/lib/opus/mcp.ex")
+    root_go = read!("apps/codex/cmd/root.go")
+
+    tags = ~w(setup_required consent_required consent_conflict restart_required)
+
+    for tag <- tags do
+      assert consent =~ "{:#{tag}, #{tag}()}",
+             "tag #{tag} missing from Sanctum.Consent's authority_error union"
+
+      assert root_go =~ ~s("#{tag}"),
+             "tag #{tag} missing from codex root.go's explain roster"
+    end
+
+    # Opus.MCP spells the roster once, as the guard on format_root_result/1.
+    assert opus_mcp =~
+             "tag in [:setup_required, :consent_required, :consent_conflict, :restart_required]",
+           "opus/mcp.ex guard roster no longer spells the four §4.3 tags"
+
+    # The payload keys Consent documents as normative are the ones the CLI
+    # formatter reads — a renamed key degrades every explanation to the
+    # payload's zero values without failing anything.
+    for key <- ~w(node_ref need current_revision cause actual_revision new_revision) do
+      assert consent =~ key, "payload key #{key} missing from Sanctum.Consent"
+      assert root_go =~ ~s(payload["#{key}"]), "payload key #{key} not read by root.go"
+    end
+  end
 end

@@ -25,9 +25,13 @@ defmodule EmissaryWeb.Plugs.ApiSecurityHeaders do
     |> maybe_hsts()
   end
 
-  defp maybe_hsts(%Plug.Conn{scheme: :https} = conn) do
+  @doc """
+  HSTS over TLS, skipped on plain HTTP. The one spelling of the policy —
+  `BrowserCSP` applies the same header from here.
+  """
+  def maybe_hsts(%Plug.Conn{scheme: :https} = conn) do
     put_resp_header(conn, "strict-transport-security", "max-age=63072000; includeSubDomains")
   end
 
-  defp maybe_hsts(conn), do: conn
+  def maybe_hsts(conn), do: conn
 end

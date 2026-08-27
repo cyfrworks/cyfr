@@ -446,7 +446,10 @@ defmodule PrismWeb.ConversationLive do
     end
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[ConversationLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   # ---------------------------------------------------------------------------
   # Runner events
@@ -598,7 +601,7 @@ defmodule PrismWeb.ConversationLive do
          put_flash(socket, :error, "Storing the attachments failed — nothing was sent.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not send: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not send: #{error_message(reason)}")}
     end
   end
 
@@ -609,7 +612,7 @@ defmodule PrismWeb.ConversationLive do
   defp run(socket, fun, assigns \\ []) do
     case fun.(socket.assigns.context) do
       :ok -> assign(socket, assigns)
-      {:error, reason} -> put_flash(socket, :error, "Could not do that: #{inspect(reason)}")
+      {:error, reason} -> put_flash(socket, :error, "Could not do that: #{error_message(reason)}")
     end
   end
 

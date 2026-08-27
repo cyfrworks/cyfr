@@ -158,7 +158,7 @@ defmodule PrismWeb.WebhooksLive do
          |> put_flash(:info, "Webhook revoked.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to revoke: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to revoke: #{error_message(reason)}")}
     end
   end
 
@@ -175,7 +175,7 @@ defmodule PrismWeb.WebhooksLive do
          |> put_flash(:info, "Secret rotated. Copy the new secret now.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to rotate: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to rotate: #{error_message(reason)}")}
     end
   end
 
@@ -314,11 +314,7 @@ defmodule PrismWeb.WebhooksLive do
   # Atomize only keys that already exist as atoms (the rendered fields are
   # compile-time literals). Unknown keys stay strings so a hostile payload
   # can't grow the atom table.
-  defp atomize_key(k) do
-    String.to_existing_atom(k)
-  rescue
-    ArgumentError -> k
-  end
+  defp atomize_key(k), do: PrismWeb.AgentsLive.Catalog.existing_atom(k) || k
 
   defp extract(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, to_string(key))
