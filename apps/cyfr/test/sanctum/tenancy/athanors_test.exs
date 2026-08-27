@@ -46,6 +46,28 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
   end
 
+  describe "put_settings/2" do
+    test "merges over the row as it is now, not the caller's copy" do
+      athanor = group!()
+
+      # The shape `Sanctum.Provisioning` takes: read the athanor, do a dozen
+      # steps, write the outcome. Anything written to settings in between was
+      # dropped, because the merge based itself on the struct read first.
+      stale = athanor
+
+      {:ok, _} = Athanors.put_settings(athanor, %{"written_during" => "yes"})
+      {:ok, _} = Athanors.put_settings(stale, %{"provisioning_error" => %{"step" => "deps"}})
+
+      assert {:ok, fresh} = Athanors.get(athanor.id)
+      settings = Athanors.settings(fresh)
+
+      assert settings["provisioning_error"]["step"] == "deps"
+
+      assert settings["written_during"] == "yes",
+             "a concurrent settings write was clobbered by a merge over a stale struct"
+    end
+  end
+
   describe "create/1" do
     test "mints an ath_ id and defaults to active" do
       athanor = group!()

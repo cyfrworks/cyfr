@@ -534,9 +534,20 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec put_settings(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
   def put_settings(%Athanor{} = athanor, patch) when is_map(patch) do
-    merged = deep_merge(settings(athanor), patch)
+    # Merge over what the row says now, not over the copy the caller is
+    # holding. `Sanctum.Provisioning` reads an athanor, runs a dozen steps,
+    # and only then writes its outcome here — anything else written to
+    # settings in between was silently dropped by the merge. A read failure
+    # falls back to the caller's copy: the write is still better than none.
+    current =
+      case get(athanor.id) do
+        {:ok, fresh} -> fresh
+        _ -> athanor
+      end
 
-    with {:ok, updated} <- update(athanor, %{settings: Jason.encode!(merged)}) do
+    merged = deep_merge(settings(current), patch)
+
+    with {:ok, updated} <- update(current, %{settings: Jason.encode!(merged)}) do
       Sanctum.Notify.broadcast(updated.id, :athanor_changed, %{name: updated.name})
       {:ok, updated}
     end
