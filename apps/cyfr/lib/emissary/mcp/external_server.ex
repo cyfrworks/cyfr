@@ -255,7 +255,9 @@ defmodule Emissary.MCP.ExternalServer do
              end) do
           {:ok, task_pid} ->
             ref = Process.monitor(task_pid)
-            {:noreply, %{state | in_flight: Map.put(state.in_flight, task_pid, ref)}}
+            # `from` rides along so an abnormal exit can still answer — see
+            # the :DOWN clause.
+            {:noreply, %{state | in_flight: Map.put(state.in_flight, task_pid, {ref, from})}}
 
           {:error, reason} ->
             {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
@@ -295,9 +297,22 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   @impl true
-  def handle_info({:DOWN, _ref, :process, task_pid, _reason}, state) do
-    # An upstream-call task finished (reply sent) or crashed (caller times
-    # out); either way its in-flight slot frees here.
+  def handle_info({:DOWN, _ref, :process, task_pid, reason}, state) do
+    # The task replies on its own way out, and its `rescue` covers a raise
+    # — but not an exit: a supervisor shutdown or a kill leaves `from`
+    # unanswered, and the caller then blocks for the whole two-minute call
+    # timeout on a task that is already gone. Answer for it.
+    case {reason, Map.get(state.in_flight, task_pid)} do
+      {:normal, _} ->
+        :ok
+
+      {_reason, {_ref, from}} ->
+        GenServer.reply(from, {:error, "External call did not complete"})
+
+      _ ->
+        :ok
+    end
+
     {:noreply, %{state | in_flight: Map.delete(state.in_flight, task_pid)}}
   end
 
@@ -702,13 +717,33 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
+  # The JSON-RPC response out of an `text/event-stream` reply.
+  #
+  # Two things the previous line-at-a-time reading got wrong. SSE folds a
+  # multi-line payload across consecutive `data:` lines within one event —
+  # they are joined with newlines, not separate messages — so a pretty-
+  # printed body was read as several fragments and all but the last thrown
+  # away. And a conformant server may send progress events before the
+  # result, separated by blank lines; the answer is the last EVENT, not the
+  # last line.
   defp extract_sse_data(sse_body) do
     sse_body
+    # Normalize CRLF: the wire form is \r\n and the split below is on \n.
+    |> String.replace("\r\n", "\n")
+    |> String.split("\n\n")
+    |> Enum.map(&event_data/1)
+    |> Enum.reject(&(&1 == ""))
+    |> List.last() || ""
+  end
+
+  defp event_data(event) do
+    event
     |> String.split("\n")
     |> Enum.filter(&String.starts_with?(&1, "data:"))
-    |> Enum.map(&String.trim_leading(&1, "data:"))
-    |> Enum.map(&String.trim/1)
-    |> List.last() || ""
+    |> Enum.map_join("\n", fn line ->
+      line |> String.trim_leading("data:") |> String.trim_leading(" ")
+    end)
+    |> String.trim()
   end
 
   # Operator-configured headers, merged over the ones this client sets.

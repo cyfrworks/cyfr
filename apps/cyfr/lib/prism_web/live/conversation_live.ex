@@ -569,12 +569,7 @@ defmodule PrismWeb.ConversationLive do
     with {:ok, conv} <- current_or_new(socket),
          {:ok, refs} <- Prism.Attachments.store(ctx, conv.id, message_id, files),
          :ok <-
-           ConversationRunner.send_message(ctx, conv.id, message,
-             id: message_id,
-             attachments: refs,
-             model: socket.assigns.model_override,
-             orchestrator: socket.assigns.orchestrator && socket.assigns.orchestrator["name"]
-           ) do
+           send_or_discard(ctx, conv, message, message_id, refs, socket) do
       socket = assign(socket, :input, "")
 
       if socket.assigns.conversation && socket.assigns.conversation.id == conv.id do
@@ -622,6 +617,28 @@ defmodule PrismWeb.ConversationLive do
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not send: #{error_message(reason)}")}
+    end
+  end
+
+  # The attachment bytes are written before the runner sees the message, so
+  # that this member writes them in this process. A refused send therefore
+  # leaves blobs behind that belong to no row — nothing lists them, nothing
+  # reads them, and they count against the athanor's quota. The runner is
+  # where the refusal is decided (membership, archive, a full queue), so
+  # the cleanup belongs on its answer.
+  defp send_or_discard(ctx, conv, message, message_id, refs, socket) do
+    case ConversationRunner.send_message(ctx, conv.id, message,
+           id: message_id,
+           attachments: refs,
+           model: socket.assigns.model_override,
+           orchestrator: socket.assigns.orchestrator && socket.assigns.orchestrator["name"]
+         ) do
+      :ok ->
+        :ok
+
+      {:error, _reason} = error ->
+        Prism.Attachments.discard(ctx, conv.id, message_id, refs)
+        error
     end
   end
 

@@ -102,6 +102,24 @@ defmodule Prism.Attachments do
   end
 
   @doc """
+  Remove blobs written for a message that never landed.
+
+  `store/4` rolls back its own storage failures, but the send it was
+  written for can still be refused afterwards — the sender is no longer a
+  member, the athanor was archived, the turn queue is full. Those bytes
+  belong to no row: nothing lists them, nothing reads them, and they count
+  against the athanor's quota until someone notices.
+  """
+  @spec discard(Context.t(), String.t(), String.t(), [ref()]) :: :ok
+  def discard(%Context{} = ctx, conversation_id, message_id, refs) when is_list(refs) do
+    Enum.each(refs, fn ref ->
+      with {:ok, blob} <- blob_path(conversation_id, message_id, ref) do
+        Arca.delete(ctx, blob)
+      end
+    end)
+  end
+
+  @doc """
   One ref's blob location, rebuilt from the owning row's identity — the
   only spelling of an attachment path outside `store/4`. `:error` for a
   ref without a stored name (it references no blob).
