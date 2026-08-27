@@ -40,13 +40,12 @@ defmodule Arca.ProfileStorage do
   def list_for_source(athanor_id, source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.list_for_source", fn ->
       rows =
-        Arca.Repo.all(
-          from p in Profile,
-            where:
-              p.athanor_id == ^athanor_id and p.source_ref == ^source_ref and
-                p.status != "revoked",
-            order_by: p.id
+        from(p in Profile,
+          where: p.source_ref == ^source_ref and p.status != "revoked",
+          order_by: p.id
         )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
 
       {:ok, rows}
     end)
@@ -56,7 +55,8 @@ defmodule Arca.ProfileStorage do
   def set_status(athanor_id, id, status) when is_binary(status) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.set_status", fn ->
       case Arca.Repo.update_all(
-             from(p in Profile, where: p.id == ^id and p.athanor_id == ^athanor_id),
+             from(p in Profile, where: p.id == ^id)
+             |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: [status: status, updated_at: DateTime.utc_now()]
            ) do
         {1, _} -> :ok
@@ -75,7 +75,9 @@ defmodule Arca.ProfileStorage do
           :ok | {:error, :head_moved | term()}
   def advance_head(athanor_id, id, expected, new_consent_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.advance_head", fn ->
-      base = from(p in Profile, where: p.id == ^id and p.athanor_id == ^athanor_id)
+      base =
+        from(p in Profile, where: p.id == ^id)
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
 
       query =
         case expected do

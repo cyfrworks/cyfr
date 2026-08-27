@@ -140,7 +140,7 @@ defmodule Prism.TinctureRegistry do
            Compendium.ComponentPath.base_prefix() ++ [@tincture_type_plural]
          ) do
       {:ok, leaves} ->
-        segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
+        segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
 
         leaves
         |> Compendium.ComponentPath.manifest_leaves()

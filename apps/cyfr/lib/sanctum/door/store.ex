@@ -220,7 +220,11 @@ defmodule Sanctum.Door.Store do
 
       %Entry{}
       |> Entry.changeset(
-        Map.merge(attrs, %{id: "door_" <> Ecto.UUID.generate(), created_at: now, updated_at: now})
+        Map.merge(attrs, %{
+          id: Emissary.UUID7.generate_id("door"),
+          created_at: now,
+          updated_at: now
+        })
       )
       |> Arca.Repo.insert()
     end)

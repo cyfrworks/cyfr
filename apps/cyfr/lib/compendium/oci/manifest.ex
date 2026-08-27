@@ -253,12 +253,18 @@ defmodule Compendium.OCI.Manifest do
     }
 
     base
-    |> maybe_put(
+    |> Cyfr.MapUtil.put_present(
       "org.opencontainers.image.description",
       metadata[:description] || metadata["description"]
     )
-    |> maybe_put("org.opencontainers.image.licenses", metadata[:license] || metadata["license"])
-    |> maybe_put("dev.cyfr.component.category", metadata[:category] || metadata["category"])
+    |> Cyfr.MapUtil.put_present(
+      "org.opencontainers.image.licenses",
+      metadata[:license] || metadata["license"]
+    )
+    |> Cyfr.MapUtil.put_present(
+      "dev.cyfr.component.category",
+      metadata[:category] || metadata["category"]
+    )
   end
 
   defp encode_config_json(s) when is_binary(s), do: {:ok, s}
@@ -270,7 +276,4 @@ defmodule Compendium.OCI.Manifest do
     end
   end
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, ""), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

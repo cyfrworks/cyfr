@@ -54,7 +54,7 @@ defmodule Arca.ApiKeyStorage do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
-      id: Ecto.UUID.generate(),
+      id: Emissary.UUID7.generate_id("key"),
       name: attrs.name,
       key_hash: attrs.key_hash,
       key_prefix: attrs.key_prefix,

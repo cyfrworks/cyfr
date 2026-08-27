@@ -33,8 +33,12 @@ defmodule Sanctum.Namespace do
   # to 0: a sandbox rollback is a write no invalidation sees.)
   @cache_ttl_ms 60_000
 
-  # A read that raises is a transient failure, never "unclaimed".
-  @transient [DBConnection.OwnershipError, ArgumentError] ++ Arca.Repo.Errors.db_errors()
+  # A read that raises is a transient failure, never "unclaimed". Only
+  # genuinely transient classes belong here: ArgumentError is deliberately
+  # absent — it is the repo's programmer-error signal (an athanor-less
+  # context at a storage backstop, a malformed call), and catching it as
+  # retryable would hide bugs as 503s.
+  @transient [DBConnection.OwnershipError] ++ Arca.Repo.Errors.db_errors()
 
   @doc """
   Resolve a person's namespace slug.

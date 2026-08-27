@@ -127,10 +127,11 @@ defmodule Arca.McpLog do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
-      from l in __MODULE__,
-        where: l.athanor_id == ^athanor_id,
+      from(l in __MODULE__,
         order_by: [desc: l.timestamp],
         limit: ^limit
+      )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
 
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
     query = if status, do: where(query, [l], l.status == ^status), else: query
@@ -207,7 +208,7 @@ defmodule Arca.McpLog do
     user_id = Keyword.get(opts, :user_id)
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-    query = from(l in __MODULE__, where: l.athanor_id == ^athanor_id)
+    query = Arca.QueryHelpers.where_athanor(__MODULE__, athanor_id)
 
     query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query

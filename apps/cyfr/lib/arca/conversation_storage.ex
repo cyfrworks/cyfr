@@ -135,15 +135,14 @@ defmodule Arca.ConversationStorage do
   """
   @spec sweep_orphaned_blobs(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep_orphaned_blobs(%Context{} = ctx) do
-    athanor_id = Context.athanor!(ctx)
-
     with {:ok, entries} <- Arca.list_typed(ctx, ["conversations"]) do
       dirs = for {name, :dir} <- entries, do: name
 
       alive =
-        MapSet.new(
-          Repo.all(from(c in Conversation, where: c.athanor_id == ^athanor_id, select: c.id))
-        )
+        from(c in Conversation, select: c.id)
+        |> QueryHelpers.where_tenant(ctx)
+        |> Repo.all()
+        |> MapSet.new()
 
       dirs
       |> Enum.reject(&MapSet.member?(alive, &1))
@@ -386,11 +385,8 @@ defmodule Arca.ConversationStorage do
       )
 
     {count, _} =
-      from(m in Message,
-        where:
-          m.id == ^id and m.athanor_id == ^ctx.athanor_id and m.kind == "approval" and
-            m.status in ^from
-      )
+      from(m in Message, where: m.id == ^id and m.kind == "approval" and m.status in ^from)
+      |> QueryHelpers.where_tenant(ctx)
       |> Repo.update_all(set: updates)
 
     case count do
@@ -426,6 +422,8 @@ defmodule Arca.ConversationStorage do
   """
   @spec with_running_turn() :: [Conversation.t()]
   def with_running_turn do
+    # arca:unscoped-ok boot recovery walks every athanor's mid-turn rows;
+    # each conversation is then reconciled inside its own athanor's context.
     Repo.all(from(c in Conversation, where: not is_nil(c.execution_id)))
   end
 
@@ -447,11 +445,10 @@ defmodule Arca.ConversationStorage do
   defp delete_before_rows(ctx, athanor_id, cutoff) do
     stale =
       from(c in Conversation,
-        where:
-          c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
-            coalesce(c.last_message_at, c.inserted_at) < ^cutoff,
+        where: is_nil(c.execution_id) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff,
         select: c.id
       )
+      |> QueryHelpers.where_athanor(athanor_id)
 
     ids = Repo.all(stale)
 
@@ -488,15 +485,12 @@ defmodule Arca.ConversationStorage do
   @spec count_before(Context.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_before(%Context{} = ctx, %DateTime{} = cutoff) do
-    athanor_id = Context.athanor!(ctx)
-
     Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.count_before", fn ->
       count =
         from(c in Conversation,
-          where:
-            c.athanor_id == ^athanor_id and is_nil(c.execution_id) and
-              coalesce(c.last_message_at, c.inserted_at) < ^cutoff
+          where: is_nil(c.execution_id) and coalesce(c.last_message_at, c.inserted_at) < ^cutoff
         )
+        |> QueryHelpers.where_tenant(ctx)
         |> Repo.aggregate(:count)
 
       {:ok, count}

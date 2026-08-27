@@ -136,8 +136,6 @@ config :cyfr,
 # Sanctum test configuration
 config :cyfr,
   secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!",
-  # Use fewer iterations in tests for speed
-  pbkdf2_iterations: 1000,
   # Namespace populated on Context.local() / Context.fixture-shaped contexts.
   # Production contexts should never use this — they get namespace from
   # CredentialStore via the session-resolution path.

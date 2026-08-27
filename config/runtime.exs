@@ -19,13 +19,6 @@ if config_env() != :test do
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
 
-  parse_integer = fn env_var, raw ->
-    case Integer.parse(raw) do
-      {n, ""} -> n
-      _ -> raise "Invalid integer for #{env_var}: #{inspect(raw)}"
-    end
-  end
-
   # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env!(key, :string, nil) end
@@ -35,11 +28,6 @@ if config_env() != :test do
     config :logger, :default_formatter,
       format: {Cyfr.JsonFormatter, :format},
       metadata: [:request_id, :user_id, :athanor_id, :auth_method]
-  end
-
-  # PBKDF2 iterations for key derivation (default 100,000)
-  if pbkdf2_iterations = env!("CYFR_PBKDF2_ITERATIONS", :string, nil) do
-    config :cyfr, :pbkdf2_iterations, parse_integer.("CYFR_PBKDF2_ITERATIONS", pbkdf2_iterations)
   end
 
   # The explicit at-rest keyring, as JSON (parsed and pinned at boot by
@@ -68,9 +56,7 @@ if config_env() != :test do
   # A quarter of the slots is reserved for chain children (a formula's hops);
   # that reserve must hold a chain of the full authority depth (8), so the
   # floor is 32 — below it a deep chain could wait on itself.
-  if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :string, nil) do
-    max_exec = parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
-
+  if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :integer, nil) do
     if max_exec < 32 do
       raise ArgumentError,
             "CYFR_MAX_CONCURRENT_EXECUTIONS must be at least 32 (a quarter of the slots " <>
@@ -82,29 +68,23 @@ if config_env() != :test do
 
   # Maximum concurrent WASM executions per tenant (default: 16)
   # Bounds the blast radius of one athanor queueing many long-running executions
-  if max_tenant_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", :string, nil) do
-    config :cyfr,
-           :max_concurrent_executions_per_tenant,
-           parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", max_tenant_exec)
+  if max_tenant_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", :integer, nil) do
+    config :cyfr, :max_concurrent_executions_per_tenant, max_tenant_exec
   end
 
   # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
   # Counts requests and SSE connection opens, not stream duration.
-  if mcp_rl_max = env!("CYFR_MCP_RATE_LIMIT_MAX", :string, nil) do
-    config :cyfr, :mcp_rate_limit_max, parse_integer.("CYFR_MCP_RATE_LIMIT_MAX", mcp_rl_max)
+  if mcp_rl_max = env!("CYFR_MCP_RATE_LIMIT_MAX", :integer, nil) do
+    config :cyfr, :mcp_rate_limit_max, mcp_rl_max
   end
 
-  if mcp_rl_window = env!("CYFR_MCP_RATE_LIMIT_WINDOW_MS", :string, nil) do
-    config :cyfr,
-           :mcp_rate_limit_window_ms,
-           parse_integer.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", mcp_rl_window)
+  if mcp_rl_window = env!("CYFR_MCP_RATE_LIMIT_WINDOW_MS", :integer, nil) do
+    config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
   end
 
   # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
   # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
-  if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
-    ttl_hours = parse_integer.("CYFR_SESSION_TTL_HOURS", session_ttl)
-
+  if ttl_hours = env!("CYFR_SESSION_TTL_HOURS", :integer, nil) do
     if ttl_hours < 0 do
       raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
     end
@@ -144,7 +124,7 @@ if config_env() != :test do
     emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
 
     host = env!("CYFR_HOST", :string, "localhost")
-    port = parse_integer.("CYFR_PORT", env!("CYFR_PORT", :string, "4000"))
+    port = env!("CYFR_PORT", :integer, 4000)
 
     # Origins the browser will send for this deployment. We include both schemes
     # so the same compose stack works whether Caddy serves plain HTTP on :80 (a
@@ -233,12 +213,7 @@ if config_env() != :test do
     if env!("CYFR_BEHIND_PROXY", :string, nil) do
       config :cyfr, :trust_x_forwarded_for, true
 
-      config :cyfr,
-             :trusted_proxy_hops,
-             parse_integer.(
-               "CYFR_TRUSTED_PROXY_HOPS",
-               env!("CYFR_TRUSTED_PROXY_HOPS", :string, "1")
-             )
+      config :cyfr, :trusted_proxy_hops, env!("CYFR_TRUSTED_PROXY_HOPS", :integer, 1)
 
       if cidrs = env!("CYFR_TRUSTED_PROXY_CIDRS", :string, nil) do
         config :cyfr,
@@ -391,8 +366,9 @@ if config_env() != :test do
   config :cyfr, :oci_registry_url, oci_registry_url_config
 
   # Device Flow Client IDs for Sanctum authentication
-  # Device Flow only needs client ID, no secret required
-  if github_id = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) do
+  # Device Flow only needs client ID, no secret required.
+  # (`github_id` was read once above, next to the Ueberauth pair.)
+  if github_id do
     config :cyfr, :github_client_id, github_id
   end
 

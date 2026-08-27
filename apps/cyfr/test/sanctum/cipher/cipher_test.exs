@@ -34,8 +34,8 @@ defmodule Sanctum.CipherTest do
   # path, so legacy rows are fabricated here to prove they fail closed.
   defp seal_v3(plaintext, %{purpose: purpose}, label, master) do
     info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
-    iters = max(Application.get_env(:cyfr, :pbkdf2_iterations, 100_000), 100_000)
-    key = :crypto.pbkdf2_hmac(:sha256, master, info, iters, 32)
+    # Mirrors Sanctum.Cipher's fixed iteration count (no knob may change it).
+    key = :crypto.pbkdf2_hmac(:sha256, master, info, 100_000, 32)
     iv = :crypto.strong_rand_bytes(12)
 
     fields =

@@ -154,7 +154,6 @@ config :cyfr, :prometheus_metrics_enabled, false
 
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
-config :cyfr, pubsub_name: Emissary.PubSub
 
 # Audit sink configuration. Ships with the Console sink; a deployment can add
 # SIEM/object-store sinks via release runtime config.

@@ -23,6 +23,7 @@ defmodule Cyfr.Network do
   """
 
   import Bitwise
+  import Arca.QueryHelpers, only: [maybe_put: 3]
 
   # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
   @private_ranges [
@@ -219,9 +220,6 @@ defmodule Cyfr.Network do
   def bracket_ip(ip) when is_binary(ip) do
     if String.contains?(ip, ":"), do: "[" <> ip <> "]", else: ip
   end
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
   # list shape the Finch-style callers expect.

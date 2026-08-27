@@ -41,7 +41,17 @@ defmodule Arca.DbRescueSeamTest do
     # configure_database: a failed boot-time PRAGMA is tolerated at
     # `Logger.warning` and answers `:ok` — neither the helper's error-level
     # log nor a refusal fits a tuning step the server must boot past.
-    "apps/cyfr/lib/cyfr/application.ex" => 1
+    "apps/cyfr/lib/cyfr/application.ex" => 1,
+    # write/1 + write_single/1: the write-behind's own fallback logic — a
+    # failed batch retries per item, so the rescue cannot answer the one
+    # constant the helper returns. DB errors only: a structurally-bad
+    # queued item must crash, never be dropped with :ok.
+    "apps/cyfr/lib/cyfr/record_sink.ex" => 2,
+    # Three boot steps (platform reconcile, Home seeding, seed sync) that
+    # tolerate a database outage with their own step-specific log lines and
+    # keep the remaining steps running — a bug still crashes the one-shot
+    # task loudly.
+    "apps/cyfr/lib/cyfr/bootstrap.ex" => 3
   }
 
   test "inline db-errors rescues exist only at the enumerated exceptions" do

@@ -6,9 +6,10 @@ defmodule Arca.AuditSink do
   Behaviour for audit event sinks.
 
   Audit sinks receive security-relevant telemetry events and persist them
-  to various backends. Console and JSONL sinks ship by default. Additional
-  sinks (e.g. SIEM, object store, or Postgres) can be added by implementing
-  this behaviour and adding them to the `:audit_sinks` config.
+  to various backends. Only the Console sink (`Arca.AuditSinks.Console`)
+  ships. Additional sinks (e.g. JSONL, SIEM, object store, or Postgres)
+  can be added by implementing this behaviour and adding them to the
+  `:audit_sinks` config.
 
   ## Implementing a sink
 

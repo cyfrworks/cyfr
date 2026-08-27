@@ -41,10 +41,9 @@ defmodule Arca.VaultStorage do
   def get_by_name(athanor_id, name) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.get_by_name", fn ->
       row =
-        Arca.Repo.one(
-          from v in VaultEntry,
-            where: v.athanor_id == ^athanor_id and v.name == ^name and v.status != "tombstoned"
-        )
+        from(v in VaultEntry, where: v.name == ^name and v.status != "tombstoned")
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.one()
 
       case row do
         nil -> {:error, :not_found}
@@ -58,9 +57,8 @@ defmodule Arca.VaultStorage do
   def list(athanor_id, opts \\ []) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.list", fn ->
       query =
-        from v in VaultEntry,
-          where: v.athanor_id == ^athanor_id,
-          order_by: v.name
+        from(v in VaultEntry, order_by: v.name)
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
 
       query =
         if Keyword.get(opts, :include_tombstoned, false),
@@ -76,7 +74,8 @@ defmodule Arca.VaultStorage do
   def update_meta(athanor_id, id, %{name: name}) when is_binary(name) and name != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.update_meta", fn ->
       case Arca.Repo.update_all(
-             from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
+             from(v in VaultEntry, where: v.id == ^id)
+             |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: [name: name, updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)]
            ) do
         {1, _} -> :ok
@@ -89,7 +88,8 @@ defmodule Arca.VaultStorage do
   def set_status(athanor_id, id, status) when is_binary(status) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.set_status", fn ->
       case Arca.Repo.update_all(
-             from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
+             from(v in VaultEntry, where: v.id == ^id)
+             |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: [
                status: status,
                updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -110,7 +110,8 @@ defmodule Arca.VaultStorage do
   def tombstone(athanor_id, id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.tombstone", fn ->
       case Arca.Repo.update_all(
-             from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
+             from(v in VaultEntry, where: v.id == ^id)
+             |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: [
                status: "tombstoned",
                sealed_payload: nil,
@@ -138,7 +139,8 @@ defmodule Arca.VaultStorage do
         |> Keyword.put(:updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond))
 
       case Arca.Repo.update_all(
-             from(v in VaultEntry, where: v.id == ^id and v.athanor_id == ^athanor_id),
+             from(v in VaultEntry, where: v.id == ^id)
+             |> Arca.QueryHelpers.where_athanor(athanor_id),
              set: set
            ) do
         {1, _} -> :ok
@@ -159,9 +161,8 @@ defmodule Arca.VaultStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.rotate_payload", fn ->
       result =
         Arca.Repo.update_all(
-          from(v in VaultEntry,
-            where: v.id == ^id and v.athanor_id == ^athanor_id and v.payload_rev == ^expected_rev
-          ),
+          from(v in VaultEntry, where: v.id == ^id and v.payload_rev == ^expected_rev)
+          |> Arca.QueryHelpers.where_athanor(athanor_id),
           set: [
             sealed_payload: sealed,
             payload_rev: expected_rev + 1,

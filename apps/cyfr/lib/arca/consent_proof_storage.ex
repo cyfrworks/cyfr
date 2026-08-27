@@ -50,6 +50,8 @@ defmodule Arca.ConsentProofStorage do
   def purge_expired(now) do
     # Deliberate default: housekeeping — a sweep the store missed is retried
     # on the next cadence, and expired proofs stay refused by their timestamp.
+    # arca:unscoped-ok proofs are keyed by token hash, not tenant; the sweep
+    # reclaims expired rows server-wide.
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentProofStorage.purge_expired", 0, fn ->
       {count, _} = Arca.Repo.delete_all(from(p in ConsentProof, where: p.expires_at <= ^now))
       count

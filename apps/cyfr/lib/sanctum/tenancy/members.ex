@@ -44,7 +44,7 @@ defmodule Sanctum.Tenancy.Members do
       attrs =
         attrs
         |> Map.new()
-        |> Map.put_new(:id, generate_id())
+        |> Map.put_new(:id, Emissary.UUID7.generate_id("mem"))
         |> Map.put_new(:created_at, now)
         |> Map.put_new(:updated_at, now)
 
@@ -581,5 +581,4 @@ defmodule Sanctum.Tenancy.Members do
     Enum.any?(errors, fn {_field, {_msg, opts}} -> opts[:constraint] == :unique end)
   end
 
-  defp generate_id, do: "mem_" <> Ecto.UUID.generate()
 end

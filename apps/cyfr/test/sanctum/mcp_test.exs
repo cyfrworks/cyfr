@@ -422,7 +422,7 @@ defmodule Sanctum.MCPTest do
       # The finished public URL rides along, keyed by the owning athanor, so
       # no client composes the route shape itself.
       assert result.athanor == ctx.athanor_id
-      segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
+      segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
       assert result.url == Cyfr.TinctureHelpers.tincture_path(segment, "local", "vis-test")
     end
   end

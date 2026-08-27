@@ -30,7 +30,10 @@ defmodule Arca.Cache do
   @max_entries Application.compile_env(:cyfr, :cache_max_entries, 10_000)
 
   @doc """
-  Initialize the ETS cache table. Called from `Cyfr.Application.start/2`.
+  Initialize the ETS cache table. Called from `Arca.Cache.Sweeper` — the
+  table's one supervised owner — never from `Cyfr.Application.start/2`:
+  the cache is a disposable read-through, re-created by the sweeper when
+  it (re)starts, so a sweeper crash flushes it harmlessly.
   """
   @spec init() :: :ok
   def init do

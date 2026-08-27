@@ -111,18 +111,22 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Resolve a route segment: `@<namespace>` names a person's athanor, a bare
-  slug a group's. Only active athanors resolve.
+  slug a group's. Only active athanors resolve, unless the caller passes
+  `include_archived: true` (a read that must still see an archived row —
+  `athanor.get`, `unarchive`).
   """
-  @spec by_route_slug(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found}
-  def by_route_slug("@" <> namespace) when namespace != "" do
-    active_only(get_by_slug("person", namespace))
+  @spec by_route_slug(String.t(), keyword()) :: {:ok, Athanor.t()} | {:error, :not_found}
+  def by_route_slug(segment, opts \\ [])
+
+  def by_route_slug("@" <> namespace, opts) when namespace != "" do
+    get_by_slug("person", namespace) |> status_gate(opts)
   end
 
-  def by_route_slug(slug) when is_binary(slug) and slug != "" do
-    active_only(get_by_slug("group", slug))
+  def by_route_slug(slug, opts) when is_binary(slug) and slug != "" do
+    get_by_slug("group", slug) |> status_gate(opts)
   end
 
-  def by_route_slug(_), do: {:error, :not_found}
+  def by_route_slug(_, _opts), do: {:error, :not_found}
 
   @doc "The route segment for an athanor: `@<slug>` for a person, the slug for a group."
   @spec route_slug(Athanor.t()) :: String.t()
@@ -541,8 +545,15 @@ defmodule Sanctum.Tenancy.Athanors do
 
   # ---- internal --------------------------------------------------------------
 
-  defp active_only({:ok, %Athanor{status: "active"} = athanor}), do: {:ok, athanor}
-  defp active_only(_), do: {:error, :not_found}
+  defp status_gate({:ok, %Athanor{status: "active"} = athanor}, _opts), do: {:ok, athanor}
+
+  defp status_gate({:ok, %Athanor{} = athanor}, opts) do
+    if Keyword.get(opts, :include_archived, false),
+      do: {:ok, athanor},
+      else: {:error, :not_found}
+  end
+
+  defp status_gate(_, _opts), do: {:error, :not_found}
 
   defp validate_name(name) when byte_size(name) in 1..80, do: :ok
   defp validate_name(_), do: {:error, :invalid_name}
@@ -570,6 +581,11 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
+  # Deliberately checks only the "group" kind: the unique index is
+  # `[kind, slug]`, so a group slug never collides with a person's. Group
+  # slugs are the only ones minted here (a person's slug IS their cyfr.run
+  # namespace, claimed elsewhere); a person-slug caller would need its own
+  # check against the "person" kind.
   defp slug_free?(slug), do: match?({:error, :not_found}, get_by_slug("group", slug))
 
   defp count_groups_created_by(user_id) do
@@ -584,5 +600,14 @@ defmodule Sanctum.Tenancy.Athanors do
     end)
   end
 
-  defp generate_id, do: "ath_" <> Ecto.UUID.generate()
+  @doc """
+  Whether `value` is an athanor id (`"ath_..."`) rather than a route slug.
+  Discriminating by prefix is sound: the slug grammar (`Sanctum.Slug` /
+  `Sanctum.ComponentRef.personal_slug_regex/0`) admits only lowercase
+  alphanumerics and hyphens — a slug can never contain `"_"`.
+  """
+  @spec athanor_id?(term()) :: boolean()
+  def athanor_id?(value), do: is_binary(value) and String.starts_with?(value, "ath_")
+
+  defp generate_id, do: Emissary.UUID7.generate_id("ath")
 end

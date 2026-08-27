@@ -29,7 +29,7 @@ defmodule Arca.SessionStorage do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row = %{
-        id: Ecto.UUID.generate(),
+        id: Emissary.UUID7.generate_id("ses"),
         token_hash: token_hash,
         token_prefix: attrs[:token_prefix],
         user_id: attrs.user_id,
@@ -147,6 +147,8 @@ defmodule Arca.SessionStorage do
   def hashes_by_user(user_id) when is_binary(user_id) do
     # Deliberate fail-open to []: the revocation's delete still runs, and a
     # memo entry this read missed dies with the memo TTL — never a grant.
+    # arca:unscoped-ok sessions are user-owned rows (a session exists from
+    # sign-in on, before any athanor is resolved); user_id is the scope.
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.hashes_by_user", [], fn ->
       Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
     end)

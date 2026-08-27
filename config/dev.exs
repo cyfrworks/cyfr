@@ -12,7 +12,12 @@ config :cyfr, EmissaryWeb.Endpoint,
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
-  secret_key_base: "dev-secret-key-base-minimum-64-characters-long-for-development-only",
+  # Same value as `:cyfr, :secret_key_base` below: prod derives both the
+  # endpoint's and the cipher's key base from the one CYFR_SECRET_KEY_BASE
+  # (runtime.exs), so dev mirrors that single-value shape. The cipher's
+  # string is the one kept — changing it would orphan every dev-encrypted
+  # vault blob, while re-keying dev cookies costs nothing.
+  secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!",
   watchers: [
     esbuild: {Esbuild, :install_and_run, [:prism, ~w(--sourcemap=inline --watch)]},
     tailwind: {Tailwind, :install_and_run, [:prism, ~w(--watch)]}

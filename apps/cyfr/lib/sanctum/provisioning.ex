@@ -196,8 +196,19 @@ defmodule Sanctum.Provisioning do
       fun.()
       :ok
     else
-      {:ok, _pid} = Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fun)
-      :ok
+      case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fun) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          # A retry the supervisor could not start is only a deferral: the
+          # next sign-in (or a member's athanor.provision) tries again.
+          Logger.error(
+            "[Sanctum.Provisioning] background provisioning not started: #{inspect(reason)}"
+          )
+
+          :ok
+      end
     end
   end
 
@@ -239,11 +250,21 @@ defmodule Sanctum.Provisioning do
 
   # The person's own context, focused on the new athanor: their pull
   # credential, their attribution on the minted consents.
+  #
+  # Permissions are stated explicitly per `Context.for_scheduled/2`'s
+  # convention — never `[:*]`, so what provisioning runs with is visible
+  # here and cannot silently widen. The path performs storage acts only
+  # (the seed scan, registration rows, registry pulls into `components/`);
+  # it never executes a component, and the consent bootstrap mints via
+  # `granted_via: "bootstrap"`, not through the consent surface gates.
+  # `auth_method: :oidc` records provenance honestly — this context exists
+  # because of the person's OIDC sign-in; no gate on this path requires
+  # the interactive class.
   defp person_ctx(user_id, athanor_id) do
     Context.build(
       user_id: user_id,
       athanor_id: athanor_id,
-      permissions: [:*],
+      permissions: [:storage_read, :storage_write],
       scope: :athanor,
       auth_method: :oidc,
       authenticated: true

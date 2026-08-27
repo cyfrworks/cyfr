@@ -18,6 +18,7 @@ defmodule Cyfr.Bootstrap do
 
   use Task, restart: :temporary
   require Logger
+  require Arca.Repo.Errors
 
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -38,11 +39,14 @@ defmodule Cyfr.Bootstrap do
 
   # A new release may ship new seed media (bundle versions, a new AQUA
   # template); boot is when existing athanors are offered it — additively,
-  # never over anything they own.
+  # never over anything they own. A database outage at boot is tolerated
+  # (the next boot and every sign-in retry); anything else raising here is
+  # a bug and crashes this one-shot task loudly.
   defp sync_seed_media do
     Sanctum.Provisioning.sync_seeds()
   rescue
-    e -> Logger.error("[Cyfr.Bootstrap] seed sync raised: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Cyfr.Bootstrap] seed sync raised: #{Exception.message(e)}")
   end
 
   # `CYFR_PLATFORM_ADMIN_EMAILS` is the operator list, and a sign-in is what
@@ -51,49 +55,63 @@ defmodule Cyfr.Bootstrap do
   # allowlist and their row — and the session holding its capability —
   # survived until it expired. Boot is the other moment the env is read.
   defp reconcile_platform_admins do
-    {:ok, platform_rows} = Members.list_platform()
+    case Members.list_platform() do
+      {:ok, platform_rows} ->
+        for %{user_id: user_id} <- platform_rows, is_binary(user_id) do
+          case Users.get(user_id) do
+            {:ok, %{email: email}} ->
+              unless Sanctum.Door.platform_admin_email?(email) do
+                Logger.warning(
+                  "[Cyfr.Bootstrap] #{user_id} is no longer in CYFR_PLATFORM_ADMIN_EMAILS — " <>
+                    "revoking platform scope and its sessions"
+                )
 
-    for %{user_id: user_id} <- platform_rows, is_binary(user_id) do
-      case Users.get(user_id) do
-        {:ok, %{email: email}} ->
-          unless Sanctum.Door.platform_admin_email?(email) do
-            Logger.warning(
-              "[Cyfr.Bootstrap] #{user_id} is no longer in CYFR_PLATFORM_ADMIN_EMAILS — " <>
-                "revoking platform scope and its sessions"
-            )
+                # revoke_platform/1 revokes the person's sessions with the row.
+                Members.revoke_platform(user_id)
+              end
 
-            # revoke_platform/1 revokes the person's sessions with the row.
-            Members.revoke_platform(user_id)
+            _ ->
+              :ok
           end
+        end
 
-        _ ->
-          :ok
-      end
+      {:error, reason} ->
+        Logger.error("[Cyfr.Bootstrap] platform reconcile skipped: #{inspect(reason)}")
     end
 
     :ok
   rescue
-    e ->
+    # A database outage at boot is tolerated (the row layer answers most of
+    # them as tuples handled above; the next boot or sign-in reconciles).
+    # Any other raise is a bug and crashes this one-shot task loudly.
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.Bootstrap] platform reconcile raised: #{Exception.message(e)}")
       :ok
   end
 
   defp ensure_home_seeded do
-    {:ok, home} = Athanors.ensure_home()
+    case Athanors.ensure_home() do
+      {:ok, %{provisioned_at: nil} = home} ->
+        case Sanctum.Provisioning.provision(home, nil) do
+          {:ok, _} ->
+            Logger.info("[Cyfr.Bootstrap] Home athanor #{home.id} provisioned")
 
-    if is_nil(home.provisioned_at) do
-      case Sanctum.Provisioning.provision(home, nil) do
-        {:ok, _} ->
-          Logger.info("[Cyfr.Bootstrap] Home athanor #{home.id} provisioned")
+          {:error, reason} ->
+            Logger.error(
+              "[Cyfr.Bootstrap] Home athanor #{home.id} not provisioned: #{inspect(reason)}"
+            )
+        end
 
-        {:error, reason} ->
-          Logger.error(
-            "[Cyfr.Bootstrap] Home athanor #{home.id} not provisioned: #{inspect(reason)}"
-          )
-      end
+      {:ok, _already_provisioned} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[Cyfr.Bootstrap] Home seeding skipped: #{inspect(reason)}")
     end
   rescue
-    e ->
+    # Same shape as the reconcile above: a database outage logs and lets
+    # the rest of boot proceed; a bug crashes loudly.
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.Bootstrap] Home seeding raised: #{Exception.message(e)}")
   end
 end

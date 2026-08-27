@@ -514,29 +514,13 @@ defmodule Sanctum.Session do
   defp broadcast_session_created(_session) do
     # Notify subscribers (e.g. AuthLive) that a session was created.
     # No token is sent — subscribers use adopt_active_session() to get their own.
-    case Application.get_env(:cyfr, :pubsub_name) do
-      nil ->
-        :ok
-
-      pubsub ->
-        Phoenix.PubSub.broadcast(
-          pubsub,
-          @session_topic,
-          {:session_created, :notification}
-        )
-    end
-  rescue
-    # PubSub may not be running (e.g. in tests or CLI-only mode)
-    _e in [ArgumentError] -> :ok
+    # A missing Emissary.PubSub is a boot-order bug and must crash loudly,
+    # like every other broadcast site — never a per-call condition.
+    Phoenix.PubSub.broadcast(Emissary.PubSub, @session_topic, {:session_created, :notification})
   end
 
   defp broadcast_sessions_revoked(user_id) do
-    case Application.get_env(:cyfr, :pubsub_name) do
-      nil -> :ok
-      pubsub -> Phoenix.PubSub.broadcast(pubsub, @session_topic, {:sessions_revoked, user_id})
-    end
-  rescue
-    _e in [ArgumentError] -> :ok
+    Phoenix.PubSub.broadcast(Emissary.PubSub, @session_topic, {:sessions_revoked, user_id})
   end
 
   @doc "The topic session lifecycle events are broadcast on."

@@ -160,7 +160,6 @@ defmodule Arca.Execution do
 
     query =
       from e in __MODULE__,
-        where: e.athanor_id == ^athanor_id,
         order_by: [desc: e.started_at],
         limit: ^limit,
         select:
@@ -183,6 +182,8 @@ defmodule Arca.Execution do
             :resolver_digest,
             :activation_digest
           ])
+
+    query = Arca.QueryHelpers.where_athanor(query, athanor_id)
 
     query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
 
@@ -242,15 +243,15 @@ defmodule Arca.Execution do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     keep_ids_query =
-      from e in __MODULE__,
-        where: e.athanor_id == ^athanor_id,
+      from(e in __MODULE__,
         order_by: [desc: e.started_at],
         limit: ^keep,
         select: e.id
+      )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
 
-    from e in __MODULE__,
-      where: e.athanor_id == ^athanor_id,
-      where: e.id not in subquery(keep_ids_query)
+    from(e in __MODULE__, where: e.id not in subquery(keep_ids_query))
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
   end
 
   @doc """
@@ -266,9 +267,9 @@ defmodule Arca.Execution do
       %{athanor_id: athanor_id} ->
         from(e in __MODULE__,
           where: e.parent_execution_id == ^parent_execution_id,
-          where: e.athanor_id == ^athanor_id,
           where: e.status == "running"
         )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.Repo.all()
 
       nil ->
@@ -285,6 +286,9 @@ defmodule Arca.Execution do
   not call it with an id taken straight from a request.
   """
   def mark_failed_if_running(id, attrs) do
+    # arca:unscoped-ok the id comes from trusted runtime state (the
+    # tenant-scoped cancellation cascade or the sweeper's own scan), never
+    # from caller input — see the doc above.
     from(e in __MODULE__,
       where: e.id == ^id,
       where: e.status == "running"
@@ -322,6 +326,8 @@ defmodule Arca.Execution do
   only — not reachable from a tenant request.
   """
   def list_stale_running(now, limit \\ 50) do
+    # arca:unscoped-ok the sweeper reaps orphaned rows across all tenants
+    # when no tenant context can be reconstructed — system-internal only.
     from(e in __MODULE__,
       where: e.status == "running",
       where: e.lease_until < ^now,

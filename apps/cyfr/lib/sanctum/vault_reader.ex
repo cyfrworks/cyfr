@@ -201,16 +201,15 @@ defmodule Sanctum.VaultReader do
   # OAuth
   # ---------------------------------------------------------------------------
 
-  defp check_provider_hint(%{provider_hint: hint}, provider)
-       when hint in [nil, ""],
-       do: check_provider_hint_ok(provider)
+  # An unset provider_hint is deliberately not validated: the hint is an
+  # optional pin, and an entry that never declared one serves any provider
+  # the consent walk already authorized.
+  defp check_provider_hint(%{provider_hint: hint}, _provider) when hint in [nil, ""], do: :ok
 
   defp check_provider_hint(%{provider_hint: hint}, provider) when hint == provider,
     do: :ok
 
   defp check_provider_hint(_entry, provider), do: {:error, {:provider_mismatch, provider}}
-
-  defp check_provider_hint_ok(_provider), do: :ok
 
   # A scope projection narrows an OAuth grant, but the provider cannot
   # attenuate an issued token — so a projection asking for scopes the

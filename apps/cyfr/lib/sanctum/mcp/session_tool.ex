@@ -270,21 +270,23 @@ defmodule Sanctum.MCP.SessionTool do
   # Auth-provider-gated helpers (shared across session handlers)
   # ============================================================================
 
+  defp resolve_athanor(segment) do
+    if Sanctum.Tenancy.Athanors.athanor_id?(segment) do
+      case Sanctum.Tenancy.Athanors.get(segment) do
+        {:ok, athanor} -> {:ok, athanor}
+        _ -> {:error, :not_found}
+      end
+    else
+      Sanctum.Tenancy.Athanors.by_route_slug(segment)
+    end
+  end
+
   # Device-flow CLI auth requires the default OAuth provider. Deployments that
   # pin `:auth_provider` to a configured OIDC provider use the web OIDC flow at
   # `/auth/<provider>` — device_init/device_poll are gated off in that case.
   # Installs with `:auth_provider = nil` are treated as the default (OAuth)
   # for this check,
   # so local dev without explicit config still works.
-  defp resolve_athanor("ath_" <> _ = id) do
-    case Sanctum.Tenancy.Athanors.get(id) do
-      {:ok, athanor} -> {:ok, athanor}
-      _ -> {:error, :not_found}
-    end
-  end
-
-  defp resolve_athanor(slug), do: Sanctum.Tenancy.Athanors.by_route_slug(slug)
-
   defp device_flow_enabled? do
     case Application.get_env(:cyfr, :auth_provider) do
       nil -> true

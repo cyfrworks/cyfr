@@ -121,10 +121,9 @@ defmodule Arca.ConsentStorage do
            %Consent{} = consent <-
              Arca.Repo.get_by(Consent, id: head_id, athanor_id: athanor_id) do
         refs =
-          Arca.Repo.all(
-            from r in ConsentVaultRef,
-              where: r.consent_id == ^head_id and r.athanor_id == ^athanor_id
-          )
+          from(r in ConsentVaultRef, where: r.consent_id == ^head_id)
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.Repo.all()
 
         {:ok, consent, refs}
       else
@@ -146,16 +145,17 @@ defmodule Arca.ConsentStorage do
   def head_profiles_referencing(athanor_id, vault_entry_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_profiles_referencing", fn ->
       ids =
-        Arca.Repo.all(
-          from r in ConsentVaultRef,
-            join: c in Consent,
-            on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
-            join: p in Arca.Schemas.Profile,
-            on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
-            where: r.vault_entry_id == ^vault_entry_id and r.athanor_id == ^athanor_id,
-            distinct: true,
-            select: p.id
+        from(r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+          where: r.vault_entry_id == ^vault_entry_id,
+          distinct: true,
+          select: p.id
         )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
 
       {:ok, ids}
     end)

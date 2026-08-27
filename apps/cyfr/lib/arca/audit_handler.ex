@@ -62,6 +62,11 @@ defmodule Arca.AuditHandler do
     for event <- @audit_events do
       event_id = "audit-" <> Enum.join(event, "-")
 
+      # Detaching first makes the call idempotent across application restarts
+      # in iex `:application.stop/start` cycles. Errors from detach when no
+      # handler is attached are explicitly safe per :telemetry docs.
+      _ = :telemetry.detach(event_id)
+
       :telemetry.attach(
         event_id,
         event,

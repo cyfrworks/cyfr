@@ -44,7 +44,7 @@ defmodule Cyfr.TinctureHelpers do
   @spec build_public_context(String.t()) ::
           {:ok, Sanctum.Context.t()} | {:error, :not_found}
   def build_public_context(athanor_segment) when is_binary(athanor_segment) do
-    case resolve_athanor(athanor_segment) do
+    case Sanctum.Tenancy.Athanors.by_route_slug(athanor_segment) do
       {:ok, athanor} ->
         {:ok,
          Sanctum.Context.build(athanor_id: athanor.id, scope: :athanor, authenticated: false)}
@@ -55,34 +55,8 @@ defmodule Cyfr.TinctureHelpers do
   end
 
   @doc """
-  The active athanor a public route segment names: `@<namespace>` → a
-  person's athanor, `<slug>` → a group's. Archived or unknown → `:not_found`.
-  """
-  @spec resolve_athanor(String.t()) :: {:ok, Arca.Schemas.Athanor.t()} | {:error, :not_found}
-  def resolve_athanor("@" <> namespace) when namespace != "" do
-    active_only(Sanctum.Tenancy.Athanors.get_by_slug("person", namespace))
-  end
-
-  def resolve_athanor(slug) when is_binary(slug) and slug != "" do
-    active_only(Sanctum.Tenancy.Athanors.get_by_slug("group", slug))
-  end
-
-  def resolve_athanor(_), do: {:error, :not_found}
-
-  defp active_only({:ok, %{status: "active"} = athanor}), do: {:ok, athanor}
-  defp active_only(_), do: {:error, :not_found}
-
-  @doc """
-  The route segment for an athanor: `@<slug>` for a person (their namespace),
-  the slug itself for a group. Inverse of `resolve_athanor/1`.
-  """
-  @spec athanor_segment(Arca.Schemas.Athanor.t()) :: String.t()
-  def athanor_segment(%{kind: "person", slug: slug}), do: "@" <> slug
-  def athanor_segment(%{slug: slug}), do: slug
-
-  @doc """
   Canonical tincture path: `/t/:athanor/:publisher/:name`, where `:athanor`
-  is the athanor's route segment (`athanor_segment/1`).
+  is the athanor's route segment (`Sanctum.Tenancy.Athanors.route_slug/1`).
 
   Single source of truth for the tincture URL shape — every server-side caller
   (controller base href, Prism shell iframe `src`, registry entry URL, the

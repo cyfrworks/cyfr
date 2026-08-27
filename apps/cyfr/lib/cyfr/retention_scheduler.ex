@@ -78,10 +78,22 @@ defmodule Cyfr.RetentionScheduler do
 
   # One crash barrier for every step: retention must never take the
   # server down, and one step's fault must not starve the rest.
+  #
+  # Deliberately broader than `Arca.Repo.Errors.db_errors()`: the DB layer
+  # under every step already answers outages as tuples, so what raises here
+  # is a storage-adapter or shape fault — and letting one escape would
+  # crash this GenServer, whose restart re-runs the whole cycle from
+  # `handle_continue(:first_run, ...)`, turning one deterministic fault
+  # into a restart loop that can exhaust the supervisor: exactly the
+  # "retention takes the server down" this barrier exists to prevent. The
+  # full stacktrace is logged so a swallowed bug is still loud.
   defp run_step(label, fun) do
     fun.()
   rescue
-    e -> Logger.error("[RetentionScheduler] #{label} crashed: #{Exception.message(e)}")
+    e ->
+      Logger.error(
+        "[RetentionScheduler] #{label} crashed: " <> Exception.format(:error, e, __STACKTRACE__)
+      )
   end
 
   defp run_retention do

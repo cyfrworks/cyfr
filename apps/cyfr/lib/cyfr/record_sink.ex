@@ -24,6 +24,7 @@ defmodule Cyfr.RecordSink do
   use GenServer
 
   require Logger
+  require Arca.Repo.Errors
   import Ecto.Query
 
   @flush_ms 250
@@ -100,7 +101,11 @@ defmodule Cyfr.RecordSink do
 
   @impl true
   def handle_info(:tick, state), do: {:noreply, drain(%{state | timer: nil})}
-  def handle_info(_msg, state), do: {:noreply, state}
+
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
 
   @impl true
   def terminate(_reason, state) do
@@ -140,7 +145,10 @@ defmodule Cyfr.RecordSink do
 
     :ok
   rescue
-    e ->
+    # Database errors only: bookkeeping is best-effort during an outage,
+    # but a structurally-bad queued item is a bug and must crash loudly —
+    # never be dropped twice with :ok.
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.RecordSink] batch write failed: #{Exception.message(e)}")
 
       # One bad row must not take the batch with it: write the rest singly.
@@ -151,7 +159,8 @@ defmodule Cyfr.RecordSink do
   defp write_single(item) do
     write([item])
   rescue
-    e -> Logger.error("[Cyfr.RecordSink] row write failed: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Cyfr.RecordSink] row write failed: #{Exception.message(e)}")
   end
 
   # Every row still passes the schema's changeset — a batch bypasses

@@ -18,7 +18,8 @@ defmodule Cyfr.GenServerCatchallTest do
     {Arca.Cache.Sweeper, "Sweeper"},
     {Prism.TelemetryBridge, "TelemetryBridge"},
     {Arca.AuditHandler, "AuditHandler"},
-    {Prism.TinctureRegistry, "TinctureRegistry"}
+    {Prism.TinctureRegistry, "TinctureRegistry"},
+    {Cyfr.RecordSink, "RecordSink"}
   ]
 
   describe "catch-all handle_info/2" do

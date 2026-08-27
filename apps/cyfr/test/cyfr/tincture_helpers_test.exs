@@ -68,7 +68,7 @@ defmodule Cyfr.TinctureHelpersTest do
 
     test "a person athanor's segment is its @namespace" do
       athanor = create_athanor!("person", "alice")
-      segment = TinctureHelpers.athanor_segment(athanor)
+      segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
       assert segment == "@alice"
       assert TinctureHelpers.tincture_path(segment, "local", "dash") == "/t/@alice/local/dash"
     end
@@ -78,11 +78,11 @@ defmodule Cyfr.TinctureHelpersTest do
     end
   end
 
-  describe "resolve_athanor/1 and build_public_context/1" do
+  describe "build_public_context/1" do
     test "resolves a group by slug into an unauthenticated context anchored to it" do
       athanor = create_athanor!("group", "acme")
 
-      assert {:ok, %{id: id}} = TinctureHelpers.resolve_athanor("acme")
+      assert {:ok, %{id: id}} = Sanctum.Tenancy.Athanors.by_route_slug("acme")
       assert id == athanor.id
       assert {:ok, ctx} = TinctureHelpers.build_public_context("acme")
       assert %Sanctum.Context{} = ctx
@@ -94,7 +94,7 @@ defmodule Cyfr.TinctureHelpersTest do
     test "resolves a person by @namespace" do
       athanor = create_athanor!("person", "bob")
 
-      assert {:ok, %{id: id}} = TinctureHelpers.resolve_athanor("@bob")
+      assert {:ok, %{id: id}} = Sanctum.Tenancy.Athanors.by_route_slug("@bob")
       assert id == athanor.id
       assert {:ok, ctx} = TinctureHelpers.build_public_context("@bob")
       assert ctx.athanor_id == athanor.id

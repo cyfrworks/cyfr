@@ -91,7 +91,7 @@ defmodule Arca.McpServerStorage do
 
       attrs =
         attrs
-        |> Map.put_new(:id, Emissary.UUID7.generate())
+        |> Map.put_new(:id, Emissary.UUID7.generate_id("mcp"))
         |> Map.put_new(:enabled, true)
         |> Map.put_new(:config_json, "{}")
         |> Map.put(:athanor_id, ctx.athanor_id)

@@ -174,15 +174,15 @@ defmodule Sanctum.Cipher do
         # blob encrypted so far. Pinned by test; change only with a
         # rotate-everything migration.
         info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
-        dk = :crypto.pbkdf2_hmac(:sha256, master, info, iterations(), @key_len)
+
+        # The iteration count is fixed on purpose: it is baked into every
+        # derived key, and no knob may lower it — the old
+        # `:pbkdf2_iterations` config could only ever raise it (a `max/2`
+        # floor), which made it a lying knob. Raising it is a
+        # rotate-everything migration, not a config change.
+        dk = :crypto.pbkdf2_hmac(:sha256, master, info, @default_iterations, @key_len)
         :persistent_term.put(pt_key, {master, dk})
         dk
     end
-  end
-
-  # A misconfigured (too-low) iteration count cannot weaken derivation below
-  # the default floor.
-  defp iterations do
-    max(Application.get_env(:cyfr, :pbkdf2_iterations, @default_iterations), @default_iterations)
   end
 end

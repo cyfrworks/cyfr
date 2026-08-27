@@ -41,7 +41,9 @@ defmodule Arca.WebhookStorage do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
-      id: Ecto.UUID.generate(),
+      # "whk", not "wh": webhook SLUGS are minted as "wh_<random>"
+      # (Sanctum.Webhook), and the row id must never read as one.
+      id: Emissary.UUID7.generate_id("whk"),
       name: attrs.name,
       slug: attrs.slug,
       target_ref: attrs.target_ref,

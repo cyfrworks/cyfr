@@ -296,16 +296,13 @@ defmodule Sanctum.MCP.AthanorTool do
   defp lookup(%Context{athanor_id: id}, nil, opts) when is_binary(id), do: get(id, opts)
   defp lookup(%Context{}, nil, _opts), do: {:error, "No athanor in focus — pass athanor"}
 
-  defp lookup(%Context{}, "ath_" <> _ = id, opts), do: get(id, opts)
-
-  defp lookup(%Context{}, slug, opts) when is_binary(slug) do
-    if Keyword.get(opts, :include_archived, false) do
-      case slug do
-        "@" <> ns -> Athanors.get_by_slug("person", ns) |> or_not_found()
-        _ -> Athanors.get_by_slug("group", slug) |> or_not_found()
-      end
+  defp lookup(%Context{}, segment, opts) when is_binary(segment) do
+    if Athanors.athanor_id?(segment) do
+      get(segment, opts)
     else
-      Athanors.by_route_slug(slug) |> or_not_found()
+      segment
+      |> Athanors.by_route_slug(include_archived: Keyword.get(opts, :include_archived, false))
+      |> or_not_found()
     end
   end
 
