@@ -22,10 +22,24 @@ defmodule Cyfr.PathSafety do
     * null bytes
     * absolute paths (leading `/`)
     * backslashes (Windows separators that sidestep `/`-based checks)
+    * over-long names and trees: a segment past 240 bytes (POSIX
+      NAME_MAX is 255; the margin covers the Local adapter's `.tmp.<n>`
+      rename suffix), more than 32 segments, or a joined path past
+      1024 bytes — one ceiling for both adapters, so a path S3 would
+      store cannot be one Local `:enametoolong`s on
 
   Everything here rejects-more than either previous validator; no legitimate
   relative storage path is affected.
+
+  No unicode normalization happens here — this module validates, it never
+  transforms, and the layer stores exactly the bytes it is given. The one
+  ingress of user-chosen names (`Prism.Attachments.safe_filename/1`)
+  NFC-normalizes before the bytes get here.
   """
+
+  @max_segment_bytes 240
+  @max_depth 32
+  @max_path_bytes 1024
 
   @doc """
   Validate a list of path segments. Raises `ArgumentError` on the first
@@ -33,14 +47,27 @@ defmodule Cyfr.PathSafety do
   """
   @spec validate_segments!([String.t()]) :: :ok
   def validate_segments!(segments) when is_list(segments) do
-    Enum.each(segments, fn segment ->
-      case check_segment(segment) do
-        :ok -> :ok
-        {:error, message} -> raise ArgumentError, message
-      end
-    end)
+    case validate_segments(segments) do
+      :ok -> :ok
+      {:error, message} -> raise ArgumentError, message
+    end
+  end
 
-    :ok
+  @doc """
+  Validate a list of path segments. Returns `:ok` or `{:error, message}` —
+  the same denylist as `validate_segments!/1`, for callers whose contract
+  answers rather than raises (`Arca.exists?/2`).
+  """
+  @spec validate_segments([String.t()]) :: :ok | {:error, String.t()}
+  def validate_segments(segments) when is_list(segments) do
+    with :ok <- check_shape(segments) do
+      Enum.reduce_while(segments, :ok, fn segment, :ok ->
+        case check_segment(segment) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    end
   end
 
   @doc """
@@ -56,12 +83,29 @@ defmodule Cyfr.PathSafety do
       path
       |> String.split("/")
       |> Enum.reject(&(&1 == ""))
-      |> Enum.reduce_while(:ok, fn segment, :ok ->
-        case check_segment(segment) do
-          :ok -> {:cont, :ok}
-          {:error, _} = error -> {:halt, error}
-        end
-      end)
+      |> validate_segments()
+    end
+  end
+
+  # The length/depth ceilings, checked once per path rather than per
+  # segment. Non-binary members don't count bytes here — check_segment/1
+  # refuses them with its own message.
+  defp check_shape(segments) do
+    total =
+      Enum.reduce(segments, 0, fn
+        segment, acc when is_binary(segment) -> acc + byte_size(segment)
+        _segment, acc -> acc
+      end) + max(length(segments) - 1, 0)
+
+    cond do
+      length(segments) > @max_depth ->
+        {:error, "Path rejected: more than #{@max_depth} segments"}
+
+      total > @max_path_bytes ->
+        {:error, "Path rejected: longer than #{@max_path_bytes} bytes"}
+
+      true ->
+        :ok
     end
   end
 
@@ -86,6 +130,9 @@ defmodule Cyfr.PathSafety do
 
       decoded in [".", ".."] or decoded =~ ~r/(^|[\/\\])\.\.($|[\/\\])/ ->
         {:error, "Path traversal rejected: encoded dot segments are not allowed"}
+
+      byte_size(segment) > @max_segment_bytes ->
+        {:error, "Path rejected: segment longer than #{@max_segment_bytes} bytes"}
 
       true ->
         :ok

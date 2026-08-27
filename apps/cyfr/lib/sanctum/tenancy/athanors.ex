@@ -8,8 +8,8 @@ defmodule Sanctum.Tenancy.Athanors do
   An athanor is the unit everything is owned by — a person's or a group's.
   Rows are created here (a person's on first authorized sign-in, a group's
   when a member creates it, Home once per server) and archived, never
-  deleted. Seeding an athanor with components and consents is the caller's
-  job (`Compendium.AthanorSeeder`), not this module's: a row is a name,
+  deleted. Filling an athanor with components and consents is the caller's
+  job (`Sanctum.Provisioning`), not this module's: a row is a name,
   provisioning is what fills it.
 
   A person's athanor is archived only through `Sanctum.Tenancy.Users.deny/1`
@@ -305,6 +305,26 @@ defmodule Sanctum.Tenancy.Athanors do
       )
 
       :ok
+  end
+
+  @doc """
+  Delete an archived athanor's whole storage tree — the one verb that
+  reclaims `athanors/{id}/` from the volume (or the bucket). Archiving never
+  touches storage, precisely so `unarchive/1` reopens a furnace intact;
+  purging is the separate, deliberate, final act. It refuses unless the
+  athanor is archived, and a purged athanor that later reopens comes back
+  with empty storage (its rows are untouched — this deletes blobs only).
+  """
+  @spec purge_storage(Athanor.t()) :: :ok | {:error, term()}
+  def purge_storage(%Athanor{} = athanor) do
+    with {:ok, current} <- get(athanor.id) do
+      if current.status == "archived" do
+        ctx = Sanctum.internal_context(athanor_id: current.id, scope: :athanor)
+        Arca.delete_tree(ctx, [])
+      else
+        {:error, :not_archived}
+      end
+    end
   end
 
   @doc """

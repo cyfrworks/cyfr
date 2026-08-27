@@ -110,31 +110,44 @@ defmodule Compendium.MCP do
   defp read_component_asset(ctx, rest) do
     case String.split(rest, "/", parts: 2) do
       [reference, path] when path != "" ->
-        case Shared.resolve_component(ctx, reference) do
-          {:ok, _component, ref} ->
-            asset_path =
-              Compendium.ComponentPath.version_dir(
-                ref.type,
-                ref.namespace,
-                ref.name,
-                ref.version
-              ) ++ String.split(path, "/")
+        # The trailing path is caller-controlled: validate it at this
+        # boundary (the rule at `Arca`'s door — every untrusted-path
+        # ingress refuses with a type, never a raise) before the resolved
+        # ref builds the real segments.
+        with {:ok, asset_segments} <- validate_asset_path(path),
+             {:ok, _component, ref} <- Shared.resolve_component(ctx, reference) do
+          asset_path =
+            Compendium.ComponentPath.version_dir(
+              ref.type,
+              ref.namespace,
+              ref.name,
+              ref.version
+            ) ++ asset_segments
 
-            case Arca.get(ctx, asset_path) do
-              {:ok, content} ->
-                {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
+          case Arca.get(ctx, asset_path) do
+            {:ok, content} ->
+              {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
 
-              {:error, reason} ->
-                Logger.error("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")
-                {:error, "Asset not found: #{rest}"}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              Logger.error("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")
+              {:error, "Asset not found: #{rest}"}
+          end
         end
 
       _ ->
         {:error, "Invalid asset URI: missing path after reference"}
+    end
+  end
+
+  defp validate_asset_path(path) do
+    segments = path |> String.split("/") |> Enum.reject(&(&1 == ""))
+
+    with [_ | _] <- segments,
+         :ok <- Cyfr.PathSafety.validate_segments(segments) do
+      {:ok, segments}
+    else
+      [] -> {:error, "Invalid asset path: empty"}
+      {:error, message} -> {:error, "Invalid asset path: #{message}"}
     end
   end
 

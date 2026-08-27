@@ -322,6 +322,32 @@ defmodule Cyfr.Retention do
   defp count_of({:ok, count}) when is_integer(count), do: count
   defp count_of(_), do: 0
 
+  @doc """
+  Reclaim orphaned conversation blob directories across every active
+  athanor (`Arca.ConversationStorage.sweep_orphaned_blobs/1` — bytes a
+  best-effort delete once left behind, still counted against the storage
+  cap). Roster-driven, each athanor inside its own context.
+  """
+  @spec sweep_conversation_blob_orphans() :: {:ok, map()}
+  def sweep_conversation_blob_orphans do
+    athanors = Sanctum.Tenancy.Athanors.list_active()
+
+    results =
+      Enum.map(athanors, fn athanor ->
+        ctx =
+          Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
+
+        {athanor.id, Arca.ConversationStorage.sweep_orphaned_blobs(ctx)}
+      end)
+
+    reclaimed =
+      results |> Enum.map(fn {_id, result} -> count_of(result) end) |> Enum.sum()
+
+    errors = for {athanor_id, {:error, reason}} <- results, do: {athanor_id, reason}
+
+    {:ok, %{tenants: length(athanors), dirs_deleted: reclaimed, errors: errors}}
+  end
+
   # ============================================================================
   # Build Cleanup
   # ============================================================================

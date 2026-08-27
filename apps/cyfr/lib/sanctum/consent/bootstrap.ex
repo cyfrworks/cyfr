@@ -14,6 +14,8 @@ defmodule Sanctum.Consent.Bootstrap do
   Machine-minted revisions record `granted_via: "bootstrap"`.
   """
 
+  require Logger
+
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
   alias Sanctum.Consent.ShapeDigest
@@ -69,14 +71,22 @@ defmodule Sanctum.Consent.Bootstrap do
     # it. Owner profiles mint here; public ones only via profile.publish.
     types = Sanctum.ComponentRef.valid_types()
 
-    case Arca.ComponentStorage.list_components(ctx, publisher: "local") do
+    case Arca.ComponentStorage.list_components(ctx,
+           publisher: Compendium.ComponentPath.default_publisher(),
+           limit: :none
+         ) do
       {:ok, rows} ->
         rows
         |> Enum.filter(fn row -> to_string(row.component_type) in types end)
         |> Enum.group_by(fn row -> {row.component_type, row.name} end)
-        |> Enum.map(fn {_key, versions} -> hd(versions) end)
+        |> Enum.map(fn {_key, versions} -> Compendium.Registry.latest_of(versions) end)
 
-      _ ->
+      {:error, reason} ->
+        Logger.error(
+          "[Sanctum.Consent.Bootstrap] component listing failed for " <>
+            "#{ctx.athanor_id}: #{inspect(reason)}; bootstrapping nothing"
+        )
+
         []
     end
   end

@@ -20,19 +20,139 @@ defmodule Compendium.ComponentPath do
   layout, and the segment can never diverge from the id minted by
   `Compendium.ComponentId`.
 
-  The seed bundle every athanor is provisioned from lives under the
-  reserved `seed/components/{type}s/local/...` prefix (`Compendium.Bundle`)
-  and is read in place from the seed tree (`:seed_path`), outside the
-  storage root; it is bytes only and never a tenant.
+  The seed bundle every athanor reads through lives under the reserved
+  `seed/components/{type}s/local/...` prefix
+  (`Arca.Storage.seed_prefix("components")`) and is read in place from the
+  seed tree (`:seed_path`), outside the storage root; it is bytes only and
+  never a tenant.
+
+  Vocabulary note: paths and the components table say `publisher`;
+  references and identity (`Sanctum.ComponentRef`) say `namespace` — the
+  SAME value under two names, one per vocabulary. This module's
+  `normalize_publisher/1` / `default_publisher/0` are the bridge.
   """
+
+  @behaviour Arca.Storage.UnitLocator
 
   @type_plurals Enum.map(Sanctum.ComponentRef.valid_types(), &(&1 <> "s"))
 
   @default_publisher "local"
 
+  @manifest_name "cyfr-manifest.json"
+
+  @components_root "components"
+
+  # components/{type}s/{publisher}/{name}/{version} — the shadow unit is
+  # the version directory, `version_dir/4`'s exact shape.
+  @unit_depth 5
+
   @doc "Root prefix segments: `[\"components\"]` — the context's athanor's tree."
   @spec base_prefix() :: [String.t()]
-  def base_prefix, do: ["components"]
+  def base_prefix, do: [@components_root]
+
+  @doc """
+  Parse tenant-relative component segments against the one layout — the
+  inverse of `version_dir/4`. `{:ok, parts}` for a path at or below a
+  version directory under a known type plural (`rest` is what follows the
+  version — `[]` for the version directory itself, `[filename]` for a
+  file in it); `:error` for anything else. The registration, scan and
+  tincture-index guards all speak through this one parser, so the
+  five-segment shape is never re-stated as a pattern elsewhere.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.parse(["components", "catalysts", "local", "files", "0.5.0"])
+      {:ok, %{type: "catalyst", publisher: "local", name: "files", version: "0.5.0", rest: []}}
+
+      iex> Compendium.ComponentPath.parse(["components", "not-a-type", "local", "x", "1.0.0"])
+      :error
+
+  """
+  @spec parse([String.t()]) ::
+          {:ok,
+           %{
+             type: String.t(),
+             publisher: String.t(),
+             name: String.t(),
+             version: String.t(),
+             rest: [String.t()]
+           }}
+          | :error
+  def parse([@components_root, type_plural, publisher, name, version | rest])
+      when type_plural in @type_plurals do
+    {:ok,
+     %{
+       type: String.trim_trailing(type_plural, "s"),
+       publisher: publisher,
+       name: name,
+       version: version,
+       rest: rest
+     }}
+  end
+
+  def parse(_segments), do: :error
+
+  @doc """
+  Filter walked leaves down to manifest files — the discovery filter the
+  component scanners share (`Compendium.AutoIndexer`,
+  `Prism.TinctureRegistry`).
+  """
+  @spec manifest_leaves([[String.t()]]) :: [[String.t()]]
+  def manifest_leaves(leaves), do: Enum.filter(leaves, &(List.last(&1) == @manifest_name))
+
+  @doc """
+  The manifest's filename — the one file every valid version directory
+  carries, which is why `locate/1` names it the overlay sentinel.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.manifest_name()
+      "cyfr-manifest.json"
+
+  """
+  @spec manifest_name() :: String.t()
+  def manifest_name, do: @manifest_name
+
+  @doc """
+  The overlay's unit grammar for `components/`
+  (`Arca.Storage.UnitLocator`): every path at or below a version
+  directory belongs to that directory-shaped unit, sentinel'd by the
+  manifest; anything shallower is above the units. Depth-only on
+  purpose — junk shapes under `components/` are the registry's to ignore,
+  not the storage layer's to police.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.locate(["components", "catalysts", "local", "files", "0.5.0", "src", "lib.rs"])
+      {:dir, ["components", "catalysts", "local", "files", "0.5.0"], "cyfr-manifest.json"}
+
+      iex> Compendium.ComponentPath.locate(["components", "catalysts"])
+      :above_unit
+
+  """
+  @impl Arca.Storage.UnitLocator
+  def locate(path) when length(path) < @unit_depth, do: :above_unit
+  def locate(path), do: {:dir, Enum.take(path, @unit_depth), @manifest_name}
+
+  @doc "Path segments to a component version's manifest."
+  @spec manifest_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
+  def manifest_path(type, publisher, name, version) do
+    version_dir(type, publisher, name, version) ++ [@manifest_name]
+  end
+
+  @doc """
+  The default publisher segment — the `local` namespace every locally-built
+  and bundled component ships under. The one spelling; callers that need
+  the literal read it here.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.default_publisher()
+      "local"
+
+  """
+  @spec default_publisher() :: String.t()
+  def default_publisher, do: @default_publisher
 
   @doc """
   Canonical publisher segment default. `nil`/`""` collapse to the seeded
@@ -47,10 +167,10 @@ defmodule Compendium.ComponentPath do
   Whether a publisher segment names the local namespace.
 
   The single source of truth for a distinction several gates depend on:
-  `local` is the highest-trust namespace — the tree the scanner indexes and
-  the seeder copies into every new athanor — so only locally-built
-  components may enter it. Remote ingress (OCI pull) must refuse it, and
-  directory registration accepts only it.
+  `local` is the highest-trust namespace — the tree the scanner indexes,
+  where the seed bundle shows through the overlay — so only locally-built
+  and bundled components may enter it. Remote ingress (OCI pull) must
+  refuse it, and directory registration accepts only it.
 
   ## Examples
 
@@ -67,10 +187,23 @@ defmodule Compendium.ComponentPath do
   @spec local_publisher?(String.t() | nil) :: boolean()
   def local_publisher?(publisher), do: normalize_publisher(publisher) == @default_publisher
 
+  @doc """
+  The plural directory name for a component type — the one pluralization
+  rule.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.type_plural("catalyst")
+      "catalysts"
+
+  """
+  @spec type_plural(String.t()) :: String.t()
+  def type_plural(type) when is_binary(type), do: type <> "s"
+
   @doc "Path segments to a component version directory."
   @spec version_dir(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
   def version_dir(type, publisher, name, version) do
-    base_prefix() ++ ["#{type}s", normalize_publisher(publisher), name, version]
+    base_prefix() ++ [type_plural(type), normalize_publisher(publisher), name, version]
   end
 
   @doc "Path segments to the WASM binary for a component."
@@ -89,13 +222,13 @@ defmodule Compendium.ComponentPath do
   @doc "Path segments to a component name directory (parent of version dirs)."
   @spec name_dir(String.t(), String.t() | nil, String.t()) :: [String.t()]
   def name_dir(type, publisher, name) do
-    base_prefix() ++ ["#{type}s", normalize_publisher(publisher), name]
+    base_prefix() ++ [type_plural(type), normalize_publisher(publisher), name]
   end
 
   @doc "Path segments to a publisher directory."
   @spec publisher_dir(String.t(), String.t() | nil) :: [String.t()]
   def publisher_dir(type, publisher) do
-    base_prefix() ++ ["#{type}s", normalize_publisher(publisher)]
+    base_prefix() ++ [type_plural(type), normalize_publisher(publisher)]
   end
 
   @doc "Known type plural strings."

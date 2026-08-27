@@ -88,6 +88,16 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       template = hd(templates)
       assert template.uriTemplate == "arca://files/{path}"
     end
+
+    test "the description names exactly the tenant roster" do
+      # Rendered from Arca.Storage.tenant_roots/0, so the advertised
+      # vocabulary can never drift from the layout table.
+      %{description: description} = hd(MCP.resource_templates())
+
+      for root <- Arca.Storage.tenant_roots() do
+        assert description =~ root <> "/"
+      end
+    end
   end
 
   describe "read/2" do
@@ -108,6 +118,24 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "returns error for unknown resource", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "arca://unknown/path")
       assert msg =~ "Unknown resource"
+    end
+
+    # The path is caller input — the boundary answers, it never raises.
+    test "a traversal path answers a typed error, never raises", %{ctx: ctx} do
+      {:error, msg} = MCP.read(ctx, "arca://files/guest/../aqua/agent.json")
+      assert msg =~ "Invalid path"
+    end
+
+    test "an unknown root answers a typed error", %{ctx: ctx} do
+      {:error, msg} = MCP.read(ctx, "arca://files/nope/x")
+      assert msg =~ "Forbidden path"
+    end
+
+    test "a platform context without an athanor answers a typed error, never raises" do
+      ctx = Sanctum.Context.internal()
+
+      {:error, msg} = MCP.read(ctx, "arca://files/guest/x")
+      assert msg =~ "Unauthorized"
     end
   end
 

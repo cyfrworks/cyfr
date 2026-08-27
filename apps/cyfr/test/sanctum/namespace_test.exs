@@ -55,7 +55,7 @@ defmodule Sanctum.NamespaceTest do
 
       # A push-token row under another slug changes nothing: identity is the
       # users row, tokens are for pushing.
-      registry = Compendium.Registry.canonical_host()
+      registry = Compendium.RegistryHost.canonical_host()
 
       :ok =
         CredentialStore.put_push_token(user_id, registry, "stripe.com", "cyfr_pt_pub", "member")

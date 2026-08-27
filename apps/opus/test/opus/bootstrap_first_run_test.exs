@@ -21,8 +21,8 @@ defmodule Opus.BootstrapFirstRunTest do
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
 
-  @bundle_root Path.expand("../../../../seed/components", __DIR__)
-  @bundled ["catalysts/local/files/0.5.0", "catalysts/local/http/1.1.0"]
+  @seed_root Path.expand("../../../../seed", __DIR__)
+  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.0"]
   @pull_gated ["formulas/local/list-models/0.6.0", "formulas/local/aqua/1.0.5"]
 
   setup do
@@ -34,6 +34,12 @@ defmodule Opus.BootstrapFirstRunTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
+    # The REAL tracked bundle, served in place through the seed overlay —
+    # the production-true path: a real install copies nothing, the union
+    # answers and the scan mints rows.
+    original_seed_path = Application.get_env(:cyfr, :seed_path)
+    Application.put_env(:cyfr, :seed_path, @seed_root)
+
     original_source = Application.get_env(:cyfr, :consent_source)
     Application.put_env(:cyfr, :consent_source, Source.DB)
 
@@ -44,6 +50,10 @@ defmodule Opus.BootstrapFirstRunTest do
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
 
+      if original_seed_path,
+        do: Application.put_env(:cyfr, :seed_path, original_seed_path),
+        else: Application.delete_env(:cyfr, :seed_path)
+
       if original_source,
         do: Application.put_env(:cyfr, :consent_source, original_source),
         else: Application.delete_env(:cyfr, :consent_source)
@@ -52,14 +62,10 @@ defmodule Opus.BootstrapFirstRunTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Stage a tracked bundle tree into the athanor's component storage and
-  # register it the way the auto-indexer does — the production-true path
-  # (a real install copies the bundle in and scans it).
+  # Register a tracked bundle version the way the auto-indexer does: the
+  # overlay union serves the seed bytes in place — nothing is copied.
   defp stage_and_register(ctx, rel) do
     segments = ["components" | String.split(rel, "/")]
-    dest = Arca.Adapters.Local.build_path(ctx, segments)
-    File.mkdir_p!(Path.dirname(dest))
-    File.cp_r!(Path.join(@bundle_root, rel), dest)
     Compendium.Registry.register_from_arca(ctx, segments)
   end
 
@@ -93,7 +99,9 @@ defmodule Opus.BootstrapFirstRunTest do
     assert {:ok, files_auth, _} =
              Loader.load_root(ctx, files_profile, source: Source.DB, live: {:ok, files_live})
 
-    assert files_auth.resources.storage.paths == ["components/", "data/"]
+    # The shipped grant is data/ only — components/ is an explicit, rare
+    # capability, not a file tool's default reach.
+    assert files_auth.resources.storage.paths == ["data/"]
     assert "write" in files_auth.resources.storage.actions
 
     {:ok, [http_profile]} = Source.DB.profiles(ctx, "catalyst:local.http")

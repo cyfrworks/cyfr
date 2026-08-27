@@ -15,6 +15,9 @@ defmodule Compendium.OCI.Client do
   alias Compendium.Registry
   alias Sanctum.Context
 
+  # The one spelling of the local namespace, pinned for pattern matches.
+  @local_publisher Compendium.ComponentPath.default_publisher()
+
   # ============================================================================
   # Pull
   # ============================================================================
@@ -43,7 +46,7 @@ defmodule Compendium.OCI.Client do
   @spec pull(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def pull(%Context{} = ctx, oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
-         :ok <- Compendium.Registry.validate_host(ref.registry),
+         :ok <- Compendium.RegistryHost.validate_host(ref.registry),
          # Resolve the component ref before any network I/O so a refused
          # namespace costs nothing and, more importantly, can never be
          # reached by a ref shape that skips an earlier check.
@@ -70,9 +73,13 @@ defmodule Compendium.OCI.Client do
              config_bytes,
              sig_meta
            ),
-         :ok <- maybe_store_manifest(ctx, component_ref, config_bytes),
          :ok <- maybe_store_readme(ctx, component_ref, readme_bytes),
-         :ok <- maybe_store_source(ctx, component_ref, source_bytes) do
+         :ok <- maybe_store_source(ctx, component_ref, source_bytes),
+         # The manifest — the unit's completion sentinel — lands LAST
+         # (the `Arca.put_files/2` discipline): a crash mid-pull must not
+         # leave a unit the scanners read as complete while its files are
+         # missing.
+         :ok <- maybe_store_manifest(ctx, component_ref, config_bytes) do
       # Cache manifest for future use, under the same key fetch_manifest
       # reads (a digest-pinned pull must never overwrite a tag entry).
       tag = ref.tag || ref.digest || "latest"
@@ -128,7 +135,7 @@ defmodule Compendium.OCI.Client do
   @spec pull_bytes(String.t()) :: {:ok, binary()} | {:error, term()}
   def pull_bytes(oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
-         :ok <- Compendium.Registry.validate_host(ref.registry),
+         :ok <- Compendium.RegistryHost.validate_host(ref.registry),
          {:ok, manifest_json, _manifest_digest, _manifest_opts} <- fetch_manifest(nil, ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
@@ -159,21 +166,14 @@ defmodule Compendium.OCI.Client do
   end
 
   # Pulled code holds zero authority, and `local` is the highest-trust
-  # namespace: it is the tree the scanner indexes and the seeder copies into
-  # every new athanor. So no remote pull may mint a component there,
+  # namespace: the tree the scanner indexes, where the seed bundle shows
+  # through the overlay. So no remote pull may mint a component there,
   # whatever the ref looks like on the way in — `local/formulas/foo:1.0` and
   # `registry.example/local/formulas/foo:1.0` both resolve to the `local`
   # namespace and both are refused here, at the one point every pull passes
   # through.
-  defp refuse_local_namespace(%Sanctum.ComponentRef{namespace: namespace}) do
-    if Compendium.ComponentPath.local_publisher?(namespace) do
-      {:error,
-       "Cannot pull into the local namespace. " <>
-         "Local components are registered from the filesystem, never pulled."}
-    else
-      :ok
-    end
-  end
+  defp refuse_local_namespace(%Sanctum.ComponentRef{namespace: namespace}),
+    do: Compendium.NamespacePolicy.refuse_remote_ingress(namespace)
 
   # ============================================================================
   # Push
@@ -206,7 +206,7 @@ defmodule Compendium.OCI.Client do
     # Resolve the actual publisher name for "local" namespace so that OCI
     # annotations, config blob, and the returned reference all use the real
     # registry namespace (e.g. "moonmoon69") instead of "local".
-    with :ok <- Compendium.Registry.validate_host(registry),
+    with :ok <- Compendium.RegistryHost.validate_host(registry),
          {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
          {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
          push_cref = %{cref | namespace: publisher},
@@ -295,7 +295,7 @@ defmodule Compendium.OCI.Client do
   """
   @spec discover(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def discover(registry, namespace \\ nil) when is_binary(registry) do
-    with :ok <- Compendium.Registry.validate_host(registry) do
+    with :ok <- Compendium.RegistryHost.validate_host(registry) do
       discover_repos(registry, namespace)
     end
   end
@@ -647,7 +647,7 @@ defmodule Compendium.OCI.Client do
             {String.to_charlist(rel), content}
           end)
 
-        case create_tar_gz(tar_entries) do
+        case Compendium.Archive.create_tar_gz(tar_entries) do
           {:ok, archive} -> {:ok, archive}
           :none -> {:error, "Failed to create tincture archive"}
         end
@@ -669,13 +669,7 @@ defmodule Compendium.OCI.Client do
   # so silently.
   defp get_full_config(ctx, publisher, cref) do
     manifest_path =
-      Compendium.ComponentPath.file_path(
-        cref.type,
-        cref.namespace,
-        cref.name,
-        cref.version,
-        "cyfr-manifest.json"
-      )
+      Compendium.ComponentPath.manifest_path(cref.type, cref.namespace, cref.name, cref.version)
 
     with {:ok, content} <- Arca.get(ctx, manifest_path),
          {:ok, manifest} <- Jason.decode(content),
@@ -689,7 +683,7 @@ defmodule Compendium.OCI.Client do
     else
       {:error, reason} ->
         {:error,
-         "cannot read cyfr-manifest.json for #{cref.name}@#{cref.version}: #{inspect(reason)}"}
+         "cannot read #{Compendium.ComponentPath.manifest_name()} for #{cref.name}@#{cref.version}: #{inspect(reason)}"}
     end
   end
 
@@ -730,34 +724,7 @@ defmodule Compendium.OCI.Client do
             {String.to_charlist(rel_path), content}
           end)
 
-        create_tar_gz(tar_entries)
-    end
-  end
-
-  # Create a gzipped tarball from a list of {charlist_name, binary_content} entries.
-  # arca:bypass-ok=D — `:erl_tar.create/3` :memory option is unreliable on
-  # OTP 28, so we round-trip through System.tmp_dir!. The tar bytes are
-  # produced and consumed entirely in this function; no Arca-tracked content
-  # touches the local FS.
-  defp create_tar_gz(tar_entries) do
-    tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{:rand.uniform(1_000_000)}.tar")
-
-    try do
-      # arca:bypass-ok=D — tar written to the scratch path above.
-      case :erl_tar.create(String.to_charlist(tmp), tar_entries) do
-        :ok ->
-          # arca:bypass-ok=D — read back the tar scratch file.
-          case File.read(tmp) do
-            {:ok, tar_binary} -> {:ok, :zlib.gzip(tar_binary)}
-            {:error, _} -> :none
-          end
-
-        {:error, _} ->
-          :none
-      end
-    after
-      # arca:bypass-ok=D — remove the tar scratch file.
-      File.rm(tmp)
+        Compendium.Archive.create_tar_gz(tar_entries)
     end
   end
 
@@ -849,12 +816,11 @@ defmodule Compendium.OCI.Client do
 
   defp maybe_store_manifest(ctx, component_ref, config_bytes) do
     path =
-      Compendium.ComponentPath.file_path(
+      Compendium.ComponentPath.manifest_path(
         component_ref.type,
         component_ref.namespace,
         component_ref.name,
-        component_ref.version,
-        "cyfr-manifest.json"
+        component_ref.version
       )
 
     case Arca.put(ctx, path, config_bytes) do
@@ -1017,7 +983,7 @@ defmodule Compendium.OCI.Client do
   # non-local namespace in the ref (a publisher membership) is used as-is.
   defp resolve_push_publisher(cref, registry, %Context{} = ctx) do
     case cref.namespace do
-      "local" ->
+      @local_publisher ->
         case Sanctum.Namespace.lookup_status(ctx.user_id) do
           {:ok, slug} ->
             {:ok, slug}

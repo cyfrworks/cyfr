@@ -379,7 +379,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # Helpers
   # ============================================================================
 
-  defp registry_url, do: Compendium.Registry.canonical_host()
+  defp registry_url, do: Compendium.RegistryHost.canonical_host()
 
   defp uptime do
     {uptime_ms, _} = :erlang.statistics(:wall_clock)

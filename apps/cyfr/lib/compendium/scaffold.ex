@@ -45,26 +45,30 @@ defmodule Compendium.Scaffold do
 
           {"tincture", _} ->
             [
-              {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
+              {base_path ++ [Compendium.ComponentPath.manifest_name()],
+               manifest_for(name, type, version)},
               {base_path ++ ["index.html"], tincture_index_html(name)},
               {base_path ++ ["app.js"], tincture_app_js()},
               {base_path ++ ["style.css"], tincture_style_css()},
-              {base_path ++ ["public", "media", "icon.svg"], placeholder_icon_svg()},
-              {base_path ++ ["public", "media", "preview-1.svg"], placeholder_preview_svg()}
+              {base_path ++ Cyfr.TinctureHelpers.default_icon(), placeholder_icon_svg()},
+              {base_path ++ Cyfr.TinctureHelpers.default_preview(), placeholder_preview_svg()}
             ]
 
           _ ->
             [
-              {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
+              {base_path ++ [Compendium.ComponentPath.manifest_name()],
+               manifest_for(name, type, version)},
               {base_path ++ ["src", "Cargo.toml"], cargo_toml_for(type_atom)},
               {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
             ] ++ wit_files(base_path, type_atom)
         end
 
-      case write_all(ctx, files) do
-        :ok ->
-          reference = "#{type}:local.#{name}:#{version}"
-          file_list = Enum.map(files, fn {path, _} -> Path.join(path) end)
+      case Arca.put_files(ctx, files) do
+        {:ok, written} ->
+          reference = local_ref(type, name, version)
+          # In write order — the manifest (the unit's completion sentinel)
+          # is last, and the list is the witness.
+          file_list = Enum.map(written, &Path.join/1)
 
           {:ok,
            %{
@@ -121,14 +125,20 @@ defmodule Compendium.Scaffold do
   defp validate_version(_), do: {:error, "Missing required argument: version"}
 
   defp check_not_exists(ctx, name, type, version) do
-    path = component_base_path(name, type, version) ++ ["cyfr-manifest.json"]
+    path =
+      component_base_path(name, type, version) ++ [Compendium.ComponentPath.manifest_name()]
 
-    case Arca.get(ctx, path) do
-      {:ok, _} ->
-        {:error, "Component already exists: #{type}:local.#{name}:#{version}"}
-
-      {:error, _} ->
+    cond do
+      not Arca.exists?(ctx, path) ->
         :ok
+
+      version in Compendium.Provenance.shipped_versions(type, name) ->
+        {:error,
+         "#{local_ref(type, name, version)} is bundled with the server — edit it in place " <>
+           "(your athanor gets its own copy on first write), or scaffold a new version or name"}
+
+      true ->
+        {:error, "Component already exists: #{local_ref(type, name, version)}"}
     end
   end
 
@@ -136,8 +146,23 @@ defmodule Compendium.Scaffold do
   # Path Helpers
   # ============================================================================
 
+  # The one spelling of a local reference — never hand-interpolated.
+  defp local_ref(type, name, version) do
+    Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+      type: type,
+      namespace: Compendium.ComponentPath.default_publisher(),
+      name: name,
+      version: version
+    })
+  end
+
   defp component_base_path(name, type, version) do
-    Compendium.ComponentPath.version_dir(type, "local", name, version)
+    Compendium.ComponentPath.version_dir(
+      type,
+      Compendium.ComponentPath.default_publisher(),
+      name,
+      version
+    )
   end
 
   # ============================================================================
@@ -149,7 +174,7 @@ defmodule Compendium.Scaffold do
       name: name,
       type: "catalyst",
       version: version,
-      publisher: "local",
+      publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your catalyst",
       caps: %{
         egress: %{
@@ -169,7 +194,7 @@ defmodule Compendium.Scaffold do
       name: name,
       type: "formula",
       version: version,
-      publisher: "local",
+      publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your formula",
       caps: %{
         tools: [],
@@ -186,7 +211,7 @@ defmodule Compendium.Scaffold do
       name: name,
       type: "reagent",
       version: version,
-      publisher: "local",
+      publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your reagent",
       dependencies: %{
         static: []
@@ -199,7 +224,7 @@ defmodule Compendium.Scaffold do
       name: name,
       type: "tincture",
       version: version,
-      publisher: "local",
+      publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your tincture",
       tincture: %{
         entry: "index.html",
@@ -427,25 +452,14 @@ defmodule Compendium.Scaffold do
   end
 
   # ============================================================================
-  # File Writing
-  # ============================================================================
-
-  defp write_all(ctx, files) do
-    Enum.reduce_while(files, :ok, fn {path, content}, :ok ->
-      case Arca.put(ctx, path, content) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  # ============================================================================
   # Next Steps
   # ============================================================================
 
   defp next_steps("catalyst", reference, _template) do
     [
-      "Edit cyfr-manifest.json to declare the needs and caps blocks",
+      "Edit cyfr-manifest.json to declare the needs and caps blocks " <>
+        "(storage grants default to none; 'data/' is the component-private scope — " <>
+        "grant 'components/' only when the component genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your catalyst logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
@@ -454,7 +468,9 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("formula", reference, _template) do
     [
-      "Edit cyfr-manifest.json to declare the needs and caps blocks",
+      "Edit cyfr-manifest.json to declare the needs and caps blocks " <>
+        "(storage grants default to none; 'data/' is the component-private scope — " <>
+        "grant 'components/' only when the component genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your formula logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
@@ -473,7 +489,9 @@ defmodule Compendium.Scaffold do
     [
       "Edit src/App.tsx to build your UI",
       "Add backend components to dependencies.static in cyfr-manifest.json",
-      "Replace public/media/icon.svg and public/media/preview-1.svg to brand the picker card (add up to 6 previews)",
+      "Replace #{Path.join(Cyfr.TinctureHelpers.default_icon())} and " <>
+        "#{Path.join(Cyfr.TinctureHelpers.default_preview())} to brand the picker card " <>
+        "(add up to #{Cyfr.TinctureHelpers.preview_count()} previews)",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the built tincture"
     ]
@@ -484,7 +502,9 @@ defmodule Compendium.Scaffold do
       "Edit index.html, app.js, and style.css to build your UI",
       "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.invoke() to call backend components",
       "Add backend components to dependencies.static in cyfr-manifest.json",
-      "Replace public/media/icon.svg and public/media/preview-1.svg to brand the picker card (add up to 6 previews)",
+      "Replace #{Path.join(Cyfr.TinctureHelpers.default_icon())} and " <>
+        "#{Path.join(Cyfr.TinctureHelpers.default_preview())} to brand the picker card " <>
+        "(add up to #{Cyfr.TinctureHelpers.preview_count()} previews)",
       "Register: use component.register with reference '#{reference}'"
     ]
   end
@@ -571,7 +591,8 @@ defmodule Compendium.Scaffold do
 
   defp react_tincture_files(base_path, name, version) do
     [
-      {base_path ++ ["cyfr-manifest.json"], react_manifest_for(name, version)},
+      {base_path ++ [Compendium.ComponentPath.manifest_name()],
+       react_manifest_for(name, version)},
       {base_path ++ ["package.json"], react_package_json(name)},
       {base_path ++ ["tsconfig.json"], react_tsconfig()},
       {base_path ++ ["vite.config.ts"], react_vite_config()},
@@ -579,8 +600,8 @@ defmodule Compendium.Scaffold do
       {base_path ++ ["src", "main.tsx"], react_main_tsx()},
       {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
       {base_path ++ ["src", "index.css"], tincture_style_css()},
-      {base_path ++ ["public", "media", "icon.svg"], placeholder_icon_svg()},
-      {base_path ++ ["public", "media", "preview-1.svg"], placeholder_preview_svg()}
+      {base_path ++ Cyfr.TinctureHelpers.default_icon(), placeholder_icon_svg()},
+      {base_path ++ Cyfr.TinctureHelpers.default_preview(), placeholder_preview_svg()}
     ]
   end
 
@@ -589,7 +610,7 @@ defmodule Compendium.Scaffold do
       name: name,
       type: "tincture",
       version: version,
-      publisher: "local",
+      publisher: Compendium.ComponentPath.default_publisher(),
       description: "TODO: Describe your tincture",
       tincture: %{
         entry: "index.html",

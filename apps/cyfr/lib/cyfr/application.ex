@@ -19,9 +19,11 @@ defmodule Cyfr.Application do
     ensure_db_directory!()
     maybe_migrate_before_pool()
     # The invoke-budget counters, owned by the application master so they
-    # outlive every request that charges them.
+    # outlive every request that charges them. The Arca.Cache table is
+    # deliberately NOT owned here: it is a disposable read-through cache,
+    # created and re-created by its one supervised owner
+    # (`Arca.Cache.Sweeper`) — a sweeper crash flushes it, harmlessly.
     Sanctum.Authority.Budget.ensure_table()
-    Arca.Cache.init()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
@@ -65,11 +67,13 @@ defmodule Cyfr.Application do
     infra_children = [
       # Arca storage layer
       Arca.Repo,
+      # The cache table's one owner — before anything that might read
+      # through it.
+      Arca.Cache.Sweeper,
       # The write-behind for bookkeeping rows (allowed policy lines, MCP log
       # completions, vault last-used); right after the repo so it drains
       # before the repo goes down.
       Cyfr.RecordSink,
-      Arca.Cache.Sweeper,
       Cyfr.RetentionScheduler,
       Arca.AuditHandler,
       # Request rate-limit counters — own table, isolated from Arca.Cache so an
@@ -122,8 +126,10 @@ defmodule Cyfr.Application do
       {Registry, keys: :unique, name: Prism.ConversationRegistry},
       {DynamicSupervisor, name: Prism.ConversationSupervisor, strategy: :one_for_one},
       maybe_conversation_recovery(),
-      # Last: seeds Home from the bundle on first boot. Needs the repo, the
-      # tincture registry (the seed scan reloads it) and nothing else.
+      # Last: mints Home's rows from the seed union on first boot (the
+      # overlay serves the bundle in place — no bytes are copied). Needs
+      # the repo, the tincture registry (the scan reloads it) and nothing
+      # else.
       Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
     ]
 

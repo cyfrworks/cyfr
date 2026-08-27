@@ -136,7 +136,7 @@ defmodule Opus.StorageHandler do
     result =
       case parse_request(json_request) do
         {:ok, %{action: action} = request} ->
-          case validate_and_dispatch(request, edge, limits, ctx, opts) do
+          case dispatch_caught(request, edge, limits, ctx, opts, component_ref) do
             {:ok, response} ->
               emit_telemetry(component_ref, action, :ok, start_time)
               encode_success(response)
@@ -152,6 +152,22 @@ defmodule Opus.StorageHandler do
       end
 
     result
+  end
+
+  # The one place the moduledoc's "never raised into WASM" promise is kept:
+  # anything below the boundary that raises becomes a typed JSON error. The
+  # message stays generic — host paths and internals must not leak to the
+  # guest; the full exception goes to the host log.
+  defp dispatch_caught(request, edge, limits, ctx, opts, component_ref) do
+    validate_and_dispatch(request, edge, limits, ctx, opts)
+  rescue
+    exception ->
+      Logger.error(
+        "[Opus.StorageHandler] #{component_ref} #{request.action} raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, :storage_error, "Internal storage error."}
   end
 
   # ============================================================================
@@ -187,6 +203,7 @@ defmodule Opus.StorageHandler do
     with :ok <- validate_tenant(ctx),
          :ok <- validate_action_allowed(edge, action),
          :ok <- validate_path_scope(path),
+         :ok <- validate_mutable_depth(action, path),
          :ok <- validate_path_safe(path),
          :ok <- validate_allowed_paths(edge, path),
          :ok <- validate_write_size(action, request, limits),
@@ -198,11 +215,52 @@ defmodule Opus.StorageHandler do
 
   # Every guest path is tenant-relative, so a context without an athanor has
   # no storage at all — a typed refusal here, where Arca's fail-closed
-  # tenant guard would raise.
-  defp validate_tenant(%{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+  # tenant guard would raise. One spelling: `Arca.Storage.athanor_ready?/1`
+  # is the boundary form of the invariant `tenant_segments/1` enforces by
+  # raising, malformed-id grammar included.
+  defp validate_tenant(%Context{} = ctx) do
+    if Arca.Storage.athanor_ready?(ctx) do
+      :ok
+    else
+      {:error, :storage_path_denied, "Storage requires an athanor-scoped context."}
+    end
+  end
 
-  defp validate_tenant(_ctx),
-    do: {:error, :storage_path_denied, "Storage requires an athanor-scoped context."}
+  @mutating_actions ~w(write append delete)
+
+  # `list`/`exists` special-case the bare root (`""`) with synthetic
+  # answers — mutations must not: `""` and a bare scope name directories,
+  # and Arca refuses them as `:invalid_path`. Refuse here with a
+  # guest-comprehensible error instead of a generic storage_error.
+  defp validate_mutable_depth(action, path) when action in @mutating_actions do
+    case String.split(path, "/", trim: true) do
+      [_scope, _ | _] = segments ->
+        validate_mutable_unit(map_guest_scope(segments), path)
+
+      _ ->
+        {:error, :storage_path_denied,
+         "A file path inside a scope is required (e.g. 'data/notes.txt'). Got: '#{path}'"}
+    end
+  end
+
+  defp validate_mutable_depth(_action, _path), do: :ok
+
+  # A mutation inside an overlaid scope must resolve to a shadow unit
+  # (`Arca.Storage.locate/1` — pure grammar, safe on unvalidated input):
+  # a guest write at `components/junk.txt` would mint a tree shape no
+  # unit grammar owns — charged to quota, invisible to every scanner.
+  # `data/` maps to the non-overlaid `guest/` scope and passes untouched.
+  defp validate_mutable_unit(segments, path) do
+    case Arca.Storage.locate(segments) do
+      :above_unit ->
+        {:error, :storage_path_denied,
+         "Component writes must land inside a version directory " <>
+           "(components/{type}s/{publisher}/{name}/{version}/...). Got: '#{path}'"}
+
+      _unit_or_not_overlaid ->
+        :ok
+    end
+  end
 
   @writing_actions ~w(write append)
 
@@ -245,11 +303,18 @@ defmodule Opus.StorageHandler do
   # second spelling of the same numbers, free to drift.
   defp default_public_quota, do: Application.fetch_env!(:cyfr, :public_storage_quota)
 
+  # A fixed ceiling on files per guest-writable scope. No byte cap sees a
+  # zero-byte-file loop, so the file count gets its own backstop — far above
+  # any real workload, present on every install, and no config key.
+  @max_scope_files 100_000
+
   # The operator's per-athanor ceiling for authenticated writes
   # (`CYFR_ATHANOR_STORAGE_BYTES`) — off unless set, as a private box needs
   # none. `Sanctum.Tenancy.Caps.check_storage/2` measures the athanor's
-  # whole tree; the incoming size is the decoded payload.
-  defp validate_athanor_quota(action, %{content: content}, ctx) when action in @writing_actions do
+  # whole tree; the incoming size is the decoded payload. The file-count
+  # backstop rides the same gate, against the per-scope counters.
+  defp validate_athanor_quota(action, %{path: path, content: content}, ctx)
+       when action in @writing_actions do
     incoming =
       case Base.decode64(content || "") do
         {:ok, decoded} -> byte_size(decoded)
@@ -258,14 +323,32 @@ defmodule Opus.StorageHandler do
 
     case Sanctum.Tenancy.Caps.check_storage(ctx, incoming) do
       :ok ->
-        :ok
+        validate_scope_files(ctx, path)
 
       {:error, {:limit_reached, :athanor_storage_bytes, cap}} ->
         {:error, :storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)"}
+
+      {:error, :storage_unverifiable} ->
+        {:error, :storage_quota_exceeded,
+         "Athanor storage usage cannot be verified right now — try again"}
     end
   end
 
   defp validate_athanor_quota(_action, _request, _ctx), do: :ok
+
+  # An unreadable count fails open like the byte cap on this authenticated
+  # path — the backstop guards against runaway loops, not against a walk
+  # outage.
+  defp validate_scope_files(ctx, path) do
+    case scope_usage(ctx, map_guest_scope([storage_root(path)])) do
+      {:ok, %{files: files}} when files >= @max_scope_files ->
+        {:error, :storage_quota_exceeded,
+         "Storage file ceiling reached (#{@max_scope_files} files per scope)"}
+
+      _ ->
+        :ok
+    end
+  end
 
   # Usage is the RECURSIVE count and byte total under the scope root, and the
   # incoming size is the decoded payload — measuring top-level basenames (or
@@ -296,15 +379,16 @@ defmodule Opus.StorageHandler do
         end
 
       _ ->
-        # An unreadable namespace is an empty one for quota purposes: the
-        # write itself still passes through every path and action check.
-        # A warning marks the fail-open so an operator can see it happen.
+        # Fail CLOSED: public profiles are the adversarial surface, and an
+        # induced usage failure (S3 errors are guest-timeable) must not mint
+        # unlimited writes. The general athanor cap stays fail-open — that
+        # asymmetry follows the trust level.
         Logger.warning(
           "[Opus.StorageHandler] public-quota usage unreadable for #{ctx.athanor_id}; " <>
-            "allowing the write"
+            "refusing the write"
         )
 
-        :ok
+        {:error, :storage_quota_exceeded, "Storage usage unavailable — write refused."}
     end
   end
 
@@ -369,12 +453,10 @@ defmodule Opus.StorageHandler do
   Empty paths are allowed (for root-level list/exists operations).
   """
   @spec validate_path_scope(String.t()) :: :ok | {:error, atom(), String.t()}
-  def validate_path_scope(""), do: :ok
-
   def validate_path_scope(path) do
-    if Enum.any?(valid_scopes(), fn scope ->
-         path == scope or String.starts_with?(path, scope <> "/")
-       end) do
+    # One predicate with the manifest parser (`Compendium.Manifest.Caps`),
+    # so a grant that parses is a path this gate honors — and vice versa.
+    if Arca.Storage.valid_guest_path?(path) do
       :ok
     else
       allowed = Enum.map_join(valid_scopes(), " or ", &"'#{&1}/'")

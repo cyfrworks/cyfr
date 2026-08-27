@@ -94,15 +94,33 @@ defmodule Cyfr.TinctureHelpers do
     "/t/#{athanor_segment}/#{publisher}/#{name}"
   end
 
-  @denylist ~w(data.db cyfr-manifest.json schema.sql)
+  @denylist ["data.db", Compendium.ComponentPath.manifest_name(), "schema.sql"]
   @allowed_extensions ~w(.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map)
 
   # Tincture media convention: fixed paths only, no globbing. We probe the
   # known slots via `Arca.exists?` so the same logic works against Local FS
-  # and S3 (which has no real directories).
+  # and S3 (which has no real directories). This module is the convention's
+  # one spelling — the scaffolder writes its placeholders through the
+  # functions below, so what it writes, discovery finds.
   @media_icon_candidates ~w(public/media/icon.svg public/media/icon.png)
   @media_preview_extensions ~w(svg png)
   @media_preview_count 6
+
+  @doc "The media directory inside a tincture version, as segments."
+  @spec media_dir() :: [String.t()]
+  def media_dir, do: ["public", "media"]
+
+  @doc "The default icon slot the scaffolder fills, as segments."
+  @spec default_icon() :: [String.t()]
+  def default_icon, do: media_dir() ++ ["icon.svg"]
+
+  @doc "The default preview slot the scaffolder fills, as segments."
+  @spec default_preview() :: [String.t()]
+  def default_preview, do: media_dir() ++ ["preview-1.svg"]
+
+  @doc "How many preview slots the picker card shows."
+  @spec preview_count() :: pos_integer()
+  def preview_count, do: @media_preview_count
 
   @doc """
   Discover media files via Arca, using the fixed `public/media/` convention.

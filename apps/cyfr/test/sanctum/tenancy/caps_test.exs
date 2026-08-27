@@ -3,8 +3,8 @@
 
 defmodule Sanctum.Tenancy.CapsTest.UnreadableAdapter do
   @moduledoc false
-  # A storage adapter whose usage walk always fails — the fail-open branch's
-  # only door.
+  # A storage adapter whose usage walk always fails — the fail-closed
+  # branch's only door.
   @behaviour Arca.Storage
 
   defdelegate get(ctx, path), to: Arca.Adapters.Local
@@ -15,7 +15,6 @@ defmodule Sanctum.Tenancy.CapsTest.UnreadableAdapter do
   defdelegate exists?(ctx, path), to: Arca.Adapters.Local
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
   defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
   defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
   def usage(_ctx, _path), do: {:error, :eacces}
@@ -169,7 +168,7 @@ defmodule Sanctum.Tenancy.CapsTest do
              Caps.check_storage(ctx, 10)
   end
 
-  test "an unreadable usage walk fails open with a warning, never blocks writes" do
+  test "an unreadable usage walk fails CLOSED while a cap is configured" do
     prev_adapter = Application.get_env(:cyfr, :storage_adapter)
     Application.put_env(:cyfr, :storage_adapter, Sanctum.Tenancy.CapsTest.UnreadableAdapter)
 
@@ -183,14 +182,19 @@ defmodule Sanctum.Tenancy.CapsTest do
     Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(ctx.athanor_id))
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
 
-    # Fail-open by policy: an unreadable tree counts zero (with a warning),
-    # so availability wins over the ceiling — the deliberate direction.
+    # A walk that cannot answer must refuse the write — treating the tree
+    # as empty would let writes march past the ceiling.
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert :ok = Caps.check_storage(ctx, 50)
+        assert {:error, :storage_unverifiable} = Caps.check_storage(ctx, 50)
       end)
 
     assert log =~ "usage walk failed"
+
+    # With no cap configured, no walk runs — the broken adapter is never
+    # even asked.
+    Application.delete_env(:cyfr, :caps)
+    assert :ok = Caps.check_storage(ctx, 50)
   end
 
   test "the athanor total is cached, bumped by writes, and dropped by deletes" do

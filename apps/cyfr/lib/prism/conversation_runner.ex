@@ -570,7 +570,8 @@ defmodule Prism.ConversationRunner do
   defp start_turn(state, %{ctx: ctx, orchestrator: orchestrator, seq: seq} = entry) do
     rows = window_rows(state, seq)
     {task, state} = task_of(state, rows)
-    refs = Enum.flat_map(rows, &Attachments.refs_of/1)
+    turn_attachments = Attachments.attachments_of(rows)
+    conv_id = state.id
 
     Conversations.update(state.system_ctx, state.id, %{
       turn_seq: seq,
@@ -586,7 +587,7 @@ defmodule Prism.ConversationRunner do
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       result =
         try do
-          attachments = Attachments.load(ctx, refs)
+          attachments = Attachments.load(ctx, conv_id, turn_attachments)
 
           %{input: input, tool_policy: policy} =
             AquaTurn.build_input(ctx, orchestrator, task,

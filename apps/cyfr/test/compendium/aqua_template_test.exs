@@ -3,20 +3,24 @@
 
 defmodule Compendium.AquaTemplateTest do
   @moduledoc """
-  The template's copy-and-upgrade discipline: `ensure/1` seeds a missing
-  copy, `refresh/1` upgrades only a copy the members never touched, and
-  `reset/1` is the deliberate path past that guard.
+  The shipped AQUA tree through the seed overlay: no copies at provision,
+  per-file shadowing (an edited agent shadows only itself, an unedited one
+  tracks the operator's mount live), whole-skill copy-on-write, `reset/2`
+  reverting edited copies while keeping member work (`all: true` for the
+  exact shipped set), and `seed_check/0` failing loud on a v2 or empty
+  mount.
   """
 
   use ExUnit.Case, async: false
 
+  alias Compendium.AquaAgent
+  alias Compendium.AquaPath
   alias Compendium.AquaTemplate
 
   setup do
     base = Path.join(System.tmp_dir!(), "aqua_template_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")
     template = Path.join(seed, "aqua")
-    File.mkdir_p!(template)
 
     prev_base = Application.fetch_env!(:cyfr, :base_path)
     prev_seed = Application.fetch_env!(:cyfr, :seed_path)
@@ -29,113 +33,193 @@ defmodule Compendium.AquaTemplateTest do
       File.rm_rf!(base)
     end)
 
-    write_template!(template, "v1")
+    write_seed!(template, "v1")
 
-    ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_aqua", scope: :athanor)
-    {:ok, template: template, ctx: ctx}
+    {:ok, template: template, ctx: Sanctum.TestContext.local()}
   end
 
-  defp write_template!(dir, marker) do
-    File.write!(
-      Path.join(dir, "agent.json"),
-      Jason.encode!(%{"agents" => %{"aqua" => %{"prompt" => "aqua.md", "marker" => marker}}})
-    )
+  defp write_seed!(template, marker) do
+    agents = Path.join(template, "agents")
+    File.mkdir_p!(agents)
 
-    File.write!(Path.join(dir, "aqua.md"), "prompt #{marker}")
+    File.write!(Path.join(agents, "aqua.md"), """
+    ---
+    title: A.Q.U.A.
+    role: orchestrator
+    model: model-#{marker}
+    ---
+
+    orchestrator prompt #{marker}
+    """)
+
+    File.write!(Path.join(agents, "scribe.md"), """
+    ---
+    title: Scribe
+    description: writes things
+    parent: aqua
+    ---
+
+    scribe prompt #{marker}
+    """)
   end
 
-  test "ensure copies a missing template once, then leaves the copy alone", %{ctx: ctx} do
-    assert :ok = AquaTemplate.ensure(ctx)
-    assert {:ok, raw} = Arca.get(ctx, ["aqua", "agent.json"])
-    assert raw =~ "v1"
+  defp write_skill!(template, name, marker) do
+    dir = Path.join([template, "skills", name])
+    File.mkdir_p!(dir)
 
-    # A present copy is not re-copied, even after the member edits it.
-    :ok = Arca.put(ctx, ["aqua", "agent.json"], ~s({"agents": {}}))
-    assert :ok = AquaTemplate.ensure(ctx)
-    assert {:ok, ~s({"agents": {}})} = Arca.get(ctx, ["aqua", "agent.json"])
+    File.write!(Path.join(dir, "SKILL.md"), """
+    ---
+    name: #{name}
+    description: does #{name} things
+    ---
+
+    skill instructions #{marker}
+    """)
+
+    File.write!(Path.join(dir, "reference.md"), "extra #{marker}")
   end
 
-  test "refresh upgrades a pristine copy and leaves an edited one alone", %{
+  test "the shipped tree reads through with zero copies", %{ctx: ctx} do
+    assert :ok = AquaTemplate.seed_check()
+
+    assert {:ok, %{default: %{name: "aqua"}, agents: agents}} = AquaAgent.roster(ctx)
+    assert Enum.map(agents, & &1.name) == ["aqua", "scribe"]
+
+    assert {:ok, %{prompt: "orchestrator prompt v1"}} = AquaAgent.get(ctx, "aqua")
+
+    # Complete through the facade, empty on disk.
+    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+  end
+
+  test "an edited agent shadows only itself; its neighbor tracks a live seed change", %{
     ctx: ctx,
     template: template
   } do
-    assert :ok = AquaTemplate.copy_into(ctx)
-    assert {:ok, :current} = AquaTemplate.refresh(ctx)
+    {:ok, scribe} = AquaAgent.get(ctx, "scribe")
 
-    # A new release ships a new template: the untouched copy follows it.
-    write_template!(template, "v2")
-    assert {:ok, :refreshed} = AquaTemplate.refresh(ctx)
-    assert {:ok, raw} = Arca.get(ctx, ["aqua", "agent.json"])
-    assert raw =~ "v2"
-    assert {:ok, :current} = AquaTemplate.refresh(ctx)
+    :ok =
+      Arca.put(
+        ctx,
+        AquaPath.agent_file("scribe"),
+        AquaAgent.serialize(%{scribe | prompt: "ours"})
+      )
 
-    # The members edit their copy; the next shipped template must not
-    # clobber their work.
-    :ok = Arca.put(ctx, ["aqua", "aqua.md"], "our own prompt")
-    write_template!(template, "v3")
-    assert {:ok, :modified} = AquaTemplate.refresh(ctx)
-    assert {:ok, "our own prompt"} = Arca.get(ctx, ["aqua", "aqua.md"])
+    # The operator's mount moves (a new release, a live edit): the unedited
+    # agent follows it, the edited one keeps the members' work.
+    write_seed!(template, "v2")
 
-    # Reset is the deliberate path to the new template.
-    assert :ok = AquaTemplate.reset(ctx)
-    assert {:ok, "prompt v3"} = Arca.get(ctx, ["aqua", "aqua.md"])
-    assert {:ok, :current} = AquaTemplate.refresh(ctx)
+    assert {:ok, %{prompt: "orchestrator prompt v2"}} = AquaAgent.get(ctx, "aqua")
+    assert {:ok, %{prompt: "ours"}} = AquaAgent.get(ctx, "scribe")
+
+    # Deleting the edited copy reverts it to shipped.
+    assert :ok = Arca.delete(ctx, AquaPath.agent_file("scribe"))
+    assert {:ok, %{prompt: "scribe prompt v2"}} = AquaAgent.get(ctx, "scribe")
   end
 
-  test "a copy from before stamping is treated as edited", %{ctx: ctx, template: template} do
-    # A pre-stamp athanor: agent.json exists, no .seeded_digest.
-    :ok = Arca.put(ctx, ["aqua", "agent.json"], ~s({"agents": {}}))
-
-    write_template!(template, "v2")
-    assert {:ok, :unstamped} = AquaTemplate.refresh(ctx)
-    assert {:ok, ~s({"agents": {}})} = Arca.get(ctx, ["aqua", "agent.json"])
-  end
-
-  test "reset produces exactly the shipped set — member-created agents go too", %{
+  test "a shipped skill copy-on-writes whole, and refuses member deletes while unowned", %{
     ctx: ctx,
     template: template
   } do
-    assert :ok = AquaTemplate.copy_into(ctx)
+    write_skill!(template, "pdf", "v1")
 
-    # A member-created agent: its own prompt file, referenced nowhere in the
-    # shipped manifest. Before exact-set reset this survived forever, so
-    # every refresh against a new template read :modified.
-    :ok = Arca.put(ctx, ["aqua", "my_agent.md"], "member's own agent")
+    assert {:ok, binary} = Arca.get(ctx, AquaPath.skill_manifest("pdf"))
+    assert binary =~ "skill instructions v1"
 
-    write_template!(template, "v2")
-    assert {:ok, :modified} = AquaTemplate.refresh(ctx)
-    assert :ok = AquaTemplate.reset(ctx)
+    assert {:error, :bundled} = Arca.delete(ctx, AquaPath.skill_manifest("pdf"))
 
-    assert {:error, :not_found} = Arca.get(ctx, ["aqua", "my_agent.md"])
-    assert {:ok, raw} = Arca.get(ctx, ["aqua", "agent.json"])
-    assert raw =~ "v2"
-    assert {:ok, :current} = AquaTemplate.refresh(ctx)
+    # A write inside the skill materializes the whole unit, sentinel last.
+    :ok = Arca.put(ctx, AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
+    assert Arca.Adapters.Local.exists?(ctx, AquaPath.skill_manifest("pdf"))
+    assert {:ok, "extra v1"} = Arca.get(ctx, AquaPath.skill_dir("pdf") ++ ["reference.md"])
   end
 
-  test "reset refuses before deleting anything when no template ships", %{
+  test "status/1 tells shipped, modified, and own apart", %{ctx: ctx, template: template} do
+    write_skill!(template, "pdf", "v1")
+
+    {:ok, scribe} = AquaAgent.get(ctx, "scribe")
+    :ok = Arca.put(ctx, AquaPath.agent_file("scribe"), AquaAgent.serialize(scribe))
+
+    :ok =
+      Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+
+    assert [
+             %{path: "aqua/agents/aqua.md", state: :bundled},
+             %{path: "aqua/agents/mine.md", state: :user},
+             %{path: "aqua/agents/scribe.md", state: :bundled_modified},
+             %{path: "aqua/skills/pdf", state: :bundled}
+           ] = AquaTemplate.status(ctx)
+  end
+
+  test "reset reverts edited copies and KEEPS member-created agents", %{ctx: ctx} do
+    {:ok, scribe} = AquaAgent.get(ctx, "scribe")
+
+    :ok =
+      Arca.put(
+        ctx,
+        AquaPath.agent_file("scribe"),
+        AquaAgent.serialize(%{scribe | prompt: "ours"})
+      )
+
+    :ok =
+      Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+
+    assert {:ok, %{reverted: ["aqua/agents/scribe.md"], kept: ["aqua/agents/mine.md"]}} =
+             AquaTemplate.reset(ctx)
+
+    assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
+    assert {:ok, _} = AquaAgent.get(ctx, "mine")
+  end
+
+  test "reset all: true produces exactly the shipped set — member-created agents go too", %{
+    ctx: ctx
+  } do
+    {:ok, scribe} = AquaAgent.get(ctx, "scribe")
+
+    :ok =
+      Arca.put(
+        ctx,
+        AquaPath.agent_file("scribe"),
+        AquaAgent.serialize(%{scribe | prompt: "ours"})
+      )
+
+    :ok =
+      Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+
+    assert {:ok, %{reverted: reverted, kept: []}} = AquaTemplate.reset(ctx, all: true)
+    assert Enum.sort(reverted) == ["aqua/agents/mine.md", "aqua/agents/scribe.md"]
+
+    assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
+    assert {:error, :not_found} = AquaAgent.get(ctx, "mine")
+    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
+  end
+
+  test "reset refuses before deleting anything when the install ships no template", %{
     ctx: ctx,
     template: template
   } do
-    assert :ok = AquaTemplate.copy_into(ctx)
-    :ok = Arca.put(ctx, ["aqua", "my_agent.md"], "member's own agent")
+    :ok = Arca.put(ctx, AquaPath.agent_file("mine"), "---\ntitle: Mine\n---\n\nmine\n")
 
-    # The install loses its template (empty seed tree): reset must refuse
-    # and leave the athanor's copy intact — deleting first would destroy
-    # the only agents left in existence.
+    # The install loses its template: reset must refuse and leave the
+    # athanor's own work intact — deleting first would destroy the only
+    # agents left in existence.
     File.rm_rf!(template)
     File.mkdir_p!(template)
 
     assert {:error, :template_missing} = AquaTemplate.reset(ctx)
-    assert {:ok, _} = Arca.get(ctx, ["aqua", "agent.json"])
-    assert {:ok, "member's own agent"} = Arca.get(ctx, ["aqua", "my_agent.md"])
+    assert {:error, :template_missing} = AquaTemplate.reset(ctx, all: true)
+    assert {:ok, _} = Arca.get(ctx, AquaPath.agent_file("mine"))
   end
 
-  test "the stamp never surfaces in the template's file listing", %{ctx: ctx} do
-    assert :ok = AquaTemplate.copy_into(ctx)
-    assert AquaTemplate.files() == ["agent.json", "aqua.md"]
+  test "seed_check/0 fails loud on broken install media", %{template: template} do
+    assert :ok = AquaTemplate.seed_check()
 
-    # The copy carries the stamp on disk, but the manifest/.md filter every
-    # listing applies keeps it out of sight.
-    assert Arca.exists?(ctx, ["aqua", ".seeded_digest"])
+    # A v2-shaped mount (agent.json at the root) gets a pointed message.
+    File.write!(Path.join(template, "agent.json"), "{}")
+    assert {:error, :seed_is_v2_shaped} = AquaTemplate.seed_check()
+    File.rm!(Path.join(template, "agent.json"))
+
+    # A roster without an orchestrator refuses too.
+    File.rm!(Path.join([template, "agents", "aqua.md"]))
+    assert {:error, :no_orchestrator} = AquaTemplate.seed_check()
   end
 end

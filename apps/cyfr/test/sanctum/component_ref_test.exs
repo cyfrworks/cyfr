@@ -226,58 +226,6 @@ defmodule Sanctum.ComponentRefTest do
   end
 
   # ============================================================================
-  # from_path/1
-  # ============================================================================
-
-  describe "from_path/1" do
-    test "extracts ref with type from catalyst path" do
-      assert {:ok,
-              %ComponentRef{
-                type: "catalyst",
-                namespace: "local",
-                name: "claude",
-                version: "0.1.0"
-              }} =
-               ComponentRef.from_path("components/catalysts/local/claude/0.1.0/catalyst.wasm")
-    end
-
-    test "extracts ref with type from reagent path" do
-      assert {:ok,
-              %ComponentRef{type: "reagent", namespace: "local", name: "parser", version: "1.0.0"}} =
-               ComponentRef.from_path("components/reagents/local/parser/1.0.0/reagent.wasm")
-    end
-
-    test "extracts ref with type from formula path" do
-      assert {:ok,
-              %ComponentRef{
-                type: "formula",
-                namespace: "cyfr",
-                name: "pipeline",
-                version: "2.0.0"
-              }} =
-               ComponentRef.from_path("components/formulas/cyfr/pipeline/2.0.0/formula.wasm")
-    end
-
-    test "extracts ref from absolute path" do
-      assert {:ok,
-              %ComponentRef{
-                type: "catalyst",
-                namespace: "local",
-                name: "my-tool",
-                version: "0.1.0"
-              }} =
-               ComponentRef.from_path(
-                 "/home/user/project/components/catalysts/local/my-tool/0.1.0/catalyst.wasm"
-               )
-    end
-
-    test "returns error for non-canonical path" do
-      assert {:error, msg} = ComponentRef.from_path("/tmp/random/file.wasm")
-      assert msg =~ "Cannot derive component ref"
-    end
-  end
-
-  # ============================================================================
   # validate/1
   # ============================================================================
 
@@ -504,16 +452,6 @@ defmodule Sanctum.ComponentRefTest do
 
     test "typed shorthand normalizes through round-trip" do
       {:ok, parsed} = ComponentRef.parse("c:local.claude:0.1.0")
-      canonical = ComponentRef.to_string(parsed)
-      assert canonical == "catalyst:local.claude:0.1.0"
-      {:ok, reparsed} = ComponentRef.parse(canonical)
-      assert reparsed == parsed
-    end
-
-    test "from_path round-trip includes type" do
-      {:ok, parsed} =
-        ComponentRef.from_path("components/catalysts/local/claude/0.1.0/catalyst.wasm")
-
       canonical = ComponentRef.to_string(parsed)
       assert canonical == "catalyst:local.claude:0.1.0"
       {:ok, reparsed} = ComponentRef.parse(canonical)

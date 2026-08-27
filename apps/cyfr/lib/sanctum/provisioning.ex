@@ -3,11 +3,14 @@
 
 defmodule Sanctum.Provisioning do
   @moduledoc """
-  What turns an athanor row into a working athanor: the seed bundle copied
-  in and registered, the AQUA agent definitions copied from the shipped
-  template, the published components the bundle depends on pulled from the
-  registry, and a baseline consent minted for every executable local
-  component — so the athanor's AQUA answers from the first prompt.
+  What turns an athanor row into a working athanor: the seed bundle
+  registered as rows (its bytes stay in the seed tree — `Arca.Overlay`
+  reads them through the athanor's `components/` until a write
+  materializes a copy), the AQUA agent definitions checked well-formed
+  (never copied — the overlay serves the shipped template in place), the
+  published components the bundle depends on pulled from the registry,
+  and a baseline consent minted for every executable local component —
+  so the athanor's AQUA answers from the first prompt.
 
   A person's own athanor is minted here on their first admitted sign-in
   (`after_sign_in/1`, once their cyfr.run namespace is known — the athanor's
@@ -24,7 +27,7 @@ defmodule Sanctum.Provisioning do
 
   require Logger
 
-  alias Compendium.{AthanorSeeder, Pull}
+  alias Compendium.{AutoIndexer, Pull}
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Caps, Members, Users}
 
@@ -111,11 +114,11 @@ defmodule Sanctum.Provisioning do
   end
 
   @doc """
-  Fill an athanor: seed bundle → register → pull the dependency closure →
-  baseline consents → mark provisioned. `acting_ctx` is the person's
-  context focused on the athanor (their pull credential); `nil` provisions
-  as the server (anonymous pulls). Returns the row either way; a failure is
-  recorded on it and logged.
+  Fill an athanor: register the bundle (the scan walking the seed overlay)
+  → pull the dependency closure → baseline consents → mark provisioned.
+  `acting_ctx` is the person's context focused on the athanor (their pull
+  credential); `nil` provisions as the server (anonymous pulls). Returns
+  the row either way; a failure is recorded on it and logged.
   """
   @spec provision(Arca.Schemas.Athanor.t(), Context.t() | nil) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
@@ -124,7 +127,7 @@ defmodule Sanctum.Provisioning do
   def provision(%{id: athanor_id} = athanor, acting_ctx) do
     ctx = acting_ctx || seed_ctx(athanor_id)
 
-    with :ok <- AthanorSeeder.seed(athanor),
+    with {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(ctx),
          %{failed: []} = closure <- Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx)),
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
@@ -138,6 +141,9 @@ defmodule Sanctum.Provisioning do
     else
       %{failed: failed} ->
         record_failure(athanor, :closure, failed)
+
+      {:error, {:aqua_template, _} = reason} ->
+        record_failure(athanor, :aqua_template, reason)
 
       {:error, reason} ->
         record_failure(athanor, :seed, reason)
@@ -251,21 +257,61 @@ defmodule Sanctum.Provisioning do
     Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
   end
 
-  # The athanor's own AQUA agent definitions, from the shipped template. A
-  # copy already there (a retry after a later step failed) is kept as is.
-  defp aqua_definitions(ctx) do
-    case Compendium.AquaTemplate.ensure(ctx) do
+  # The bundle registered as rows: the scan walks the athanor's
+  # `components/` union (its own tree over the seed bundle — `Arca.Overlay`)
+  # and mints a row per version directory. No bytes move. An install
+  # without its bundle cannot provision anyone; say so rather than minting
+  # an empty athanor.
+  defp register_bundle(athanor_id) do
+    ctx = seed_ctx(athanor_id)
+
+    with :ok <- bundle_present(ctx) do
+      # A component that fails registration is logged by the scan and
+      # skipped; the consent bootstrap's `all_minted` is the gate that
+      # decides whether what registered is enough to provision.
+      {:ok, AutoIndexer.scan(ctx: ctx)}
+    end
+  end
+
+  defp bundle_present(ctx) do
+    case Arca.list_recursive(ctx, Arca.Storage.seed_prefix("components")) do
+      {:ok, [_ | _]} -> :ok
+      {:ok, []} -> {:error, :bundle_missing}
+      {:error, reason} -> {:error, {:bundle_unreadable, reason}}
+    end
+  end
+
+  # The AQUA template is served in place through the seed overlay — no
+  # copy is made. What provisioning checks is that the install SHIPS a
+  # well-formed template (a v2-shaped or empty mount fails loud here, at
+  # the one moment an operator is watching, instead of as an empty roster
+  # later). `ctx` is unused — the check is the seed's, not the athanor's.
+  defp aqua_definitions(_ctx) do
+    case Compendium.AquaTemplate.seed_check() do
       :ok -> :ok
       {:error, reason} -> {:error, {:aqua_template, reason}}
     end
   end
 
   @doc """
-  Additively sync every provisioned athanor with the seed media a release
-  shipped: bundle versions an athanor lacks are copied in and registered
-  (their published deps pulled), and an unmodified AQUA template copy is
-  refreshed (`Compendium.AquaTemplate.refresh/1`). Existing version
-  directories and edited templates are never touched.
+  Sync every provisioned athanor with the seed media a release shipped:
+  the scan re-walks the `components/` union so bundle versions the release
+  added get rows, their published deps pulled, AND their baseline consents
+  minted — a row without a profile is uninvocable, and nothing after boot
+  would ever mint one. No bytes move, the overlay serves them in place.
+  AQUA needs no sync step at all: the same overlay serves its tree, so a
+  new release's agents and skills are simply visible, per-file, everywhere
+  they were not edited.
+
+  The sync also collapses pristine copies: a materialized unit that is
+  byte-identical to what the release now ships serves nothing — deleting
+  it reclaims the athanor's quota and lets the unit track upgrades again.
+  Edited copies are kept.
+
+  Why per-file for aqua and per-version for components: the upgrade rule
+  lives with the layout table (`Arca.Storage`) — a release only ever
+  changes what an UNmaterialized unit reads through to, and the unit
+  granularity IS the upgrade granularity.
 
   Runs at boot (`Cyfr.Bootstrap`); a failure logs and moves on — a sync
   must never take the server down or block another athanor's.
@@ -275,14 +321,9 @@ defmodule Sanctum.Provisioning do
     for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at) do
       ctx = seed_ctx(athanor.id)
 
-      # Boot never reads the present/modified distinction, so it skips the
-      # byte-digesting that classification costs.
-      case AthanorSeeder.sync(athanor.id, classify_drift: false) do
-        {:ok, %{copied: [_ | _] = copied}} ->
-          Logger.info(
-            "[Provisioning] #{athanor.id}: synced #{length(copied)} bundle version(s): " <>
-              Enum.join(copied, ", ")
-          )
+      case AutoIndexer.scan(ctx: ctx) do
+        %{registered: registered} when registered > 0 ->
+          Logger.info("[Provisioning] #{athanor.id}: registered #{registered} bundle version(s)")
 
           case Pull.ensure_published_deps(ctx, missing_bundle_deps(ctx)) do
             %{failed: []} ->
@@ -294,21 +335,52 @@ defmodule Sanctum.Provisioning do
               )
           end
 
-        {:ok, _report} ->
-          :ok
+          bootstrap_synced(ctx, athanor.id)
 
-        {:error, reason} ->
-          Logger.warning("[Provisioning] #{athanor.id}: bundle sync failed: #{inspect(reason)}")
+        %{errors: errors} when errors > 0 ->
+          Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
+
+        _scan ->
+          :ok
       end
 
-      case Compendium.AquaTemplate.refresh(ctx) do
-        {:ok, _} ->
-          :ok
+      collapse_pristine(ctx, athanor.id)
+    end
+
+    :ok
+  end
+
+  # Idempotent by construction: every already-consented ref lands in
+  # `skipped`, so only what the release just added mints anything.
+  defp bootstrap_synced(ctx, athanor_id) do
+    case Sanctum.Consent.Bootstrap.run(ctx) do
+      {:ok, %{minted: [_ | _] = minted}} ->
+        Logger.info(
+          "[Provisioning] #{athanor_id}: minted baseline consents for #{Enum.join(minted, ", ")}"
+        )
+
+      {:ok, _nothing_new} ->
+        :ok
+    end
+  end
+
+  defp collapse_pristine(ctx, athanor_id) do
+    for root <- Arca.Storage.seed_roots(),
+        {unit, :materialized} <- Arca.Overlay.unit_statuses(ctx, root) do
+      case Arca.Overlay.collapse_unit(ctx, unit) do
+        :collapsed ->
+          Logger.info(
+            "[Provisioning] #{athanor_id}: collapsed pristine copy #{Enum.join(unit, "/")}"
+          )
 
         {:error, reason} ->
           Logger.warning(
-            "[Provisioning] #{athanor.id}: AQUA template refresh failed: #{inspect(reason)}"
+            "[Provisioning] #{athanor_id}: collapse of #{Enum.join(unit, "/")} failed: " <>
+              inspect(reason)
           )
+
+        _kept_or_absent ->
+          :ok
       end
     end
 
@@ -318,7 +390,10 @@ defmodule Sanctum.Provisioning do
   # Every static dependency the athanor's local components declare that
   # is not present — the published catalysts the bundled AQUA depends on.
   defp missing_bundle_deps(ctx) do
-    case Arca.ComponentStorage.list_components(ctx, publisher: "local", limit: 1_000) do
+    case Arca.ComponentStorage.list_components(ctx,
+           publisher: Compendium.ComponentPath.default_publisher(),
+           limit: :none
+         ) do
       {:ok, rows} ->
         rows
         |> Enum.flat_map(&Pull.missing_deps(ctx, &1))

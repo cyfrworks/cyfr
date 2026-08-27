@@ -137,19 +137,70 @@ defmodule Cyfr.RetentionScheduler do
 
     sweep_webhook_deliveries()
     sweep_stale_tmp_files()
+    sweep_conversation_blob_orphans()
+    sweep_health_probe_dir()
   end
 
-  # Orphaned atomic-write temp files are a Local-adapter artifact; object
-  # stores have no in-flight keys to reclaim.
-  defp sweep_stale_tmp_files do
-    if Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local) == Arca.Adapters.Local do
-      try do
-        {:ok, count} = Arca.Adapters.Local.sweep_stale_tmp()
-        if count > 0, do: Logger.info("[RetentionScheduler] Removed #{count} stale temp files")
-      rescue
-        e -> Logger.error("[RetentionScheduler] Temp sweep crashed: #{Exception.message(e)}")
-      end
+  # The storage readiness probe overwrites one fixed key and cleans up
+  # after itself; this belt reclaims anything a failed delete (or the old
+  # per-probe naming scheme) stranded. A racing probe's in-flight key may
+  # go with it — the probe treats that delete race as success.
+  defp sweep_health_probe_dir do
+    case Arca.delete_tree(Sanctum.system_context(), ["system", "health"]) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Health-probe sweep failed: #{inspect(reason)}")
     end
+  rescue
+    e -> Logger.error("[RetentionScheduler] Health-probe sweep crashed: #{Exception.message(e)}")
+  end
+
+  # Conversation blob dirs no row backs (a blob delete that failed after
+  # its rows were reclaimed) — swept so the bytes stop counting against
+  # the athanor's storage cap forever.
+  defp sweep_conversation_blob_orphans do
+    case Cyfr.Retention.sweep_conversation_blob_orphans() do
+      {:ok, %{dirs_deleted: 0, errors: []}} ->
+        :ok
+
+      {:ok, %{dirs_deleted: deleted, tenants: tenants, errors: errors}} ->
+        if deleted > 0 do
+          Logger.info(
+            "[RetentionScheduler] Reclaimed #{deleted} orphaned conversation blob dirs " <>
+              "across #{tenants} tenants"
+          )
+        end
+
+        for {athanor_id, reason} <- errors do
+          Logger.warning(
+            "[RetentionScheduler] Blob orphan sweep failed athanor=#{athanor_id}: #{inspect(reason)}"
+          )
+        end
+
+        :ok
+    end
+  rescue
+    e -> Logger.error("[RetentionScheduler] Blob orphan sweep crashed: #{Exception.message(e)}")
+  end
+
+  # Orphaned atomic-write temp files are an adapter artifact; the facade
+  # asks whichever adapter is configured, and one with nothing to reclaim
+  # answers zero.
+  defp sweep_stale_tmp_files do
+    case Arca.sweep_stale_tmp() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Removed #{count} stale temp files")
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Temp sweep failed: #{inspect(reason)}")
+    end
+  rescue
+    e -> Logger.error("[RetentionScheduler] Temp sweep crashed: #{Exception.message(e)}")
   end
 
   # Webhook idempotency table sweep. Default TTL 24h — webhook senders that

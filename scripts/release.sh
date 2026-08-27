@@ -38,6 +38,28 @@ if git rev-parse "$VERSION" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Shipped seed versions are immutable: the overlay serves unmaterialized
+# units straight from seed/, so changed bytes under a version directory an
+# earlier release shipped silently repatch every athanor. New bytes mean a
+# NEW version directory. Retiring a WHOLE version directory is allowed.
+# This mirrors the CI seed-guards job, which only sees pull requests.
+LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+if [ -n "$LAST_TAG" ]; then
+  SEED_BAD="$(git diff --name-only --diff-filter=M "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
+    if [ -d "$vdir" ]; then SEED_BAD="$SEED_BAD"$'\n'"$f"; fi
+  done <<< "$(git diff --name-only --diff-filter=DR "$LAST_TAG"..HEAD -- 'seed/components/' || true)"
+  SEED_BAD="$(printf '%s\n' "$SEED_BAD" | sed '/^$/d')"
+  if [ -n "$SEED_BAD" ]; then
+    echo "Error: files changed inside seed/components version directories shipped by $LAST_TAG:"
+    echo "$SEED_BAD"
+    echo "Ship a new version directory instead."
+    exit 1
+  fi
+fi
+
 if [ -n "$(git status --porcelain)" ]; then
   echo "Warning: working tree has uncommitted changes:"
   git status --short

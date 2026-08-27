@@ -120,7 +120,7 @@ defmodule Sanctum.SessionTest do
 
       # Push tokens are for pushing: none were ever stored, and storing then
       # deleting one changes nothing about who the person is.
-      registry = Compendium.Registry.canonical_host()
+      registry = Compendium.RegistryHost.canonical_host()
 
       :ok =
         Compendium.Registry.CredentialStore.put_push_token(

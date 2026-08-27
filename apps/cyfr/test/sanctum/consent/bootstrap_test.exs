@@ -83,6 +83,42 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert {"reagent:local.boot-idem", :already_bootstrapped} in skipped
   end
 
+  test "every local component is considered, past the default listing page", %{ctx: ctx} do
+    # Minimal rows are enough: a component that fails to activate lands in
+    # `skipped`, so the witness is that all 101 were even looked at — the
+    # default 100-row listing page once silently dropped the tail.
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for i <- 1..101 do
+      {:ok, _} =
+        Arca.ComponentStorage.put_component(ctx, %{
+          id: Ecto.UUID.generate(),
+          name: "bulk-#{i}",
+          version: "1.0.0",
+          component_type: "reagent",
+          description: "bulk",
+          tags: "[]",
+          category: "test",
+          license: "MIT",
+          digest: "sha256:#{:crypto.hash(:sha256, "bulk-#{i}") |> Base.encode16(case: :lower)}",
+          size: 1,
+          exports: "[]",
+          manifest: "{}",
+          publisher: "local",
+          publisher_id: nil,
+          source: "test",
+          signature_verified: false,
+          signer_identity: nil,
+          signer_issuer: nil,
+          inserted_at: now,
+          updated_at: now
+        })
+    end
+
+    assert {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
+    assert length(minted) + length(skipped) == 101
+  end
+
   test "consents are insert-only by export list" do
     exports = Arca.ConsentStorage.__info__(:functions) |> Keyword.keys()
 

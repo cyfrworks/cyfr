@@ -50,10 +50,12 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
         created_by: "system"
       })
 
-    :ok = Compendium.AthanorSeeder.seed(athanor)
-
     # The server's own mint: `granted_by` is the constant "system:bootstrap".
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
+
+    # The scan mints the bundle rows through the seed overlay — no copies.
+    %{errors: 0} = Compendium.AutoIndexer.scan(ctx: ctx)
+
     {:ok, ctx: ctx}
   end
 

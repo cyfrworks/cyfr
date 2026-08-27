@@ -76,4 +76,21 @@ defmodule Compendium.OCI.CacheTest do
       assert :miss = Cache.get_manifest("reg.io", "test/repo", "v1")
     end
   end
+
+  describe "layout" do
+    test "the cache lives under a global root — never a tenant's tree" do
+      content = "layout-witness"
+      digest = Compendium.OCI.Blob.compute_digest(content)
+      Cache.put_blob(digest, content)
+
+      ctx = Sanctum.system_context()
+      {:ok, leaves} = Arca.list_recursive(ctx, ["cache"])
+
+      assert leaves != []
+
+      for leaf <- leaves do
+        assert hd(leaf) in Arca.Storage.global_prefixes()
+      end
+    end
+  end
 end

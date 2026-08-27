@@ -12,7 +12,7 @@ defmodule Compendium.Registry.IdentityTest do
   # Read through the same accessor the code under test uses, at runtime: seven
   # other suites `put_env` this key, and a value frozen into a module attribute
   # at compile time cannot see any of them.
-  defp registry, do: Compendium.Registry.canonical_host()
+  defp registry, do: Compendium.RegistryHost.canonical_host()
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

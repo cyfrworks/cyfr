@@ -96,7 +96,7 @@ defmodule Arca.Adapters.S3MinioTest do
 
     assert {:ok, %{files: 3, bytes: 6}} = S3.usage(ctx, ["guest", "walk"])
 
-    assert {:ok, pairs} = S3.read_subtree(ctx, ["guest", "walk"])
+    assert {:ok, pairs} = Arca.Storage.read_subtree_via(S3, ctx, ["guest", "walk"])
 
     assert Enum.sort(pairs) == [
              {["a.txt"], "a"},

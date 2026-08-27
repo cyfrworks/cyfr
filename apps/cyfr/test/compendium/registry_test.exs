@@ -15,7 +15,6 @@ defmodule Compendium.RegistryTest.FailingPutAdapter do
   defdelegate exists?(ctx, path), to: Arca.Adapters.Local
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
   defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
   defdelegate usage(ctx, path), to: Arca.Adapters.Local
   defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
@@ -430,6 +429,29 @@ defmodule Compendium.RegistryTest do
       {:ok, component} = Registry.get_latest(ctx, "multi-semver")
 
       assert component.version == "2.1.0"
+    end
+  end
+
+  describe "latest_of/1" do
+    defp row(version, inserted_at), do: %{version: version, inserted_at: inserted_at}
+
+    test "picks highest semver regardless of insertion order" do
+      older = DateTime.utc_now() |> DateTime.add(-60)
+      newer = DateTime.utc_now()
+
+      # "1.2.0" inserted after "1.10.0" — semver must still win the pick.
+      assert %{version: "1.10.0"} =
+               Registry.latest_of([row("1.10.0", older), row("1.2.0", newer)])
+    end
+
+    test "breaks a version tie on inserted_at, and answers nil for no rows" do
+      older = DateTime.utc_now() |> DateTime.add(-60)
+      newer = DateTime.utc_now()
+
+      assert %{inserted_at: ^newer} =
+               Registry.latest_of([row("1.0.0", older), row("1.0.0", newer)])
+
+      assert Registry.latest_of([]) == nil
     end
   end
 
@@ -878,7 +900,7 @@ defmodule Compendium.RegistryTest do
           type: "catalyst"
         })
 
-      # Verify stored at components/{athanor_id}/{type}s/...
+      # Verify stored at athanors/{athanor_id}/components/{type}s/...
       storage_path = [
         "components",
         "catalysts",

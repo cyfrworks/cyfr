@@ -65,6 +65,10 @@ ExUnit.after_suite(fn _ ->
       System.at_exit(fn _ -> exit({:shutdown, 1}) end)
     end
   end
+
+  # The run's tmp roots do not accumulate across runs.
+  File.rm_rf(Application.fetch_env!(:cyfr, :base_path))
+  File.rm_rf(Application.fetch_env!(:cyfr, :seed_path))
 end)
 
 ExUnit.start()

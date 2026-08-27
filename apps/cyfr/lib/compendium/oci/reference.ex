@@ -32,9 +32,9 @@ defmodule Compendium.OCI.Reference do
 
   @default_tag "latest"
 
-  # Compendium.Registry.canonical_host/0 owns the host default — one source
+  # Compendium.RegistryHost.canonical_host/0 owns the host default — one source
   # for what an unprefixed ref resolves to.
-  defp default_registry, do: Compendium.Registry.canonical_host()
+  defp default_registry, do: Compendium.RegistryHost.canonical_host()
 
   @doc """
   Parse an OCI reference string into a `%Reference{}`.

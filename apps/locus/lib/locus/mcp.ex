@@ -240,10 +240,10 @@ defmodule Locus.MCP do
         # Save compiled artifacts — WASM binary or tincture output files
         store_result =
           if Map.has_key?(result, :output_files) do
-            store_tincture_output(ctx, type, "local", name, version, result.output_files)
+            store_tincture_output(ctx, type, publisher(), name, version, result.output_files)
           else
             wasm_path =
-              Compendium.ComponentPath.wasm_path(type, "local", name, version)
+              Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
             Arca.put(ctx, wasm_path, result.wasm_bytes)
           end
@@ -339,9 +339,13 @@ defmodule Locus.MCP do
     end
   end
 
+  # Locus builds only the local namespace — the tree the scanner indexes
+  # and directory registration accepts.
+  defp publisher, do: Compendium.ComponentPath.default_publisher()
+
   defp read_source_tree(ctx, "tincture", name, version) do
     base =
-      Compendium.ComponentPath.version_dir("tincture", "local", name, version)
+      Compendium.ComponentPath.version_dir("tincture", publisher(), name, version)
 
     pkg_path = base ++ ["package.json"]
 
@@ -358,7 +362,7 @@ defmodule Locus.MCP do
 
   defp read_source_tree(ctx, type, name, version) do
     src_base =
-      Compendium.ComponentPath.version_dir(type, "local", name, version) ++ ["src"]
+      Compendium.ComponentPath.version_dir(type, publisher(), name, version) ++ ["src"]
 
     # Check that lib.rs exists
     lib_rs_path = src_base ++ ["src", "lib.rs"]

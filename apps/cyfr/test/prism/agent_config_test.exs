@@ -35,10 +35,9 @@ defmodule Prism.AgentConfigTest do
     Prism.AgentConfig.stringify_deep(guide)["tool_policy"]
   end
 
-  test "an athanor without definitions is given the shipped template on first read", %{ctx: ctx} do
-    assert {:error, :not_found} = Arca.get(ctx, ["aqua", "agent.json"])
+  test "the shipped roster reads through the overlay — no copy is ever made", %{ctx: ctx} do
     assert is_map(policy(ctx, "aqua"))
-    assert {:ok, _} = Arca.get(ctx, ["aqua", "agent.json"])
+    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, ["aqua"])
   end
 
   test "set_tool_auto / drop_tool edit the athanor's allowlist in place", %{ctx: ctx} do
@@ -50,16 +49,16 @@ defmodule Prism.AgentConfigTest do
     :ok = AgentConfig.drop_tool(ctx, "aqua", "component.pull")
     refute Map.has_key?(policy(ctx, "aqua"), "component.pull")
 
-    # The template on disk is untouched — the edit was the athanor's copy.
+    # The template on disk is untouched — the edit materialized the one
+    # agent file into the athanor's own tree.
     {:ok, raw} =
       Arca.get(
         Sanctum.system_context(),
-        Compendium.AquaTemplate.seed_prefix() ++ ["agent.json"]
+        Compendium.AquaTemplate.seed_prefix() ++ ["agents", "aqua.md"]
       )
 
-    template = Jason.decode!(raw)
-
-    assert template["agents"]["aqua"]["tool_policy"]["component.pull"] == "ask"
+    {:ok, shipped} = Compendium.AquaAgent.parse("aqua", raw)
+    assert shipped.tool_policy["component.pull"] == "ask"
   end
 
   test "put_formula_tool_surface always attaches the policy, never a tool list" do
@@ -80,5 +79,17 @@ defmodule Prism.AgentConfigTest do
 
     empty = AgentConfig.put_formula_tool_surface(%{"task" => "t"}, nil)
     assert empty["tool_policy"] == %{}
+  end
+
+  test "the system prompt names every guest storage scope", %{ctx: ctx} do
+    # The prose in build_dynamic_context is hand-written; this pins it to
+    # the vocabulary `Arca.Storage.guest_scopes/0` defines, so a renamed or
+    # added guest scope cannot leave the model prompt describing a stale one.
+    prompt = AgentConfig.build_system_prompt(ctx)
+
+    for scope <- Map.keys(Arca.Storage.guest_scopes()) do
+      assert prompt =~ scope <> "/",
+             "system prompt no longer mentions guest scope #{scope}/"
+    end
   end
 end

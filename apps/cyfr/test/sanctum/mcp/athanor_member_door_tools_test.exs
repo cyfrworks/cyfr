@@ -429,4 +429,47 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     {:ok, _} = Users.allow(user)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
   end
+
+  describe "AthanorTool.resolve/3 returns a focused context" do
+    # Every downstream act (provisioning above all) must run at
+    # `scope: :athanor` with the resolved athanor bound — a platform
+    # admin's wider scope stops at resolve, not in the handler.
+    test "a member's context is rebound to the named athanor",
+         %{alice: alice, ctx: ctx, n: n} do
+      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+      assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Focus #{n}"})
+
+      assert {:ok, athanor, focused} =
+               Sanctum.MCP.AthanorTool.resolve(a, %{"athanor" => group.id})
+
+      assert athanor.id == group.id
+      assert focused.athanor_id == group.id
+      assert focused.scope == :athanor
+    end
+
+    test "a platform admin's platform scope narrows to the athanor",
+         %{alice: alice, ops: ops, ctx: ctx, n: n} do
+      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+      assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Wide #{n}"})
+
+      operator =
+        Context.build(
+          user_id: ops,
+          athanor_id: nil,
+          provider: "github",
+          permissions: [:*],
+          scope: :platform,
+          auth_method: :oidc,
+          authenticated: true,
+          platform_admin: true
+        )
+
+      assert {:ok, athanor, focused} =
+               Sanctum.MCP.AthanorTool.resolve(operator, %{"athanor" => group.id})
+
+      assert athanor.id == group.id
+      assert focused.athanor_id == group.id
+      assert focused.scope == :athanor
+    end
+  end
 end

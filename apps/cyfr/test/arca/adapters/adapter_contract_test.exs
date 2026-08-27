@@ -58,6 +58,18 @@ defmodule Arca.Adapters.ContractTest do
     assert {:error, :enotdir} = adapter.list_typed(ctx, ["guest", "a.txt"])
   end
 
+  # A directory is not a readable object: S3 has no key there and answers
+  # :not_found — Local used to leak a raw :eisdir for the same question.
+  defp contract_get_directory_is_not_found(adapter, ctx) do
+    assert {:error, :not_found} = adapter.get(ctx, ["guest", "sub"])
+  end
+
+  defp contract_serve_missing_and_directory_not_found(adapter, ctx) do
+    conn = Plug.Test.conn(:get, "/")
+    assert {:error, :not_found} = adapter.serve_to_conn(conn, ctx, ["guest", "missing.txt"], [])
+    assert {:error, :not_found} = adapter.serve_to_conn(conn, ctx, ["guest", "sub"], [])
+  end
+
   defp contract_empty_listing(adapter, ctx) do
     assert {:ok, []} = adapter.list_typed(ctx, ["guest", "nothing-here"])
   end
@@ -77,6 +89,13 @@ defmodule Arca.Adapters.ContractTest do
     assert :ok = adapter.delete_tree(ctx, ["guest", "a.txt"])
   end
 
+  # Tree deletion is idempotent — "make this subtree not exist" already
+  # holds for a missing tree. `:not_found` is delete/2's answer for a
+  # missing single object, never delete_tree/2's.
+  defp contract_delete_tree_missing_is_ok(adapter, ctx) do
+    assert :ok = adapter.delete_tree(ctx, ["guest", "nothing-here"])
+  end
+
   defp contract_list_recursive(adapter, ctx) do
     assert {:ok, leaves} = adapter.list_recursive(ctx, ["guest"])
 
@@ -93,14 +112,38 @@ defmodule Arca.Adapters.ContractTest do
     assert {:ok, %{files: 3, bytes: 3}} = adapter.usage(ctx, ["guest"])
   end
 
+  # read_subtree is no adapter callback — one shared algorithm over
+  # list_recursive + get (`Arca.Storage.read_subtree_via/4`). Run here per
+  # adapter anyway: the shared code must answer identically over each
+  # adapter's listing and read semantics, file-path contract included.
   defp contract_read_subtree(adapter, ctx) do
-    assert {:ok, pairs} = adapter.read_subtree(ctx, ["guest"])
+    assert {:ok, pairs} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest"])
 
     assert Enum.sort(pairs) == [
              {["a.txt"], "a"},
              {["b.txt"], "b"},
              {["sub", "c.txt"], "c"}
            ]
+
+    # A file is not a subtree; a missing prefix is honestly empty.
+    assert {:error, :enotdir} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest", "a.txt"])
+    assert {:ok, []} = Arca.Storage.read_subtree_via(adapter, ctx, ["guest", "nope"])
+  end
+
+  # A 300-byte name used to store fine on S3 (1024-byte keys) and
+  # `:enametoolong` on Local — exactly the divergence this file exists to
+  # prevent. Both adapters now refuse it identically at validation, before
+  # any I/O.
+  defp contract_overlong_segment_refused(adapter, ctx) do
+    long = String.duplicate("a", 300)
+
+    assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
+      adapter.put(ctx, ["guest", long], "x")
+    end
+
+    assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
+      adapter.get(ctx, ["guest", long])
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -149,6 +192,14 @@ defmodule Arca.Adapters.ContractTest do
       do: contract_empty_listing(Local, ctx)
     )
 
+    test("get/2 on a directory is :not_found", %{ctx: ctx},
+      do: contract_get_directory_is_not_found(Local, ctx)
+    )
+
+    test("serve_to_conn/4 on a missing path or directory is :not_found", %{ctx: ctx},
+      do: contract_serve_missing_and_directory_not_found(Local, ctx)
+    )
+
     test("exists?/2 answers files, not directories", %{ctx: ctx},
       do: contract_exists_files_only(Local, ctx)
     )
@@ -163,6 +214,10 @@ defmodule Arca.Adapters.ContractTest do
       refute Local.exists?(ctx, ["guest", "a.txt"])
     end
 
+    test("delete_tree/2 on a missing tree is :ok", %{ctx: ctx},
+      do: contract_delete_tree_missing_is_ok(Local, ctx)
+    )
+
     test("list_recursive/2 returns every leaf as full segments", %{ctx: ctx},
       do: contract_list_recursive(Local, ctx)
     )
@@ -173,6 +228,112 @@ defmodule Arca.Adapters.ContractTest do
 
     test("read_subtree/2 returns relative pairs", %{ctx: ctx},
       do: contract_read_subtree(Local, ctx)
+    )
+
+    test("an over-long segment is refused before any I/O", %{ctx: ctx},
+      do: contract_overlong_segment_refused(Local, ctx)
+    )
+  end
+
+  # ---------------------------------------------------------------------------
+  # Overlay decorator — contract-transparent for non-overlaid paths
+  # ---------------------------------------------------------------------------
+
+  describe "Arca.Overlay (decorator)" do
+    # The overlay implements the same behaviour it wraps; on paths outside
+    # its overlaid roots (the whole `guest/` scope this suite uses) it must
+    # be a pure pass-through — every contract answer identical to the inner
+    # adapter's. The union semantics themselves are pinned in overlay_test.
+    setup do
+      base =
+        Path.join(System.tmp_dir!(), "contract_overlay_#{System.unique_integer([:positive])}")
+
+      seed = Path.join(base, "seed")
+      File.mkdir_p!(seed)
+
+      original_base = Application.get_env(:cyfr, :base_path)
+      original_seed = Application.get_env(:cyfr, :seed_path)
+      Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
+      Application.put_env(:cyfr, :seed_path, seed)
+
+      on_exit(fn ->
+        File.rm_rf(base)
+
+        if original_base,
+          do: Application.put_env(:cyfr, :base_path, original_base),
+          else: Application.delete_env(:cyfr, :base_path)
+
+        if original_seed,
+          do: Application.put_env(:cyfr, :seed_path, original_seed),
+          else: Application.delete_env(:cyfr, :seed_path)
+      end)
+
+      ctx = Sanctum.TestContext.local()
+      :ok = Arca.Overlay.put(ctx, ["guest", "a.txt"], "a")
+      :ok = Arca.Overlay.put(ctx, ["guest", "b.txt"], "b")
+      :ok = Arca.Overlay.put(ctx, ["guest", "sub", "c.txt"], "c")
+
+      {:ok, ctx: ctx}
+    end
+
+    test("put/2 then get/2 round-trips the bytes", %{ctx: ctx},
+      do: contract_put_get_roundtrip(Arca.Overlay, ctx)
+    )
+
+    test("append/3 creates then extends", %{ctx: ctx},
+      do: contract_append_roundtrip(Arca.Overlay, ctx)
+    )
+
+    test("tells a directory from a file", %{ctx: ctx},
+      do: contract_dir_vs_file(Arca.Overlay, ctx, [])
+    )
+
+    test("a file is not a directory", %{ctx: ctx},
+      do: contract_file_is_not_a_directory(Arca.Overlay, ctx)
+    )
+
+    test("an empty prefix lists empty", %{ctx: ctx},
+      do: contract_empty_listing(Arca.Overlay, ctx)
+    )
+
+    test("get/2 on a directory is :not_found", %{ctx: ctx},
+      do: contract_get_directory_is_not_found(Arca.Overlay, ctx)
+    )
+
+    test("serve_to_conn/4 on a missing path or directory is :not_found", %{ctx: ctx},
+      do: contract_serve_missing_and_directory_not_found(Arca.Overlay, ctx)
+    )
+
+    test("exists?/2 answers for files only", %{ctx: ctx},
+      do: contract_exists_files_only(Arca.Overlay, ctx)
+    )
+
+    test "delete/2: a missing file is :not_found, a deleted file is gone", %{ctx: ctx} do
+      contract_delete(Arca.Overlay, ctx)
+    end
+
+    test("delete_tree/2 removes an object at the tree's own path", %{ctx: ctx},
+      do: contract_delete_tree_object_at_path(Arca.Overlay, ctx)
+    )
+
+    test("delete_tree/2 on a missing tree is :ok", %{ctx: ctx},
+      do: contract_delete_tree_missing_is_ok(Arca.Overlay, ctx)
+    )
+
+    test("list_recursive/2 answers full segment lists", %{ctx: ctx},
+      do: contract_list_recursive(Arca.Overlay, ctx)
+    )
+
+    test("usage/2 counts files and bytes, nothing else", %{ctx: ctx},
+      do: contract_usage(Arca.Overlay, ctx)
+    )
+
+    test("read_subtree/2 returns relative pairs", %{ctx: ctx},
+      do: contract_read_subtree(Arca.Overlay, ctx)
+    )
+
+    test("an over-long segment is refused before any I/O", %{ctx: ctx},
+      do: contract_overlong_segment_refused(Arca.Overlay, ctx)
     )
   end
 
@@ -287,6 +448,14 @@ defmodule Arca.Adapters.ContractTest do
       do: contract_empty_listing(S3, ctx)
     )
 
+    test("get/2 on a directory is :not_found", %{ctx: ctx},
+      do: contract_get_directory_is_not_found(S3, ctx)
+    )
+
+    test("serve_to_conn/4 on a missing path or directory is :not_found", %{ctx: ctx},
+      do: contract_serve_missing_and_directory_not_found(S3, ctx)
+    )
+
     test("exists?/2 answers files, not directories", %{ctx: ctx},
       do: contract_exists_files_only(S3, ctx)
     )
@@ -297,6 +466,10 @@ defmodule Arca.Adapters.ContractTest do
 
     test("delete_tree/2 removes an object at the tree's own path", %{ctx: ctx},
       do: contract_delete_tree_object_at_path(S3, ctx)
+    )
+
+    test("delete_tree/2 on a missing tree is :ok", %{ctx: ctx},
+      do: contract_delete_tree_missing_is_ok(S3, ctx)
     )
 
     test("list_recursive/2 returns every leaf as full segments", %{ctx: ctx},
@@ -314,5 +487,9 @@ defmodule Arca.Adapters.ContractTest do
       {:ok, entries} = S3.list_typed(ctx, ["guest"])
       assert Enum.filter(entries, &(elem(&1, 0) == "marker")) == [{"marker", :dir}]
     end
+
+    test("an over-long segment is refused before any I/O", %{ctx: ctx},
+      do: contract_overlong_segment_refused(S3, ctx)
+    )
   end
 end

@@ -54,7 +54,7 @@ defmodule Compendium.Registry.Identity do
     # OCI host keys the CredentialStore (tokens were issued for that host);
     # REST host receives the whoami confirmation call. Distinct in the default
     # cyfr.run topology; some self-hosted deployments collapse them.
-    oci_host = Compendium.Registry.canonical_host()
+    oci_host = Compendium.RegistryHost.canonical_host()
     rest_host = rest_host()
 
     case list_user_credentials(ctx, oci_host) do
@@ -189,9 +189,9 @@ defmodule Compendium.Registry.Identity do
 
   # REST API host (e.g. "cyfr.run"). Distinct from the OCI gateway host
   # (e.g. "registry.cyfr.run") in the default cyfr.run topology; both default in
-  # config/runtime.exs. Delegates to `Compendium.Registry.canonical_rest_host/0`
+  # config/runtime.exs. Delegates to `Compendium.RegistryHost.canonical_rest_host/0`
   # so Identity + Client share one source of truth.
   defp rest_host do
-    Compendium.Registry.canonical_rest_host()
+    Compendium.RegistryHost.canonical_rest_host()
   end
 end

@@ -99,8 +99,8 @@ config :cyfr, external_server_reconciler_enabled: false
 # the NEXT test fails. cron_scheduler_test.exs starts it itself.
 config :cyfr, cron_scheduler_enabled: false
 
-# Boot-time Home seeding writes rows and files before any test's sandbox
-# checkout — the seeder is exercised directly by its own tests.
+# Boot-time Home provisioning writes rows before any test's sandbox
+# checkout — provisioning is exercised directly by its own tests.
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the conversation-runner boot recovery reads the repo before any
@@ -119,18 +119,19 @@ config :cyfr, provisioning_inline: true
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
 
-# Default storage roots for tests (individual tests may override), both under
-# one throwaway root: `base_path` holds all tenant storage, and the seed tree
-# starts with an empty bundle so no test sees one it did not write. Leaving
-# either at its config.exs default would make tests read or write the repo's
-# own trees. test_helper.exs copies the shipped AQUA template into the
-# throwaway seed tree — it is only ever read, and copied into an athanor's
-# own storage under `base_path`.
-test_root = Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
+# Default storage roots for tests (individual tests may override), two
+# throwaway SIBLING roots — the topology dev and prod use ("two trees, two
+# lifetimes", Arca.Storage): `base_path` holds all tenant storage, and the
+# seed tree starts with an empty bundle so no test sees one it did not
+# write. Leaving either at its config.exs default would make tests read or
+# write the repo's own trees. test_helper.exs copies the shipped AQUA
+# template into the throwaway seed tree — it is only ever read in place
+# through the overlay. test_helper.exs removes both roots after the suite.
+test_run = "cyfr_test_#{System.system_time(:millisecond)}"
 
 config :cyfr,
-  base_path: test_root,
-  seed_path: Path.join(test_root, "seed")
+  base_path: Path.join(System.tmp_dir!(), "#{test_run}_data"),
+  seed_path: Path.join(System.tmp_dir!(), "#{test_run}_seed")
 
 # Sanctum test configuration
 config :cyfr,

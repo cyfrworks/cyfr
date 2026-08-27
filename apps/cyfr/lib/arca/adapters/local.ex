@@ -15,19 +15,9 @@ defmodule Arca.Adapters.Local do
 
   ## Directory Structure
 
-      data/                              # :base_path — the one runtime root
-      ├── cyfr.db                        # SQLite database (all structured data)
-      ├── cache/                         # Global: immutable cached artifacts
-      │   └── oci/{digest}/
-      ├── system/                        # Global: server-internal scratch
-      └── athanors/{athanor_id}/         # Tenant-scoped
-          ├── components/{type}s/{publisher}/{name}/{version}/
-          │   ├── {type}.wasm
-          │   ├── cyfr-manifest.json
-          │   └── src/
-          ├── aqua/                      # the athanor's AQUA agent definitions
-          ├── conversations/             # chat attachment blobs
-          └── guest/                     # guest (WASM) files — the guest's `data/` scope
+  The tree this adapter lays out is drawn once, in `Arca.Storage`'s
+  moduledoc (the layout table's home) — this module only joins
+  `physical_segments/2` under `:base_path`.
 
   ## Structured Logs (database only)
 
@@ -73,6 +63,12 @@ defmodule Arca.Adapters.Local do
             Logger.debug("[Arca.Local.get] :enoent for #{full_path}")
             {:error, :not_found}
 
+          {:error, :eisdir} ->
+            # A directory is not a readable object on any adapter — S3 has
+            # no key there and answers :not_found; so does Local.
+            Logger.debug("[Arca.Local.get] :eisdir for #{full_path}")
+            {:error, :not_found}
+
           {:error, reason} ->
             Logger.warning("[Arca.Local.get] error=#{inspect(reason)} for full_path=#{full_path}")
             {:error, reason}
@@ -92,6 +88,13 @@ defmodule Arca.Adapters.Local do
       # either the old or the new content, never a torn file, and a crash
       # mid-write can't leave a partial artifact at the real path (matching
       # the all-or-nothing semantics of an S3 object PUT).
+      #
+      # Atomic against readers, NOT against power loss: nothing fsyncs the
+      # file or its directory, so a crash can lose a write the caller saw
+      # succeed (a committed row may briefly reference a vanished blob).
+      # Accepted deliberately — every blob consumer tolerates a missing
+      # blob, the row plane is SQLite-journaled, and a datasync per publish
+      # tree was judged not worth its cost.
       tmp_path = "#{full_path}.tmp.#{System.unique_integer([:positive])}"
 
       case File.write(tmp_path, content) do
@@ -202,7 +205,6 @@ defmodule Arca.Adapters.Local do
 
   @impl true
   def list_recursive(%Context{} = ctx, path) do
-    Arca.Storage.validate_path!(path)
     full_path = build_path(ctx, path)
 
     if File.dir?(full_path) do
@@ -222,62 +224,80 @@ defmodule Arca.Adapters.Local do
 
   @impl true
   def usage(%Context{} = ctx, path) do
-    Arca.Storage.validate_path!(path)
     full_path = build_path(ctx, path)
 
     if File.dir?(full_path) do
-      leaves = walk_files(full_path)
+      # Strict, unlike the listing walk: the storage cap rides this
+      # number, and an unreadable subtree silently read as empty would
+      # weaken it — the cap layer fails CLOSED on a usage error
+      # (`Sanctum.Tenancy.Caps.check_storage/2`), so the error must reach
+      # it. A missing root stays zero (nothing stored is honestly zero).
+      case walk_files_sized(full_path) do
+        {:ok, sized} ->
+          {:ok,
+           %{
+             files: length(sized),
+             bytes: Enum.reduce(sized, 0, fn {_leaf, size}, acc -> acc + size end)
+           }}
 
-      bytes =
-        Enum.reduce(leaves, 0, fn leaf, acc ->
-          case File.stat(leaf) do
-            {:ok, %File.Stat{size: size}} ->
-              acc + size
-
-            {:error, reason} ->
-              # Fail open (quota reads an unreadable file as empty), never
-              # silently: an under-count here weakens the storage cap.
-              Logger.warning("[Arca.Local.usage] stat #{inspect(reason)} for #{leaf}")
-              acc
-          end
-        end)
-
-      {:ok, %{files: length(leaves), bytes: bytes}}
+        {:error, reason} ->
+          Logger.warning("[Arca.Local.usage] walk failed: #{inspect(reason)}")
+          {:error, reason}
+      end
     else
-      {:ok, %{files: 0, bytes: 0}}
+      case File.lstat(full_path) do
+        {:error, reason} when reason != :enoent ->
+          # A root that exists but cannot even be stat'd must not read as
+          # empty — the cap would silently under-count.
+          {:error, {:usage_walk, full_path, reason}}
+
+        _missing_or_not_a_dir ->
+          {:ok, %{files: 0, bytes: 0}}
+      end
     end
   end
 
-  @impl true
-  def read_subtree(%Context{} = ctx, path) do
-    with {:ok, leaf_segments} <- list_recursive(ctx, path) do
-      pairs =
-        Enum.reduce_while(leaf_segments, [], fn segs, acc ->
-          case get(ctx, segs) do
-            {:ok, content} ->
-              relative = Enum.drop(segs, length(path))
-              {:cont, [{relative, content} | acc]}
+  # The usage walk: every regular leaf with its size, or the first error.
+  # A leaf that vanishes between the listing and its lstat is skipped —
+  # concurrent deletion is not an unreadable tree.
+  defp walk_files_sized(dir) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
+          full = Path.join(dir, entry)
 
-            {:error, :not_found} ->
-              # File vanished between list and read — skip; concurrent delete is
-              # unusual but not an error condition for a tree dump.
-              {:cont, acc}
+          if tmp_name?(entry) do
+            {:cont, {:ok, acc}}
+          else
+            case File.lstat(full) do
+              {:ok, %File.Stat{type: :directory}} ->
+                case walk_files_sized(full) do
+                  {:ok, sub} -> {:cont, {:ok, sub ++ acc}}
+                  {:error, _} = error -> {:halt, error}
+                end
 
-            {:error, reason} ->
-              {:halt, {:error, reason}}
+              {:ok, %File.Stat{type: :regular, size: size}} ->
+                {:cont, {:ok, [{full, size} | acc]}}
+
+              {:ok, _symlink_or_special} ->
+                {:cont, {:ok, acc}}
+
+              {:error, :enoent} ->
+                {:cont, {:ok, acc}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:usage_walk, full, reason}}}
+            end
           end
         end)
 
-      case pairs do
-        {:error, reason} -> {:error, reason}
-        list -> {:ok, Enum.reverse(list)}
-      end
+      {:error, reason} ->
+        {:error, {:usage_walk, dir, reason}}
     end
   end
 
   @impl true
   def serve_to_conn(conn, %Context{} = ctx, path, opts) do
-    Arca.Storage.validate_path!(path)
     full_path = build_path(ctx, path)
     status = Keyword.get(opts, :status, 200)
 
@@ -307,8 +327,9 @@ defmodule Arca.Adapters.Local do
         end)
 
       {:error, reason} ->
-        # Fail open (walks and quota read an unreadable directory as
-        # empty), never silently: an under-count weakens the storage cap.
+        # Fail open, never silently: listings read an unreadable
+        # directory as empty. The storage cap does NOT ride this walk —
+        # `usage/2` has its own strict one that propagates the error.
         Logger.warning("[Arca.Local.walk] ls #{inspect(reason)} for #{dir}")
         []
     end
@@ -322,13 +343,26 @@ defmodule Arca.Adapters.Local do
   end
 
   @doc """
-  Remove `put/3` temp files older than `max_age_seconds` (default one day) —
-  orphans of crashed writes. Listings never surface them; this reclaims the
-  bytes. Returns `{:ok, removed_count}`.
+  Remove `put/3` temp files older than `max_age_seconds` — orphans of
+  crashed writes. Listings never surface them; this reclaims the bytes.
+  Returns `{:ok, removed_count}`. `Arca.sweep_stale_tmp/0` is the one
+  caller and supplies the age.
   """
-  def sweep_stale_tmp(max_age_seconds \\ 86_400) do
+  @impl true
+  def sweep_stale_tmp(max_age_seconds) do
     cutoff = System.os_time(:second) - max_age_seconds
-    {:ok, sweep_tmp_dir(base_path(), cutoff)}
+
+    # The volume holds more than Arca paths (`cyfr.db*`, the `mcp-bridge/`
+    # sidecar tree — "another program's file" per `Arca.Storage`). `put/3`
+    # lands tmp files only where Arca writes: under `athanors/` and the
+    # global roots — so the sweep walks exactly those.
+    removed =
+      [Arca.Storage.tenant_physical_root() | Arca.Storage.global_prefixes()]
+      |> Enum.map(&Path.join(base_path(), &1))
+      |> Enum.filter(&File.dir?/1)
+      |> Enum.reduce(0, &(&2 + sweep_tmp_dir(&1, cutoff)))
+
+    {:ok, removed}
   end
 
   defp sweep_tmp_dir(dir, cutoff) do
@@ -343,15 +377,36 @@ defmodule Arca.Adapters.Local do
                 {:ok, %File.Stat{type: :regular, mtime: mtime}} when mtime < cutoff ->
                   if File.rm(full) == :ok, do: acc + 1, else: acc
 
+                {:ok, %File.Stat{type: :directory, mtime: mtime}} when mtime < cutoff ->
+                  # A tmp-named directory predates the facade reserving the
+                  # shape on every segment; nothing can list it or count it,
+                  # so reclaim the whole subtree once it has aged out.
+                  case File.rm_rf(full) do
+                    {:ok, _} -> acc + 1
+                    {:error, _, _} -> acc
+                  end
+
                 _ ->
                   acc
               end
 
-            lstat_type(full) == :directory ->
-              acc + sweep_tmp_dir(full, cutoff)
-
             true ->
-              acc
+              case lstat_type(full) do
+                :directory ->
+                  acc + sweep_tmp_dir(full, cutoff)
+
+                :symlink ->
+                  # No tenant-reachable code can create one, so a symlink
+                  # under the storage root means host-level tampering or a
+                  # bug — the per-operation guards refuse the final
+                  # component, and this walk is the cheap detector for the
+                  # rest of the chain.
+                  Logger.warning("[Arca.Local.sweep] symlink under storage root: #{full}")
+                  acc
+
+                _ ->
+                  acc
+              end
           end
         end)
 
@@ -367,6 +422,10 @@ defmodule Arca.Adapters.Local do
   directory (`Arca.Storage.seed_roots/0`); every other path joins
   `Arca.Storage.physical_segments/2` under `:base_path`. The reserved roots
   are gated by `Arca.Storage.authorize_path/2` before any adapter call.
+
+  This is the adapter's one validation chokepoint: every callback reaches
+  it before any I/O, so `Arca.Storage.validate_path!/1` runs exactly once
+  per operation — never per callback on top.
   """
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)

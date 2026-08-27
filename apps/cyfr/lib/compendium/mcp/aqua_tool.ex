@@ -4,13 +4,19 @@
 defmodule Compendium.MCP.AquaTool do
   @moduledoc """
   AQUA tool handlers for the Compendium MCP provider — agent system
-  (orchestrators, sub-agents, prompts) and documentation guides.
+  (orchestrators, sub-agents, prompts), the skills tree, and documentation
+  guides.
 
-  Agent definitions are the athanor's own (`aqua/agent.json` and the prompt
-  files under its tenant storage), seeded from the shipped template by
-  `Compendium.AquaTemplate`; every member of the athanor may edit them.
+  Agent definitions are the athanor's own: one frontmatter-markdown file
+  per agent under `aqua/agents/` (`Compendium.AquaAgent` is the format,
+  the directory is the roster), served through the seed overlay — shipped
+  agents read through until edited, edited ones shadow only themselves,
+  and deleting an edited copy reverts it to shipped. Skills follow the
+  open Agent Skills convention under `aqua/skills/<name>/SKILL.md`.
   """
 
+  alias Compendium.AquaAgent
+  alias Compendium.AquaPath
   alias Sanctum.Context
 
   # Repo root — used for compile-time doc embedding. Resolved by walking up from
@@ -34,7 +40,9 @@ defmodule Compendium.MCP.AquaTool do
   @tincture_guide File.read!(Path.join(@project_root, "tincture-guide.md"))
   @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))
 
-  # --- list ---
+  # Agent and skill names become path segments — refuse anything else at
+  # this boundary with a typed error, where the adapter would raise.
+  @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -44,7 +52,7 @@ defmodule Compendium.MCP.AquaTool do
       name: "aqua",
       title: "AQUA Agent System",
       description:
-        "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only).",
+        "Manage the AQUA agent system — orchestrators, sub-agents, prompts, skills, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent on create; docs are read-only), 'status' to see which agents are shipped/modified/own, 'skill_list'/'skill_get' for the skills tree, or 'reset' to revert edited copies of shipped files (member-created agents and skills are kept unless all=true).",
       annotations: %{
         readOnlyHint: false,
         destructiveHint: true,
@@ -56,6 +64,9 @@ defmodule Compendium.MCP.AquaTool do
           # something a chain can do to itself.
           "list" => %{kind: :read, planes: [:external, :in_chain]},
           "get" => %{kind: :read, planes: [:external, :in_chain]},
+          "status" => %{kind: :read, planes: [:external, :in_chain]},
+          "skill_list" => %{kind: :read, planes: [:external, :in_chain]},
+          "skill_get" => %{kind: :read, planes: [:external, :in_chain]},
           "create" => %{kind: :write, planes: [:external], permission: :component_manage},
           "update" => %{kind: :write, planes: [:external], permission: :component_manage},
           "delete" => %{
@@ -63,9 +74,9 @@ defmodule Compendium.MCP.AquaTool do
             planes: [:external],
             permission: :component_manage
           },
-          # Replaces the athanor's agent definitions with the shipped
-          # template — the deliberate upgrade path for an edited copy that
-          # the pristine-only boot refresh leaves alone.
+          # Reverts edited copies of shipped units to shipped;
+          # member-created agents and skills are KEPT unless all=true
+          # deletes the whole upper layer (Compendium.AquaTemplate.reset/2).
           "reset" => %{
             kind: :destructive,
             planes: [:external],
@@ -78,13 +89,23 @@ defmodule Compendium.MCP.AquaTool do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "enum" => ["list", "get", "create", "update", "delete", "reset"],
+            "enum" => [
+              "list",
+              "get",
+              "create",
+              "update",
+              "delete",
+              "reset",
+              "status",
+              "skill_list",
+              "skill_get"
+            ],
             "description" =>
-              "Action: list/get agents and guides, create/update/delete to manage agents (for create, pass type=orchestrator|sub-agent to choose the agent kind; docs are read-only), or reset to replace the athanor's agent definitions with the shipped template."
+              "Action: list/get agents and guides, create/update/delete to manage agents (for create, pass type=orchestrator|sub-agent to choose the agent kind; docs are read-only), status for per-file provenance (bundled/bundled_modified/user), skill_list/skill_get for the skills tree, or reset to revert edited copies of shipped files (member-created agents and skills are kept unless all=true)."
           },
           "name" => %{
             "type" => "string",
-            "description" => "Agent or guide name (for get/update/delete actions)"
+            "description" => "Agent, guide, or skill name (for get/update/delete/skill_get)"
           },
           "type" => %{
             "type" => "string",
@@ -120,12 +141,24 @@ defmodule Compendium.MCP.AquaTool do
           "model" => %{
             "type" => "string",
             "description" => "Model identifier (for create/update actions)"
+          },
+          "disabled" => %{
+            "type" => "boolean",
+            "description" =>
+              "Take an agent out of the roster without deleting its file (for update; shipped agents cannot be deleted — disable them instead)"
+          },
+          "all" => %{
+            "type" => "boolean",
+            "description" =>
+              "For reset: also DELETE member-created agents and skills, so the tree becomes exactly the shipped set (default false keeps them)"
           }
         },
         "required" => ["action"]
       }
     }
   end
+
+  # --- list ---
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
     type_filter = Map.get(args, "type")
@@ -153,29 +186,19 @@ defmodule Compendium.MCP.AquaTool do
     ]
 
     agent_guides =
-      case read_agent_manifest(ctx) do
-        {:ok, %{"agents" => agents}} ->
-          Enum.flat_map(agents, fn {name, config} ->
-            orchestrator = %{
-              name: name,
-              title: config["title"] || name,
-              type: "orchestrator",
-              description: ""
+      case AquaAgent.list(ctx) do
+        {:ok, agents, _errors} ->
+          agents
+          |> Enum.reject(& &1.disabled)
+          |> Enum.map(fn agent ->
+            base = %{
+              name: agent.name,
+              title: agent.title,
+              type: type_name(agent.role),
+              description: agent.description
             }
 
-            sub_agents =
-              (config["sub_agents"] || %{})
-              |> Enum.map(fn {sa_name, sa_config} ->
-                %{
-                  name: sa_name,
-                  title: sa_config["title"] || sa_name,
-                  type: "sub-agent",
-                  parent: name,
-                  description: sa_config["description"] || ""
-                }
-              end)
-
-            [orchestrator | sub_agents]
+            if agent.parent, do: Map.put(base, :parent, agent.parent), else: base
           end)
 
         _ ->
@@ -207,7 +230,32 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get", "name" => name}) do
-    lookup_agent_guide(ctx, name)
+    with :ok <- validate_name(name),
+         {:ok, agent} <- AquaAgent.get(ctx, name) do
+      {:ok,
+       %{
+         name: agent.name,
+         format: "markdown",
+         content: agent.prompt,
+         type: type_name(agent.role),
+         parent: agent.parent,
+         title: agent.title,
+         description: agent.description,
+         tool_policy: agent.tool_policy,
+         catalyst_ref: agent.catalyst_ref,
+         model: agent.model,
+         disabled: agent.disabled
+       }}
+    else
+      {:error, :not_found} ->
+        {:error, "Unknown agent or guide: #{name}. Use aqua(list) to see available agents."}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, "Failed to read agent '#{name}': #{inspect(reason)}"}
+    end
   end
 
   def handle(_ctx, %{"action" => "get"}) do
@@ -217,15 +265,15 @@ defmodule Compendium.MCP.AquaTool do
   # --- create ---
   # Dispatches by the `type` arg (orchestrator | sub-agent). When `type` is
   # absent, infers from presence of `parent`: parent → sub-agent, no parent →
-  # orchestrator. Pass `type: "doc"` to create a markdown guide entry.
+  # orchestrator.
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- validate_tool_policy(args["tool_policy"]) do
-      type = inferred_aqua_create_type(args)
-
-      case type do
-        "sub-agent" -> create_aqua_sub_agent(ctx, name, args)
-        "orchestrator" -> create_aqua_orchestrator(ctx, name, args)
+    with :ok <- validate_name(name),
+         :ok <- validate_tool_policy(args["tool_policy"]),
+         :ok <- refute_name_taken(ctx, name) do
+      case inferred_aqua_create_type(args) do
+        "sub-agent" -> create_agent(ctx, name, args, :sub_agent)
+        "orchestrator" -> create_agent(ctx, name, args, :orchestrator)
         other -> {:error, "Unsupported aqua create type: #{inspect(other)}"}
       end
     end
@@ -238,44 +286,16 @@ defmodule Compendium.MCP.AquaTool do
   # --- update ---
 
   def handle(%Context{} = ctx, %{"action" => "update", "name" => name} = args) do
-    with :ok <- validate_tool_policy(args["tool_policy"]),
-         {:ok, manifest} <- read_agent_manifest(ctx),
-         {:ok, location} <- find_agent_in_manifest(manifest, name) do
-      # Update manifest fields if provided
-      updated_manifest =
-        case location do
-          {:orchestrator, _config} ->
-            update_agent_fields(manifest, ["agents", name], args)
-
-          {:sub_agent, parent, _config} ->
-            update_agent_fields(manifest, ["agents", parent, "sub_agents", name], args)
-        end
-
-      # Update prompt content if provided
-      prompt_result =
-        case args["content"] do
-          nil ->
-            :ok
-
-          content ->
-            {_, config} =
-              case location do
-                {:orchestrator, c} -> {:orchestrator, c}
-                {:sub_agent, _, c} -> {:sub_agent, c}
-              end
-
-            filename = config["prompt"] || "#{name}.md"
-            Arca.put(ctx, ["aqua", filename], content)
-        end
-
-      with :ok <- write_agent_manifest(ctx, updated_manifest),
-           :ok <- prompt_result do
-        {:ok, %{updated: name}}
-      else
-        {:error, reason} -> {:error, "Failed to update: #{inspect(reason)}"}
-      end
+    with :ok <- validate_name(name),
+         :ok <- validate_tool_policy(args["tool_policy"]),
+         {:ok, agent} <- AquaAgent.get(ctx, name),
+         updated = apply_updates(agent, args),
+         :ok <- Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(updated)) do
+      {:ok, %{updated: name}}
     else
-      {:error, reason} -> {:error, reason}
+      {:error, :not_found} -> {:error, "Agent '#{name}' not found"}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, "Failed to update: #{inspect(reason)}"}
     end
   end
 
@@ -283,39 +303,41 @@ defmodule Compendium.MCP.AquaTool do
     {:error, "Missing required argument: name"}
   end
 
-  # --- reset ---
-
-  def handle(%Context{} = ctx, %{"action" => "reset"}) do
-    case Compendium.AquaTemplate.reset(ctx) do
-      :ok -> {:ok, %{reset: true, files: Compendium.AquaTemplate.files()}}
-      {:error, reason} -> {:error, "Failed to reset: #{inspect(reason)}"}
-    end
-  end
-
   # --- delete ---
+  # A shipped, unedited agent cannot be deleted (the athanor does not own
+  # it) — disabling is the roster-removal verb. Deleting an EDITED copy of
+  # a shipped agent reverts it to shipped; deleting a member-created agent
+  # deletes it outright.
 
   def handle(%Context{} = ctx, %{"action" => "delete", "name" => name}) do
-    with {:ok, manifest} <- read_agent_manifest(ctx),
-         {:ok, location} <- find_agent_in_manifest(manifest, name) do
-      {updated, prompt_file} =
-        case location do
-          {:orchestrator, config} ->
-            {update_in(manifest, ["agents"], &Map.delete(&1, name)), config["prompt"]}
+    with :ok <- validate_name(name) do
+      file = AquaPath.agent_file(name)
 
-          {:sub_agent, parent, config} ->
-            {update_in(manifest, ["agents", parent, "sub_agents"], &Map.delete(&1, name)),
-             config["prompt"]}
-        end
+      case Arca.Overlay.unit_status(ctx, file) do
+        :seed ->
+          {:error,
+           "Agent '#{name}' ships with the server and cannot be deleted — " <>
+             "disable it instead (update name=#{name} disabled=true)"}
 
-      with :ok <- write_agent_manifest(ctx, updated) do
-        # Best-effort delete of prompt file
-        if prompt_file, do: Arca.delete(ctx, ["aqua", prompt_file])
-        {:ok, %{deleted: name}}
-      else
-        {:error, reason} -> {:error, "Failed to delete: #{inspect(reason)}"}
+        status when status in [:materialized, :own, :own_shadowing] ->
+          case Arca.Overlay.drop_unit(ctx, file) do
+            :ok ->
+              # The status already says what the delete reveals: an edited
+              # copy or the athanor's own work over a shipped counterpart
+              # uncovers it; plain own work is simply gone.
+              if status in [:materialized, :own_shadowing] do
+                {:ok, %{deleted: name, restored: "shipped"}}
+              else
+                {:ok, %{deleted: name}}
+              end
+
+            {:error, reason} ->
+              {:error, "Failed to delete: #{inspect(reason)}"}
+          end
+
+        :absent ->
+          {:error, "Agent '#{name}' not found"}
       end
-    else
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -323,11 +345,118 @@ defmodule Compendium.MCP.AquaTool do
     {:error, "Missing required argument: name"}
   end
 
+  # --- reset ---
+
+  def handle(%Context{} = ctx, %{"action" => "reset"} = args) do
+    case Compendium.AquaTemplate.reset(ctx, all: args["all"] == true) do
+      {:ok, %{reverted: reverted, kept: kept}} ->
+        files = Enum.map(Compendium.AquaTemplate.files(), &Enum.join(&1, "/"))
+        {:ok, %{reset: true, reverted: reverted, kept: kept, files: files}}
+
+      {:error, reason} ->
+        {:error, "Failed to reset: #{inspect(reason)}"}
+    end
+  end
+
+  # --- status ---
+
+  def handle(%Context{} = ctx, %{"action" => "status"}) do
+    files =
+      for %{path: path, state: state} <- Compendium.AquaTemplate.status(ctx) do
+        %{path: path, state: Compendium.Provenance.label(state)}
+      end
+
+    {:ok, %{files: files, count: length(files)}}
+  end
+
+  # --- skills ---
+
+  def handle(%Context{} = ctx, %{"action" => "skill_list"}) do
+    skills =
+      case Arca.list_typed(ctx, AquaPath.skills_root()) do
+        {:ok, entries} ->
+          for {name, :dir} <- entries,
+              {:ok, meta, _body} <- [read_skill_manifest(ctx, name)] do
+            %{
+              name: name,
+              title: meta["name"] || name,
+              description: meta["description"] || ""
+            }
+          end
+
+        {:error, _} ->
+          []
+      end
+
+    result = %{skills: Enum.sort_by(skills, & &1.name), count: length(skills)}
+
+    # An honest empty state: the machinery is live even when the install
+    # ships no skills — a release adding seed/aqua/skills/ needs no code.
+    result =
+      if skills == [] do
+        Map.put(
+          result,
+          :hint,
+          "No skills installed. Create one at aqua/skills/<name>/SKILL.md " <>
+            "(Agent Skills format: frontmatter name + description); skills a " <>
+            "release ships appear here automatically."
+        )
+      else
+        result
+      end
+
+    {:ok, result}
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "skill_get", "name" => name}) do
+    with :ok <- validate_name(name),
+         {:ok, meta, body} <- read_skill_manifest(ctx, name) do
+      resources =
+        case Arca.list_recursive(ctx, AquaPath.skill_dir(name)) do
+          {:ok, leaves} ->
+            leaves
+            |> Enum.map(&Enum.drop(&1, length(AquaPath.skill_dir(name))))
+            |> Enum.reject(&(&1 == [AquaPath.skill_manifest_name()]))
+            |> Enum.map(&Enum.join(&1, "/"))
+            |> Enum.sort()
+
+          _ ->
+            []
+        end
+
+      {:ok,
+       %{
+         name: name,
+         title: meta["name"] || name,
+         description: meta["description"] || "",
+         format: "markdown",
+         content: body,
+         resources: resources
+       }}
+    else
+      {:error, :not_found} ->
+        {:error, "Unknown skill: #{name}. Use aqua(skill_list) to see available skills."}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, "Failed to read skill '#{name}': #{inspect(reason)}"}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "skill_get"}) do
+    {:error, "Missing required argument: name"}
+  end
+
   def handle(_ctx, _args) do
     {:error, Emissary.MCP.ToolProvider.invalid_action("aqua", action_enum())}
   end
 
-  # --- aqua create helpers ---
+  # --- helpers ---
+
+  defp type_name(:orchestrator), do: "orchestrator"
+  defp type_name(:sub_agent), do: "sub-agent"
 
   defp inferred_aqua_create_type(%{"type" => type}) when is_binary(type) and type != "", do: type
 
@@ -336,195 +465,99 @@ defmodule Compendium.MCP.AquaTool do
 
   defp inferred_aqua_create_type(_args), do: "orchestrator"
 
-  defp create_aqua_sub_agent(ctx, name, args) do
-    parent = args["parent"]
+  defp create_agent(ctx, name, args, role) do
+    with {:ok, parent} <- checked_parent(ctx, args, role) do
+      agent = %{
+        name: name,
+        title: Map.get(args, "title", name),
+        description: Map.get(args, "description", ""),
+        role: role,
+        parent: parent,
+        default: false,
+        disabled: false,
+        catalyst_ref: args["catalyst_ref"],
+        model: args["model"],
+        tool_policy: args["tool_policy"] || %{},
+        prompt: Map.get(args, "content", "")
+      }
 
-    if is_nil(parent) or parent == "" do
-      {:error, "Missing required argument: parent (required for type=sub-agent)"}
-    else
-      content = Map.get(args, "content", "")
+      case Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(agent)) do
+        :ok ->
+          base = %{created: name, type: type_name(role)}
+          {:ok, if(parent, do: Map.put(base, :parent, parent), else: base)}
 
-      # The prompt file is keyed by name alone, so a sub-agent named after an
-      # existing agent would overwrite that agent's system prompt — a way to
-      # rewrite what another agent is, dressed up as creating a new one.
-      with {:ok, manifest} <- read_agent_manifest(ctx),
-           :ok <- refute_name_taken(manifest, parent, name),
-           true <- Map.has_key?(manifest["agents"] || %{}, parent) do
-        sa_config =
-          %{
-            "prompt" => "#{name}.md",
-            "title" => Map.get(args, "title", name),
-            "description" => Map.get(args, "description", "")
-          }
-          |> maybe_put("tool_policy", args["tool_policy"])
-          |> maybe_put("catalyst_ref", args["catalyst_ref"])
-          |> maybe_put("model", args["model"])
-
-        updated = put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
-
-        with :ok <- write_agent_manifest(ctx, updated),
-             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
-          {:ok, %{created: name, type: "sub-agent", parent: parent}}
-        else
-          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
-        end
-      else
-        false -> {:error, "Parent orchestrator '#{parent}' not found"}
-        {:error, :name_taken} -> {:error, "Agent '#{name}' already exists"}
-        {:error, reason} -> {:error, "Failed to read manifest: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to create agent: #{inspect(reason)}"}
       end
     end
   end
 
-  # A name is taken by any orchestrator, or by a sub-agent under any parent —
-  # every one of them stores its prompt at `aqua/<name>.md`.
-  defp refute_name_taken(manifest, _parent, name) do
-    agents = manifest["agents"] || %{}
+  defp checked_parent(_ctx, _args, :orchestrator), do: {:ok, nil}
 
-    taken? =
-      Map.has_key?(agents, name) or
-        Enum.any?(agents, fn {_agent_name, config} ->
-          config
-          |> Kernel.||(%{})
-          |> Map.get("sub_agents", %{})
-          |> Map.has_key?(name)
-        end)
-
-    if taken?, do: {:error, :name_taken}, else: :ok
-  end
-
-  defp create_aqua_orchestrator(ctx, name, args) do
-    content = Map.get(args, "content", "")
-
-    with {:ok, manifest} <- read_agent_manifest(ctx) do
-      if Map.has_key?(manifest["agents"] || %{}, name) do
-        {:error, "Agent '#{name}' already exists"}
-      else
-        agent_config =
-          %{
-            "title" => Map.get(args, "title", name),
-            "prompt" => "#{name}.md",
-            "sub_agents" => %{}
-          }
-          |> maybe_put("catalyst_ref", args["catalyst_ref"])
-          |> maybe_put("model", args["model"])
-          |> maybe_put("tool_policy", args["tool_policy"])
-
-        updated = put_in(manifest, ["agents", name], agent_config)
-
-        with :ok <- write_agent_manifest(ctx, updated),
-             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
-          {:ok, %{created: name, type: "orchestrator"}}
-        else
-          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
+  defp checked_parent(ctx, args, :sub_agent) do
+    case args["parent"] do
+      parent when is_binary(parent) and parent != "" ->
+        case AquaAgent.get(ctx, parent) do
+          {:ok, %{role: :orchestrator}} -> {:ok, parent}
+          {:ok, _} -> {:error, "'#{parent}' is not an orchestrator"}
+          {:error, _} -> {:error, "Parent orchestrator '#{parent}' not found"}
         end
+
+      _ ->
+        {:error, "Missing required argument: parent (required for type=sub-agent)"}
+    end
+  end
+
+  # The union answers for shipped and member-created agents alike — a name
+  # either kind holds is taken.
+  defp refute_name_taken(ctx, name) do
+    if Arca.exists?(ctx, AquaPath.agent_file(name)),
+      do: {:error, "Agent '#{name}' already exists"},
+      else: :ok
+  end
+
+  # `nil` for an updatable field removes it (v2 semantics); an absent key
+  # leaves it alone. `content` swaps the prompt body.
+  defp apply_updates(agent, args) do
+    agent
+    |> maybe_update(args, "title", :title, agent.name)
+    |> maybe_update(args, "description", :description, "")
+    |> maybe_update(args, "tool_policy", :tool_policy, %{})
+    |> maybe_update(args, "catalyst_ref", :catalyst_ref, nil)
+    |> maybe_update(args, "model", :model, nil)
+    |> maybe_update(args, "disabled", :disabled, false)
+    |> then(fn a ->
+      case args["content"] do
+        content when is_binary(content) -> %{a | prompt: content}
+        _ -> a
       end
-    end
+    end)
   end
 
-  # --- AQUA private helpers ---
-  #
-  # All AQUA reads/writes go through Arca under the athanor's own `aqua/`
-  # prefix. An athanor without a manifest yet is given the shipped template
-  # on first read, so a row provisioned before the copy existed still works.
-
-  defp read_agent_manifest(%Context{} = ctx) do
-    with :ok <- Compendium.AquaTemplate.ensure(ctx),
-         {:ok, raw} <- Arca.get(ctx, ["aqua", "agent.json"]),
-         {:ok, manifest} <- Jason.decode(raw) do
-      {:ok, manifest}
-    else
-      _ -> {:error, :manifest_not_found}
-    end
-  end
-
-  defp write_agent_manifest(%Context{} = ctx, manifest) do
-    case Jason.encode(manifest, pretty: true) do
-      {:ok, json} -> Arca.put(ctx, ["aqua", "agent.json"], json <> "\n")
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp read_agent_prompt(%Context{} = ctx, filename) do
-    Arca.get(ctx, ["aqua", filename])
-  end
-
-  defp lookup_agent_guide(%Context{} = ctx, name) do
-    with {:ok, %{"agents" => agents}} <- read_agent_manifest(ctx) do
-      case Map.get(agents, name) do
-        %{"prompt" => filename} = config ->
-          with {:ok, content} <- read_agent_prompt(ctx, filename) do
-            {:ok,
-             %{
-               name: name,
-               format: "markdown",
-               content: content,
-               type: "orchestrator",
-               title: config["title"],
-               catalyst_ref: config["catalyst_ref"],
-               model: config["model"],
-               tool_policy: config["tool_policy"] || %{}
-             }}
-          else
-            _ -> {:error, "Failed to read prompt for orchestrator: #{name}"}
-          end
-
-        nil ->
-          find_sub_agent_guide(ctx, agents, name)
+  defp maybe_update(agent, args, arg_key, field, empty) do
+    if Map.has_key?(args, arg_key) do
+      case Map.get(args, arg_key) do
+        nil -> Map.put(agent, field, empty)
+        value -> Map.put(agent, field, value)
       end
     else
-      _ -> {:error, "Failed to read agent manifest"}
+      agent
     end
   end
 
-  defp find_sub_agent_guide(%Context{} = ctx, agents, name) do
-    result =
-      Enum.find_value(agents, fn {parent, config} ->
-        case get_in(config, ["sub_agents", name]) do
-          %{"prompt" => filename} = sa ->
-            with {:ok, content} <- read_agent_prompt(ctx, filename) do
-              {:ok,
-               %{
-                 name: name,
-                 format: "markdown",
-                 content: content,
-                 type: "sub-agent",
-                 parent: parent,
-                 title: sa["title"],
-                 description: sa["description"],
-                 tool_policy: sa["tool_policy"] || %{},
-                 catalyst_ref: sa["catalyst_ref"],
-                 model: sa["model"]
-               }}
-            end
-
-          _ ->
-            nil
-        end
-      end)
-
-    result || {:error, "Unknown agent or guide: #{name}. Use aqua(list) to see available agents."}
-  end
-
-  defp find_agent_in_manifest(manifest, name) do
-    agents = manifest["agents"] || %{}
-
-    case Map.get(agents, name) do
-      %{} = config ->
-        {:ok, {:orchestrator, config}}
-
-      nil ->
-        result =
-          Enum.find_value(agents, fn {parent, config} ->
-            case get_in(config, ["sub_agents", name]) do
-              %{} = sa -> {:ok, {:sub_agent, parent, sa}}
-              _ -> nil
-            end
-          end)
-
-        result || {:error, "Agent '#{name}' not found"}
+  defp read_skill_manifest(ctx, name) do
+    with {:ok, binary} <- Arca.get(ctx, AquaPath.skill_manifest(name)) do
+      AquaAgent.parse_frontmatter(binary)
     end
   end
+
+  defp validate_name(name) when is_binary(name) do
+    if name =~ @name_format,
+      do: :ok,
+      else: {:error, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}
+  end
+
+  defp validate_name(_), do: {:error, "Invalid name"}
 
   # The policy vocabulary is exactly "ask" | "auto" and keys are
   # "tool.action", "tool.*", or a bare native-tool name ("native_search").
@@ -562,28 +595,6 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   defp valid_policy_key?(_), do: false
-
-  defp update_agent_fields(manifest, path, args) do
-    updatable = ["title", "description", "tool_policy", "catalyst_ref", "model"]
-
-    Enum.reduce(updatable, manifest, fn field, acc ->
-      if Map.has_key?(args, field) do
-        case Map.get(args, field) do
-          nil ->
-            # Explicitly set to nil → remove the field from manifest
-            update_in(acc, path, fn config -> Map.delete(config, field) end)
-
-          value ->
-            put_in(acc, path ++ [field], value)
-        end
-      else
-        acc
-      end
-    end)
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

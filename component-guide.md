@@ -542,7 +542,7 @@ The declared capability **ask**. Unlike the `setup.policy` block it replaces, `c
 | `egress.methods` | string[] | HTTP methods (e.g. `["GET", "POST"]`) |
 | `egress.schemes` | string[] | URL schemes. Omitted = `["https"]` at consent |
 | `egress.private_ips` | string[] | Private IPs/CIDRs to reach (SSRF exception; `169.254.0.0/16` always blocked) |
-| `storage.paths` | string[] | Storage paths for `cyfr:storage/files` |
+| `storage.paths` | string[] | Storage paths for `cyfr:storage/files`. `"data/"` is the component-private scope and the default choice; `"components/"` reaches the athanor's real component trees (writes copy-on-write whole version directories against the storage cap) — grant it only when the component genuinely manages components |
 | `storage.actions` | string[] | Storage actions (`read`, `write`, `list`, `delete`, `exists`) |
 | `tools` | string[] | MCP tool patterns (formulas): `"*"`, exact (`"execution.run"`), or prefix glob (`"component.*"`) |
 | `limits.timeout`, `limits.batch_timeout` | string | Durations like `"30s"`, `"3m"` |
@@ -1106,6 +1106,36 @@ A component that takes everything it needs from call arguments declares no `need
   }
 }
 ```
+
+---
+
+## Bundled Components and Upgrades
+
+Every athanor sees the components the server ships (`seed/components/`) through
+a copy-on-write overlay — a bundled component costs your athanor **nothing**
+until you edit it. The rules:
+
+- **Unedited bundled components track the release live.** A new server version
+  updates them everywhere automatically; new shipped versions appear beside
+  whatever you already have.
+- **Editing makes a copy.** Your first write copies the whole version directory
+  into your athanor (counted against your storage) and freezes it — later
+  releases no longer touch it. `component status` shows it as `bundled_modified`
+  with a diff against shipped.
+- **Delete never means revert.** Deleting a bundled component is refused (it
+  isn't yours to delete — and it costs nothing); `component reset` reverts an
+  edited copy to exactly what the release ships.
+- **Your own component at a shipped path stays yours.** If a release later
+  ships a component where you already created one, your bytes keep answering
+  (shown as "hides shipped"); deleting yours reveals the shipped one. Reset
+  never destroys your work.
+- **Forks report their upstream.** A fork remembers what it was cut from
+  (`forked_from`); when a newer version of that upstream line is present
+  locally, status flags it `upstream_superseded`.
+
+AQUA agent definitions follow the same overlay with per-file units: an unedited
+agent tracks the release automatically, an edited one shadows only itself, and
+`aqua reset` reverts edited copies while keeping agents you created.
 
 ---
 

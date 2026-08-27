@@ -3,57 +3,42 @@
 
 defmodule Compendium.Registry do
   @moduledoc """
-  Local component registry with database-backed metadata and canonical directory layout.
+  The athanor's component index: rows (`Arca.ComponentStorage`, on
+  `Arca.Repo`) over bytes the overlay serves
+  (`components/{type}s/{publisher}/{name}/{version}/` —
+  `Compendium.ComponentPath` owns the shape, the tenant is never in the
+  path). A row makes a component addressable by
+  `type:namespace.name:version` reference; the bytes stay the tree's.
 
-  Components are stored under the context's athanor (the tenant is never
-  in the path — `Compendium.ComponentPath` builds the shape):
-  - `components/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
-  - `components/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
+  ## The four ingresses
 
-  The `publisher` is a flat namespace scoped to signing identity:
-  - `local` — reserved for unsigned local components (default for local publish)
-  - `cyfr` — CYFR first-party components
-  - `alice` — community publisher
+  Everything that mints a row converges on one builder:
 
-  Metadata is stored via `Arca.ComponentStorage`.
+  - `publish_bytes/4` (`source: "published"`) — raw WASM from a
+    same-machine caller; refuses tinctures; `origin: :remote` may never
+    mint into `local` (`Compendium.NamespacePolicy`).
+  - `publish_tincture_archive/4` (`source: "oci"`) — a tar+gzip tincture
+    bundle, decompression-bounded (`Compendium.Archive.gunzip_bounded/2`),
+    symlink-refusing, validated before a byte is stored.
+  - `register_from_arca/3` (`source: "filesystem"`) — the scanner's path
+    (`Compendium.AutoIndexer` walks the seed UNION, so bundled versions
+    get rows without a byte copied); `local` publisher only.
+  - the OCI pull (`Compendium.OCI.Client`) — stores files then registers
+    with `allow_overwrite`, never into `local`.
 
-  ## Component Lifecycle
+  ## Delete vs reset — provenance decides
 
-  1. Develop components directly on the filesystem
-  2. Register via `cyfr register` to make them executable by canonical reference
-  3. Optionally publish to SQLite via `publish_bytes/3` for named references
-  4. Search/query components from Registry
-  5. Run components by `type:namespace.name:version` canonical reference
+  `delete/4` asks `Compendium.Provenance` first: a `:bundled` component
+  is the release's, not the athanor's (refused); a `:bundled_modified`
+  copy refuses too — "delete" never means "revert"; the revert is
+  `reset/4`, which asks the overlay's `revert_copy/2` (only a
+  materialized copy reverts; member work never does). A `:user`/`:remote`
+  component deletes bytes FIRST, then rows, so the DB can never claim a
+  deletion the tree didn't make.
 
-  ## Reference Format
-
-  Components are identified by `type:namespace.name:version` references:
-  - `catalyst:local.my-tool:1.0.0` - Specific version in local namespace
-  - `reagent:cyfr.sentiment:1.0.0` - CYFR first-party reagent
-  - `formula:local.list-models:0.1.0` - Local formula
-
-  The type prefix is required. Shorthand prefixes are accepted: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture).
-
-  ## Usage
-
-      ctx = Sanctum.TestContext.local()
-
-      # Publish raw WASM bytes directly
-      {:ok, component} = Registry.publish_bytes(ctx, wasm_bytes, %{
-        name: "my-tool",
-        version: "1.0.0",
-        type: "reagent",
-        description: "My awesome tool"
-      })
-
-      # Search components
-      {:ok, results} = Registry.search(ctx, %{type: "reagent"})
-
-      # Get a specific component (name + version from namespace.name:version reference)
-      {:ok, component} = Registry.get(ctx, "my-tool", "1.0.0")
-
-      # Get component binary
-      {:ok, wasm_bytes} = Registry.get_blob(ctx, "sha256:abc123...")
+  Sibling homes for what used to live here: canonical hostnames —
+  `Compendium.RegistryHost`; archive mechanics — `Compendium.Archive`;
+  the name-level removal cascade — `Compendium.Cascade`.
   """
 
   require Logger
@@ -62,52 +47,6 @@ defmodule Compendium.Registry do
   alias Compendium.WasmValidator, as: Validator
   alias Compendium.DependencyResolver
   alias Compendium.ComponentPath
-
-  # Guards can't call functions; pinned at compile time from the SSOT.
-  @type_plurals Compendium.ComponentPath.type_plurals()
-
-  # ============================================================================
-  # Canonical Hosts
-  # ============================================================================
-
-  @default_oci_host "registry.cyfr.run"
-  @default_rest_host "cyfr.run"
-
-  @doc """
-  Canonical OCI Distribution host for this deployment.
-
-  Defaults to `"registry.cyfr.run"`. Self-hosted deployments override via
-  `CYFR_OCI_REGISTRY_URL` (wired in `config/runtime.exs`).
-  """
-  @spec canonical_host() :: String.t()
-  def canonical_host,
-    do: Application.get_env(:cyfr, :oci_registry_url, @default_oci_host)
-
-  @doc """
-  Canonical REST API host for this deployment (cyfr.run `/v1/*` endpoints).
-
-  Defaults to `"cyfr.run"`. Self-hosted deployments override via
-  `CYFR_REGISTRY_URL`.
-  """
-  @spec canonical_rest_host() :: String.t()
-  def canonical_rest_host,
-    do: Application.get_env(:cyfr, :registry_url, @default_rest_host)
-
-  @doc """
-  Validate that an OCI registry hostname matches the canonical host
-  for this deployment. Rejects any other host with an explanatory
-  error tuple.
-  """
-  @spec validate_host(String.t()) :: :ok | {:error, String.t()}
-  def validate_host(host) do
-    canonical = canonical_host()
-
-    if host == canonical do
-      :ok
-    else
-      {:error, "This deployment only supports #{canonical}, got: #{host}."}
-    end
-  end
 
   # ============================================================================
   # Public API
@@ -349,7 +288,7 @@ defmodule Compendium.Registry do
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
     # Get all filesystem-registered components
     {:ok, existing} =
-      Arca.ComponentStorage.list_components(ctx, source: "filesystem", limit: 10_000)
+      Arca.ComponentStorage.list_components(ctx, source: "filesystem", limit: :none)
 
     discovered_set = MapSet.new(discovered_components)
 
@@ -374,7 +313,7 @@ defmodule Compendium.Registry do
     |> Enum.uniq_by(fn comp ->
       {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))}
     end)
-    |> Enum.each(fn comp -> maybe_cleanup_name_level(ctx, comp) end)
+    |> Enum.each(fn comp -> Compendium.Cascade.name_removed(ctx, comp) end)
 
     if stale != [], do: invalidate_executor_caches(ctx)
 
@@ -476,9 +415,7 @@ defmodule Compendium.Registry do
           {:ok, map()} | {:error, :not_found | term()}
   def latest_row(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
-    # A single name rarely has more than a handful of versions; the raised
-    # limit just guarantees the sort sees all of them.
-    opts = [name: name, limit: 10_000]
+    opts = [name: name, limit: :none]
     opts = if publisher, do: Keyword.put(opts, :publisher, publisher), else: opts
     opts = if component_type, do: Keyword.put(opts, :component_type, component_type), else: opts
 
@@ -487,22 +424,30 @@ defmodule Compendium.Registry do
         {:error, :not_found}
 
       {:ok, components} ->
-        latest =
-          components
-          |> Enum.sort(fn a, b ->
-            case Version.compare(a.version, b.version) do
-              :gt -> true
-              :lt -> false
-              :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt
-            end
-          end)
-          |> List.first()
-
-        {:ok, latest}
+        {:ok, latest_of(components)}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc """
+  The semver-latest of a list of rows, `inserted_at` as the tiebreak —
+  the one comparator every "latest" answer shares. Raises on a version
+  string `Version.compare/2` cannot parse, as registered versions are
+  validated semver.
+  """
+  @spec latest_of([map()]) :: map() | nil
+  def latest_of(rows) when is_list(rows) do
+    rows
+    |> Enum.sort(fn a, b ->
+      case Version.compare(a.version, b.version) do
+        :gt -> true
+        :lt -> false
+        :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt
+      end
+    end)
+    |> List.first()
   end
 
   @doc """
@@ -552,36 +497,95 @@ defmodule Compendium.Registry do
   end
 
   @doc """
-  Delete a component from the registry.
-  Removes metadata from SQLite and deletes the component directory.
-  Optionally pass a publisher to disambiguate components with the same name/version.
+  Delete a component from the registry — and "deleted" means GONE.
+
+  Provenance decides first (`Compendium.Provenance`): a `:bundled`
+  component is the release's, not the athanor's — refused as
+  `{:error, :bundled}` before anything is touched (deleting its row would
+  only be resurrected by the next scan, while §3.10's profile revocation
+  would silently outlive it). A `:bundled_modified` copy refuses as
+  `{:error, :bundled_modified}` — "delete" never means "revert"; the
+  revert is `reset/4`. A `:user`/`:remote` component deletes bytes FIRST
+  (any storage failure keeps the row, so the DB can never claim a
+  deletion the tree didn't make), then the row and its associations.
+
+  Optionally pass a publisher to disambiguate components with the same
+  name/version.
   """
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
       {:ok, component} ->
-        cleanup_component_associations(ctx, component)
-        Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
-        maybe_cleanup_name_level(ctx, component)
-        invalidate_executor_caches(ctx)
+        case Compendium.Provenance.of(ctx, component) do
+          :bundled ->
+            {:error, :bundled}
 
-        :telemetry.execute(
-          [:cyfr, :compendium, :component, :remove],
-          %{system_time: System.system_time()},
-          %{
-            name: name,
-            version: version,
-            publisher: Map.get(component, :publisher) || publisher_filter,
-            component_type: Map.get(component, :component_type),
-            athanor_id: ctx.athanor_id,
-            user_id: ctx.user_id
-          }
-        )
+          :bundled_modified ->
+            {:error, :bundled_modified}
 
-        :ok
+          _user_or_remote ->
+            with :ok <- cleanup_component_associations(ctx, component) do
+              Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
+              Compendium.Cascade.name_removed(ctx, component)
+              invalidate_executor_caches(ctx)
+
+              :telemetry.execute(
+                [:cyfr, :compendium, :component, :remove],
+                %{system_time: System.system_time()},
+                %{
+                  name: name,
+                  version: version,
+                  publisher: Map.get(component, :publisher) || publisher_filter,
+                  component_type: Map.get(component, :component_type),
+                  athanor_id: ctx.athanor_id,
+                  user_id: ctx.user_id
+                }
+              )
+
+              :ok
+            end
+        end
 
       {:error, :not_found} ->
         {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Revert a `:bundled_modified` component to exactly what the release
+  shipped: delete the athanor's materialized copy (the seed shows through
+  again) and re-register so the row matches the pristine bytes. Refused
+  for anything else — `{:ok, :already_pristine}` for an unedited bundled
+  component, `{:error, :not_bundled}` for the athanor's own or a pulled
+  one.
+  """
+  @spec reset(Context.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, :reset | :already_pristine} | {:error, term()}
+  def reset(%Context{} = ctx, name, version, publisher_filter \\ nil)
+      when is_binary(name) and is_binary(version) do
+    with {:ok, component} <-
+           Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
+      # The overlay's revert verb IS the policy: only a materialized copy
+      # reverts. The athanor's own work (a fork, a pull, its own name a
+      # release later shipped) refuses as :not_a_copy; an unmaterialized
+      # bundled unit as :bundled — both mapped to this surface's words.
+      case Arca.Overlay.revert_copy(ctx, Compendium.Provenance.version_dir(component)) do
+        :ok ->
+          with {:ok, _} <-
+                 register_from_arca(ctx, Compendium.Provenance.version_dir(component)) do
+            invalidate_executor_caches(ctx)
+            {:ok, :reset}
+          end
+
+        {:error, :bundled} ->
+          {:ok, :already_pristine}
+
+        {:error, refused} when refused in [:not_a_copy, :not_found, :not_overlaid] ->
+          {:error, :not_bundled}
+
+        {:error, _} = error ->
+          error
+      end
     end
   end
 
@@ -631,7 +635,7 @@ defmodule Compendium.Registry do
       # (decompression bomb) and OOM the node. The tar that follows can hold no
       # more bytes than the gunzip output, so this also caps total extracted
       # content.
-      case gunzip_bounded(archive_bytes, tincture_max_decompressed_bytes()) do
+      case Compendium.Archive.gunzip_bounded(archive_bytes, tincture_max_decompressed_bytes()) do
         {:ok, tar_binary} ->
           # arca:bypass-ok=D — tar extraction into the scratch dir above.
           case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
@@ -693,86 +697,68 @@ defmodule Compendium.Registry do
     )
   end
 
-  # Streaming gzip inflate that aborts once the output exceeds `max_bytes`, so a
-  # malicious archive can never materialize an unbounded binary in memory.
-  defp gunzip_bounded(data, max_bytes) when is_binary(data) do
-    z = :zlib.open()
-
-    try do
-      # 31 = 15 (max window) + 16 (gzip header/trailer).
-      :zlib.inflateInit(z, 31)
-      inflate_bounded(z, data, [], 0, max_bytes)
-    rescue
-      e -> {:error, Exception.message(e)}
-    after
-      :zlib.close(z)
-    end
-  end
-
-  defp inflate_bounded(z, input, acc, total, max_bytes) do
-    case :zlib.safeInflate(z, input) do
-      {:continue, output} ->
-        new_total = total + IO.iodata_length(output)
-
-        if new_total > max_bytes do
-          {:error, :too_large}
-        else
-          # Subsequent calls drain the internal buffer with [].
-          inflate_bounded(z, [], [output | acc], new_total, max_bytes)
-        end
-
-      {:finished, output} ->
-        new_total = total + IO.iodata_length(output)
-
-        if new_total > max_bytes do
-          {:error, :too_large}
-        else
-          {:ok, IO.iodata_to_binary(Enum.reverse([output | acc]))}
-        end
-    end
-  end
-
-  # arca:bypass-ok=D — recursively walks the tar-extract tmp dir set up by
+  # arca:bypass-ok=D — walks the tar-extract tmp dir set up by
   # `extract_and_store_tincture/5` and writes each file back through
   # `Arca.put/3`. Once this returns, no Arca content lives on local FS.
   #
   # Halts on the first failed write and returns the error: a partially
   # stored tincture must abort registration, or the registry would record a
-  # healthy component whose stored files do not match its digest.
+  # healthy component whose stored files do not match its digest. The
+  # manifest — the unit's completion sentinel — lands LAST, the same
+  # discipline as `Arca.put_files/2`, spelled locally because the bytes
+  # stream from the scratch dir one file at a time.
   defp store_tincture_files(ctx, base_dir, current_dir, arca_base) do
+    with {:ok, entries} <- collect_tincture_entries(base_dir, current_dir, arca_base) do
+      {sentinel, rest} =
+        Enum.split_with(entries, fn {segments, _path} ->
+          List.last(segments) == ComponentPath.manifest_name()
+        end)
+
+      Enum.reduce_while(rest ++ sentinel, :ok, fn {segments, path}, :ok ->
+        # arca:bypass-ok=D — read the scratch file for the Arca write.
+        result =
+          case File.read(path) do
+            {:ok, content} ->
+              Arca.put(ctx, segments, content)
+
+            {:error, reason} ->
+              {:error, {:tincture_read_failed, Path.relative_to(path, base_dir), reason}}
+          end
+
+        case result do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp collect_tincture_entries(base_dir, current_dir, arca_base) do
     current_dir
     # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
     |> Enum.reject(&(&1 in @tincture_excluded_on_pull))
-    |> Enum.reduce_while(:ok, fn entry, :ok ->
+    |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
       path = Path.join(current_dir, entry)
 
-      result =
-        cond do
-          # lstat, not stat: File.dir?/File.read follow symlinks, so a link
-          # here would recurse into itself or copy a host file into Arca.
-          # The validator refuses links too; this is the store-side backstop.
-          # arca:bypass-ok=D — stat the tar-extract scratch entries.
-          match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path)) ->
-            {:error, {:tincture_symlink_rejected, Path.relative_to(path, base_dir)}}
+      cond do
+        # lstat, not stat: File.dir?/File.read follow symlinks, so a link
+        # here would recurse into itself or copy a host file into Arca.
+        # The validator refuses links too; this is the store-side backstop.
+        # arca:bypass-ok=D — stat the tar-extract scratch entries.
+        match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path)) ->
+          {:halt, {:error, {:tincture_symlink_rejected, Path.relative_to(path, base_dir)}}}
 
-          File.dir?(path) ->
-            store_tincture_files(ctx, base_dir, path, arca_base)
+        # arca:bypass-ok=D — walk the scratch tree.
+        File.dir?(path) ->
+          case collect_tincture_entries(base_dir, path, arca_base) do
+            {:ok, sub} -> {:cont, {:ok, acc ++ sub}}
+            {:error, _} = error -> {:halt, error}
+          end
 
-          true ->
-            rel = Path.relative_to(path, base_dir)
-            segments = arca_base ++ String.split(rel, "/")
-
-            # arca:bypass-ok=D — read the scratch file for the Arca write.
-            case File.read(path) do
-              {:ok, content} -> Arca.put(ctx, segments, content)
-              {:error, reason} -> {:error, {:tincture_read_failed, rel, reason}}
-            end
-        end
-
-      case result do
-        :ok -> {:cont, :ok}
-        {:error, _} = error -> {:halt, error}
+        true ->
+          rel = Path.relative_to(path, base_dir)
+          {:cont, {:ok, acc ++ [{arca_base ++ String.split(rel, "/"), path}]}}
       end
     end)
   end
@@ -834,7 +820,7 @@ defmodule Compendium.Registry do
   defp save_component(ctx, component, false, name, version) do
     publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
 
-    if publisher == "local" do
+    if ComponentPath.local_publisher?(publisher) do
       put_component(ctx, component)
     else
       case Arca.ComponentStorage.insert_component(ctx, component) do
@@ -1022,19 +1008,16 @@ defmodule Compendium.Registry do
 
   defp validate_publish_namespace(_publisher, _ctx), do: :ok
 
-  # The `local` namespace is the highest-trust one: the scanner indexes it and
-  # the seeder copies it into every new athanor. Remote (registry-sourced)
-  # content must never mint a component there, however the ref was spelled on
-  # the way in. Direct local publishes (no `:remote` origin) are unaffected —
-  # they are same-machine callers, equivalent in trust to the register path.
+  # Remote (registry-sourced) content must never mint into `local`,
+  # however the ref was spelled on the way in — the policy is
+  # `Compendium.NamespacePolicy`'s; this wraps its refusal in the publish
+  # surface's error shape. Direct local publishes (no `:remote` origin)
+  # are unaffected — same-machine callers, equivalent in trust to the
+  # register path.
   defp validate_publish_origin(publisher, :remote) do
-    if ComponentPath.local_publisher?(publisher) do
-      {:error,
-       {:namespace_rejected,
-        "remote content cannot be published into the 'local' namespace — " <>
-          "local components are registered from the filesystem, never pulled"}}
-    else
-      :ok
+    case Compendium.NamespacePolicy.refuse_remote_ingress(publisher) do
+      :ok -> :ok
+      {:error, message} -> {:error, {:namespace_rejected, message}}
     end
   end
 
@@ -1127,13 +1110,11 @@ defmodule Compendium.Registry do
   # Registration Helpers
   # ============================================================================
 
-  @allowed_register_publishers ["local"]
-
-  defp validate_register_namespace(publisher) when publisher in @allowed_register_publishers,
-    do: :ok
-
   defp validate_register_namespace(publisher) do
-    {:error, {:namespace_rejected, "only local/ namespace can be registered, got: #{publisher}"}}
+    case Compendium.NamespacePolicy.require_local_register(publisher) do
+      :ok -> :ok
+      {:error, message} -> {:error, {:namespace_rejected, message}}
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1141,15 +1122,18 @@ defmodule Compendium.Registry do
   # ---------------------------------------------------------------------------
 
   defp read_manifest_arca(ctx, segments) do
-    case Arca.get(ctx, segments ++ ["cyfr-manifest.json"]) do
+    case Arca.get(ctx, segments ++ [ComponentPath.manifest_name()]) do
       {:ok, content} ->
         case Jason.decode(content) do
-          {:ok, manifest} -> {:ok, manifest}
-          {:error, _} -> {:error, {:invalid_manifest, "cyfr-manifest.json is not valid JSON"}}
+          {:ok, manifest} ->
+            {:ok, manifest}
+
+          {:error, _} ->
+            {:error, {:invalid_manifest, "#{ComponentPath.manifest_name()} is not valid JSON"}}
         end
 
       {:error, :not_found} ->
-        {:error, {:missing_manifest, "cyfr-manifest.json not found"}}
+        {:error, {:missing_manifest, "#{ComponentPath.manifest_name()} not found"}}
 
       {:error, reason} ->
         {:error, {:manifest_read_error, reason}}
@@ -1183,26 +1167,19 @@ defmodule Compendium.Registry do
     end
   end
 
-  # Infer metadata from Arca segments — no Path.split, no filesystem lookup.
-  #
-  # Layout: ["components", "{type}s", publisher, name, version] — tenant-
-  # relative; the athanor flows through `ctx` into `do_register/8`.
-  defp infer_segment_metadata([
-         "components",
-         type_plural,
-         publisher,
-         name,
-         version
-       ])
-       when type_plural in @type_plurals do
-    component_type = String.trim_trailing(type_plural, "s")
-    {:ok, publisher, component_type, name, version}
-  end
-
+  # Infer metadata from Arca segments — the one parser
+  # (`Compendium.ComponentPath.parse/1`), no Path.split, no filesystem
+  # lookup. The athanor flows through `ctx` into `do_register/8`.
   defp infer_segment_metadata(segments) do
-    {:error,
-     {:invalid_path,
-      "expected components/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+    case Compendium.ComponentPath.parse(segments) do
+      {:ok, %{rest: [], type: type, publisher: publisher, name: name, version: version}} ->
+        {:ok, publisher, type, name, version}
+
+      _not_a_version_dir ->
+        {:error,
+         {:invalid_path,
+          "expected components/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+    end
   end
 
   defp reject_tincture_publish_bytes("tincture") do
@@ -1307,122 +1284,31 @@ defmodule Compendium.Registry do
   # Cleanup Helpers
   # ============================================================================
 
-  # Called AFTER delete_component to check if the removed version was the last one.
-  # If no versions remain, revokes profiles and disables registrations so
-  # a future component with the same name inherits nothing.
-  defp maybe_cleanup_name_level(ctx, comp) do
-    publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-
-    unless Arca.ComponentStorage.has_remaining_versions?(ctx, comp.name, publisher) do
-      component_type = Map.get(comp, :component_type, "")
-      name_ref = "#{component_type}:#{publisher}.#{comp.name}"
-
-      revoke_profiles(ctx, name_ref)
-      disable_registrations(ctx, name_ref)
-
-      Logger.debug(
-        "[Compendium.Registry] Cleaned up name-level state for #{name_ref} (last version removed)"
-      )
-    end
-  end
-
-  # §3.10: removing a component revokes its profiles. Consent rows stay —
-  # they are insert-only history, and the revoked profile status is the
-  # live gate. Vault entries stay too: they are the operator's, and they
-  # outlive any component that borrowed them.
-  defp revoke_profiles(ctx, name_ref) do
-    case Arca.ProfileStorage.list_for_source(ctx.athanor_id, name_ref) do
-      {:ok, profiles} ->
-        Enum.each(profiles, fn profile ->
-          Arca.ProfileStorage.set_status(ctx.athanor_id, profile.id, "revoked")
-        end)
-
-      _ ->
-        :ok
-    end
-  end
-
-  # A registration outliving its target is a standing invocation channel
-  # pointed at nothing — and one that would go live again the moment
-  # anyone republished the name (D5).
-  defp disable_registrations(ctx, name_ref) do
-    disable_webhooks(ctx, name_ref)
-    disable_schedules(ctx, name_ref)
-  end
-
-  defp disable_webhooks(ctx, name_ref) do
-    athanor_id = ctx.athanor_id
-
-    case Arca.WebhookStorage.list_webhooks(athanor_id) do
-      {:ok, webhooks} ->
-        webhooks
-        |> Enum.filter(&targets?(&1.target_ref, name_ref))
-        |> Enum.each(fn webhook ->
-          Arca.WebhookStorage.set_disabled(webhook.name, athanor_id)
-        end)
-
-      _ ->
-        :ok
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[Compendium.Registry] webhook cascade failed for #{name_ref}: #{Exception.message(error)}"
-      )
-
-      :ok
-  end
-
-  defp disable_schedules(ctx, name_ref) do
-    ctx
-    |> Arca.CronSchedule.list(limit: 1000)
-    |> Enum.filter(fn schedule ->
-      targets?(schedule.resolved_reference, name_ref) or
-        targets?(Map.get(schedule, :reference), name_ref)
-    end)
-    |> Enum.each(fn schedule -> Arca.CronSchedule.soft_delete(ctx, schedule.id) end)
-
-    :ok
-  rescue
-    error ->
-      Logger.warning(
-        "[Compendium.Registry] schedule cascade failed for #{name_ref}: #{Exception.message(error)}"
-      )
-
-      :ok
-  end
-
-  # Registrations may name a versioned or a name-level ref; both point at
-  # the component that just went away.
-  defp targets?(nil, _name_ref), do: false
-
-  defp targets?(target_ref, name_ref) when is_binary(target_ref) do
-    case Compendium.Activation.key_for_ref(target_ref) do
-      {:ok, ^name_ref} -> true
-      _ -> false
-    end
-  end
-
-  defp targets?(_target_ref, _name_ref), do: false
-
   defp cleanup_component_associations(ctx, comp) do
     component_type = Map.get(comp, :component_type, "")
     publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
+    # — and PROPAGATE a failure: the caller keeps the row when the bytes
+    # survive, so DB and storage cannot diverge. (A missing tree is `:ok`
+    # by the delete_tree contract.)
     version_dir =
       ComponentPath.version_dir(component_type, publisher, comp.name, comp.version)
 
-    Arca.delete_tree(ctx, version_dir)
+    case Arca.delete_tree(ctx, version_dir) do
+      :ok ->
+        # Clean up empty parent directories (name, then publisher)
+        name_dir = ComponentPath.name_dir(component_type, publisher, comp.name)
+        maybe_remove_empty_dir(ctx, name_dir)
 
-    # Clean up empty parent directories (name, then publisher)
-    name_dir = ComponentPath.name_dir(component_type, publisher, comp.name)
-    maybe_remove_empty_dir(ctx, name_dir)
+        publisher_dir = ComponentPath.publisher_dir(component_type, publisher)
+        maybe_remove_empty_dir(ctx, publisher_dir)
 
-    publisher_dir = ComponentPath.publisher_dir(component_type, publisher)
-    maybe_remove_empty_dir(ctx, publisher_dir)
+        :ok
 
-    :ok
+      {:error, reason} ->
+        {:error, {:storage_delete_failed, reason}}
+    end
   end
 
   @doc false
@@ -1442,6 +1328,13 @@ defmodule Compendium.Registry do
     )
   end
 
+  # List-then-delete is a real (accepted) race: a concurrent publish into
+  # a just-emptied name dir can land between the empty listing and the
+  # tree delete and be removed with it. The window is sub-second, needs
+  # two members deleting and publishing the same component name at once,
+  # only matters on the Local adapter (an object store has no directories
+  # to tidy), and heals on republish — the tree is rewritten whole. An
+  # atomic remove-if-empty would mean new adapter surface for that margin.
   defp maybe_remove_empty_dir(ctx, dir_path) do
     case Arca.list(ctx, dir_path) do
       {:ok, []} ->

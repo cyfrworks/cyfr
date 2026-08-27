@@ -287,7 +287,7 @@ defmodule Sanctum.SignIn do
   # never the sign-in. `:skipped` (no token in the body) is not a failure —
   # the identity was recorded from the slug regardless.
   defp store_tokens(user_id, personal, memberships) do
-    registry = Compendium.Registry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
 
     entries =
       case personal do

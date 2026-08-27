@@ -114,6 +114,17 @@ config :cyfr,
   base_path: Path.expand("./data"),
   seed_path: Path.expand("../seed", __DIR__)
 
+# The unit grammar of each seed-overlaid root (`Arca.Storage.locate/1`):
+# the domain module that owns the root's path spelling answers where its
+# shadow units sit and how they are shaped (`Arca.Storage.UnitLocator`).
+# Config-wired so Arca never compile-depends on Compendium. Every root the
+# layout table marks `:overlay` must have a row here — a missing one
+# raises on first touch.
+config :cyfr, :overlay_locators, %{
+  "aqua" => Compendium.AquaPath,
+  "components" => Compendium.ComponentPath
+}
+
 # Storage-adjacent knobs, spelled out so the defaults are discoverable —
 # the readers fall back to the same values, but an invisible knob is a knob
 # nobody knows to turn.
@@ -123,9 +134,10 @@ config :cyfr,
 # authenticated writes is CYFR_ATHANOR_STORAGE_BYTES.
 config :cyfr, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
 
-# Concurrent object reads in the S3 adapter's subtree dump (seeding,
-# packing) — bounded so a wide tree cannot open unbounded connections.
-config :cyfr, :s3_read_subtree_concurrency, 10
+# Concurrent object reads in the shared subtree dump
+# (Arca.Storage.read_subtree_via/4) — bounded so a wide tree cannot open
+# unbounded connections on the object-store path.
+config :cyfr, :read_subtree_concurrency, 10
 
 # Decompression ceiling for published tincture archives (zip-bomb guard).
 config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024

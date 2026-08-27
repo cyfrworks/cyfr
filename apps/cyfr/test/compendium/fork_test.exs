@@ -153,6 +153,51 @@ defmodule Compendium.ForkTest do
       assert manifest["version"] == "1.0.0"
       assert manifest["forked_from"] == "catalyst:acme.my-tool:1.0.0"
     end
+
+    test "the stamped lineage is queryable end to end", %{ctx: ctx} do
+      # The "written but never read" gap, closed: fork → register → the
+      # row's manifest carries the stamp and the provenance surface
+      # reports the upstream line.
+      valid_wasm =
+        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+      create_source_component("reagent", "acme", "lineage-tool", "1.0.0", with_wasm: true)
+      create_source_component("reagent", "acme", "lineage-tool", "1.1.0", with_wasm: true)
+
+      # Pulled components carry rows; upstream_status reads what this
+      # install KNOWS, so the upstream line must be registered.
+      for version <- ["1.0.0", "1.1.0"] do
+        {:ok, _} =
+          Compendium.Registry.publish_bytes(ctx, valid_wasm, %{
+            name: "lineage-tool",
+            version: version,
+            type: "reagent",
+            publisher: "acme"
+          })
+      end
+
+      source_ref = parse_ref!("r:acme.lineage-tool:1.0.0")
+      assert {:ok, _} = Fork.fork(ctx, source_ref, name: "my-lineage")
+
+      # The member rebuilds the fork; the fixture's source wasm is fake.
+      target_dir = ["components", "reagents", "local", "my-lineage", "1.0.0"]
+      :ok = Arca.put(ctx, target_dir ++ ["reagent.wasm"], valid_wasm)
+      {:ok, row} = Compendium.Registry.register_from_arca(ctx, target_dir)
+
+      assert %{
+               forked_from: "reagent:acme.lineage-tool:1.0.0",
+               upstream_superseded: true
+             } = Compendium.Provenance.upstream_status(ctx, row)
+
+      [entry] = Compendium.Provenance.annotate(ctx, [row])
+      assert entry.provenance == :user
+      assert entry.forked_from == "reagent:acme.lineage-tool:1.0.0"
+      assert entry.upstream_superseded
+    end
   end
 
   describe "fork happy path (tincture)" do

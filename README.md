@@ -468,10 +468,12 @@ none of them.
 | `CYFR_MINT_PER_HOUR` | personal athanors minted per hour, i.e. how fast strangers can arrive |
 | `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (they may belong to more) |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
-| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — its data *and* its components, the seeded bundle included |
+| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — its data and the components it has materialized or created; pristine seeded components read through the overlay and cost it nothing |
 
-Every athanor is minted with its own copy of the component bundle, so
-`CYFR_MAX_ATHANORS` and `CYFR_ATHANOR_STORAGE_BYTES` are what bound the disk.
+A new athanor reads the shipped bundle in place through the seed overlay —
+no copy exists until it edits a component — so `CYFR_MAX_ATHANORS` bounds
+tenancy and `CYFR_ATHANOR_STORAGE_BYTES` bounds only what each athanor
+actually writes.
 A specific `cyfr admin deny` always beats `*`.
 
 Closing the door again — `cyfr admin remove` on the `*` entry — ejects

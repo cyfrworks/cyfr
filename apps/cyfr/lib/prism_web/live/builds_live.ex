@@ -172,24 +172,26 @@ defmodule PrismWeb.BuildsLive do
   end
 
   defp discover_local_components(ctx) do
-    Enum.flat_map(Sanctum.ComponentRef.valid_types(), fn type ->
-      type_dir = Compendium.ComponentPath.publisher_dir(type, "local")
+    # The build plane's one walk (`Compendium.AutoIndexer.discover/1`) —
+    # the same manifest-bearing roster registration sees, so the picker
+    # can never diverge from the scanner. Manifest-less version dirs
+    # rightly vanish: a scaffold always writes the manifest, so a dir
+    # without one was never buildable.
+    ctx
+    |> Compendium.AutoIndexer.discover()
+    |> Enum.flat_map(fn segments ->
+      case Compendium.ComponentPath.parse(segments) do
+        {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
+          [
+            Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+              type: type,
+              namespace: publisher,
+              name: name,
+              version: version
+            })
+          ]
 
-      case Arca.list(ctx, type_dir) do
-        {:ok, names} ->
-          Enum.flat_map(names, fn name ->
-            case Arca.list(ctx, type_dir ++ [name]) do
-              {:ok, versions} ->
-                Enum.map(versions, fn version ->
-                  "#{type}:local.#{name}:#{version}"
-                end)
-
-              _ ->
-                []
-            end
-          end)
-
-        _ ->
+        :error ->
           []
       end
     end)

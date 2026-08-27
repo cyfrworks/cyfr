@@ -99,7 +99,7 @@ defmodule Compendium.MCP.Shared do
   # Find a bearer scoped to a specific namespace.
   def namespace_bearer(%Context{user_id: user_id}, slug)
       when is_binary(user_id) and user_id != "" and is_binary(slug) do
-    registry = Compendium.Registry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
 
     case Compendium.Registry.CredentialStore.get(user_id, registry, slug) do
       {:ok, %{type: :push_token, token: token}} when is_binary(token) ->

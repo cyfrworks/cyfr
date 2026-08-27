@@ -3,15 +3,22 @@
 
 defmodule Compendium.Fork do
   @moduledoc """
-  Fork a published component into the local namespace.
+  Fork a published component into the local namespace — how a remote
+  component becomes a user-owned local line.
 
   Copies the source code, manifest, compiled artifact, and README from a
   published component into `components/{type}s/local/{name}/{version}/`,
-  making it fully editable.
+  making it fully editable, and stamps `forked_from` into the manifest so
+  the fork's upstream line stays queryable
+  (`Compendium.Provenance.upstream_status/2`).
 
-  Requires source code (`src/` directory) to be present in the source
-  component's storage. Components must be pulled locally first.
+  The first guard REFUSES a `local` source (`Compendium.NamespacePolicy`
+  — a local component has nothing to cross; use scaffold for a fresh
+  one). Requires source code (`src/` directory) to be present in the
+  source component's storage — components must be pulled locally first.
   """
+
+  require Logger
 
   alias Sanctum.{ComponentRef, Context}
   alias Compendium.ComponentPath
@@ -33,15 +40,23 @@ defmodule Compendium.Fork do
     target_base =
       ComponentPath.version_dir(
         source_ref.type,
-        "local",
+        ComponentPath.default_publisher(),
         target_name,
         target_version
       )
 
     source_ref_str = ComponentRef.to_string(source_ref)
-    target_ref_str = "#{source_ref.type}:local.#{target_name}:#{target_version}"
 
-    with :ok <- validate_name(target_name),
+    target_ref_str =
+      ComponentRef.to_string(%ComponentRef{
+        type: source_ref.type,
+        namespace: ComponentPath.default_publisher(),
+        name: target_name,
+        version: target_version
+      })
+
+    with :ok <- refuse_local_source(source_ref),
+         :ok <- validate_name(target_name),
          :ok <- validate_version(target_version),
          :ok <- check_source_exists(ctx, source_base, source_ref_str),
          :ok <- check_target_not_exists(ctx, target_base, target_ref_str),
@@ -58,12 +73,29 @@ defmodule Compendium.Fork do
            }}
 
         {:error, reason} ->
-          # Clean up partial copy
-          Arca.delete_tree(ctx, target_base)
+          # Clean up the partial copy. A cleanup failure must not mask the
+          # fork failure — but it must not vanish either.
+          case Arca.delete_tree(ctx, target_base) do
+            :ok ->
+              :ok
+
+            {:error, cleanup_reason} ->
+              Logger.warning(
+                "[Compendium.Fork] partial-copy cleanup of #{target_ref_str} failed: " <>
+                  inspect(cleanup_reason)
+              )
+          end
+
           {:error, "Fork failed: #{inspect(reason)}"}
       end
     end
   end
+
+  # The guard lives here, not in the MCP caller, so a direct call cannot
+  # fork what the tool refuses; the rule and its message are
+  # `Compendium.NamespacePolicy`'s.
+  defp refuse_local_source(%ComponentRef{namespace: namespace}),
+    do: Compendium.NamespacePolicy.refuse_local_fork_source(namespace)
 
   # ============================================================================
   # Validation
@@ -84,7 +116,7 @@ defmodule Compendium.Fork do
   end
 
   defp check_source_exists(ctx, source_base, source_ref_str) do
-    case Arca.get(ctx, source_base ++ ["cyfr-manifest.json"]) do
+    case Arca.get(ctx, source_base ++ [ComponentPath.manifest_name()]) do
       {:ok, _} ->
         :ok
 
@@ -95,7 +127,7 @@ defmodule Compendium.Fork do
   end
 
   defp check_target_not_exists(ctx, target_base, target_ref_str) do
-    case Arca.get(ctx, target_base ++ ["cyfr-manifest.json"]) do
+    case Arca.get(ctx, target_base ++ [ComponentPath.manifest_name()]) do
       {:ok, _} -> {:error, "Target already exists: #{target_ref_str}"}
       {:error, _} -> :ok
     end
@@ -117,37 +149,30 @@ defmodule Compendium.Fork do
   # Copy Logic
   # ============================================================================
 
+  # One streaming pass through `Arca.copy_tree/4` — one file in memory at
+  # a time, build droppings excluded (a pulled tree can carry them; the
+  # seed never does). The manifest — the unit's completion sentinel — is
+  # excluded from the copy, re-stamped, and lands LAST (the
+  # `Arca.put_files/2` discipline): a fork that dies mid-copy never
+  # leaves a unit that reads as complete.
   defp do_fork(ctx, source_base, target_base, target_name, target_version, source_ref_str) do
-    case Arca.read_subtree(ctx, source_base) do
-      {:ok, files} ->
-        write_files(files, ctx, target_base, target_name, target_version, source_ref_str)
+    manifest = [ComponentPath.manifest_name()]
 
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
+    copy =
+      Arca.copy_tree(ctx, source_base, target_base,
+        exclude: &(Arca.Storage.build_dropping?(&1) or &1 == manifest)
+      )
 
-  defp write_files(files, ctx, target_base, target_name, target_version, source_ref_str) do
-    result =
-      Enum.reduce_while(files, {:ok, []}, fn {rel_segments, content}, {:ok, acc} ->
-        content =
-          if rel_segments == ["cyfr-manifest.json"] do
-            rewrite_manifest(content, target_name, target_version, source_ref_str)
-          else
-            content
-          end
-
-        target_path = target_base ++ rel_segments
-
-        case Arca.put(ctx, target_path, content) do
-          :ok -> {:cont, {:ok, [Path.join(target_path) | acc]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-
-    case result do
-      {:ok, files} -> {:ok, Enum.reverse(files)}
-      {:error, reason} -> {:error, reason}
+    with :ok <- copy,
+         {:ok, source_manifest} <- Arca.get(ctx, source_base ++ manifest),
+         :ok <-
+           Arca.put(
+             ctx,
+             target_base ++ manifest,
+             rewrite_manifest(source_manifest, target_name, target_version, source_ref_str)
+           ),
+         {:ok, leaves} <- Arca.list_recursive(ctx, target_base) do
+      {:ok, leaves |> Enum.map(&Path.join/1) |> Enum.sort()}
     end
   end
 
@@ -159,7 +184,7 @@ defmodule Compendium.Fork do
     case Jason.decode(manifest_json) do
       {:ok, manifest} ->
         manifest
-        |> Map.put("publisher", "local")
+        |> Map.put("publisher", ComponentPath.default_publisher())
         |> Map.put("name", name)
         |> Map.put("version", version)
         |> Map.put("forked_from", forked_from)

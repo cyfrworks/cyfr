@@ -16,11 +16,11 @@ defmodule Prism.AquaTemplatePolicyTest do
   alias Emissary.MCP.ToolRegistry
   alias Prism.AquaVirtualTools
 
-  @template Path.expand("../../../../seed/aqua/agent.json", __DIR__)
+  @agents_dir Path.expand("../../../../seed/aqua/agents", __DIR__)
 
   test "every tool_policy key in the shipped template is reachable from a chat" do
     unreachable =
-      @template
+      @agents_dir
       |> policies()
       |> Enum.flat_map(fn {agent, policy} ->
         for {key, _mode} <- policy, refused?(key), do: "#{agent}: #{key}"
@@ -45,13 +45,13 @@ defmodule Prism.AquaTemplatePolicyTest do
     refute Map.has_key?(catalog, "member")
   end
 
-  defp policies(path) do
-    %{"agents" => agents} = path |> File.read!() |> Jason.decode!()
-
-    for {name, %{} = agent} <- agents,
-        policy = agent["tool_policy"],
-        is_map(policy),
-        do: {name, policy}
+  defp policies(dir) do
+    for file <- File.ls!(dir),
+        String.ends_with?(file, ".md"),
+        name = String.trim_trailing(file, ".md"),
+        {:ok, agent} = Compendium.AquaAgent.parse(name, File.read!(Path.join(dir, file))),
+        map_size(agent.tool_policy) > 0,
+        do: {agent.name, agent.tool_policy}
   end
 
   # `native_search` is a bare exclusivity gate, not a tool; a `tool.*` glob

@@ -70,12 +70,17 @@ defmodule Arca.StorageTest do
 
       assert Storage.physical_segments(ath_ctx(), ["conversations", "conv_1", "a.png"]) ==
                ["athanors", "ath_x", "conversations", "conv_1", "a.png"]
+
+      # The one spelling: the Local sweep walks the same root this mapping
+      # writes under, via tenant_physical_root/0 — never a second literal.
+      assert hd(Storage.physical_segments(ath_ctx(), ["guest"])) ==
+               Storage.tenant_physical_root()
     end
 
     test "the guest scope is a sibling of the host scopes" do
       # Opus.StorageHandler maps the guest contract's `data/` to `guest/` at
       # the boundary, so a `data/` grant physically cannot reach aqua/,
-      # config/ or any other host scope — they are siblings, not children.
+      # conversations/ or any other host scope — they are siblings, not children.
       assert Storage.physical_segments(ath_ctx(), ["guest", "notes.txt"]) ==
                ["athanors", "ath_x", "guest", "notes.txt"]
 
@@ -242,7 +247,7 @@ defmodule Arca.StorageTest do
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components conversations guest)
+               ~w(aqua components conversations guest meta)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -268,6 +273,130 @@ defmodule Arca.StorageTest do
       for {_guest, physical} <- Storage.guest_scopes() do
         assert physical in Storage.tenant_roots()
       end
+    end
+  end
+
+  describe "the layout table (derived rosters)" do
+    test "the rosters are consistent views of one layout" do
+      # Every roster is derived from @layout; these pin the derived values
+      # so an edited row cannot silently reshape a roster.
+      assert Enum.sort(Storage.tenant_roots()) == ~w(aqua components conversations guest meta)
+      assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
+      assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
+      assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
+      assert Storage.reserved_roots() == ~w(meta)
+      assert Storage.guest_scopes() == %{"data" => "guest", "components" => "components"}
+
+      # The classes partition: no root is both tenant and global; every
+      # seed root, overlay root and guest-scope target is a tenant root;
+      # every overlay root has a configured locator (the unit shapes are
+      # the locators' own — their tests witness them).
+      assert Storage.tenant_roots() -- Storage.global_prefixes() == Storage.tenant_roots()
+      assert Enum.all?(Storage.seed_roots(), &(&1 in Storage.tenant_roots()))
+      assert Enum.all?(Storage.overlay_roots(), &(&1 in Storage.tenant_roots()))
+      assert Enum.all?(Map.values(Storage.guest_scopes()), &(&1 in Storage.tenant_roots()))
+
+      locators = Application.fetch_env!(:cyfr, :overlay_locators)
+      assert Enum.sort(Map.keys(locators)) == Enum.sort(Storage.overlay_roots())
+
+      for {_root, mod} <- locators do
+        assert Code.ensure_loaded?(mod) and function_exported?(mod, :locate, 1)
+      end
+    end
+
+    test "locate/1 routes through the configured locator, and only there" do
+      assert Storage.locate(["guest", "x"]) == :not_overlaid
+      assert Storage.locate(["meta", "origin", "x"]) == :not_overlaid
+      assert Storage.locate([]) == :not_overlaid
+      assert Storage.locate(["components"]) == :above_unit
+      assert Storage.locate(["aqua"]) == :above_unit
+
+      assert {:dir, _, _} = Storage.locate(["components", "catalysts", "local", "n", "1.0.0"])
+      assert {:file, _} = Storage.locate(["aqua", "agents", "a.md"])
+    end
+
+    test "seed_prefix/1 spells the seed vocabulary, and only for seed roots" do
+      for root <- Storage.seed_roots() do
+        assert Storage.seed_prefix(root) == ["seed", root]
+        assert Storage.classify(Storage.seed_prefix(root) ++ ["x"]) == :seed
+      end
+
+      assert_raise FunctionClauseError, fn -> Storage.seed_prefix("guest") end
+      assert_raise FunctionClauseError, fn -> Storage.seed_prefix("nope") end
+    end
+
+    test "valid_guest_path?/1 speaks exactly the guest vocabulary" do
+      assert Storage.valid_guest_path?("")
+      assert Storage.valid_guest_path?("data")
+      assert Storage.valid_guest_path?("data/")
+      assert Storage.valid_guest_path?("data/notes.txt")
+      assert Storage.valid_guest_path?("components/catalysts/local/x/0.1.0/catalyst.wasm")
+
+      refute Storage.valid_guest_path?("aqua/agent.json")
+      refute Storage.valid_guest_path?("conversations/conv_1")
+      refute Storage.valid_guest_path?("guest/notes.txt")
+      refute Storage.valid_guest_path?("datax/notes.txt")
+      refute Storage.valid_guest_path?("*")
+    end
+  end
+
+  describe "Arca.exists?/2 is a total predicate" do
+    test "a traversal segment under a legal root answers false, never raises" do
+      ctx = Sanctum.TestContext.local()
+
+      refute Arca.exists?(ctx, ["guest", "..", "aqua"])
+      refute Arca.exists?(ctx, ["guest", ".."])
+      refute Arca.exists?(ctx, ["nope", "x"])
+      refute Arca.exists?(ctx, ["guest", String.duplicate("a", 500)])
+
+      # Every other facade entry keeps failing loud on the same input.
+      assert_raise ArgumentError, fn -> Arca.get(ctx, ["guest", "..", "aqua"]) end
+    end
+
+    test "an athanor-less context answers false for a tenant path, never raises" do
+      ctx = Sanctum.Context.internal()
+
+      refute Arca.exists?(ctx, ["guest", "x"])
+      refute Arca.exists?(ctx, ["components"])
+
+      # Every other facade entry keeps failing loud on the same context —
+      # reaching one without an athanor is host-side programmer error.
+      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+        Arca.get(ctx, ["guest", "x"])
+      end
+    end
+  end
+
+  describe "mutating ops refuse root and scope-root paths" do
+    # The refusals fire before any adapter dispatch: the athanor root and
+    # the scope roots are directories, never objects — a put there would
+    # wedge the tree (a regular file where the tree root belongs).
+    test "put/append/delete below depth 2 answer {:error, :invalid_path}" do
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, :invalid_path} = Arca.put(ctx, [], "x")
+      assert {:error, :invalid_path} = Arca.put(ctx, ["guest"], "x")
+      assert {:error, :invalid_path} = Arca.append(ctx, ["guest"], "x")
+      assert {:error, :invalid_path} = Arca.delete(ctx, ["guest"])
+
+      # Globals are covered by the same gate.
+      assert {:error, :invalid_path} = Arca.put(Sanctum.Context.internal(), ["cache"], "x")
+    end
+
+    test "a multi-level string segment counts as its real depth" do
+      ctx = Sanctum.TestContext.local()
+
+      # `"guest/…"` normalizes to two segments before the gate runs, so the
+      # gate cannot regress to counting pre-split shapes.
+      assert :ok = Arca.put(ctx, ["guest/depth_gate_pin.txt"], "x")
+      assert :ok = Arca.delete(ctx, ["guest/depth_gate_pin.txt"])
+    end
+
+    test "delete_tree keeps working on the whole tree and on a scope" do
+      ctx = Sanctum.TestContext.local()
+
+      assert :ok = Arca.put(ctx, ["guest", "depth_gate_tree", "a.txt"], "x")
+      assert :ok = Arca.delete_tree(ctx, ["guest", "depth_gate_tree"])
     end
   end
 end

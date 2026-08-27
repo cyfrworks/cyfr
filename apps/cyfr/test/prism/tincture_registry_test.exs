@@ -69,8 +69,10 @@ defmodule Prism.TinctureRegistryTest do
     test "starts and loads tinctures" do
       name = :test_tincture_reg
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       assert length(tinctures) == 1
       assert hd(tinctures).name == "test-dash"
 
@@ -82,8 +84,10 @@ defmodule Prism.TinctureRegistryTest do
     test "returns tinctures for the given scope" do
       name = :test_list
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       assert length(tinctures) == 1
 
       t = hd(tinctures)
@@ -103,8 +107,10 @@ defmodule Prism.TinctureRegistryTest do
     test "returns empty for a non-matching athanor" do
       name = :test_empty_athanor
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_nonexistent"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_nonexistent"))
       assert tinctures == []
 
       GenServer.stop(pid)
@@ -130,8 +136,10 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_version
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       assert length(tinctures) == 1
       assert hd(tinctures).version == "2.0.0"
 
@@ -143,8 +151,10 @@ defmodule Prism.TinctureRegistryTest do
     test "rescans filesystem" do
       name = :test_reload
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      assert length(TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})) == 1
+      assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
 
       # Add a new tincture
       new_dir = fixture_dir("ath_test", "local", "new-tincture", "0.1.0")
@@ -162,7 +172,7 @@ defmodule Prism.TinctureRegistryTest do
 
       :ok = TinctureRegistry.reload(name)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       assert length(tinctures) == 2
 
       GenServer.stop(pid)
@@ -179,7 +189,7 @@ defmodule Prism.TinctureRegistryTest do
           created_by: "test"
         })
 
-      # Logical layout: components/{athanor_id}/tinctures/{publisher}/{name}/{version}/
+      # Physical layout: athanors/{athanor_id}/components/tinctures/{publisher}/{name}/{version}/
       other_dir = fixture_dir(other.id, "acme", "acme-dash", "0.1.0")
       File.mkdir_p!(other_dir)
 
@@ -195,17 +205,19 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_ext_athanor
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       # Visible to the matching athanor, with its own route segment
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: other.id})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup(other.id))
       assert [%{name: "acme-dash", entry_url: "/t/acme/acme/acme-dash"}] = tinctures
 
       # Not visible to a different athanor
-      other_tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_other"})
+      other_tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_other"))
       refute "acme-dash" in Enum.map(other_tinctures, & &1.name)
 
       # Not visible to the test athanor
-      core_tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      core_tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       refute "acme-dash" in Enum.map(core_tinctures, & &1.name)
 
       GenServer.stop(pid)
@@ -239,9 +251,11 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_orphans
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      assert TinctureRegistry.list_tinctures(name, %{athanor_id: archived.id}) == []
-      assert TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_ghost"}) == []
+      assert TinctureRegistry.list_tinctures(name, lookup(archived.id)) == []
+      assert TinctureRegistry.list_tinctures(name, lookup("ath_ghost")) == []
 
       GenServer.stop(pid)
     end
@@ -270,8 +284,10 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_bundle_skip
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      assert TinctureRegistry.list_tinctures(name, %{athanor_id: "_bundle"}) == []
+      assert TinctureRegistry.list_tinctures(name, lookup("_bundle")) == []
 
       GenServer.stop(pid)
     end
@@ -279,8 +295,10 @@ defmodule Prism.TinctureRegistryTest do
     test "still discovers the test athanor's tinctures" do
       name = :test_ext_core
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       names = Enum.map(tinctures, & &1.name)
       assert "test-dash" in names
 
@@ -304,8 +322,10 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_skip_app
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       names = Enum.map(tinctures, & &1.name)
       refute "legacy-app" in names
 
@@ -336,9 +356,11 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_reject_png_icon
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+        TinctureRegistry.list_tinctures(name, lookup("ath_test"))
         |> Enum.map(& &1.name)
 
       refute "has-png-icon" in names
@@ -364,9 +386,11 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_reject_jpg_preview
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+        TinctureRegistry.list_tinctures(name, lookup("ath_test"))
         |> Enum.map(& &1.name)
 
       refute "has-jpg-preview" in names
@@ -393,9 +417,11 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_reject_conv_png
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+        TinctureRegistry.list_tinctures(name, lookup("ath_test"))
         |> Enum.map(& &1.name)
 
       refute "conv-png" in names
@@ -421,9 +447,11 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_allow_svg
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+        TinctureRegistry.list_tinctures(name, lookup("ath_test"))
         |> Enum.map(& &1.name)
 
       assert "svg-ok" in names
@@ -449,9 +477,11 @@ defmodule Prism.TinctureRegistryTest do
 
       name = :test_upper_png
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       names =
-        TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+        TinctureRegistry.list_tinctures(name, lookup("ath_test"))
         |> Enum.map(& &1.name)
 
       refute "upper-png" in names
@@ -463,14 +493,49 @@ defmodule Prism.TinctureRegistryTest do
     test "list and get answer from ETS while the server is suspended" do
       name = :test_suspended_reads
       {:ok, pid} = TinctureRegistry.start_link(name: name)
+      # The initial scan runs in handle_continue; a call synchronizes with it.
+      :sys.get_state(pid)
 
       :ok = :sys.suspend(pid)
 
-      tinctures = TinctureRegistry.list_tinctures(name, %{athanor_id: "ath_test"})
+      tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       assert [%{name: "test-dash"}] = tinctures
 
       :ok = :sys.resume(pid)
       GenServer.stop(pid)
     end
+  end
+
+  describe "startup" do
+    test "the table answers (empty) before the first scan completes" do
+      # init only creates the table; the scan runs in handle_continue —
+      # a slow object-store walk must not block supervisor startup, and
+      # readers in the window see an empty roster, never a crash.
+      name = :test_async_init
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+
+      assert is_list(TinctureRegistry.list_tinctures(name, lookup("ath_test")))
+
+      # After the continue drains, the scan has populated the table.
+      :sys.get_state(pid)
+      assert [_ | _] = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
+      GenServer.stop(pid)
+    end
+
+    test "an unresolved athanor lists nothing" do
+      name = :test_unresolved
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+      :sys.get_state(pid)
+
+      anon = Sanctum.Context.build(user_id: "anon", athanor_id: nil, authenticated: false)
+      assert TinctureRegistry.list_tinctures(name, anon) == []
+      GenServer.stop(pid)
+    end
+  end
+
+  # The registry is shell-plane only: every reader carries the member's
+  # Context, and the athanor it names is the one listed.
+  defp lookup(athanor_id) do
+    Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
   end
 end

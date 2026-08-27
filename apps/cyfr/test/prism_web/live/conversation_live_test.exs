@@ -270,15 +270,25 @@ defmodule PrismWeb.ConversationLiveTest do
     refs = msg |> Prism.Attachments.refs_of() |> Enum.sort_by(& &1["filename"])
     assert Enum.map(refs, & &1["filename"]) == ["note.txt", "plan.md"]
     assert Enum.map(refs, & &1["size"]) == [8, 6]
-    # the bytes are the record: one blob per ref, under the message
+    # the bytes are the record: one blob per ref, under the message — the
+    # location rebuilt from row identity, never persisted in the ref.
     for ref <- refs do
-      assert ["conversations", conv_id, msg_id, _name] = ref["path"]
+      refute Map.has_key?(ref, "path")
+
+      assert {:ok, ["conversations", conv_id, msg_id, _name] = blob} =
+               Prism.Attachments.blob_path(conv.id, msg.id, ref)
+
       assert conv_id == conv.id and msg_id == msg.id
-      assert Arca.exists?(ctx, ref["path"])
+      assert Arca.exists?(ctx, blob)
     end
 
-    # A member reads the bytes back on any device; the type is served safe.
-    path = athanor_path("/attachments/#{msg.id}/note.txt", group)
+    note = Enum.find(refs, &(&1["filename"] == "note.txt"))
+    plan = Enum.find(refs, &(&1["filename"] == "plan.md"))
+
+    # A member reads the bytes back on any device — addressed by the
+    # STORED name, so same-named uploads stay distinct; the download still
+    # carries the display filename. The type is served safe.
+    path = athanor_path("/attachments/#{msg.id}/#{note["stored_name"]}", group)
     resp = get(bob_conn, path)
     assert resp.status == 200
     assert resp.resp_body == "hi there"
@@ -286,7 +296,7 @@ defmodule PrismWeb.ConversationLiveTest do
     assert get_resp_header(resp, "x-content-type-options") == ["nosniff"]
 
     # An undeclared type is served as opaque bytes, never as what the uploader said.
-    md = get(bob_conn, athanor_path("/attachments/#{msg.id}/plan.md", group))
+    md = get(bob_conn, athanor_path("/attachments/#{msg.id}/#{plan["stored_name"]}", group))
     assert md.status == 200
     assert get_resp_header(md, "content-type") == ["application/octet-stream"]
 

@@ -78,8 +78,9 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         uriTemplate: "arca://files/{path}",
         name: "Arca Files",
         description:
-          "Read any file in the athanor's storage by path (components/, aqua/, " <>
-            "guest/, conversations/) — :storage_read spans the whole tree",
+          "Read any file in the athanor's storage by path (" <>
+            Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
+            ") — :storage_read spans the whole tree",
         mimeType: "application/octet-stream"
       }
     ]
@@ -96,17 +97,24 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     # Resources have no annotation chokepoint — the router delegates
     # authorization to each handler, so the `:storage_read` the template
     # advertises is enforced here. `require_permission/2` fails closed on
-    # guest-plane contexts.
-    with :ok <- Context.require_permission(ctx, :storage_read),
-         :ok <- tenant_gate(ctx) do
-      segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
+    # guest-plane contexts. The path is caller input: validate it (and the
+    # context's tenant) totally here — `Arca.get/2` raises on both, which
+    # is the fail-loud contract for host code, not for an MCP boundary.
+    segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
+    with :ok <- Context.require_permission(ctx, :storage_read),
+         :ok <- tenant_gate(ctx),
+         :ok <- storage_ctx_gate(ctx),
+         :ok <- validate_segments(segments) do
       case Arca.get(ctx, segments) do
         {:ok, content} ->
           {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
 
         {:error, :not_found} ->
           {:error, "File not found: #{path}"}
+
+        {:error, :forbidden} ->
+          {:error, "Forbidden path: #{path}"}
 
         {:error, reason} ->
           Logger.error("[Emissary.MCP.Tools.RecordsProvider] Failed to read: #{inspect(reason)}")
@@ -117,6 +125,21 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def read(_ctx, uri) do
     {:error, "Unknown resource URI: #{uri}"}
+  end
+
+  # `tenant_gate/1` exempts platform scope; blob reads are tenant-relative,
+  # so a platform context must still carry the athanor whose files it reads.
+  defp storage_ctx_gate(ctx) do
+    if Arca.Storage.athanor_ready?(ctx),
+      do: :ok,
+      else: {:error, "Unauthorized: no resolved tenant"}
+  end
+
+  defp validate_segments(segments) do
+    case Cyfr.PathSafety.validate_segments(segments) do
+      :ok -> :ok
+      {:error, message} -> {:error, "Invalid path: #{message}"}
+    end
   end
 
   def tools do
@@ -281,7 +304,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
             },
             "cleanup_type" => %{
               "type" => "string",
-              "enum" => ["executions", "builds"],
+              "enum" => ["executions", "builds", "mcp_logs"],
               "description" => "Type of data to clean up (for cleanup action)"
             },
             "dry_run" => %{
@@ -627,8 +650,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:error, "Cleanup failed"}
       end
     else
-      {:error, _reason} ->
-        {:error, "Unauthorized: cleanup requires admin-level access"}
+      # The only clause above is the tenant gate — surface its own words,
+      # as every other handler here does.
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
     end
   end
 

@@ -79,4 +79,20 @@ defmodule Arca.R6AthanorLessFailClosedTest do
       refute "alice" in Arca.Storage.tenant_segments(ctx)
     end
   end
+
+  describe "athanor_ready?/1 — the boundary spelling of the same invariant" do
+    # Total predicates (`Arca.exists?/2`) and guest-facing refusals
+    # (`Opus.StorageHandler`) consume this instead of catching the raise.
+    test "answers exactly where tenant_segments/1 raises" do
+      ctx = Context.build(user_id: "u1", athanor_id: nil)
+
+      refute Arca.Storage.athanor_ready?(ctx)
+      # The corrupted-row shapes `Context.build/1` itself refuses to mint.
+      refute Arca.Storage.athanor_ready?(%{ctx | athanor_id: ""})
+      refute Arca.Storage.athanor_ready?(%{ctx | athanor_id: "a.b"})
+      refute Arca.Storage.athanor_ready?(%{ctx | athanor_id: "../x"})
+
+      assert Arca.Storage.athanor_ready?(%{ctx | athanor_id: "ath_alpha"})
+    end
+  end
 end

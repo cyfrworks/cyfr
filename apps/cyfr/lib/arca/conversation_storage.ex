@@ -95,11 +95,17 @@ defmodule Arca.ConversationStorage do
 
   @doc """
   Delete a conversation, its messages and its attachment blobs
-  (`blob_root/1` under the athanor's storage).
+  (`blob_root/1` under the athanor's storage). Bytes go FIRST: a failed
+  blob delete keeps the rows and answers
+  `{:error, {:storage_delete_failed, reason}}`, so the DB can never claim
+  a deletion the tree didn't make — the next attempt (or the orphan
+  sweep) retries.
   """
-  @spec delete(Context.t(), String.t()) :: :ok | {:error, :not_found}
+  @spec delete(Context.t(), String.t()) ::
+          :ok | {:error, :not_found | {:storage_delete_failed, term()}}
   def delete(%Context{} = ctx, id) when is_binary(id) do
-    with {:ok, conv} <- get(ctx, id) do
+    with {:ok, conv} <- get(ctx, id),
+         :ok <- delete_blobs(ctx, conv.id) do
       # Messages cascade through the FK; delete them explicitly as well so
       # SQLite files opened without foreign_keys=ON cannot leave orphans.
       Repo.transaction(fn ->
@@ -107,7 +113,6 @@ defmodule Arca.ConversationStorage do
         Repo.delete!(conv)
       end)
 
-      delete_blobs(ctx, [conv.id])
       :ok
     end
   end
@@ -120,21 +125,45 @@ defmodule Arca.ConversationStorage do
   def blob_root(conversation_id) when is_binary(conversation_id),
     do: ["conversations", conversation_id]
 
-  # Best effort: the rows are gone either way; an orphaned directory is a
-  # retention concern, never a correctness one.
-  defp delete_blobs(ctx, conversation_ids) do
-    Enum.each(conversation_ids, fn id ->
-      case Arca.delete_tree(ctx, blob_root(id)) do
-        :ok ->
-          :ok
+  @doc """
+  Reclaim conversation blob directories no row backs — the retention
+  sweep's leg. The directories are snapshotted FIRST, then the surviving
+  rows: blobs are only ever written under an existing conversation row
+  (`Prism.Attachments`), so a snapshotted directory either has a row
+  (kept) or is a genuine orphan — a concurrent create can never lose its
+  bytes to this sweep.
+  """
+  @spec sweep_orphaned_blobs(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def sweep_orphaned_blobs(%Context{} = ctx) do
+    athanor_id = Context.athanor!(ctx)
 
-        {:error, :not_found} ->
-          :ok
+    with {:ok, entries} <- Arca.list_typed(ctx, ["conversations"]) do
+      dirs = for {name, :dir} <- entries, do: name
 
-        {:error, reason} ->
-          Logger.warning("[ConversationStorage] blobs of #{id}: #{inspect(reason)}")
-      end
-    end)
+      alive =
+        MapSet.new(
+          Repo.all(from(c in Conversation, where: c.athanor_id == ^athanor_id, select: c.id))
+        )
+
+      dirs
+      |> Enum.reject(&MapSet.member?(alive, &1))
+      |> Enum.reduce_while({:ok, 0}, fn id, {:ok, reclaimed} ->
+        case Arca.delete_tree(ctx, blob_root(id)) do
+          :ok -> {:cont, {:ok, reclaimed + 1}}
+          {:error, :not_found} -> {:cont, {:ok, reclaimed}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
+  end
+
+  # Bytes-first, typed: `:not_found` counts as deleted (nothing stored).
+  defp delete_blobs(ctx, conversation_id) do
+    case Arca.delete_tree(ctx, blob_root(conversation_id)) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+      {:error, reason} -> {:error, {:storage_delete_failed, reason}}
+    end
   end
 
   @doc "The provider-shape history stored on a conversation, decoded (`[]` when none)."
@@ -408,13 +437,27 @@ defmodule Arca.ConversationStorage do
 
     ids = Repo.all(stale)
 
-    if ids == [] do
+    # Bytes before rows, per conversation: an id whose blob delete fails
+    # keeps its rows and retries next cycle — never an orphaned tree the
+    # DB has already forgotten.
+    deletable =
+      Enum.filter(ids, fn id ->
+        case delete_blobs(ctx, id) do
+          :ok ->
+            true
+
+          {:error, reason} ->
+            Logger.warning("[ConversationStorage] keeping #{id} this cycle: #{inspect(reason)}")
+
+            false
+        end
+      end)
+
+    if deletable == [] do
       {0, nil}
     else
-      Repo.delete_all(from(m in Message, where: m.conversation_id in ^ids))
-      result = Repo.delete_all(from(c in Conversation, where: c.id in ^ids))
-      delete_blobs(ctx, ids)
-      result
+      Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
+      Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
     end
   end
 

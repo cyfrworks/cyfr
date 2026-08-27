@@ -20,7 +20,6 @@ defmodule Compendium.Registry.Client do
 
   require Logger
 
-  alias Compendium.Registry, as: CompendiumRegistry
   alias Compendium.OCI.Errors
   alias Compendium.Registry.CredentialStore
   alias Compendium.Registry.Transport
@@ -77,7 +76,7 @@ defmodule Compendium.Registry.Client do
           {:ok, %{"components" => components} = data} ->
             {:ok,
              %{
-               registry: CompendiumRegistry.canonical_host(),
+               registry: Compendium.RegistryHost.canonical_host(),
                components: components,
                total: data["total"] || length(components)
              }}
@@ -666,9 +665,9 @@ defmodule Compendium.Registry.Client do
     # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable
     # address (e.g. "127.0.0.1:19") to force connection-refused errors, or at
     # a Bypass HTTP server (with :registry_scheme override) for wire-level
-    # happy-path tests. Host comes from `Compendium.Registry.canonical_rest_host/0` so
+    # happy-path tests. Host comes from `Compendium.RegistryHost.canonical_rest_host/0` so
     # Identity + Client share a single source of truth.
-    "#{scheme()}://#{CompendiumRegistry.canonical_rest_host()}"
+    "#{scheme()}://#{Compendium.RegistryHost.canonical_rest_host()}"
   end
 
   # `https` in production; tests override to `http` to talk to a Bypass
@@ -681,7 +680,7 @@ defmodule Compendium.Registry.Client do
   # personal-namespace token when present, falling back to the first publisher
   # membership token.
   defp auth_headers(ctx) do
-    registry = CompendiumRegistry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
 
     case ctx do
       %Sanctum.Context{user_id: user_id} when is_binary(user_id) and user_id != "" ->

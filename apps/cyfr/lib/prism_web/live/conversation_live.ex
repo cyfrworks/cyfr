@@ -215,9 +215,20 @@ defmodule PrismWeb.ConversationLive do
     message = String.trim(params["message"] || "")
     has_uploads = socket.assigns.uploads.attachments.entries != []
 
-    if message == "" and not has_uploads,
-      do: {:noreply, socket},
-      else: send_message(socket, message, consume_attachments(socket))
+    cond do
+      message == "" and not has_uploads ->
+        {:noreply, socket}
+
+      true ->
+        case consume_attachments(socket) do
+          {:ok, files} ->
+            send_message(socket, message, files)
+
+          {:error, :attachments_unreadable} ->
+            {:noreply,
+             put_flash(socket, :error, "Could not read the attachments — try adding them again.")}
+        end
+    end
   end
 
   # A seeding that failed is retried by any member; the row says how it went.
@@ -568,11 +579,23 @@ defmodule PrismWeb.ConversationLive do
       {:error, :storage_full} ->
         {:noreply, put_flash(socket, :error, "This athanor's storage is full.")}
 
+      {:error, :storage_unverifiable} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Storage usage can't be verified right now — try again."
+         )}
+
       {:error, :too_many_attachments} ->
         {:noreply, put_flash(socket, :error, "Too many attachments for one message.")}
 
       {:error, :attachment_too_large} ->
         {:noreply, put_flash(socket, :error, "An attachment is too large.")}
+
+      {:error, :storage_error} ->
+        {:noreply,
+         put_flash(socket, :error, "Storing the attachments failed — nothing was sent.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not send: #{inspect(reason)}")}
@@ -591,20 +614,23 @@ defmodule PrismWeb.ConversationLive do
   end
 
   defp consume_attachments(socket) do
-    consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
-      # arca:bypass-ok=D — Plug-managed upload tmp file.
-      {:ok,
-       %{
-         "filename" => entry.client_name,
-         "media_type" => entry.client_type,
-         # arca:bypass-ok=D — Plug-managed upload tmp file.
-         "bytes" => File.read!(path)
-       }}
-    end)
+    files =
+      consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
+        # arca:bypass-ok=D — Plug-managed upload tmp file.
+        {:ok,
+         %{
+           "filename" => entry.client_name,
+           "media_type" => entry.client_type,
+           # arca:bypass-ok=D — Plug-managed upload tmp file.
+           "bytes" => File.read!(path)
+         }}
+      end)
+
+    {:ok, files}
   rescue
     e ->
       Logger.warning("[ConversationLive] consume uploads failed: #{inspect(e)}")
-      []
+      {:error, :attachments_unreadable}
   end
 
   defp pending_in(messages) do
@@ -1179,15 +1205,15 @@ defmodule PrismWeb.ConversationLive do
         <div :if={@attachments != []} class="mt-1 flex flex-wrap gap-1">
           <%= for a <- @attachments do %>
             <a
-              :if={@attachment_href && a["path"]}
-              href={@attachment_href.(a["filename"])}
+              :if={@attachment_href && a["stored_name"]}
+              href={@attachment_href.(a["stored_name"])}
               download={a["filename"]}
               class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px] hover:bg-black/40 underline-offset-2 hover:underline"
             >
               📎 {a["filename"]}
             </a>
             <span
-              :if={!(@attachment_href && a["path"])}
+              :if={!(@attachment_href && a["stored_name"])}
               class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px]"
             >
               📎 {a["filename"]}

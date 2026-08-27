@@ -138,6 +138,54 @@ defmodule Sanctum.ProvisioningTest do
     assert {:error, :no_namespace} = Provisioning.ensure_personal_athanor(user)
   end
 
+  test "sync_seeds registers, consents, and collapses pristine copies", %{
+    bundle_dir: bundle_dir
+  } do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|sync-#{n}"}
+
+    {:ok, group} = Provisioning.ensure_group_athanor(ctx, "Sync #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+
+    # A member edited foo and reverted the edit by hand — a materialized,
+    # byte-identical copy that costs quota and no longer tracks releases.
+    version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
+    :ok = Arca.put(in_group, version_dir ++ ["scratch.txt"], "x")
+    :ok = Arca.delete(in_group, version_dir ++ ["scratch.txt"])
+    assert Arca.Overlay.unit_status(in_group, version_dir) == :materialized
+
+    # The next release ships a second bundled catalyst.
+    src = Path.join([bundle_dir, "catalysts", "local", "fresh", "1.0.0"])
+    File.mkdir_p!(src)
+    File.write!(Path.join(src, "catalyst.wasm"), @valid_wasm)
+
+    File.write!(
+      Path.join(src, "cyfr-manifest.json"),
+      Jason.encode!(%{
+        "name" => "fresh",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "caps" => %{"egress" => %{"domains" => []}}
+      })
+    )
+
+    assert :ok = Provisioning.sync_seeds()
+
+    # The new component has a row AND a baseline profile — invocable
+    # without a human walking every athanor's consent sheet.
+    {:ok, rows} =
+      Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
+
+    assert Enum.any?(rows, &(&1.name == "fresh"))
+
+    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.fresh")
+    assert profile.kind == "owner"
+
+    # The pristine copy collapsed — the seed serves the unit again.
+    assert Arca.Overlay.unit_status(in_group, version_dir) == :seed
+  end
+
   test "a bundle whose closure cannot be pulled leaves the athanor unprovisioned, loudly, and retries",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir, deps: ["catalyst:someone.elsewhere"])

@@ -40,14 +40,12 @@ defmodule Arca.ComponentStorage do
         do: from(c in query, where: c.component_type == ^component_type),
         else: query
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ComponentStorage] Database error in get_component: #{Exception.message(e)}")
-      {:error, :database_error}
+    rescuing_db("get_component", fn ->
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -61,14 +59,12 @@ defmodule Arca.ComponentStorage do
       from(c in Component, where: c.digest == ^digest, limit: 1)
       |> where_tenant(ctx)
 
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ComponentStorage] Database error in get_by_digest: #{Exception.message(e)}")
-      {:error, :database_error}
+    rescuing_db("get_by_digest", fn ->
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
   end
 
   @doc """
@@ -82,6 +78,10 @@ defmodule Arca.ComponentStorage do
   def put_component(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = ensure_tenant_fields(ctx, attrs)
 
+    rescuing_db("put_component", fn -> do_put_component(attrs) end)
+  end
+
+  defp do_put_component(attrs) do
     Arca.Repo.insert_all(
       Component,
       [attrs],
@@ -111,10 +111,6 @@ defmodule Arca.ComponentStorage do
       {0, _} -> {:ok, attrs}
       error -> {:error, error}
     end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ComponentStorage] Database error in put_component: #{Exception.message(e)}")
-      {:error, :database_error}
   end
 
   @doc """
@@ -127,18 +123,13 @@ defmodule Arca.ComponentStorage do
   def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = ensure_tenant_fields(ctx, attrs)
 
-    case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
-      {1, _} -> {:ok, attrs}
-      {0, _} -> {:error, :already_exists}
-      error -> {:error, error}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ComponentStorage] Database error in insert_component: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+    rescuing_db("insert_component", fn ->
+      case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
+        {1, _} -> {:ok, attrs}
+        {0, _} -> {:error, :already_exists}
+        error -> {:error, error}
+      end
+    end)
   end
 
   @doc """
@@ -157,17 +148,12 @@ defmodule Arca.ComponentStorage do
         do: from(c in query, where: c.component_type == ^component_type),
         else: query
 
-    case Arca.Repo.delete_all(query) do
-      {_count, _} -> :ok
-      error -> {:error, error}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ComponentStorage] Database error in delete_component: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+    rescuing_db("delete_component", fn ->
+      case Arca.Repo.delete_all(query) do
+        {_count, _} -> :ok
+        error -> {:error, error}
+      end
+    end)
   end
 
   @doc """
@@ -204,7 +190,9 @@ defmodule Arca.ComponentStorage do
   - `:component_type` - Filter by type (catalyst, reagent, formula)
   - `:query` - Text search in name/description
   - `:category` - Filter by category
-  - `:limit` - Max results (default 100)
+  - `:limit` - Max results (default 100); `:none` returns every row —
+    callers that feed completeness-sensitive answers (consent bootstrap,
+    provenance maps, prune) must use it, a page here silently truncates
   """
   def list_components(%Context{} = ctx, opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
@@ -212,14 +200,20 @@ defmodule Arca.ComponentStorage do
     # Stable baseline ordering so row order (and thus limit truncation) is
     # identical on every adapter. Semver-aware "latest" cannot be expressed
     # portably in SQL — callers that need it sort in Elixir
-    # (Compendium.Registry.latest_row/4); this order_by only removes
+    # (Compendium.Registry.latest_of/1); this order_by only removes
     # adapter-defined nondeterminism.
     query =
       from(c in Component,
-        order_by: [desc: c.inserted_at, asc: c.name, asc: c.version, asc: c.id],
-        limit: ^limit
+        order_by: [desc: c.inserted_at, asc: c.name, asc: c.version, asc: c.id]
       )
       |> where_tenant(ctx)
+
+    query =
+      if limit == :none do
+        query
+      else
+        from(c in query, limit: ^limit)
+      end
 
     query =
       if name = Keyword.get(opts, :name) do
@@ -271,14 +265,7 @@ defmodule Arca.ComponentStorage do
         query
       end
 
-    {:ok, Arca.Repo.all(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ComponentStorage] Database error in list_components: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
+    rescuing_db("list_components", fn -> {:ok, Arca.Repo.all(query)} end)
   end
 
   @doc """
@@ -295,5 +282,26 @@ defmodule Arca.ComponentStorage do
   defp ensure_tenant_fields(%Context{athanor_id: athanor_id}, attrs)
        when is_binary(athanor_id) and athanor_id != "" do
     Map.put(attrs, :athanor_id, athanor_id)
+  end
+
+  defp ensure_tenant_fields(%Context{} = ctx, _attrs) do
+    # Host programmer error — fail loud with a message, the same shape as
+    # `Arca.Storage.tenant_segments/1`, not a bare FunctionClauseError.
+    raise ArgumentError,
+          "Arca.ComponentStorage: a resolved athanor_id is required to write component rows " <>
+            "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
+            "auth_method=#{inspect(ctx.auth_method)})"
+  end
+
+  # One rescue for the module's typed-refusal contract: DB errors log with
+  # the operation's name and answer `{:error, :database_error}`
+  # (`has_remaining_versions?/3` keeps its own fail-safe rescue — its
+  # fallback is `true`, not an error tuple).
+  defp rescuing_db(op, fun) do
+    fun.()
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[ComponentStorage] Database error in #{op}: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 end

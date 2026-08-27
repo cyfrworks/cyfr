@@ -195,6 +195,18 @@ defmodule Arca.ComponentStorageTest do
       assert {:ok, comps} = ComponentStorage.list_components(ctx, limit: 2)
       assert length(comps) == 2
     end
+
+    test "limit: :none returns every row past the default page", %{ctx: ctx} do
+      for i <- 1..105 do
+        {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("all-#{i}", "1.0.0"))
+      end
+
+      assert {:ok, paged} = ComponentStorage.list_components(ctx)
+      assert length(paged) == 100
+
+      assert {:ok, comps} = ComponentStorage.list_components(ctx, limit: :none)
+      assert length(comps) == 105
+    end
   end
 
   describe "timestamp parsing" do
@@ -238,6 +250,20 @@ defmodule Arca.ComponentStorageTest do
 
     test "returns false for missing component", %{ctx: ctx} do
       refute ComponentStorage.exists?(ctx, "missing", "1.0.0")
+    end
+  end
+
+  describe "an athanor-less context" do
+    test "fails loud with a message on writes, matching the module's siblings", %{ctx: ctx} do
+      anon = %{ctx | athanor_id: nil}
+
+      assert_raise ArgumentError, ~r/resolved athanor_id is required/, fn ->
+        ComponentStorage.put_component(anon, component_attrs("x", "1.0.0"))
+      end
+
+      assert_raise ArgumentError, ~r/resolved athanor_id is required/, fn ->
+        ComponentStorage.insert_component(anon, component_attrs("x", "1.0.0"))
+      end
     end
   end
 end

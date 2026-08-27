@@ -14,79 +14,108 @@ defmodule Compendium.MCPTest do
                 <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-  # The athanor's own AQUA definitions live under its tenant storage.
+  # The athanor's own AQUA definitions live under its tenant storage —
+  # v3 agent files that shadow the throwaway seed's per-file, so these
+  # tests read exactly this fixture whatever the shipped template says.
+  # Written through the facade so each shadowing write records its origin
+  # — the fixture IS an edit of the shipped template, not the athanor's
+  # own work.
   defp setup_aqua_dir do
-    aqua_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), ["aqua"])
-    File.mkdir_p!(aqua_dir)
+    write = fn name, attrs, prompt ->
+      agent =
+        Map.merge(
+          %{
+            name: name,
+            title: name,
+            description: "",
+            role: :sub_agent,
+            parent: "aqua",
+            default: false,
+            disabled: false,
+            catalyst_ref: nil,
+            model: nil,
+            tool_policy: %{},
+            prompt: prompt
+          },
+          attrs
+        )
 
-    manifest = %{
-      "version" => 1,
-      "default" => "aqua",
-      "agents" => %{
-        "aqua" => %{
-          "title" => "A.Q.U.A.",
-          "prompt" => "aqua.md",
-          "catalyst_ref" => "catalyst:moonmoon69.claude",
-          "model" => "claude-opus-4-6",
-          "sub_agents" => %{
-            "aqua_builder" => %{
-              "prompt" => "aqua_builder.md",
-              "title" => "Builder",
-              "description" => "WASM component builder sub-agent prompt",
-              "tool_policy" => %{"component.list" => "auto", "build.compile" => "auto"}
-            },
-            "aqua_artisan" => %{
-              "prompt" => "aqua_artisan.md",
-              "title" => "Artisan",
-              "description" => "Tincture app/dashboard sub-agent prompt",
-              "tool_policy" => %{"files.read" => "auto", "storage.get" => "auto"}
-            },
-            "aqua_arcade" => %{
-              "prompt" => "aqua_arcade.md",
-              "title" => "Arcade",
-              "description" => "Game tincture sub-agent prompt",
-              "tool_policy" => %{"files.read" => "auto", "storage.get" => "auto"}
-            },
-            "aqua_explorer" => %{
-              "prompt" => "aqua_explorer.md",
-              "title" => "Explorer",
-              "description" => "Research and web search sub-agent prompt",
-              "tool_policy" => %{"native_search" => "auto"}
-            },
-            "aqua_planner" => %{
-              "prompt" => "aqua_planner.md",
-              "title" => "Planner",
-              "description" => "Planning and analysis sub-agent prompt"
-            },
-            "aqua_web" => %{
-              "prompt" => "aqua_web.md",
-              "title" => "Web",
-              "description" => "HTTP interaction sub-agent prompt",
-              "tool_policy" => %{"http.get" => "auto"}
-            }
-          }
-        }
-      }
-    }
+      :ok =
+        Arca.put(
+          Sanctum.TestContext.local(),
+          ["aqua", "agents", name <> ".md"],
+          Compendium.AquaAgent.serialize(agent)
+        )
+    end
 
-    File.write!(Path.join(aqua_dir, "agent.json"), Jason.encode!(manifest))
-
-    File.write!(
-      Path.join(aqua_dir, "aqua.md"),
+    write.(
+      "aqua",
+      %{
+        title: "A.Q.U.A.",
+        role: :orchestrator,
+        parent: nil,
+        default: true,
+        catalyst_ref: "catalyst:moonmoon69.claude",
+        model: "claude-opus-4-6"
+      },
       "# A.Q.U.A.\n\n## Routing Rules\n\nYou are A.Q.U.A."
     )
 
-    File.write!(Path.join(aqua_dir, "aqua_builder.md"), "# Builder Agent\n\nYou are the Builder.")
-    File.write!(Path.join(aqua_dir, "aqua_artisan.md"), "# Artisan Agent\n\nYou are the Artisan.")
-    File.write!(Path.join(aqua_dir, "aqua_arcade.md"), "# Arcade Agent\n\nYou are the Arcade.")
+    write.(
+      "aqua_builder",
+      %{
+        title: "Builder",
+        description: "WASM component builder sub-agent prompt",
+        tool_policy: %{"component.list" => "auto", "build.compile" => "auto"}
+      },
+      "# Builder Agent\n\nYou are the Builder."
+    )
 
-    File.write!(
-      Path.join(aqua_dir, "aqua_explorer.md"),
+    write.(
+      "aqua_artisan",
+      %{
+        title: "Artisan",
+        description: "Tincture app/dashboard sub-agent prompt",
+        tool_policy: %{"files.read" => "auto", "storage.get" => "auto"}
+      },
+      "# Artisan Agent\n\nYou are the Artisan."
+    )
+
+    write.(
+      "aqua_arcade",
+      %{
+        title: "Arcade",
+        description: "Game tincture sub-agent prompt",
+        tool_policy: %{"files.read" => "auto", "storage.get" => "auto"}
+      },
+      "# Arcade Agent\n\nYou are the Arcade."
+    )
+
+    write.(
+      "aqua_explorer",
+      %{
+        title: "Explorer",
+        description: "Research and web search sub-agent prompt",
+        tool_policy: %{"native_search" => "auto"}
+      },
       "# Explorer Agent\n\nYou are the Explorer."
     )
 
-    File.write!(Path.join(aqua_dir, "aqua_planner.md"), "# Planner Agent\n\nYou are the Planner.")
-    File.write!(Path.join(aqua_dir, "aqua_web.md"), "# Web Agent\n\nYou are the Web agent.")
+    write.(
+      "aqua_planner",
+      %{title: "Planner", description: "Planning and analysis sub-agent prompt"},
+      "# Planner Agent\n\nYou are the Planner."
+    )
+
+    write.(
+      "aqua_web",
+      %{
+        title: "Web",
+        description: "HTTP interaction sub-agent prompt",
+        tool_policy: %{"http.get" => "auto"}
+      },
+      "# Web Agent\n\nYou are the Web agent."
+    )
   end
 
   setup do
@@ -226,6 +255,32 @@ defmodule Compendium.MCPTest do
     test "returns error for non-existent asset", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.nocomp:1.0.0/missing.txt")
       assert msg =~ "not found"
+    end
+
+    test "a hostile asset path is a typed refusal, never a raise", %{ctx: ctx} do
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "asset-guard",
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      for hostile <- [
+            "..%2F..%2Fetc%2Fpasswd",
+            "../../../etc/passwd",
+            "%2e%2e/%2e%2e/secret",
+            "a\\b",
+            String.duplicate("a", 300)
+          ] do
+        assert {:error, msg} =
+                 MCP.read(ctx, "compendium://assets/r:local.asset-guard:1.0.0/#{hostile}")
+
+        assert msg =~ "Invalid asset path"
+      end
+
+      # A path of only empty segments refuses as empty, not as a read.
+      assert {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.asset-guard:1.0.0///")
+      assert msg =~ "Invalid asset path"
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
@@ -585,11 +640,16 @@ defmodule Compendium.MCPTest do
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
 
       :ok =
-        Registry.CredentialStore.put(ctx.user_id, Registry.canonical_host(), "testns", %{
-          type: :push_token,
-          token: "cyfr_pt_test",
-          namespace: "testns"
-        })
+        Registry.CredentialStore.put(
+          ctx.user_id,
+          Compendium.RegistryHost.canonical_host(),
+          "testns",
+          %{
+            type: :push_token,
+            token: "cyfr_pt_test",
+            namespace: "testns"
+          }
+        )
 
       {:error, msg} =
         MCP.handle("component", ctx, %{
@@ -1060,6 +1120,15 @@ defmodule Compendium.MCPTest do
       names = Enum.map(result.components, &(&1[:name] || &1["name"]))
       assert "list-test-a" in names
       assert "list-test-b" in names
+
+      # Every listed row carries its provenance and update facts — the
+      # one data path the Components page consumes.
+      for comp <- result.components do
+        assert comp[:provenance] in ["bundled", "bundled_modified", "user", "remote"]
+        assert is_boolean(comp[:superseded])
+        assert is_boolean(comp[:shadows_shipped])
+        assert is_boolean(comp[:upstream_superseded])
+      end
     end
 
     test "list filters by type", %{ctx: ctx} do
@@ -1494,6 +1563,132 @@ defmodule Compendium.MCPTest do
         })
 
       assert result["readme"] == nil
+    end
+  end
+
+  describe "component tool - status overview" do
+    test "status without a reference answers the whole-athanor overview", %{ctx: ctx} do
+      segments = ["components", "reagents", "local", "ov-tool", "1.0.0"]
+      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
+      File.mkdir_p!(comp_dir)
+
+      File.write!(
+        Path.join(comp_dir, "cyfr-manifest.json"),
+        Jason.encode!(%{"type" => "reagent", "version" => "1.0.0", "name" => "ov-tool"})
+      )
+
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
+
+      {:ok, %{components: components, counts: counts}} =
+        MCP.handle("component", ctx, %{"action" => "status"})
+
+      entry = Enum.find(components, &(&1.reference =~ "ov-tool"))
+      assert entry.provenance == "user"
+      assert entry.shipped_versions == []
+      assert entry.superseded == false
+      assert counts.user >= 1
+    end
+  end
+
+  describe "aqua tool - status, skills, delete semantics" do
+    test "status speaks the one provenance vocabulary", %{ctx: ctx} do
+      # The fixture materialized every shipped agent (they shadow the seed).
+      {:ok, %{files: files}} = MCP.handle("aqua", ctx, %{"action" => "status"})
+
+      assert %{state: "bundled_modified"} =
+               Enum.find(files, &(&1.path == "aqua/agents/aqua.md"))
+    end
+
+    test "reset keeps member-created agents unless all=true", %{ctx: ctx} do
+      :ok =
+        Arca.put(
+          ctx,
+          ["aqua", "agents", "keeper.md"],
+          "---\ntitle: Keeper\nparent: aqua\n---\n\nkeeper\n"
+        )
+
+      {:ok, %{reset: true, reverted: reverted, kept: kept}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset"})
+
+      assert "aqua/agents/keeper.md" in kept
+      assert "aqua/agents/aqua_web.md" in reverted
+      assert Arca.exists?(ctx, ["aqua", "agents", "keeper.md"])
+
+      {:ok, %{reset: true, kept: []}} =
+        MCP.handle("aqua", ctx, %{"action" => "reset", "all" => true})
+
+      refute Arca.exists?(ctx, ["aqua", "agents", "keeper.md"])
+    end
+
+    test "skill_list and skill_get serve the skills tree", %{ctx: ctx} do
+      # The empty state is honest and actionable — the machinery is live
+      # even when the install ships no skills.
+      {:ok, empty} = MCP.handle("aqua", ctx, %{"action" => "skill_list"})
+      assert empty.skills == []
+      assert empty.hint =~ "aqua/skills/<name>/SKILL.md"
+
+      skill_dir =
+        Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), ["aqua", "skills", "pdf"])
+
+      File.mkdir_p!(skill_dir)
+
+      File.write!(
+        Path.join(skill_dir, "SKILL.md"),
+        "---\nname: pdf\ndescription: fills PDF forms\n---\n\nUse the reference.\n"
+      )
+
+      File.write!(Path.join(skill_dir, "reference.md"), "field tables")
+
+      {:ok, listing} = MCP.handle("aqua", ctx, %{"action" => "skill_list"})
+      assert [%{name: "pdf", description: "fills PDF forms"}] = listing.skills
+      refute Map.has_key?(listing, :hint)
+
+      {:ok, skill} = MCP.handle("aqua", ctx, %{"action" => "skill_get", "name" => "pdf"})
+      assert skill.content =~ "Use the reference."
+      assert skill.resources == ["reference.md"]
+    end
+
+    test "a shipped agent refuses delete and points at disable; an edited one reverts", %{
+      ctx: ctx
+    } do
+      # The throwaway seed ships aqua_web (test_helper copies the real
+      # template); the fixture's tenant copy shadows it — a delete reverts.
+      {:ok, %{deleted: "aqua_web", restored: "shipped"}} =
+        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
+
+      # Now unmaterialized and shipped: delete refuses, disable is the verb.
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
+      assert msg =~ "cannot be deleted"
+      assert msg =~ "disabled=true"
+
+      {:ok, _} =
+        MCP.handle("aqua", ctx, %{"action" => "update", "name" => "aqua_web", "disabled" => true})
+
+      {:ok, listing} = MCP.handle("aqua", ctx, %{"action" => "list"})
+      refute Enum.any?(listing.guides, &(&1.name == "aqua_web"))
+
+      # get still answers (so it can be re-enabled), flagged.
+      {:ok, got} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
+      assert got.disabled == true
+    end
+
+    test "a member-created agent deletes outright", %{ctx: ctx} do
+      {:ok, _} =
+        MCP.handle("aqua", ctx, %{
+          "action" => "create",
+          "name" => "my_agent",
+          "parent" => "aqua",
+          "content" => "You are mine."
+        })
+
+      {:ok, %{deleted: "my_agent"} = result} =
+        MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "my_agent"})
+
+      refute Map.has_key?(result, :restored)
+
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "my_agent"})
+      assert msg =~ "Unknown agent"
     end
   end
 

@@ -30,6 +30,12 @@ defmodule Arca.Adapters.S3 do
   (`Arca.Storage.seed_roots/0`). `namespace` is identity-only and is not
   part of the path.
 
+  This adapter never filters the Local adapter's `.tmp.<n>` write-marker
+  shape: the facade reserves it on every segment of every write, so the
+  bucket never gains one — and any pre-reservation offender stays visible,
+  listed and counted (a visible object cannot evade the storage cap) until
+  deleted.
+
   ## Append semantics
 
   S3 has no atomic append. `append/3` reads the object, extends it and writes
@@ -38,8 +44,9 @@ defmodule Arca.Adapters.S3 do
   has. Two consequences follow from the read-modify-write, and neither applies
   to Local's `O_APPEND` write: concurrent appends to one path are
   last-writer-wins, and an append is refused once the object would pass 5 MiB
-  (the default node `max_response_size`, above which a guest cannot read the
-  object back anyway).
+  (the DEFAULT node `max_response_size`, above which a guest cannot read the
+  object back anyway — a node whose manifest raises its own response limit
+  does not raise this ceiling; the two deliberately track only the default).
 
   ## Configuration
 
@@ -72,12 +79,9 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def get(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
-
     case request(:get, build_key(ctx, segments)) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: 404}} -> {:error, :not_found}
-      {:ok, %{status: 403}} -> {:error, :permission_denied}
       {:ok, %{status: status, body: body}} -> log_and_error("get", status, body)
       {:error, reason} -> log_and_error("get", reason)
     end
@@ -85,11 +89,8 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def put(%Context{} = ctx, segments, content) do
-    Arca.Storage.validate_path!(segments)
-
     case request(:put, build_key(ctx, segments), content) do
       {:ok, %{status: status}} when status in 200..299 -> :ok
-      {:ok, %{status: 403}} -> {:error, :permission_denied}
       {:ok, %{status: status, body: body}} -> log_and_error("put", status, body)
       {:error, reason} -> log_and_error("put", reason)
     end
@@ -97,8 +98,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def append(%Context{} = ctx, segments, content) do
-    Arca.Storage.validate_path!(segments)
-
     with {:ok, existing} <- read_for_append(ctx, segments) do
       merged = existing <> content
 
@@ -122,7 +121,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def delete(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
     key = build_key(ctx, segments)
 
     # Real S3 answers 204 even for a key that never existed, so a bare DELETE
@@ -150,7 +148,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def list_typed(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
     prefix = build_key(ctx, segments)
 
     case list_keys(prefix) do
@@ -171,8 +168,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def exists?(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
-
     case request(:head, build_key(ctx, segments)) do
       {:ok, %{status: 200}} -> true
       _ -> false
@@ -181,7 +176,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def delete_tree(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
     prefix = build_key(ctx, segments)
 
     # An object can sit AT the tree's own key (Local's rm_rf removes it, and
@@ -242,7 +236,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def list_recursive(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
     prefix_key = build_key(ctx, segments)
     prefix_with_slash = prefix_key <> "/"
 
@@ -272,7 +265,6 @@ defmodule Arca.Adapters.S3 do
 
   @impl true
   def usage(%Context{} = ctx, segments) do
-    Arca.Storage.validate_path!(segments)
     prefix_key = build_key(ctx, segments)
     prefix_with_slash = prefix_key <> "/"
 
@@ -294,46 +286,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def read_subtree(%Context{} = ctx, segments) do
-    with {:ok, leaf_segments} <- list_recursive(ctx, segments) do
-      max_concurrency = Application.get_env(:cyfr, :s3_read_subtree_concurrency, 10)
-
-      results =
-        leaf_segments
-        |> Task.async_stream(
-          fn segs ->
-            case get(ctx, segs) do
-              {:ok, content} ->
-                relative = Enum.drop(segs, length(segments))
-                {:ok, {relative, content}}
-
-              {:error, :not_found} ->
-                :skip
-
-              {:error, reason} ->
-                {:error, reason}
-            end
-          end,
-          max_concurrency: max_concurrency,
-          timeout: :timer.seconds(30)
-        )
-        |> Enum.reduce_while([], fn
-          {:ok, {:ok, pair}}, acc -> {:cont, [pair | acc]}
-          {:ok, :skip}, acc -> {:cont, acc}
-          {:ok, {:error, reason}}, _acc -> {:halt, {:error, reason}}
-          {:exit, reason}, _acc -> {:halt, {:error, {:task_exit, reason}}}
-        end)
-
-      case results do
-        {:error, reason} -> {:error, reason}
-        list -> {:ok, Enum.reverse(list)}
-      end
-    end
-  end
-
-  @impl true
   def serve_to_conn(conn, %Context{} = ctx, segments, opts) do
-    Arca.Storage.validate_path!(segments)
     status = Keyword.get(opts, :status, 200)
 
     # Buffer-and-send: simple and correct, fits manifests + tincture HTML
@@ -350,6 +303,9 @@ defmodule Arca.Adapters.S3 do
   # Private — key construction
   # ============================================================================
 
+  # The adapter's one validation chokepoint: every callback reaches it
+  # before any request (append and serve via get), so `validate_path!/1`
+  # runs exactly once per operation.
   defp build_key(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
     base = Arca.Storage.physical_segments(ctx, segments)

@@ -1,3 +1,34 @@
+---
+title: Builder
+description: "Spawn a Builder specialist to create, fix, or improve WASM components (catalysts, reagents, formulas). Handles Rust/WASM development, WIT interfaces, compilation, manifest work. NOT for tinctures — use aqua_artisan or aqua_arcade."
+parent: aqua
+catalyst_ref: catalyst:moonmoon69.claude
+model: claude-sonnet-4-6
+tool_policy:
+  aqua.get: auto
+  aqua.list: auto
+  build.compile: auto
+  build.toolchains: auto
+  build.validate: auto
+  component.inspect: auto
+  component.list: auto
+  component.pull: auto
+  component.search: auto
+  component.setup_plan: auto
+  files.delete: auto
+  files.list: auto
+  files.read: auto
+  files.write: auto
+  http.get: auto
+  http.head: auto
+  http.post: auto
+  request_setup.open: auto
+  storage.delete: auto
+  storage.list: auto
+  storage.read: auto
+  storage.write: auto
+---
+
 # Builder Agent
 
 You are a WASM component builder specialist. You create, fix, and

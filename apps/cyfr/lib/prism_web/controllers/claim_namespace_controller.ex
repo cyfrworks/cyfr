@@ -45,7 +45,7 @@ defmodule PrismWeb.ClaimNamespaceController do
       # is cached best-effort — a later probe re-mints it.
       case Sanctum.SignIn.record_namespace(user_id, slug) do
         {:ok, _user} ->
-          registry = Compendium.Registry.canonical_host()
+          registry = Compendium.RegistryHost.canonical_host()
 
           conn =
             case CredentialStore.put_push_token(

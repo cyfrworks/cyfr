@@ -89,4 +89,56 @@ defmodule Cyfr.PathSafetyTest do
       assert message =~ "backslashes"
     end
   end
+
+  describe "length and depth ceilings (both contracts)" do
+    test "a 240-byte segment passes; 241 is refused — measured in bytes, not graphemes" do
+      assert :ok = PathSafety.validate_segments!(["guest", String.duplicate("a", 240)])
+
+      assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
+        PathSafety.validate_segments!(["guest", String.duplicate("a", 241)])
+      end
+
+      # 81 three-byte graphemes are 243 bytes: past the ceiling even though
+      # the grapheme count is far under it.
+      assert_raise ArgumentError, ~r/segment longer than 240 bytes/, fn ->
+        PathSafety.validate_segments!(["guest", String.duplicate("四", 81)])
+      end
+
+      assert {:error, message} =
+               PathSafety.validate_relative_path("data/" <> String.duplicate("a", 241))
+
+      assert message =~ "segment longer than 240 bytes"
+    end
+
+    test "depth past 32 segments is refused" do
+      deep_ok = ["guest" | for(n <- 1..31, do: "d#{n}")]
+      assert :ok = PathSafety.validate_segments!(deep_ok)
+
+      deep_bad = ["guest" | for(n <- 1..32, do: "d#{n}")]
+
+      assert_raise ArgumentError, ~r/more than 32 segments/, fn ->
+        PathSafety.validate_segments!(deep_bad)
+      end
+
+      assert {:error, message} = PathSafety.validate_relative_path(Enum.join(deep_bad, "/"))
+      assert message =~ "more than 32 segments"
+    end
+
+    test "a joined path past 1024 bytes is refused" do
+      # Eight 200-byte segments: each under the segment cap, 1607 joined.
+      long = ["guest" | for(_ <- 1..8, do: String.duplicate("a", 200))]
+
+      assert_raise ArgumentError, ~r/longer than 1024 bytes/, fn ->
+        PathSafety.validate_segments!(long)
+      end
+    end
+  end
+
+  describe "validate_segments/1 (tuple contract)" do
+    test "answers instead of raising — the exists? contract" do
+      assert :ok = PathSafety.validate_segments(["guest", "notes.txt"])
+      assert {:error, message} = PathSafety.validate_segments(["guest", ".."])
+      assert message =~ "not allowed"
+    end
+  end
 end

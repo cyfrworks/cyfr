@@ -19,6 +19,11 @@ defmodule Compendium.OCI.Cache do
 
   alias Compendium.OCI.Blob, as: BlobUtil
 
+  # The global root this cache lives under — one spelling for the four
+  # segment builders below (membership in `Arca.Storage.global_prefixes/0`
+  # is witnessed in the tests).
+  @cache_root "cache"
+
   # All cache operations run under a single global storage context.
   # The `cache/` prefix is in `Arca.Storage.global_prefixes/0`, so the
   # adapter writes to root rather than user-scoping by `user_id`.
@@ -124,7 +129,7 @@ defmodule Compendium.OCI.Cache do
   """
   @spec clear() :: :ok | {:error, term()}
   def clear do
-    case Arca.delete_tree(ctx(), ["cache", "oci"]) do
+    case Arca.delete_tree(ctx(), [@cache_root, "oci"]) do
       :ok ->
         :ok
 
@@ -141,14 +146,14 @@ defmodule Compendium.OCI.Cache do
   # Private — path segments
   # ============================================================================
 
-  defp blob_segments(hex), do: ["cache", "oci", "blobs", "sha256", hex]
+  defp blob_segments(hex), do: [@cache_root, "oci", "blobs", "sha256", hex]
 
   defp manifest_segments(registry, repository, tag) do
     safe_repo = String.replace(repository, "/", "_")
-    ["cache", "oci", "manifests", registry, safe_repo, "#{tag}.json"]
+    [@cache_root, "oci", "manifests", registry, safe_repo, "#{tag}.json"]
   end
 
-  defp index_segments, do: ["cache", "oci", "index.json"]
+  defp index_segments, do: [@cache_root, "oci", "index.json"]
 
   defp index_key(registry, repository, tag), do: "#{registry}/#{repository}:#{tag}"
 

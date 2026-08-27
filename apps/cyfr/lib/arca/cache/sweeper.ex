@@ -36,6 +36,9 @@ defmodule Arca.Cache.Sweeper do
 
   @impl true
   def init(_opts) do
+    # The table's one creation path at boot (Cyfr.Application deliberately
+    # does not own it) — `ensure_table/0` stays the recovery path.
+    Arca.Cache.init()
     schedule_sweep()
     {:ok, %{}}
   end

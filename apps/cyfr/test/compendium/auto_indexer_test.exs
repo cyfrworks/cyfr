@@ -71,6 +71,32 @@ defmodule Compendium.AutoIndexerTest do
     dir
   end
 
+  describe "discover/1" do
+    test "answers manifest-bearing local version dirs only — the build plane's roster", %{
+      ctx: ctx
+    } do
+      create_component("reagent", "local", "with-manifest", "1.0.0")
+      create_component("reagent", "acme", "foreign", "1.0.0")
+
+      # A version dir without a manifest was never buildable — a scaffold
+      # always writes one — so it is not on the roster.
+      bare =
+        Arca.Adapters.Local.build_path(
+          ctx,
+          ["components", "reagents", "local", "manifest-less", "1.0.0"]
+        )
+
+      File.mkdir_p!(bare)
+      File.write!(Path.join(bare, "reagent.wasm"), @valid_wasm)
+
+      discovered = Compendium.AutoIndexer.discover(ctx)
+
+      assert ["components", "reagents", "local", "with-manifest", "1.0.0"] in discovered
+      refute Enum.any?(discovered, fn segs -> "foreign" in segs end)
+      refute Enum.any?(discovered, fn segs -> "manifest-less" in segs end)
+    end
+  end
+
   describe "scan/1" do
     test "discovers and registers local components", %{ctx: ctx} do
       create_component("catalyst", "local", "openai", "0.1.0")
@@ -182,17 +208,48 @@ defmodule Compendium.AutoIndexerTest do
       assert result.total == 0
     end
 
-    test "never indexes the seed bundle", %{ctx: ctx, test_dir: test_dir} do
+    test "indexes the seed bundle through the overlay union, and prune keeps its rows", %{
+      ctx: ctx,
+      test_dir: test_dir
+    } do
       # A seed fixture of this test's own — never the suite-shared seed tree.
       prev_seed = Application.get_env(:cyfr, :seed_path)
-      Application.put_env(:cyfr, :seed_path, Path.join(test_dir, "seed_fixture"))
+      seed_dir = Path.join(test_dir, "seed_fixture")
+      Application.put_env(:cyfr, :seed_path, seed_dir)
       on_exit(fn -> Application.put_env(:cyfr, :seed_path, prev_seed) end)
 
-      create_component("catalyst", "local", "bundled", "0.1.0", athanor: "_bundle")
+      bundle_dir = Path.join([seed_dir, "components", "catalysts", "local", "bundled", "0.1.0"])
+      File.mkdir_p!(bundle_dir)
 
+      File.write!(
+        Path.join(bundle_dir, "cyfr-manifest.json"),
+        Jason.encode!(%{"type" => "catalyst", "version" => "0.1.0", "description" => "Bundled"})
+      )
+
+      File.write!(Path.join(bundle_dir, "catalyst.wasm"), @valid_wasm)
+
+      # No bytes in the athanor's tree — the walk sees the bundle through
+      # the union and mints its row anyway.
       result = AutoIndexer.scan(ctx: ctx)
-      assert result.registered == 0
-      assert result.total == 0
+      assert result.registered == 1
+
+      assert {:ok, %{name: "bundled"}} =
+               Arca.ComponentStorage.get_component(ctx, "bundled", "0.1.0")
+
+      refute File.exists?(
+               Arca.Adapters.Local.build_path(
+                 ctx,
+                 ["components", "catalysts", "local", "bundled", "0.1.0", "catalyst.wasm"]
+               )
+             )
+
+      # The rescan rediscovers it the same way — prune must keep the row,
+      # not sweep it as stale.
+      rescan = AutoIndexer.scan(ctx: ctx)
+      assert rescan.pruned == 0
+
+      assert {:ok, %{name: "bundled"}} =
+               Arca.ComponentStorage.get_component(ctx, "bundled", "0.1.0")
     end
   end
 end

@@ -1047,7 +1047,7 @@ A typical live-data pipeline:
 | `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
 | `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails of the server's operators (platform admins). They are always let in and manage the door — the server allowlist (`cyfr admin allow <email\|user_id\|*>`) that decides who else may sign in. Everyone not on either list is refused at sign-in (403). |
-| `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. |
+| `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. Note `CYFR_ATHANOR_STORAGE_BYTES` in particular: unset, an athanor's storage has no total-byte ceiling (each write is still bounded, and files per scope are backstopped) — a server exposed to others sets it deliberately. |
 
 ### Platform admins
 
@@ -1066,6 +1066,16 @@ sign in at all: a match on first sign-in lets them in, no match is a 403, and
 door: adding an unknown email to a group leaves an invitation that activates on
 that person's first admitted sign-in and, when the door would refuse them, a
 request for the operator.
+
+### Reclaiming an archived athanor's storage
+
+Archiving an athanor revokes its keys and cancels its running work but
+deliberately leaves its storage tree (`data/athanors/<id>/`) in place, so
+`athanor.unarchive` reopens the furnace intact. When the bytes should
+actually be reclaimed, a platform admin runs `athanor.purge` (the `athanor`
+tool) against the archived athanor: it deletes the whole tree — blobs only,
+rows remain — and is final. A purged athanor that is later unarchived comes
+back with empty storage.
 
 With no auth configured, the deployment runs without sign-in: requests reach the
 public read-only surface as an unauthenticated context, and tenant-scoped

@@ -134,9 +134,22 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:error, :reserved_name} = Arca.append(a, ["guest", "log.tmp.99"], "x")
     refute Arca.exists?(a, ["guest", "blob.tmp.1"])
 
+    # Reserved at ANY depth: a tmp-named directory would hide its whole
+    # subtree from listings and the usage walk — an uncounted object the
+    # sweeper couldn't reclaim. Archive ingresses store remote-controlled
+    # paths, so this is also what stops a hostile tarball from planting
+    # an invisible subtree.
+    assert {:ok, usage_before} = Arca.usage(a, [])
+    assert {:error, :reserved_name} = Arca.put(a, ["guest", "x.tmp.1", "a.txt"], "x")
+    assert {:error, :reserved_name} = Arca.append(a, ["guest", "x.tmp.2", "log"], "x")
+    assert {:error, :reserved_name} = Arca.put(a, ["guest/x.tmp.3", "a.txt"], "x")
+    refute Arca.exists?(a, ["guest", "x.tmp.1", "a.txt"])
+    assert {:ok, ^usage_before} = Arca.usage(a, [])
+
     # Only the exact suffix is reserved.
     assert :ok = Arca.put(a, ["guest", "blob.tmp"], "x")
     assert :ok = Arca.put(a, ["guest", "tmp.1"], "x")
+    assert :ok = Arca.put(a, ["guest", "sub.tmp", "nested.txt"], "x")
   end
 
   test "a context without an athanor cannot touch tenant storage at all" do

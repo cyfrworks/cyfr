@@ -17,6 +17,9 @@ defmodule Compendium.MCP.ComponentTool do
   alias Compendium.Registry
   alias Compendium.MCP.Shared
 
+  # The one spelling of the local namespace, pinned for pattern matches.
+  @local_publisher Compendium.ComponentPath.default_publisher()
+
   # ============================================================================
   # Tool Handlers - Action-based dispatch
   # ============================================================================
@@ -63,7 +66,15 @@ defmodule Compendium.MCP.ComponentTool do
           },
           "setup_plan" => %{kind: :read, planes: [:external, :in_chain]},
           "list" => %{kind: :read, planes: [:external, :in_chain]},
+          "status" => %{kind: :read, planes: [:external, :in_chain]},
           "delete" => %{kind: :destructive, planes: [:external], permission: :component_manage},
+          # Reverts a bundled component's local edits to exactly what the
+          # release shipped — destructive to the edits, mirror of aqua.reset.
+          "reset" => %{
+            kind: :destructive,
+            planes: [:external],
+            permission: :component_manage
+          },
           "create" => %{
             kind: :write,
             planes: [:external, :in_chain],
@@ -106,7 +117,9 @@ defmodule Compendium.MCP.ComponentTool do
               "discover",
               "setup_plan",
               "list",
+              "status",
               "delete",
+              "reset",
               "create",
               "fork",
               "deprecate",
@@ -163,7 +176,7 @@ defmodule Compendium.MCP.ComponentTool do
           "reference" => %{
             "type" => "string",
             "description" =>
-              "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results."
+              "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
           },
           # inspect action params
           "include_readme" => %{
@@ -364,13 +377,13 @@ defmodule Compendium.MCP.ComponentTool do
           {:ok, %{version: nil}} ->
             {:error, "Version is required for pushing. Example: c:local.name:1.0.0"}
 
-          {:ok, cref} when cref.namespace != "local" ->
+          {:ok, cref} when cref.namespace != @local_publisher ->
             {:error,
              "Only components in the local namespace can be pushed to a registry. " <>
                "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
           {:ok, _cref} ->
-            case Compendium.Registry.validate_host(registry) do
+            case Compendium.RegistryHost.validate_host(registry) do
               {:error, msg} ->
                 {:error, msg}
 
@@ -548,7 +561,22 @@ defmodule Compendium.MCP.ComponentTool do
     }
 
     {:ok, result} = Registry.search(ctx, filters)
-    {:ok, enrich_tincture_media(ctx, result)}
+
+    # The one data path the Components page consumes: every row carries
+    # its provenance and update facts, so the UI needs no second call.
+    components =
+      ctx
+      |> Compendium.Provenance.annotate(result.components)
+      |> Enum.map(fn entry ->
+        entry.component
+        |> Map.put(:provenance, Compendium.Provenance.label(entry.provenance))
+        |> Map.put(:superseded, entry.superseded)
+        |> Map.put(:shadows_shipped, entry.shadows_shipped)
+        |> Map.put(:forked_from, entry.forked_from)
+        |> Map.put(:upstream_superseded, entry.upstream_superseded)
+      end)
+
+    {:ok, enrich_tincture_media(ctx, %{result | components: components})}
   end
 
   # Delete action - delete a component from the registry
@@ -569,6 +597,20 @@ defmodule Compendium.MCP.ComponentTool do
 
           {:error, :not_found} ->
             {:error, "Component not found: #{reference}"}
+
+          {:error, :bundled} ->
+            {:error,
+             "#{reference} ships with the server and cannot be deleted — " <>
+               "it costs your athanor nothing until edited"}
+
+          {:error, :bundled_modified} ->
+            {:error,
+             "#{reference} is bundled with local edits — use action=reset to " <>
+               "revert it to the shipped version"}
+
+          {:error, reason} ->
+            Logger.error("[Compendium.MCP] component.delete failed: #{inspect(reason)}")
+            {:error, "Failed to delete #{reference}"}
         end
 
       {:error, reason} ->
@@ -578,6 +620,143 @@ defmodule Compendium.MCP.ComponentTool do
 
   def handle(_ctx, %{"action" => "delete"}) do
     {:error, "Missing required argument: reference"}
+  end
+
+  # Reset action — revert a bundled component's local edits to exactly what
+  # the release shipped ("delete" never means "revert").
+  def handle(%Context{} = ctx, %{"action" => "reset", "reference" => reference}) do
+    with {:ok, %{version: version} = cref} when is_binary(version) <-
+           Sanctum.ComponentRef.parse(reference) do
+      case Registry.reset(ctx, cref.name, cref.version, cref.namespace) do
+        {:ok, :reset} ->
+          broadcast_components_changed(ctx)
+          {:ok, %{status: "reset", reference: reference}}
+
+        {:ok, :already_pristine} ->
+          {:ok, %{status: "already_pristine", reference: reference}}
+
+        {:error, :not_found} ->
+          {:error, "Component not found: #{reference}"}
+
+        {:error, :not_bundled} ->
+          {:error, "#{reference} is not a bundled component — nothing shipped to revert to"}
+
+        {:error, reason} ->
+          Logger.error("[Compendium.MCP] component.reset failed: #{inspect(reason)}")
+          {:error, "Failed to reset #{reference}"}
+      end
+    else
+      {:ok, %{version: nil}} ->
+        {:error, "Version is required for reset. Example: c:local.name:1.0.0"}
+
+      {:error, reason} ->
+        {:error, "Invalid reference: #{reason}"}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "reset"}) do
+    {:error, "Missing required argument: reference"}
+  end
+
+  # Status action — provenance and drift for one component: whose bytes
+  # answer (bundled / bundled_modified / user / remote), how an edited
+  # bundled copy differs from shipped, and what versions this release ships.
+  def handle(%Context{} = ctx, %{"action" => "status", "reference" => reference}) do
+    with {:ok, %{version: version} = cref} when is_binary(version) <-
+           Sanctum.ComponentRef.parse(reference),
+         {:ok, component} <-
+           Arca.ComponentStorage.get_component(ctx, cref.name, cref.version, cref.namespace, nil),
+         {:ok, overlay} <- Compendium.Provenance.status(ctx, component) do
+      drift =
+        case overlay.drift do
+          :pristine -> %{drift: "pristine"}
+          {:modified, diff} -> %{drift: "modified", diff: format_diff(diff)}
+          nil -> %{}
+        end
+
+      shipped =
+        if overlay.provenance == :remote,
+          do: [],
+          else:
+            Compendium.Provenance.shipped_versions(
+              to_string(Map.get(component, :component_type, "")),
+              cref.name
+            )
+
+      lineage =
+        case Compendium.Provenance.upstream_status(ctx, component) do
+          nil ->
+            %{}
+
+          upstream ->
+            %{
+              forked_from: upstream.forked_from,
+              upstream_superseded: upstream.upstream_superseded
+            }
+        end
+
+      {:ok,
+       %{
+         reference: reference,
+         provenance: Compendium.Provenance.label(overlay.provenance),
+         shipped_versions: shipped,
+         shadows_shipped: overlay.shadows_shipped
+       }
+       |> Map.merge(drift)
+       |> Map.merge(lineage)}
+    else
+      {:ok, %{version: nil}} ->
+        {:error, "Version is required for status. Example: c:local.name:1.0.0"}
+
+      {:error, :not_found} ->
+        {:error, "Component not found: #{reference}"}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, "Invalid reference: #{reason}"}
+
+      {:error, reason} ->
+        Logger.error("[Compendium.MCP] component.status failed: #{inspect(reason)}")
+        {:error, "Failed to read status for #{reference}"}
+    end
+  end
+
+  # Status overview — no reference: the whole athanor at once, provenance
+  # per component with the release catalog and superseded flags. The batch
+  # surface an updates view consumes.
+  def handle(%Context{} = ctx, %{"action" => "status"}) do
+    overview = Compendium.Provenance.overview(ctx)
+
+    components =
+      Enum.map(overview, fn entry ->
+        row = entry.component
+
+        reference =
+          Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+            type: to_string(Map.get(row, :component_type, "")),
+            namespace: Compendium.ComponentPath.normalize_publisher(Map.get(row, :publisher)),
+            name: row.name,
+            version: row.version
+          })
+
+        %{
+          reference: reference,
+          provenance: Compendium.Provenance.label(entry.provenance),
+          shipped_versions: entry.shipped_versions,
+          superseded: entry.superseded,
+          shadows_shipped: entry.shadows_shipped,
+          forked_from: entry.forked_from,
+          upstream_superseded: entry.upstream_superseded
+        }
+      end)
+
+    counts =
+      Enum.reduce(
+        overview,
+        %{bundled: 0, bundled_modified: 0, user: 0, remote: 0},
+        fn entry, acc -> Map.update!(acc, entry.provenance, &(&1 + 1)) end
+      )
+
+    {:ok, %{components: Enum.sort_by(components, & &1.reference), counts: counts}}
   end
 
   # Categories action - list available categories
@@ -618,7 +797,7 @@ defmodule Compendium.MCP.ComponentTool do
   def handle(%Context{} = ctx, %{"action" => "discover"} = args) do
     registry = args["registry"] || default_registry()
 
-    case Compendium.Registry.validate_host(registry) do
+    case Compendium.RegistryHost.validate_host(registry) do
       {:error, msg} ->
         {:error, msg}
 
@@ -658,9 +837,8 @@ defmodule Compendium.MCP.ComponentTool do
       {:ok, %{version: nil}} ->
         {:error, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}
 
-      {:ok, %{namespace: "local"}} ->
-        {:error, "Cannot fork a local component. Use 'new' to create a fresh component."}
-
+      # A local source is refused inside Compendium.Fork — one guard, one
+      # message, whether the call comes through this tool or directly.
       {:ok, cref} ->
         opts = [
           name: args["name"] || cref.name,
@@ -760,7 +938,7 @@ defmodule Compendium.MCP.ComponentTool do
   # Registry Default
   # ============================================================================
 
-  defp default_registry, do: Compendium.Registry.canonical_host()
+  defp default_registry, do: Compendium.RegistryHost.canonical_host()
 
   # ============================================================================
   # Error Formatting
@@ -797,7 +975,7 @@ defmodule Compendium.MCP.ComponentTool do
   # ============================================================================
 
   # Namespaces that represent local/on-disk components (not pullable from OCI).
-  @local_dep_namespaces ["local"]
+  @local_dep_namespaces [@local_publisher]
 
   # After registration, check newly registered formulas for missing dependencies.
   # Local deps (local/agent namespaces) produce warnings; published deps are auto-pulled.
@@ -985,6 +1163,15 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Broadcast to all Prism LiveViews subscribed to prism:components.
   # Fires after any state-changing component operation (pull, register, delete, new, publish).
+  # A diff's relative segment lists, joined for the wire.
+  defp format_diff(%{added: added, removed: removed, changed: changed}) do
+    %{
+      added: Enum.map(added, &Enum.join(&1, "/")),
+      removed: Enum.map(removed, &Enum.join(&1, "/")),
+      changed: Enum.map(changed, &Enum.join(&1, "/"))
+    }
+  end
+
   defp broadcast_components_changed(ctx) do
     topic = Prism.Topics.components(ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
@@ -1028,7 +1215,7 @@ defmodule Compendium.MCP.ComponentTool do
   defp do_oci_pull(ctx, reference) do
     case Compendium.OCI.Reference.parse(reference) do
       {:ok, ref} ->
-        case Compendium.Registry.validate_host(ref.registry) do
+        case Compendium.RegistryHost.validate_host(ref.registry) do
           :ok ->
             namespace_slug =
               case String.split(ref.repository || "", "/", parts: 2) do
@@ -1038,7 +1225,7 @@ defmodule Compendium.MCP.ComponentTool do
 
             anonymous? =
               Compendium.OCI.Auth.fetch_credential(
-                Compendium.Registry.canonical_host(),
+                Compendium.RegistryHost.canonical_host(),
                 namespace_slug,
                 ctx
               ) ==
@@ -1046,7 +1233,7 @@ defmodule Compendium.MCP.ComponentTool do
 
             if anonymous? do
               Logger.warning(
-                "[Compendium.MCP] No credentials for #{Compendium.Registry.canonical_host()} — " <>
+                "[Compendium.MCP] No credentials for #{Compendium.RegistryHost.canonical_host()} — " <>
                   "pull may fail for non-public components. Run `cyfr login` to authenticate."
               )
             end
@@ -1060,7 +1247,7 @@ defmodule Compendium.MCP.ComponentTool do
                     Map.put(
                       result,
                       :auth_note,
-                      "You are pulling anonymously from #{Compendium.Registry.canonical_host()}. " <>
+                      "You are pulling anonymously from #{Compendium.RegistryHost.canonical_host()}. " <>
                         "Private components will not be accessible. Run `cyfr login` to authenticate."
                     )
                   else
@@ -1074,7 +1261,7 @@ defmodule Compendium.MCP.ComponentTool do
                 if anonymous? do
                   {:error,
                    reason <>
-                     " — No credentials configured for #{Compendium.Registry.canonical_host()}. " <>
+                     " — No credentials configured for #{Compendium.RegistryHost.canonical_host()}. " <>
                      "Run `cyfr login` to authenticate."}
                 else
                   {:error, reason}

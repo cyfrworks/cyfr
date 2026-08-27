@@ -18,6 +18,15 @@ defmodule Sanctum.ComponentRef do
 
   **Shorthand**: `c` = catalyst, `r` = reagent, `f` = formula, `t` = tincture
 
+  ## `namespace` here, `publisher` in paths and rows
+
+  References and identity say `namespace`; the on-disk layout and the
+  components table say `publisher` — the SAME value under two names, one
+  per vocabulary, converted at the boundary. The bridge is
+  `Compendium.ComponentPath.normalize_publisher/1` /
+  `default_publisher/0` (which also collapse an absent value to `local`);
+  no rename is planned — ~20 call sites would churn for zero behavior.
+
   ## Namespace shapes
 
   The `namespace` slot admits two syntactically distinct shapes:
@@ -293,42 +302,6 @@ defmodule Sanctum.ComponentRef do
     case parse(ref_string) do
       {:ok, parsed} -> {:ok, to_name_ref(parsed)}
       {:error, _} = error -> error
-    end
-  end
-
-  @doc """
-  Extract a `%ComponentRef{}` from a canonical filesystem path.
-
-  Expected path layout:
-    `components/{type}s/{namespace}/{name}/{version}/{type}.wasm`
-
-  The component type is extracted from the directory name (e.g., `catalysts` → `catalyst`).
-
-  ## Examples
-
-      iex> Sanctum.ComponentRef.from_path("components/catalysts/local/claude/0.1.0/catalyst.wasm")
-      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}}
-
-  """
-  @spec from_path(String.t()) :: {:ok, t()} | {:error, String.t()}
-  @component_type_dirs Enum.map(@valid_types, &(&1 <> "s"))
-  def from_path(path) when is_binary(path) do
-    parts = Path.split(path)
-
-    case Enum.reverse(parts) do
-      [_wasm_file, version, name, namespace, type_dir | _]
-      when type_dir in @component_type_dirs ->
-        component_type = String.trim_trailing(type_dir, "s")
-
-        {:ok,
-         %__MODULE__{type: component_type, namespace: namespace, name: name, version: version}}
-
-      _ ->
-        {:error,
-         "Cannot derive component ref from path: #{path}\n\n" <>
-           "WASM files must be in the canonical layout:\n" <>
-           "  components/{catalysts,reagents,formulas,tinctures}/{namespace}/{name}/{version}/{type}.wasm\n\n" <>
-           "Example: components/catalysts/local/claude/0.1.0/catalyst.wasm => catalyst:local.claude:0.1.0\n"}
     end
   end
 

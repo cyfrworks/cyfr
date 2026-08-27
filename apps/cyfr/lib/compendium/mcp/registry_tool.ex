@@ -546,7 +546,7 @@ defmodule Compendium.MCP.RegistryTool do
   # Find the user's personal-namespace bearer, used for actions that require
   # a user identity proof (claim_publisher, verify_publisher).
   defp personal_bearer(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
-    registry = Compendium.Registry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
       [%{type: :push_token, token: token, namespace: slug} | _] when is_binary(token) ->
@@ -586,7 +586,7 @@ defmodule Compendium.MCP.RegistryTool do
           )
       end
 
-      registry = Compendium.Registry.canonical_host()
+      registry = Compendium.RegistryHost.canonical_host()
 
       case Compendium.Registry.CredentialStore.put_push_token(
              user_id,
@@ -674,7 +674,7 @@ defmodule Compendium.MCP.RegistryTool do
   # abuse-report submission. Same head-of-list heuristic used by probe.
   defp any_push_token(%Sanctum.Context{user_id: user_id})
        when is_binary(user_id) and user_id != "" do
-    registry = Compendium.Registry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
       [%{type: :push_token, token: token} | _] when is_binary(token) -> {:ok, token}

@@ -41,5 +41,28 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert response["checks"]["resource_registry"] == "ok"
       assert response["checks"]["progress"] == "ok"
     end
+
+    test "the write probe's root is a real global root" do
+      # The controller spells "system" literally (global roots keep the
+      # literal at their single consumer); this pins it to the roster so a
+      # renamed row cannot leave the probe writing into a refused root.
+      assert "system" in Arca.Storage.global_prefixes()
+    end
+
+    test "a stranded probe key is overwritten, not accumulated", %{conn: conn} do
+      # The probe writes ONE fixed key and deletes it — a past failed
+      # delete strands at most one object, reclaimed by the next probe's
+      # overwrite (the retention sweep is the belt for legacy strays).
+      # Bust the result cache so this request runs a real probe.
+      :persistent_term.erase({EmissaryWeb.HealthController, :ready_cache})
+
+      ctx = Sanctum.internal_context(user_id: "_test", permissions: [:storage_write])
+      :ok = Arca.put(ctx, ["system", "health", ".write_probe"], "stranded")
+
+      conn = get(conn, "/api/health/ready")
+      assert json_response(conn, 200)["checks"]["storage"] == "ok"
+
+      assert {:ok, []} = Arca.list_typed(ctx, ["system", "health"])
+    end
   end
 end

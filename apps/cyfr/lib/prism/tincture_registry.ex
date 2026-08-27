@@ -17,11 +17,20 @@ defmodule Prism.TinctureRegistry do
   slow on an object-store backend). The table is named after the registered
   process name, so `server` must be that name (an atom), not a pid.
 
+  A shell-plane UI cache, member-facing only: the public `/t/` route is
+  served by `Sanctum.TinctureAccess`, not this table, so `list_tinctures/2`
+  takes the member's `Sanctum.Context` like every other storage-derived
+  reader. The table exists from `init/1` on (readers never crash) and is
+  EMPTY until the first scan completes — the scan runs in
+  `handle_continue`, so a slow object-store walk never blocks supervisor
+  startup; `reload/1` calls queue behind it.
   """
 
   use GenServer
 
   require Logger
+
+  alias Sanctum.Context
 
   # -- Public API --
 
@@ -30,14 +39,21 @@ defmodule Prism.TinctureRegistry do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @doc "List all tinctures of the athanor the given scope (a Context or map) names."
-  @spec list_tinctures(atom(), map()) :: [map()]
-  def list_tinctures(server \\ __MODULE__, scope) do
-    athanor_id = extract_athanor_id(scope)
+  @doc """
+  List the tinctures of the context's athanor. An unresolved athanor
+  lists nothing.
+  """
+  @spec list_tinctures(atom(), Context.t()) :: [map()]
+  def list_tinctures(server \\ __MODULE__, %Context{athanor_id: athanor_id}) do
+    case athanor_id do
+      id when is_binary(id) and id != "" ->
+        server
+        |> :ets.match_object({{id, :_, :_}, :_})
+        |> Enum.map(fn {_key, tincture} -> tincture end)
 
-    server
-    |> :ets.match_object({{athanor_id, :_, :_}, :_})
-    |> Enum.map(fn {_key, tincture} -> tincture end)
+      _unresolved ->
+        []
+    end
   end
 
   @doc "Rescan the filesystem for tinctures."
@@ -57,9 +73,14 @@ defmodule Prism.TinctureRegistry do
       |> Keyword.get(:name, __MODULE__)
       |> :ets.new([:named_table, :protected, :set, read_concurrency: true])
 
-    count = store_tinctures(table, scan_tinctures())
+    {:ok, %{table: table}, {:continue, :initial_scan}}
+  end
+
+  @impl true
+  def handle_continue(:initial_scan, state) do
+    count = store_tinctures(state.table, scan_tinctures())
     Logger.info("TinctureRegistry: loaded #{count} tincture(s)")
-    {:ok, %{table: table}}
+    {:noreply, state}
   end
 
   @impl true
@@ -92,9 +113,8 @@ defmodule Prism.TinctureRegistry do
 
   # -- Scanning --
 
-  # The tincture subtree name under each athanor's component tree — one of
-  # the canonical type plurals (`Sanctum.ComponentRef.valid_types/0` + "s").
-  @tincture_type_plural "tinctures"
+  # Pinned at compile time from the SSOT.
+  @tincture_type_plural Compendium.ComponentPath.type_plural("tincture")
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
@@ -123,7 +143,7 @@ defmodule Prism.TinctureRegistry do
         segment = Cyfr.TinctureHelpers.athanor_segment(athanor)
 
         leaves
-        |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
+        |> Compendium.ComponentPath.manifest_leaves()
         |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs, athanor.id) end)
         |> Enum.map(&put_segment(&1, segment))
 
@@ -174,16 +194,14 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # Layout: ["components", "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  # — tenant-relative; the athanor is the scanning context's.
-  defp tincture_path?(["components", @tincture_type_plural | _]), do: true
-  defp tincture_path?(_), do: false
-
-  # A lookup scope (Context/map) → athanor_id. Nothing is normalized: an
-  # absent athanor lists nothing.
-  defp extract_athanor_id(%{athanor_id: athanor_id}), do: athanor_id
-  defp extract_athanor_id(%{"athanor_id" => athanor_id}), do: athanor_id
-  defp extract_athanor_id(_), do: nil
+  # A tincture manifest exactly at its version directory — the one parser
+  # (`Compendium.ComponentPath.parse/1`) decides, so a manifest nested
+  # BELOW a version dir is refused instead of indexed with the wrong
+  # version segments. Tenant-relative; the athanor is the scanning
+  # context's.
+  defp tincture_path?(segs),
+    do:
+      match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.ComponentPath.parse(segs))
 
   # Launch constraint: tinctures can't carry raster image assets until
   # CSAM hash matching (PhotoDNA) is live. Vector (.svg) is allowed.

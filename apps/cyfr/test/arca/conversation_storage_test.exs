@@ -1,6 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Arca.ConversationStorageTest.FailingDeleteAdapter do
+  @moduledoc false
+  defdelegate get(ctx, path), to: Arca.Adapters.Local
+  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate delete(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
+  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+  defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
+  defdelegate usage(ctx, path), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+
+  # A conversation's whole blob tree refuses to delete.
+  def delete_tree(_ctx, ["conversations", _id]), do: {:error, :eacces}
+  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+end
+
 defmodule Arca.ConversationStorageTest do
   use ExUnit.Case, async: false
 
@@ -123,6 +140,13 @@ defmodule Arca.ConversationStorageTest do
              Conversations.resolve_approval(ctx, "msg_nope", "pending", "running")
   end
 
+  test "blob_root/1 spells a real tenant root" do
+    # The module owns the "conversations" literal (the layout table's
+    # roster pattern: the literal lives at its single consumer, with this
+    # membership witness) — a renamed row cannot silently orphan blobs.
+    assert hd(Conversations.blob_root("conv_x")) in Arca.Storage.tenant_roots()
+  end
+
   test "delete removes the messages and the attachment blobs too", %{ctx: ctx} do
     {:ok, conv} = Conversations.create(ctx)
     {:ok, msg} = Conversations.append(ctx, conv.id, %{author: "aqua", content: "x"})
@@ -133,6 +157,53 @@ defmodule Arca.ConversationStorageTest do
     assert Conversations.messages(ctx, conv.id) == []
     assert {:error, :not_found} = Conversations.get(ctx, conv.id)
     refute Arca.exists?(ctx, blob)
+  end
+
+  test "delete goes bytes-first: a failed blob delete keeps the rows", %{ctx: ctx} do
+    {:ok, conv} = Conversations.create(ctx)
+    {:ok, msg} = Conversations.append(ctx, conv.id, %{author: "aqua", content: "x"})
+    blob = Conversations.blob_root(conv.id) ++ [msg.id, "0-a.txt"]
+    :ok = Arca.put(ctx, blob, "bytes")
+
+    prev = Application.get_env(:cyfr, :storage_adapter)
+
+    Application.put_env(
+      :cyfr,
+      :storage_adapter,
+      Arca.ConversationStorageTest.FailingDeleteAdapter
+    )
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:cyfr, :storage_adapter, prev),
+        else: Application.delete_env(:cyfr, :storage_adapter)
+    end)
+
+    # The DB never claims a deletion the tree didn't make.
+    assert {:error, {:storage_delete_failed, :eacces}} = Conversations.delete(ctx, conv.id)
+    assert {:ok, _} = Conversations.get(ctx, conv.id)
+    assert [_] = Conversations.messages(ctx, conv.id)
+
+    # Healed adapter: the retry completes rows and bytes together.
+    Application.put_env(:cyfr, :storage_adapter, prev || Arca.Adapters.Local)
+    assert :ok = Conversations.delete(ctx, conv.id)
+    refute Arca.exists?(ctx, blob)
+  end
+
+  test "sweep_orphaned_blobs/1 reclaims rowless dirs and keeps live ones", %{ctx: ctx} do
+    {:ok, conv} = Conversations.create(ctx)
+    live = Conversations.blob_root(conv.id) ++ ["msg", "keep.txt"]
+    :ok = Arca.put(ctx, live, "keep")
+
+    orphan = Conversations.blob_root("conv_orphan") ++ ["msg", "gone.txt"]
+    :ok = Arca.put(ctx, orphan, "gone")
+
+    # The suite's storage tree is shared, so other tests' leavings may be
+    # reclaimed alongside — pin the fates, not the count.
+    assert {:ok, reclaimed} = Conversations.sweep_orphaned_blobs(ctx)
+    assert reclaimed >= 1
+    assert Arca.exists?(ctx, live)
+    refute Arca.exists?(ctx, orphan)
   end
 
   test "messages/3 windows the thread by seq, and the turn cursor round-trips", %{ctx: ctx} do

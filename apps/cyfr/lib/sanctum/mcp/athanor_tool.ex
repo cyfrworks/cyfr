@@ -18,7 +18,7 @@ defmodule Sanctum.MCP.AthanorTool do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  @person_only ~w(create rename archive unarchive settings provision)
+  @person_only ~w(create rename archive unarchive settings provision purge)
 
   # An `athanor` argument names the athanor an action works on: an id, a
   # group slug, or `@<namespace>`; absent, the caller's focused athanor.
@@ -51,7 +51,8 @@ defmodule Sanctum.MCP.AthanorTool do
           "archive" => %{kind: :destructive, planes: [:external]},
           "unarchive" => %{kind: :write, planes: [:external]},
           "settings" => %{kind: :write, planes: [:external]},
-          "provision" => %{kind: :write, planes: [:external]}
+          "provision" => %{kind: :write, planes: [:external]},
+          "purge" => %{kind: :destructive, planes: [:external]}
         }
       },
       input_schema: %{
@@ -67,10 +68,12 @@ defmodule Sanctum.MCP.AthanorTool do
               "archive",
               "unarchive",
               "settings",
-              "provision"
+              "provision",
+              "purge"
             ],
             "description" =>
-              "Action to perform (provision: retry a seeding that failed — idempotent)"
+              "Action to perform (provision: retry a seeding that failed — idempotent; " <>
+                "purge: platform admin deletes an archived athanor's storage tree — final)"
           },
           "athanor" => @athanor_arg,
           "name" => %{"type" => "string", "description" => "Group name (create, rename)"},
@@ -99,7 +102,7 @@ defmodule Sanctum.MCP.AthanorTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get"} = args) do
-    with {:ok, athanor} <- resolve(ctx, args, include_archived: true) do
+    with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
       {:ok, render(athanor)}
     end
   end
@@ -130,7 +133,7 @@ defmodule Sanctum.MCP.AthanorTool do
 
   def handle(%Context{} = ctx, %{"action" => "rename", "name" => name} = args)
       when is_binary(name) do
-    with {:ok, athanor} <- resolve(ctx, args),
+    with {:ok, athanor, _focused} <- resolve(ctx, args),
          {:ok, renamed} <- rename(athanor, name) do
       broadcast_athanors_changed(ctx, renamed)
       {:ok, render(renamed)}
@@ -140,7 +143,7 @@ defmodule Sanctum.MCP.AthanorTool do
   def handle(_ctx, %{"action" => "rename"}), do: {:error, "Missing required argument: name"}
 
   def handle(%Context{} = ctx, %{"action" => "archive"} = args) do
-    with {:ok, athanor} <- resolve(ctx, args) do
+    with {:ok, athanor, _focused} <- resolve(ctx, args) do
       case Athanors.archive(athanor) do
         {:ok, archived} ->
           # Keys, running work and the members' views are closed by
@@ -166,7 +169,7 @@ defmodule Sanctum.MCP.AthanorTool do
   # door (allow); restoring it here while its owner is still denied would
   # reopen a furnace nobody may enter. A retired Home never reopens at all.
   def handle(%Context{} = ctx, %{"action" => "unarchive"} = args) do
-    with {:ok, athanor} <- resolve(ctx, args, include_archived: true),
+    with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true),
          :ok <- owner_admitted(athanor) do
       case Athanors.unarchive(athanor) do
         {:ok, restored} ->
@@ -184,9 +187,33 @@ defmodule Sanctum.MCP.AthanorTool do
     end
   end
 
+  # Purging is the operator's act: it deletes an archived athanor's whole
+  # storage tree — the one thing archive deliberately leaves in place so
+  # unarchive reopens a furnace intact. Blobs only; the rows remain, and a
+  # purged athanor that reopens comes back with empty storage.
+  def handle(%Context{} = ctx, %{"action" => "purge"} = args) do
+    if ctx.platform_admin do
+      with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
+        case Athanors.purge_storage(athanor) do
+          :ok ->
+            {:ok, Map.put(render(athanor), "purged", true)}
+
+          {:error, :not_archived} ->
+            {:error, "Only an archived athanor's storage can be purged — archive it first"}
+
+          {:error, reason} ->
+            Logger.error("[Sanctum.MCP] athanor.purge failed: #{inspect(reason)}")
+            {:error, "Failed to purge the athanor's storage"}
+        end
+      end
+    else
+      {:error, "athanor.purge is the operator's act — only a platform admin may do it"}
+    end
+  end
+
   def handle(%Context{} = ctx, %{"action" => "settings", "settings" => patch} = args)
       when is_map(patch) do
-    with {:ok, athanor} <- resolve(ctx, args) do
+    with {:ok, athanor, _focused} <- resolve(ctx, args) do
       case Athanors.put_settings(athanor, patch) do
         {:ok, updated} ->
           {:ok, render(updated)}
@@ -202,8 +229,8 @@ defmodule Sanctum.MCP.AthanorTool do
   # public) is retried by any member — idempotent, so a provisioned athanor
   # answers at once. The outcome is on the row either way.
   def handle(%Context{} = ctx, %{"action" => "provision"} = args) do
-    with {:ok, athanor} <- resolve(ctx, args) do
-      case Sanctum.Provisioning.provision(athanor, %{ctx | athanor_id: athanor.id}) do
+    with {:ok, athanor, focused} <- resolve(ctx, args) do
+      case Sanctum.Provisioning.provision(athanor, focused) do
         {:ok, provisioned} ->
           {:ok, render(provisioned)}
 
@@ -228,17 +255,22 @@ defmodule Sanctum.MCP.AthanorTool do
   # athanor is refused on every path unless the action asks for it
   # (`include_archived: true` — a read, or `unarchive` itself): archive is
   # a hard stop for members and Codex alike, not only for the browser.
+  #
+  # Returns the resolved athanor AND a context focused on it (`scope:
+  # :athanor`, its id bound) — the shape every downstream act must run
+  # under. A platform admin's wider scope stops here, not in the handler.
   @doc false
   def resolve(%Context{} = ctx, args, opts \\ []) do
     with {:ok, athanor} <- lookup(ctx, Map.get(args, "athanor"), opts) do
       cond do
         Members.member?(ctx.user_id, athanor.id) ->
-          {:ok, athanor}
+          {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}}
 
         # An operator opening an athanor they do not belong to: the audited
         # act `Context.focus/2` records — or, for an archived one that only
-        # `unarchive`/`get` may name, the same audit event written here,
-        # since focus rightly refuses an archived athanor.
+        # `unarchive`/`get` may name, the focused shape built by hand with
+        # the same audit event, since focus rightly refuses an archived
+        # athanor.
         ctx.platform_admin and athanor.status == "archived" ->
           Sanctum.Telemetry.platform_context_event(%{
             caller: :athanor_tool,
@@ -247,11 +279,11 @@ defmodule Sanctum.MCP.AthanorTool do
             auth_method: ctx.auth_method
           })
 
-          {:ok, athanor}
+          {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}}
 
         ctx.platform_admin ->
           case Context.focus(ctx, athanor) do
-            {:ok, _} -> {:ok, athanor}
+            {:ok, focused} -> {:ok, athanor, focused}
             {:error, _} -> {:error, "Not a member of that athanor"}
           end
 

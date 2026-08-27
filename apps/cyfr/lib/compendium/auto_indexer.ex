@@ -9,9 +9,10 @@ defmodule Compendium.AutoIndexer do
   corresponding `.wasm` file, then registers them in the Compendium registry
   with `source: "filesystem"`.
 
-  This module does NOT auto-scan on boot. A scan is triggered when an
-  athanor is provisioned (`Compendium.AthanorSeeder` registers the copies it
-  just wrote), by `component.register`, and from the Components page.
+  A scan is triggered when an athanor is provisioned and at every boot sync
+  (`Sanctum.Provisioning` — the walk sees the seed bundle through
+  `Arca.Overlay`, so bundled versions get rows without any copy), by
+  `component.register`, and from the Components page.
 
   ## Security
 
@@ -21,17 +22,17 @@ defmodule Compendium.AutoIndexer do
 
   ## Stale Entry Pruning
 
-  After scanning, removes registry rows with `source: "filesystem"` whose
-  component directory is no longer present in storage (Local FS or S3).
+  After scanning, removes registry rows with `source: "filesystem"` the
+  walk no longer discovered. "Present" means present in the UNION: a
+  bundled version directory is always discoverable through the seed, so
+  bundled rows survive every prune without the athanor holding a byte —
+  only a genuinely deleted local component loses its row.
   """
 
   require Logger
 
   alias Compendium.Registry
 
-  # Guards can't call functions; pinned at compile time from the SSOT.
-  @type_plurals Compendium.ComponentPath.type_plurals()
-  @allowed_publishers ["local"]
   @doc """
   Scan the context's athanor's `components/` tree via
   `Arca.list_recursive/2` and register all discovered local components.
@@ -54,7 +55,7 @@ defmodule Compendium.AutoIndexer do
     start_time = System.monotonic_time(:millisecond)
     ctx = Keyword.fetch!(opts, :ctx)
 
-    version_segment_lists = discover_component_segments(ctx)
+    version_segment_lists = discover(ctx)
 
     {results, discovered} =
       Enum.reduce(
@@ -187,22 +188,32 @@ defmodule Compendium.AutoIndexer do
   # Discovery via Arca
   # ============================================================================
 
-  # Walk the athanor's own `components/` subtree via the configured storage
-  # adapter, find every `cyfr-manifest.json`, and return the
-  # version-directory segment lists.
-  #
-  # Each athanor indexes its own subtree — the listing is rooted in `ctx`'s
-  # athanor, and `register_from_arca`/`prune_stale_entries` stay keyed on
-  # `ctx`, so no scan writes another athanor's rows. The seed bundle is
-  # never reached: it lives under the reserved `seed/` root, not under any
-  # athanor's tree.
-  defp discover_component_segments(ctx) do
+  @doc """
+  The manifest-bearing local version directories of the athanor's
+  `components/` union, as segment lists — the BUILD plane's roster.
+
+  Two planes, deliberately: registry rows are the INVOCATION plane (the
+  Components page, consent, execution — a row exists only once an
+  artifact validates), while this walk is the BUILD plane — a freshly
+  scaffolded component has a manifest but no compiled artifact yet, so it
+  lives here before it can ever earn a row. `scan/1` registers from this
+  same walk; the build picker (`PrismWeb.BuildsLive`) lists it directly.
+
+  Each athanor indexes its own subtree — the listing is rooted in `ctx`'s
+  athanor, and `register_from_arca`/`prune_stale_entries` stay keyed on
+  `ctx`, so no scan writes another athanor's rows. The walk is the seed
+  UNION (`Arca.Overlay`): bundled version directories the athanor has not
+  materialized are discovered — and stay discovered — so their rows
+  survive every prune without a byte copied.
+  """
+  @spec discover(Sanctum.Context.t()) :: [[String.t()]]
+  def discover(ctx) do
     root = Compendium.ComponentPath.base_prefix()
 
     case Arca.list_recursive(ctx, root) do
       {:ok, leaves} ->
         leaves
-        |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
+        |> Compendium.ComponentPath.manifest_leaves()
         # Drop the manifest filename to get the version directory.
         |> Enum.map(&Enum.drop(&1, -1))
         |> Enum.uniq()
@@ -214,24 +225,25 @@ defmodule Compendium.AutoIndexer do
     end
   end
 
-  # Layout: ["components", type_plural, publisher, name, version]
-  defp allowed_segments?(["components", type_plural, publisher, _name, _version])
-       when type_plural in @type_plurals do
-    publisher in @allowed_publishers
+  # A registrable version directory: the one parser accepts it whole, and
+  # only the local namespace registers from the tree.
+  defp allowed_segments?(segments) do
+    case Compendium.ComponentPath.parse(segments) do
+      {:ok, %{rest: [], publisher: publisher}} ->
+        Compendium.ComponentPath.local_publisher?(publisher)
+
+      _not_a_version_dir ->
+        false
+    end
   end
 
-  defp allowed_segments?(_), do: false
+  defp extract_segment_metadata(segments) do
+    case Compendium.ComponentPath.parse(segments) do
+      {:ok, %{rest: [], type: type, publisher: publisher, name: name, version: version}} ->
+        {:ok, name, version, type, publisher}
 
-  defp extract_segment_metadata([
-         "components",
-         type_plural,
-         publisher,
-         name,
-         version
-       ])
-       when type_plural in @type_plurals do
-    {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
+      _not_a_version_dir ->
+        :error
+    end
   end
-
-  defp extract_segment_metadata(_), do: :error
 end

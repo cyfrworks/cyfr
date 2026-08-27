@@ -3,219 +3,170 @@
 
 defmodule Compendium.AquaTemplate do
   @moduledoc """
-  The shipped AQUA agent definitions, and how an athanor gets its own copy.
+  The shipped AQUA tree — seed media under the reserved `seed/aqua` root
+  (`Arca.Storage.seed_roots/0`), read in place from the seed tree: the
+  repo's `seed/aqua/` on a checkout, the operator-editable `/app/seed/aqua`
+  mount in Docker.
 
-  `agent.json` plus the prompt files it names are the template — seed media
-  under the reserved `seed/aqua` root (`Arca.Storage.seed_roots/0`), read in
-  place from the seed tree: the repo's `seed/aqua/` on a checkout, the
-  operator-editable `/app/seed/aqua` mount in Docker. Every athanor owns a copy
-  under its tenant storage (`data/athanors/{athanor_id}/aqua/`),
-  written when the athanor is provisioned; the Agents page and the `aqua`
-  tool then edit that copy, so a group's members shape their own agent
-  without touching anyone else's.
+  Provisioning copies nothing: the athanor's `aqua/` is served through the
+  seed overlay (`Arca.Overlay`, per-file shadow units), so every agent and
+  skill the seed ships is visible immediately, an edited file shadows only
+  itself, an unedited one tracks the operator's mount live, and deleting an
+  edited copy reverts it to shipped. Upgrades are therefore per-file and
+  automatic — the digest-stamp machinery this module used to carry is gone
+  with the copies it compared.
 
-  `ensure/1` is the self-healing entry the `aqua` tool uses: an athanor
-  whose copy is missing gets the template on first read. Template reads run
-  under a server-internal context — reading install media is the server's
-  own act, whoever triggered it — while the copy is written with the
-  caller's context, into the caller's athanor.
+  What remains here is the seed-side surface: `seed_check/0` (is the
+  install's template well-formed — provisioning fails loud on a v2 or
+  empty mount), `files/0` (what the seed ships), `status/1` (each unit's
+  drift, from the overlay), and `reset/2` (revert edited copies of
+  shipped units; member-created agents and skills are kept unless
+  `all: true` deletes the whole upper layer).
   """
 
-  require Logger
-
+  alias Compendium.AquaAgent
+  alias Compendium.AquaPath
   alias Sanctum.Context
 
-  @manifest "agent.json"
-  @seed_prefix ["seed", "aqua"]
-
-  # The pristine stamp: the digest of the shipped file set at the moment it
-  # was copied in. A dotfile, so `files/0`'s manifest/.md filter — and with
-  # it the tool surface — never lists it.
-  @stamp ".seeded_digest"
+  @seed_prefix Arca.Storage.seed_prefix("aqua")
 
   @doc "The template's seed segments: `[\"seed\", \"aqua\"]`."
   @spec seed_prefix() :: [String.t()]
   def seed_prefix, do: @seed_prefix
 
-  @doc "The template's files (`agent.json` first), relative to the seed root."
-  @spec files() :: [String.t()]
+  @doc """
+  Whether the install ships a well-formed v3 template: an `agents/`
+  directory whose files parse and pass roster validation (at least one
+  orchestrator, one default, parents resolve). Fails loud with a reason —
+  a v2-shaped mount (`agent.json` at the root) gets a pointed message, so
+  an operator who mounted an old tree learns it at boot, not from an
+  empty roster.
+  """
+  @spec seed_check() :: :ok | {:error, term()}
+  def seed_check do
+    ctx = Sanctum.system_context()
+
+    cond do
+      Arca.exists?(ctx, @seed_prefix ++ ["agent.json"]) ->
+        {:error, :seed_is_v2_shaped}
+
+      true ->
+        case seed_roster() do
+          {:ok, _roster} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  @doc "The files the seed ships, as paths relative to the aqua root."
+  @spec files() :: [[String.t()]]
   def files do
-    case Arca.list_typed(Sanctum.system_context(), @seed_prefix) do
-      {:ok, entries} ->
-        entries
-        |> Enum.filter(fn {name, kind} ->
-          kind == :file and (name == @manifest or String.ends_with?(name, ".md"))
+    case Arca.list_recursive(Sanctum.system_context(), @seed_prefix) do
+      {:ok, leaves} -> Enum.map(leaves, fn ["seed", "aqua" | rest] -> rest end)
+      {:error, _} -> []
+    end
+  end
+
+  @doc """
+  Each aqua shadow unit's state, in the one provenance vocabulary
+  (`Compendium.Provenance.of_status/1`): `:bundled` (reads come from the
+  seed), `:bundled_modified` (the athanor's copy shadows a shipped
+  counterpart), `:user` (member-created, no shipped counterpart).
+  """
+  @spec status(Context.t()) :: [%{path: String.t(), state: Compendium.Provenance.t()}]
+  def status(%Context{} = ctx) do
+    Arca.Overlay.unit_statuses(ctx, "aqua")
+    |> Enum.map(fn {unit, state} ->
+      %{path: Enum.join(unit, "/"), state: Compendium.Provenance.of_status(state)}
+    end)
+    |> Enum.sort_by(& &1.path)
+  end
+
+  @doc """
+  Revert the aqua tree to shipped. By default only edited copies of
+  shipped units revert — member-created agents and skills are KEPT and
+  reported. `all: true` deletes the whole `aqua/` upper layer, the
+  member's own units included, so the seed shows through whole. Either
+  way the template's presence is checked before anything is deleted: a
+  broken install refuses rather than destroys.
+  """
+  @spec reset(Context.t(), keyword()) ::
+          {:ok, %{reverted: [String.t()], kept: [String.t()]}} | {:error, term()}
+  def reset(%Context{} = ctx, opts \\ []) do
+    Context.require_tenant!(ctx)
+
+    with :ok <- seed_check() do
+      statuses = Arca.Overlay.unit_statuses(ctx, "aqua")
+
+      if Keyword.get(opts, :all, false) do
+        with :ok <- Arca.delete_tree(ctx, AquaPath.root()) do
+          gone = for {unit, state} <- statuses, state != :seed, do: Enum.join(unit, "/")
+          {:ok, %{reverted: Enum.sort(gone), kept: []}}
+        end
+      else
+        statuses
+        |> Enum.sort_by(fn {unit, _state} -> unit end)
+        |> Enum.reduce_while({:ok, %{reverted: [], kept: []}}, fn
+          {unit, :materialized}, {:ok, acc} ->
+            case Arca.Overlay.revert_copy(ctx, unit) do
+              :ok ->
+                {:cont, {:ok, %{acc | reverted: acc.reverted ++ [Enum.join(unit, "/")]}}}
+
+              {:error, reason} ->
+                {:halt, {:error, reason}}
+            end
+
+          {unit, own}, {:ok, acc} when own in [:own, :own_shadowing] ->
+            {:cont, {:ok, %{acc | kept: acc.kept ++ [Enum.join(unit, "/")]}}}
+
+          {_unit, :seed}, {:ok, acc} ->
+            {:cont, {:ok, acc}}
         end)
-        |> Enum.map(fn {name, _kind} -> name end)
-        |> Enum.sort_by(&(&1 != @manifest))
+      end
+    end
+  end
+
+  # The seed's own roster, parsed and validated exactly the way the
+  # athanor's union roster is — same format module, same rules.
+  defp seed_roster do
+    ctx = Sanctum.system_context()
+
+    case Arca.list_typed(ctx, @seed_prefix ++ ["agents"]) do
+      {:ok, entries} ->
+        agents =
+          entries
+          |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
+          |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
+          |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
+            with {:ok, binary} <- Arca.get(ctx, @seed_prefix ++ ["agents", name <> ".md"]),
+                 {:ok, agent} <- AquaAgent.parse(name, binary) do
+              {:cont, {:ok, [agent | acc]}}
+            else
+              {:error, reason} -> {:halt, {:error, {:seed_agent_invalid, name, reason}}}
+            end
+          end)
+
+        with {:ok, list} <- agents do
+          validate_seed_roster(Enum.reject(list, & &1.disabled))
+        end
 
       {:error, _} ->
-        []
-    end
-  end
-
-  @doc """
-  Copy the template into the context's athanor, overwriting whatever is
-  there. Returns `{:error, :template_missing}` when the install ships no
-  template.
-  """
-  @spec copy_into(Context.t()) :: :ok | {:error, term()}
-  def copy_into(%Context{} = ctx) do
-    Context.require_tenant!(ctx)
-
-    case files() do
-      [] ->
         {:error, :template_missing}
-
-      names ->
-        if @manifest in names do
-          copied =
-            Enum.reduce_while(names, :ok, fn name, :ok ->
-              with {:ok, content} <- Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]),
-                   :ok <- Arca.put(ctx, ["aqua", name], content) do
-                {:cont, :ok}
-              else
-                {:error, reason} -> {:halt, {:error, {name, reason}}}
-              end
-            end)
-
-          # The stamp is what refresh/1 compares against: this copy is
-          # pristine as of the template it was taken from.
-          with :ok <- copied do
-            Arca.put(ctx, ["aqua", @stamp], shipped_digest())
-          end
-        else
-          {:error, :template_missing}
-        end
     end
   end
 
-  @doc """
-  Give the athanor the template if it has no `agent.json` yet; a copy that
-  exists is left alone. Returns `:ok` when a manifest is present afterwards.
-  """
-  @spec ensure(Context.t()) :: :ok | {:error, term()}
-  def ensure(%Context{} = ctx) do
-    if Arca.exists?(ctx, ["aqua", @manifest]) do
-      :ok
-    else
-      case copy_into(ctx) do
-        :ok ->
-          Logger.info("[Compendium.AquaTemplate] seeded AQUA definitions for #{ctx.athanor_id}")
-          :ok
+  defp validate_seed_roster([]), do: {:error, :template_missing}
 
-        {:error, reason} = err ->
-          Logger.warning(
-            "[Compendium.AquaTemplate] could not seed #{ctx.athanor_id}: #{inspect(reason)}"
-          )
+  defp validate_seed_roster(agents) do
+    orchestrators = Enum.filter(agents, &(&1.role == :orchestrator))
+    defaults = Enum.filter(orchestrators, & &1.default)
 
-          err
-      end
+    cond do
+      orchestrators == [] -> {:error, :no_orchestrator}
+      length(orchestrators) == 1 -> {:ok, agents}
+      length(defaults) == 1 -> {:ok, agents}
+      defaults == [] -> {:error, :no_default_orchestrator}
+      true -> {:error, :multiple_default_orchestrators}
     end
-  end
-
-  @doc """
-  Upgrade the athanor's copy when a newer release shipped a new template —
-  but only a copy the members never touched.
-
-  Compares three digests: the shipped template, the stamp written when the
-  copy was made, and the copy as it stands. Shipped == stamp means nothing
-  new; copy == stamp means the members never edited it, so the new template
-  replaces it (and restamps); anything else is the members' own work and is
-  left alone — `reset/1` is their deliberate path to the new template. A
-  copy from before stamping exists is treated as edited (never clobbered).
-
-  Returns `{:ok, :current | :refreshed | :modified | :unstamped}` or
-  `{:error, reason}`.
-  """
-  @spec refresh(Context.t()) ::
-          {:ok, :current | :refreshed | :modified | :unstamped} | {:error, term()}
-  def refresh(%Context{} = ctx) do
-    Context.require_tenant!(ctx)
-    shipped = shipped_digest()
-
-    case Arca.get(ctx, ["aqua", @stamp]) do
-      {:ok, ^shipped} ->
-        {:ok, :current}
-
-      {:ok, stamped} ->
-        if copy_digest(ctx) == stamped do
-          with :ok <- copy_into(ctx) do
-            Logger.info("[Compendium.AquaTemplate] refreshed AQUA template for #{ctx.athanor_id}")
-            {:ok, :refreshed}
-          end
-        else
-          {:ok, :modified}
-        end
-
-      {:error, :not_found} ->
-        {:ok, :unstamped}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  @doc """
-  Replace the athanor's copy with EXACTLY the shipped template — the
-  explicit "reset to shipped" a modified copy upgrades through. The
-  athanor's `aqua/` tree is deleted first, so member-created agents go
-  with it; anything less leaves orphaned prompts that read as `:modified`
-  forever. The template's presence is checked before anything is deleted —
-  a template-less install refuses rather than destroys — but the
-  delete-then-copy is not atomic: a failure mid-copy leaves a partial
-  tree, which `ensure/1` or a second reset repairs.
-  """
-  @spec reset(Context.t()) :: :ok | {:error, term()}
-  def reset(%Context{} = ctx) do
-    Context.require_tenant!(ctx)
-    names = files()
-
-    if names == [] or @manifest not in names do
-      {:error, :template_missing}
-    else
-      with :ok <- Arca.delete_tree(ctx, ["aqua"]) do
-        copy_into(ctx)
-      end
-    end
-  end
-
-  # The digest of the shipped file set — what a pristine copy hashes to.
-  defp shipped_digest do
-    digest_files(
-      fn name -> Arca.get(Sanctum.system_context(), @seed_prefix ++ [name]) end,
-      files()
-    )
-  end
-
-  # The digest of the athanor's copy, over the same kind of file set the
-  # template ships (manifest + prompts) — an added, removed or edited file
-  # all change it.
-  defp copy_digest(ctx) do
-    names =
-      case Arca.list_typed(ctx, ["aqua"]) do
-        {:ok, entries} ->
-          for {name, :file} <- entries,
-              name == @manifest or String.ends_with?(name, ".md"),
-              do: name
-
-        {:error, _} ->
-          []
-      end
-
-    digest_files(fn name -> Arca.get(ctx, ["aqua", name]) end, names)
-  end
-
-  defp digest_files(read, names) do
-    names
-    |> Enum.sort()
-    |> Enum.map(fn name ->
-      case read.(name) do
-        {:ok, content} -> [name, 0, content, 0]
-        {:error, _} -> [name, 0]
-      end
-    end)
-    |> IO.iodata_to_binary()
-    |> Cyfr.Digest.sha256()
   end
 end

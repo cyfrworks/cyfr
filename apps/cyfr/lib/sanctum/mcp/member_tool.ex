@@ -84,7 +84,7 @@ defmodule Sanctum.MCP.MemberTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
-    with {:ok, athanor} <- AthanorTool.resolve(ctx, args, include_archived: true) do
+    with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args, include_archived: true) do
       members =
         Members.list_by_athanor(athanor.id,
           limit: int_arg(args, "limit", 500),
@@ -96,7 +96,7 @@ defmodule Sanctum.MCP.MemberTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "add"} = args) do
-    with {:ok, athanor} <- AthanorTool.resolve(ctx, args),
+    with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args),
          {:ok, target} <- target(args) do
       case Members.add(athanor, target, ctx.user_id) do
         {:ok, _added_or_invited} ->
@@ -132,7 +132,7 @@ defmodule Sanctum.MCP.MemberTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "remove"} = args) do
-    with {:ok, athanor} <- AthanorTool.resolve(ctx, args),
+    with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args),
          {:ok, target} <- target(args) do
       case Members.remove_member(athanor, target) do
         :ok ->
@@ -152,7 +152,7 @@ defmodule Sanctum.MCP.MemberTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "leave"} = args) do
-    with {:ok, athanor} <- AthanorTool.resolve(ctx, args) do
+    with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args) do
       cond do
         athanor.kind == "person" ->
           {:error, "You cannot leave your own athanor"}

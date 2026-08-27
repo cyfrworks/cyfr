@@ -105,6 +105,50 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} = Scaffold.create(ctx, "my-comp2", "catalyst", "0.1.0")
       assert {:ok, _} = Scaffold.create(ctx, "my-comp2", "reagent", "0.1.0")
     end
+
+    test "a version the seed ships refuses with the bundled explanation", %{ctx: ctx} do
+      seed = Path.join(System.tmp_dir!(), "scaffold_seed_#{System.unique_integer([:positive])}")
+      shipped = Path.join(seed, "components/catalysts/local/shipped-tool/1.0.0")
+      File.mkdir_p!(shipped)
+      File.write!(Path.join(shipped, "cyfr-manifest.json"), ~s({"type":"catalyst"}))
+
+      prev_seed = Application.fetch_env!(:cyfr, :seed_path)
+      Application.put_env(:cyfr, :seed_path, seed)
+
+      on_exit(fn ->
+        Application.put_env(:cyfr, :seed_path, prev_seed)
+        File.rm_rf!(seed)
+      end)
+
+      assert {:error, msg} = Scaffold.create(ctx, "shipped-tool", "catalyst", "1.0.0")
+      assert msg =~ "bundled with the server"
+
+      # A version the seed does not ship scaffolds normally.
+      assert {:ok, _} = Scaffold.create(ctx, "shipped-tool", "catalyst", "2.0.0")
+    end
+
+    test "the manifest lands last, so a crashed scaffold never reads complete", %{ctx: ctx} do
+      assert {:ok, %{files: files}} = Scaffold.create(ctx, "ordered", "catalyst", "0.1.0")
+      assert List.last(files) |> Path.basename() == Compendium.ComponentPath.manifest_name()
+    end
+
+    test "what scaffold writes, media discovery finds", %{ctx: ctx} do
+      # The `public/media/` convention has one spelling
+      # (Cyfr.TinctureHelpers); the scaffolder's placeholders must land
+      # exactly where discovery probes.
+      assert {:ok, _} = Scaffold.create(ctx, "branded", "tincture", "0.1.0")
+
+      version_segs =
+        Compendium.ComponentPath.version_dir(
+          "tincture",
+          Compendium.ComponentPath.default_publisher(),
+          "branded",
+          "0.1.0"
+        )
+
+      assert %{icon: "public/media/icon.svg", previews: ["public/media/preview-1.svg"]} =
+               Cyfr.TinctureHelpers.discover_media_via_arca(ctx, version_segs)
+    end
   end
 
   # ============================================================================

@@ -15,7 +15,6 @@ defmodule Arca.CopyTreeTest.RecordingAdapter do
   defdelegate exists?(ctx, path), to: Arca.Adapters.Local
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
   defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
   defdelegate usage(ctx, path), to: Arca.Adapters.Local
   defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
@@ -38,7 +37,6 @@ defmodule Arca.CopyTreeTest.VanishingAdapter do
   defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
   defdelegate exists?(ctx, path), to: Arca.Adapters.Local
   defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-  defdelegate read_subtree(ctx, path), to: Arca.Adapters.Local
   defdelegate usage(ctx, path), to: Arca.Adapters.Local
   defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
 
@@ -51,9 +49,10 @@ end
 
 defmodule Arca.CopyTreeTest do
   @moduledoc """
-  `Arca.copy_tree/3` is the seeding seam: the source is read per-path (the
-  seed bundle stays pinned to local disk), the destination is written
-  per-path through the configured adapter.
+  `Arca.copy_tree/3` is the tree-copy primitive under overlay
+  materialization and fork: the source is read per-path (the seed bundle
+  stays pinned to local disk), the destination is written per-path through
+  the configured adapter.
   """
 
   use ExUnit.Case, async: false
@@ -120,9 +119,12 @@ defmodule Arca.CopyTreeTest do
     assert {:error, :not_found} = Arca.get(ctx, ["guest", "dest", "ghost.txt"])
   end
 
-  test "seeds the bundle through the configured adapter, reading it in place", %{bundle: bundle} do
-    # The AthanorSeeder contract on an object-store deployment: the bundle
-    # is read from local disk and only the copies reach the adapter.
+  test "materializes bundle bytes through the configured adapter, reading seed in place", %{
+    bundle: bundle
+  } do
+    # The overlay-materialization contract on an object-store deployment:
+    # the bundle is read from local disk and only the copies reach the
+    # adapter.
     version_dir = Path.join([bundle, "catalysts", "local", "x", "1.0.0"])
     File.mkdir_p!(version_dir)
     File.write!(Path.join(version_dir, "cyfr-manifest.json"), "{}")
@@ -138,15 +140,16 @@ defmodule Arca.CopyTreeTest do
 
     Process.register(self(), :copy_tree_recorder)
 
-    seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_seeded", scope: :athanor)
+    internal =
+      Sanctum.internal_context(user_id: "_overlay", athanor_id: "ath_seeded", scope: :athanor)
 
-    src = Compendium.Bundle.bundle_prefix() ++ ["catalysts", "local"]
+    src = Arca.Storage.seed_prefix("components") ++ ["catalysts", "local"]
     dest = ["components", "catalysts", "local"]
 
-    assert :ok = Arca.copy_tree(seed, src, dest)
+    assert :ok = Arca.copy_tree(internal, src, dest)
 
     dest_leaf = dest ++ ["x", "1.0.0", "cyfr-manifest.json"]
     assert_received {:adapter_put, ^dest_leaf}
-    assert {:ok, "{}"} = Arca.get(seed, dest_leaf)
+    assert {:ok, "{}"} = Arca.get(internal, dest_leaf)
   end
 end

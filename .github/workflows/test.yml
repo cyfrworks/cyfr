@@ -234,6 +234,53 @@ jobs:
             exit 1
           fi
 
+  seed-guards:
+    name: Seed media (clean, immutable versions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      # Install media must be clean: build droppings under seed/ would be
+      # excluded from every copy-on-write materialization but still counted
+      # by its cap pre-check (Arca.Overlay.check_cap/2) — a spurious refusal.
+      - name: Seed ships no build droppings
+        run: |
+          set -uo pipefail
+          hits="$(find seed -type d \( -name target -o -name node_modules -o -name .git \) -print || true)"
+          if [ -n "$hits" ]; then
+            echo "::error::build droppings under seed/ — install media must be clean"
+            echo "$hits"
+            exit 1
+          fi
+      # Bundle versions are immutable: the overlay serves unmaterialized
+      # units straight from the seed, so changing bytes under an existing
+      # version directory is a silent live patch for every athanor that
+      # never edited it — and a silent miss for every one that did. New
+      # bytes mean a NEW version directory. (Adding or removing whole
+      # versions is a release decision; modifying files inside one is not.)
+      - name: Existing seed component versions are unmodified
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          bad="$(git diff --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
+          # A deletion or rename inside a version directory that still
+          # ships is a mutation too; retiring the WHOLE directory is a
+          # release decision and passes.
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
+            if [ -d "$vdir" ]; then bad="$bad"$'\n'"$f"; fi
+          done <<< "$(git diff --name-only --diff-filter=DR "$base"..HEAD -- 'seed/components/**')"
+          bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
+          if [ -n "$bad" ]; then
+            echo "::error::files changed inside existing seed/components version directories — ship a new version instead"
+            echo "$bad"
+            exit 1
+          fi
+
   config-seam:
     name: Config keys (no compile-time/runtime split)
     runs-on: ubuntu-latest
@@ -306,6 +353,9 @@ jobs:
             'Arca\.Schemas\.(Org|Project)\b' \
             'Sanctum\.Tenancy\.(Orgs|Projects|Memberships)\b' \
             'Compendium\.ProjectSeeder\b' \
+            'Compendium\.AthanorSeeder\b' \
+            'Compendium\.Upstream\b' \
+            'Compendium\.Bundle\b' \
             'Sanctum\.TenantScope\b' \
             'Arca\.Tenant\b' \
             'default_athanor' \
@@ -377,4 +427,23 @@ jobs:
           if git ls-files 'seed/*' | grep -vE '^seed/(components|aqua)/' | grep -q .; then
             echo "::error::seed/ carries only its two roots, components/ and aqua/"; fail=1
           fi
+          # The deployment shell spells the volume/seed layout outside Elixir
+          # — compose mounts, the Docker seed bake, the init template, the
+          # scaffold tarball. Witness each spelling so a layout rename in
+          # Arca.Storage cannot silently drift past them.
+          assert_spelling() {
+            if ! grep -qF -- "$2" "$1"; then
+              echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1
+            fi
+          }
+          assert_spelling docker-compose.yml './data:/app/data'
+          assert_spelling docker-compose.yml './aqua:/app/seed/aqua'
+          assert_spelling docker-compose.yml './data/mcp-bridge:/data'
+          assert_spelling Dockerfile 'CYFR_SEED_PATH=/app/seed'
+          assert_spelling Dockerfile 'COPY seed/components/'
+          assert_spelling docker-entrypoint.sh '/app/seed/aqua'
+          assert_spelling apps/codex/cmd/lifecycle.go '"data"'
+          assert_spelling apps/codex/cmd/lifecycle.go '"data/mcp-bridge"'
+          assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
+          assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
           exit $fail

@@ -78,10 +78,9 @@ defmodule Compendium.Pull do
   def oci_reference_for(reference) when is_binary(reference) do
     case Sanctum.ComponentRef.parse(reference) do
       {:ok, %Sanctum.ComponentRef{namespace: ns} = cref} ->
-        if Compendium.ComponentPath.local_publisher?(ns) do
-          {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
-        else
-          to_oci_ref(cref)
+        case Compendium.NamespacePolicy.refuse_remote_ingress(ns) do
+          :ok -> to_oci_ref(cref)
+          {:error, _message} = refused -> refused
         end
 
       {:error, reason} ->
@@ -149,7 +148,7 @@ defmodule Compendium.Pull do
   defp component_id(component), do: to_string(component[:name] || "component")
 
   defp to_oci_ref(%Sanctum.ComponentRef{version: nil} = cref) do
-    registry = Compendium.Registry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
     {:ok, oci_ref} = Reference.from_component_ref(cref, registry)
 
     case resolve_latest_oci_tag(oci_ref) do
@@ -159,7 +158,7 @@ defmodule Compendium.Pull do
   end
 
   defp to_oci_ref(%Sanctum.ComponentRef{} = cref) do
-    registry = Compendium.Registry.canonical_host()
+    registry = Compendium.RegistryHost.canonical_host()
     {:ok, oci_ref} = Reference.from_component_ref(cref, registry)
     {:ok, Reference.to_string(oci_ref)}
   end

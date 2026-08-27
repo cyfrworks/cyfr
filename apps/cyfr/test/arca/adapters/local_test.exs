@@ -81,6 +81,116 @@ defmodule Arca.Adapters.LocalTest do
       refute File.exists?(orphan)
       assert {:ok, "a"} = Local.get(ctx, ["guest", "a.txt"])
     end
+
+    test "sweep_stale_tmp/1 reclaims an aged tmp-named directory subtree", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+
+      # A pre-reservation offender: the facade now refuses tmp-shaped
+      # segments at every depth, but a directory written before that gate
+      # hides its whole subtree from listings and the usage walk.
+      dir = Local.build_path(ctx, ["guest", "x.tmp.1"])
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "hidden.txt"), "hidden")
+
+      # Fresh: kept — a writer may still be racing the fix window.
+      assert {:ok, 0} = Local.sweep_stale_tmp(3600)
+      assert File.dir?(dir)
+
+      # Aged: the whole subtree is reclaimed as one entry.
+      assert {:ok, 1} = Local.sweep_stale_tmp(-1)
+      refute File.exists?(dir)
+      assert {:ok, "a"} = Local.get(ctx, ["guest", "a.txt"])
+    end
+
+    test "the facade sweep asks an adapter that exports the callback, else answers zero" do
+      # Local exports the optional callback — the facade dispatches to it.
+      assert {:ok, n} = Arca.sweep_stale_tmp()
+      assert is_integer(n)
+
+      # An adapter without the export (an object store) is never asked.
+      defmodule NoSweepAdapter do
+        @moduledoc false
+        defdelegate get(ctx, path), to: Arca.Adapters.Local
+        defdelegate put(ctx, path, content), to: Arca.Adapters.Local
+        defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+        defdelegate delete(ctx, path), to: Arca.Adapters.Local
+        defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
+        defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+        defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+        defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
+        defdelegate usage(ctx, path), to: Arca.Adapters.Local
+        defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+      end
+
+      original = Application.get_env(:cyfr, :storage_adapter)
+      Application.put_env(:cyfr, :storage_adapter, NoSweepAdapter)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :storage_adapter, original),
+          else: Application.delete_env(:cyfr, :storage_adapter)
+      end)
+
+      assert {:ok, 0} = Arca.sweep_stale_tmp()
+    end
+
+    test "the sweep walks only Arca-owned trees, never the sidecar's or the DB's", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+
+      # Stale orphans where Arca writes — swept.
+      athanor_orphan = Local.build_path(ctx, ["guest", "a.txt"]) <> ".tmp.1"
+      cache_orphan = Path.join([@test_base_path, "cache", "blob.tmp.2"])
+      File.mkdir_p!(Path.dirname(cache_orphan))
+      File.write!(athanor_orphan, "partial")
+      File.write!(cache_orphan, "partial")
+
+      # tmp-shaped files where OTHER programs live ("another program's
+      # file" per Arca.Storage) — never touched, symlinks there never
+      # reported.
+      sidecar = Path.join(@test_base_path, "mcp-bridge")
+      File.mkdir_p!(sidecar)
+      sidecar_file = Path.join(sidecar, "state.tmp.3")
+      File.write!(sidecar_file, "sidecar's own")
+      root_file = Path.join(@test_base_path, "cyfr.db.tmp.4")
+      File.write!(root_file, "not ours")
+
+      outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      on_exit(fn -> File.rm_rf!(outside) end)
+      File.ln_s!(outside, Path.join(sidecar, "sidecar-link"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, 2} = Local.sweep_stale_tmp(-1)
+        end)
+
+      refute File.exists?(athanor_orphan)
+      refute File.exists?(cache_orphan)
+      assert File.exists?(sidecar_file)
+      assert File.exists?(root_file)
+      refute log =~ "sidecar-link"
+    end
+
+    test "the sweep reports a planted symlink — the cheap detector for host tampering", %{
+      ctx: ctx
+    } do
+      :ok = Local.put(ctx, ["guest", "a.txt"], "a")
+
+      outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      tree_dir = Local.build_path(ctx, ["guest", "a.txt"]) |> Path.dirname()
+      File.ln_s!(outside, Path.join(tree_dir, "planted"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, _} = Local.sweep_stale_tmp(3600)
+        end)
+
+      assert log =~ "symlink under storage root"
+      assert log =~ "planted"
+    end
   end
 
   describe "symlinks" do
@@ -324,6 +434,23 @@ defmodule Arca.Adapters.LocalTest do
 
     test "a missing prefix is empty usage", %{ctx: ctx} do
       assert {:ok, %{files: 0, bytes: 0}} = Local.usage(ctx, ["guest", "never-written"])
+    end
+
+    @tag :unix
+    test "an unreadable subtree fails CLOSED — the cap must see the error", %{ctx: ctx} do
+      # Root skips the check: permission bits don't bind the superuser.
+      if :os.type() == {:unix, :darwin} or System.get_env("USER") != "root" do
+        :ok = Local.put(ctx, ["guest", "locked", "secret.txt"], "12345")
+        locked = Local.build_path(ctx, ["guest", "locked"])
+        File.chmod!(locked, 0o000)
+
+        on_exit(fn -> File.chmod!(locked, 0o755) end)
+
+        assert {:error, {:usage_walk, _path, :eacces}} = Local.usage(ctx, ["guest"])
+
+        # Listings stay lenient by design — only the cap's walk is strict.
+        assert {:ok, _} = Local.list_recursive(ctx, ["guest"])
+      end
     end
   end
 

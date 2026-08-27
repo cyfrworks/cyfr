@@ -7,6 +7,11 @@ defmodule PrismWeb.ComponentsLive do
 
   alias PrismWeb.ComponentsLive.Editor
 
+  # The one spelling of the local namespace. Exact equality on purpose: a
+  # nil publisher is a display question, not `local_publisher?/1`'s
+  # nil-collapses-to-local policy question.
+  @local_publisher Compendium.ComponentPath.default_publisher()
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
@@ -18,6 +23,10 @@ defmodule PrismWeb.ComponentsLive do
       socket
       |> assign(:page_title, "Components")
       |> assign(:active_nav, "components")
+      # In HEEx `@local_publisher` reads THIS assign — the same-named
+      # module attribute is invisible there, and expanding a row crashed
+      # on the missing key until this was assigned.
+      |> assign(:local_publisher, @local_publisher)
       |> assign(:components, [])
       |> assign(:grouped, %{})
       |> assign(:type_filter, nil)
@@ -282,7 +291,21 @@ defmodule PrismWeb.ComponentsLive do
          |> put_flash(:info, "Deleted #{ref}")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to remove: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Failed to remove: " <> error_message(reason))}
+    end
+  end
+
+  def handle_event("reset", %{"ref" => ref}, socket) do
+    case call_tool(socket, "component", %{"action" => "reset", "reference" => ref}) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> collapse()
+         |> fetch_components()
+         |> put_flash(:info, "Reset #{ref} to the shipped version")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to reset: " <> error_message(reason))}
     end
   end
 
@@ -870,7 +893,7 @@ defmodule PrismWeb.ComponentsLive do
     version = comp_field(comp, :version)
 
     base =
-      if publisher && publisher != "local",
+      if publisher && publisher != @local_publisher,
         do: "#{publisher}.#{name}",
         else: name
 
@@ -942,6 +965,14 @@ defmodule PrismWeb.ComponentsLive do
 
   defp comp_field(c, key) when is_map(c), do: c[key] || c[to_string(key)]
   defp comp_field(_, _), do: nil
+
+  # The version-row badge for a provenance label. "Yours" (user) is the
+  # default state and carries no badge noise; an absent label (older wire
+  # shape) shows nothing.
+  defp provenance_badge("bundled"), do: {"bundled", "bg-gray-800 text-gray-400"}
+  defp provenance_badge("bundled_modified"), do: {"modified", "bg-amber-900/50 text-amber-300"}
+  defp provenance_badge("remote"), do: {"remote", "bg-sky-900/50 text-sky-300"}
+  defp provenance_badge(_user_or_nil), do: nil
 
   # --- Render ---
 
@@ -1286,6 +1317,19 @@ defmodule PrismWeb.ComponentsLive do
                           >
                             {group.version_count}v
                           </span>
+                          <span
+                            :if={
+                              Enum.any?(
+                                group.versions,
+                                &(comp_field(&1, :superseded) ||
+                                    comp_field(&1, :upstream_superseded))
+                              )
+                            }
+                            class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
+                            title="a newer shipped version exists"
+                          >
+                            update
+                          </span>
                         </span>
                       </td>
                       <td class="px-4 py-3 text-sm text-gray-400 whitespace-nowrap font-mono text-xs">
@@ -1357,6 +1401,34 @@ defmodule PrismWeb.ComponentsLive do
                                         >
                                           latest
                                         </span>
+                                        <% badge = provenance_badge(comp_field(ver, :provenance)) %>
+                                        <span
+                                          :if={badge}
+                                          class={"ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium #{elem(badge, 1)}"}
+                                        >
+                                          {elem(badge, 0)}
+                                        </span>
+                                        <span
+                                          :if={comp_field(ver, :superseded)}
+                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
+                                          title="a newer shipped version exists"
+                                        >
+                                          update shipped
+                                        </span>
+                                        <span
+                                          :if={comp_field(ver, :upstream_superseded)}
+                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-900/50 text-emerald-300"
+                                          title={"forked from #{comp_field(ver, :forked_from)} — a newer upstream version is available locally"}
+                                        >
+                                          upstream updated
+                                        </span>
+                                        <span
+                                          :if={comp_field(ver, :shadows_shipped)}
+                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-900/50 text-amber-300"
+                                          title="your component hides a same-named shipped one — removing it reveals the shipped version"
+                                        >
+                                          hides shipped
+                                        </span>
                                       </td>
                                       <td class="px-3 py-2 text-sm text-gray-400">
                                         {format_bytes(comp_field(ver, :size))}
@@ -1377,7 +1449,10 @@ defmodule PrismWeb.ComponentsLive do
                                             Pushing...
                                           </span>
                                           <.button
-                                            :if={comp_field(ver, :publisher) == "local" && !@pushing}
+                                            :if={
+                                              comp_field(ver, :publisher) == @local_publisher &&
+                                                !@pushing
+                                            }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5"
                                             phx-click="push"
@@ -1387,7 +1462,26 @@ defmodule PrismWeb.ComponentsLive do
                                             Push
                                           </.button>
                                           <.button
-                                            :if={!@pushing}
+                                            :if={
+                                              comp_field(ver, :provenance) == "bundled_modified" &&
+                                                !@pushing
+                                            }
+                                            variant="ghost"
+                                            class="text-xs px-2 py-0.5 text-amber-400 hover:text-amber-300"
+                                            phx-click="reset"
+                                            phx-value-ref={ver_ref}
+                                            data-confirm={"Reset #{ver_ref} to the shipped version? Your edits will be lost."}
+                                          >
+                                            Reset
+                                          </.button>
+                                          <.button
+                                            :if={
+                                              comp_field(ver, :provenance) not in [
+                                                "bundled",
+                                                "bundled_modified"
+                                              ] &&
+                                                !@pushing
+                                            }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5 text-red-400 hover:text-red-300"
                                             phx-click="remove"

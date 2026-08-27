@@ -114,17 +114,34 @@ defmodule Compendium.Manifest.Caps do
   defp validate_storage(nil), do: :ok
 
   defp validate_storage(%{} = storage) do
-    with :ok <- only_keys(storage, @storage_keys, :storage) do
-      Enum.reduce_while(@storage_keys, :ok, fn key, :ok ->
-        case string_list(storage[key], [:caps, :storage, key]) do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
-      end)
+    with :ok <- only_keys(storage, @storage_keys, :storage),
+         :ok <-
+           Enum.reduce_while(@storage_keys, :ok, fn key, :ok ->
+             case string_list(storage[key], [:caps, :storage, key]) do
+               :ok -> {:cont, :ok}
+               error -> {:halt, error}
+             end
+           end) do
+      validate_storage_paths(storage["paths"])
     end
   end
 
   defp validate_storage(other), do: {:error, {:invalid_caps, {:storage_not_a_map, other}}}
+
+  # A grant no runtime would honor is refused at parse: every path must
+  # name a guest scope (`Arca.Storage.valid_guest_path?/1` — the predicate
+  # `Opus.StorageHandler` gates requests with), or be the wildcard `"*"`
+  # (grant grammar, not a path — `Opus.EdgeGuard`'s concern).
+  defp validate_storage_paths(nil), do: :ok
+
+  defp validate_storage_paths(paths) when is_list(paths) do
+    case Enum.find(paths, fn path ->
+           path != "*" and not Arca.Storage.valid_guest_path?(path)
+         end) do
+      nil -> :ok
+      bad -> {:error, {:invalid_caps, {:invalid_storage_path, bad}}}
+    end
+  end
 
   defp validate_tools(nil), do: :ok
 

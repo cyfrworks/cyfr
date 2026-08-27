@@ -136,6 +136,26 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert :ok = Caps.validate(%{"caps" => %{"tools" => ["*"]}})
     end
 
+    test "storage paths speak the guest vocabulary — out-of-scope grants fail at parse" do
+      assert :ok = Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["data/"]}}})
+
+      assert :ok =
+               Caps.validate(%{
+                 "caps" => %{"storage" => %{"paths" => ["data/notes", "components/", "*"]}}
+               })
+
+      # A grant no runtime would honor — the host scopes are not guest
+      # vocabulary — is refused here, not three layers later at dispatch.
+      assert {:error, {:invalid_caps, {:invalid_storage_path, "aqua/"}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["data/", "aqua/"]}}})
+
+      assert {:error, {:invalid_caps, {:invalid_storage_path, "conversations/"}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["conversations/"]}}})
+
+      assert {:error, {:invalid_caps, {:invalid_storage_path, "guest/"}}} =
+               Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["guest/"]}}})
+    end
+
     test "limits carry the Sanctum.Limits vocabulary with strict durations" do
       assert {:error, {:invalid_caps, {:invalid_limit, "timeout", "5min"}}} =
                Caps.validate(%{"caps" => %{"limits" => %{"timeout" => "5min"}}})
