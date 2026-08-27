@@ -120,11 +120,10 @@ defmodule PrismWeb.ComponentsLive do
 
            result =
              try do
-               {name, merged_args} =
-                 {"component",
-                  %{"action" => "pull", "reference" => ref, "progress_id" => progress_id}}
-
-               Emissary.MCP.ToolRegistry.call_external(name, ctx, merged_args)
+               call_tool(ctx, "component/pull", %{
+                 "reference" => ref,
+                 "progress_id" => progress_id
+               })
              rescue
                e -> {:error, Exception.message(e)}
              end
@@ -277,8 +276,7 @@ defmodule PrismWeb.ComponentsLive do
 
            result =
              try do
-               Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-                 "action" => "push",
+               call_tool(ctx, "component/push", %{
                  "reference" => ref,
                  "progress_id" => progress_id
                })
@@ -737,10 +735,7 @@ defmodule PrismWeb.ComponentsLive do
 
           result =
             try do
-              Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-                "action" => "setup_plan",
-                "reference" => ref
-              })
+              call_tool(ctx, "component/setup_plan", %{"reference" => ref})
             rescue
               e ->
                 Logger.warning(

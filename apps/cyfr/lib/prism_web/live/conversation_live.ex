@@ -754,8 +754,7 @@ defmodule PrismWeb.ConversationLive do
         Cyfr.LoggerContext.restore(logger_metadata)
 
         result =
-          Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
-            "action" => "run",
+          call_tool(ctx, "execution/run", %{
             "reference" => @list_models_ref,
             "input" => %{}
           })

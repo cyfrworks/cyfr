@@ -35,6 +35,8 @@ defmodule PrismWeb do
       import PrismWeb.MCPHelpers
       import PrismWeb.DisplayHelpers
 
+      use PrismWeb.LiveDefaults
+
       unquote(html_helpers())
     end
   end
@@ -42,6 +44,11 @@ defmodule PrismWeb do
   def live_component do
     quote do
       use Phoenix.LiveComponent
+
+      import PrismWeb.MCPHelpers
+      import PrismWeb.DisplayHelpers
+
+      use PrismWeb.LiveDefaults
 
       unquote(html_helpers())
     end

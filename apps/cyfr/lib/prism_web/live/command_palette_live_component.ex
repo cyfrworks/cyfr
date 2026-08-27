@@ -159,10 +159,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   defp context_actions(_), do: []
 
   defp recent_request_items(ctx) do
-    case Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{
-           "action" => "list",
-           "limit" => @max_recent
-         }) do
+    case call_tool(ctx, "mcp_log/list", %{"limit" => @max_recent}) do
       {:ok, %{logs: logs}} when is_list(logs) ->
         Enum.map(logs, fn log ->
           %{
@@ -185,10 +182,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   end
 
   defp component_items(ctx) do
-    case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-           "action" => "list",
-           "limit" => @max_recent
-         }) do
+    case call_tool(ctx, "component/list", %{"limit" => @max_recent}) do
       {:ok, %{components: list}} when is_list(list) ->
         Enum.map(list, fn comp ->
           ref = comp[:reference] || comp["reference"] || ""

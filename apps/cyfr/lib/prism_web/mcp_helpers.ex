@@ -20,18 +20,26 @@ defmodule PrismWeb.MCPHelpers do
   require Logger
 
   @doc """
-  Call an MCP tool using the context from socket assigns.
+  Call an MCP tool with the socket's context, or with a context directly.
+
+  The second shape is for work a page hands to `Prism.TaskSupervisor`: a
+  task has the context but no socket, which is why those call sites used to
+  reach past this module and spell the registry call themselves — losing
+  the `"tool/action"` split with them.
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
-  def call_tool(socket, tool_name, args \\ %{}) do
-    case socket.assigns do
-      %{context: %Sanctum.Context{} = ctx} ->
-        {name, merged_args} = normalize_tool_call(tool_name, args)
-        Emissary.MCP.ToolRegistry.call_external(name, ctx, merged_args)
+  def call_tool(socket_or_context, tool_name, args \\ %{})
 
-      _ ->
-        {:error, :no_context}
+  def call_tool(%Sanctum.Context{} = ctx, tool_name, args) do
+    {name, merged_args} = normalize_tool_call(tool_name, args)
+    Emissary.MCP.ToolRegistry.call_external(name, ctx, merged_args)
+  end
+
+  def call_tool(socket, tool_name, args) do
+    case socket.assigns do
+      %{context: %Sanctum.Context{} = ctx} -> call_tool(ctx, tool_name, args)
+      _ -> {:error, :no_context}
     end
   end
 

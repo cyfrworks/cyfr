@@ -234,7 +234,16 @@ defmodule Prism.AgentConfig do
     end
   end
 
-  defp call_aqua(ctx, args) do
+  @doc """
+  Call the `aqua` tool and normalize its result to string keys.
+
+  Every aqua call goes through here so guide maps arrive with ONE key
+  spelling: in-process results are atom-keyed, wire round-trips
+  string-keyed, and consumers must not carry `m[:k] || m["k"]` pairs. The
+  console's agents page had a byte-identical private copy of this.
+  """
+  @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
+  def call_aqua(ctx, args) do
     case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
       {:ok, result} -> {:ok, stringify_deep(result)}
       other -> other

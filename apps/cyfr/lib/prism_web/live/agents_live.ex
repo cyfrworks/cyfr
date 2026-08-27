@@ -435,8 +435,7 @@ defmodule PrismWeb.AgentsLive do
         Cyfr.LoggerContext.restore(logger_metadata)
 
         result =
-          Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
-            "action" => "run",
+          call_tool(ctx, "execution/run", %{
             "reference" => @list_models_ref,
             "input" => %{}
           })
@@ -868,16 +867,8 @@ defmodule PrismWeb.AgentsLive do
     """
   end
 
-  # Every aqua-tool call goes through here so guide maps arrive with ONE key
-  # spelling (see Prism.AgentConfig.stringify_deep/1) — in-process results
-  # are atom-keyed, wire round-trips string-keyed, and consumers must not
-  # carry `m[:k] || m["k"]` pairs.
-  defp call_aqua(ctx, args) do
-    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
-      {:ok, result} -> {:ok, Prism.AgentConfig.stringify_deep(result)}
-      other -> other
-    end
-  end
+  # One owner for the aqua call and its key normalization.
+  defp call_aqua(ctx, args), do: Prism.AgentConfig.call_aqua(ctx, args)
 
   # Count of capabilities the agent runs without asking that *aren't* reads —
   # i.e. the write/execute actions the user has blanket-approved ("auto").
