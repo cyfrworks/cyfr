@@ -517,13 +517,16 @@ defmodule Compendium.Registry do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
       {:ok, component} ->
         case Compendium.Provenance.of(ctx, component) do
-          :bundled ->
+          {:ok, :bundled} ->
             {:error, :bundled}
 
-          :bundled_modified ->
+          {:ok, :bundled_modified} ->
             {:error, :bundled_modified}
 
-          _user_or_remote ->
+          {:error, _} = error ->
+            error
+
+          {:ok, _user_or_remote} ->
             with :ok <- cleanup_component_associations(ctx, component) do
               Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
               Compendium.Cascade.name_removed(ctx, component)

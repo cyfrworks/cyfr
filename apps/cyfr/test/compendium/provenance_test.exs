@@ -59,11 +59,11 @@ defmodule Compendium.ProvenanceTest do
   end
 
   test "of/2 tells the four classes apart", %{ctx: ctx, bundled: bundled} do
-    assert Provenance.of(ctx, bundled) == :bundled
+    assert Provenance.of(ctx, bundled) == {:ok, :bundled}
 
     # An edit copy-on-writes the unit — same row, different provenance.
     :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "edited")
-    assert Provenance.of(ctx, bundled) == :bundled_modified
+    assert Provenance.of(ctx, bundled) == {:ok, :bundled_modified}
 
     # The athanor's own component: tenant bytes, no seed counterpart.
     own_dir = ["components", "reagents", "local", "own-tool", "0.1.0"]
@@ -77,7 +77,7 @@ defmodule Compendium.ProvenanceTest do
 
     File.write!(Path.join(own_local, "reagent.wasm"), @valid_wasm)
     {:ok, own} = Registry.register_from_arca(ctx, own_dir)
-    assert Provenance.of(ctx, own) == :user
+    assert Provenance.of(ctx, own) == {:ok, :user}
 
     # A published/pulled component is remote whatever the tree says.
     {:ok, remote} =
@@ -87,10 +87,10 @@ defmodule Compendium.ProvenanceTest do
         type: "reagent"
       })
 
-    assert Provenance.of(ctx, remote) == :remote
+    assert Provenance.of(ctx, remote) == {:ok, :remote}
 
     # The batch map agrees with the one-row classification.
-    provenance_map = Provenance.map(ctx)
+    {:ok, provenance_map} = Provenance.map(ctx)
     assert provenance_map[{"bundled-tool", "1.0.0", "local"}] == :bundled_modified
     assert provenance_map[{"own-tool", "0.1.0", "local"}] == :user
     assert provenance_map[{"remote-tool", "1.0.0", "local"}] == :remote
@@ -139,7 +139,7 @@ defmodule Compendium.ProvenanceTest do
         type: "reagent"
       })
 
-    overview = Provenance.overview(ctx)
+    {:ok, overview} = Provenance.overview(ctx)
 
     bundled_entry = Enum.find(overview, &(&1.component.name == "bundled-tool"))
     assert bundled_entry.provenance == :bundled
@@ -178,7 +178,7 @@ defmodule Compendium.ProvenanceTest do
 
     # And the next scan registers nothing new: there is nothing to resurrect.
     assert %{registered: 0} = Compendium.AutoIndexer.scan(ctx: ctx)
-    assert Provenance.of(ctx, bundled) == :bundled
+    assert Provenance.of(ctx, bundled) == {:ok, :bundled}
   end
 
   test "deleting an edited bundled copy refuses and points at reset", %{ctx: ctx} do
@@ -195,10 +195,10 @@ defmodule Compendium.ProvenanceTest do
     assert {:ok, :already_pristine} = Registry.reset(ctx, "bundled-tool", "1.0.0")
 
     :ok = Arca.put(ctx, @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
-    assert Provenance.of(ctx, bundled) == :bundled_modified
+    assert Provenance.of(ctx, bundled) == {:ok, :bundled_modified}
 
     assert {:ok, :reset} = Registry.reset(ctx, "bundled-tool", "1.0.0")
-    assert Provenance.of(ctx, bundled) == :bundled
+    assert Provenance.of(ctx, bundled) == {:ok, :bundled}
     assert {:ok, @valid_wasm} = Arca.get(ctx, @bundled_dir ++ ["reagent.wasm"])
 
     # The row survived the revert and matches the pristine bytes again.
@@ -229,7 +229,7 @@ defmodule Compendium.ProvenanceTest do
       )
 
     {:ok, own} = Registry.register_from_arca(ctx, own_dir)
-    assert Provenance.of(ctx, own) == :user
+    assert Provenance.of(ctx, own) == {:ok, :user}
 
     # A later release ships the very same name and version.
     shipped_wasm = @valid_wasm <> <<1>>
@@ -251,7 +251,7 @@ defmodule Compendium.ProvenanceTest do
 
     # Still the user's work: reset refuses to wipe it, delete is allowed —
     # and only then does the shipped unit show through.
-    assert Provenance.of(ctx, own) == :user
+    assert Provenance.of(ctx, own) == {:ok, :user}
     assert {:error, :not_bundled} = Registry.reset(ctx, "mine-first", "1.0.0")
 
     assert :ok = Registry.delete(ctx, "mine-first", "1.0.0")
@@ -318,7 +318,7 @@ defmodule Compendium.ProvenanceTest do
     assert {:ok, %{provenance: :user, drift: nil, shadows_shipped: true}} =
              Provenance.status(ctx, own)
 
-    [entry] = Provenance.annotate(ctx, [own])
+    {:ok, [entry]} = Provenance.annotate(ctx, [own])
     assert entry.shadows_shipped
     assert entry.provenance == :user
   end
@@ -349,7 +349,7 @@ defmodule Compendium.ProvenanceTest do
              upstream_superseded: true
            } = Provenance.upstream_status(ctx, fork)
 
-    [entry] = Provenance.annotate(ctx, [fork])
+    {:ok, [entry]} = Provenance.annotate(ctx, [fork])
     assert entry.forked_from == "reagent:acme.base:1.0.0"
     assert entry.upstream_superseded
 
@@ -362,7 +362,7 @@ defmodule Compendium.ProvenanceTest do
         manifest: Jason.encode!(%{"forked_from" => "reagent:acme.base:1.1.0"})
       })
 
-    [current] = Provenance.annotate(ctx, [current_fork])
+    {:ok, [current]} = Provenance.annotate(ctx, [current_fork])
     refute current.upstream_superseded
 
     # Malformed lineage answers nothing, never a raise.
@@ -375,7 +375,7 @@ defmodule Compendium.ProvenanceTest do
       })
 
     assert Provenance.upstream_status(ctx, weird) == nil
-    [w] = Provenance.annotate(ctx, [weird])
+    {:ok, [w]} = Provenance.annotate(ctx, [weird])
     assert w.forked_from == nil
     refute w.upstream_superseded
   end

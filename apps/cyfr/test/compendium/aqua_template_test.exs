@@ -142,12 +142,13 @@ defmodule Compendium.AquaTemplateTest do
     :ok =
       Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
 
-    assert [
-             %{path: "aqua/agents/aqua.md", state: :bundled},
-             %{path: "aqua/agents/mine.md", state: :user},
-             %{path: "aqua/agents/scribe.md", state: :bundled_modified},
-             %{path: "aqua/skills/pdf", state: :bundled}
-           ] = AquaTemplate.status(ctx)
+    assert {:ok,
+            [
+              %{path: "aqua/agents/aqua.md", state: :bundled},
+              %{path: "aqua/agents/mine.md", state: :user},
+              %{path: "aqua/agents/scribe.md", state: :bundled_modified},
+              %{path: "aqua/skills/pdf", state: :bundled}
+            ]} = AquaTemplate.status(ctx)
   end
 
   test "reset reverts edited copies and KEEPS member-created agents", %{ctx: ctx} do

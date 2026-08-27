@@ -361,6 +361,20 @@ defmodule Arca.Storage do
   @spec seed_prefix(String.t()) :: path()
   def seed_prefix(root) when root in @seed_roots, do: ["seed", root]
 
+  @doc """
+  The inverse of `seed_prefix/1`'s vocabulary: strip the `"seed"` head
+  from a seed-side path, back to logical segments — the one spelling of
+  that strip, so no consumer hand-patterns the literal.
+
+  ## Examples
+
+      iex> Arca.Storage.seed_logical(["seed", "aqua", "agents", "aqua.md"])
+      ["aqua", "agents", "aqua.md"]
+
+  """
+  @spec seed_logical(path()) :: path()
+  def seed_logical(["seed" | rest]), do: rest
+
   # The overlay roots, from the layout table. Their unit shapes live with
   # the domain locators (`locate/1`).
   @overlay_roots for {root, _class, _guest, :overlay} <- @layout, do: root

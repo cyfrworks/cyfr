@@ -237,23 +237,18 @@ defmodule Arca.Overlay do
         tenant_result
 
       :above_unit ->
-        tenant_entries =
-          case tenant_result do
-            {:ok, entries} -> entries
-            _ -> []
-          end
+        # A union answer needs both sides to have answered: absence is
+        # already `{:ok, []}` on either side, so an error here is an
+        # outage — answering the other side alone would be a plausible
+        # listing that silently omits real entries.
+        with {:ok, tenant_entries} <- tenant_result,
+             {:ok, seed_entries} <- seed_list_typed(path) do
+          names = MapSet.new(tenant_entries, fn {name, _kind} -> name end)
 
-        case seed_list_typed(path) do
-          {:ok, seed_entries} ->
-            names = MapSet.new(tenant_entries, fn {name, _kind} -> name end)
+          merged =
+            tenant_entries ++ Enum.reject(seed_entries, &MapSet.member?(names, elem(&1, 0)))
 
-            merged =
-              tenant_entries ++ Enum.reject(seed_entries, &MapSet.member?(names, elem(&1, 0)))
-
-            {:ok, merged}
-
-          {:error, _} ->
-            tenant_result
+          {:ok, merged}
         end
 
       loc ->
@@ -270,13 +265,13 @@ defmodule Arca.Overlay do
         tenant_result
 
       :above_unit ->
-        merged =
-          merge_above_unit(ctx, leaves(tenant_result), seed_list_recursive(path), & &1)
-
-        {:ok, Enum.uniq(merged)}
+        with {:ok, tenant_leaves} <- tenant_result,
+             {:ok, seed_leaves} <- seed_list_recursive(path) do
+          {:ok, Enum.uniq(merge_above_unit(ctx, tenant_leaves, seed_leaves, & &1))}
+        end
 
       loc ->
-        at_unit_result(ctx, loc, tenant_result, fn -> {:ok, seed_list_recursive(path)} end)
+        at_unit_result(ctx, loc, tenant_result, fn -> seed_list_recursive(path) end)
     end
   end
 
@@ -292,13 +287,16 @@ defmodule Arca.Overlay do
   @doc """
   What one shadow unit holds, as the union serves it — see
   `t:unit_status/0`. A path below a unit is answered for its unit; a path
-  above any unit (or outside the overlaid roots) is `:absent`.
+  above any unit (or outside the overlaid roots) is `{:ok, :absent}`.
+  A tenant-adapter outage answers `{:error, term}` — a status surface
+  must not misreport the athanor's own units as shipped.
   """
-  @spec unit_status(Context.t(), Arca.Storage.path()) :: unit_status()
+  @spec unit_status(Context.t(), Arca.Storage.path()) ::
+          {:ok, unit_status()} | {:error, term()}
   def unit_status(%Context{} = ctx, path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] ->
-        :absent
+        {:ok, :absent}
 
       loc ->
         # The same classification the batch form applies over its walked
@@ -306,22 +304,27 @@ defmodule Arca.Overlay do
         # together.
         seed? = seed_unit_present?(loc)
 
-        cond do
-          completed?(ctx, loc) ->
+        with {:ok, state} <- tenant_unit_state(ctx, loc) do
+          status =
             cond do
-              not seed? -> :own
-              origin_mark?(ctx, unit_of(loc)) -> :materialized
-              true -> :own_shadowing
+              state == :complete ->
+                cond do
+                  not seed? -> :own
+                  origin_mark?(ctx, unit_of(loc)) -> :materialized
+                  true -> :own_shadowing
+                end
+
+              seed? ->
+                :seed
+
+              state == :partial ->
+                :own
+
+              true ->
+                :absent
             end
 
-          seed? ->
-            :seed
-
-          tenant_content?(ctx, loc) ->
-            :own
-
-          true ->
-            :absent
+          {:ok, status}
         end
     end
   end
@@ -330,47 +333,53 @@ defmodule Arca.Overlay do
   Every unit under an overlaid root, mapped to its status — the batch form
   of `unit_status/2`: three listings total (tenant, seed, origin marks),
   no per-unit probes — classifying a leaf is a pure locator call.
-  `:absent` units are, by definition, not in the map.
+  `:absent` units are, by definition, not in the map. A tenant listing
+  outage answers `{:error, term}`, never a seed-only map.
   """
-  @spec unit_statuses(Context.t(), String.t()) :: %{Arca.Storage.path() => unit_status()}
+  @spec unit_statuses(Context.t(), String.t()) ::
+          {:ok, %{Arca.Storage.path() => unit_status()}} | {:error, term()}
   def unit_statuses(%Context{} = ctx, root) when is_binary(root) do
     if root in Arca.Storage.overlay_roots() do
-      marks = origin_marks(ctx)
-      tenant_leaves = leaves(tenant().list_recursive(ctx, [root]))
-      seed_leaves = seed_list_recursive([root])
+      with {:ok, tenant_leaves} <- tenant().list_recursive(ctx, [root]),
+           {:ok, seed_leaves} <- seed_list_recursive([root]) do
+        marks = origin_marks(ctx)
 
-      seed_locs = MapSet.new(for leaf <- seed_leaves, loc = leaf_loc(leaf), do: loc)
+        seed_locs = MapSet.new(for leaf <- seed_leaves, loc = leaf_loc(leaf), do: loc)
 
-      tenant_by_loc =
-        tenant_leaves
-        |> Enum.group_by(&Arca.Storage.locate/1)
-        |> Map.drop([:above_unit, :not_overlaid])
+        tenant_by_loc =
+          tenant_leaves
+          |> Enum.group_by(&Arca.Storage.locate/1)
+          |> Map.drop([:above_unit, :not_overlaid])
 
-      all_locs = MapSet.union(seed_locs, MapSet.new(Map.keys(tenant_by_loc)))
+        all_locs = MapSet.union(seed_locs, MapSet.new(Map.keys(tenant_by_loc)))
 
-      Map.new(all_locs, fn loc ->
-        unit = unit_of(loc)
+        statuses =
+          Map.new(all_locs, fn loc ->
+            unit = unit_of(loc)
 
-        status =
-          cond do
-            completed_in_leaves?(loc, Map.get(tenant_by_loc, loc, [])) ->
+            status =
               cond do
-                not MapSet.member?(seed_locs, loc) -> :own
-                MapSet.member?(marks, unit) -> :materialized
-                true -> :own_shadowing
+                completed_in_leaves?(loc, Map.get(tenant_by_loc, loc, [])) ->
+                  cond do
+                    not MapSet.member?(seed_locs, loc) -> :own
+                    MapSet.member?(marks, unit) -> :materialized
+                    true -> :own_shadowing
+                  end
+
+                MapSet.member?(seed_locs, loc) ->
+                  :seed
+
+                true ->
+                  :own
               end
 
-            MapSet.member?(seed_locs, loc) ->
-              :seed
+            {unit, status}
+          end)
 
-            true ->
-              :own
-          end
-
-        {unit, status}
-      end)
+        {:ok, statuses}
+      end
     else
-      %{}
+      {:ok, %{}}
     end
   end
 
@@ -435,10 +444,11 @@ defmodule Arca.Overlay do
 
       loc ->
         case unit_status(ctx, path) do
-          :materialized -> delete_unit(ctx, loc)
-          own when own in [:own, :own_shadowing] -> {:error, :not_a_copy}
-          :seed -> {:error, :bundled}
-          :absent -> {:error, :not_found}
+          {:ok, :materialized} -> delete_unit(ctx, loc)
+          {:ok, own} when own in [:own, :own_shadowing] -> {:error, :not_a_copy}
+          {:ok, :seed} -> {:error, :bundled}
+          {:ok, :absent} -> {:error, :not_found}
+          {:error, _} = error -> error
         end
     end
   end
@@ -461,9 +471,10 @@ defmodule Arca.Overlay do
 
       loc ->
         case unit_status(ctx, path) do
-          :seed -> {:error, :bundled}
-          :absent -> {:error, :not_found}
-          _materialized_or_own -> delete_unit(ctx, loc)
+          {:ok, :seed} -> {:error, :bundled}
+          {:ok, :absent} -> {:error, :not_found}
+          {:ok, _materialized_or_own} -> delete_unit(ctx, loc)
+          {:error, _} = error -> error
         end
     end
   end
@@ -479,7 +490,7 @@ defmodule Arca.Overlay do
           :collapsed | :kept | :absent | {:error, term()}
   def collapse_unit(%Context{} = ctx, path) do
     case unit_status(ctx, path) do
-      :materialized ->
+      {:ok, :materialized} ->
         loc = Arca.Storage.locate(path)
 
         case diff_unit(ctx, unit_of(loc)) do
@@ -496,11 +507,14 @@ defmodule Arca.Overlay do
             error
         end
 
-      own when own in [:own, :own_shadowing] ->
+      {:ok, own} when own in [:own, :own_shadowing] ->
         :kept
 
-      _seed_or_absent ->
+      {:ok, _seed_or_absent} ->
         :absent
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -659,14 +673,23 @@ defmodule Arca.Overlay do
     end)
   end
 
-  # The at-or-below-unit answer, shared by the three merges: a completed
+  # The at-or-below-unit answer, shared by the listing merges: a completed
   # copy answers alone, an unmaterialized seed unit reads through, and a
-  # tenant-only unit answers its own content.
+  # tenant-only unit answers its own content. A tenant adapter fault
+  # propagates before any probe — `:enotdir` is a real answer (a file
+  # where the unit's tree belongs), everything else is an outage the seed
+  # side must not paper over.
   defp at_unit_result(ctx, loc, tenant_result, seed_fun) do
-    cond do
-      completed?(ctx, loc) -> tenant_result
-      seed_unit_present?(loc) -> seed_fun.()
-      true -> tenant_result
+    case tenant_result do
+      {:error, reason} when reason != :enotdir ->
+        tenant_result
+
+      _answered ->
+        cond do
+          completed?(ctx, loc) -> tenant_result
+          seed_unit_present?(loc) -> seed_fun.()
+          true -> tenant_result
+        end
     end
   end
 
@@ -674,21 +697,52 @@ defmodule Arca.Overlay do
   # directory copy is complete when it holds its sentinel file; a file
   # unit when the tenant file exists. Asked of the tenant adapter
   # directly, on purpose — the union answering here would make every seed
-  # unit look materialized.
+  # unit look materialized. `exists?/2` is total by the adapter contract,
+  # so these probes cannot carry an outage: they serve only the write
+  # gates and leaf fall-through, whose failure directions are safe (a
+  # refused delete, a materialization that fails typed, a read the
+  # adapter just answered). Status surfaces ask `tenant_unit_state/2`
+  # instead — the error-carrying form.
   defp completed?(ctx, {:file, unit}), do: tenant().exists?(ctx, unit)
 
   defp completed?(ctx, {:dir, unit, sentinel}),
     do: tenant().exists?(ctx, unit ++ [sentinel])
 
-  # Whether the athanor's own tree holds anything at the unit — complete
-  # or not. Only consulted when the seed has no counterpart, where
-  # "content" and "the unit" are the same thing.
-  defp tenant_content?(ctx, {:file, unit}), do: tenant().exists?(ctx, unit)
+  # The status-surface probe: what the athanor's own tree holds at the
+  # unit, with the error channel the total `exists?/2` probes cannot
+  # carry — a status answer must not misreport a materialized unit as
+  # `:seed` during an adapter outage. `:enotdir` is a real answer (a file
+  # where a tree belongs): content, but never a complete copy.
+  defp tenant_unit_state(ctx, {:file, unit}) do
+    parent = Enum.drop(unit, -1)
+    name = List.last(unit)
 
-  defp tenant_content?(ctx, {:dir, unit, _sentinel}) do
+    case tenant().list_typed(ctx, parent) do
+      {:ok, entries} ->
+        {:ok, if({name, :file} in entries, do: :complete, else: :empty)}
+
+      {:error, :enotdir} ->
+        {:ok, :empty}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp tenant_unit_state(ctx, {:dir, unit, sentinel}) do
     case tenant().list_typed(ctx, unit) do
-      {:ok, [_ | _]} -> true
-      _ -> false
+      {:ok, entries} ->
+        cond do
+          {sentinel, :file} in entries -> {:ok, :complete}
+          entries != [] -> {:ok, :partial}
+          true -> {:ok, :empty}
+        end
+
+      {:error, :enotdir} ->
+        {:ok, :partial}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -967,20 +1021,19 @@ defmodule Arca.Overlay do
 
   defp seed([root | rest]), do: Arca.Storage.seed_prefix(root) ++ rest
 
-  defp leaves({:ok, leaves}), do: leaves
-  defp leaves({:error, _}), do: []
-
   # The seed side is always the Local adapter, reading install media in
   # place — whatever tenant adapter is configured.
   defp seed_get(path), do: Arca.Adapters.Local.get(seed_ctx(), seed(path))
   defp seed_exists?(path), do: Arca.Adapters.Local.exists?(seed_ctx(), seed(path))
   defp seed_list_typed(path), do: Arca.Adapters.Local.list_typed(seed_ctx(), seed(path))
 
-  # Local's recursive walk is total ({:ok, []} for a missing tree), so
-  # this answers a plain list, stripped back to logical segments.
+  # Total in practice (Local answers {:ok, []} for a missing tree), but
+  # the adapter tuple propagates — install media that cannot be listed is
+  # a fault, not an empty union.
   defp seed_list_recursive(path) do
-    {:ok, leaves} = Arca.Adapters.Local.list_recursive(seed_ctx(), seed(path))
-    Enum.map(leaves, fn ["seed" | rest] -> rest end)
+    with {:ok, leaves} <- Arca.Adapters.Local.list_recursive(seed_ctx(), seed(path)) do
+      {:ok, Enum.map(leaves, &Arca.Storage.seed_logical/1)}
+    end
   end
 
   defp seed_read_subtree(path),

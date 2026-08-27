@@ -314,12 +314,12 @@ defmodule Compendium.MCP.AquaTool do
       file = AquaPath.agent_file(name)
 
       case Arca.Overlay.unit_status(ctx, file) do
-        :seed ->
+        {:ok, :seed} ->
           {:error,
            "Agent '#{name}' ships with the server and cannot be deleted — " <>
              "disable it instead (update name=#{name} disabled=true)"}
 
-        status when status in [:materialized, :own, :own_shadowing] ->
+        {:ok, status} when status in [:materialized, :own, :own_shadowing] ->
           case Arca.Overlay.drop_unit(ctx, file) do
             :ok ->
               # The status already says what the delete reveals: an edited
@@ -335,8 +335,11 @@ defmodule Compendium.MCP.AquaTool do
               {:error, "Failed to delete: #{inspect(reason)}"}
           end
 
-        :absent ->
+        {:ok, :absent} ->
           {:error, "Agent '#{name}' not found"}
+
+        {:error, reason} ->
+          {:error, "Failed to read agent status: #{inspect(reason)}"}
       end
     end
   end
@@ -361,12 +364,18 @@ defmodule Compendium.MCP.AquaTool do
   # --- status ---
 
   def handle(%Context{} = ctx, %{"action" => "status"}) do
-    files =
-      for %{path: path, state: state} <- Compendium.AquaTemplate.status(ctx) do
-        %{path: path, state: Compendium.Provenance.label(state)}
-      end
+    case Compendium.AquaTemplate.status(ctx) do
+      {:ok, entries} ->
+        files =
+          for %{path: path, state: state} <- entries do
+            %{path: path, state: Compendium.Provenance.label(state)}
+          end
 
-    {:ok, %{files: files, count: length(files)}}
+        {:ok, %{files: files, count: length(files)}}
+
+      {:error, reason} ->
+        {:error, "Failed to read status: #{inspect(reason)}"}
+    end
   end
 
   # --- skills ---

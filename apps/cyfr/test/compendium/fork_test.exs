@@ -193,7 +193,7 @@ defmodule Compendium.ForkTest do
                upstream_superseded: true
              } = Compendium.Provenance.upstream_status(ctx, row)
 
-      [entry] = Compendium.Provenance.annotate(ctx, [row])
+      {:ok, [entry]} = Compendium.Provenance.annotate(ctx, [row])
       assert entry.provenance == :user
       assert entry.forked_from == "reagent:acme.lineage-tool:1.0.0"
       assert entry.upstream_superseded

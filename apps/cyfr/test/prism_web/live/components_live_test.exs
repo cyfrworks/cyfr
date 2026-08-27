@@ -100,7 +100,7 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     # The copy is gone; the seed shows through, and a fresh mount agrees.
     refute Arca.exists?(ctx, @version_dir ++ ["notes.txt"])
-    assert Arca.Overlay.unit_status(ctx, @version_dir) == :seed
+    assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :seed}
 
     {_view, html} = expanded_html(conn)
     assert html =~ ~r/>\s*bundled\s*</

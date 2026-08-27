@@ -73,13 +73,17 @@ defmodule Compendium.AquaTemplate do
   seed), `:bundled_modified` (the athanor's copy shadows a shipped
   counterpart), `:user` (member-created, no shipped counterpart).
   """
-  @spec status(Context.t()) :: [%{path: String.t(), state: Compendium.Provenance.t()}]
+  @spec status(Context.t()) ::
+          {:ok, [%{path: String.t(), state: Compendium.Provenance.t()}]} | {:error, term()}
   def status(%Context{} = ctx) do
-    Arca.Overlay.unit_statuses(ctx, "aqua")
-    |> Enum.map(fn {unit, state} ->
-      %{path: Enum.join(unit, "/"), state: Compendium.Provenance.of_status(state)}
-    end)
-    |> Enum.sort_by(& &1.path)
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
+      {:ok,
+       statuses
+       |> Enum.map(fn {unit, state} ->
+         %{path: Enum.join(unit, "/"), state: Compendium.Provenance.of_status(state)}
+       end)
+       |> Enum.sort_by(& &1.path)}
+    end
   end
 
   @doc """
@@ -95,9 +99,8 @@ defmodule Compendium.AquaTemplate do
   def reset(%Context{} = ctx, opts \\ []) do
     Context.require_tenant!(ctx)
 
-    with :ok <- seed_check() do
-      statuses = Arca.Overlay.unit_statuses(ctx, "aqua")
-
+    with :ok <- seed_check(),
+         {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
       if Keyword.get(opts, :all, false) do
         with :ok <- Arca.delete_tree(ctx, AquaPath.root()) do
           gone = for {unit, state} <- statuses, state != :seed, do: Enum.join(unit, "/")

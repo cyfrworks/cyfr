@@ -33,13 +33,17 @@ defmodule Compendium.Provenance do
 
   @doc """
   Classify one registry row (an `Arca.ComponentStorage` component map).
+  A storage outage answers `{:error, term}` — provenance derived from a
+  tree that cannot be read is not provenance.
   """
-  @spec of(Context.t(), map()) :: t()
+  @spec of(Context.t(), map()) :: {:ok, t()} | {:error, term()}
   def of(%Context{} = ctx, component) do
     if to_string(Map.get(component, :source)) in @remote_sources do
-      :remote
+      {:ok, :remote}
     else
-      of_status(Arca.Overlay.unit_status(ctx, version_dir(component)))
+      with {:ok, status} <- Arca.Overlay.unit_status(ctx, version_dir(component)) do
+        {:ok, of_status(status)}
+      end
     end
   end
 
@@ -67,19 +71,16 @@ defmodule Compendium.Provenance do
   rows list once, the overlay walks twice (`Arca.Overlay.unit_statuses/2`)
   — no per-component probes. Keyed `{name, version, publisher}`.
   """
-  @spec map(Context.t()) :: %{{String.t(), String.t(), String.t()} => t()}
+  @spec map(Context.t()) ::
+          {:ok, %{{String.t(), String.t(), String.t()} => t()}} | {:error, term()}
   def map(%Context{} = ctx) do
-    statuses = Arca.Overlay.unit_statuses(ctx, "components")
-
-    case Arca.ComponentStorage.list_components(ctx, limit: :none) do
-      {:ok, rows} ->
-        Map.new(rows, fn row ->
-          publisher = ComponentPath.normalize_publisher(Map.get(row, :publisher))
-          {{row.name, row.version, publisher}, classify_row(statuses, row)}
-        end)
-
-      {:error, _} ->
-        %{}
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
+         {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
+      {:ok,
+       Map.new(rows, fn row ->
+         publisher = ComponentPath.normalize_publisher(Map.get(row, :publisher))
+         {{row.name, row.version, publisher}, classify_row(statuses, row)}
+       end)}
     end
   end
 
@@ -123,27 +124,28 @@ defmodule Compendium.Provenance do
       {:ok, %{provenance: :remote, drift: nil, shadows_shipped: false}}
     else
       unit_dir = version_dir(component)
-      unit_status = Arca.Overlay.unit_status(ctx, unit_dir)
 
-      base = %{
-        provenance: of_status(unit_status),
-        drift: nil,
-        shadows_shipped: unit_status == :own_shadowing
-      }
+      with {:ok, unit_status} <- Arca.Overlay.unit_status(ctx, unit_dir) do
+        base = %{
+          provenance: of_status(unit_status),
+          drift: nil,
+          shadows_shipped: unit_status == :own_shadowing
+        }
 
-      case unit_status do
-        :materialized ->
-          case Arca.Overlay.diff_unit(ctx, unit_dir) do
-            {:ok, %{added: [], removed: [], changed: []}} -> {:ok, %{base | drift: :pristine}}
-            {:ok, diff} -> {:ok, %{base | drift: {:modified, diff}}}
-            {:error, _} = error -> error
-          end
+        case unit_status do
+          :materialized ->
+            case Arca.Overlay.diff_unit(ctx, unit_dir) do
+              {:ok, %{added: [], removed: [], changed: []}} -> {:ok, %{base | drift: :pristine}}
+              {:ok, diff} -> {:ok, %{base | drift: {:modified, diff}}}
+              {:error, _} = error -> error
+            end
 
-        :seed ->
-          {:ok, %{base | drift: :pristine}}
+          :seed ->
+            {:ok, %{base | drift: :pristine}}
 
-        _own_or_absent ->
-          {:ok, base}
+          _own_or_absent ->
+            {:ok, base}
+        end
       end
     end
   end
@@ -177,54 +179,65 @@ defmodule Compendium.Provenance do
   non-remote name, one targeted row query per forked row (forks are
   rare).
   """
-  @spec annotate(Context.t(), [map()]) :: [
-          %{
-            component: map(),
-            provenance: t(),
-            shipped_versions: [String.t()],
-            superseded: boolean(),
-            shadows_shipped: boolean(),
-            forked_from: String.t() | nil,
-            upstream_superseded: boolean()
-          }
-        ]
+  @spec annotate(Context.t(), [map()]) ::
+          {:ok,
+           [
+             %{
+               component: map(),
+               provenance: t(),
+               shipped_versions: [String.t()],
+               superseded: boolean(),
+               shadows_shipped: boolean(),
+               forked_from: String.t() | nil,
+               upstream_superseded: boolean()
+             }
+           ]}
+          | {:error, term()}
   def annotate(%Context{} = ctx, rows) when is_list(rows) do
-    statuses = Arca.Overlay.unit_statuses(ctx, "components")
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components") do
+      catalog =
+        rows
+        |> Enum.reject(&remote_row?/1)
+        |> Enum.map(&{type_of(&1), &1.name})
+        |> Enum.uniq()
+        |> Map.new(fn {type, name} -> {{type, name}, shipped_versions(type, name)} end)
 
-    catalog =
-      rows
-      |> Enum.reject(&remote_row?/1)
-      |> Enum.map(&{type_of(&1), &1.name})
-      |> Enum.uniq()
-      |> Map.new(fn {type, name} -> {{type, name}, shipped_versions(type, name)} end)
+      annotated =
+        Enum.map(rows, fn row ->
+          base =
+            if remote_row?(row) do
+              %{
+                provenance: :remote,
+                shipped_versions: [],
+                superseded: false,
+                shadows_shipped: false
+              }
+            else
+              unit_status = Map.get(statuses, version_dir(row), :absent)
+              shipped = Map.fetch!(catalog, {type_of(row), row.name})
 
-    Enum.map(rows, fn row ->
-      base =
-        if remote_row?(row) do
-          %{provenance: :remote, shipped_versions: [], superseded: false, shadows_shipped: false}
-        else
-          unit_status = Map.get(statuses, version_dir(row), :absent)
-          shipped = Map.fetch!(catalog, {type_of(row), row.name})
+              %{
+                provenance: of_status(unit_status),
+                shipped_versions: shipped,
+                superseded: superseded?(shipped, row.version),
+                shadows_shipped: unit_status == :own_shadowing
+              }
+            end
 
-          %{
-            provenance: of_status(unit_status),
-            shipped_versions: shipped,
-            superseded: superseded?(shipped, row.version),
-            shadows_shipped: unit_status == :own_shadowing
-          }
-        end
+          lineage =
+            case upstream_status(ctx, row) do
+              nil ->
+                %{forked_from: nil, upstream_superseded: false}
 
-      lineage =
-        case upstream_status(ctx, row) do
-          nil ->
-            %{forked_from: nil, upstream_superseded: false}
+              %{forked_from: forked, upstream_superseded: superseded} ->
+                %{forked_from: forked, upstream_superseded: superseded}
+            end
 
-          %{forked_from: forked, upstream_superseded: superseded} ->
-            %{forked_from: forked, upstream_superseded: superseded}
-        end
+          %{component: row} |> Map.merge(base) |> Map.merge(lineage)
+        end)
 
-      %{component: row} |> Map.merge(base) |> Map.merge(lineage)
-    end)
+      {:ok, annotated}
+    end
   end
 
   @doc """
@@ -269,11 +282,10 @@ defmodule Compendium.Provenance do
   Every registry row annotated (`annotate/2`) — the whole athanor in one
   answer, the batch surface an updates view consumes.
   """
-  @spec overview(Context.t()) :: [map()]
+  @spec overview(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def overview(%Context{} = ctx) do
-    case Arca.ComponentStorage.list_components(ctx, limit: :none) do
-      {:ok, rows} -> annotate(ctx, rows)
-      {:error, _} -> []
+    with {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
+      annotate(ctx, rows)
     end
   end
 

@@ -153,7 +153,7 @@ defmodule Sanctum.ProvisioningTest do
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
     :ok = Arca.put(in_group, version_dir ++ ["scratch.txt"], "x")
     :ok = Arca.delete(in_group, version_dir ++ ["scratch.txt"])
-    assert Arca.Overlay.unit_status(in_group, version_dir) == :materialized
+    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :materialized}
 
     # The next release ships a second bundled catalyst.
     src = Path.join([bundle_dir, "catalysts", "local", "fresh", "1.0.0"])
@@ -183,7 +183,7 @@ defmodule Sanctum.ProvisioningTest do
     assert profile.kind == "owner"
 
     # The pristine copy collapsed — the seed serves the unit again.
-    assert Arca.Overlay.unit_status(in_group, version_dir) == :seed
+    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :seed}
   end
 
   test "a bundle whose closure cannot be pulled leaves the athanor unprovisioned, loudly, and retries",

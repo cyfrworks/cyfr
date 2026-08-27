@@ -365,22 +365,36 @@ defmodule Sanctum.Provisioning do
   end
 
   defp collapse_pristine(ctx, athanor_id) do
-    for root <- Arca.Storage.seed_roots(),
-        {unit, :materialized} <- Arca.Overlay.unit_statuses(ctx, root) do
-      case Arca.Overlay.collapse_unit(ctx, unit) do
-        :collapsed ->
-          Logger.info(
-            "[Provisioning] #{athanor_id}: collapsed pristine copy #{Enum.join(unit, "/")}"
-          )
+    # Collapse is overlay semantics, so the roster is the overlay's —
+    # `unit_statuses/2` filters by the same one, and a status walk that
+    # cannot answer skips this athanor's collapse rather than running
+    # over a lying map.
+    for root <- Arca.Storage.overlay_roots() do
+      case Arca.Overlay.unit_statuses(ctx, root) do
+        {:ok, statuses} ->
+          for {unit, :materialized} <- statuses do
+            case Arca.Overlay.collapse_unit(ctx, unit) do
+              :collapsed ->
+                Logger.info(
+                  "[Provisioning] #{athanor_id}: collapsed pristine copy #{Enum.join(unit, "/")}"
+                )
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[Provisioning] #{athanor_id}: collapse of #{Enum.join(unit, "/")} failed: " <>
+                    inspect(reason)
+                )
+
+              _kept_or_absent ->
+                :ok
+            end
+          end
 
         {:error, reason} ->
           Logger.warning(
-            "[Provisioning] #{athanor_id}: collapse of #{Enum.join(unit, "/")} failed: " <>
-              inspect(reason)
+            "[Provisioning] #{athanor_id}: #{root} status walk failed, " <>
+              "skipping collapse this cycle: #{inspect(reason)}"
           )
-
-        _kept_or_absent ->
-          :ok
       end
     end
 

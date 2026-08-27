@@ -18,6 +18,23 @@ defmodule Arca.OverlayTest.FailingCopyAdapter do
   defdelegate put(ctx, path, content), to: Arca.Adapters.Local
 end
 
+defmodule Arca.OverlayTest.DownAdapter do
+  @moduledoc false
+  # A tenant adapter whose listings are down — the outage shape an object
+  # store produces. Everything else answers normally.
+  defdelegate get(ctx, path), to: Arca.Adapters.Local
+  defdelegate put(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate append(ctx, path, content), to: Arca.Adapters.Local
+  defdelegate delete(ctx, path), to: Arca.Adapters.Local
+  defdelegate exists?(ctx, path), to: Arca.Adapters.Local
+  defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
+  defdelegate usage(ctx, path), to: Arca.Adapters.Local
+  defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+
+  def list_typed(_ctx, _path), do: {:error, :adapter_down}
+  def list_recursive(_ctx, _path), do: {:error, :adapter_down}
+end
+
 defmodule Arca.OverlayTest do
   @moduledoc """
   The seed overlay on the `components/` root: every facade reader sees the
@@ -210,7 +227,7 @@ defmodule Arca.OverlayTest do
       :ok = Arca.put(generic, @version_dir ++ ["own.txt"], "mine")
 
       assert Arca.Adapters.Local.exists?(ctx, @version_dir ++ [@sentinel])
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :materialized
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
       assert {:ok, entries} = Arca.list_typed(ctx, @version_dir)
       assert {"own.txt", :file} in entries
     end
@@ -226,7 +243,7 @@ defmodule Arca.OverlayTest do
       assert {:error, :bundled} = Arca.delete_tree(shaped, @version_dir)
 
       :ok = Arca.put(shaped, @version_dir ++ ["own.txt"], "mine")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :materialized
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
       assert Arca.Adapters.Local.exists?(ctx, @version_dir ++ [@sentinel])
     end
   end
@@ -335,14 +352,14 @@ defmodule Arca.OverlayTest do
 
   describe "unit status and drift" do
     test "unit_status/2 tells the five states apart", %{ctx: ctx, seed_dir: seed} do
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :seed
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :seed}
 
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :materialized
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
 
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
-      assert Arca.Overlay.unit_status(ctx, own) == :own
+      assert Arca.Overlay.unit_status(ctx, own) == {:ok, :own}
 
       # The athanor's own complete unit over a later-shipped counterpart.
       shadowing = ["components", "catalysts", "local", "mine", "1.0.0"]
@@ -350,14 +367,14 @@ defmodule Arca.OverlayTest do
       shipped = Path.join([seed, "components", "catalysts", "local", "mine", "1.0.0"])
       File.mkdir_p!(shipped)
       File.write!(Path.join(shipped, @sentinel), ~s({"type":"catalyst"}))
-      assert Arca.Overlay.unit_status(ctx, shadowing) == :own_shadowing
+      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
 
       absent = ["components", "catalysts", "local", "nope", "9.9.9"]
-      assert Arca.Overlay.unit_status(ctx, absent) == :absent
+      assert Arca.Overlay.unit_status(ctx, absent) == {:ok, :absent}
 
       # Longer paths answer for their unit; non-overlaid roots are :absent.
-      assert Arca.Overlay.unit_status(ctx, @version_dir ++ ["notes.txt"]) == :materialized
-      assert Arca.Overlay.unit_status(ctx, ["guest", "x"]) == :absent
+      assert Arca.Overlay.unit_status(ctx, @version_dir ++ ["notes.txt"]) == {:ok, :materialized}
+      assert Arca.Overlay.unit_status(ctx, ["guest", "x"]) == {:ok, :absent}
     end
 
     test "unit_statuses/2 answers the whole root in three listings, matching unit_status/2",
@@ -365,7 +382,7 @@ defmodule Arca.OverlayTest do
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
 
-      assert %{@version_dir => :seed, ^own => :own} =
+      assert {:ok, %{@version_dir => :seed, ^own => :own}} =
                Arca.Overlay.unit_statuses(ctx, "components")
 
       :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
@@ -376,7 +393,7 @@ defmodule Arca.OverlayTest do
       File.mkdir_p!(shipped)
       File.write!(Path.join(shipped, @sentinel), ~s({"type":"catalyst"}))
 
-      statuses = Arca.Overlay.unit_statuses(ctx, "components")
+      {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "components")
 
       assert %{@version_dir => :materialized, ^own => :own, ^shadowing => :own_shadowing} =
                statuses
@@ -384,7 +401,7 @@ defmodule Arca.OverlayTest do
       # The batch and per-unit forms can never classify the same facts
       # differently.
       for {unit, status} <- statuses do
-        assert Arca.Overlay.unit_status(ctx, unit) == status
+        assert Arca.Overlay.unit_status(ctx, unit) == {:ok, status}
       end
     end
 
@@ -443,7 +460,7 @@ defmodule Arca.OverlayTest do
       :ok = Arca.put(ctx, file, "shipped body")
       assert {:ok, %{added: [], removed: [], changed: []}} = Arca.Overlay.diff_unit(ctx, file)
       assert Arca.Overlay.collapse_unit(ctx, file) == :collapsed
-      assert Arca.Overlay.unit_status(ctx, file) == :seed
+      assert Arca.Overlay.unit_status(ctx, file) == {:ok, :seed}
       assert {:ok, "shipped body"} = Arca.get(ctx, file)
     end
   end
@@ -455,9 +472,9 @@ defmodule Arca.OverlayTest do
     } do
       # An edited (materialized) copy reverts: the seed shows through.
       :ok = Arca.put(ctx, @version_dir ++ ["catalyst.wasm"], "EDITED")
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :materialized
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
       assert :ok = Arca.Overlay.revert_copy(ctx, @version_dir)
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :seed
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :seed}
       assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
 
       # The athanor's own work never reverts — with or without a shipped
@@ -472,7 +489,7 @@ defmodule Arca.OverlayTest do
       shipped = Path.join([seed, "components", "catalysts", "local", "mine", "1.0.0"])
       File.mkdir_p!(shipped)
       File.write!(Path.join(shipped, @sentinel), ~s({"type":"catalyst"}))
-      assert Arca.Overlay.unit_status(ctx, shadowing) == :own_shadowing
+      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
       assert {:error, :not_a_copy} = Arca.Overlay.revert_copy(ctx, shadowing)
 
       # Nothing materialized → :bundled; neither side → :not_found;
@@ -491,7 +508,7 @@ defmodule Arca.OverlayTest do
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
       :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], "NEW")
       assert :ok = Arca.Overlay.drop_unit(ctx, own)
-      assert Arca.Overlay.unit_status(ctx, own) == :absent
+      assert Arca.Overlay.unit_status(ctx, own) == {:ok, :absent}
 
       # Own work shadowing a shipped counterpart: dropping it is the
       # reveal path.
@@ -501,9 +518,9 @@ defmodule Arca.OverlayTest do
       File.mkdir_p!(shipped)
       File.write!(Path.join(shipped, @sentinel), ~s({"type":"catalyst"}))
       File.write!(Path.join(shipped, "catalyst.wasm"), "SHIPPED")
-      assert Arca.Overlay.unit_status(ctx, shadowing) == :own_shadowing
+      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :own_shadowing}
       assert :ok = Arca.Overlay.drop_unit(ctx, shadowing)
-      assert Arca.Overlay.unit_status(ctx, shadowing) == :seed
+      assert Arca.Overlay.unit_status(ctx, shadowing) == {:ok, :seed}
       assert {:ok, "SHIPPED"} = Arca.get(ctx, shadowing ++ ["catalyst.wasm"])
 
       # What the athanor does not hold refuses.
@@ -518,7 +535,7 @@ defmodule Arca.OverlayTest do
       File.write!(Path.join(agents, "a.md"), "shipped")
 
       :ok = Arca.put(ctx, ["aqua", "agents", "a.md"], "edited")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == :materialized
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == {:ok, :materialized}
       assert :ok = Arca.Overlay.revert_copy(ctx, ["aqua", "agents", "a.md"])
       assert {:ok, "shipped"} = Arca.get(ctx, ["aqua", "agents", "a.md"])
     end
@@ -532,7 +549,7 @@ defmodule Arca.OverlayTest do
       mine = ["components", "catalysts", "local", "mine", "1.0.0"]
       :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
       :ok = Arca.put(ctx, mine ++ ["catalyst.wasm"], "MY-WASM")
-      assert Arca.Overlay.unit_status(ctx, mine) == :own
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
 
       # A later release ships the same name and version. The athanor's
       # bytes still win the union AND stay classified as its own work —
@@ -544,13 +561,13 @@ defmodule Arca.OverlayTest do
       File.write!(Path.join(shipped, "catalyst.wasm"), "SHIPPED-WASM")
 
       assert {:ok, "MY-WASM"} = Arca.get(ctx, mine ++ ["catalyst.wasm"])
-      assert Arca.Overlay.unit_status(ctx, mine) == :own_shadowing
-      assert %{^mine => :own_shadowing} = Arca.Overlay.unit_statuses(ctx, "components")
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own_shadowing}
+      assert {:ok, %{^mine => :own_shadowing}} = Arca.Overlay.unit_statuses(ctx, "components")
 
       # Deleting the athanor's own work is allowed; the shipped unit then
       # shows through as pristine seed.
       assert :ok = Arca.delete_tree(ctx, mine)
-      assert Arca.Overlay.unit_status(ctx, mine) == :seed
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :seed}
       assert {:ok, "SHIPPED-WASM"} = Arca.get(ctx, mine ++ ["catalyst.wasm"])
     end
 
@@ -563,7 +580,7 @@ defmodule Arca.OverlayTest do
       :ok = lay_raw(ctx, @version_dir ++ [@sentinel], ~s({"type":"catalyst"}))
       :ok = lay_raw(ctx, @version_dir ++ ["catalyst.wasm"], "WASM-BYTES")
 
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == :own_shadowing
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :own_shadowing}
       assert Arca.Overlay.collapse_unit(ctx, @version_dir) == :kept
     end
 
@@ -576,17 +593,19 @@ defmodule Arca.OverlayTest do
       # Editing the shipped agent is the file-shaped copy-on-write: the
       # single put shadows the seed file and records its mark.
       :ok = Arca.put(ctx, ["aqua", "agents", "shipped.md"], "edited body")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "shipped.md"]) == :materialized
+
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "shipped.md"]) ==
+               {:ok, :materialized}
 
       # An agent the athanor wrote first stays its own when a release
       # later ships the same name — and deleting it surfaces the seed's.
       :ok = Arca.put(ctx, ["aqua", "agents", "mine.md"], "my body")
       File.write!(Path.join(agents, "mine.md"), "shipped later")
 
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "mine.md"]) == :own_shadowing
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "mine.md"]) == {:ok, :own_shadowing}
       assert :ok = Arca.delete(ctx, ["aqua", "agents", "mine.md"])
       assert {:ok, "shipped later"} = Arca.get(ctx, ["aqua", "agents", "mine.md"])
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "mine.md"]) == :seed
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "mine.md"]) == {:ok, :seed}
     end
 
     test "concurrent materializations keep both marks — no lost update", %{
@@ -609,7 +628,7 @@ defmodule Arca.OverlayTest do
       assert a == :ok
       assert b == :ok
 
-      statuses = Arca.Overlay.unit_statuses(ctx, "components")
+      {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "components")
       assert statuses[@version_dir] == :materialized
       assert statuses[other_dir] == :materialized
     end
@@ -635,14 +654,14 @@ defmodule Arca.OverlayTest do
 
       # Materialize the agent — its mark exists, status :materialized.
       :ok = Arca.put(ctx, ["aqua", "agents", "a.md"], "edited")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == :materialized
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == {:ok, :materialized}
 
       # A whole-scope delete (reset all: true's shape) clears the marks
       # with the bytes: re-completing the same unit without the overlay's
       # own copy machinery must NOT read as :materialized.
       assert :ok = Arca.delete_tree(ctx, ["aqua"])
       :ok = lay_raw(ctx, ["aqua", "agents", "a.md"], "recreated by hand")
-      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == :own_shadowing
+      assert Arca.Overlay.unit_status(ctx, ["aqua", "agents", "a.md"]) == {:ok, :own_shadowing}
     end
   end
 
@@ -694,6 +713,41 @@ defmodule Arca.OverlayTest do
                Arca.Overlay.with_internal_writes(fn ->
                  Arca.put(system, ["seed" | @version_dir] ++ ["x.txt"], "x")
                end)
+    end
+  end
+
+  describe "a tenant adapter outage propagates — the union never lies" do
+    # A union answer needs both sides: an outage answering seed-only would
+    # be a plausible listing silently missing the athanor's files, and a
+    # status surface would misreport its own units as shipped.
+    setup %{ctx: ctx} do
+      # Materialize the bundled unit while the real adapter is up, so the
+      # outage has something real to misreport.
+      :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
+
+      original = Application.get_env(:cyfr, :storage_adapter)
+      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.DownAdapter)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :storage_adapter, original),
+          else: Application.delete_env(:cyfr, :storage_adapter)
+      end)
+
+      :ok
+    end
+
+    test "listings answer the outage, never a seed-only union", %{ctx: ctx} do
+      assert {:error, :adapter_down} = Arca.list_typed(ctx, ["components"])
+      assert {:error, :adapter_down} = Arca.list_recursive(ctx, ["components"])
+    end
+
+    test "status surfaces answer the outage, never :seed for a materialized unit", %{ctx: ctx} do
+      assert {:error, :adapter_down} = Arca.Overlay.unit_status(ctx, @version_dir)
+      assert {:error, :adapter_down} = Arca.Overlay.unit_statuses(ctx, "components")
+      assert {:error, :adapter_down} = Arca.Overlay.revert_copy(ctx, @version_dir)
+      assert {:error, :adapter_down} = Arca.Overlay.collapse_unit(ctx, @version_dir)
     end
   end
 end

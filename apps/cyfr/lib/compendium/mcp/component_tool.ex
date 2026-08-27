@@ -560,23 +560,26 @@ defmodule Compendium.MCP.ComponentTool do
       limit: min(args["limit"] || 1000, 1000)
     }
 
-    {:ok, result} = Registry.search(ctx, filters)
-
     # The one data path the Components page consumes: every row carries
     # its provenance and update facts, so the UI needs no second call.
-    components =
-      ctx
-      |> Compendium.Provenance.annotate(result.components)
-      |> Enum.map(fn entry ->
-        entry.component
-        |> Map.put(:provenance, Compendium.Provenance.label(entry.provenance))
-        |> Map.put(:superseded, entry.superseded)
-        |> Map.put(:shadows_shipped, entry.shadows_shipped)
-        |> Map.put(:forked_from, entry.forked_from)
-        |> Map.put(:upstream_superseded, entry.upstream_superseded)
-      end)
+    with {:ok, result} <- Registry.search(ctx, filters),
+         {:ok, annotated} <- Compendium.Provenance.annotate(ctx, result.components) do
+      components =
+        Enum.map(annotated, fn entry ->
+          entry.component
+          |> Map.put(:provenance, Compendium.Provenance.label(entry.provenance))
+          |> Map.put(:superseded, entry.superseded)
+          |> Map.put(:shadows_shipped, entry.shadows_shipped)
+          |> Map.put(:forked_from, entry.forked_from)
+          |> Map.put(:upstream_superseded, entry.upstream_superseded)
+        end)
 
-    {:ok, enrich_tincture_media(ctx, %{result | components: components})}
+      {:ok, enrich_tincture_media(ctx, %{result | components: components})}
+    else
+      {:error, reason} ->
+        Logger.error("[Compendium.MCP] component.list failed: #{inspect(reason)}")
+        {:error, "Failed to list components"}
+    end
   end
 
   # Delete action - delete a component from the registry
@@ -724,39 +727,43 @@ defmodule Compendium.MCP.ComponentTool do
   # per component with the release catalog and superseded flags. The batch
   # surface an updates view consumes.
   def handle(%Context{} = ctx, %{"action" => "status"}) do
-    overview = Compendium.Provenance.overview(ctx)
+    case Compendium.Provenance.overview(ctx) do
+      {:error, reason} ->
+        {:error, "Failed to read status: #{inspect(reason)}"}
 
-    components =
-      Enum.map(overview, fn entry ->
-        row = entry.component
+      {:ok, overview} ->
+        components =
+          Enum.map(overview, fn entry ->
+            row = entry.component
 
-        reference =
-          Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-            type: to_string(Map.get(row, :component_type, "")),
-            namespace: Compendium.ComponentPath.normalize_publisher(Map.get(row, :publisher)),
-            name: row.name,
-            version: row.version
-          })
+            reference =
+              Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+                type: to_string(Map.get(row, :component_type, "")),
+                namespace: Compendium.ComponentPath.normalize_publisher(Map.get(row, :publisher)),
+                name: row.name,
+                version: row.version
+              })
 
-        %{
-          reference: reference,
-          provenance: Compendium.Provenance.label(entry.provenance),
-          shipped_versions: entry.shipped_versions,
-          superseded: entry.superseded,
-          shadows_shipped: entry.shadows_shipped,
-          forked_from: entry.forked_from,
-          upstream_superseded: entry.upstream_superseded
-        }
-      end)
+            %{
+              reference: reference,
+              provenance: Compendium.Provenance.label(entry.provenance),
+              shipped_versions: entry.shipped_versions,
+              superseded: entry.superseded,
+              shadows_shipped: entry.shadows_shipped,
+              forked_from: entry.forked_from,
+              upstream_superseded: entry.upstream_superseded
+            }
+          end)
 
-    counts =
-      Enum.reduce(
-        overview,
-        %{bundled: 0, bundled_modified: 0, user: 0, remote: 0},
-        fn entry, acc -> Map.update!(acc, entry.provenance, &(&1 + 1)) end
-      )
+        counts =
+          Enum.reduce(
+            overview,
+            %{bundled: 0, bundled_modified: 0, user: 0, remote: 0},
+            fn entry, acc -> Map.update!(acc, entry.provenance, &(&1 + 1)) end
+          )
 
-    {:ok, %{components: Enum.sort_by(components, & &1.reference), counts: counts}}
+        {:ok, %{components: Enum.sort_by(components, & &1.reference), counts: counts}}
+    end
   end
 
   # Categories action - list available categories
