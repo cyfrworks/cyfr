@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomUUID } from "node:crypto";
 
 // Single source for the bridge version: package.json.
 const VERSION = JSON.parse(
@@ -80,6 +80,11 @@ const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 const TOOLS_TTL_MS = 60_000;
 const RPC_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_RPC_TIMEOUT_MS || 30_000);
 const INIT_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_INIT_TIMEOUT_MS || 15_000);
+
+// Ceiling on calls awaiting one child at a time. RPC_TIMEOUT_MS drains the
+// queue eventually, but until it fired nothing bounded how many pending
+// entries a flood could park against a slow child.
+const MAX_IN_FLIGHT = Number(process.env.MCP_BRIDGE_MAX_IN_FLIGHT || 32);
 
 const backends = new Map();
 
@@ -237,6 +242,10 @@ function rpc(backend, method, params, timeoutMs = RPC_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     if (backend.status === "removed" || backend.status === "crashed") {
       reject(new Error(`backend not running (${backend.status})`));
+      return;
+    }
+    if (backend.pending.size >= MAX_IN_FLIGHT) {
+      reject(new Error(`backend busy: ${backend.pending.size} calls in flight`));
       return;
     }
     const id = ++backend.nextId;
@@ -535,10 +544,22 @@ app.all("/mcp", (req, res, next) => {
 app.post("/mcp", async (req, res) => {
   res.set("mcp-protocol-version", PROTOCOL_VERSION);
 
+  // One correlation id per request, echoed back and stamped on error logs —
+  // cyfr sends x-request-id on every call it makes.
+  const requestId = req.get("x-request-id") || randomUUID();
+  res.set("x-request-id", requestId);
+
   if (!authorized(req)) {
-    // RFC 9110 §15.5.2: a 401 MUST carry a challenge.
+    // RFC 9110 §15.5.2: a 401 MUST carry a challenge. The body is JSON-RPC
+    // shaped like every other refusal this file emits (`rpcError` siblings
+    // above) — a bare `{"error":"unauthorized"}` string made cyfr's era
+    // heuristic misread an auth failure as a pre-2026 protocol peer.
     res.set("www-authenticate", "Bearer");
-    return res.status(401).json({ error: "unauthorized" });
+    const id =
+      req.body && typeof req.body === "object" && !Array.isArray(req.body)
+        ? (req.body.id ?? null)
+        : null;
+    return rpcError(res, 401, id, -33001, "unauthorized");
   }
 
   const msg = req.body;
@@ -568,12 +589,14 @@ app.post("/mcp", async (req, res) => {
       // server missing one method from a legacy server missing the endpoint.
       return rpcError(res, 404, msg.id, -32601, err.message);
     }
-    console.error("[mcp] error:", err);
+    console.error(`[mcp] request=${requestId} error:`, err);
     return res.json({
       jsonrpc: "2.0",
       id: msg.id,
       error: {
-        code: -32000,
+        // -32603 (internal error) — the code cyfr's own fallback uses for
+        // the same condition; -32000 was a second spelling of it.
+        code: -32603,
         message: err?.message || String(err),
       },
     });
@@ -718,14 +741,33 @@ async function handleRpc(msg) {
 // Boot
 // ============================================================================
 
+let httpServer = null;
+
 async function shutdown(signal) {
   console.log(`[mcp-bridge] ${signal} — stopping ${backends.size} backends`);
+  // Stop accepting and let in-flight requests drain; the children are
+  // SIGTERMed in parallel, so pending calls against them fail promptly.
+  if (httpServer) httpServer.close(() => process.exit(0));
   for (const name of [...backends.keys()]) stopBackend(name);
-  setTimeout(() => process.exit(0), 500).unref();
+  // Hard stop inside compose's stop_grace_period if a request never drains.
+  setTimeout(() => process.exit(0), 10_000).unref();
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// This process supervises children and is itself supervised (compose
+// restart: unless-stopped): an unexpected failure crashes loudly and lets
+// the supervisor restart a clean instance, rather than limping on with
+// unknown state.
+process.on("uncaughtException", (err) => {
+  console.error("[mcp-bridge] FATAL uncaught exception:", err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[mcp-bridge] FATAL unhandled rejection:", reason);
+  process.exit(1);
+});
 
 (async () => {
   // The refusal comes first, before any persisted command is read or run.
@@ -765,7 +807,7 @@ process.on("SIGINT", () => shutdown("SIGINT"));
     initializeBackend(entry.name).catch(() => {});
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`[mcp-bridge] /mcp on :${PORT} (data: ${PERSIST}, auth: ${AUTH_TOKEN ? "on" : "off"})`);
   });
 })();

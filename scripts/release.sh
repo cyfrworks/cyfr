@@ -117,6 +117,21 @@ if [ "$ACTUAL" -ne "$EXPECTED" ]; then
   exit 1
 fi
 
+# The bridge stamps its package.json version on every MCP response, so it
+# releases in lockstep with the tree — it sat at 1.0.0 while the stack
+# moved to 0.5.x. The lockfile's two root version fields live in its first
+# lines; the line range keeps the sed away from any dependency that
+# happens to share the version string.
+sedi -E "s/\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$VERSION\"/" apps/mcp-bridge/package.json
+sedi -E "1,12s/\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$VERSION\"/" apps/mcp-bridge/package-lock.json
+
+for f in apps/mcp-bridge/package.json apps/mcp-bridge/package-lock.json; do
+  if ! grep -q "\"version\": \"$VERSION\"" "$f"; then
+    echo "Error: $f was not updated to $VERSION."
+    exit 1
+  fi
+done
+
 # Get commit message
 if [ -z "$COMMIT_MSG" ]; then
   if [ -t 0 ]; then

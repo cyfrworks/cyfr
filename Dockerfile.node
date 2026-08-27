@@ -8,7 +8,9 @@
 #
 # e.g.  docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge .
 
-FROM node:24-alpine AS base
+# Pinned to the same Node LTS the runner base ships (Dockerfile.runner-base
+# NODE_VERSION) — `24-alpine` floated with every upstream release.
+FROM node:24.14.1-alpine AS base
 
 # ===========================================================================
 # mcp-bridge — HTTP MCP gateway. Single /mcp endpoint that surfaces:
@@ -30,4 +32,11 @@ COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 ENV NODE_ENV=production
 EXPOSE 8001
+# The bridge is remote code execution by design; it must not run as root.
+# The entrypoint chowns the /data bind mount (docker may create it
+# root-owned) and drops to the image's unprivileged node user via su-exec.
+RUN apk add --no-cache su-exec
+COPY apps/mcp-bridge/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.mjs"]

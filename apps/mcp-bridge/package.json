@@ -1,9 +1,9 @@
 {
   "name": "cyfr-mcp-bridge",
-  "version": "1.0.0",
+  "version": "0.5.8",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Wraps stdio/npx MCP servers behind a single HTTP MCP endpoint. Registered with cyfr like any other HTTP MCP — admin tools (add_backend / remove_backend / list_backends / restart_backend) and the children's forwarded tools all surface through the same /mcp endpoint.",
+  "description": "Wraps stdio/npx MCP servers behind a single HTTP MCP endpoint. Registered with cyfr like any other HTTP MCP \u2014 admin tools (add_backend / remove_backend / list_backends / restart_backend) and the children's forwarded tools all surface through the same /mcp endpoint.",
   "type": "module",
   "main": "server.mjs",
   "scripts": {

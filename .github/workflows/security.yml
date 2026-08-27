@@ -7,6 +7,7 @@ on:
       - 'apps/opus/**'
       - 'apps/locus/**'
       - 'apps/codex/**'
+      - 'apps/mcp-bridge/**'
       - 'config/**'
       - 'scripts/**'
       - 'tests/**'
@@ -20,6 +21,7 @@ on:
       - 'apps/opus/**'
       - 'apps/locus/**'
       - 'apps/codex/**'
+      - 'apps/mcp-bridge/**'
       - 'config/**'
       - 'scripts/**'
       - 'tests/**'
@@ -109,7 +111,9 @@ jobs:
           cache-dependency-path: apps/codex/go.sum
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned like every other tool in CI — @latest was the one unpinned
+        # executable in the pipeline.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
 
       - name: Run govulncheck
         # govulncheck v1.4.0 panics (exit 2) while analyzing generics under
@@ -137,3 +141,32 @@ jobs:
 
       - name: Run install.sh verification tests
         run: sh tests/install-verify-test.sh
+
+  repo-scan:
+    name: Trivy (secrets + IaC misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Dependency vulnerabilities are covered per-language above (mix_audit,
+      # govulncheck, npm audit); this closes the two gaps none of them saw —
+      # committed secrets, and Dockerfile/compose misconfigurations.
+      - name: Secret scan (enforced)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: secret
+          format: table
+          exit-code: '1'
+
+      - name: Misconfiguration scan (report-only)
+        # Visibility first: deliberate patterns (the entrypoint privilege
+        # drops, compose's upgrade-channel :latest tag) would read as
+        # findings; tighten to enforced once the accepted set is triaged.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: misconfig
+          format: table
+          exit-code: '0'
+          severity: CRITICAL,HIGH

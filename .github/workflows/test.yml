@@ -6,6 +6,9 @@ on:
       - 'apps/cyfr/**'
       - 'apps/opus/**'
       - 'apps/locus/**'
+      # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
+      # a bridge-only change must run the Elixir suite that pins them.
+      - 'apps/mcp-bridge/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
@@ -29,7 +32,6 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
-      - 'CLAUDE.md'
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
@@ -38,6 +40,9 @@ on:
       - 'apps/cyfr/**'
       - 'apps/opus/**'
       - 'apps/locus/**'
+      # ClientProtocolDriftTest and StackShapeTest read server.mjs literals;
+      # a bridge-only change must run the Elixir suite that pins them.
+      - 'apps/mcp-bridge/**'
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
@@ -61,7 +66,6 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
-      - 'CLAUDE.md'
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
@@ -340,7 +344,7 @@ jobs:
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.runner-base docker-entrypoint.sh .env.example .gitignore .dockerignore README.md CLAUDE.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.runner-base docker-entrypoint.sh .env.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
           excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \

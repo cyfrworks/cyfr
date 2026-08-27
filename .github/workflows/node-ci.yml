@@ -9,10 +9,12 @@ on:
     branches: [main]
     paths:
       - 'apps/mcp-bridge/**'
+      - 'Dockerfile.node'
       - '.github/workflows/node-ci.yml'
   pull_request:
     paths:
       - 'apps/mcp-bridge/**'
+      - 'Dockerfile.node'
       - '.github/workflows/node-ci.yml'
 
 permissions:
@@ -88,3 +90,39 @@ jobs:
       - name: Audit dependencies (report-only)
         continue-on-error: true
         run: npm audit --audit-level=high
+
+  # The bridge image ships to every install (compose builds it locally), yet
+  # it was never built or scanned in CI — a broken Dockerfile.node surfaced
+  # on the user's first `cyfr up`, and its vulnerabilities surfaced nowhere.
+  image:
+    name: Build + scan image (mcp-bridge)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build the image compose would build
+        run: docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge:ci .
+
+      - name: Boot smoke as non-root
+        run: |
+          set -euo pipefail
+          docker run -d --name bridge-ci -e MCP_BRIDGE_TOKEN=ci -p 127.0.0.1:8001:8001 cyfr-mcp-bridge:ci
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          curl -fsS http://127.0.0.1:8001/health
+          # The privilege drop is load-bearing: the bridge spawns shell
+          # commands by design and must not do so as root.
+          uid=$(docker exec bridge-ci id -u)
+          [ "$uid" != "0" ] || { echo "bridge is running as root"; exit 1; }
+          docker rm -f bridge-ci
+
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cyfr-mcp-bridge:ci
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true

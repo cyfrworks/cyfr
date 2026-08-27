@@ -665,8 +665,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :content, :text, null: false, default: ""
       # Kind-specific JSON: an approval's intent + proposal, a text message's
       # attachment refs (`%{"attachments" => [%{filename, media_type, size,
-      # path}]}`, bytes under data/{athanor}/conversations/{conv}/{msg}/),
-      # an error's source.
+      # path}]}`, bytes under
+      # data/athanors/{athanor_id}/conversations/{conv}/{msg}/), an error's
+      # source.
       add :payload, :text
       # Approvals: pending | running | approved | declined | error.
       add :status, :string

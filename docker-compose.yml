@@ -88,6 +88,9 @@ services:
       # or back up. The container creates the file on first add_backend.
       - ./data/mcp-bridge:/data
     restart: unless-stopped
+    # Shutdown SIGTERMs the child servers and drains in-flight requests;
+    # compose's default 10s is tight when several children are up.
+    stop_grace_period: 15s
     logging:
       driver: json-file
       options:
@@ -108,7 +111,9 @@ services:
 
   caddy:
     profiles: ["tls"]
-    image: caddy:2-alpine
+    # Minor-pinned like the other images; `2-alpine` floated across majors
+    # of the one container that terminates TLS.
+    image: caddy:2.11-alpine
     ports:
       - "80:80"
       - "443:443"
@@ -121,8 +126,26 @@ services:
       - CYFR_HOST=${CYFR_HOST:-localhost}
       - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
     depends_on:
-      - cyfr
+      cyfr:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # Config-load liveness: caddy exposes no HTTP health endpoint by
+      # default, so validate the loaded config instead.
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 volumes:
   caddy_data:

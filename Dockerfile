@@ -77,11 +77,19 @@ COPY seed/components/ /app/seed/components/
 COPY seed/aqua/ /app/aqua-defaults/
 ENV CYFR_SEED_PATH=/app/seed
 
-# gosu for entrypoint privilege drop (standard Docker pattern)
+# gosu for entrypoint privilege drop (standard Docker pattern). Checksum-
+# pinned: `gosu nobody true` is a liveness check, not an integrity check,
+# and this binary runs as root at every container start.
 RUN set -eux; \
     dpkgArch="$(dpkg --print-architecture)"; \
+    case "$dpkgArch" in \
+      amd64) gosuSha="bbc4136d03ab138b1ad66fa4fc051bafc6cc7ffae632b069a53657279a450de3" ;; \
+      arm64) gosuSha="c3805a85d17f4454c23d7059bcb97e1ec1af272b90126e79ed002342de08389b" ;; \
+      *) echo "unsupported architecture: $dpkgArch" >&2; exit 1 ;; \
+    esac; \
     curl -fsSL "https://github.com/tianon/gosu/releases/download/1.17/gosu-$dpkgArch" \
       -o /usr/local/bin/gosu; \
+    echo "$gosuSha  /usr/local/bin/gosu" | sha256sum -c -; \
     chmod +x /usr/local/bin/gosu; \
     gosu nobody true
 
