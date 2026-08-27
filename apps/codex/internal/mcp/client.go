@@ -6,7 +6,9 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -336,6 +338,7 @@ func (c *Client) sendNotification(ctx context.Context, method string, params any
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
+	httpReq.Header.Set("X-Request-Id", newRequestID())
 	c.setCredential(httpReq)
 
 	httpResp, err := c.httpClient.Do(httpReq)
@@ -376,6 +379,24 @@ func rpcError(e *JSONRPCError) error {
 // request was being served.
 type ProgressFunc func(params map[string]any)
 
+// newRequestID mints the correlation id sent as X-Request-Id.
+func newRequestID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "cli-unknown"
+	}
+	return "cli-" + hex.EncodeToString(b[:])
+}
+
+// withRequestID appends the correlation id to an error while preserving its
+// chain (errors.Is on ErrAuthRequired must keep working).
+func withRequestID(err error, requestID string) error {
+	if err == nil || requestID == "" {
+		return err
+	}
+	return fmt.Errorf("%w (request id %s)", err, requestID)
+}
+
 func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progressToken string, onProgress ProgressFunc) (*JSONRPCResponse, error) {
 	req.Params = withMeta(req.Params, progressToken)
 
@@ -392,6 +413,11 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
+	// The server logs and answers under this id (it mints one otherwise);
+	// sending our own means a failure here and the server-side log line
+	// share a key — the server advertises the header for exactly that.
+	requestID := newRequestID()
+	httpReq.Header.Set("X-Request-Id", requestID)
 	routingHeaders(httpReq, req.Method, req.Params)
 	c.setCredential(httpReq)
 
@@ -406,6 +432,11 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
+	// Prefer the id the server actually filed under, when it echoes one.
+	if serverID := httpResp.Header.Get("X-Request-Id"); serverID != "" {
+		requestID = serverID
+	}
+
 	if httpResp.StatusCode != http.StatusOK {
 		// A 404 used to be read as "the session expired" — that was the previous
 		// transport, where the server forgot a session and answered 404. This
@@ -415,9 +446,9 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 		// hit a method the server does not have.
 		var errResp JSONRPCResponse
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil {
-			return nil, rpcError(errResp.Error)
+			return nil, withRequestID(rpcError(errResp.Error), requestID)
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("HTTP %d (request id %s): %s", httpResp.StatusCode, requestID, string(respBody))
 	}
 
 	// The server answers a progress-opted request with an SSE stream: the

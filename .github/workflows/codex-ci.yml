@@ -47,7 +47,9 @@ jobs:
         run: test -z "$(gofmt -l .)"
 
       - name: go test
-        run: go test ./...
+        # -race matches the Makefile's local invocation — the stricter run
+        # was the one CI didn't do.
+        run: go test ./... -race
 
       - name: go build
         run: go build ./...
