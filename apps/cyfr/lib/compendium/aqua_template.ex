@@ -62,7 +62,7 @@ defmodule Compendium.AquaTemplate do
   @spec files() :: [[String.t()]]
   def files do
     case Arca.list_recursive(Sanctum.system_context(), @seed_prefix) do
-      {:ok, leaves} -> Enum.map(leaves, fn ["seed", "aqua" | rest] -> rest end)
+      {:ok, leaves} -> Enum.map(leaves, &Enum.drop(&1, length(@seed_prefix)))
       {:error, _} -> []
     end
   end
@@ -134,14 +134,15 @@ defmodule Compendium.AquaTemplate do
   defp seed_roster do
     ctx = Sanctum.system_context()
 
-    case Arca.list_typed(ctx, @seed_prefix ++ ["agents"]) do
+    case Arca.list_typed(ctx, @seed_prefix ++ [AquaPath.agents_dirname()]) do
       {:ok, entries} ->
         agents =
           entries
           |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
           |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
           |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
-            with {:ok, binary} <- Arca.get(ctx, @seed_prefix ++ ["agents", name <> ".md"]),
+            with {:ok, binary} <-
+                   Arca.get(ctx, @seed_prefix ++ [AquaPath.agents_dirname(), name <> ".md"]),
                  {:ok, agent} <- AquaAgent.parse(name, binary) do
               {:cont, {:ok, [agent | acc]}}
             else

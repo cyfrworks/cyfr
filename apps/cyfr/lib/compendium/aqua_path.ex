@@ -75,6 +75,19 @@ defmodule Compendium.AquaPath do
   def agents_root, do: @root ++ [@agents]
 
   @doc """
+  The bare agents directory name — for consumers rooted elsewhere (the
+  seed side reads `seed_prefix("aqua") ++ [agents_dirname()]`).
+
+  ## Examples
+
+      iex> Compendium.AquaPath.agents_dirname()
+      "agents"
+
+  """
+  @spec agents_dirname() :: String.t()
+  def agents_dirname, do: @agents
+
+  @doc """
   One agent's file — a shadow unit of its own.
 
   ## Examples

@@ -155,6 +155,28 @@ defmodule Compendium.ComponentPath do
   end
 
   @doc """
+  Path segments to a component's stored artifact — the version directory
+  for a tincture (its artifact is the directory-shaped bundle), the
+  `.wasm` file for every other type. The one home for that type-shaped
+  distinction.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.artifact_path("tincture", "local", "widget", "1.0.0")
+      ["components", "tinctures", "local", "widget", "1.0.0"]
+
+      iex> Compendium.ComponentPath.artifact_path("catalyst", "local", "files", "0.5.0")
+      ["components", "catalysts", "local", "files", "0.5.0", "catalyst.wasm"]
+
+  """
+  @spec artifact_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
+  def artifact_path("tincture", publisher, name, version),
+    do: version_dir("tincture", publisher, name, version)
+
+  def artifact_path(type, publisher, name, version),
+    do: wasm_path(type, publisher, name, version)
+
+  @doc """
   The default publisher segment — the `local` namespace every locally-built
   and bundled component ships under. The one spelling; callers that need
   the literal read it here.

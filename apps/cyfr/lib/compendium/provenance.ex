@@ -285,24 +285,15 @@ defmodule Compendium.Provenance do
 
   defp type_of(row), do: to_string(Map.get(row, :component_type, ""))
 
-  # The fork's stamp, wherever the row's manifest is on its journey —
-  # decoded map or raw JSON (guarded by a cheap substring check so
-  # unforked rows never pay a decode).
+  # The fork's stamp, read through the manifest module's lenient decode —
+  # the same read-side SSOT every other manifest consumer speaks, whatever
+  # shape the row's manifest is on its journey (decoded map or raw JSON).
+  # Lineage lives IN the manifest, deliberately: it travels with the
+  # content on push and pull, and provenance stays derived, never stored.
   defp forked_from(row) do
-    case Map.get(row, :manifest) do
-      %{"forked_from" => forked} when is_binary(forked) ->
-        forked
-
-      manifest when is_binary(manifest) ->
-        if String.contains?(manifest, "forked_from") do
-          case Jason.decode(manifest) do
-            {:ok, %{"forked_from" => forked}} when is_binary(forked) -> forked
-            _ -> nil
-          end
-        end
-
-      _none ->
-        nil
+    case Compendium.Manifest.decode(Map.get(row, :manifest)) do
+      %{"forked_from" => forked} when is_binary(forked) -> forked
+      _ -> nil
     end
   end
 

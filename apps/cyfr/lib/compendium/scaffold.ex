@@ -462,7 +462,7 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("catalyst", reference, _template) do
     [
-      "Edit cyfr-manifest.json to declare the needs and caps blocks " <>
+      "Edit #{Compendium.ComponentPath.manifest_name()} to declare the needs and caps blocks " <>
         "(storage grants default to none; 'data/' is the component-private scope — " <>
         "grant 'components/' only when the component genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your catalyst logic",
@@ -473,7 +473,7 @@ defmodule Compendium.Scaffold do
 
   defp next_steps("formula", reference, _template) do
     [
-      "Edit cyfr-manifest.json to declare the needs and caps blocks " <>
+      "Edit #{Compendium.ComponentPath.manifest_name()} to declare the needs and caps blocks " <>
         "(storage grants default to none; 'data/' is the component-private scope — " <>
         "grant 'components/' only when the component genuinely manages component trees)",
       "Edit src/src/lib.rs to implement your formula logic",
@@ -493,7 +493,7 @@ defmodule Compendium.Scaffold do
   defp next_steps("tincture", reference, "react") do
     [
       "Edit src/App.tsx to build your UI",
-      "Add backend components to dependencies.static in cyfr-manifest.json",
+      "Add backend components to dependencies.static in #{Compendium.ComponentPath.manifest_name()}",
       "Replace #{Path.join(Cyfr.TinctureHelpers.default_icon())} and " <>
         "#{Path.join(Cyfr.TinctureHelpers.default_preview())} to brand the picker card " <>
         "(add up to #{Cyfr.TinctureHelpers.preview_count()} previews)",
@@ -506,7 +506,7 @@ defmodule Compendium.Scaffold do
     [
       "Edit index.html, app.js, and style.css to build your UI",
       "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.invoke() to call backend components",
-      "Add backend components to dependencies.static in cyfr-manifest.json",
+      "Add backend components to dependencies.static in #{Compendium.ComponentPath.manifest_name()}",
       "Replace #{Path.join(Cyfr.TinctureHelpers.default_icon())} and " <>
         "#{Path.join(Cyfr.TinctureHelpers.default_preview())} to brand the picker card " <>
         "(add up to #{Cyfr.TinctureHelpers.preview_count()} previews)",

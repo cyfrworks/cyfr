@@ -556,7 +556,7 @@ defmodule Compendium.Registry do
         publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
 
         path =
-          component_storage_path(
+          ComponentPath.artifact_path(
             component.component_type,
             publisher,
             component.name,
@@ -708,14 +708,6 @@ defmodule Compendium.Registry do
   # ============================================================================
   # Storage Operations
   # ============================================================================
-
-  defp component_storage_path("tincture", publisher, name, version) do
-    Compendium.ComponentPath.version_dir("tincture", publisher, name, version)
-  end
-
-  defp component_storage_path(type, publisher, name, version) do
-    Compendium.ComponentPath.wasm_path(type, publisher, name, version)
-  end
 
   # Extract a tincture tar+gzip archive, validate it, and store files to Arca.
   # Returns {:ok, %{digest, size, exports}} on success.

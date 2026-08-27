@@ -380,6 +380,22 @@ defmodule Compendium.ProvenanceTest do
     refute w.upstream_superseded
   end
 
+  test "the fork stamp reads through the manifest decode, whatever the shape", %{ctx: ctx} do
+    # An already-decoded map answers; malformed JSON that merely CONTAINS
+    # the substring answers nil (the old substring guard's false-positive
+    # class); a non-string value answers nil.
+    map_row = %{manifest: %{"forked_from" => "reagent:acme.up:1.0.0"}, name: "x", version: "1"}
+    assert %{forked_from: "reagent:acme.up:1.0.0"} = lineage(ctx, map_row)
+
+    broken_row = %{manifest: ~s({"forked_from": broken json), name: "x", version: "1"}
+    assert lineage(ctx, broken_row) == nil
+
+    non_string = %{manifest: %{"forked_from" => 42}, name: "x", version: "1"}
+    assert lineage(ctx, non_string) == nil
+  end
+
+  defp lineage(ctx, row), do: Provenance.upstream_status(ctx, row)
+
   test "deleting a user component still deletes outright", %{ctx: ctx} do
     {:ok, _} =
       Registry.publish_bytes(ctx, @valid_wasm, %{

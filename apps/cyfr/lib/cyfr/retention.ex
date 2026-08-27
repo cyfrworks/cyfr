@@ -251,14 +251,7 @@ defmodule Cyfr.Retention do
     {successes, failures} =
       tenants
       |> Enum.map(fn athanor_id ->
-        # Each athanor's cleanup runs inside that athanor: its own settings,
-        # its own rows.
-        tenant_ctx =
-          Sanctum.internal_context(
-            user_id: ctx.user_id,
-            athanor_id: athanor_id,
-            scope: :athanor
-          )
+        tenant_ctx = athanor_ctx(athanor_id, ctx.user_id)
 
         {athanor_id, cleanup_executions(tenant_ctx, opts)}
       end)
@@ -294,7 +287,7 @@ defmodule Cyfr.Retention do
 
     results =
       Enum.map(athanors, fn athanor_id ->
-        ctx = Sanctum.internal_context(user_id: "system", athanor_id: athanor_id, scope: :athanor)
+        ctx = athanor_ctx(athanor_id)
 
         {athanor_id, cleanup_mcp_logs(ctx, opts), cleanup_policy_logs(ctx, opts),
          cleanup_conversations(ctx, opts)}
@@ -335,7 +328,7 @@ defmodule Cyfr.Retention do
     results =
       Enum.map(athanors, fn athanor ->
         ctx =
-          Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
+          athanor_ctx(athanor.id)
 
         {athanor.id, Arca.ConversationStorage.sweep_orphaned_blobs(ctx)}
       end)
@@ -382,7 +375,7 @@ defmodule Cyfr.Retention do
     results =
       Enum.map(athanors, fn athanor ->
         ctx =
-          Sanctum.internal_context(user_id: "system", athanor_id: athanor.id, scope: :athanor)
+          athanor_ctx(athanor.id)
 
         {athanor.id, cleanup_builds(ctx, opts)}
       end)
@@ -509,4 +502,9 @@ defmodule Cyfr.Retention do
       Logger.error("[Cyfr.Retention] cleanup_conversations failed: #{Exception.message(e)}")
       {:error, :database_error}
   end
+
+  # Each athanor's cleanup runs inside that athanor — its own settings,
+  # its own rows; the user_id is audit attribution only. One spelling.
+  defp athanor_ctx(athanor_id, user_id \\ "system"),
+    do: Sanctum.internal_context(user_id: user_id, athanor_id: athanor_id, scope: :athanor)
 end

@@ -17,9 +17,6 @@ defmodule Compendium.MCP.ComponentTool do
   alias Compendium.Registry
   alias Compendium.MCP.Shared
 
-  # The one spelling of the local namespace, pinned for pattern matches.
-  @local_publisher Compendium.ComponentPath.default_publisher()
-
   # ============================================================================
   # Tool Handlers - Action-based dispatch
   # ============================================================================
@@ -377,46 +374,38 @@ defmodule Compendium.MCP.ComponentTool do
           {:ok, %{version: nil}} ->
             {:error, "Version is required for pushing. Example: c:local.name:1.0.0"}
 
-          {:ok, cref} when cref.namespace != @local_publisher ->
-            {:error,
-             "Only components in the local namespace can be pushed to a registry. " <>
-               "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
+          {:ok, cref} ->
+            with :ok <- refuse_non_local_push(cref),
+                 :ok <- Compendium.RegistryHost.validate_host(registry) do
+              # `local` refs are remapped to the caller's claimed personal
+              # namespace inside `OCI.Client.push` (via resolve_push_publisher),
+              # which returns a precise error if no namespace is claimed. No
+              # literal-"local" credential pre-check here — there is no push
+              # token for "local"; the token belongs to the resolved namespace.
+              broadcast_progress(
+                ctx,
+                progress_id,
+                :pushing,
+                "Pushing #{reference} to #{registry}..."
+              )
 
-          {:ok, _cref} ->
-            case Compendium.RegistryHost.validate_host(registry) do
-              {:error, msg} ->
-                {:error, msg}
+              case Compendium.OCI.Client.push(ctx, reference, registry) do
+                {:ok, result} ->
+                  broadcast_progress(
+                    ctx,
+                    progress_id,
+                    :complete,
+                    "Pushed #{result[:oci_reference] || reference}"
+                  )
 
-              :ok ->
-                # `local` refs are remapped to the caller's claimed personal
-                # namespace inside `OCI.Client.push` (via resolve_push_publisher),
-                # which returns a precise error if no namespace is claimed. No
-                # literal-"local" credential pre-check here — there is no push
-                # token for "local"; the token belongs to the resolved namespace.
-                broadcast_progress(
-                  ctx,
-                  progress_id,
-                  :pushing,
-                  "Pushing #{reference} to #{registry}..."
-                )
+                  record_push(ctx, reference, result)
+                  {:ok, result}
 
-                case Compendium.OCI.Client.push(ctx, reference, registry) do
-                  {:ok, result} ->
-                    broadcast_progress(
-                      ctx,
-                      progress_id,
-                      :complete,
-                      "Pushed #{result[:oci_reference] || reference}"
-                    )
-
-                    record_push(ctx, reference, result)
-                    {:ok, result}
-
-                  {:error, reason} ->
-                    Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
-                    broadcast_progress(ctx, progress_id, :error, "Push failed")
-                    {:error, reason}
-                end
+                {:error, reason} ->
+                  Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
+                  broadcast_progress(ctx, progress_id, :error, "Push failed")
+                  {:error, reason}
+              end
             end
 
           {:error, reason} ->
@@ -953,6 +942,19 @@ defmodule Compendium.MCP.ComponentTool do
 
   defp default_registry, do: Compendium.RegistryHost.canonical_host()
 
+  # Only local-namespace refs may be pushed — the namespace grammar is
+  # `Compendium.ComponentPath`'s, one spelling.
+  defp refuse_non_local_push(cref) do
+    if Compendium.ComponentPath.local_publisher?(cref.namespace) do
+      :ok
+    else
+      {:error,
+       "Only components in the local namespace can be pushed to a registry. " <>
+         "Got namespace '#{cref.namespace}'. Use the local namespace " <>
+         "(e.g., c:#{Compendium.ComponentPath.default_publisher()}.#{cref.name}:#{cref.version})."}
+    end
+  end
+
   # ============================================================================
   # Error Formatting
   # ============================================================================
@@ -986,9 +988,6 @@ defmodule Compendium.MCP.ComponentTool do
   # ============================================================================
   # Register Dependency Checking
   # ============================================================================
-
-  # Namespaces that represent local/on-disk components (not pullable from OCI).
-  @local_dep_namespaces [@local_publisher]
 
   # After registration, check newly registered formulas for missing dependencies.
   # Local deps (local/agent namespaces) produce warnings; published deps are auto-pulled.
@@ -1029,7 +1028,9 @@ defmodule Compendium.MCP.ComponentTool do
         {local_missing, published_missing} =
           Enum.split_with(availability.missing, fn dep ->
             ns = dep[:dep_namespace] || dep["dep_namespace"]
-            ns in @local_dep_namespaces
+            # Local/on-disk namespaces are never pullable from OCI — the
+            # grammar is ComponentPath's, one spelling.
+            Compendium.ComponentPath.local_publisher?(ns)
           end)
 
         local_refs = Enum.map(local_missing, & &1[:dependency_ref])
@@ -1348,7 +1349,7 @@ defmodule Compendium.MCP.ComponentTool do
           type = comp[:type] || comp["type"] || comp[:component_type] || comp["component_type"],
           name = comp[:name] || comp["name"],
           is_binary(type) and is_binary(name),
-          do: "#{type}:local.#{name}"
+          do: "#{type}:#{Compendium.ComponentPath.default_publisher()}.#{name}"
 
     case refs do
       [] ->

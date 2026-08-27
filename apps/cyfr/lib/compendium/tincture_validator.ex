@@ -35,7 +35,7 @@ defmodule Compendium.TinctureValidator do
   """
   @spec validate(String.t()) :: {:ok, map()} | {:error, String.t()}
   def validate(directory_path) do
-    manifest_path = Path.join(directory_path, "cyfr-manifest.json")
+    manifest_path = Path.join(directory_path, Compendium.ComponentPath.manifest_name())
 
     with {:ok, raw} <- read_file(manifest_path),
          {:ok, manifest} <- decode_json(raw),
@@ -61,7 +61,7 @@ defmodule Compendium.TinctureValidator do
   def validate_from_pairs(pairs) when is_list(pairs) do
     files = Map.new(pairs, fn {segs, content} -> {Enum.join(segs, "/"), content} end)
 
-    with {:ok, raw} <- fetch_pair(files, "cyfr-manifest.json"),
+    with {:ok, raw} <- fetch_pair(files, Compendium.ComponentPath.manifest_name()),
          {:ok, manifest} <- decode_json(raw),
          :ok <- check_type(manifest),
          :ok <- check_entry_in_pairs(files, manifest),
@@ -82,7 +82,7 @@ defmodule Compendium.TinctureValidator do
   defp read_file(path) do
     case File.read(path) do
       {:ok, content} -> {:ok, content}
-      {:error, :enoent} -> {:error, "cyfr-manifest.json not found"}
+      {:error, :enoent} -> {:error, "#{Compendium.ComponentPath.manifest_name()} not found"}
       {:error, reason} -> {:error, "cannot read manifest: #{inspect(reason)}"}
     end
   end
@@ -223,7 +223,7 @@ defmodule Compendium.TinctureValidator do
   defp fetch_pair(files, key) do
     case Map.fetch(files, key) do
       {:ok, content} -> {:ok, content}
-      :error -> {:error, "cyfr-manifest.json not found"}
+      :error -> {:error, "#{Compendium.ComponentPath.manifest_name()} not found"}
     end
   end
 

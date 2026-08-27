@@ -15,9 +15,6 @@ defmodule Compendium.OCI.Client do
   alias Compendium.Registry
   alias Sanctum.Context
 
-  # The one spelling of the local namespace, pinned for pattern matches.
-  @local_publisher Compendium.ComponentPath.default_publisher()
-
   # ============================================================================
   # Pull
   # ============================================================================
@@ -935,28 +932,26 @@ defmodule Compendium.OCI.Client do
   # namespace (`c:local.foo:0.1.0` -> `c:alice.foo:0.1.0`). An explicit,
   # non-local namespace in the ref (a publisher membership) is used as-is.
   defp resolve_push_publisher(cref, registry, %Context{} = ctx) do
-    case cref.namespace do
-      @local_publisher ->
-        case Sanctum.Namespace.lookup_status(ctx.user_id) do
-          {:ok, slug} ->
-            {:ok, slug}
+    # local (and its blank-namespace normalization — ComponentPath's one
+    # rule) remaps to the caller's claimed personal namespace; anything
+    # else pushes under its own name.
+    if Compendium.ComponentPath.local_publisher?(cref.namespace) do
+      case Sanctum.Namespace.lookup_status(ctx.user_id) do
+        {:ok, slug} ->
+          {:ok, slug}
 
-          :not_claimed ->
-            {:error,
-             "You haven't claimed a personal namespace yet. Run `cyfr login` to " <>
-               "authenticate and claim one before publishing to #{registry}."}
+        :not_claimed ->
+          {:error,
+           "You haven't claimed a personal namespace yet. Run `cyfr login` to " <>
+             "authenticate and claim one before publishing to #{registry}."}
 
-          {:error, _reason} ->
-            {:error,
-             "Could not resolve your personal namespace for #{registry} " <>
-               "(your account could not be read just now). Please retry."}
-        end
-
-      slug when is_binary(slug) and slug != "" ->
-        {:ok, slug}
-
-      _ ->
-        {:error, "Cannot resolve push target namespace for #{registry}"}
+        {:error, _reason} ->
+          {:error,
+           "Could not resolve your personal namespace for #{registry} " <>
+             "(your account could not be read just now). Please retry."}
+      end
+    else
+      {:ok, cref.namespace}
     end
   end
 
