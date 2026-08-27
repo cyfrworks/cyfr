@@ -467,5 +467,6 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
       assert focused.scope == :athanor
     end
   end
+
   defp rows!({:ok, rows}), do: rows
 end

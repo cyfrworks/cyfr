@@ -757,5 +757,4 @@ defmodule PrismWeb.RegistryLive do
 
     "#{base} #{color}"
   end
-
 end

@@ -163,5 +163,6 @@ defmodule Sanctum.SignInTest do
     refute Enum.any?(rows, &(&1.scope == "platform"))
     assert Enum.map(Athanors.list_for_user(user.id), & &1.kind) == ["person"]
   end
+
   defp rows!({:ok, rows}), do: rows
 end

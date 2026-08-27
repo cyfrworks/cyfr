@@ -78,6 +78,7 @@ defmodule EmissaryWeb.MCPErrorTest do
       assert body["error"]["message"] =~ "Batch requests not supported"
     end
   end
+
   describe "parser failures on /mcp" do
     # These once escaped to Phoenix's {"errors":{"detail":"Bad Request"}} —
     # no envelope, no -32700, the id lost. The id genuinely cannot be

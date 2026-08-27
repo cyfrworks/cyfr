@@ -190,6 +190,7 @@ defmodule Opus.HttpRequestValidationTest do
       end)
     end
   end
+
   describe "egress rate limiting" do
     test "the consented rate limit denies the wire-bound path itself" do
       ctx = Sanctum.TestContext.local()

@@ -126,6 +126,7 @@ defmodule Emissary.TelemetryTest do
       assert metadata.tool == "resources"
     end
   end
+
   describe "emitted execution-ingress events are metered" do
     # The forward test above stops a metric with no emitter; this stops the
     # reverse — an emitted event no metric consumes. Both webhook and

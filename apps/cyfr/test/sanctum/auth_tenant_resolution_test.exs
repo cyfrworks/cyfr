@@ -159,5 +159,6 @@ defmodule Sanctum.AuthTenantResolutionTest do
         else: Application.delete_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
     end)
   end
+
   defp rows!({:ok, rows}), do: rows
 end

@@ -275,5 +275,4 @@ defmodule Compendium.OCI.Manifest do
       {:error, reason} -> {:error, "Failed to encode config: #{inspect(reason)}"}
     end
   end
-
 end

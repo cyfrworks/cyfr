@@ -86,5 +86,4 @@ defmodule EmissaryWeb.OAuthCallbackController do
       accent: "#ef4444"
     )
   end
-
 end

@@ -744,14 +744,15 @@ defmodule Compendium.Registry do
     # refuse a publish without leaving extracted files behind.
     before_store = Keyword.get(opts, :before_store, fn _validation -> :ok end)
 
+    # The scratch name is unguessable, not merely varied: `File.mkdir_p!/1`
+    # succeeds on a directory that already exists — including one an attacker
+    # planted in this world-writable dir — and the extraction would then write
+    # into it, with the `rm_rf!` below removing their tree instead of ours.
+    tmp_dir = Path.join(System.tmp_dir!(), "cyfr_tincture_#{Compendium.Archive.scratch_id()}")
+
     # arca:bypass-ok=D — `:erl_tar.extract` requires a real local FS to write
     # to. After extraction we validate the bundle and write the validated
     # files back through Arca via `store_tincture_files/4`.
-    # Unguessable, not merely varied: `File.mkdir_p!/1` succeeds on a
-    # directory that already exists — including one an attacker planted in
-    # this world-writable dir — and the extraction would then write into it,
-    # with the `rm_rf!` below removing their tree instead of ours.
-    tmp_dir = Path.join(System.tmp_dir!(), "cyfr_tincture_#{Compendium.Archive.scratch_id()}")
     File.mkdir_p!(tmp_dir)
 
     try do

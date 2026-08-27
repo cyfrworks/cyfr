@@ -28,7 +28,6 @@ defmodule Sanctum.TinctureAuth do
   - `:unauthenticated` — No valid credentials found
   """
 
-
   alias Sanctum.Context
 
   # Distinct from the `/_s/` asset token (tincture_controller.ex,

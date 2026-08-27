@@ -284,5 +284,6 @@ defmodule Sanctum.Tenancy.MembersTest do
       end)
     end)
   end
+
   defp rows!({:ok, rows}), do: rows
 end

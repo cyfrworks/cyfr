@@ -114,7 +114,8 @@ defmodule PrismWeb.McpServersLive do
          )}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to register the bridge: #{error_message(reason)}")}
+        {:noreply,
+         put_flash(socket, :error, "Failed to register the bridge: #{error_message(reason)}")}
     end
   end
 

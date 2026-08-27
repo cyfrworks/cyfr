@@ -198,6 +198,4 @@ defmodule PrismWeb.MyReportsLive do
 
   defp badge_class("dismissed"), do: "bg-gray-800 text-gray-400 border border-gray-700"
   defp badge_class(_), do: "bg-gray-800 text-gray-400 border border-gray-700"
-
-
 end

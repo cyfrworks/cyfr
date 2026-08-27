@@ -173,7 +173,6 @@ defmodule PrismWeb.ComponentDetailLive do
     {:noreply, socket}
   end
 
-
   @impl true
   def render(assigns) do
     assigns = assign(assigns, :report_categories, @report_categories)

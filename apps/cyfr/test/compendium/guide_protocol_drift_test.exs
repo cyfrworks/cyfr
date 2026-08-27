@@ -129,6 +129,7 @@ defmodule Compendium.GuideProtocolDriftTest do
              "integration-guide.md does not show the required `#{key}` field."
     end
   end
+
   # The invoke error-type table is the same class of authority: the agent
   # writes formulas that branch on these. The guide once documented two
   # types no code produced (`invalid_type`, `execution_failed`) and omitted

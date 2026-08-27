@@ -67,5 +67,6 @@ defmodule PrismWeb.MembersLiveTest do
     assert Members.count_by_athanor(group.id) == {:ok, 1}
     assert Members.member?(alice.user_id, group.id)
   end
+
   defp rows!({:ok, rows}), do: rows
 end

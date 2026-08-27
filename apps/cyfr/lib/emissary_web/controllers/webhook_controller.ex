@@ -239,7 +239,12 @@ defmodule EmissaryWeb.WebhookController do
           |> Map.put(:error, "task_spawn_failed: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
         )
 
-        EmissaryWeb.ApiError.send(conn, 503, :service_unavailable, "Service unavailable — try again shortly")
+        EmissaryWeb.ApiError.send(
+          conn,
+          503,
+          :service_unavailable,
+          "Service unavailable — try again shortly"
+        )
     end
   end
 

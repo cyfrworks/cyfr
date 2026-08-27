@@ -40,6 +40,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "expression missing from ref.go: #{expr}"
     end
   end
+
   # ==========================================================================
   # ComponentRef: verdict-level binding + the constants the regex test skips
   # ==========================================================================
@@ -94,7 +95,12 @@ defmodule Cyfr.CrossLanguageDriftTest do
       assert go =~ ~s("#{type}":), "type #{type} missing from Go roster"
     end
 
-    for {short, full} <- [{"c", "catalyst"}, {"r", "reagent"}, {"f", "formula"}, {"t", "tincture"}] do
+    for {short, full} <- [
+          {"c", "catalyst"},
+          {"r", "reagent"},
+          {"f", "formula"},
+          {"t", "tincture"}
+        ] do
       assert go =~ ~s("#{short}": "#{full}")
     end
 

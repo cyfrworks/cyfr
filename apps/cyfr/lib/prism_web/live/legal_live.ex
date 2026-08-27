@@ -156,5 +156,4 @@ defmodule PrismWeb.LegalLive do
   end
 
   defp normalize_tab(_), do: "terms"
-
 end

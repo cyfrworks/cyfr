@@ -69,7 +69,14 @@ defmodule Opus.HttpRequestValidation do
   """
   @spec validate(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t(), keyword()) ::
           {:ok, validated_request()} | {:error, atom(), String.t()}
-  def validate(json_request, edge, %Limits{} = limits, %Context{} = ctx, component_ref, opts \\ []) do
+  def validate(
+        json_request,
+        edge,
+        %Limits{} = limits,
+        %Context{} = ctx,
+        component_ref,
+        opts \\ []
+      ) do
     with {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(edge, request.method),
          :ok <- validate_scheme(edge, request.url),
@@ -120,8 +127,7 @@ defmodule Opus.HttpRequestValidation do
         :ok
 
       {:error, :rate_limited, retry_after} ->
-        {:error, :rate_limited,
-         "HTTP egress rate limit exceeded; retry in #{retry_after}ms"}
+        {:error, :rate_limited, "HTTP egress rate limit exceeded; retry in #{retry_after}ms"}
 
       {:error, :missing_tenant} ->
         {:error, :rate_limited, "HTTP egress refused: no resolved athanor"}
@@ -342,5 +348,4 @@ defmodule Opus.HttpRequestValidation do
       :error -> {:error, :method_blocked, "Unsupported HTTP method: #{method}"}
     end
   end
-
 end

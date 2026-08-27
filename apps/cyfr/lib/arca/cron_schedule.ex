@@ -275,5 +275,4 @@ defmodule Arca.CronSchedule do
     |> where_tenant(ctx)
     |> Arca.Repo.one()
   end
-
 end

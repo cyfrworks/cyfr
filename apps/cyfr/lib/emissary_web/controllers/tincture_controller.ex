@@ -67,7 +67,11 @@ defmodule EmissaryWeb.TinctureController do
         conn
         |> put_resp_header("www-authenticate", "Bearer")
         |> put_status(401)
-        |> EmissaryWeb.ApiError.send(403, :token_cannot_renew_itself, "A minted tincture token cannot mint another")
+        |> EmissaryWeb.ApiError.send(
+          403,
+          :token_cannot_renew_itself,
+          "A minted tincture token cannot mint another"
+        )
 
       {:ok, ctx} ->
         conn
@@ -335,5 +339,4 @@ defmodule EmissaryWeb.TinctureController do
   end
 
   defp valid_connect_domain?(_), do: false
-
 end

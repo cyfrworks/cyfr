@@ -123,7 +123,8 @@ defmodule Cyfr.Network do
     * `:transport_opts` — extra Mint transport opts
   """
   @spec pin(String.t(), keyword()) ::
-          {:ok, %{ip: String.t(), ip_tuple: :inet.ip_address(), uri: URI.t(), req_opts: keyword()}}
+          {:ok,
+           %{ip: String.t(), ip_tuple: :inet.ip_address(), uri: URI.t(), req_opts: keyword()}}
           | {:error, atom(), String.t()}
   def pin(url, opts \\ []) do
     uri = URI.parse(url)

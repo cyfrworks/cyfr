@@ -580,5 +580,4 @@ defmodule Sanctum.Tenancy.Members do
   defp unique_conflict?(errors) do
     Enum.any?(errors, fn {_field, {_msg, opts}} -> opts[:constraint] == :unique end)
   end
-
 end
