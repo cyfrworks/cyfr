@@ -590,9 +590,12 @@ defmodule Arca.Overlay do
   # sentinel, no rollback (failure leaves the previous bytes), and the
   # plain facade path so the file CoW mark-then-put applies untouched.
   defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, :none, nil) do
+    # `cap: :exempt` on the put because the commit's own required policy
+    # was just applied above — the caller stated it, and the one check is
+    # this commit's, not the write gate's.
     with {:ok, bytes} <- resolve_content(content),
          :ok <- check_commit_cap(ctx, cap),
-         :ok <- Arca.put(ctx, unit, bytes) do
+         :ok <- Arca.put(ctx, unit, bytes, cap: :exempt) do
       {:ok, [[]]}
     end
   end
@@ -805,7 +808,7 @@ defmodule Arca.Overlay do
   # decorator the facade always wraps around it; configured as the
   # adapter itself it would recurse without bound, so refuse loudly.
   defp tenant do
-    case Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local) do
+    case Arca.Storage.configured_adapter() do
       __MODULE__ ->
         raise ArgumentError,
               ":storage_adapter must name a real adapter (Local or S3) — " <>

@@ -245,7 +245,10 @@ defmodule Locus.MCP do
             wasm_path =
               Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
-            Arca.put(ctx, wasm_path, result.wasm_bytes)
+            # Build artifacts write cap-exempt by design: failing a build
+            # half-way through its save is worse than any over-cap state,
+            # and the bytes still count against usage accounting.
+            Arca.put(ctx, wasm_path, result.wasm_bytes, cap: :exempt)
           end
 
         case store_result do
@@ -449,7 +452,8 @@ defmodule Locus.MCP do
     Enum.reduce_while(output_files, :ok, fn {rel_path, content}, :ok ->
       path = base ++ Path.split(rel_path)
 
-      case Arca.put(ctx, path, content) do
+      # Cap-exempt like the WASM save above — build outputs, same policy.
+      case Arca.put(ctx, path, content, cap: :exempt) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end

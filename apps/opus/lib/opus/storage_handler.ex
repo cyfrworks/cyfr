@@ -308,30 +308,15 @@ defmodule Opus.StorageHandler do
   # any real workload, present on every install, and no config key.
   @max_scope_files 100_000
 
-  # The operator's per-athanor ceiling for authenticated writes
-  # (`CYFR_ATHANOR_STORAGE_BYTES`) — off unless set, as a private box needs
-  # none. `Sanctum.Tenancy.Caps.check_storage/2` measures the athanor's
-  # whole tree; the incoming size is the decoded payload. The file-count
-  # backstop rides the same gate, against the per-scope counters.
-  defp validate_athanor_quota(action, %{path: path, content: content}, ctx)
+  # The file-count backstop against the per-scope counters. The
+  # operator's per-athanor BYTE ceiling (`CYFR_ATHANOR_STORAGE_BYTES`) is
+  # not checked here any more: the `Arca` write gate checks every tenant
+  # create by default, on the same decoded bytes, and its refusal
+  # surfaces through the write/append dispatch clauses as
+  # `storage_quota_exceeded`.
+  defp validate_athanor_quota(action, %{path: path}, ctx)
        when action in @writing_actions do
-    incoming =
-      case Base.decode64(content || "") do
-        {:ok, decoded} -> byte_size(decoded)
-        :error -> byte_size(content || "")
-      end
-
-    case Sanctum.Tenancy.Caps.check_storage(ctx, incoming) do
-      :ok ->
-        validate_scope_files(ctx, path)
-
-      {:error, {:limit_reached, :athanor_storage_bytes, cap}} ->
-        {:error, :storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)"}
-
-      {:error, :storage_unverifiable} ->
-        {:error, :storage_quota_exceeded,
-         "Athanor storage usage cannot be verified right now — try again"}
-    end
+    validate_scope_files(ctx, path)
   end
 
   defp validate_athanor_quota(_action, _request, _ctx), do: :ok
@@ -529,7 +514,7 @@ defmodule Opus.StorageHandler do
              }}
 
           {:error, reason} ->
-            {:error, :storage_error, "Failed to write file: #{inspect(reason)}"}
+            write_error(reason)
         end
 
       :error ->
@@ -624,7 +609,7 @@ defmodule Opus.StorageHandler do
              }}
 
           {:error, reason} ->
-            {:error, :storage_error, "Failed to append to file: #{inspect(reason)}"}
+            write_error(reason)
         end
 
       :error ->
@@ -636,6 +621,22 @@ defmodule Opus.StorageHandler do
   defp dispatch(action, _request, _limits, _ctx) do
     {:error, :unknown_action,
      "Unknown storage action: #{action}. Use: read, write, append, list, delete, or exists"}
+  end
+
+  # The write gate's cap refusals, in the guest's quota vocabulary; every
+  # other write fault stays a generic storage_error so host internals do
+  # not leak.
+  defp write_error({:limit_reached, :athanor_storage_bytes, cap}) do
+    {:error, :storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)"}
+  end
+
+  defp write_error(:storage_unverifiable) do
+    {:error, :storage_quota_exceeded,
+     "Athanor storage usage cannot be verified right now — try again"}
+  end
+
+  defp write_error(reason) do
+    {:error, :storage_error, "Failed to write file: #{inspect(reason)}"}
   end
 
   defp check_read_size(%Limits{} = limits, content),

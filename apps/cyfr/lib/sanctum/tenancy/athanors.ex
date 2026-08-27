@@ -42,7 +42,7 @@ defmodule Sanctum.Tenancy.Athanors do
       |> Map.put_new(:created_at, now)
       |> Map.put_new(:updated_at, now)
 
-    with :ok <- Caps.check(:max_athanors, count()) do
+    with :ok <- Caps.check_counted(:max_athanors, &count/0) do
       insert_row(attrs)
     end
   end
@@ -71,7 +71,10 @@ defmodule Sanctum.Tenancy.Athanors do
     name = String.trim(name)
 
     with :ok <- validate_name(name),
-         :ok <- Caps.check(:max_groups_per_person, count_groups_created_by(creator_user_id)),
+         :ok <-
+           Caps.check_counted(:max_groups_per_person, fn ->
+             count_groups_created_by(creator_user_id)
+           end),
          {:ok, slug} <- resolve_slug(Keyword.get(opts, :slug), name),
          {:ok, athanor} <-
            create(%{kind: "group", name: name, slug: slug, created_by: creator_user_id}),
@@ -352,7 +355,7 @@ defmodule Sanctum.Tenancy.Athanors do
           # An archived athanor freed its place against the server cap when it
           # closed; taking the place back has to ask for it, or archiving and
           # reopening would be the way past `CYFR_MAX_ATHANORS`.
-          with :ok <- Caps.check(:max_athanors, count()) do
+          with :ok <- Caps.check_counted(:max_athanors, &count/0) do
             update(current, %{status: "active", archived_at: nil})
           end
       end
@@ -438,33 +441,42 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   How many person athanors were minted after `since` — the mint-rate cap's
-  measure; groups people create are bounded by their own cap.
+  measure; groups people create are bounded by their own cap. Strict: a
+  count the store cannot answer is `{:error, :database_error}`, never a
+  zero the cap would admit past its ceiling.
   """
-  @spec count_created_since(DateTime.t()) :: non_neg_integer()
+  @spec count_created_since(DateTime.t()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def count_created_since(%DateTime{} = since) do
-    Arca.Repo.one(
-      from(a in Athanor,
-        where: a.kind == "person" and a.created_at > ^since,
-        select: count(a.id)
-      )
-    ) || 0
+    {:ok,
+     Arca.Repo.one(
+       from(a in Athanor,
+         where: a.kind == "person" and a.created_at > ^since,
+         select: count(a.id)
+       )
+     ) || 0}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
         "Sanctum.Tenancy.Athanors: count_created_since failed (#{Exception.message(e)})"
       )
 
-      0
+      {:error, :database_error}
   end
 
-  @doc "How many active athanors this server holds — an archived one frees its place."
-  @spec count() :: non_neg_integer()
+  @doc """
+  How many active athanors this server holds — an archived one frees its
+  place. Strict like `count_created_since/1`: the caps consult this, and
+  an unanswerable count must refuse, not read as an empty server.
+  """
+  @spec count() :: {:ok, non_neg_integer()} | {:error, :database_error}
   def count do
-    Arca.Repo.one(from(a in Athanor, where: a.status == "active", select: count(a.id))) || 0
+    {:ok,
+     Arca.Repo.one(from(a in Athanor, where: a.status == "active", select: count(a.id))) || 0}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Athanors: count failed (#{Exception.message(e)})")
-      0
+      {:error, :database_error}
   end
 
   @doc "The athanor's settings document (JSON on the row), as a map."
@@ -577,16 +589,17 @@ defmodule Sanctum.Tenancy.Athanors do
   defp slug_free?(slug), do: match?({:error, :not_found}, get_by_slug("group", slug))
 
   defp count_groups_created_by(user_id) do
-    Arca.Repo.one(
-      from(a in Athanor,
-        where: a.kind == "group" and a.created_by == ^user_id and a.status == "active",
-        select: count(a.id)
-      )
-    ) || 0
+    {:ok,
+     Arca.Repo.one(
+       from(a in Athanor,
+         where: a.kind == "group" and a.created_by == ^user_id and a.status == "active",
+         select: count(a.id)
+       )
+     ) || 0}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Athanors: count_groups failed (#{Exception.message(e)})")
-      0
+      {:error, :database_error}
   end
 
   defp generate_id, do: "ath_" <> Ecto.UUID.generate()

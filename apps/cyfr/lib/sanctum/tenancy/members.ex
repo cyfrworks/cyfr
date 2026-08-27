@@ -190,7 +190,7 @@ defmodule Sanctum.Tenancy.Members do
     # verified email is not required — a person admitted by a `user_id`
     # door entry may have none.)
     with {:ok, %User{status: "active"}} <- Users.get(user_id),
-         :ok <- Caps.check(:max_members_per_group, count_seats(athanor_id)),
+         :ok <- Caps.check_counted(:max_members_per_group, fn -> count_seats(athanor_id) end),
          {:ok, _} <- ensure(user_id, opts) do
       broadcast_change(user_id, athanor.id, :joined)
       Sanctum.Notify.member_changed(athanor.id)
@@ -207,7 +207,7 @@ defmodule Sanctum.Tenancy.Members do
     email = String.downcase(String.trim(email))
 
     with true <- String.contains?(email, "@") or {:error, :invalid_email},
-         :ok <- Caps.check(:max_members_per_group, count_seats(athanor_id)) do
+         :ok <- Caps.check_counted(:max_members_per_group, fn -> count_seats(athanor_id) end) do
       known = Users.list_by_email(email)
 
       case Enum.filter(known, &known_and_active?/1) do
@@ -493,16 +493,17 @@ defmodule Sanctum.Tenancy.Members do
   # invitations — which is what the member cap bounds; an invitation is a
   # seat someone will take.
   defp count_seats(athanor_id) do
-    Arca.Repo.one(
-      from(m in Membership,
-        where: m.athanor_id == ^athanor_id and m.scope == "athanor",
-        select: count(m.id)
-      )
-    ) || 0
+    {:ok,
+     Arca.Repo.one(
+       from(m in Membership,
+         where: m.athanor_id == ^athanor_id and m.scope == "athanor",
+         select: count(m.id)
+       )
+     ) || 0}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: count_seats failed (#{Exception.message(e)})")
-      0
+      {:error, :database_error}
   end
 
   @doc "The PubSub topic a person's LiveViews subscribe to for their own membership changes."

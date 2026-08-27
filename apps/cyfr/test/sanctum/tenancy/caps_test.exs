@@ -45,6 +45,48 @@ defmodule Sanctum.Tenancy.CapsTest do
     :ok
   end
 
+  test "check_counted/2 counts only while the cap is on, and refuses an uncountable current" do
+    # Cap off: the count is never even asked for.
+    Application.delete_env(:cyfr, :caps)
+    assert :ok = Caps.check_counted(:max_athanors, fn -> raise "must not be called" end)
+
+    Application.put_env(:cyfr, :caps, max_athanors: 3)
+    assert :ok = Caps.check_counted(:max_athanors, fn -> {:ok, 2} end)
+
+    assert {:error, {:limit_reached, :max_athanors, 3}} =
+             Caps.check_counted(:max_athanors, fn -> {:ok, 3} end)
+
+    # A count the store cannot answer refuses — fail closed, like the
+    # storage cap's unverifiable walk; a DB blink must not admit a mint.
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:cap_unverifiable, :max_athanors}} =
+                 Caps.check_counted(:max_athanors, fn -> {:error, :database_error} end)
+      end)
+
+    assert log =~ "count failed"
+  end
+
+  test "the write gate checks every tenant create by default; :exempt is the stated exception" do
+    ctx = Sanctum.TestContext.local()
+    Arca.Usage.invalidate(ctx.athanor_id)
+    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
+
+    # Default posture: a writer that states nothing is capped.
+    assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
+             Arca.put(ctx, ["guest", "capped.txt"], "too many bytes")
+
+    refute Arca.exists?(ctx, ["guest", "capped.txt"])
+
+    # The uncapped-by-design writers say so, visibly, per call.
+    assert :ok = Arca.put(ctx, ["guest", "exempted.txt"], "still lands", cap: :exempt)
+
+    # Anything else is caller misuse, not a policy.
+    assert_raise ArgumentError, ~r/cap: must be :checked or :exempt/, fn ->
+      Arca.put(ctx, ["guest", "typo.txt"], "x", cap: :always)
+    end
+  end
+
   test "an unset cap is off; a set cap is a ceiling" do
     Application.delete_env(:cyfr, :caps)
     assert Caps.get(:max_athanors) == nil
@@ -58,7 +100,7 @@ defmodule Sanctum.Tenancy.CapsTest do
   end
 
   test "max_athanors stops Athanors.create; max_groups_per_person stops create_group" do
-    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count())
+    Application.put_env(:cyfr, :caps, max_athanors: active_count())
 
     assert {:error, {:limit_reached, :max_athanors, _}} =
              Athanors.create(%{
@@ -73,14 +115,14 @@ defmodule Sanctum.Tenancy.CapsTest do
     Application.delete_env(:cyfr, :caps)
     {:ok, doomed} = Athanors.create_group(uid0, "Doomed")
     {:ok, _} = Athanors.archive(doomed)
-    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count() + 1)
+    Application.put_env(:cyfr, :caps, max_athanors: active_count() + 1)
     assert {:ok, _} = Athanors.create_group(uid0, "Fits")
 
     # ...and taking the place back has to ask for it, or archive-then-reopen
     # would be the way past the cap.
-    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count())
+    Application.put_env(:cyfr, :caps, max_athanors: active_count())
     assert {:error, {:limit_reached, :max_athanors, _}} = Athanors.unarchive(doomed)
-    Application.put_env(:cyfr, :caps, max_athanors: Athanors.count() + 1)
+    Application.put_env(:cyfr, :caps, max_athanors: active_count() + 1)
     assert {:ok, %{status: "active"}} = Athanors.unarchive(doomed)
 
     Application.put_env(:cyfr, :caps, max_groups_per_person: 1)
@@ -240,5 +282,10 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     assert {:error, {:limit_reached, :max_members_per_group, 2}} =
              Members.add(group, [email: "b@example.com"], uid)
+  end
+
+  defp active_count do
+    {:ok, n} = Athanors.count()
+    n
   end
 end

@@ -229,6 +229,17 @@ defmodule Arca.Storage do
   ]
 
   @doc """
+  The configured tenant adapter — the one spelling of the
+  `:storage_adapter` read and its Local default, shared by the `Arca`
+  facade and the `Arca.Overlay` decorator so the two can never disagree
+  about the fallback.
+  """
+  @spec configured_adapter() :: module()
+  def configured_adapter do
+    Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+  end
+
+  @doc """
   Global path prefixes that are NOT tenant-scoped.
 
   These paths are stored at the root level — they bypass the

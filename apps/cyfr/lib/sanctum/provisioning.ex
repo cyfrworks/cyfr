@@ -228,16 +228,13 @@ defmodule Sanctum.Provisioning do
   defp record_personal(%{personal_athanor_id: id} = user, %{id: id}), do: {:ok, user}
   defp record_personal(user, athanor), do: Users.set_personal_athanor(user, athanor.id)
 
-  # The mint rate is a per-server cap on personal athanors minted per hour.
+  # The mint rate is a per-server cap on personal athanors minted per
+  # hour. `check_counted/2` counts only while the cap is on, and refuses
+  # (never admits) when the count cannot be answered.
   defp mint_allowed do
-    case Caps.get(:mint_per_hour) do
-      nil ->
-        :ok
-
-      _cap ->
-        hour_ago = DateTime.add(DateTime.utc_now(), -3600)
-        Caps.check(:mint_per_hour, Athanors.count_created_since(hour_ago))
-    end
+    Caps.check_counted(:mint_per_hour, fn ->
+      Athanors.count_created_since(DateTime.add(DateTime.utc_now(), -3600))
+    end)
   end
 
   # The person's own context, focused on the new athanor: their pull

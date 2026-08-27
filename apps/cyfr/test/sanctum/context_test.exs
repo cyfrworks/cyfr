@@ -296,7 +296,7 @@ defmodule Sanctum.ContextTest do
         )
 
       resource = %{user_id: "u1", athanor_id: "ath_test"}
-      assert :ok == Context.authorize(ctx, :storage_read, {:owned, resource})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, resource})
     end
 
     test "owned resource is accessible to any same-tenant member" do
@@ -311,7 +311,7 @@ defmodule Sanctum.ContextTest do
         )
 
       resource = %{user_id: "u2", athanor_id: "ath_test"}
-      assert :ok == Context.authorize(ctx, :storage_read, {:owned, resource})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, resource})
     end
   end
 
@@ -379,7 +379,7 @@ defmodule Sanctum.ContextTest do
   end
 
   describe "authorize/3 malformed tagged resources fail closed" do
-    test "{:owned, map} with no :user_id is rejected (not silently downgraded)" do
+    test "{:execution, map} with no :user_id is rejected (not silently downgraded)" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -390,8 +390,32 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:owned, %{}})
-      assert msg =~ "malformed owned resource"
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, %{}})
+      assert msg =~ "malformed execution resource"
+    end
+
+    test "an untagged map carrying an athanor is refused, never downgraded" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          athanor_id: "ath_test",
+          permissions: [:storage_read],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      # Passing a tenant-bearing record untagged used to fall through to
+      # the permission + tenant-presence path, silently skipping the
+      # per-record athanor check the record calls for.
+      record = %{athanor_id: "ath_other", user_id: "u1"}
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, record)
+      assert msg =~ "must be passed tagged"
+
+      assert {:error, msg2} =
+               Context.authorize(ctx, :storage_read, %{"athanor_id" => "ath_other"})
+
+      assert msg2 =~ "must be passed tagged"
     end
 
     test "{:execution, map} with no :user_id is rejected" do
@@ -438,7 +462,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "other_user", athanor_id: "ath_b"}
-      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:owned, record})
+      assert {:error, msg} = Context.authorize(ctx, :storage_read, {:execution, record})
       assert msg =~ "tenant mismatch"
     end
 
@@ -454,7 +478,7 @@ defmodule Sanctum.ContextTest do
         )
 
       record = %{user_id: "u1", athanor_id: "ath_test"}
-      assert :ok == Context.authorize(ctx, :storage_read, {:owned, record})
+      assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
   end
 

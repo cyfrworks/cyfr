@@ -62,6 +62,45 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
+  @doc """
+  `check/2` over a current that must be counted first — and may not be
+  countable. `count_fun` runs only while the cap is configured, and a
+  count the store cannot answer refuses as
+  `{:error, {:cap_unverifiable, key}}`: the same fail-closed posture as
+  `check_storage/2`, because a cap that admits past its ceiling whenever
+  the database blinks is not a cap. With the cap off, nothing is counted
+  and nothing can refuse.
+  """
+  @spec check_counted(key(), (-> {:ok, non_neg_integer()} | {:error, term()})) ::
+          :ok
+          | {:error, {:limit_reached, key(), pos_integer()}}
+          | {:error, {:cap_unverifiable, key()}}
+  def check_counted(key, count_fun) when key in @keys and is_function(count_fun, 0) do
+    case get(key) do
+      nil ->
+        :ok
+
+      cap ->
+        case count_fun.() do
+          {:ok, current} when is_integer(current) and current < cap ->
+            :ok
+
+          {:ok, _current} ->
+            {:error, {:limit_reached, key, cap}}
+
+          {:error, reason} ->
+            require Logger
+
+            Logger.warning(
+              "[Sanctum.Tenancy.Caps] #{key} count failed: #{inspect(reason)}; " <>
+                "refusing until it answers"
+            )
+
+            {:error, {:cap_unverifiable, key}}
+        end
+    end
+  end
+
   # `Arca` keeps this current without re-walking: every successful tenant
   # write bumps the cached total by the bytes written (over-counting an
   # overwrite — the safe direction), and deletes drop it so reclaimed space
@@ -70,19 +109,16 @@ defmodule Sanctum.Tenancy.Caps do
 
   @doc """
   `:ok` while the athanor's storage, plus `incoming` bytes, stays under the
-  `:athanor_storage_bytes` cap (or the cap is off). The one place the cap is
-  computed — and, deliberately, enforced only at the user-ingress writers:
-  authenticated WASM writes (`Opus.StorageHandler`), chat attachments
-  (`Prism.Attachments`), and every unit commit that states
-  `cap: {:checked, bytes}` — the `Compendium.Registry` publish paths
-  (which the OCI pull rides, whole incoming unit counted) and the
-  overlay's copy-on-write materialization (`Arca.Overlay.commit_unit/4`,
-  where each ingress's policy is a required, visible argument).
-  Cap-exempt writers — scaffold, fork, build-artifact stores — write
-  uncapped by design: they move operator-shipped or build-derived bytes,
-  and failing them half-completes a provision or a publish, which is
-  worse than any over-cap state. Their bytes still count — usage
-  accounting in `Arca` sees every tenant write.
+  `:athanor_storage_bytes` cap (or the cap is off). The one place the cap
+  is computed — and its enforcement is mechanical, not a roster anyone
+  remembers: the `Arca` write gate checks every tenant-scoped create by
+  default (`Arca.put/4`'s `cap:` option), and `Arca.Overlay.commit_unit/4`
+  checks whole units up front with the policy as a required argument.
+  The uncapped-by-design set is whatever states `cap: :exempt` — grep it:
+  today the build-artifact saves (`Locus.MCP`), plus scaffold and fork's
+  `commit_unit` calls, which move operator-shipped or build-derived
+  bytes where failing half-way is worse than any over-cap state. Exempt
+  bytes still count — usage accounting in `Arca` sees every tenant write.
 
   The count is one walk of the athanor's whole tree — components, guest
   files, attachments, because a cap that bounds one subtree is not a cap

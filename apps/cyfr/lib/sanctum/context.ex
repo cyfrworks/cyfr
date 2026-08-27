@@ -548,7 +548,7 @@ defmodule Sanctum.Context do
   carries a tenant identity must be passed as one of the recognized tuples so
   its tenant is verified here, via `Sanctum.TenantPolicy`:
 
-  - `{:execution, record}` / `{:owned, record}` — permission + per-record
+  - `{:execution, record}` — permission + per-record
     `verify_tenant`; the record must carry `:user_id` (attribution) and
     `:athanor_id`. There is no owner gate: members of an athanor are
     interchangeable.
@@ -612,11 +612,10 @@ defmodule Sanctum.Context do
   # Tenant-bearing resources authorize identically: permission + per-record
   # athanor equality via verify_tenant. Members of an athanor are
   # interchangeable — there is NO owner gate; user_id stays on records for
-  # attribution only. :execution/:owned still require a :user_id key so a tag
+  # attribution only. :execution still requires a :user_id key so a tag
   # that promises an owner but carries none fails closed in the malformed
   # clause below (rather than passing on tenant presence alone).
-  defp do_authorize(%__MODULE__{} = ctx, action, {tag, %{user_id: _} = record})
-       when tag in [:execution, :owned] do
+  defp do_authorize(%__MODULE__{} = ctx, action, {:execution, %{user_id: _} = record}) do
     verify_tenant_resource(ctx, action, record)
   end
 
@@ -625,22 +624,43 @@ defmodule Sanctum.Context do
   end
 
   # A tagged owner/tenant resource that did not structurally match the typed
-  # clauses above — e.g. `{:execution|:owned, record}` with no `:user_id`, or a
+  # clauses above — e.g. `{:execution, record}` with no `:user_id`, or a
   # `{:tenant, non_map}` — is caller misuse. Fail closed rather than fall
   # through to the permission + tenant-presence-only path below, which would
   # silently skip the ownership and per-record tenant checks the tag implies.
   defp do_authorize(%__MODULE__{} = ctx, action, {tag, _})
-       when tag in [:execution, :owned, :tenant] do
+       when tag in [:execution, :tenant] do
     log_denial(ctx, action, {tag, :malformed_resource})
     {:error, "Unauthorized: malformed #{tag} resource (missing tenant/owner identity)"}
+  end
+
+  # An UNTAGGED value that visibly carries a tenant identity is the same
+  # misuse, mechanically refused: the contract below says a tenant-bearing
+  # record must arrive tagged so its athanor is checked authoritatively —
+  # falling through would silently skip exactly that check.
+  defp do_authorize(%__MODULE__{} = ctx, action, %{athanor_id: _}) do
+    log_denial(ctx, action, {:untagged_tenant_resource, :refused})
+
+    {:error,
+     "Unauthorized: a tenant-bearing resource must be passed tagged " <>
+       "({:execution, record} or {:tenant, record})"}
+  end
+
+  defp do_authorize(%__MODULE__{} = ctx, action, %{"athanor_id" => _}) do
+    log_denial(ctx, action, {:untagged_tenant_resource, :refused})
+
+    {:error,
+     "Unauthorized: a tenant-bearing resource must be passed tagged " <>
+       "({:execution, record} or {:tenant, record})"}
   end
 
   # Fallback: a resource shape that carries no tenant identity — `nil`, or an
   # untagged value (a plain map, struct, id, …). The contract is explicit:
   # `authorize/3` enforces permission + tenant *presence* here; a resource
-  # that DOES carry a tenant must be passed as `{:execution|:owned|:tenant,
-  # record}` so it is tenant-checked authoritatively above (a malformed such
-  # tuple now fails closed in the clause directly above, not here). The storage
+  # that DOES carry a tenant must be passed as `{:execution|:tenant,
+  # record}` so it is tenant-checked authoritatively above (a malformed
+  # tuple or an untagged athanor-bearing map fails closed in the clauses
+  # directly above, not here). The storage
   # primitive (`Arca.QueryHelpers.where_tenant/2` / `Arca.Storage.tenant_segments/1`)
   # remains a fail-closed *backstop* — it scopes every query by athanor and
   # rejects an athanor-less tenant context — but it is no longer the control
@@ -651,7 +671,7 @@ defmodule Sanctum.Context do
 
   # Shared body for tenant-bearing resources: permission + per-record
   # athanor equality. The single authorization path for
-  # {:execution|:owned|:tenant}. verify_tenant (Sanctum.TenantPolicy) logs any
+  # {:execution|:tenant}. verify_tenant (Sanctum.TenantPolicy) logs any
   # tenant mismatch, so this does not re-log.
   defp verify_tenant_resource(%__MODULE__{} = ctx, action, record) do
     with :ok <- require_permission(ctx, action_to_permission(action)),

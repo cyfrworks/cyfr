@@ -60,9 +60,11 @@ defmodule Arca do
   reserved root, from `authorize_path/2`); `:seed_read_only`;
   `:reserved_name` (the `.tmp.<n>` shape); `:invalid_path` (a mutation
   above depth 2); `:bundled` (deleting an unmaterialized seed unit);
-  `{:materialize_failed, reason}` and `{:limit_reached,
-  :athanor_storage_bytes, cap}` (copy-on-write materialization); plus the
-  adapter vocabulary in `t:Arca.Storage.error/0`. `get_json/2` adds
+  `{:materialize_failed, reason}` (copy-on-write materialization);
+  `{:limit_reached, :athanor_storage_bytes, cap}` and
+  `:storage_unverifiable` (any capped tenant create — the write gate
+  checks by default, see `put/4`'s `cap:` option); plus the adapter
+  vocabulary in `t:Arca.Storage.error/0`. `get_json/2` adds
   `{:invalid_json, %Jason.DecodeError{}}`.
 
   Raises, reserved for programmer error: a malformed path (traversal or
@@ -156,6 +158,20 @@ defmodule Arca do
 
   Creates parent directories automatically.
 
+  ## Options
+
+    * `cap:` — `:checked` (default) or `:exempt`. A tenant-scoped write
+      is checked against the athanor's storage cap
+      (`Sanctum.Tenancy.Caps.check_storage/2`) before a byte moves,
+      refusing with `{:error, {:limit_reached, :athanor_storage_bytes,
+      cap}}` or `{:error, :storage_unverifiable}`. The default is the
+      protective posture — a new writer that states nothing is capped —
+      and `:exempt` is a visible, deliberate statement at the few
+      uncapped-by-design writers (`grep 'cap: :exempt'` is that roster).
+      Global and seed paths carry no tenant bytes and ignore the option;
+      `Arca.Overlay`'s internal writes were already checked at unit level
+      by `commit_unit/4` and skip it.
+
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
@@ -163,10 +179,10 @@ defmodule Arca do
       :ok
 
   """
-  @spec put(Context.t(), Arca.Storage.path(), binary()) :: :ok | {:error, term()}
-  def put(%Context{} = ctx, path, content),
+  @spec put(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
+  def put(%Context{} = ctx, path, content, opts \\ []),
     do:
-      mutating(ctx, normalize(path), {:create, byte_size(content)}, fn p ->
+      mutating(ctx, normalize(path), {:create, byte_size(content)}, opts, fn p ->
         adapter(p).put(ctx, p, content)
       end)
 
@@ -180,10 +196,10 @@ defmodule Arca do
       :ok
 
   """
-  @spec put_json(Context.t(), Arca.Storage.path(), term()) :: :ok | {:error, term()}
-  def put_json(%Context{} = ctx, path, data) do
+  @spec put_json(Context.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
+  def put_json(%Context{} = ctx, path, data, opts \\ []) do
     case Jason.encode(data) do
-      {:ok, json} -> put(ctx, path, json)
+      {:ok, json} -> put(ctx, path, json, opts)
       {:error, _} = error -> error
     end
   end
@@ -205,10 +221,10 @@ defmodule Arca do
       :ok
 
   """
-  @spec append(Context.t(), Arca.Storage.path(), binary()) :: :ok | {:error, term()}
-  def append(%Context{} = ctx, path, content),
+  @spec append(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
+  def append(%Context{} = ctx, path, content, opts \\ []),
     do:
-      mutating(ctx, normalize(path), {:create, byte_size(content)}, fn p ->
+      mutating(ctx, normalize(path), {:create, byte_size(content)}, opts, fn p ->
         adapter(p).append(ctx, p, content)
       end)
 
@@ -228,7 +244,7 @@ defmodule Arca do
   """
   @spec delete(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, path),
-    do: mutating(ctx, normalize(path), :delete, fn p -> adapter(p).delete(ctx, p) end)
+    do: mutating(ctx, normalize(path), :delete, [], fn p -> adapter(p).delete(ctx, p) end)
 
   @doc """
   List contents at path.
@@ -338,7 +354,8 @@ defmodule Arca do
   """
   @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
   def delete_tree(%Context{} = ctx, path),
-    do: mutating(ctx, normalize(path), :delete_tree, fn p -> adapter(p).delete_tree(ctx, p) end)
+    do:
+      mutating(ctx, normalize(path), :delete_tree, [], fn p -> adapter(p).delete_tree(ctx, p) end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -382,6 +399,8 @@ defmodule Arca do
   `transform: fn relative_segments, content -> content end` rewrites a
   file's bytes between the read and the write — how `Compendium.Fork`
   re-stamps the manifest without holding the whole tree in memory.
+  `cap:` is threaded through to each `put/4` (default `:checked`, like
+  any other write).
   """
   @spec copy_tree(Context.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
@@ -398,7 +417,12 @@ defmodule Arca do
       |> Enum.reduce_while({:ok, []}, fn relative, {:ok, acc} ->
         case get(ctx, src ++ relative) do
           {:ok, content} ->
-            case put(ctx, dest ++ relative, transform.(relative, content)) do
+            case put(
+                   ctx,
+                   dest ++ relative,
+                   transform.(relative, content),
+                   Keyword.take(opts, [:cap])
+                 ) do
               :ok -> {:cont, {:ok, [relative | acc]}}
               {:error, reason} -> {:halt, {:error, reason}}
             end
@@ -439,7 +463,7 @@ defmodule Arca do
   """
   @spec sweep_stale_tmp() :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep_stale_tmp do
-    adapter = Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+    adapter = Arca.Storage.configured_adapter()
 
     if Code.ensure_loaded?(adapter) and function_exported?(adapter, :sweep_stale_tmp, 1) do
       adapter.sweep_stale_tmp(Arca.Storage.stale_tmp_max_age_seconds())
@@ -498,7 +522,7 @@ defmodule Arca do
   # Accounting here rather than in each writer means a new writer cannot
   # forget — every mutation already passes through. Globals are not tenant
   # bytes and touch nothing.
-  defp mutating(ctx, path, kind, fun) do
+  defp mutating(ctx, path, kind, opts, fun) do
     cond do
       Arca.Storage.classify(path) == :seed ->
         {:error, :seed_read_only}
@@ -528,17 +552,45 @@ defmodule Arca do
       true ->
         # Copy-on-write for the seed-overlaid roots happens inside the
         # `Arca.Overlay` decorator's own put/append/delete callbacks —
-        # this seam only gates, dispatches and accounts. Accounting is
-        # universal — every tenant write lands here, so a new writer
-        # cannot forget — while the cap itself is CHECKED only by the
-        # user-ingress writers, by design; `Arca.Usage` owns the cache
-        # discipline, `Sanctum.Tenancy.Caps.check_storage/2` the policy
-        # and its roster.
-        result = guarded(ctx, path, fun)
-        Arca.Usage.account(ctx, path, kind, result)
-        result
+        # this seam only gates, checks, dispatches and accounts.
+        # Accounting is universal — every tenant write lands here, so a
+        # new writer cannot forget — and the cap check rides the same
+        # chokepoint (`check_cap/4` below): checked by default, exempt
+        # only where a call site says so. `Arca.Usage` owns the cache
+        # discipline, `Sanctum.Tenancy.Caps.check_storage/2` the policy.
+        with :ok <- check_cap(ctx, path, kind, opts) do
+          result = guarded(ctx, path, fun)
+          Arca.Usage.account(ctx, path, kind, result)
+          result
+        end
     end
   end
+
+  # The storage-cap gate: every tenant-scoped create is checked unless its
+  # call site states `cap: :exempt` — the same visible-policy shape as
+  # `Arca.Overlay.commit_unit/4`, with the default on the protective side
+  # so a writer that states nothing is capped. Deletes reclaim space and
+  # carry no policy; globals are not tenant bytes; the overlay's internal
+  # writes were checked at unit level by `commit_unit/4` (its cap is a
+  # required argument) and must not be re-checked per file.
+  defp check_cap(ctx, path, {:create, bytes}, opts) do
+    if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?() do
+      case Keyword.get(opts, :cap, :checked) do
+        :checked ->
+          Sanctum.Tenancy.Caps.check_storage(ctx, bytes)
+
+        :exempt ->
+          :ok
+
+        other ->
+          raise ArgumentError, "cap: must be :checked or :exempt, got #{inspect(other)}"
+      end
+    else
+      :ok
+    end
+  end
+
+  defp check_cap(_ctx, _path, _kind, _opts), do: :ok
 
   # Seed media is server install media read straight from local disk
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
