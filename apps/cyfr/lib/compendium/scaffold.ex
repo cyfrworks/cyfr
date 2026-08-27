@@ -63,12 +63,17 @@ defmodule Compendium.Scaffold do
             ] ++ wit_files(base_path, type_atom)
         end
 
-      case Arca.put_files(ctx, files) do
+      rel_files =
+        Enum.map(files, fn {path, content} -> {Enum.drop(path, length(base_path)), content} end)
+
+      # Scaffolds stay cap-exempt — the enforcement roster in
+      # `Sanctum.Tenancy.Caps` is unchanged by the commit migration.
+      case Arca.Overlay.commit_unit(ctx, base_path, {:files, rel_files}, cap: :exempt) do
         {:ok, written} ->
           reference = local_ref(type, name, version)
           # In write order — the manifest (the unit's completion sentinel)
           # is last, and the list is the witness.
-          file_list = Enum.map(written, &Path.join/1)
+          file_list = Enum.map(written, &Path.join(base_path ++ &1))
 
           {:ok,
            %{

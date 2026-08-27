@@ -346,43 +346,6 @@ defmodule Arca do
       guarded(ctx, normalize(path), fn p -> Arca.Storage.read_subtree_via(adapter(p), ctx, p) end)
 
   @doc """
-  Write a batch of `{path, content}` files, any overlay unit sentinel
-  LAST — the one spelling of "a unit is complete only when whole" for
-  every writer that lays a unit file-by-file (scaffold, the tincture
-  store, fork, OCI pull). A path whose root has no unit grammar keeps the
-  given order. Halts on the first error, so a failed batch never leaves a
-  directory unit carrying its completion mark; success answers the paths
-  in the order they were written. `Arca.Overlay` enforces the same
-  discipline for its own seed copies (`materialize/2`).
-  """
-  @spec put_files(Context.t(), [{[String.t()] | String.t(), binary()}]) ::
-          {:ok, [[String.t()]]} | {:error, term()}
-  def put_files(%Context{} = ctx, files) when is_list(files) do
-    {sentinel_files, plain} =
-      Enum.split_with(files, fn {path, _content} -> sentinel_file?(normalize(path)) end)
-
-    ordered = plain ++ sentinel_files
-
-    Enum.reduce_while(ordered, :ok, fn {path, content}, :ok ->
-      case put(ctx, path, content) do
-        :ok -> {:cont, :ok}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
-    |> case do
-      :ok -> {:ok, Enum.map(ordered, fn {path, _content} -> normalize(path) end)}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp sentinel_file?(path) do
-    case Arca.Storage.locate(path) do
-      {:dir, unit, sentinel} -> path == unit ++ [sentinel]
-      _file_unit_or_outside -> false
-    end
-  end
-
-  @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
 
   Lists `src` via `list_recursive/2`, then streams each file with `get/2` +
