@@ -18,8 +18,6 @@ defmodule Compendium.Fork do
   source component's storage — components must be pulled locally first.
   """
 
-  require Logger
-
   alias Sanctum.{ComponentRef, Context}
   alias Compendium.ComponentPath
 
@@ -73,19 +71,6 @@ defmodule Compendium.Fork do
            }}
 
         {:error, reason} ->
-          # Clean up the partial copy. A cleanup failure must not mask the
-          # fork failure — but it must not vanish either.
-          case Arca.delete_tree(ctx, target_base) do
-            :ok ->
-              :ok
-
-            {:error, cleanup_reason} ->
-              Logger.warning(
-                "[Compendium.Fork] partial-copy cleanup of #{target_ref_str} failed: " <>
-                  inspect(cleanup_reason)
-              )
-          end
-
           {:error, "Fork failed: #{inspect(reason)}"}
       end
     end
@@ -149,30 +134,25 @@ defmodule Compendium.Fork do
   # Copy Logic
   # ============================================================================
 
-  # One streaming pass through `Arca.copy_tree/4` — one file in memory at
-  # a time, build droppings excluded (a pulled tree can carry them; the
-  # seed never does). The manifest — the unit's completion sentinel — is
-  # excluded from the copy, re-stamped, and lands LAST (the
-  # `Arca.put_files/2` discipline): a fork that dies mid-copy never
-  # leaves a unit that reads as complete.
+  # One unit commit: the source tree streams over (one file in memory at
+  # a time, build droppings excluded — a pulled tree can carry them; the
+  # seed never does), and the re-stamped manifest is the commit's
+  # sentinel, landing LAST. Rollback on failure is the commit's own — a
+  # fork that dies mid-copy leaves nothing behind. Fork moves pulled or
+  # operator-shipped bytes into the athanor's own name, so it stays
+  # cap-exempt (the `Sanctum.Tenancy.Caps` roster).
   defp do_fork(ctx, source_base, target_base, target_name, target_version, source_ref_str) do
-    manifest = [ComponentPath.manifest_name()]
-
-    copy =
-      Arca.copy_tree(ctx, source_base, target_base,
-        exclude: &(Arca.Storage.build_dropping?(&1) or &1 == manifest)
-      )
-
-    with {:ok, _copied} <- copy,
-         {:ok, source_manifest} <- Arca.get(ctx, source_base ++ manifest),
-         :ok <-
-           Arca.put(
+    with {:ok, source_manifest} <- Arca.get(ctx, source_base ++ [ComponentPath.manifest_name()]),
+         {:ok, written} <-
+           Arca.Overlay.commit_unit(
              ctx,
-             target_base ++ manifest,
-             rewrite_manifest(source_manifest, target_name, target_version, source_ref_str)
-           ),
-         {:ok, leaves} <- Arca.list_recursive(ctx, target_base) do
-      {:ok, leaves |> Enum.map(&Path.join/1) |> Enum.sort()}
+             target_base,
+             {:tree, source_base, exclude: &Arca.Storage.build_dropping?/1},
+             cap: :exempt,
+             sentinel:
+               rewrite_manifest(source_manifest, target_name, target_version, source_ref_str)
+           ) do
+      {:ok, written |> Enum.map(&Path.join(target_base ++ &1)) |> Enum.sort()}
     end
   end
 
