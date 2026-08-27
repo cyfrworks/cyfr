@@ -31,6 +31,8 @@ defmodule Emissary.MCP.ResourceRegistry do
   @refresh_interval :timer.hours(23)
   # Timeout for resource read calls (matches ToolRegistry)
   @resource_timeout_ms :timer.minutes(5)
+  # How long to wait for the sweeper to restart and re-create the table.
+  @rebuild_delay_ms 250
 
   # ============================================================================
   # Public API
@@ -120,6 +122,7 @@ defmodule Emissary.MCP.ResourceRegistry do
     providers = Application.get_env(:cyfr, :resource_providers, default_providers())
     register_providers(providers)
     schedule_refresh()
+    watch_cache_table()
 
     {:ok, %{providers: providers}}
   end
@@ -131,10 +134,43 @@ defmodule Emissary.MCP.ResourceRegistry do
     {:noreply, state}
   end
 
+  # Same shape as `Emissary.MCP.ToolRegistry`: this registry write-populates
+  # the shared cache table and refreshes it only every 23 hours, so a table
+  # that died with its owner would leave resources/list empty for that long
+  # rather than one miss that re-derives.
+  @impl true
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    Process.send_after(self(), :rebuild_cache, @rebuild_delay_ms)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:rebuild_cache, %{providers: providers} = state) do
+    case Arca.Cache.Sweeper.ensure_table() do
+      :ok ->
+        Logger.warning("[ResourceRegistry] cache table was lost — reloading resource providers")
+        register_providers(providers)
+        watch_cache_table()
+
+      {:error, :cache_unavailable} ->
+        Process.send_after(self(), :rebuild_cache, @rebuild_delay_ms)
+    end
+
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  defp watch_cache_table do
+    if is_nil(Arca.Cache.monitor_owner()) do
+      Process.send_after(self(), :rebuild_cache, @rebuild_delay_ms)
+    end
+
+    :ok
   end
 
   # ============================================================================

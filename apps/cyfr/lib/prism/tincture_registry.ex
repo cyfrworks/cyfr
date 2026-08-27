@@ -56,12 +56,31 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  @doc "Rescan the filesystem for tinctures."
+  @doc """
+  Rescan every active athanor. Boot and the seed sync use this; a change
+  inside one athanor uses `reload_athanor/2`.
+  """
   @spec reload(atom()) :: :ok
   def reload(server \\ __MODULE__) do
     # The scan is I/O-bound (Arca walk + per-manifest reads); the default 5s
     # call timeout is too tight on object-store backends.
     GenServer.call(server, :reload, 30_000)
+  end
+
+  @doc """
+  Rescan one athanor's tinctures and replace exactly that athanor's rows.
+
+  Registering a tincture is a single-tenant act, but it used to rescan the
+  whole roster: every active athanor walked and every manifest re-read,
+  inside one `handle_call` on a global singleton — O(athanors × tinctures)
+  object-store round trips for one athanor's write, with every other
+  athanor's registration queued behind it. The prune is scoped to the same
+  athanor, so a tincture removed elsewhere is still dropped by its own
+  reload (or by the next full `reload/1`).
+  """
+  @spec reload_athanor(atom(), String.t()) :: :ok
+  def reload_athanor(server \\ __MODULE__, athanor_id) when is_binary(athanor_id) do
+    GenServer.call(server, {:reload_athanor, athanor_id}, 30_000)
   end
 
   # -- GenServer Callbacks --
@@ -91,6 +110,24 @@ defmodule Prism.TinctureRegistry do
   end
 
   @impl true
+  def handle_call({:reload_athanor, athanor_id}, _from, state) do
+    count =
+      case Sanctum.Tenancy.Athanors.get(athanor_id) do
+        {:ok, %{status: "active"} = athanor} ->
+          store_athanor_tinctures(state.table, athanor_id, scan_one(athanor))
+
+        # Archived, gone, or unreadable: it contributes nothing, and its rows
+        # go with it. `scan_tinctures/0` reaches the same end by not
+        # enumerating it.
+        _ ->
+          store_athanor_tinctures(state.table, athanor_id, [])
+      end
+
+    Logger.info("[TinctureRegistry] reloaded #{count} tincture(s) for #{athanor_id}")
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -100,9 +137,22 @@ defmodule Prism.TinctureRegistry do
   # then prune keys that vanished — readers never observe an empty table
   # mid-reload. Returns the fresh tincture count.
   defp store_tinctures(table, tinctures) do
+    old_keys = :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])
+    replace(table, old_keys, tinctures)
+  end
+
+  # The same insert-then-prune, with the prune confined to one athanor's
+  # keys so a single-tenant reload cannot delete another tenant's rows.
+  defp store_athanor_tinctures(table, athanor_id, tinctures) do
+    old_keys =
+      :ets.select(table, [{{{athanor_id, :"$1", :"$2"}, :_}, [], [{{athanor_id, :"$1", :"$2"}}]}])
+
+    replace(table, old_keys, tinctures)
+  end
+
+  defp replace(table, old_keys, tinctures) do
     rows = Enum.map(tinctures, &{{&1.athanor_id, &1.publisher, &1.name}, &1})
     fresh_keys = MapSet.new(rows, fn {key, _} -> key end)
-    old_keys = :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])
 
     :ets.insert(table, rows)
 
@@ -126,6 +176,16 @@ defmodule Prism.TinctureRegistry do
   defp scan_tinctures do
     Sanctum.Tenancy.Athanors.list_active()
     |> Enum.flat_map(&scan_athanor/1)
+    |> pick_latest_versions()
+  end
+
+  # One athanor's scan, version-picked the same way the full scan is — the
+  # grouping in `pick_latest_versions/1` is keyed by athanor, so running it
+  # over one athanor's rows gives that athanor exactly the rows it would
+  # have got from the full walk.
+  defp scan_one(athanor) do
+    athanor
+    |> scan_athanor()
     |> pick_latest_versions()
   end
 

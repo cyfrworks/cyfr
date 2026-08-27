@@ -215,6 +215,83 @@ defmodule Prism.TinctureRegistryTest do
     end
   end
 
+  describe "reload_athanor/2" do
+    # Registering a tincture is one athanor's act. It used to rescan the
+    # whole roster inside a single handle_call on the global singleton, so
+    # every other athanor's write queued behind an O(athanors × tinctures)
+    # walk. The scoped reload has to pick up that athanor's change without
+    # touching — or needing to read — anyone else's rows.
+    test "picks up one athanor's change and leaves the others alone" do
+      {:ok, other} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Bystander",
+          slug: "bystander",
+          created_by: "test"
+        })
+
+      other_dir = fixture_dir(other.id, "bystander", "other-dash", "0.1.0")
+      File.mkdir_p!(other_dir)
+
+      File.write!(
+        Path.join(other_dir, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => "other-dash",
+          "type" => "tincture",
+          "version" => "0.1.0",
+          "publisher" => "bystander",
+          "tincture" => %{"entry" => "index.html"}
+        })
+      )
+
+      name = :test_reload_scoped
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+      :sys.get_state(pid)
+
+      assert length(TinctureRegistry.list_tinctures(name, lookup(other.id))) == 1
+      before_count = length(TinctureRegistry.list_tinctures(name, lookup("ath_test")))
+
+      scoped_dir = fixture_dir("ath_test", "local", "scoped-add", "0.1.0")
+      File.mkdir_p!(scoped_dir)
+
+      File.write!(
+        Path.join(scoped_dir, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => "scoped-add",
+          "type" => "tincture",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "tincture" => %{"entry" => "index.html"}
+        })
+      )
+
+      :ok = TinctureRegistry.reload_athanor(name, "ath_test")
+
+      assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) ==
+               before_count + 1
+
+      # The bystander's rows were neither re-read nor pruned.
+      assert length(TinctureRegistry.list_tinctures(name, lookup(other.id))) == 1
+
+      GenServer.stop(pid)
+    end
+
+    test "an athanor's own removal is pruned by its own reload" do
+      name = :test_reload_prune
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+      :sys.get_state(pid)
+
+      assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
+
+      File.rm_rf!(fixture_dir("ath_test", "local", "test-dash", "1.0.0"))
+      :ok = TinctureRegistry.reload_athanor(name, "ath_test")
+
+      assert TinctureRegistry.list_tinctures(name, lookup("ath_test")) == []
+
+      GenServer.stop(pid)
+    end
+  end
+
   describe "athanor-scoped tincture loading" do
     test "discovers another athanor's tinctures under its own id" do
       {:ok, other} =

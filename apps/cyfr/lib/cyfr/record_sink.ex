@@ -30,6 +30,19 @@ defmodule Cyfr.RecordSink do
   @flush_ms 250
   @batch 200
 
+  # The buffer this process holds is bounded by @batch — every 200th enqueue
+  # drains before returning. Its MAILBOX is not: a drain runs inside
+  # `handle_cast/2`, so while the database is slow (a SQLite `busy_timeout`,
+  # a Postgres failover) casts keep arriving and queue up behind it, and
+  # nothing in a fire-and-forget path ever pushes back. Under sustained
+  # request volume that grows until the node runs out of memory — and it is
+  # bookkeeping that would take the node down, not the work itself.
+  #
+  # So the sink sheds instead. A dropped row is a missing audit line, which
+  # is a real cost and is why the ceiling is high enough that only a genuine
+  # stall reaches it; losing the node loses every subsequent row anyway.
+  @max_queue 10_000
+
   @type item ::
           {:policy_log, map()}
           | {:mcp_log_update, Sanctum.Context.t(), String.t(), map()}
@@ -54,9 +67,24 @@ defmodule Cyfr.RecordSink do
           :ok
 
         pid ->
-          GenServer.cast(pid, {:enqueue, item})
+          if backlogged?(pid), do: shed(item), else: GenServer.cast(pid, {:enqueue, item})
+          :ok
       end
     end
+  end
+
+  defp backlogged?(pid) do
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, len} -> len > @max_queue
+      nil -> false
+    end
+  end
+
+  # Loud in telemetry, quiet in the log: a stall drops many rows, and a line
+  # each would be its own flood. Operators watch the counter.
+  defp shed(item) do
+    :telemetry.execute([:cyfr, :record_sink, :dropped], %{count: 1}, %{kind: elem(item, 0)})
+    :ok
   end
 
   @doc "Write everything queued so far, synchronously."

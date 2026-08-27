@@ -95,4 +95,54 @@ defmodule Cyfr.RecordSinkTest do
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
     assert Enum.any?(Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100), &(&1.id == id))
   end
+
+  # The buffer is bounded by the batch size, but the mailbox is not: a drain
+  # runs inside handle_cast, so a stalled database lets casts pile up behind
+  # it with nothing pushing back. Bookkeeping must not be able to take the
+  # node down, so past a ceiling the sink drops and says so.
+  test "a backlogged sink sheds rather than growing without bound" do
+    test_pid = self()
+
+    :telemetry.attach(
+      "record-sink-drop-test",
+      [:cyfr, :record_sink, :dropped],
+      fn _event, measurements, metadata, _ ->
+        send(test_pid, {:dropped, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("record-sink-drop-test") end)
+
+    # Block the sink so its mailbox is the only thing that grows, then fill
+    # past the ceiling. `:sys.suspend/1` stops it processing without killing
+    # it, which is what a slow transaction looks like from outside.
+    pid = Process.whereis(Cyfr.RecordSink)
+    :sys.suspend(pid)
+
+    for _ <- 1..10_050 do
+      RecordSink.enqueue({:policy_log, policy_attrs(%{})})
+    end
+
+    assert_receive {:dropped, %{count: 1}, %{kind: :policy_log}}, 5_000
+
+    {:message_queue_len, len} = Process.info(pid, :message_queue_len)
+
+    assert len <= 10_051,
+           "the sink queued #{len} messages — shedding did not bound the mailbox"
+
+    # Discard the backlog rather than resuming into ten thousand real writes:
+    # this is the shared singleton, and draining them would land another
+    # test's assertions in the middle of this one's flood. A kill skips
+    # terminate/2 (and its flush), and the supervisor brings back an empty one.
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
+
+    assert Enum.any?(1..200, fn _ ->
+             Process.sleep(25)
+             is_pid(Process.whereis(Cyfr.RecordSink))
+           end),
+           "the record sink did not come back"
+  end
 end

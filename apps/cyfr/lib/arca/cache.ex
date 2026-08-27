@@ -33,7 +33,13 @@ defmodule Arca.Cache do
   Initialize the ETS cache table. Called from `Arca.Cache.Sweeper` — the
   table's one supervised owner — never from `Cyfr.Application.start/2`:
   the cache is a disposable read-through, re-created by the sweeper when
-  it (re)starts, so a sweeper crash flushes it harmlessly.
+  it (re)starts.
+
+  A sweeper crash therefore flushes the cache. That is harmless for a
+  genuine read-through entry — a miss re-derives it — but NOT for a
+  consumer that write-populates the table and would otherwise wait out its
+  own refresh interval before noticing. Those consumers watch the owner
+  with `monitor_owner/0`.
   """
   @spec init() :: :ok
   def init do
@@ -42,6 +48,31 @@ defmodule Arca.Cache do
     end
 
     :ok
+  end
+
+  @doc """
+  Monitor the process that owns the cache table.
+
+  For the consumers that treat this table as a store rather than a
+  read-through: `Emissary.MCP.ToolRegistry` and
+  `Emissary.MCP.ResourceRegistry` write their catalogues here at boot and
+  refresh them only every 23 hours. The table dies with its owner and comes
+  back empty, and `get/1` turns the missing table into an ordinary miss —
+  so without a monitor the whole MCP catalogue reads as "unknown tool" for
+  up to a day, silently, and nothing restarts them (they are siblings of
+  the sweeper under a `:one_for_one` tier).
+
+  Returns the monitor reference, or `nil` when the table is not up yet —
+  the caller retries in that case.
+  """
+  @spec monitor_owner() :: reference() | nil
+  def monitor_owner do
+    with tid when tid != :undefined <- :ets.whereis(@table_name),
+         owner when is_pid(owner) <- :ets.info(tid, :owner) do
+      Process.monitor(owner)
+    else
+      _ -> nil
+    end
   end
 
   @doc """
