@@ -305,6 +305,18 @@ defmodule Sanctum.Vault.OAuth do
     |> DateTime.to_iso8601()
   end
 
+  # RFC 6749 says `expires_in` is a number, and plenty of providers send it
+  # as a JSON string anyway. Read as "no expiry", a token that has one is
+  # never refreshed — `token_valid?/1` answers true for a nil expiry
+  # forever — so the entry works until the provider expires it and then
+  # returns 401s that no refresh is ever attempted for.
+  def compute_expires_at(expires_in) when is_binary(expires_in) do
+    case Integer.parse(String.trim(expires_in)) do
+      {seconds, ""} -> compute_expires_at(seconds)
+      _ -> nil
+    end
+  end
+
   def compute_expires_at(_), do: nil
 
   defp emit_telemetry(entry, provider, status) do

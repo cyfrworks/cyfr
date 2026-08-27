@@ -168,4 +168,29 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       assert row.sealed_payload == "sealed-a"
     end
   end
+
+  describe "compute_expires_at/1" do
+    # RFC 6749 says expires_in is a number; providers send it as a JSON
+    # string often enough that reading one as "no expiry" is a live bug:
+    # token_valid?/1 answers true for a nil expiry forever, so the entry is
+    # never refreshed and simply starts returning 401s that nothing retries.
+    test "a numeric string is an expiry, not an absence" do
+      assert expiry = Sanctum.Vault.OAuth.compute_expires_at("3600")
+      assert {:ok, dt, _} = DateTime.from_iso8601(expiry)
+      assert DateTime.diff(dt, DateTime.utc_now()) > 3_000
+    end
+
+    test "surrounding whitespace is still a number" do
+      assert Sanctum.Vault.OAuth.compute_expires_at(" 3600 ")
+    end
+
+    test "an integer is unchanged, and nonsense is still no expiry" do
+      assert Sanctum.Vault.OAuth.compute_expires_at(3600)
+      assert Sanctum.Vault.OAuth.compute_expires_at(nil) == nil
+      assert Sanctum.Vault.OAuth.compute_expires_at("soon") == nil
+      assert Sanctum.Vault.OAuth.compute_expires_at("3600 seconds") == nil
+      assert Sanctum.Vault.OAuth.compute_expires_at("-5") == nil
+      assert Sanctum.Vault.OAuth.compute_expires_at("0") == nil
+    end
+  end
 end

@@ -54,7 +54,7 @@ defmodule EmissaryWeb.HealthControllerTest do
       # delete strands at most one object, reclaimed by the next probe's
       # overwrite (the retention sweep is the belt for legacy strays).
       # Bust the result cache so this request runs a real probe.
-      :persistent_term.erase({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
 
       ctx = Sanctum.internal_context(user_id: "_test", permissions: [:storage_write])
 

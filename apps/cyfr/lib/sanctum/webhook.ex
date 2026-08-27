@@ -101,6 +101,7 @@ defmodule Sanctum.Webhook do
            ),
          :ok <- WebhookStorage.create_webhook(attrs) do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
+      warn_if_replayable(name, attrs)
 
       {:ok,
        %{
@@ -111,12 +112,46 @@ defmodule Sanctum.Webhook do
          target_ref: target_ref,
          input_template: Jason.decode!(input_template_json),
          signature_header: attrs.signature_header,
+         replay_protection: replay_protection(attrs),
          created_at: now
        }}
     end
   end
 
   def create(_ctx, _opts), do: {:error, "name and target_ref are required"}
+
+  # A signature proves the body came from someone holding the secret. It
+  # says nothing about WHEN, so on its own it stays valid for a captured
+  # delivery forever. Two things bound that, and both are per-webhook
+  # optional: `timestamp_header` refuses a delivery outside the skew
+  # window, `idempotency_key_header` refuses one that already ran.
+  #
+  # Neither can be inferred. An identical body is a replay if the sender
+  # sends unique events and a legitimate repeat if it does not, and only
+  # the sender's own timestamp or event id tells the two apart — so this
+  # reports the gap rather than guessing at it.
+  defp replay_protection(attrs) do
+    case {present?(attrs[:timestamp_header]), present?(attrs[:idempotency_key_header])} do
+      {false, false} -> "none"
+      {true, false} -> "timestamp"
+      {false, true} -> "idempotency_key"
+      {true, true} -> "timestamp+idempotency_key"
+    end
+  end
+
+  defp warn_if_replayable(name, attrs) do
+    if replay_protection(attrs) == "none" do
+      Logger.warning(
+        "[Sanctum.Webhook] #{name} has no replay protection: set timestamp_header " <>
+          "(skew window) or idempotency_key_header (per-delivery id) — a signed body " <>
+          "captured off the wire stays valid indefinitely without one"
+      )
+    end
+
+    :ok
+  end
+
+  defp present?(value), do: is_binary(value) and value != ""
 
   @doc """
   Get webhook details by name. Secret is never returned.

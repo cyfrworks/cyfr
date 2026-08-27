@@ -52,16 +52,23 @@ defmodule EmissaryWeb.HealthController do
     })
   end
 
+  # Memoized in the shared ETS cache rather than a persistent term.
+  # `:persistent_term.put/2` forces a global garbage collection whenever it
+  # replaces an existing value — so this rewrote itself every five seconds,
+  # and under a burst every concurrent miss wrote again, on an endpoint that
+  # is anonymous and internet-reachable by design.
+  #
+  # Using the cache to memoize a check OF the cache is not circular in the
+  # direction that matters: a broken table misses, the checks run, and this
+  # answers `cache: failed`. It cannot report ready off a cache that is down.
   defp cached_checks do
-    now = System.monotonic_time(:millisecond)
-
-    case :persistent_term.get(@ready_cache_key, nil) do
-      {checks, expires_at} when expires_at > now ->
+    case Arca.Cache.get(@ready_cache_key) do
+      {:ok, checks} ->
         checks
 
-      _ ->
+      :miss ->
         checks = run_checks()
-        :persistent_term.put(@ready_cache_key, {checks, now + ready_cache_ms()})
+        Arca.Cache.put(@ready_cache_key, checks, ready_cache_ms())
         checks
     end
   end

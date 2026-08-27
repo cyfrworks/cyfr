@@ -750,20 +750,23 @@ defmodule Prism.ConversationRunner do
   # A start result for a turn that is no longer the current one.
   def handle_info({:turn_start_result, _ref, _result}, state), do: {:noreply, state}
 
-  def handle_info({:execution_event, %{type: "emit", data: data}}, state) do
-    {:noreply, handle_emit(state, data["kind"] || data[:kind], data)}
+  # An event only speaks for the turn it came from. `unsubscribe` happens
+  # when a turn ends, but a message already in flight arrives after it —
+  # and after the next turn has started — so an unmatched event would fold
+  # a finished execution's text, tool activity or completion into the turn
+  # that replaced it.
+  def handle_info({:execution_event, %{execution_id: id} = event}, state)
+      when is_binary(id) do
+    if id == state.execution_id do
+      {:noreply, apply_execution_event(state, event)}
+    else
+      {:noreply, state}
+    end
   end
 
-  def handle_info({:execution_event, %{type: "complete"}}, state) do
-    {:noreply, complete_turn(state)}
+  def handle_info({:execution_event, event}, state) do
+    {:noreply, apply_execution_event(state, event)}
   end
-
-  def handle_info({:execution_event, %{type: "error", data: data}}, state) do
-    err = data["message"] || data[:message] || inspect(data)
-    {:noreply, fail_turn(state, err)}
-  end
-
-  def handle_info({:execution_event, _other}, state), do: {:noreply, state}
 
   def handle_info({:approval_result, message_id, ctx, outcome, payload}, state) do
     {:noreply, complete_approval(state, ctx, message_id, outcome, payload)}
@@ -812,6 +815,18 @@ defmodule Prism.ConversationRunner do
     Logger.warning("[Prism.ConversationRunner] unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
+
+  defp apply_execution_event(state, %{type: "emit", data: data}) do
+    handle_emit(state, data["kind"] || data[:kind], data)
+  end
+
+  defp apply_execution_event(state, %{type: "complete"}), do: complete_turn(state)
+
+  defp apply_execution_event(state, %{type: "error", data: data}) do
+    fail_turn(state, data["message"] || data[:message] || inspect(data))
+  end
+
+  defp apply_execution_event(state, _other), do: state
 
   # A supervisor stop (a shutdown, a rolling deploy) mid-turn: write the
   # interruption while the Repo is still up, drop the queue, and let the

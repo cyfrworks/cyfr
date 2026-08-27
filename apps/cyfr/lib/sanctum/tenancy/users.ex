@@ -35,20 +35,28 @@ defmodule Sanctum.Tenancy.Users do
   and `display_name` follow what the provider asserted this time —
   `email_verified` as the provider's own three answers, so "it never said"
   is not recorded as "it said no".
+
+  An assertion the provider did NOT make leaves the stored value alone. The
+  same reasoning as `email_verified`: `AuthController` builds `name` from
+  the Ueberauth info, which carries neither `:name` nor `:nickname` for
+  some identities, so an absent claim used to write `nil` over a display
+  name an earlier sign-in had recorded — the row lost information by being
+  refreshed.
   """
   @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
   def upsert_from_provider(%{id: id, provider: provider} = info) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.upsert_from_provider", fn ->
       now = DateTime.utc_now()
 
-      seen = %{
-        email: Map.get(info, :email),
-        email_verified: verified_claim(Map.get(info, :verified)),
-        provider: to_string(provider),
-        display_name: Map.get(info, :name),
-        last_seen_at: now,
-        updated_at: now
-      }
+      seen =
+        %{
+          email_verified: verified_claim(Map.get(info, :verified)),
+          provider: to_string(provider),
+          last_seen_at: now,
+          updated_at: now
+        }
+        |> Cyfr.MapUtil.put_present(:email, Map.get(info, :email))
+        |> Cyfr.MapUtil.put_present(:display_name, Map.get(info, :name))
 
       case get(id) do
         {:ok, user} ->

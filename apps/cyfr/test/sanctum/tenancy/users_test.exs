@@ -39,6 +39,44 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert length(Users.list_by_email("SAME@example.com")) == 2
   end
 
+  # An assertion the provider did not make must not erase one it made
+  # before. AuthController builds `name` from the Ueberauth info, which
+  # carries neither :name nor :nickname for some identities — so a later
+  # sign-in wrote nil over a display name an earlier one recorded, and the
+  # row lost information by being refreshed.
+  test "a sign-in that asserts no name or email keeps what is already stored" do
+    stored = person(41, %{email: "keep@example.com", name: "Keep Me"})
+    assert stored.display_name == "Keep Me"
+
+    {:ok, refreshed} =
+      Users.upsert_from_provider(%{
+        id: stored.id,
+        provider: "github",
+        email: nil,
+        name: nil,
+        verified: true
+      })
+
+    assert refreshed.display_name == "Keep Me"
+    assert refreshed.email == "keep@example.com"
+  end
+
+  test "a sign-in that does assert them updates" do
+    stored = person(42, %{email: "old@example.com", name: "Old Name"})
+
+    {:ok, refreshed} =
+      Users.upsert_from_provider(%{
+        id: stored.id,
+        provider: "github",
+        email: "new@example.com",
+        name: "New Name",
+        verified: true
+      })
+
+    assert refreshed.display_name == "New Name"
+    assert refreshed.email == "new@example.com"
+  end
+
   test "a users row is a person: synthetic principal ids are refused" do
     for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes"] do
       assert {:error, %Ecto.Changeset{errors: errors}} =
