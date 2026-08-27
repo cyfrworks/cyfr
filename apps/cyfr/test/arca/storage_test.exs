@@ -421,3 +421,36 @@ defmodule Arca.StorageTest do
     end
   end
 end
+
+defmodule Arca.StorageLocatorWiringTest do
+  # Mutates the global :overlay_locators wiring — must not run beside the
+  # async suites that call locate/1.
+  use ExUnit.Case, async: false
+
+  test "install_locators!/0 fails loud on a wiring that does not match the layout" do
+    original = Application.fetch_env!(:cyfr, :overlay_locators)
+
+    on_exit(fn ->
+      Application.put_env(:cyfr, :overlay_locators, original)
+      Arca.Storage.install_locators!()
+    end)
+
+    # A missing root is a boot error, not a first-touch surprise. The
+    # failed install never clobbers the previously installed map, so
+    # locate/1 keeps answering while this raises.
+    Application.put_env(:cyfr, :overlay_locators, Map.delete(original, "aqua"))
+
+    assert_raise ArgumentError, ~r/overlay_locators must name exactly/, fn ->
+      Arca.Storage.install_locators!()
+    end
+
+    assert {:file, _} = Arca.Storage.locate(["aqua", "agents", "a.md"])
+
+    # A root wired to a module without locate/1 is refused too.
+    Application.put_env(:cyfr, :overlay_locators, %{original | "aqua" => String})
+
+    assert_raise ArgumentError, ~r/does not implement/, fn ->
+      Arca.Storage.install_locators!()
+    end
+  end
+end

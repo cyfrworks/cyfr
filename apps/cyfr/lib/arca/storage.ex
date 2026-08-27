@@ -400,25 +400,65 @@ defmodule Arca.Storage do
           | {:file, unit :: path()}
           | {:dir, unit :: path(), sentinel :: String.t()}
 
+  @locators_key {__MODULE__, :overlay_locators}
+
+  @doc """
+  Assert the locator wiring and install it: `:overlay_locators` must name
+  exactly the overlaid roots (`overlay_roots/0`), each value a module
+  exporting `locate/1` — checked loudly at boot
+  (`Cyfr.Application.start/2`), before anything scans the union, instead
+  of on the first touch of whichever root was forgotten. The verified map
+  is cached in `:persistent_term` so `locate/1` — called per leaf in
+  batch walks — never re-reads config. The map is boot-frozen by design:
+  a test that ever swaps `:overlay_locators` must call this again after
+  `put_env` and after the restore.
+  """
+  @spec install_locators!() :: %{String.t() => module()}
+  def install_locators! do
+    configured = Application.get_env(:cyfr, :overlay_locators, %{})
+    roots = MapSet.new(@overlay_roots)
+    keys = MapSet.new(Map.keys(configured))
+
+    unless MapSet.equal?(roots, keys) do
+      raise ArgumentError, """
+      :overlay_locators must name exactly the overlaid roots.
+        overlaid roots (Arca.Storage layout): #{inspect(Enum.sort(roots))}
+        configured locators:                  #{inspect(Enum.sort(keys))}
+      Remedy: add the missing root's Arca.Storage.UnitLocator to
+      `config :cyfr, :overlay_locators`, or add/remove the root's row in
+      the layout table — the two must always agree.
+      """
+    end
+
+    for {root, mod} <- configured,
+        not (Code.ensure_loaded?(mod) and function_exported?(mod, :locate, 1)) do
+      raise ArgumentError,
+            "locator for #{inspect(root)} (#{inspect(mod)}) does not implement " <>
+              "Arca.Storage.UnitLocator"
+    end
+
+    :persistent_term.put(@locators_key, configured)
+    configured
+  end
+
   @doc """
   Locate `path` against the overlay's unit grammar: the one lookup from a
   logical path to its shadow unit and shape, answered by the root's
-  configured `Arca.Storage.UnitLocator` (pure — no I/O, so batch walks
+  installed `Arca.Storage.UnitLocator` (pure — no I/O, so batch walks
   can classify every leaf without a probe). A non-overlaid root — `meta/`,
-  `guest/`, the empty path — is `:not_overlaid`; an overlaid root without
-  a configured locator is a boot wiring error and raises.
+  `guest/`, the empty path — is `:not_overlaid`. The wiring is asserted
+  and cached by `install_locators!/0` at boot; the lazy fallback here
+  covers `--no-start` scripts.
   """
   @spec locate(path()) :: location()
   def locate([root | _] = path) when root in @overlay_roots do
-    case Map.get(Application.get_env(:cyfr, :overlay_locators, %{}), root) do
-      nil ->
-        raise ArgumentError,
-              "no Arca.Storage.UnitLocator configured for overlaid root #{inspect(root)} — " <>
-                "add it to the :overlay_locators config"
+    locators =
+      case :persistent_term.get(@locators_key, :not_installed) do
+        :not_installed -> install_locators!()
+        map -> map
+      end
 
-      locator ->
-        locator.locate(path)
-    end
+    Map.fetch!(locators, root).locate(path)
   end
 
   def locate(_path), do: :not_overlaid

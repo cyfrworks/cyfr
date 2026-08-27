@@ -17,6 +17,10 @@ defmodule Cyfr.Application do
   def start(_type, _args) do
     # Arca storage setup
     ensure_db_directory!()
+    # Overlay wiring fails loud here — before Bootstrap or the tincture
+    # registry scan the union — not on the first touch of whichever
+    # overlaid root was left without a locator.
+    Arca.Storage.install_locators!()
     maybe_migrate_before_pool()
     # The invoke-budget counters, owned by the application master so they
     # outlive every request that charges them. The Arca.Cache table is
