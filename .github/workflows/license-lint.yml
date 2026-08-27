@@ -5,6 +5,9 @@ on:
     paths:
       - '**/*.ex'
       - '**/*.exs'
+      - 'apps/codex/**'
+      - 'apps/mcp-bridge/server.mjs'
+      - 'wit/**'
       - 'LICENSES/**'
       - '.github/workflows/license-lint.yml'
   push:
@@ -12,6 +15,9 @@ on:
     paths:
       - '**/*.ex'
       - '**/*.exs'
+      - 'apps/codex/**'
+      - 'apps/mcp-bridge/server.mjs'
+      - 'wit/**'
       - 'LICENSES/**'
 
 jobs:
@@ -20,11 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Single source of truth: every Elixir source file carries its own SPDX
+      # Single source of truth: every gated source file carries its own SPDX
       # header in-band. The FSL moat is exactly apps/cyfr/lib/sanctum + its
       # tests; everything else (including the tenancy migrations under
       # priv/repo/migrations) is Apache-2.0. This one gate covers every tracked
-      # .ex/.exs in the repo — root mix.exs, config/, priv/, and all apps.
+      # .ex/.exs in the repo — root mix.exs, config/, priv/, and all apps —
+      # plus the Go CLI (apps/codex), the mcp-bridge server, and the WIT ABI
+      # definitions under wit/, all of which sit outside the moat.
       - name: Assert SPDX license boundary
         run: |
           set -uo pipefail
@@ -59,7 +67,7 @@ jobs:
                 fail=1
               fi
             fi
-          done < <(git ls-files '*.ex' '*.exs')
+          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/server.mjs' 'wit/*.wit')
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

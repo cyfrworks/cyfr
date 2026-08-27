@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Package cmd — cyfr.run namespace + push-token management subcommands.
 //
 // This file is the client side of the MCP `registry` tool. Each cobra

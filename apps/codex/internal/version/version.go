@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Package version carries the CLI's build identity, injected via -ldflags.
 //
 // It lives below cmd so that internal/mcp can announce the real version in

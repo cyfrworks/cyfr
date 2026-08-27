@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Package ref provides component type prefix detection, expansion, and
 // lightweight CLI-side ref parsing.
 //

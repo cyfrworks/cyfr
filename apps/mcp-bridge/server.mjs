@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // CYFR mcp-bridge: wraps stdio MCP servers behind one HTTP MCP endpoint.
 //
 // Architecture: a single Streamable-HTTP-compatible /mcp endpoint. Tools
