@@ -72,8 +72,11 @@ defmodule Sanctum.Caller do
       # A cold page load establishes the same caller several times inside
       # a second (the plug, the dead render, the connected mount, the
       # nested topbar). The short memo collapses those to one pipeline
-      # run. Only successes are cached; revocation is bounded by the TTL
-      # plus the sessions_revoked broadcast that ends mounted views.
+      # run. Only successes are cached, and every session mutation
+      # (`Session.destroy/1`, `destroy_by_hash/1`, `use_athanor/2`,
+      # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
+      # or repointed session misses on its very next establish — the TTL
+      # only bounds reads that race the mutation itself.
       key = memo_key(token, opts)
 
       case Arca.Cache.get(key) do
@@ -173,6 +176,21 @@ defmodule Sanctum.Caller do
       {:error, _reason} ->
         {:error, :unauthenticated}
     end
+  end
+
+  @doc """
+  Drop every established-context memo for a session row key.
+
+  Called by the session mutations (`Sanctum.Session.destroy/1`,
+  `destroy_by_hash/1`, `use_athanor/2`, `revoke_all_for_user/1`) so a
+  revoked or repointed session is a next-request fact rather than a
+  TTL-bounded one — the same invalidate-on-write discipline
+  `Sanctum.Namespace.invalidate/1` applies to its cache.
+  """
+  @spec invalidate_hash(binary()) :: :ok
+  def invalidate_hash(hash) when is_binary(hash) do
+    Arca.Cache.delete_match({:established, hash, :_, :_})
+    :ok
   end
 
   defp memo_key(token, opts) do

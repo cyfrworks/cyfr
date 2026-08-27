@@ -5,9 +5,10 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   @moduledoc """
   Resolves the caller's `%Sanctum.Context{}` and assigns it as `:context`.
 
-  There is no session. Every request carries its own credential and is resolved
-  against the database on its own, so a revoked one stops working on the next
-  call rather than whenever a cached session would have expired.
+  There is no server-side session state beyond the session row. Every request
+  carries its own credential; resolution goes through `Sanctum.Caller`, whose
+  short established-context memo is invalidated by every session mutation, so
+  a revoked credential stops working on the next call.
 
   1. `Authorization: Bearer …` — an API key or a Sanctum session token, told
      apart by the `cyfr_` prefix.
@@ -188,9 +189,10 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # ============================================================================
 
   # Two credential kinds share the header and are told apart by the `cyfr_`
-  # prefix: an API key, or a Sanctum session token. Both resolve to a Context on
-  # the request itself, consulting the database every time — no server-side
-  # session state, and no cached copy that can outlive a logout.
+  # prefix: an API key, or a Sanctum session token. Both resolve to a Context
+  # on the request itself; the session path rides `Sanctum.Caller`'s short
+  # memo, which every logout/revocation invalidates, so no cached copy
+  # outlives one.
   #
   # Returns {:ok, context, :api_key | :session_token}, :no_key when no bearer
   # credential is present, or {:error, reason}.
@@ -208,9 +210,10 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     end
   end
 
-  # A Sanctum session token presented as a bearer credential. `Session.load/2`
-  # reads the row, so a revoked or expired session is rejected on the very next
-  # request rather than surviving in a cache.
+  # A Sanctum session token presented as a bearer credential.
+  # `Caller.establish/2` reads the row (through a short memo that every
+  # session mutation invalidates), so a revoked or expired session is
+  # rejected on the very next request.
   defp validate_session_token(token) do
     # This surface never slides the session — the console hooks do.
     case Sanctum.Caller.establish(token, refresh: false) do

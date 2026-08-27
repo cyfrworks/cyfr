@@ -333,7 +333,13 @@ defmodule Sanctum.SignIn do
 
     case Members.ensure_platform(user_id) do
       {:ok, _} ->
-        unless already?, do: emit_platform_bootstrap(user_id)
+        unless already? do
+          emit_platform_bootstrap(user_id)
+          # A freshly granted operator bit reaches this person's already
+          # mounted views: LiveAuth re-establishes on membership_changed.
+          Members.broadcast_change(user_id, nil, :platform_granted)
+        end
+
         seat_in_home(user_id)
 
       {:error, reason} ->
@@ -344,8 +350,9 @@ defmodule Sanctum.SignIn do
   end
 
   # An email dropped from CYFR_PLATFORM_ADMIN_EMAILS loses the operator bit
-  # here. The bit is re-read from the row on every request, so a revoke that
-  # fails leaves an operator who should not be one — never silent.
+  # here: the revoke removes the row and revokes the person's other
+  # sessions, so no established context keeps the capability. A revoke
+  # that fails leaves an operator who should not be one — never silent.
   defp apply_platform(user_id, :allowed) do
     case Members.revoke_platform(user_id) do
       :ok ->

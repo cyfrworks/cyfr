@@ -115,13 +115,11 @@ defmodule Arca.PolicyLogTest do
         PolicyLog.record(log_attrs(%{id: "pl_plat", athanor_id: "ath_x"}))
 
       platform_ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %PolicyLog{id: "pl_plat"} = PolicyLog.get_tenant(platform_ctx, log.id)
@@ -163,13 +161,11 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_br1", request_id: "req_plat"}))
 
       platform_ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %PolicyLog{request_id: "req_plat"} =

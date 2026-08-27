@@ -188,22 +188,38 @@ defmodule Sanctum.CallerTest do
       :ok
     end
 
-    test "a hit inside the TTL serves the established context; expiry re-reads the row" do
+    test "a hit inside the TTL serves the established context" do
       {user, _home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))
 
       assert {:ok, ctx} = Caller.establish(session.token)
-
-      # Within the TTL the memo answers — even after the row is retired;
-      # revocation is bounded by the TTL plus the revoked-sessions
-      # broadcast that ends mounted views.
-      :ok = Sanctum.Session.destroy(session.token)
       assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
       assert user_id == ctx.user_id
+      refute Arca.Cache.match({:established, :_, :_, :_}) == []
+    end
 
-      # Once the memo is gone, the refusal is back.
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+    test "destroy invalidates the memo: a logged-out session refuses on the next call" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+
+      assert {:ok, _ctx} = Caller.establish(session.token)
+
+      :ok = Sanctum.Session.destroy(session.token)
       assert {:error, :unauthenticated} = Caller.establish(session.token)
+    end
+
+    test "revoke_all_for_user invalidates every memoized session of the person" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      user = Map.put(user, :namespace, user.slug)
+      s1 = session_for(user)
+      s2 = session_for(user)
+
+      assert {:ok, _} = Caller.establish(s1.token)
+      assert {:ok, _} = Caller.establish(s2.token)
+
+      assert {:ok, 2} = Sanctum.Session.revoke_all_for_user(user.user_id)
+      assert {:error, :unauthenticated} = Caller.establish(s1.token)
+      assert {:error, :unauthenticated} = Caller.establish(s2.token)
     end
 
     test "refusals are never cached" do

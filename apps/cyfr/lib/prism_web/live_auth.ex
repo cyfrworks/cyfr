@@ -97,7 +97,18 @@ defmodule PrismWeb.LiveAuth do
     end
   end
 
-  defp standing_changed({:membership_changed, _}, socket), do: {:halt, socket}
+  # Any other membership change — joined a group, the operator bit granted —
+  # re-derives the caller instead of trusting the Context assigned at mount
+  # for the socket's lifetime.
+  defp standing_changed({:membership_changed, _}, socket) do
+    token = socket.assigns[:session_token]
+    focus = socket.assigns.context.athanor_id
+
+    case PrismWeb.AuthHelpers.authenticate_session(token, focus) do
+      {:ok, ctx} -> {:halt, assign(socket, current_user: ctx, context: ctx)}
+      {:error, _} -> {:halt, redirect(socket, to: "/")}
+    end
+  end
   defp standing_changed({:session_created, _}, socket), do: {:halt, socket}
   defp standing_changed(_msg, socket), do: {:cont, socket}
 end

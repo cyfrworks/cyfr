@@ -99,7 +99,7 @@ defmodule Sanctum.ContextTest do
     end
 
     test "keeps the scope it is given" do
-      assert Context.build(user_id: "u1", scope: :platform).scope == :platform
+      assert Context.internal(user_id: "u1").scope == :platform
       assert Context.build(user_id: "u1", athanor_id: "ath_1").scope == :athanor
     end
   end
@@ -349,12 +349,10 @@ defmodule Sanctum.ContextTest do
 
     test "platform scope bypasses tenant check" do
       ctx =
-        Context.build(
+        Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:storage_read, :*],
-          scope: :platform,
           namespace: "testns",
-          authenticated: true,
           auth_method: :oidc
         )
 
@@ -520,10 +518,8 @@ defmodule Sanctum.ContextTest do
     end
 
     test "accepts all valid scopes" do
-      for scope <- [:athanor, :platform] do
-        ctx = Context.build(user_id: "u1", scope: scope)
-        assert ctx.scope == scope
-      end
+      assert Context.build(user_id: "u1", scope: :athanor).scope == :athanor
+      assert Context.internal(user_id: "u1").scope == :platform
     end
 
     test "accepts nil for all string fields" do
@@ -560,7 +556,7 @@ defmodule Sanctum.ContextTest do
     end
 
     test "allows nil namespace when scope: :platform (system tasks set namespace explicitly)" do
-      ctx = Context.build(user_id: "system", scope: :platform, authenticated: true)
+      ctx = Context.internal(user_id: "system")
       assert ctx.namespace == nil
       assert ctx.scope == :platform
     end

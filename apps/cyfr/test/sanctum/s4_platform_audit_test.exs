@@ -3,17 +3,13 @@
 
 defmodule Sanctum.S4PlatformAuditTest do
   @moduledoc """
-  Phase 2 S4: every `scope: :platform` context construction is audited via
-  `[:cyfr, :sanctum, :platform_context]` telemetry. The sanctioned path
-  (`Context.internal/1` / `Sanctum.system_context/0`) is marked
-  `sanctioned: true`; a direct `Context.build(scope: :platform, ...)` is
-  still allowed (legitimate test fixtures depend on it) but recorded
-  `sanctioned: false` and logged, so it is observable rather than silent.
-
-  (A hard raise on direct platform construction is deferred: ~20 cross-app
-  test fixtures build platform contexts directly; migrating them to
-  `internal/1` is a separate, isolated step. The audit objective — knowing
-  who creates the tenant-bypassing scope — is fully met here.)
+  Phase 2 S4: platform-scope construction is closed and audited. Every
+  `scope: :platform` construction emits `[:cyfr, :sanctum, :platform_context]`
+  telemetry; the one sanctioned path (`Context.internal/1` /
+  `Sanctum.system_context/0`, fixtures via `Sanctum.TestContext.platform/1`)
+  is marked `sanctioned: true`, and a direct
+  `Context.build(scope: :platform, ...)` raises — the telemetry event still
+  fires first, so even a refused construction leaves a record of who tried.
   """
   use ExUnit.Case, async: false
 
@@ -52,11 +48,19 @@ defmodule Sanctum.S4PlatformAuditTest do
     assert_received {:platform_ctx, %{count: 1}, %{sanctioned: true, user_id: "svc"}}
   end
 
-  test "a direct Context.build(scope: :platform) is allowed but unsanctioned" do
-    assert %Context{scope: :platform} =
-             Context.build(user_id: "u1", scope: :platform, authenticated: true)
+  test "a direct Context.build(scope: :platform) is refused, and the attempt recorded" do
+    assert_raise ArgumentError, ~r/platform-scope context is built only by/, fn ->
+      Context.build(user_id: "u1", scope: :platform, authenticated: true)
+    end
 
     assert_received {:platform_ctx, %{count: 1}, %{sanctioned: false, user_id: "u1"}}
+  end
+
+  test "Sanctum.TestContext.platform/1 is the sanctioned fixture path" do
+    assert %Context{scope: :platform, platform_admin: true} =
+             Sanctum.TestContext.platform(user_id: "ops", platform_admin: true)
+
+    assert_received {:platform_ctx, %{count: 1}, %{sanctioned: true, user_id: "ops"}}
   end
 
   test "non-platform construction emits NO platform event" do

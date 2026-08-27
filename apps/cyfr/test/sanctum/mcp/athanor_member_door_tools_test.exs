@@ -453,14 +453,10 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
       assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Wide #{n}"})
 
       operator =
-        Context.build(
+        Sanctum.TestContext.platform(
           user_id: ops,
-          athanor_id: nil,
-          provider: "github",
           permissions: [:*],
-          scope: :platform,
           auth_method: :oidc,
-          authenticated: true,
           platform_admin: true
         )
 

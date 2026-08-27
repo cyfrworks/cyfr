@@ -306,14 +306,12 @@ defmodule Arca.ExecutionTest do
       assert count == 1
 
       ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "user_test",
           athanor_id: @athanor,
           permissions: [:execution_read],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       updated = Execution.get_tenant(ctx, id)

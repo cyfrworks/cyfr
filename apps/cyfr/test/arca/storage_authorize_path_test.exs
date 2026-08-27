@@ -154,7 +154,7 @@ defmodule Arca.StorageAuthorizePathTest do
 
   test "a context without an athanor cannot touch tenant storage at all" do
     platform =
-      Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+      Sanctum.TestContext.platform(user_id: "op")
 
     # Platform opens an athanor the way it does for rows — with a context
     # focused on it. Unfocused, tenant paths are nowhere: fail closed.

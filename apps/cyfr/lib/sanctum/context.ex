@@ -33,9 +33,11 @@ defmodule Sanctum.Context do
   contexts `internal/1` builds for sweepers, retention, health probes and
   seeding, which cross athanors by nature. A platform admin (the operator)
   is a person like any other, focused on one athanor at a time; the
-  capability rides on the context as `platform_admin: true`, is re-read from
-  the membership row on every request, and is what the `door.*` verbs and
-  the audited "open another athanor" check — never a widened scope.
+  capability rides on the context as `platform_admin: true`, is re-derived
+  from the membership row whenever the context is established (behind
+  `Sanctum.Caller`'s short memo, which revocation invalidates), and is what
+  the `door.*` verbs and the audited "open another athanor" check — never a
+  widened scope.
   Only *how* a context is constructed varies by deployment configuration —
   never the functions that consume it.
   """
@@ -268,13 +270,13 @@ defmodule Sanctum.Context do
       plane: plane
     }
 
-    # Audit every platform-scope construction. `:platform` bypasses ALL tenant
-    # checks, so there must be a record of who creates it. The sanctioned path
-    # (`internal/1` / `system_context/0`) sets the private `__platform_ok__`
-    # marker; a direct `Context.build(scope: :platform, ...)` is still allowed
-    # (many legitimate test fixtures rely on it) but is logged as unsanctioned
-    # so it is observable rather than silent.
-    maybe_audit_platform(ctx, Map.get(attrs, :__platform_ok__, false) == true)
+    # Gate every platform-scope construction. `:platform` bypasses ALL tenant
+    # checks, so it has exactly one construction path: `internal/1` (and its
+    # `system_context/0` facade), which sets the private `__platform_ok__`
+    # marker. A direct `Context.build(scope: :platform, ...)` is refused —
+    # a log line is not a gate. Telemetry still records every construction.
+    # Test fixtures use `Sanctum.TestContext.platform/1`.
+    audit_platform!(ctx, Map.get(attrs, :__platform_ok__, false) == true)
     ctx
   end
 
@@ -711,8 +713,8 @@ defmodule Sanctum.Context do
     )
   end
 
-  # Audit/telemetry for platform-scope construction (see build/1).
-  defp maybe_audit_platform(%__MODULE__{scope: :platform} = ctx, sanctioned?) do
+  # Audit/telemetry + gate for platform-scope construction (see build/1).
+  defp audit_platform!(%__MODULE__{scope: :platform} = ctx, sanctioned?) do
     caller = platform_caller()
 
     Sanctum.Telemetry.platform_context_event(%{
@@ -724,17 +726,17 @@ defmodule Sanctum.Context do
     })
 
     unless sanctioned? do
-      Logger.warning(
-        "[Sanctum.Context] platform-scope context built directly (not via " <>
-          "Sanctum.Context.internal/1 / Sanctum.system_context/0): " <>
-          "user=#{ctx.user_id} auth_method=#{ctx.auth_method} caller=#{caller}"
-      )
+      raise ArgumentError,
+            "Sanctum.Context.build/1: a platform-scope context is built only by " <>
+              "Sanctum.Context.internal/1 / Sanctum.system_context/0 " <>
+              "(tests: Sanctum.TestContext.platform/1); " <>
+              "caller=#{caller} user=#{ctx.user_id} auth_method=#{ctx.auth_method}"
     end
 
     :ok
   end
 
-  defp maybe_audit_platform(_ctx, _sanctioned?), do: :ok
+  defp audit_platform!(_ctx, _sanctioned?), do: :ok
 
   # First stacktrace frame outside this module — cheap; the platform path is
   # low-frequency (system / cron / bootstrap), not per-request.

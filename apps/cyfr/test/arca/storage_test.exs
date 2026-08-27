@@ -117,7 +117,7 @@ defmodule Arca.StorageTest do
     end
 
     test "a context without an athanor cannot name a component path (fail closed)" do
-      ctx = Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+      ctx = Sanctum.TestContext.platform(user_id: "op")
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         Storage.physical_segments(ctx, ["components", "tinctures"])
@@ -179,7 +179,7 @@ defmodule Arca.StorageTest do
 
     test "raises for a platform context with no athanor too" do
       ctx =
-        Context.build(user_id: "system", scope: :platform, athanor_id: nil, authenticated: true)
+        Sanctum.TestContext.platform(user_id: "system")
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         Storage.tenant_segments(ctx)
@@ -215,8 +215,10 @@ defmodule Arca.StorageTest do
     test "the seed bundle is readable only by server-internal contexts" do
       member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
 
+      # An operator's platform context is person-derived (`auth_method:
+      # :oidc`), not the `:system` provenance the seed gate admits.
       platform =
-        Context.build(user_id: "op", scope: :platform, athanor_id: nil, authenticated: true)
+        Sanctum.TestContext.platform(user_id: "op", auth_method: :oidc)
 
       seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
 

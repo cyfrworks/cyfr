@@ -89,13 +89,11 @@ defmodule Opus.ExecutorCascadeTest do
       assert Execution.list_running_children(parent_id) == []
 
       ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "user_cascade_test",
           permissions: [:execution_read],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       child1 = Execution.get_tenant(ctx, child1_id)
@@ -161,13 +159,11 @@ defmodule Opus.ExecutorCascadeTest do
 
       # Verify status unchanged
       read_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "user_cascade_test",
           permissions: [:execution_read],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       child = Execution.get_tenant(read_ctx, child_id)
@@ -264,13 +260,11 @@ defmodule Opus.ExecutorCascadeTest do
 
       # The execution's own record is left running and untouched.
       platform_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "user_b",
           permissions: [:storage_read],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "ns_b",
-          authenticated: true
+          namespace: "ns_b"
         )
 
       assert Execution.get_tenant(platform_ctx, exec_id).status == "running"
@@ -312,13 +306,11 @@ defmodule Opus.ExecutorCascadeTest do
       assert_receive {:DOWN, ^ref, :process, ^target, _}, 1000
 
       platform_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "user_b",
           permissions: [:storage_read],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "ns_b",
-          authenticated: true
+          namespace: "ns_b"
         )
 
       refute Execution.get_tenant(platform_ctx, exec_id).status == "running"

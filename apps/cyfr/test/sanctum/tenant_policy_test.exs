@@ -28,7 +28,7 @@ defmodule Sanctum.TenantPolicyTest do
 
   describe "verify/2" do
     test ":platform scope bypasses (cross-tenant ops e.g. retention sweeps)" do
-      ctx = Context.build(user_id: "u1", scope: :platform)
+      ctx = Sanctum.TestContext.platform(user_id: "u1")
       assert :ok = TenantPolicy.verify(ctx, %{athanor_id: "any"})
     end
 

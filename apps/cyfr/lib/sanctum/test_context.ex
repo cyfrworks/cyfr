@@ -131,5 +131,21 @@ if Mix.env() in [:test, :dev] do
         authenticated: true
       )
     end
+
+    @doc """
+    Build a platform-scope test Context through the one sanctioned
+    construction path (`Sanctum.Context.internal/1`) — `build/1` refuses
+    `scope: :platform` from anywhere else.
+
+    Defaults are `internal/1`'s (`user_id: "system"`, `auth_method: :system`,
+    the four system permissions); fixtures that need the wildcard pass
+    `permissions: [:*]`, and `platform_admin: true` marks the operator
+    capability on the returned struct.
+    """
+    def platform(opts \\ []) do
+      {admin?, opts} = Keyword.pop(opts, :platform_admin, false)
+      ctx = Context.internal(opts)
+      %{ctx | platform_admin: admin? == true}
+    end
   end
 end

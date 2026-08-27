@@ -60,8 +60,8 @@ defmodule Cyfr.Bootstrap do
                 "revoking platform scope and its sessions"
             )
 
+            # revoke_platform/1 revokes the person's sessions with the row.
             Members.revoke_platform(user_id)
-            Sanctum.Session.revoke_all_for_user(user_id)
           end
 
         _ ->

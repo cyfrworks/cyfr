@@ -851,7 +851,13 @@ defmodule Compendium.RegistryTest do
                  publisher: "cyfr"
                })
 
-      platform_ctx = %{ctx | scope: :platform}
+      platform_ctx =
+        Sanctum.TestContext.platform(
+          user_id: ctx.user_id,
+          namespace: ctx.namespace,
+          athanor_id: ctx.athanor_id,
+          permissions: [:*]
+        )
 
       assert {:ok, component} =
                Registry.publish_bytes(platform_ctx, @valid_wasm, %{

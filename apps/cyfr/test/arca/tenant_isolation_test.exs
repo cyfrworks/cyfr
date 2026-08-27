@@ -179,13 +179,11 @@ defmodule Arca.TenantIsolationTest do
         })
 
       platform_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %Arca.Execution{id: "exec_platform_test"} =
@@ -612,13 +610,11 @@ defmodule Arca.TenantIsolationTest do
         })
 
       platform_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %Arca.McpLog{id: "mlog_platform_test"} =
@@ -665,13 +661,11 @@ defmodule Arca.TenantIsolationTest do
         })
 
       platform_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %Arca.PolicyLog{id: "plog_platform_test"} =
@@ -715,13 +709,11 @@ defmodule Arca.TenantIsolationTest do
         })
 
       platform_ctx =
-        Sanctum.Context.build(
+        Sanctum.TestContext.platform(
           user_id: "platform_admin",
           permissions: [:*],
-          scope: :platform,
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %Arca.PolicyLog{} =

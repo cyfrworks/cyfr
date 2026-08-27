@@ -56,13 +56,11 @@ defmodule Arca.McpLogTest do
       {:ok, log} = McpLog.record(log_attrs(%{id: "req_upd_1"}))
 
       ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert {:ok, updated} =
@@ -74,13 +72,11 @@ defmodule Arca.McpLogTest do
 
     test "returns not_found for missing log" do
       ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert {:error, :not_found} =
@@ -192,13 +188,11 @@ defmodule Arca.McpLogTest do
         McpLog.record(log_attrs(%{id: "req_plat", athanor_id: "ath_x"}))
 
       platform_ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert %McpLog{id: "req_plat"} = McpLog.get_tenant(platform_ctx, log.id)
@@ -245,13 +239,11 @@ defmodule Arca.McpLogTest do
       assert count >= 1
 
       platform_ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       assert is_nil(McpLog.get_tenant(platform_ctx, "req_del1"))
@@ -284,13 +276,11 @@ defmodule Arca.McpLogTest do
       assert count >= 1
 
       platform_ctx =
-        Context.build(
-          scope: :platform,
+        Sanctum.TestContext.platform(
           user_id: "admin",
           permissions: [:*],
           auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+          namespace: "testns"
         )
 
       # ath_a record deleted

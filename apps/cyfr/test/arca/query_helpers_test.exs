@@ -56,7 +56,7 @@ defmodule Arca.QueryHelpersTest do
       # Platform readers that cross athanors use where_tenant_unless_platform/2;
       # a platform task working inside one athanor carries that athanor.
       ctx =
-        Context.build(user_id: "admin", athanor_id: nil, scope: :platform, authenticated: true)
+        Sanctum.TestContext.platform(user_id: "admin")
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         QueryHelpers.where_tenant(base_query(), ctx)
@@ -75,7 +75,7 @@ defmodule Arca.QueryHelpersTest do
   describe "where_tenant_unless_platform/2" do
     test "a platform context reads unfiltered" do
       ctx =
-        Context.build(user_id: "admin", athanor_id: nil, scope: :platform, authenticated: true)
+        Sanctum.TestContext.platform(user_id: "admin")
 
       query = QueryHelpers.where_tenant_unless_platform(base_query(), ctx)
       assert query.wheres == []

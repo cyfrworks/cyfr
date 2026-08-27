@@ -155,6 +155,21 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
+  The token hashes of every session of one user — what a user-wide
+  revocation invalidates in the established-context memo, which is keyed
+  by hash. A store failure returns `[]`: the delete that follows still
+  lands, and the memo entries it misses lapse with the TTL.
+  """
+  @spec hashes_by_user(String.t()) :: [binary()]
+  def hashes_by_user(user_id) when is_binary(user_id) do
+    Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in hashes_by_user: #{Exception.message(e)}")
+      []
+  end
+
+  @doc """
   Delete all expired sessions globally. Used by daemon processes for housekeeping.
 
   Returns `{:ok, count}`.

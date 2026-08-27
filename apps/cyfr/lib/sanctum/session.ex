@@ -323,6 +323,9 @@ defmodule Sanctum.Session do
       when is_binary(hash) and is_binary(athanor_id) do
     with {:ok, focused} <- Context.focus(ctx, athanor_id),
          :ok <- Arca.SessionStorage.update_athanor(hash, athanor_id) do
+      # The next establish must read the repointed row, not the memo of
+      # the athanor this session just left.
+      Sanctum.Caller.invalidate_hash(hash)
       {:ok, focused}
     end
   end
@@ -336,7 +339,13 @@ defmodule Sanctum.Session do
   """
   @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_all_for_user(user_id) when is_binary(user_id) do
+    # The memo is keyed by token hash, so a user-wide revocation collects
+    # the hashes first, deletes the rows, then drops each memo — a session
+    # racing in between misses the row and cannot re-cache.
+    hashes = Arca.SessionStorage.hashes_by_user(user_id)
+
     with {:ok, count} <- Arca.SessionStorage.delete_by_user(user_id) do
+      Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
       broadcast_sessions_revoked(user_id)
       {:ok, count}
     end
@@ -352,7 +361,7 @@ defmodule Sanctum.Session do
   """
   @spec destroy(String.t()) :: :ok | {:error, term()}
   def destroy(token) when is_binary(token) do
-    Arca.SessionStorage.delete_session(hash_token(token))
+    destroy_by_hash(hash_token(token))
   end
 
   @doc """
@@ -393,7 +402,11 @@ defmodule Sanctum.Session do
   """
   @spec destroy_by_hash(binary()) :: :ok | {:error, term()}
   def destroy_by_hash(hash) when is_binary(hash) do
-    Arca.SessionStorage.delete_session(hash)
+    with :ok <- Arca.SessionStorage.delete_session(hash) do
+      # After the row delete, so an establish racing the logout cannot
+      # re-cache a context the delete is about to orphan.
+      Sanctum.Caller.invalidate_hash(hash)
+    end
   end
 
   defp hash_token(token), do: :crypto.hash(:sha256, token)

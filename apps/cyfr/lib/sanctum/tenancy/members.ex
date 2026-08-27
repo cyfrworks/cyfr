@@ -128,12 +128,23 @@ defmodule Sanctum.Tenancy.Members do
   Remove the platform-admin row for `user_id`, if any. A failure is
   reported, not swallowed: the caller is taking a capability away, and
   answering `:ok` while the row survives would leave the operator bit on.
+
+  When a row was actually removed, the person's sessions are revoked with
+  it (`Sanctum.Session.revoke_all_for_user/1`): the capability rides on
+  established contexts — memoized per request, held for a LiveView
+  socket's lifetime — and ending the sessions is what makes the
+  revocation a next-request fact on every surface. A no-op revoke (no
+  row) touches nothing, so the routine sign-in of a non-operator never
+  logs anyone out.
   """
   @spec revoke_platform(String.t()) :: :ok | {:error, :database_error}
   def revoke_platform(user_id) when is_binary(user_id) do
-    Arca.Repo.delete_all(
-      from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
-    )
+    {count, _} =
+      Arca.Repo.delete_all(
+        from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
+      )
+
+    if count > 0, do: Sanctum.Session.revoke_all_for_user(user_id)
 
     :ok
   rescue
