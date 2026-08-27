@@ -38,6 +38,9 @@ defmodule PrismWeb.LoginLive do
 
   @impl true
   def handle_event("start", %{"provider" => provider}, socket) do
+    now = System.monotonic_time(:millisecond)
+    last = socket.assigns[:last_start_at]
+
     cond do
       not DeviceFlow.provider?(provider) ->
         {:noreply, socket}
@@ -45,8 +48,15 @@ defmodule PrismWeb.LoginLive do
       socket.assigns.login_state == :waiting ->
         {:noreply, socket}
 
+      # Each click mints a device code at the IdP — a double-click or a
+      # rage-click should cost one round-trip, not one per click.
+      # (Monotonic time is negative on the BEAM — nil is the sentinel,
+      # never 0.)
+      is_integer(last) and now - last < 2_000 ->
+        {:noreply, socket}
+
       true ->
-        start_device_flow(socket, provider)
+        start_device_flow(assign(socket, :last_start_at, now), provider)
     end
   end
 

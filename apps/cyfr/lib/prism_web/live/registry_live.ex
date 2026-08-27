@@ -103,6 +103,11 @@ defmodule PrismWeb.RegistryLive do
     component_id = socket.assigns.appeal_pending
 
     cond do
+      # A second click while a device flow is already out to the provider
+      # would mint a second code and orphan the first — ignore it.
+      socket.assigns.appeal_state == :waiting ->
+        {:noreply, socket}
+
       component_id in [nil, ""] ->
         {:noreply, put_flash(socket, :error, "No takedown selected.")}
 

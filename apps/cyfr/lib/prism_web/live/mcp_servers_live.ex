@@ -267,14 +267,16 @@ defmodule PrismWeb.McpServersLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    if connected?(socket) do
-      {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
-    else
-      {:noreply, socket}
-    end
+    # Paint the frame first — refresh_servers probes every server.
+    if connected?(socket), do: send(self(), :load)
+    {:noreply, socket}
   end
 
   @impl true
+  def handle_info(:load, socket) do
+    {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
+  end
+
   def handle_info(:mcp_servers_changed, socket) do
     {:noreply, refresh_servers(socket)}
   end

@@ -149,8 +149,8 @@ defmodule PrismWeb.ConnCase do
   """
   defmacro live_authenticated(conn, path) do
     quote do
-      {:ok, view, html} = live(unquote(conn), unquote(path))
-      {view, html}
+      {:ok, view, _mount_html} = live(unquote(conn), unquote(path))
+      {view, PrismWeb.ConnCase.settled_render(view)}
     end
   end
 
@@ -163,13 +163,34 @@ defmodule PrismWeb.ConnCase do
     PrismWeb.Focus.path(athanor, suffix)
   end
 
-  @doc "Mount `suffix` under the athanor in focus (Home by default); returns `{view, html}`."
+  @doc """
+  Mount `suffix` under the athanor in focus (Home by default); returns
+  `{view, html}` where `html` is the settled page — rendered after the
+  paint-then-load views' `:load` message has been served.
+  """
   defmacro mount_athanor(conn, suffix, athanor \\ nil) do
     quote do
-      {:ok, view, html} =
+      {:ok, view, _mount_html} =
         live(unquote(conn), PrismWeb.ConnCase.athanor_path(unquote(suffix), unquote(athanor)))
 
-      {view, html}
+      {view, PrismWeb.ConnCase.settled_render(view)}
+    end
+  end
+
+  @doc """
+  Render the settled page: data-heavy views paint a frame and load in a
+  `:load` message, and the topbar child does the same — a render call is
+  served after those messages, so what this returns is the page a person
+  actually sees, and no load is still mid-query when the test exits (a
+  LiveView killed mid-query poisons the shared SQLite sandbox connection
+  for the next test).
+  """
+  def settled_render(view) do
+    html = Phoenix.LiveViewTest.render(view)
+
+    case Phoenix.LiveViewTest.find_live_child(view, "topbar") do
+      nil -> html
+      child -> Phoenix.LiveViewTest.render(child) && Phoenix.LiveViewTest.render(view)
     end
   end
 end

@@ -36,9 +36,8 @@ defmodule PrismWeb.MembersLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    if connected?(socket),
-      do: {:noreply, socket |> load() |> assign(:loading, false)},
-      else: {:noreply, socket}
+    if connected?(socket), do: send(self(), :load_members)
+    {:noreply, socket}
   end
 
   @impl true
@@ -127,6 +126,10 @@ defmodule PrismWeb.MembersLive do
   end
 
   @impl true
+  def handle_info(:load_members, socket) do
+    {:noreply, socket |> load() |> assign(:loading, false)}
+  end
+
   def handle_info({:notify, _athanor_id, kind, _payload}, socket)
       when kind in [:member_changed, :athanor_changed] do
     {:noreply, load(socket)}

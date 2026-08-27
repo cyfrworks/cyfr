@@ -46,7 +46,10 @@ defmodule PrismWeb.BuildsLive do
     # Run compile async so progress messages can be received
     lv = self()
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
            args = %{"reference" => reference, "build_id" => build_id}
            result = call_tool(socket, "build/compile", args)
            send(lv, {:build_complete, result})
@@ -75,48 +78,50 @@ defmodule PrismWeb.BuildsLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    if connected?(socket) do
-      toolchains =
-        case call_tool(socket, "build/toolchains", %{}) do
-          {:ok, %{toolchains: tc}} when is_map(tc) ->
-            normalize_toolchains(tc)
-
-          {:ok, %{toolchains: list}} when is_list(list) ->
-            list
-
-          {:ok, list} when is_list(list) ->
-            list
-
-          other ->
-            Logger.warning("[BuildsLive] build/toolchains failed: #{inspect(other)}")
-            []
-        end
-
-      socket =
-        case discover_local_components(socket.assigns.context) do
-          {:ok, component_refs} ->
-            assign(socket, :components, component_refs)
-
-          {:error, reason} ->
-            # An unreadable tree is an outage, not an empty picker — say so
-            # rather than showing a roster with nothing in it.
-            Logger.warning("[BuildsLive] component discovery failed: #{inspect(reason)}")
-
-            socket
-            |> assign(:components, [])
-            |> put_flash(:error, "Component discovery failed — storage is unreachable")
-        end
-
-      {:noreply,
-       socket
-       |> assign(:toolchains, toolchains)
-       |> assign(:loading, false)}
-    else
-      {:noreply, socket}
-    end
+    # Paint first — toolchains and discovery are two tool calls.
+    if connected?(socket), do: send(self(), :load)
+    {:noreply, socket}
   end
 
   @impl true
+  def handle_info(:load, socket) do
+    toolchains =
+      case call_tool(socket, "build/toolchains", %{}) do
+        {:ok, %{toolchains: tc}} when is_map(tc) ->
+          normalize_toolchains(tc)
+
+        {:ok, %{toolchains: list}} when is_list(list) ->
+          list
+
+        {:ok, list} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[BuildsLive] build/toolchains failed: #{inspect(other)}")
+          []
+      end
+
+    socket =
+      case discover_local_components(socket.assigns.context) do
+        {:ok, component_refs} ->
+          assign(socket, :components, component_refs)
+
+        {:error, reason} ->
+          # An unreadable tree is an outage, not an empty picker — say so
+          # rather than showing a roster with nothing in it.
+          Logger.warning("[BuildsLive] component discovery failed: #{inspect(reason)}")
+
+          socket
+          |> assign(:components, [])
+          |> put_flash(:error, "Component discovery failed — storage is unreachable")
+      end
+
+    {:noreply,
+     socket
+     |> assign(:toolchains, toolchains)
+     |> assign(:loading, false)}
+  end
+
   def handle_info({:build_progress, %{phase: phase, message: message}}, socket) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :build_log, socket.assigns.build_log ++ [entry])}

@@ -35,17 +35,9 @@ defmodule PrismWeb.SettingsLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    if connected?(socket) do
-      {:noreply,
-       socket
-       |> load_system_status()
-       |> load_log_stats()
-       |> load_door()
-       |> load_prefs()
-       |> assign(:loading, false)}
-    else
-      {:noreply, socket}
-    end
+    # Paint first — the system-status load probes the registry.
+    if connected?(socket), do: send(self(), :load)
+    {:noreply, socket}
   end
 
   @impl true
@@ -89,6 +81,16 @@ defmodule PrismWeb.SettingsLive do
   end
 
   @impl true
+  def handle_info(:load, socket) do
+    {:noreply,
+     socket
+     |> load_system_status()
+     |> load_log_stats()
+     |> load_door()
+     |> load_prefs()
+     |> assign(:loading, false)}
+  end
+
   def handle_info({:request, _metadata, _measurements}, socket) do
     {:noreply, load_log_stats(socket)}
   end

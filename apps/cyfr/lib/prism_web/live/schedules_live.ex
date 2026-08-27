@@ -136,18 +136,19 @@ defmodule PrismWeb.SchedulesLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    if connected?(socket) do
-      {:noreply,
-       socket
-       |> fetch_schedules()
-       |> fetch_components()
-       |> assign(:loading, false)}
-    else
-      {:noreply, socket}
-    end
+    if connected?(socket), do: send(self(), :load)
+    {:noreply, socket}
   end
 
   @impl true
+  def handle_info(:load, socket) do
+    {:noreply,
+     socket
+     |> fetch_schedules()
+     |> fetch_components()
+     |> assign(:loading, false)}
+  end
+
   def handle_info(:schedules_updated, socket) do
     {:noreply, fetch_schedules(socket)}
   end

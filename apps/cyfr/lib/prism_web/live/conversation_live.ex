@@ -35,7 +35,9 @@ defmodule PrismWeb.ConversationLive do
       |> assign(:active_nav, "chat")
       |> assign(:conversations, [])
       |> assign(:conversation, nil)
-      |> assign(:messages, [])
+      |> stream(:messages, [])
+      |> assign(:pending_approvals, [])
+      |> assign(:any_messages, false)
       |> assign(:input, "")
       |> assign(:running, false)
       |> assign(:turn_user, nil)
@@ -147,7 +149,9 @@ defmodule PrismWeb.ConversationLive do
     socket
     |> unsubscribe_current()
     |> assign(:conversation, nil)
-    |> assign(:messages, [])
+    |> stream(:messages, [], reset: true)
+    |> assign(:pending_approvals, [])
+    |> assign(:any_messages, false)
     |> reset_live()
   end
 
@@ -158,9 +162,13 @@ defmodule PrismWeb.ConversationLive do
     ConversationRunner.subscribe(conv.id, conv.athanor_id)
     live = ConversationRunner.state(conv.id, conv.athanor_id)
 
+    rows = Conversations.messages(ctx, conv.id)
+
     socket
     |> assign(:conversation, conv)
-    |> assign(:messages, Conversations.messages(ctx, conv.id))
+    |> stream(:messages, rows, reset: true)
+    |> assign(:pending_approvals, pending_in(rows))
+    |> assign(:any_messages, rows != [])
     |> reset_live()
     |> apply_live(live)
   end
@@ -321,14 +329,14 @@ defmodule PrismWeb.ConversationLive do
   end
 
   def handle_event("approve_all_pending", _params, socket) do
-    for msg <- pending_in(socket.assigns.messages),
+    for msg <- socket.assigns.pending_approvals,
         do: send(self(), {:approval_approve, msg.id, :once})
 
     {:noreply, socket}
   end
 
   def handle_event("decline_all_pending", _params, socket) do
-    for msg <- pending_in(socket.assigns.messages),
+    for msg <- socket.assigns.pending_approvals,
         do: send(self(), {:approval_decline, msg.id, "", :once})
 
     {:noreply, socket}
@@ -457,12 +465,12 @@ defmodule PrismWeb.ConversationLive do
 
   defp handle_conversation_event(socket, {:message, row}) do
     socket
-    |> assign(:messages, upsert_row(socket.assigns.messages, row))
+    |> upsert_message(row)
     |> refresh_list()
   end
 
   defp handle_conversation_event(socket, {:message_updated, row}) do
-    assign(socket, :messages, upsert_row(socket.assigns.messages, row))
+    upsert_message(socket, row)
   end
 
   # A turn may start for a message queued earlier — the sender's draft of
@@ -525,10 +533,22 @@ defmodule PrismWeb.ConversationLive do
   defp handle_conversation_event(socket, {:error, text}), do: put_flash(socket, :error, text)
   defp handle_conversation_event(socket, _), do: socket
 
-  defp upsert_row(rows, row) do
-    if Enum.any?(rows, &(&1.id == row.id)),
-      do: Enum.map(rows, &if(&1.id == row.id, do: row, else: &1)),
-      else: rows ++ [row]
+  # The stream owns membership and ordering (stream_insert replaces an
+  # existing dom id in place); only the two derived facts the templates
+  # and the approve-all handlers read are kept as assigns.
+  defp upsert_message(socket, row) do
+    pending =
+      Enum.reject(socket.assigns.pending_approvals, &(&1.id == row.id))
+
+    pending =
+      if row.kind == "approval" and row.status == "pending",
+        do: pending ++ [row],
+        else: pending
+
+    socket
+    |> stream_insert(:messages, row)
+    |> assign(:pending_approvals, pending)
+    |> assign(:any_messages, true)
   end
 
   defp refresh_list(socket) do
@@ -711,7 +731,11 @@ defmodule PrismWeb.ConversationLive do
     lv = self()
 
     if Cyfr.Execution.available?() do
+      logger_metadata = Cyfr.LoggerContext.capture()
+
       Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+
         result =
           Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
             "action" => "run",
@@ -947,7 +971,7 @@ defmodule PrismWeb.ConversationLive do
           class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
         >
           <div
-            :if={@messages == [] and @streaming_text == ""}
+            :if={not @any_messages and @streaming_text == ""}
             class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
           >
             <%= if @model_ready in [:no_model, :no_key] do %>
@@ -986,7 +1010,7 @@ defmodule PrismWeb.ConversationLive do
             </span>
           </div>
 
-          <% pending = pending_in(@messages) %>
+          <% pending = @pending_approvals %>
           <div
             :if={length(pending) > 1}
             class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-[11px] text-amber-200"
@@ -1008,34 +1032,38 @@ defmodule PrismWeb.ConversationLive do
             </button>
           </div>
 
-          <%= for msg <- @messages do %>
-            <%= if msg.kind == "approval" do %>
-              <% intent = Conversations.payload(msg)["intent"] || %{} %>
-              <% resolution = Conversations.resolution(msg) %>
-              <.live_component
-                module={PrismWeb.AquaApprovalCard}
-                id={msg.id}
-                payload={intent}
-                status={msg.status}
-                decided_at={msg.resolved_at}
-                reason={resolution["reason"]}
-                result_summary={resolution["summary"]}
-                scope={scope_atom(resolution["scope"])}
-                resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
-                agent_label={@orchestrator && @orchestrator["title"]}
-                shared_with={@athanor.kind == "group" && @athanor.name}
-              />
-            <% else %>
-              <.message_bubble
-                id={"msg-" <> msg.id}
-                role={role_of(msg)}
-                content={msg.content}
-                author={author_label(msg, @members, @context)}
-                attachments={Conversations.payload(msg)["attachments"] || []}
-                attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
-              />
+          <div id="conversation-messages" phx-update="stream" class="space-y-3">
+            <%= for {dom_id, msg} <- @streams.messages do %>
+              <div id={dom_id}>
+                <%= if msg.kind == "approval" do %>
+                  <% intent = Conversations.payload(msg)["intent"] || %{} %>
+                  <% resolution = Conversations.resolution(msg) %>
+                  <.live_component
+                    module={PrismWeb.AquaApprovalCard}
+                    id={msg.id}
+                    payload={intent}
+                    status={msg.status}
+                    decided_at={msg.resolved_at}
+                    reason={resolution["reason"]}
+                    result_summary={resolution["summary"]}
+                    scope={scope_atom(resolution["scope"])}
+                    resolved_by={msg.resolved_by && label_for(@members, msg.resolved_by, @context)}
+                    agent_label={@orchestrator && @orchestrator["title"]}
+                    shared_with={@athanor.kind == "group" && @athanor.name}
+                  />
+                <% else %>
+                  <.message_bubble
+                    id={"msg-" <> msg.id}
+                    role={role_of(msg)}
+                    content={msg.content}
+                    author={author_label(msg, @members, @context)}
+                    attachments={Conversations.payload(msg)["attachments"] || []}
+                    attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
+                  />
+                <% end %>
+              </div>
             <% end %>
-          <% end %>
+          </div>
 
           <ul :if={@tool_activity != []} class="space-y-1">
             <li :for={entry <- @tool_activity} class="flex items-center gap-2 text-[11px]">

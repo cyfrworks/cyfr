@@ -43,12 +43,9 @@ defmodule PrismWeb.ConnectionsLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    if connected?(socket) do
-      {:noreply,
-       socket |> fetch_entries() |> fetch_used_by() |> fetch_clients() |> assign(:loading, false)}
-    else
-      {:noreply, socket}
-    end
+    # Paint the frame first; the three fetches land in :load.
+    if connected?(socket), do: send(self(), :load)
+    {:noreply, socket}
   end
 
   # ---------------------------------------------------------------------------
@@ -226,6 +223,11 @@ defmodule PrismWeb.ConnectionsLive do
   # ---------------------------------------------------------------------------
 
   @impl true
+  def handle_info(:load, socket) do
+    {:noreply,
+     socket |> fetch_entries() |> fetch_used_by() |> fetch_clients() |> assign(:loading, false)}
+  end
+
   def handle_info({:vault_entry_changed, _id, _verb}, socket) do
     {:noreply, socket |> fetch_entries() |> assign(:pending_grant, nil)}
   end

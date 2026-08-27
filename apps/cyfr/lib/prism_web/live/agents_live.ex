@@ -429,7 +429,11 @@ defmodule PrismWeb.AgentsLive do
       lv = self()
       ctx = socket.assigns.context
 
+      logger_metadata = Cyfr.LoggerContext.capture()
+
       Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+
         result =
           Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
             "action" => "run",

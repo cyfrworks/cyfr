@@ -202,7 +202,7 @@ defmodule PrismWeb.ExecutionsLive do
   defp fetch_executions(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> maybe_put("status", socket.assigns.status_filter)
+      |> Cyfr.MapUtil.put_present("status", socket.assigns.status_filter)
 
     case call_tool(socket, "execution", args) do
       {:ok, %{executions: list}} when is_list(list) ->
@@ -336,10 +336,6 @@ defmodule PrismWeb.ExecutionsLive do
     (is_nil(status_filter) or f(entry, :status) == status_filter) and
       (is_nil(type_filter) or f(entry, :component_type) == type_filter)
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, ""), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp normalize(nil), do: nil
   defp normalize(""), do: nil

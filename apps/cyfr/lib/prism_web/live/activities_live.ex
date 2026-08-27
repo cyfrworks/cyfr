@@ -176,9 +176,9 @@ defmodule PrismWeb.ActivitiesLive do
   defp fetch_logs(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> maybe_put("status", socket.assigns.status_filter)
-      |> maybe_put("tool", socket.assigns.source_filter)
-      |> maybe_put("since", time_filter_to_since(socket.assigns.time_filter))
+      |> Cyfr.MapUtil.put_present("status", socket.assigns.status_filter)
+      |> Cyfr.MapUtil.put_present("tool", socket.assigns.source_filter)
+      |> Cyfr.MapUtil.put_present("since", time_filter_to_since(socket.assigns.time_filter))
 
     case call_tool(socket, "mcp_log", args) do
       {:ok, %{logs: logs}} when is_list(logs) ->
@@ -225,10 +225,6 @@ defmodule PrismWeb.ActivitiesLive do
       {:noreply, assign(socket, :refresh_pending, true)}
     end
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, ""), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp normalize_filter(nil), do: nil
   defp normalize_filter(""), do: nil
@@ -295,7 +291,6 @@ defmodule PrismWeb.ActivitiesLive do
         end
     end
   end
-
 
   defp type_class("catalyst"), do: "bg-purple-900/30 text-purple-300"
   defp type_class("reagent"), do: "bg-blue-900/30 text-blue-300"

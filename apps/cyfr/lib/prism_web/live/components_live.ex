@@ -98,7 +98,11 @@ defmodule PrismWeb.ComponentsLive do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
     socket =
-      resubscribe(socket, :progress_topic, Prism.Topics.progress(progress_id, socket.assigns[:context]))
+      resubscribe(
+        socket,
+        :progress_topic,
+        Prism.Topics.progress(progress_id, socket.assigns[:context])
+      )
 
     socket =
       socket
@@ -109,7 +113,11 @@ defmodule PrismWeb.ComponentsLive do
     lv = self()
     ctx = socket.assigns.context
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+
            result =
              try do
                {name, merged_args} =
@@ -148,7 +156,11 @@ defmodule PrismWeb.ComponentsLive do
     register_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
     socket =
-      resubscribe(socket, :register_topic, Prism.Topics.register(register_id, socket.assigns[:context]))
+      resubscribe(
+        socket,
+        :register_topic,
+        Prism.Topics.register(register_id, socket.assigns[:context])
+      )
 
     socket =
       socket
@@ -158,7 +170,11 @@ defmodule PrismWeb.ComponentsLive do
 
     lv = self()
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+
            result =
              call_tool(socket, "component", %{
                "action" => "register",
@@ -239,7 +255,11 @@ defmodule PrismWeb.ComponentsLive do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
     socket =
-      resubscribe(socket, :progress_topic, Prism.Topics.progress(progress_id, socket.assigns[:context]))
+      resubscribe(
+        socket,
+        :progress_topic,
+        Prism.Topics.progress(progress_id, socket.assigns[:context])
+      )
 
     socket =
       socket
@@ -250,7 +270,11 @@ defmodule PrismWeb.ComponentsLive do
     lv = self()
     ctx = socket.assigns.context
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+
            result =
              try do
                Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
@@ -306,26 +330,26 @@ defmodule PrismWeb.ComponentsLive do
   @impl true
   def handle_params(params, _uri, socket) do
     if connected?(socket) do
-      socket = socket |> fetch_components() |> assign(:loading, false)
+      # Paint first; :load fetches, and the deep link (sent after, so it
+      # processes after the fetch) opens against the loaded list.
+      send(self(), :load)
 
-      socket =
-        case params do
-          %{"ref" => ref, "setup" => "true"} ->
-            tap(socket, fn _ -> send(self(), {:deep_link_setup, ref}) end)
-
-          _ ->
-            socket
-        end
-
-      {:noreply, socket}
-    else
-      {:noreply, socket}
+      case params do
+        %{"ref" => ref, "setup" => "true"} -> send(self(), {:deep_link_setup, ref})
+        _ -> :ok
+      end
     end
+
+    {:noreply, socket}
   end
 
   # --- PubSub handlers ---
 
   @impl true
+  def handle_info(:load, socket) do
+    {:noreply, socket |> fetch_components() |> assign(:loading, false)}
+  end
+
   def handle_info({:consent_granted, _ref, _result}, socket) do
     {:noreply,
      socket
@@ -637,59 +661,8 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  # Group search results by component name (all versions under one entry).
-  # Uses remote_versions from the merged search to show all available versions,
-  # even though the search response only includes the latest per component.
-  defp group_search_results(components) do
-    components
-    |> Enum.group_by(fn comp ->
-      name = comp_field(comp, :name)
-      publisher = comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
-      type = comp_field(comp, :component_type)
-      {name, publisher, type}
-    end)
-    |> Enum.map(fn {{name, publisher, type}, local_versions} ->
-      sorted =
-        Compendium.Semver.sort_desc_by(local_versions, fn v ->
-          comp_field(v, :version) || "0.0.0"
-        end)
-
-      latest = hd(sorted)
-
-      # Merge remote_versions into the list (remote versions not already local)
-      remote_vs = comp_field(latest, :remote_versions) || []
-      local_vs = MapSet.new(sorted, fn v -> comp_field(v, :version) end)
-
-      remote_only =
-        remote_vs
-        |> Enum.reject(fn v -> MapSet.member?(local_vs, v) end)
-        |> Enum.map(fn v ->
-          ref = Editor.build_ref_from_parts(type, publisher, name, v)
-          %{version: v, component_ref: ref, remote_only: true}
-        end)
-
-      all_versions =
-        Compendium.Semver.sort_desc_by(sorted ++ remote_only, fn v ->
-          comp_field(v, :version) || "0.0.0"
-        end)
-
-      %{
-        name: name,
-        publisher: Compendium.ComponentPath.normalize_publisher(publisher),
-        component_type: type,
-        description: comp_field(latest, :description),
-        latest: latest,
-        versions: all_versions,
-        version_count: length(all_versions),
-        # Latest version's status (active|deprecated|yanked|taken_down).
-        # Older rows + local-only entries may omit it; default to "active".
-        # Callers render a status badge when != "active".
-        status: comp_field(latest, :status) || "active",
-        status_reason: comp_field(latest, :status_reason)
-      }
-    end)
-    |> Enum.sort_by(fn g -> g.name end)
-  end
+  defp group_search_results(components),
+    do: Compendium.Catalogue.group_search_results(components)
 
   # Small inline badge next to the publisher cell for deprecated / yanked /
   # taken_down versions. Returns `nil` for active (no badge rendered). Colors
@@ -753,7 +726,11 @@ defmodule PrismWeb.ComponentsLive do
     lv = self()
     ctx = socket.assigns.context
 
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Cyfr.LoggerContext.restore(logger_metadata)
+
       readiness =
         Enum.reduce(groups, %{}, fn group, acc ->
           ref = comp_ref(group.latest)
@@ -809,35 +786,8 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:grouped, grouped)
   end
 
-  defp group_by_component(components) do
-    components
-    |> Enum.group_by(fn c ->
-      ref = comp_ref(c)
-
-      case Sanctum.ComponentRef.to_name_ref(ref) do
-        {:ok, nr} -> nr
-        _ -> ref
-      end
-    end)
-    |> Enum.map(fn {name_ref, versions} ->
-      sorted =
-        Compendium.Semver.sort_desc_by(versions, fn v ->
-          comp_field(v, :version) || "0.0.0"
-        end)
-
-      latest = hd(sorted)
-
-      %{
-        name_ref: name_ref,
-        latest: latest,
-        versions: sorted,
-        version_count: length(sorted),
-        component_type: comp_field(latest, :component_type) || "unknown",
-        description: comp_field(latest, :description)
-      }
-    end)
-    |> Enum.sort_by(fn g -> g.name_ref end)
-  end
+  defp group_by_component(components),
+    do: Compendium.Catalogue.group_by_component(components)
 
   # --- Data helpers ---
 
@@ -1624,6 +1574,7 @@ defmodule PrismWeb.ComponentsLive do
     </div>
     """
   end
+
   # Each pull/register/push subscribes to a fresh random progress topic.
   # Dropping the previous topic's subscription first keeps N operations
   # from leaking N live subscriptions for the socket's lifetime (the

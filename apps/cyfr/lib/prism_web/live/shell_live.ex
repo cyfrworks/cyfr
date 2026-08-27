@@ -115,12 +115,37 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # The scan walks the athanor's whole components tree and writes registry
+  # rows — off the LiveView process, one at a time per athanor. A click
+  # while a scan runs rides the running one instead of stacking another.
   def handle_event("refresh_tinctures", _params, socket) do
     ctx = socket.assigns.context
-    Compendium.AutoIndexer.scan(ctx: ctx)
-    Prism.TinctureRegistry.reload()
-    socket = load_tinctures(socket)
-    {:noreply, put_flash(socket, :info, "Tinctures registered and refreshed")}
+    lv = self()
+    scan_key = {:tincture_scan_running, ctx.athanor_id}
+
+    case Arca.Cache.get(scan_key) do
+      {:ok, _} ->
+        {:noreply, put_flash(socket, :info, "A refresh is already running")}
+
+      :miss ->
+        Arca.Cache.put(scan_key, true, :timer.seconds(60))
+        logger_metadata = Cyfr.LoggerContext.capture()
+
+        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+          Cyfr.LoggerContext.restore(logger_metadata)
+
+          try do
+            Compendium.AutoIndexer.scan(ctx: ctx)
+            Prism.TinctureRegistry.reload()
+          after
+            Arca.Cache.delete_match(scan_key)
+          end
+
+          send(lv, :tinctures_refreshed)
+        end)
+
+        {:noreply, put_flash(socket, :info, "Refreshing tinctures…")}
+    end
   end
 
   def handle_event("copy_url", %{"tincture" => tincture_id}, socket) do
@@ -600,6 +625,13 @@ defmodule PrismWeb.ShellLive do
   # (single source of truth, shared with the tincture controller).
 
   @impl true
+  def handle_info(:tinctures_refreshed, socket) do
+    {:noreply,
+     socket
+     |> load_tinctures()
+     |> put_flash(:info, "Tinctures registered and refreshed")}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[ShellLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}

@@ -29,6 +29,11 @@ config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.Memory
 # tincture controller's 429 tests override this per-test.
 config :cyfr, :tincture_rate_limit_max, 1_000_000
 
+# No network from tests: the registry health probe is a real DNS + TLS
+# round-trip with a 3s timeout — pure wall clock and straggling sockets
+# in a suite. Surfaces render its "unknown" answer.
+config :cyfr, :registry_health_probe, false
+
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must
 # match (SQLite-only keys break a Postgres connect, and Postgres needs a URL

@@ -111,7 +111,7 @@ defmodule PrismWeb.EnforcementsLive do
   defp fetch_logs(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> maybe_put("event_type", socket.assigns.event_type_filter)
+      |> Cyfr.MapUtil.put_present("event_type", socket.assigns.event_type_filter)
 
     case call_tool(socket, "policy_log", args) do
       {:ok, %{logs: logs}} when is_list(logs) ->
@@ -177,10 +177,6 @@ defmodule PrismWeb.EnforcementsLive do
     end
   end
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, ""), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
   defp normalize_filter(nil), do: nil
   defp normalize_filter(""), do: nil
   defp normalize_filter(value), do: value
@@ -203,7 +199,6 @@ defmodule PrismWeb.EnforcementsLive do
   defp decision_status("allowed"), do: "ok"
   defp decision_status("denied"), do: "failed"
   defp decision_status(_), do: "pending"
-
 
   # ============================================================================
   # Render

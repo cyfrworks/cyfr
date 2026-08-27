@@ -166,8 +166,12 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp handle_status(ctx, "all") do
     services = check_all_services(ctx)
 
+    # "unknown" is a probe that deliberately did not run (test env) — not
+    # evidence of degradation.
     overall =
-      if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub"] end), do: "ok", else: "degraded"
+      if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub", "unknown"] end),
+        do: "ok",
+        else: "degraded"
 
     {:ok,
      %{
@@ -189,7 +193,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
       {:ok,
        %{
-         status: if(service_status in ["ok", "stub"], do: "ok", else: "degraded"),
+         status: if(service_status in ["ok", "stub", "unknown"], do: "ok", else: "degraded"),
          version: Cyfr.Version.current(),
          uptime_seconds: uptime(),
          # `scope` was just checked against the closed derived set, so the
@@ -312,6 +316,17 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp probe_registry_health do
+    if Application.get_env(:cyfr, :registry_health_probe, true) do
+      do_probe_registry_health()
+    else
+      # The test env turns the probe off: a real DNS + TLS round-trip with
+      # a 3s timeout inside a test is 3s of wall clock and a straggling
+      # socket at test exit, and the answer means nothing there.
+      "unknown"
+    end
+  end
+
+  defp do_probe_registry_health do
     url = registry_url()
 
     case :httpc.request(
