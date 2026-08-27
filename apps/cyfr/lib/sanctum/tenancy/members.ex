@@ -115,13 +115,13 @@ defmodule Sanctum.Tenancy.Members do
   def ensure_platform(user_id), do: ensure(user_id, scope: "platform")
 
   @doc "Every platform-admin row — the server's operators, as the rows say."
-  @spec list_platform() :: [Membership.t()]
+  @spec list_platform() :: {:ok, [Membership.t()]} | {:error, :database_error}
   def list_platform do
-    Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))
+    {:ok, Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: list_platform failed (#{Exception.message(e)})")
-      []
+      {:error, :database_error}
   end
 
   @doc """
@@ -330,7 +330,7 @@ defmodule Sanctum.Tenancy.Members do
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: activate_invited failed (#{Exception.message(e)})")
-      {:ok, 0}
+      {:error, :database_error}
   end
 
   def activate_invited(_user), do: {:ok, 0}
@@ -442,12 +442,13 @@ defmodule Sanctum.Tenancy.Members do
   Paged with `limit:` (default and ceiling #{@max_page}) and `offset:`; the
   member cap bounds the roster, the page bounds one read.
   """
-  @spec list_by_athanor(String.t(), keyword()) :: [map()]
+  @spec list_by_athanor(String.t(), keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list_by_athanor(athanor_id, opts \\ []) when is_binary(athanor_id) do
     limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
     offset = opts |> Keyword.get(:offset, 0) |> max(0)
 
-    Arca.Repo.all(
+    {:ok,
+     Arca.Repo.all(
       from(m in Membership,
         left_join: u in User,
         on: u.id == m.user_id,
@@ -465,39 +466,46 @@ defmodule Sanctum.Tenancy.Members do
           since: m.created_at
         }
       )
-    )
+     )}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: list_by_athanor failed (#{Exception.message(e)})")
-      []
+      {:error, :database_error}
   end
 
   @doc "Every row of a person: platform and athanor, active only. Uncapped."
+  @spec list_by_user(String.t()) :: {:ok, [Membership.t()]} | {:error, :database_error}
   def list_by_user(user_id) do
-    from(m in Membership,
-      where: m.user_id == ^user_id and m.status == "active",
-      order_by: [desc: m.created_at]
-    )
-    |> Arca.Repo.all()
+    {:ok,
+     from(m in Membership,
+       where: m.user_id == ^user_id and m.status == "active",
+       order_by: [desc: m.created_at]
+     )
+     |> Arca.Repo.all()}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: list_by_user failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
 
-  @doc "How many active members an athanor has."
-  @spec count_by_athanor(String.t()) :: non_neg_integer()
+  @doc """
+  How many active members an athanor has. Strict like `Athanors.count/0`
+  and `count_seats/1`: a count that decides anything (auto-archive keys on
+  zero) must refuse when the store cannot answer, never read as empty.
+  """
+  @spec count_by_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def count_by_athanor(athanor_id) do
-    Arca.Repo.one(
-      from(m in Membership,
-        where: m.athanor_id == ^athanor_id and m.status == "active",
-        select: count(m.id)
-      )
-    ) || 0
+    {:ok,
+     Arca.Repo.one(
+       from(m in Membership,
+         where: m.athanor_id == ^athanor_id and m.status == "active",
+         select: count(m.id)
+       )
+     ) || 0}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Members: count_by_athanor failed (#{Exception.message(e)})")
-      0
+      {:error, :database_error}
   end
 
   # Every seat the athanor has handed out — active members and pending
@@ -535,11 +543,14 @@ defmodule Sanctum.Tenancy.Members do
   # ---- internal --------------------------------------------------------------
 
   defp archive_when_empty(%{id: id, kind: "group"} = athanor) do
-    if count_by_athanor(id) == 0 do
-      case Athanors.get(id) do
-        {:ok, current} -> Athanors.archive(current, reason: :empty)
-        _ -> {:ok, athanor}
-      end
+    # Only a verified zero archives. A store failure aborts: archiving is
+    # terminal for a group (an :empty archive releases the slug and cannot
+    # be undone), so a transient read error must never read as "empty".
+    with {:ok, 0} <- count_by_athanor(id),
+         {:ok, current} <- Athanors.get(id) do
+      Athanors.archive(current, reason: :empty)
+    else
+      _ -> {:ok, athanor}
     end
 
     :ok

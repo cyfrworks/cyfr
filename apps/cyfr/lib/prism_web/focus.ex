@@ -60,7 +60,6 @@ defmodule PrismWeb.Focus do
   defp focus_assigns(socket, ctx, athanor) do
     socket
     |> assign(:context, ctx)
-    |> assign(:current_user, ctx)
     |> assign(:athanor, athanor)
     |> assign(:athanor_route, Athanors.route_slug(athanor))
   end

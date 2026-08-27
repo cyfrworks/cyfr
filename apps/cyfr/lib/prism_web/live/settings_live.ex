@@ -409,11 +409,11 @@ defmodule PrismWeb.SettingsLive do
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Email</dt>
-              <dd class="text-sm text-white mt-1">{@current_user.email || "-"}</dd>
+              <dd class="text-sm text-white mt-1">{@context.email || "-"}</dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Provider</dt>
-              <dd class="text-sm text-white mt-1">{@current_user.provider}</dd>
+              <dd class="text-sm text-white mt-1">{@context.provider}</dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Auth Method</dt>
@@ -421,7 +421,7 @@ defmodule PrismWeb.SettingsLive do
             </div>
             <div class="col-span-2">
               <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-              <dd class="text-xs text-gray-400 mt-1 font-mono break-all">{@current_user.user_id}</dd>
+              <dd class="text-xs text-gray-400 mt-1 font-mono break-all">{@context.user_id}</dd>
             </div>
           </dl>
         </.card>

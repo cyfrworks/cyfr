@@ -730,15 +730,18 @@ defmodule PrismWeb.ConversationLive do
   defp elem_or_empty(_), do: %{}
 
   defp member_labels(ctx) do
-    Sanctum.Tenancy.Members.list_by_athanor(ctx.athanor_id)
-    |> Enum.reduce(%{}, fn m, acc ->
-      case m.user_id do
-        nil -> acc
-        id -> Map.put(acc, id, m.display_name || m.email || id)
-      end
-    end)
-  rescue
-    _ -> %{}
+    case Sanctum.Tenancy.Members.list_by_athanor(ctx.athanor_id) do
+      {:ok, rows} ->
+        Enum.reduce(rows, %{}, fn m, acc ->
+          case m.user_id do
+            nil -> acc
+            id -> Map.put(acc, id, m.display_name || m.email || id)
+          end
+        end)
+
+      {:error, _} ->
+        %{}
+    end
   end
 
   # ============================================================================

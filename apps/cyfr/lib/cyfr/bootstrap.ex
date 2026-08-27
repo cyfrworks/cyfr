@@ -51,7 +51,9 @@ defmodule Cyfr.Bootstrap do
   # allowlist and their row — and the session holding its capability —
   # survived until it expired. Boot is the other moment the env is read.
   defp reconcile_platform_admins do
-    for %{user_id: user_id} <- Members.list_platform(), is_binary(user_id) do
+    {:ok, platform_rows} = Members.list_platform()
+
+    for %{user_id: user_id} <- platform_rows, is_binary(user_id) do
       case Users.get(user_id) do
         {:ok, %{email: email}} ->
           unless Sanctum.Door.platform_admin_email?(email) do

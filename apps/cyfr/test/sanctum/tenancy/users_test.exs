@@ -146,7 +146,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   end
 
   defp invited_rows(athanor_id),
-    do: athanor_id |> Members.list_by_athanor() |> Enum.filter(&(&1.status == "invited"))
+    do: athanor_id |> Members.list_by_athanor() |> rows!() |> Enum.filter(&(&1.status == "invited"))
 
   test "revalidate drops a denied person's session context to unauthenticated" do
     u = person(5)
@@ -166,4 +166,5 @@ defmodule Sanctum.Tenancy.UsersTest do
     refute out.authenticated
     assert out.athanor_id == nil
   end
+  defp rows!({:ok, rows}), do: rows
 end

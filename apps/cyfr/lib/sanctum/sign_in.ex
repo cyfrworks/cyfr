@@ -73,7 +73,20 @@ defmodule Sanctum.SignIn do
   def admitted(%{id: user_id} = user_info, verdict) when verdict in [:admin, :allowed] do
     with {:ok, user} <- Users.upsert_from_provider(user_info) do
       apply_platform(user_id, verdict)
-      {:ok, _n} = Members.activate_invited(user)
+
+      # The invited seats activate on the next sign-in; refusing this one
+      # over a store blip would lock the person out. Loud, never silent —
+      # the assertive match this replaces could not fail (both arms were
+      # {:ok, _}), so a failed activation was invisible.
+      case Members.activate_invited(user) do
+        {:ok, _n} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error(
+            "[Sanctum.SignIn] activate_invited failed for #{user_id}: #{inspect(reason)}"
+          )
+      end
       # Provisioning failure is recorded on the athanor and retried on the
       # next sign-in; it never refuses the sign-in itself.
       _ = Sanctum.Provisioning.after_sign_in(user_id)
@@ -388,8 +401,8 @@ defmodule Sanctum.SignIn do
 
   defp platform_admin?(user_id) do
     case Members.list_by_user(user_id) do
-      rows when is_list(rows) -> Enum.any?(rows, &(&1.scope == "platform"))
-      _ -> false
+      {:ok, rows} -> Enum.any?(rows, &(&1.scope == "platform"))
+      {:error, _} -> false
     end
   end
 

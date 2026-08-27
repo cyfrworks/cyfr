@@ -63,7 +63,6 @@ defmodule PrismWeb.TopbarLive do
 
           socket
           |> assign(:context, ctx)
-          |> assign(:current_user, ctx)
           |> assign(:personal_namespace_slug, ctx.namespace)
           |> assign(:authenticated, true)
           |> assign(:session_token, token)
@@ -76,7 +75,7 @@ defmodule PrismWeb.TopbarLive do
 
         _ ->
           socket
-          |> assign(:current_user, nil)
+          |> assign(:context, nil)
           |> assign(:personal_namespace_slug, nil)
           |> assign(:authenticated, false)
           |> assign(:session_token, nil)
@@ -791,10 +790,10 @@ defmodule PrismWeb.TopbarLive do
         
     <!-- User -->
         <.indicator
-          :if={@current_user}
+          :if={@context}
           name="user"
           open={@open_popover == "user"}
-          label={@personal_namespace_slug || @current_user.email || @current_user.user_id}
+          label={@personal_namespace_slug || @context.email || @context.user_id}
           icon="user"
         >
           <:popover>
@@ -803,17 +802,17 @@ defmodule PrismWeb.TopbarLive do
                 <dt class="text-xs text-gray-500 uppercase">Namespace</dt>
                 <dd class="text-white font-mono text-xs truncate">{@personal_namespace_slug}</dd>
               </div>
-              <div :if={@current_user.email}>
+              <div :if={@context.email}>
                 <dt class="text-xs text-gray-500 uppercase">Email</dt>
-                <dd class="text-white text-xs truncate">{@current_user.email}</dd>
+                <dd class="text-white text-xs truncate">{@context.email}</dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500 uppercase">Provider</dt>
-                <dd class="text-white text-xs">{@current_user.provider}</dd>
+                <dd class="text-white text-xs">{@context.provider}</dd>
               </div>
               <div>
                 <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-                <dd class="text-gray-400 font-mono text-[11px] break-all">{@current_user.user_id}</dd>
+                <dd class="text-gray-400 font-mono text-[11px] break-all">{@context.user_id}</dd>
               </div>
             </dl>
             <a

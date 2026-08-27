@@ -111,7 +111,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert Members.member?(bob, group.id)
 
     assert Enum.any?(
-             Members.list_by_athanor(group.id),
+             rows!(Members.list_by_athanor(group.id)),
              &(&1.status == "invited" and &1.email == stranger)
            )
 
@@ -137,7 +137,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:ok, %{ejected: 0, invites_withdrawn: 1}} =
              call(admin, "door", %{"action" => "deny", "value" => stranger})
 
-    refute Enum.any?(Members.list_by_athanor(group.id), &(&1.email == stranger))
+    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.email == stranger))
 
     # the request the invite queued is now the deny itself, and it names no
     # requester any more
@@ -185,7 +185,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => unverified})
 
     assert msg =~ "not verified"
-    refute Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
+    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
     # By user id they are seatable — the id is the person.
     assert {:ok, %{state: "added"}} =
@@ -349,7 +349,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} = call(a, "member", %{"action" => "remove", "user_id" => alice})
     assert msg =~ "owner"
     assert Members.member?(alice, personal.id)
-    assert Members.count_by_athanor(personal.id) == 1
+    assert Members.count_by_athanor(personal.id) == {:ok, 1}
 
     # The domain function refuses too — the tool is not the only guard.
     assert {:error, :person_athanor} = Members.add(personal, [user_id: bob], alice)
@@ -467,4 +467,5 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
       assert focused.scope == :athanor
     end
   end
+  defp rows!({:ok, rows}), do: rows
 end

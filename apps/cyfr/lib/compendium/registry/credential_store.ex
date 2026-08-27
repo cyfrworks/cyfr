@@ -55,8 +55,9 @@ defmodule Compendium.Registry.CredentialStore do
   """
   @spec device_label() :: String.t()
   def device_label do
+    # :device_label is set by runtime.exs from CYFR_DEVICE_LABEL through
+    # Dotenvy — one environment pipeline for OS env and .env files alike.
     Application.get_env(:cyfr, :device_label) ||
-      System.get_env("CYFR_DEVICE_LABEL") ||
       case :inet.gethostname() do
         {:ok, host} -> to_string(host)
         _ -> "cyfr-host"

@@ -26,6 +26,7 @@ defmodule Opus.HttpRequestValidation do
 
   alias Opus.EdgeGuard
   alias Sanctum.Authority.Blob.Edge
+  alias Sanctum.Context
   alias Sanctum.Limits
 
   @valid_http_methods %{
@@ -63,9 +64,9 @@ defmodule Opus.HttpRequestValidation do
     * `:allow_multipart` — `false` rejects requests carrying a `multipart`
       field (the streaming transport cannot send one). Defaults to `true`.
   """
-  @spec validate(String.t(), Edge.t() | nil, Limits.t(), keyword()) ::
+  @spec validate(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t(), keyword()) ::
           {:ok, validated_request()} | {:error, atom(), String.t()}
-  def validate(json_request, edge, %Limits{} = limits, opts \\ []) do
+  def validate(json_request, edge, %Limits{} = limits, %Context{} = ctx, component_ref, opts \\ []) do
     with {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(edge, request.method),
          :ok <- validate_scheme(edge, request.url),
@@ -73,10 +74,37 @@ defmodule Opus.HttpRequestValidation do
          :ok <- check_multipart_allowed(request, Keyword.get(opts, :allow_multipart, true)),
          {:ok, request} <- decode_request_body(request),
          :ok <- EdgeGuard.check_request_size(limits, request),
+         :ok <- check_egress_rate(ctx, component_ref, limits),
          {:ok, ip} <- resolve_and_validate_ip(request.hostname, edge),
          {:ok, method_atom} <- validated_method_atom(request.method) do
       {:ok, request |> Map.put(:ip, ip) |> Map.put(:method_atom, method_atom)}
     end
+  end
+
+  # The consented rate limit, on the wire-bound path itself — the WIT
+  # contract promises the host enforces rate limits before executing the
+  # request, and until this step only the per-invocation gate existed, so
+  # one invocation could issue unbounded egress. Keyed per component like
+  # the executor's gate (a distinct "http:" budget under the same
+  # consented config); before DNS, so a denied caller cannot use the
+  # resolver either. A dead limiter fails CLOSED, matching the executor.
+  defp check_egress_rate(%Context{} = ctx, component_ref, %Limits{} = limits) do
+    case Opus.RateLimiter.check(ctx.athanor_id, "http:" <> component_ref, %{
+           rate_limit: limits.rate_limit
+         }) do
+      {:ok, _remaining} ->
+        :ok
+
+      {:error, :rate_limited, retry_after} ->
+        {:error, :rate_limited,
+         "HTTP egress rate limit exceeded; retry in #{retry_after}ms"}
+
+      {:error, :missing_tenant} ->
+        {:error, :rate_limited, "HTTP egress refused: no resolved athanor"}
+    end
+  catch
+    :exit, _reason ->
+      {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"}
   end
 
   @doc """

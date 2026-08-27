@@ -355,7 +355,11 @@ defmodule Sanctum.MCP.AthanorTool do
       route: Athanors.route_slug(athanor),
       home: athanor.home,
       status: athanor.status,
-      member_count: Members.count_by_athanor(athanor.id),
+      member_count:
+        case Members.count_by_athanor(athanor.id) do
+          {:ok, n} -> n
+          {:error, _} -> nil
+        end,
       settings: Athanors.settings(athanor),
       provisioned: not is_nil(athanor.provisioned_at),
       provisioning_error: Athanors.settings(athanor)["provisioning_error"],

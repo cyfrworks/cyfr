@@ -98,7 +98,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
       # Resolution alone mints nothing.
       assert Tenancy.resolve_into(ctx, force: true).platform_admin == false
-      assert Members.list_by_user(ctx.user_id) == []
+      assert rows!(Members.list_by_user(ctx.user_id)) == []
 
       # The door admits the operator; sign-in records it; resolution reads it.
       assert {:ok, :admin} = Sanctum.Door.admit(ctx.user_id, ctx.email, true)
@@ -112,7 +112,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       result = Tenancy.resolve_into(ctx, force: true)
       assert result.platform_admin
       assert result.scope == :athanor
-      assert Enum.any?(Members.list_by_user(ctx.user_id), &(&1.scope == "platform"))
+      assert Enum.any?(rows!(Members.list_by_user(ctx.user_id)), &(&1.scope == "platform"))
     end
 
     test "an unlisted, unmembered user stays unresolved with no membership row" do
@@ -122,7 +122,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
       result = Tenancy.resolve_into(ctx, force: true)
 
       assert result.athanor_id == nil
-      assert Members.list_by_user(ctx.user_id) == []
+      assert rows!(Members.list_by_user(ctx.user_id)) == []
     end
   end
 
@@ -159,4 +159,5 @@ defmodule Sanctum.AuthTenantResolutionTest do
         else: Application.delete_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
     end)
   end
+  defp rows!({:ok, rows}), do: rows
 end

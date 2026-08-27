@@ -129,7 +129,9 @@ defmodule Opus.HttpStreamHandler do
         "Maximum concurrent streams (#{@max_concurrent_streams}) exceeded"
       )
     else
-      case HttpRequestValidation.validate(json_request, edge, limits, allow_multipart: false) do
+      case HttpRequestValidation.validate(json_request, edge, limits, ctx, component_ref,
+             allow_multipart: false
+           ) do
         {:ok, request} ->
           start_stream(request, exec_ref, component_ref, limits)
 

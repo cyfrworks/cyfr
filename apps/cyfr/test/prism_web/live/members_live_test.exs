@@ -41,7 +41,7 @@ defmodule PrismWeb.MembersLiveTest do
     assert render(view) =~ stranger
 
     assert Enum.any?(
-             Members.list_by_athanor(group.id),
+             rows!(Members.list_by_athanor(group.id)),
              &(&1.email == stranger and &1.status == "invited")
            )
 
@@ -64,7 +64,8 @@ defmodule PrismWeb.MembersLiveTest do
 
     assert render(view) =~ "Garden #{alice.namespace}"
     [group] = Enum.filter(Athanors.list_for_user(alice.user_id), &(&1.name =~ "Garden"))
-    assert Members.count_by_athanor(group.id) == 1
+    assert Members.count_by_athanor(group.id) == {:ok, 1}
     assert Members.member?(alice.user_id, group.id)
   end
+  defp rows!({:ok, rows}), do: rows
 end

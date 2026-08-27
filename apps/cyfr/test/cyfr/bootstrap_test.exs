@@ -67,8 +67,10 @@ defmodule Cyfr.BootstrapTest do
     Application.put_env(:cyfr, :platform_admin_emails, ["kept#{n}@example.com"])
     :ok = Cyfr.Bootstrap.run()
 
-    assert Enum.any?(Members.list_by_user(kept.id), &(&1.scope == "platform"))
-    refute Enum.any?(Members.list_by_user(dropped.id), &(&1.scope == "platform"))
+    assert {:ok, kept_rows} = Members.list_by_user(kept.id)
+    assert Enum.any?(kept_rows, &(&1.scope == "platform"))
+    assert {:ok, dropped_rows} = Members.list_by_user(dropped.id)
+    refute Enum.any?(dropped_rows, &(&1.scope == "platform"))
     assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
   end
 

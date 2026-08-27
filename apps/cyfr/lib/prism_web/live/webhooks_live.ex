@@ -38,8 +38,6 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_signature_header, @default_signature_header)
      |> assign(:form_timestamp_header, "")
      |> assign(:form_idempotency_key_header, "")
-     |> assign(:form_timestamp_header, "")
-     |> assign(:form_idempotency_key_header, "")
      |> assign(:form_description, "")
      |> assign(:form_rate_limit, "")
      |> assign(:form_input_template, "{}")
@@ -245,6 +243,11 @@ defmodule PrismWeb.WebhooksLive do
     |> assign(:form_target_ref, "")
     |> assign(:form_profile_id, "")
     |> assign(:form_signature_header, @default_signature_header)
+    # These two were missing from the reset, so a webhook edited with e.g.
+    # x-github-delivery left its header names pre-filled in the next
+    # create form.
+    |> assign(:form_timestamp_header, "")
+    |> assign(:form_idempotency_key_header, "")
     |> assign(:form_description, "")
     |> assign(:form_rate_limit, "")
     |> assign(:form_input_template, "{}")

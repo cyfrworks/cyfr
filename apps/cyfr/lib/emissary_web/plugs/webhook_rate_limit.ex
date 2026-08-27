@@ -100,7 +100,10 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
 
   defp bucket_for(conn), do: {conn, {:ip_unknown, ip(conn)}, @unknown_max, @unknown_window_ms}
 
-  defp ip(conn), do: conn.remote_ip |> :inet.ntoa() |> to_string()
+  # Through the X-Forwarded-For trust boundary like every other limiter:
+  # behind the shipped Caddy proxy, `conn.remote_ip` is the proxy, which
+  # collapsed the whole internet's scan traffic into one 10/1m bucket.
+  defp ip(conn), do: Sanctum.ClientIp.resolve(conn)
 
   # Parse "<count>/<window>" — e.g. "100/1m", "1000/1h", "60/30s".
   # Falls back to defaults on any parse failure.

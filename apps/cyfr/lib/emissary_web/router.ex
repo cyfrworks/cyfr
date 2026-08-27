@@ -180,6 +180,12 @@ defmodule EmissaryWeb.Router do
   pipeline :tincture_invoke do
     plug :accepts, ["json"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
+    # Deliberately NO MCPOrigin here, unlike /mcp and /api: a public
+    # tincture is embeddable from any origin, so this surface is
+    # cross-origin BY DESIGN (the CORS plug below is its contract). The
+    # DNS-rebinding class MCPOrigin defends against needs an ambient
+    # credential to steal; invoke authenticates per request (Bearer or the
+    # short-lived ?_t= mint) and the public route is credential-less.
     # POST for invoke, GET for the cross-origin `/t/access-token` mint.
     plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
     # Before the rate limiter so a 429 is scrubbed too — it is logged like any

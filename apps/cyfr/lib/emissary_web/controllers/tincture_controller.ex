@@ -263,8 +263,8 @@ defmodule EmissaryWeb.TinctureController do
 
   defp platform_admin?(user_id) do
     case Sanctum.Tenancy.Members.list_by_user(user_id) do
-      rows when is_list(rows) -> Enum.any?(rows, &(&1.scope == "platform"))
-      _ -> false
+      {:ok, rows} -> Enum.any?(rows, &(&1.scope == "platform"))
+      {:error, _} -> false
     end
   end
 

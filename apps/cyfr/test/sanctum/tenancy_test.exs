@@ -128,7 +128,7 @@ defmodule Sanctum.TenancyTest do
       result = Tenancy.resolve_into(ctx, force: true)
 
       refute result.platform_admin
-      assert Members.list_by_user(uid) == []
+      assert rows!(Members.list_by_user(uid)) == []
     end
 
     test "an archived athanor is never chosen" do
@@ -181,7 +181,7 @@ defmodule Sanctum.TenancyTest do
 
       assert Tenancy.revalidate(ctx).platform_admin
 
-      [m] = Members.list_by_user(uid)
+      [m] = rows!(Members.list_by_user(uid))
       {:ok, _} = Members.remove(m)
 
       # No memberships → no capability, no athanor; the tenant gate then
@@ -298,4 +298,5 @@ defmodule Sanctum.TenancyTest do
 
   defp restore(k, nil), do: Application.delete_env(:cyfr, k)
   defp restore(k, v), do: Application.put_env(:cyfr, k, v)
+  defp rows!({:ok, rows}), do: rows
 end

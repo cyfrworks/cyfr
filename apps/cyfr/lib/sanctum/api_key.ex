@@ -291,11 +291,9 @@ defmodule Sanctum.ApiKey do
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
     case Arca.ApiKeyStorage.get_key(name, athanor!(ctx)) do
-      {:ok, row} ->
-        {:ok, redact_key(row)}
-
-      {:error, :not_found} ->
-        {:error, :not_found}
+      {:ok, row} -> {:ok, redact_key(row)}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, :database_error} -> {:error, :database_error}
     end
   end
 
@@ -372,6 +370,9 @@ defmodule Sanctum.ApiKey do
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      {:error, :database_error} ->
+        {:error, :database_error}
     end
   end
 
@@ -431,6 +432,12 @@ defmodule Sanctum.ApiKey do
     case Arca.ApiKeyStorage.get_key_by_hash(hash_key(key)) do
       {:error, :not_found} ->
         {:error, :invalid_key}
+
+      # The store could not answer — refuse the credential without
+      # judging it. This is the authentication hot path: the missing
+      # clause used to be a CaseClauseError on a DB blip.
+      {:error, :database_error} ->
+        {:error, :database_error}
 
       {:ok, %{revoked: true}} ->
         {:error, :revoked}

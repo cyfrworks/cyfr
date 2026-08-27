@@ -84,14 +84,16 @@ defmodule Sanctum.MCP.MemberTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
-    with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args, include_archived: true) do
-      members =
-        Members.list_by_athanor(athanor.id,
-          limit: int_arg(args, "limit", 500),
-          offset: int_arg(args, "offset", 0)
-        )
-
+    with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args, include_archived: true),
+         {:ok, members} <-
+           Members.list_by_athanor(athanor.id,
+             limit: int_arg(args, "limit", 500),
+             offset: int_arg(args, "offset", 0)
+           ) do
       {:ok, %{athanor: athanor.id, members: Enum.map(members, &render/1), count: length(members)}}
+    else
+      {:error, :database_error} -> {:error, "member list unavailable — try again"}
+      other -> other
     end
   end
 

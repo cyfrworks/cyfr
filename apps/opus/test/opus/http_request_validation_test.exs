@@ -9,6 +9,20 @@ defmodule Opus.HttpRequestValidationTest do
   alias Opus.HttpRequestValidation
   alias Opus.Test.EdgeFixtures
 
+  # Every call goes through the full production entry with the rate-limit
+  # principals a real caller supplies; the default fixture's 100/1m budget
+  # never trips in a test's handful of calls.
+  defp validate(json, edge, limits, opts \\ []) do
+    HttpRequestValidation.validate(
+      json,
+      edge,
+      limits,
+      Sanctum.TestContext.local(),
+      "test:probe",
+      opts
+    )
+  end
+
   defp encode(overrides) do
     Map.merge(
       %{"method" => "GET", "url" => "http://localhost/x", "headers" => %{}, "body" => ""},
@@ -27,10 +41,10 @@ defmodule Opus.HttpRequestValidationTest do
     )
   end
 
-  describe "validate/4" do
+  describe "validate/6" do
     test "returns a validated request with pinned IP and method atom" do
       assert {:ok, request} =
-               HttpRequestValidation.validate(
+               validate(
                  encode(%{}),
                  localhost_edge(),
                  EdgeFixtures.limits()
@@ -44,12 +58,12 @@ defmodule Opus.HttpRequestValidationTest do
 
     test "rejects invalid JSON" do
       assert {:error, :http_error, "Invalid JSON request"} =
-               HttpRequestValidation.validate("not-json", localhost_edge(), EdgeFixtures.limits())
+               validate("not-json", localhost_edge(), EdgeFixtures.limits())
     end
 
     test "rejects request missing method/url" do
       assert {:error, :http_error, "Invalid request: must include 'method' and 'url'"} =
-               HttpRequestValidation.validate(
+               validate(
                  Jason.encode!(%{"url" => "http://localhost/x"}),
                  localhost_edge(),
                  EdgeFixtures.limits()
@@ -58,7 +72,7 @@ defmodule Opus.HttpRequestValidationTest do
 
     test "rejects URL without hostname" do
       assert {:error, :http_error, "Invalid URL: missing hostname"} =
-               HttpRequestValidation.validate(
+               validate(
                  encode(%{"url" => "http:///path"}),
                  localhost_edge(),
                  EdgeFixtures.limits()
@@ -69,7 +83,7 @@ defmodule Opus.HttpRequestValidationTest do
       edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
 
       assert {:error, :method_blocked, _msg} =
-               HttpRequestValidation.validate(
+               validate(
                  encode(%{"method" => "DELETE", "url" => "https://evil.example.net/x"}),
                  edge,
                  EdgeFixtures.limits()
@@ -88,7 +102,7 @@ defmodule Opus.HttpRequestValidationTest do
         })
 
       assert {:error, :request_too_large, msg} =
-               HttpRequestValidation.validate(request, edge, limits)
+               validate(request, edge, limits)
 
       assert msg == "Request body (100 bytes) exceeds limit (16 bytes)"
     end
@@ -97,7 +111,7 @@ defmodule Opus.HttpRequestValidationTest do
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       assert {:error, :private_ip_blocked, msg} =
-               HttpRequestValidation.validate(encode(%{}), edge, EdgeFixtures.limits())
+               validate(encode(%{}), edge, EdgeFixtures.limits())
 
       assert msg =~ "127.0.0.1"
     end
@@ -106,7 +120,7 @@ defmodule Opus.HttpRequestValidationTest do
       edge = localhost_edge(methods: ["TRACE"])
 
       assert {:error, :method_blocked, "Unsupported HTTP method: TRACE"} =
-               HttpRequestValidation.validate(
+               validate(
                  encode(%{"method" => "TRACE"}),
                  edge,
                  EdgeFixtures.limits()
@@ -122,7 +136,7 @@ defmodule Opus.HttpRequestValidationTest do
         })
 
       assert {:ok, validated} =
-               HttpRequestValidation.validate(request, localhost_edge(), EdgeFixtures.limits())
+               validate(request, localhost_edge(), EdgeFixtures.limits())
 
       assert [%{name: "model", value: "whisper-1"}] = validated.multipart
     end
@@ -136,7 +150,7 @@ defmodule Opus.HttpRequestValidationTest do
         })
 
       assert {:error, :http_error, "Streaming requests do not support 'multipart'"} =
-               HttpRequestValidation.validate(
+               validate(
                  request,
                  localhost_edge(),
                  EdgeFixtures.limits(),
@@ -155,7 +169,7 @@ defmodule Opus.HttpRequestValidationTest do
         })
 
       assert {:error, :request_too_large, _msg} =
-               HttpRequestValidation.validate(request, localhost_edge(), limits)
+               validate(request, localhost_edge(), limits)
     end
   end
 
@@ -174,6 +188,21 @@ defmodule Opus.HttpRequestValidationTest do
       capture_log(fn ->
         assert HttpRequestValidation.timeout_ms(limits, 60_000) == 60_000
       end)
+    end
+  end
+  describe "egress rate limiting" do
+    test "the consented rate limit denies the wire-bound path itself" do
+      ctx = Sanctum.TestContext.local()
+      ref = "test:egress-#{System.unique_integer([:positive])}"
+      limits = EdgeFixtures.limits(rate_limit: %{requests: 1, window: "1m"})
+
+      assert {:ok, _} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, ctx, ref)
+
+      assert {:error, :rate_limited, message} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, ctx, ref)
+
+      assert message =~ "rate limit"
     end
   end
 end

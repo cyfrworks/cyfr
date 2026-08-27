@@ -112,7 +112,8 @@ defmodule Arca.ApiKeyStorage do
   Get an unrevoked key row by its id within an athanor — the lookup a
   key-authenticated context uses to read its own key's attributes.
   """
-  @spec get_key_by_id(String.t(), String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
+  @spec get_key_by_id(String.t(), String.t()) ::
+          {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
   def get_key_by_id(athanor_id, id) when is_binary(id) do
     query =
       from(k in ApiKey, where: k.id == ^id and k.revoked == false)
@@ -125,7 +126,7 @@ defmodule Arca.ApiKeyStorage do
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in get_key_by_id: #{Exception.message(e)}")
-      {:error, :not_found}
+      {:error, :database_error}
   end
 
   @doc """
@@ -139,7 +140,7 @@ defmodule Arca.ApiKeyStorage do
   192-bit globally-unique credential, so this single untenanted lookup is the
   correct and authoritative path regardless of how the deployment is configured.
   """
-  @spec get_key_by_hash(binary()) :: {:ok, ApiKey.t()} | {:error, :not_found}
+  @spec get_key_by_hash(binary()) :: {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
   def get_key_by_hash(key_hash) do
     query =
       from(k in ApiKey,

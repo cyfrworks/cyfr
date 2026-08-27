@@ -335,7 +335,9 @@ defmodule Emissary.MCP.Router do
   # accepting the notification as well would be a second, unspecified way in.
   defp dispatch_notification(_ctx, method, _params) do
     require Logger
-    Logger.warning("MCP: Unknown notification: #{method}")
+    # `method` is unvalidated client input headed for structured logs —
+    # bound it so a caller cannot inflate a log line at will.
+    Logger.warning("MCP: Unknown notification: #{String.slice(to_string(method), 0, 200)}")
     :ok
   end
 

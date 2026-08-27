@@ -13,7 +13,7 @@ defmodule EmissaryWeb.WebhookController do
 
   Build the invoke envelope, merge with the webhook's stored
   `input_template`, and **fire** the target component asynchronously through
-  `Opus.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
+  `Cyfr.Execution.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
   GitHub / Twilio / PayPal docs all converge on this). Component outcome is
@@ -224,7 +224,7 @@ defmodule EmissaryWeb.WebhookController do
         duration_ms = duration_ms(start_time)
 
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: "task_spawn_failed: #{inspect(reason)}",
+          error: "task_spawn_failed: #{inspect(Sanctum.Sanitizer.sanitize(reason))}",
           duration_ms: duration_ms,
           routed_to: "opus"
         })
@@ -234,7 +234,7 @@ defmodule EmissaryWeb.WebhookController do
           %{duration_ms: duration_ms},
           telemetry_meta
           |> Map.put(:status, :error)
-          |> Map.put(:error, "task_spawn_failed: #{inspect(reason)}")
+          |> Map.put(:error, "task_spawn_failed: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
         )
 
         conn |> put_status(503) |> json(%{error: "service_unavailable"})
@@ -242,7 +242,7 @@ defmodule EmissaryWeb.WebhookController do
   end
 
   # Task body. Wrapped in try/rescue so the audit trail (`RequestLog` row +
-  # `:invoke, :stop` telemetry) closes whether `Opus.run_root/5` returns
+  # `:invoke, :stop` telemetry) closes whether `Cyfr.Execution.run_root/5` returns
   # `{:ok, _}`, `{:error, _}`, or raises. The supervisor would log a crash
   # otherwise, but the structured audit row would dangle in `pending`.
   defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time) do
@@ -275,7 +275,11 @@ defmodule EmissaryWeb.WebhookController do
           Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
 
           RequestLog.safe_log_failed(ctx, request_id, %{
-            error: inspect(reason),
+            error:
+              if(is_binary(reason),
+                do: reason,
+                else: inspect(Sanctum.Sanitizer.sanitize(reason))
+              ),
             duration_ms: duration_ms,
             routed_to: "opus"
           })

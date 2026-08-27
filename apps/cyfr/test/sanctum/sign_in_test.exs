@@ -59,25 +59,25 @@ defmodule Sanctum.SignInTest do
     assert_receive {:bootstrap, %{user_id: uid}}
     assert uid == i.id
 
-    rows = Members.list_by_user(i.id)
+    rows = rows!(Members.list_by_user(i.id))
     assert Enum.any?(rows, &(&1.scope == "platform"))
     home = Athanors.home!()
     assert Enum.any?(rows, &(&1.scope == "athanor" and &1.athanor_id == home.id))
 
     assert {:ok, _} = SignIn.admitted(i, :admin)
     refute_receive {:bootstrap, _}
-    assert length(Members.list_by_user(i.id)) == 2
+    assert length(rows!(Members.list_by_user(i.id))) == 2
   end
 
   test "an email dropped from the operator list loses the platform row on the next sign-in" do
     i = info(3)
     assert {:ok, _} = SignIn.admitted(i, :admin)
-    assert Enum.any?(Members.list_by_user(i.id), &(&1.scope == "platform"))
+    assert Enum.any?(rows!(Members.list_by_user(i.id)), &(&1.scope == "platform"))
 
     assert {:ok, _} = SignIn.admitted(i, :allowed)
-    refute Enum.any?(Members.list_by_user(i.id), &(&1.scope == "platform"))
+    refute Enum.any?(rows!(Members.list_by_user(i.id)), &(&1.scope == "platform"))
     # the Home seat is an ordinary membership and stays
-    assert Enum.any?(Members.list_by_user(i.id), &(&1.scope == "athanor"))
+    assert Enum.any?(rows!(Members.list_by_user(i.id)), &(&1.scope == "athanor"))
   end
 
   test "invited rows for the person's verified email activate on first sign-in" do
@@ -85,13 +85,13 @@ defmodule Sanctum.SignInTest do
     {:ok, :invited} = Members.add(group, [email: "User4@Example.com"], "creator")
 
     assert [%{status: "invited", email: "user4@example.com"}] =
-             Enum.filter(Members.list_by_athanor(group.id), &(&1.status == "invited"))
+             Enum.filter(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
     i = info(4)
     assert {:ok, _} = SignIn.admitted(i, :allowed)
 
     assert Members.member?(i.id, group.id)
-    refute Enum.any?(Members.list_by_athanor(group.id), &(&1.status == "invited"))
+    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
   end
 
   test "an address the provider never claimed activates its invitations; one it refuses does not" do
@@ -112,7 +112,7 @@ defmodule Sanctum.SignInTest do
              SignIn.admitted(info(9, %{verified: false}), :allowed)
 
     refute Members.member?(info(9).id, group2.id)
-    assert Enum.any?(Members.list_by_athanor(group2.id), &(&1.status == "invited"))
+    assert Enum.any?(rows!(Members.list_by_athanor(group2.id)), &(&1.status == "invited"))
   end
 
   test "record_namespace/2 lands the claim on the users row, mints the athanor, and refuses a slug another identity holds" do
@@ -159,8 +159,9 @@ defmodule Sanctum.SignInTest do
 
     assert owner == user.id
 
-    rows = Members.list_by_user(user.id)
+    rows = rows!(Members.list_by_user(user.id))
     refute Enum.any?(rows, &(&1.scope == "platform"))
     assert Enum.map(Athanors.list_for_user(user.id), & &1.kind) == ["person"]
   end
+  defp rows!({:ok, rows}), do: rows
 end

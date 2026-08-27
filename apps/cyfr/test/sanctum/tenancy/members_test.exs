@@ -73,7 +73,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert {:ok, first} = Members.ensure(uid, scope: "platform")
       assert {:ok, again} = Members.ensure(uid, scope: "platform")
       assert first.id == again.id
-      assert [_one] = Members.list_by_user(uid)
+      assert [_one] = rows!(Members.list_by_user(uid))
     end
 
     test "athanor memberships key on the athanor", %{athanor: athanor} do
@@ -108,13 +108,13 @@ defmodule Sanctum.Tenancy.MembersTest do
     test "lists memberships for an athanor as display rows, paged", %{athanor: athanor} do
       {:ok, _} = Members.create(attrs(athanor.id))
       {:ok, _} = Members.create(attrs(athanor.id))
-      mems = Members.list_by_athanor(athanor.id)
+      mems = rows!(Members.list_by_athanor(athanor.id))
       assert length(mems) >= 2
       assert Enum.all?(mems, &Map.has_key?(&1, :display_name))
 
       [first | _] = mems
-      assert [^first] = Members.list_by_athanor(athanor.id, limit: 1)
-      assert Members.list_by_athanor(athanor.id, limit: 1, offset: 1) != [first]
+      assert [^first] = rows!(Members.list_by_athanor(athanor.id, limit: 1))
+      assert rows!(Members.list_by_athanor(athanor.id, limit: 1, offset: 1)) != [first]
     end
   end
 
@@ -122,7 +122,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     test "lists memberships for a user", %{athanor: athanor} do
       user_id = "user_" <> Ecto.UUID.generate()
       {:ok, _} = Members.create(attrs(athanor.id, %{user_id: user_id}))
-      assert Members.list_by_user(user_id) != []
+      assert rows!(Members.list_by_user(user_id)) != []
     end
   end
 
@@ -205,7 +205,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert_receive {:membership_changed, %{change: :joined}}
 
       # the invitations are gone as invitations, and the seat carries no email
-      rows = Members.list_by_athanor(athanor.id)
+      rows = rows!(Members.list_by_athanor(athanor.id))
       refute Enum.any?(rows, &(&1.status == "invited"))
       assert Enum.any?(rows, &(&1.user_id == user.id and &1.status == "active"))
 
@@ -242,7 +242,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       rows =
         Enum.filter(
-          Members.list_by_athanor(athanor.id),
+          rows!(Members.list_by_athanor(athanor.id)),
           &(&1.user_id == user.id or &1.email == email)
         )
 
@@ -284,4 +284,5 @@ defmodule Sanctum.Tenancy.MembersTest do
       end)
     end)
   end
+  defp rows!({:ok, rows}), do: rows
 end

@@ -42,6 +42,16 @@ if config_env() != :test do
     config :cyfr, :pbkdf2_iterations, parse_integer.("CYFR_PBKDF2_ITERATIONS", pbkdf2_iterations)
   end
 
+  # The explicit at-rest keyring, as JSON (parsed and pinned at boot by
+  # Cyfr.Application.resolve_crypto_keyring!/0; unset = derive from
+  # CYFR_SECRET_KEY_BASE). Through Dotenvy like every other secret: it was
+  # the one secret read with System.get_env/1, which silently ignored a
+  # keyring an operator put in .env alongside everything else.
+  config :cyfr, :crypto_keyring_json, env!("CYFR_CRYPTO_KEYRING", :string, nil)
+
+  # Device label attached to registry credentials (unset = hostname).
+  config :cyfr, :device_label, env!("CYFR_DEVICE_LABEL", :string, nil)
+
   # Whether the server migrates the database on boot (default: true). Several
   # nodes on one Postgres, or an operator who runs the schema step by hand
   # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.

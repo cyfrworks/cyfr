@@ -441,8 +441,11 @@ defmodule Cyfr.Application do
         :ok
 
       _ ->
+        # runtime.exs reads CYFR_CRYPTO_KEYRING through Dotenvy (OS env and
+        # .env files alike) into :crypto_keyring_json — reading the OS env
+        # directly here ignored a .env-configured keyring.
         keyring =
-          case System.get_env("CYFR_CRYPTO_KEYRING") do
+          case Application.get_env(:cyfr, :crypto_keyring_json) do
             nil ->
               derive_keyring_from_secret_key_base!()
 

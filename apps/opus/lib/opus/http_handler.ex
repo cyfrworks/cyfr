@@ -143,7 +143,7 @@ defmodule Opus.HttpHandler do
   """
   @spec execute(String.t(), Edge.t() | nil, Limits.t(), Context.t(), String.t()) :: String.t()
   def execute(json_request, edge, %Limits{} = limits, %Context{} = ctx, component_ref) do
-    case HttpRequestValidation.validate(json_request, edge, limits) do
+    case HttpRequestValidation.validate(json_request, edge, limits, ctx, component_ref) do
       {:ok, request} ->
         perform_request(request, limits, component_ref, ctx)
 
@@ -166,6 +166,7 @@ defmodule Opus.HttpHandler do
         :request_too_large -> :request_size
         :response_too_large -> :request_size
         :private_ip_blocked -> :denied
+        :rate_limited -> :denied
         _ -> nil
       end
 

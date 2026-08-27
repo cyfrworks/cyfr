@@ -7,7 +7,7 @@ defmodule PrismWeb.LiveAuth do
 
   Loads the session token from the cookie session (the one this origin
   has, written by the auth callback), authenticates it via Sanctum, and
-  assigns `:current_user` (a Context) to the socket. Redirects to /login
+  assigns `:context` (a Context) to the socket. Redirects to /login
   if unauthenticated and to the claim gate if the person has no namespace
   yet.
 
@@ -47,7 +47,6 @@ defmodule PrismWeb.LiveAuth do
 
         {:cont,
          socket
-         |> assign(:current_user, ctx)
          |> assign(:context, ctx)
          |> assign(:session_token, token)
          |> assign(:personal_namespace_slug, slug)
@@ -105,7 +104,7 @@ defmodule PrismWeb.LiveAuth do
     focus = socket.assigns.context.athanor_id
 
     case PrismWeb.AuthHelpers.authenticate_session(token, focus) do
-      {:ok, ctx} -> {:halt, assign(socket, current_user: ctx, context: ctx)}
+      {:ok, ctx} -> {:halt, assign(socket, :context, ctx)}
       {:error, _} -> {:halt, redirect(socket, to: "/")}
     end
   end

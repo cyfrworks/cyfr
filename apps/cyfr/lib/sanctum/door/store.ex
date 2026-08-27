@@ -155,15 +155,26 @@ defmodule Sanctum.Door.Store do
   Is there a deny entry for this identity or email? Deliberately reads
   `effect` alone — unlike `allowed?/2`, which also wants `status:
   "allowed"` — so a deny row is honoured whatever its status says: a
-  malformed or half-written deny must never read as an admit.
+  malformed or half-written deny must never read as an admit. The same
+  posture covers the store itself: a read the database could not answer
+  counts as denied, because "not denied" is the one answer this function
+  must never give without having actually looked.
   """
   @spec denied?(String.t() | nil, String.t() | nil) :: boolean()
   def denied?(user_id, email) do
     values = [{"user_id", user_id}, {"email", downcase(email)}]
 
     Enum.any?(values, fn
-      {_kind, nil} -> false
-      {kind, value} -> match?({:ok, %Entry{effect: "deny"}}, find(kind, value))
+      {_kind, nil} ->
+        false
+
+      {kind, value} ->
+        case find(kind, value) do
+          {:ok, %Entry{effect: "deny"}} -> true
+          {:ok, %Entry{}} -> false
+          {:error, :not_found} -> false
+          {:error, _} -> true
+        end
     end)
   end
 

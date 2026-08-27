@@ -163,38 +163,28 @@ defmodule Compendium.Registry.CredentialStoreTest do
   end
 
   describe "device_label/0" do
+    # CYFR_DEVICE_LABEL reaches :cyfr, :device_label through runtime.exs's
+    # Dotenvy pipeline; the module reads app config only, so the OS env is
+    # not consulted here.
     setup do
       original_app = Application.get_env(:cyfr, :device_label)
-      original_env = System.get_env("CYFR_DEVICE_LABEL")
 
       on_exit(fn ->
         if original_app,
           do: Application.put_env(:cyfr, :device_label, original_app),
           else: Application.delete_env(:cyfr, :device_label)
-
-        if original_env,
-          do: System.put_env("CYFR_DEVICE_LABEL", original_env),
-          else: System.delete_env("CYFR_DEVICE_LABEL")
       end)
 
       :ok
     end
 
-    test "prefers :cyfr, :device_label app env over CYFR_DEVICE_LABEL env" do
+    test "reads :cyfr, :device_label" do
       Application.put_env(:cyfr, :device_label, "app-env-value")
-      System.put_env("CYFR_DEVICE_LABEL", "os-env-value")
       assert CredentialStore.device_label() == "app-env-value"
     end
 
-    test "falls back to CYFR_DEVICE_LABEL when no app env" do
+    test "falls back to machine hostname when unset" do
       Application.delete_env(:cyfr, :device_label)
-      System.put_env("CYFR_DEVICE_LABEL", "os-env-value")
-      assert CredentialStore.device_label() == "os-env-value"
-    end
-
-    test "falls back to machine hostname when neither env set" do
-      Application.delete_env(:cyfr, :device_label)
-      System.delete_env("CYFR_DEVICE_LABEL")
 
       label = CredentialStore.device_label()
       assert is_binary(label)

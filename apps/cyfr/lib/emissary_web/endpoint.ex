@@ -26,6 +26,13 @@ defmodule EmissaryWeb.Endpoint do
   def session_options do
     salt = Application.get_env(:cyfr, :emissary_session_salt, @default_session_salt)
 
+    # The salt is a domain separator, not a key (signing strength comes
+    # from secret_key_base) — but a release running on the repo's default
+    # deserves to know, once, like the derived-keyring warning at boot.
+    if salt == @default_session_salt and System.get_env("RELEASE_ROOT") != nil do
+      warn_default_salt_once()
+    end
+
     [
       store: :cookie,
       key: "_cyfr_key",
@@ -91,5 +98,23 @@ defmodule EmissaryWeb.Endpoint do
   defp dynamic_session(conn, _opts) do
     opts = Plug.Session.init(session_options())
     Plug.Session.call(conn, opts)
+  end
+
+  # session_options/0 runs per request; the warning belongs in the log once.
+  defp warn_default_salt_once do
+    if :persistent_term.get({__MODULE__, :salt_warned}, false) == false do
+      :persistent_term.put({__MODULE__, :salt_warned}, true)
+
+      require Logger
+
+      Logger.warning(
+        "[EmissaryWeb.Endpoint] No CYFR_SESSION_SALT set — session cookies " <>
+          "are signed under the repo's default salt. Signing strength still " <>
+          "comes from CYFR_SECRET_KEY_BASE; set an explicit salt to decouple " <>
+          "this deployment's cookie domain from every other CYFR install."
+      )
+    end
+
+    :ok
   end
 end

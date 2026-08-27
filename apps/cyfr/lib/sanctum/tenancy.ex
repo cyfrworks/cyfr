@@ -105,7 +105,7 @@ defmodule Sanctum.Tenancy do
 
   defp resolve_from_memberships(%Context{user_id: user_id} = ctx) do
     with {:ok, user} <- user_row(user_id),
-         memberships when is_list(memberships) <- Members.list_by_user(user_id) do
+         {:ok, memberships} <- Members.list_by_user(user_id) do
       apply_membership(ctx, memberships, user)
     else
       {:error, reason} ->
@@ -223,8 +223,8 @@ defmodule Sanctum.Tenancy do
 
       {:ok, user} ->
         case Members.list_by_user(user_id) do
-          memberships when is_list(memberships) -> apply_membership(ctx, memberships, user)
-          _error -> ctx
+          {:ok, memberships} -> apply_membership(ctx, memberships, user)
+          {:error, _} -> ctx
         end
 
       {:error, _} ->
