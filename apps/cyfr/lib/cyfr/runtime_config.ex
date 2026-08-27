@@ -268,24 +268,30 @@ defmodule Cyfr.RuntimeConfig do
     resolved = for {var, key} <- required, into: %{}, do: {key, blank_to_nil(getenv.(var))}
     missing = for {var, key} <- required, is_nil(resolved[key]), do: var
 
-    case missing do
-      [] ->
-        opts =
-          [
-            bucket: resolved.bucket,
-            region: resolved.region,
-            access_key_id: resolved.access_key_id,
-            secret_access_key: resolved.secret_access_key,
-            endpoint: blank_to_nil(getenv.("CYFR_S3_ENDPOINT")),
-            prefix: blank_to_nil(getenv.("CYFR_S3_PREFIX")),
-            path_style: getenv.("CYFR_S3_PATH_STYLE") in ["true", "1"]
-          ]
-          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    with [] <- missing,
+         # A distant or slow object store is the one storage failure an
+         # operator can fix from the outside. This lived as a top-level
+         # `:s3_receive_timeout_ms` that no config file set, while every other
+         # S3 setting was read from `config :cyfr, :s3`.
+         {:ok, receive_timeout_ms} <-
+           positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS") do
+      opts =
+        [
+          bucket: resolved.bucket,
+          region: resolved.region,
+          access_key_id: resolved.access_key_id,
+          secret_access_key: resolved.secret_access_key,
+          endpoint: blank_to_nil(getenv.("CYFR_S3_ENDPOINT")),
+          prefix: blank_to_nil(getenv.("CYFR_S3_PREFIX")),
+          path_style: getenv.("CYFR_S3_PATH_STYLE") in ["true", "1"],
+          receive_timeout_ms: receive_timeout_ms
+        ]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
-        {:ok, {:s3, opts}}
-
-      _ ->
-        {:error, "CYFR_STORAGE=s3 requires #{Enum.join(missing, ", ")}."}
+      {:ok, {:s3, opts}}
+    else
+      {:error, message} -> {:error, message}
+      _missing -> {:error, "CYFR_STORAGE=s3 requires #{Enum.join(missing, ", ")}."}
     end
   end
 
@@ -331,6 +337,22 @@ defmodule Cyfr.RuntimeConfig do
     case String.trim(value) do
       "" -> nil
       trimmed -> trimmed
+    end
+  end
+
+  # Optional positive integer: unset means "the reader's own default", but a
+  # value the operator set and got wrong fails the boot rather than silently
+  # reverting to it.
+  defp positive_int(raw, var) do
+    case blank_to_nil(raw) do
+      nil ->
+        {:ok, nil}
+
+      trimmed ->
+        case Integer.parse(trimmed) do
+          {n, ""} when n > 0 -> {:ok, n}
+          _ -> {:error, "#{var} must be a positive integer, got #{inspect(trimmed)}."}
+        end
     end
   end
 

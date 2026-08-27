@@ -642,8 +642,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   @finch_pool Sanctum.Auth.Finch
 
   # One reader for the timeout, so the two verbs cannot come to disagree
-  # about how long an IdP is allowed to take.
-  defp http_timeout_ms, do: Application.get_env(:cyfr, :http_timeout_ms, 30_000)
+  # about how long an IdP is allowed to take. It was an
+  # `Application.get_env(:cyfr, :http_timeout_ms)` that nothing set — a
+  # constant under a name general enough that the next module to want an
+  # HTTP timeout would have read this one by accident.
+  @http_timeout_ms 30_000
+
+  defp http_timeout_ms, do: @http_timeout_ms
 
   defp http_post(url, headers, body) do
     :post

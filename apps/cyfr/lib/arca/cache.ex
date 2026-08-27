@@ -27,7 +27,10 @@ defmodule Arca.Cache do
 
   @table_name :arca_cache
   @default_ttl_ms 60_000
-  @max_entries Application.compile_env(:cyfr, :cache_max_entries, 10_000)
+  # A compile-time ceiling, not a knob: `compile_env` on a key no config
+  # file sets is a constant that reads like something an operator can
+  # tune. The byte budget in `Arca.Cache.Sweeper` is the tunable one.
+  @max_entries 10_000
 
   @doc """
   Initialize the ETS cache table. Called from `Arca.Cache.Sweeper` — the

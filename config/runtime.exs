@@ -115,6 +115,32 @@ if config_env() != :test do
     config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
   end
 
+  # Webhook replay window (default 300s). A delivery whose `timestamp_header`
+  # is further than this from now is refused. Senders differ in how well they
+  # keep a clock; the value was a constant nothing could set, so operators
+  # facing a drifting sender had no answer short of turning the header off.
+  if skew = env_int.("CYFR_WEBHOOK_MAX_SKEW_SECONDS", nil) do
+    if skew <= 0, do: raise("CYFR_WEBHOOK_MAX_SKEW_SECONDS must be > 0")
+    config :cyfr, :webhook_max_skew_seconds, skew
+  end
+
+  # How long delivered webhook idempotency keys are kept (default 86_400s).
+  # This is the window a retried delivery is recognised as a duplicate in, so
+  # it trades table size against how late a sender may retry.
+  if ttl = env_int.("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS", nil) do
+    if ttl <= 0, do: raise("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS must be > 0")
+    config :cyfr, :webhook_idempotency_ttl_seconds, ttl
+  end
+
+  # How long `/health/ready` reuses its last probe (default 5000ms). On an
+  # object store the write probe is a billable PUT per uncached hit, so a
+  # frequent prober is a line item; the code documented this as settable
+  # while nothing could set it.
+  if ready_ms = env_int.("CYFR_HEALTH_READY_CACHE_MS", nil) do
+    if ready_ms < 0, do: raise("CYFR_HEALTH_READY_CACHE_MS must be >= 0")
+    config :cyfr, :health_ready_cache_ms, ready_ms
+  end
+
   # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
   # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
   if ttl_hours = env_int.("CYFR_SESSION_TTL_HOURS", nil) do

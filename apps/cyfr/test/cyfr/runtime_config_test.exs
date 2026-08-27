@@ -193,6 +193,36 @@ defmodule Cyfr.RuntimeConfigTest do
       assert {:error, msg} = RuntimeConfig.resolve_storage(env(%{"CYFR_STORAGE" => "gcs"}))
       assert msg =~ "Unknown CYFR_STORAGE"
     end
+
+    test "the receive timeout rides in the s3 opts, and a wrong one fails the boot" do
+      base = %{
+        "CYFR_STORAGE" => "s3",
+        "CYFR_S3_BUCKET" => "b",
+        "CYFR_S3_REGION" => "us-east-1",
+        "CYFR_S3_ACCESS_KEY_ID" => "ak",
+        "CYFR_S3_SECRET_ACCESS_KEY" => "sk"
+      }
+
+      assert {:ok, {:s3, opts}} =
+               RuntimeConfig.resolve_storage(
+                 env(Map.put(base, "CYFR_S3_RECEIVE_TIMEOUT_MS", "90000"))
+               )
+
+      assert opts[:receive_timeout_ms] == 90_000
+
+      # Unset leaves the adapter's own default in charge rather than a nil.
+      assert {:ok, {:s3, plain}} = RuntimeConfig.resolve_storage(env(base))
+      refute Keyword.has_key?(plain, :receive_timeout_ms)
+
+      for bad <- ["0", "-1", "sixty", "60s"] do
+        assert {:error, msg} =
+                 RuntimeConfig.resolve_storage(
+                   env(Map.put(base, "CYFR_S3_RECEIVE_TIMEOUT_MS", bad))
+                 )
+
+        assert msg =~ "CYFR_S3_RECEIVE_TIMEOUT_MS", "#{bad} should be refused by name"
+      end
+    end
   end
 
   describe "resolve_postgres/1" do

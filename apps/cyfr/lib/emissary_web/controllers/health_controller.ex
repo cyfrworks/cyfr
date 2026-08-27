@@ -21,7 +21,7 @@ defmodule EmissaryWeb.HealthController do
   # the DB query, PubSub round-trip and storage write are not free (on the
   # S3 adapter the write probe is a billable PUT per uncached hit).
   # Operators on an object store can lengthen the window without a
-  # release via `config :cyfr, :health_ready_cache_ms`.
+  # release via `CYFR_HEALTH_READY_CACHE_MS`.
   @default_ready_cache_ms 5_000
   @ready_cache_key {__MODULE__, :ready_cache}
 

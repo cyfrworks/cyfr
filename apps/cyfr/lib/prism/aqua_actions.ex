@@ -31,9 +31,11 @@ defmodule Prism.AquaActions do
 
   ## Allowlist
 
-  `ui.navigate` paths are validated against a hardcoded list (mirrors the
-  routes in `apps/cyfr/lib/prism_web/router.ex`). Configurable via
-  `Application.get_env(:cyfr, :aqua_actions_allowed_paths, ...)`.
+  `ui.navigate` paths are validated against the console GET routes the
+  router itself declares, minus `@excluded_routes` — derived, not
+  mirrored, so a route added to the router needs no edit here. It is not
+  configurable: a config key that replaces this list is a lever for
+  widening where an agent may send the browser, and nothing set it.
 
   Resource-focus actions (`ui.execution.focus`, `ui.component.focus`, etc.)
   compute their target paths internally and don't need to be in the allowlist.
@@ -376,7 +378,7 @@ defmodule Prism.AquaActions do
   end
 
   defp check_allowed_path(path) do
-    routes = Application.get_env(:cyfr, :aqua_actions_allowed_paths, allowed_routes())
+    routes = allowed_routes()
 
     cond do
       path in routes -> :ok

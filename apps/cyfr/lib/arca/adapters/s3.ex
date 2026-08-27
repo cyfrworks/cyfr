@@ -361,7 +361,7 @@ defmodule Arca.Adapters.S3 do
       body: body,
       decode_body: false,
       retry: false,
-      receive_timeout: Application.get_env(:cyfr, :s3_receive_timeout_ms, 60_000)
+      receive_timeout: config(:receive_timeout_ms) || 60_000
     )
   end
 
