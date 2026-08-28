@@ -314,9 +314,11 @@ func TestParsedRef_WithVersion(t *testing.T) {
 		want    string
 	}{
 		{
+			// A shorthand type expands on the way out — the rebuilt ref is
+			// canonical server format, not the raw prefix the user typed.
 			ref:     ParsedRef{Type: "c", Namespace: "local", Name: "supabase"},
 			version: "0.1.0",
-			want:    "c:local.supabase:0.1.0",
+			want:    "catalyst:local.supabase:0.1.0",
 		},
 		{
 			ref:     ParsedRef{Namespace: "local", Name: "supabase"},
@@ -326,7 +328,7 @@ func TestParsedRef_WithVersion(t *testing.T) {
 		{
 			ref:     ParsedRef{Type: "c", Name: "supabase"},
 			version: "0.1.0",
-			want:    "c:local.supabase:0.1.0",
+			want:    "catalyst:local.supabase:0.1.0",
 		},
 		{
 			ref:     ParsedRef{Name: "supabase"},

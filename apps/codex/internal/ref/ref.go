@@ -316,43 +316,103 @@ func validateName(name string) error {
 	return nil
 }
 
-// CompareVersions compares two dot-separated version strings numerically.
-// Returns -1 if a < b, 0 if a == b, +1 if a > b.
-// Non-numeric segments are compared lexicographically.
+// CompareVersions compares two semver strings by semver.org precedence:
+// numeric core, then prerelease — a version WITHOUT a prerelease ranks
+// ABOVE one with ("1.0.0" > "1.0.0-rc1"), numeric identifiers rank below
+// alphanumeric ones, and build metadata is ignored. The old dot-split
+// with a byte-compare fallback ranked "1.0.0-rc1" above "1.0.0" — the
+// opposite of the server's Compendium.Semver — so interactive version
+// resolution could pick a prerelease the server never would. Inputs that
+// fail the semver grammar fall back to a byte compare of the raw
+// strings, matching the server's own fallback.
 func CompareVersions(a, b string) int {
-	as := strings.Split(a, ".")
-	bs := strings.Split(b, ".")
-	max := len(as)
-	if len(bs) > max {
-		max = len(bs)
+	av, aok := parseSemver(a)
+	bv, bok := parseSemver(b)
+	if !aok || !bok {
+		return strings.Compare(a, b)
+	}
+	for i := 0; i < 3; i++ {
+		if av.core[i] != bv.core[i] {
+			if av.core[i] < bv.core[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case len(av.pre) == 0 && len(bv.pre) == 0:
+		return 0
+	case len(av.pre) == 0:
+		return 1
+	case len(bv.pre) == 0:
+		return -1
+	}
+	max := len(av.pre)
+	if len(bv.pre) > max {
+		max = len(bv.pre)
 	}
 	for i := 0; i < max; i++ {
-		var ai, bi string
-		if i < len(as) {
-			ai = as[i]
+		if i >= len(av.pre) {
+			return -1 // fewer identifiers ranks lower
 		}
-		if i < len(bs) {
-			bi = bs[i]
+		if i >= len(bv.pre) {
+			return 1
 		}
-		an, aerr := strconv.Atoi(ai)
-		bn, berr := strconv.Atoi(bi)
-		if aerr == nil && berr == nil {
-			if an < bn {
-				return -1
-			}
-			if an > bn {
-				return 1
-			}
-		} else {
-			if ai < bi {
-				return -1
-			}
-			if ai > bi {
-				return 1
-			}
+		if c := comparePreIdent(av.pre[i], bv.pre[i]); c != 0 {
+			return c
 		}
 	}
 	return 0
+}
+
+type semverParts struct {
+	core [3]int
+	pre  []string
+}
+
+func parseSemver(s string) (semverParts, bool) {
+	var v semverParts
+	if !versionRegex.MatchString(s) {
+		return v, false
+	}
+	if plus := strings.IndexByte(s, '+'); plus >= 0 {
+		s = s[:plus]
+	}
+	core := s
+	if dash := strings.IndexByte(s, '-'); dash >= 0 {
+		core = s[:dash]
+		v.pre = strings.Split(s[dash+1:], ".")
+	}
+	parts := strings.Split(core, ".")
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return v, false
+		}
+		v.core[i] = n
+	}
+	return v, true
+}
+
+func comparePreIdent(a, b string) int {
+	an, aerr := strconv.Atoi(a)
+	bn, berr := strconv.Atoi(b)
+	switch {
+	case aerr == nil && berr == nil:
+		if an < bn {
+			return -1
+		}
+		if an > bn {
+			return 1
+		}
+		return 0
+	case aerr == nil:
+		return -1 // numeric identifiers rank below alphanumeric
+	case berr == nil:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
 }
 
 // HasTypePrefix reports whether the parsed ref had an explicit type prefix.
@@ -361,12 +421,14 @@ func (p ParsedRef) HasTypePrefix() bool {
 }
 
 // NameRef returns the name-level ref string (without version).
-// When the namespace is empty (bare name like "claude"), it defaults to "local"
-// so the output matches canonical server format (e.g. "catalyst:local.claude").
+// When the namespace is empty (bare name like "claude"), it defaults to "local",
+// and a shorthand type expands ("c" → "catalyst") so the output genuinely
+// matches canonical server format (e.g. "catalyst:local.claude") — it used to
+// emit the raw shorthand and rely on the server re-expanding it.
 func (p ParsedRef) NameRef() string {
 	var b strings.Builder
 	if p.Type != "" {
-		b.WriteString(p.Type)
+		b.WriteString(ExpandType(p.Type))
 		b.WriteByte(':')
 	}
 	ns := p.Namespace
@@ -380,12 +442,13 @@ func (p ParsedRef) NameRef() string {
 }
 
 // WithVersion returns the ref string rebuilt with the given version.
-// When the namespace is empty (bare name like "claude"), it defaults to "local"
-// so the output matches canonical server format (e.g. "catalyst:local.claude:0.1.0").
+// When the namespace is empty (bare name like "claude"), it defaults to "local",
+// and a shorthand type expands so the output matches canonical server format
+// (e.g. "catalyst:local.claude:0.1.0").
 func (p ParsedRef) WithVersion(v string) string {
 	var b strings.Builder
 	if p.Type != "" {
-		b.WriteString(p.Type)
+		b.WriteString(ExpandType(p.Type))
 		b.WriteByte(':')
 	}
 	ns := p.Namespace
