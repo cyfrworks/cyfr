@@ -17,11 +17,24 @@ defmodule Locus.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      Locus.BuildLimiter,
-      {Task.Supervisor, name: Locus.TaskSupervisor}
-    ]
+    children =
+      [
+        Locus.BuildLimiter,
+        {Task.Supervisor, name: Locus.TaskSupervisor}
+      ] ++ builder_endpoint()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Locus.Supervisor)
+  end
+
+  # The builder container's HTTP face — only when this node IS the builder
+  # (the `builder` release sets CYFR_BUILDER_LISTEN=true). The app image
+  # never listens on this port.
+  defp builder_endpoint do
+    if Application.get_env(:cyfr, :builder_listen, false) do
+      port = Application.get_env(:cyfr, :builder_port, 4100)
+      [{Bandit, plug: Locus.BuilderService, port: port, ip: {0, 0, 0, 0}}]
+    else
+      []
+    end
   end
 end

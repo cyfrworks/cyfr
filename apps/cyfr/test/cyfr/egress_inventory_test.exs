@@ -34,7 +34,11 @@ defmodule Cyfr.EgressInventoryTest do
     # while streaming.
     "apps/opus/lib/opus/http_handler.ex" => :guest_fetch,
     # Guest streaming HTTP — `into: :self` with an append-time byte budget.
-    "apps/opus/lib/opus/http_stream_handler.ex" => :guest_stream
+    "apps/opus/lib/opus/http_stream_handler.ex" => :guest_stream,
+    # The build-isolation seam's client: POSTs source maps to the
+    # operator-configured builder container (CYFR_BUILDER_URL), bearer
+    # token both ends, bounded response.
+    "apps/locus/lib/locus/builder_client.ex" => :builder
   }
 
   @patterns [

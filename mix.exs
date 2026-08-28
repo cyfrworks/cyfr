@@ -42,6 +42,16 @@ defmodule Cyfr.MixProject do
           locus: :permanent,
           opus: :permanent
         ]
+      ],
+      # The builder container: the toolchain half of Locus and nothing
+      # else. The cyfr app is LOADED (its pure modules — PathSafety,
+      # WasmValidator, WITSource, Digest — compile into the build path)
+      # but never STARTED: no endpoint, no repo, no tenant state.
+      builder: [
+        applications: [
+          locus: :permanent,
+          cyfr: :load
+        ]
       ]
     ]
   end

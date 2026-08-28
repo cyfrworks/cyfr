@@ -64,6 +64,36 @@ services:
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
+  # Toolchain builds isolated from the app image: cargo/npm run here, not
+  # in cyfr's container. Opt in with
+  #   docker compose --profile builder up -d
+  # and set CYFR_BUILDER_URL=http://builder:4100 plus CYFR_BUILDER_TOKEN
+  # in .env (both containers read the same file).      [profile: builder]
+  builder:
+    container_name: cyfr-builder
+    build:
+      context: .
+      dockerfile: Dockerfile.builder
+    profiles: ["builder"]
+    expose:
+      - "4100"
+    env_file:
+      - .env
+    environment:
+      - CYFR_BUILDER_LISTEN=true
+    # No /data mount, read-only root: the builder holds no tenant state —
+    # sources arrive in the request, artifacts leave in the response, and
+    # the only writable surface is its own build scratch.
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   mcp-bridge:
     # Built locally from Dockerfile.node (not a published image), so `docker
     # compose pull` won't fetch it — `up` builds it on first run.

@@ -42,7 +42,7 @@ defmodule Cyfr.StackShapeTest do
       |> List.flatten()
       |> Enum.sort()
 
-    assert services == ["caddy", "cyfr", "mcp-bridge"]
+    assert services == ["builder", "caddy", "cyfr", "mcp-bridge"]
     refute compose =~ ~r/porta|4001|8080/
 
     # One runtime root: the old components bind mount must not come back.

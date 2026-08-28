@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.7-labs
 # (parser directive above must be the first line; needed for COPY --parents)
 
-ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:1.0.0
+# 2.x runner bases carry NO toolchains — builds live in the builder
+# container (Dockerfile.builder). Rebuild with scripts/build-runner-base.sh.
+ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:2.0.0
 
 # ---- Stage 1: Builder ----
 FROM hexpm/elixir:1.20.0-erlang-29.0.2-debian-bookworm-20260610 AS builder
@@ -44,8 +46,8 @@ COPY wit/ wit/
 RUN mix compile && mix assets.deploy && mix release cyfr
 
 # ---- Stage 2: Runner ----
-# Pre-built base with Rust + cargo-component (see Dockerfile.runner-base)
-# Rebuild with: scripts/build-runner-base.sh
+# Pre-built runtime base — libraries and the runtime user, no toolchains
+# (see Dockerfile.runner-base). Rebuild with: scripts/build-runner-base.sh
 ARG RUNNER_BASE
 FROM ${RUNNER_BASE} AS runner
 

@@ -17,4 +17,8 @@ if excludes != [] do
   ExUnit.configure(exclude: excludes)
 end
 
+# The cyfr dep is runtime: false (the builder release loads it without
+# starting it), so the test run starts it here explicitly.
+{:ok, _} = Application.ensure_all_started(:cyfr)
+
 ExUnit.start()

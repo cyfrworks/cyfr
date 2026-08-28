@@ -96,6 +96,15 @@ if config_env() != :test do
     config :cyfr, :max_concurrent_builds_per_tenant, tenant_builds
   end
 
+  # Build isolation: with CYFR_BUILDER_URL set, `build.compile` POSTs the
+  # source map to the builder container instead of running toolchains in
+  # this image; CYFR_BUILDER_TOKEN authenticates both ends. The `builder`
+  # release sets CYFR_BUILDER_LISTEN=true to serve that endpoint.
+  config :cyfr, :builder_url, env_str.("CYFR_BUILDER_URL", nil)
+  config :cyfr, :builder_token, env_str.("CYFR_BUILDER_TOKEN", nil)
+  config :cyfr, :builder_listen, env_bool.("CYFR_BUILDER_LISTEN", false)
+  config :cyfr, :builder_port, env_int.("CYFR_BUILDER_PORT", 4100)
+
   # A headless node (default: false) serves the API, MCP and public tinctures
   # and no browser surface: every route on the browser pipeline answers 404.
   # Codex signs in through the session tool on /mcp, so it does not notice.

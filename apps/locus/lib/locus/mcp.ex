@@ -254,9 +254,9 @@ defmodule Locus.MCP do
             wasm_path =
               Compendium.ComponentPath.wasm_path(type, publisher(), name, version)
 
-            # Build artifacts write cap-exempt by design: failing a build
-            # half-way through its save is worse than any over-cap state,
-            # and the bytes still count against usage accounting.
+            # Bounded output (Locus.Builder caps dist size and the WASM
+            # validator caps binaries), so the store applies the ordinary
+            # tenant cap — the old blanket exemption is gone.
             Arca.put(ctx, wasm_path, result.wasm_bytes)
           end
 
@@ -435,10 +435,19 @@ defmodule Locus.MCP do
     target_type = String.to_existing_atom(type)
     language = language_for_type(type)
 
-    case Locus.Builder.compile(source_files, language,
-           target_type: target_type,
-           on_progress: on_progress
-         ) do
+    build_opts = [target_type: target_type, on_progress: on_progress]
+
+    # The build-isolation seam: CYFR_BUILDER_URL set → the builder
+    # container compiles; unset → in-process, with Locus.Builder's honest
+    # threat model. Same result shape either way.
+    result =
+      if Locus.BuilderClient.enabled?() do
+        Locus.BuilderClient.compile(source_files, language, build_opts)
+      else
+        Locus.Builder.compile(source_files, language, build_opts)
+      end
+
+    case result do
       {:ok, result} ->
         {:ok, result}
 
@@ -451,6 +460,16 @@ defmodule Locus.MCP do
       {:error, {:toolchain_not_found, lang}} ->
         {:error,
          "Toolchain not found: #{lang}. Install cargo-component (cargo install cargo-component)."}
+
+      {:error, {:builder_failed, message}} ->
+        {:error, "Builder: #{message}"}
+
+      {:error, :builder_unreachable} ->
+        {:error, "The builder service is unreachable — check CYFR_BUILDER_URL and the container"}
+
+      {:error, :builder_unauthorized} ->
+        {:error,
+         "The builder refused this server's token — check CYFR_BUILDER_TOKEN on both ends"}
 
       {:error, reason} ->
         {:error, "Compilation error: #{inspect(reason)}"}
