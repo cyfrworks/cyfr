@@ -516,6 +516,10 @@ defmodule Compendium.Registry do
       case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do
         {:ok, row} -> {:ok, decode_row_json_fields(row)}
         {:error, :not_found} -> {:error, :not_found}
+        # A database fault must propagate as itself — it once raised
+        # CaseClauseError here while release_status/7 handled it two
+        # screens away.
+        {:error, reason} -> {:error, reason}
       end
     end
   end
@@ -696,6 +700,9 @@ defmodule Compendium.Registry do
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

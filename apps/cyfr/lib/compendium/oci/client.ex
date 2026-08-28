@@ -607,6 +607,9 @@ defmodule Compendium.OCI.Client do
 
       {:error, :not_found} ->
         {:error, "Component not found locally: #{Sanctum.ComponentRef.to_string(cref)}"}
+
+      {:error, reason} ->
+        {:error, "Component lookup failed: #{inspect(reason)}"}
     end
   end
 
