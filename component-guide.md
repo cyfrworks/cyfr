@@ -480,10 +480,10 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Component name |
+| `name` | string | Yes | Component name — must match the directory the component lives under |
 | `type` | string | Yes | `"reagent"`, `"catalyst"`, `"formula"`, or `"tincture"` |
-| `version` | string | Yes | Semver version |
-| `publisher` | string | Yes | Publisher identifier — `"local"` for local dev |
+| `version` | string | Yes | Semver version — must match the version directory |
+| `publisher` | string | No | Publisher identifier — defaults to `"local"`; when present it must MATCH the directory the component lives under (a disagreeing manifest is refused) |
 | `description` | string | Yes | Human-readable summary |
 | `needs` | object | Catalysts (if uses credentials) | Named roles the operator satisfies with Connections (see below) |
 | `caps` | object | Catalysts/Formulas | The declared capability ask: egress, storage, tools, limits (see below) |

@@ -1247,33 +1247,12 @@ defmodule Compendium.Registry do
   end
 
   # The needs/caps blocks are digest-covered manifest vocabulary; a manifest
-  # carrying a malformed block is refused at every register/publish ingress.
-  # The retired setup/oauth/wasi blocks are refused outright — the frozen
-  # model has no arm that could honor them, so accepting one would register
-  # a component whose declared ask silently never applies.
+  # carrying a malformed block is refused at every register/publish ingress
+  # — through the ONE validator, `Compendium.Manifest.validate/1` (closed
+  # key roster, legacy-block refusal, needs/caps owners).
   defp validate_manifest_capability_blocks(manifest) do
-    with :ok <- reject_legacy_manifest_blocks(manifest),
-         :ok <- Compendium.Manifest.Needs.validate(manifest) do
-      Compendium.Manifest.Caps.validate(manifest)
-    end
+    Compendium.Manifest.validate(manifest)
   end
-
-  @legacy_manifest_blocks ~w(setup oauth wasi)
-
-  defp reject_legacy_manifest_blocks(manifest) when is_map(manifest) do
-    case Enum.filter(@legacy_manifest_blocks, &Map.has_key?(manifest, &1)) do
-      [] ->
-        :ok
-
-      keys ->
-        {:error,
-         {:legacy_manifest_blocks,
-          "Manifest declares retired block(s) #{Enum.join(keys, "/")} — declare needs/caps " <>
-            "instead (see component-guide.md, \"Migrating from setup/oauth\")"}}
-    end
-  end
-
-  defp reject_legacy_manifest_blocks(_manifest), do: :ok
 
   # ============================================================================
   # Registration Helpers

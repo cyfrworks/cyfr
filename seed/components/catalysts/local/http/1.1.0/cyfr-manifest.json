@@ -1,6 +1,5 @@
 {
-  "defaults": {},
-  "description": "HTTP catalyst \u2014 read pages as clean Markdown, raw HTTP fetch, discover links, and extract metadata. Public hosts only: private and link-local addresses are refused unless the consent grants them.",
+  "description": "HTTP catalyst — read pages as clean Markdown, raw HTTP fetch, discover links, and extract metadata. Public hosts only: private and link-local addresses are refused unless the consent grants them.",
   "examples": [
     {
       "description": "Extract readable content as clean Markdown",

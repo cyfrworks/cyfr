@@ -60,6 +60,78 @@ defmodule Compendium.Manifest do
 
   def decode_strict(_), do: {:error, :malformed_manifest}
 
+  # The closed top-level key roster — every field a manifest may carry,
+  # which is also the roster component-guide.md documents. Identity fields
+  # are validated against the directory at registration
+  # (`Registry.validate_manifest_identity`); presentational fields are
+  # free text; `needs`/`caps` delegate to their owners below.
+  @known_keys ~w(
+    name type version publisher
+    description license tags category
+    needs caps dependencies tincture
+    schema examples defaults forked_from
+  )
+
+  @legacy_blocks ~w(setup oauth wasi)
+
+  @doc "The closed top-level manifest key roster (docs derive from this)."
+  @spec known_keys() :: [String.t()]
+  def known_keys, do: @known_keys
+
+  @doc """
+  Validate a decoded manifest at a write boundary — the ONE manifest
+  validator, called by every ingress (directory registration,
+  `publish_bytes`, tincture publish; OCI store lands through those).
+
+  Three refusals, in order:
+
+    * a retired `setup`/`oauth`/`wasi` block — the frozen model has no arm
+      that could honor it, so accepting one would register a component
+      whose declared ask silently never applies;
+    * an unknown top-level key — a typo'd `nedes` block must refuse, not
+      register as "no needs";
+    * a malformed `needs`/`caps` block, refused by its owning validator.
+
+  "Is this manifest valid?" used to depend on which of five call paths
+  you asked.
+  """
+  @spec validate(map()) :: :ok | {:error, term()}
+  def validate(manifest) when is_map(manifest) do
+    with :ok <- reject_legacy_blocks(manifest),
+         :ok <- reject_unknown_keys(manifest),
+         :ok <- Compendium.Manifest.Needs.validate(manifest) do
+      Compendium.Manifest.Caps.validate(manifest)
+    end
+  end
+
+  def validate(_), do: :ok
+
+  defp reject_legacy_blocks(manifest) do
+    case Enum.filter(@legacy_blocks, &Map.has_key?(manifest, &1)) do
+      [] ->
+        :ok
+
+      keys ->
+        {:error,
+         {:legacy_manifest_blocks,
+          "Manifest declares retired block(s) #{Enum.join(keys, "/")} — declare needs/caps " <>
+            "instead (see component-guide.md, \"Migrating from setup/oauth\")"}}
+    end
+  end
+
+  defp reject_unknown_keys(manifest) do
+    case manifest |> Map.keys() |> Enum.filter(&(is_binary(&1) and &1 not in @known_keys)) do
+      [] ->
+        :ok
+
+      keys ->
+        {:error,
+         {:unknown_manifest_keys,
+          "Manifest declares unknown top-level key(s): #{Enum.join(Enum.sort(keys), ", ")}. " <>
+            "Known keys: #{Enum.join(@known_keys, ", ")}"}}
+    end
+  end
+
   @doc """
   The suggested vocabulary for the manifest's `category` field — the one
   roster the MCP categories action serves. The field itself is free
