@@ -610,8 +610,11 @@ defmodule Opus.Executor do
                 error
             end
 
+          {:error, :blob_not_found} ->
+            {:error, "Failed to fetch component bytes: blob not found for #{digest}"}
+
           {:error, reason} ->
-            {:error, "Failed to fetch component bytes: #{reason}"}
+            {:error, "Failed to fetch component bytes: #{inspect(reason)}"}
         end
     end
   end

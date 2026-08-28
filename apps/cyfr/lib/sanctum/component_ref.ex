@@ -707,8 +707,8 @@ defmodule Sanctum.ComponentRef do
       {:error, "name must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
 
   """
-  @spec validate_name(String.t()) :: :ok | {:error, String.t()}
-  def validate_name(name) do
+  @spec validate_name(term()) :: :ok | {:error, String.t()}
+  def validate_name(name) when is_binary(name) do
     cond do
       byte_size(name) < 2 and not Regex.match?(@single_char_name_regex, name) ->
         {:error, "name must be at least 2 characters"}
@@ -758,18 +758,22 @@ defmodule Sanctum.ComponentRef do
       {:error, "version is required. Use an explicit semver version (e.g., 1.0.0)."}
 
   """
-  @spec validate_version(String.t() | nil) :: :ok | {:error, String.t()}
+  @spec validate_version(term()) :: :ok | {:error, String.t()}
   def validate_version(nil) do
     {:error, "version is required. Use an explicit semver version (e.g., 1.0.0)."}
   end
 
-  def validate_version(version) do
+  def validate_version(version) when is_binary(version) do
     if Regex.match?(@version_regex, version) do
       :ok
     else
       {:error, "version must be valid semver (e.g., 1.0.0)"}
     end
   end
+
+  # Answers like validate_namespace/1 does — a validator's contract is to
+  # answer, never to raise on the input shape it exists to check.
+  def validate_version(_), do: {:error, "version must be a string"}
 
   defimpl String.Chars do
     def to_string(ref), do: Sanctum.ComponentRef.to_string(ref)

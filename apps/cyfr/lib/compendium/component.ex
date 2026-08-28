@@ -63,13 +63,12 @@ defmodule Compendium.Component do
 
   Returns raw binary bytes (no base64 encoding).
   """
-  @spec get_blob(Context.t(), String.t()) :: {:ok, binary()} | {:error, term()}
+  @spec get_blob(Context.t(), String.t()) ::
+          {:ok, binary()} | {:error, :blob_not_found | term()}
   def get_blob(%Context{} = ctx, digest) when is_binary(digest) do
-    case Registry.get_blob(ctx, digest) do
-      {:ok, bytes} -> {:ok, bytes}
-      {:error, :blob_not_found} -> {:error, "Blob not found for digest: #{digest}"}
-      {:error, reason} -> {:error, "Failed to get blob: #{inspect(reason)}"}
-    end
+    # Typed reasons stay typed until a wire renders them — flattening to
+    # prose here left internal callers nothing to branch on.
+    Registry.get_blob(ctx, digest)
   end
 
   @doc """
