@@ -472,7 +472,12 @@ defmodule Compendium.Registry do
   def search(%Context{} = ctx, filters \\ %{}) do
     limit = Map.get(filters, :limit, 20)
 
-    opts = [limit: limit]
+    # Tag/license filter in memory, AFTER the query — so the DB limit must
+    # not run first: rows past the first `limit` never got to match. With
+    # a post-filter, fetch the whole candidate set and take at the end.
+    post_filtered? = filters[:tags] not in [nil, []] or not is_nil(filters[:license])
+
+    opts = [limit: if(post_filtered?, do: :none, else: limit)]
     opts = if type = filters[:type], do: Keyword.put(opts, :component_type, type), else: opts
 
     opts =

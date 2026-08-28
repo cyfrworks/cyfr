@@ -585,7 +585,9 @@ defmodule Emissary.MCP.ExternalServer do
 
         case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
           {:ok, status, _headers, resp_body} when status in 200..299 ->
-            parse_response(resp_body)
+            with {:ok, parsed} <- parse_response(resp_body) do
+              check_response_id(parsed, body)
+            end
 
           {:error, {:response_too_large, _size, _max}} ->
             {:error, "Response too large (max 10MB)"}
@@ -722,6 +724,21 @@ defmodule Emissary.MCP.ExternalServer do
       _ -> false
     end
   end
+
+  # A response speaks only for the request whose id it carries: a peer
+  # answering some other id — or an SSE stream whose last event was not
+  # the reply — must not be folded into this call's result. A missing or
+  # null id passes (JSON-RPC error responses may carry id: null); a
+  # DIFFERENT id never does.
+  defp check_response_id(parsed, %{"id" => request_id}) when is_map(parsed) do
+    case Map.get(parsed, "id") do
+      ^request_id -> {:ok, parsed}
+      nil -> {:ok, parsed}
+      other -> {:error, "Response id #{inspect(other)} answers a different request"}
+    end
+  end
+
+  defp check_response_id(parsed, _notification), do: {:ok, parsed}
 
   defp parse_response(""), do: {:error, :empty_response}
 

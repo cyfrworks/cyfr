@@ -128,14 +128,17 @@ defmodule Sanctum.Vault.OAuth do
       {headers, body_params} = apply_auth_style(auth_style, creds, body_params)
       headers = [{"content-type", "application/x-www-form-urlencoded"} | headers]
 
-      emit_telemetry(entry, provider, :attempt)
+      # One provider spelling on every event of a refresh: the entry's own
+      # provider_hint — :attempt tagged with the caller's provider argument
+      # while :ok read the hint made one refresh look like two providers.
+      emit_telemetry(entry, entry.provider_hint, :attempt)
 
       case http_post(token_url, headers, URI.encode_query(body_params)) do
         {:ok, response} ->
           write_back(entry, apply_refresh_response(payload, oauth, response), oauth)
 
         {:error, reason} ->
-          emit_telemetry(entry, provider, :error)
+          emit_telemetry(entry, entry.provider_hint, :error)
 
           {:error,
            "authorization_required: refresh failed for vault entry " <>

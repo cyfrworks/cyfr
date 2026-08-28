@@ -113,6 +113,9 @@ func newClient() *mcp.Client {
 // result so cobra prints it and main exits non-zero.
 // Pass an optional context string (e.g. "Register failed") for the fallback.
 func handleToolError(err error, context ...string) error {
+	// Capitalized, punctuated messages are deliberate here (staticcheck
+	// ST1005 would object): these errors ARE the CLI's user-facing output —
+	// cobra prints them verbatim as the command's final line.
 	if errors.Is(err, mcp.ErrAuthRequired) {
 		return errors.New("Not logged in. Run 'cyfr login' to authenticate.")
 	}
