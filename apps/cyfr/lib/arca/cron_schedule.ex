@@ -59,6 +59,7 @@ defmodule Arca.CronSchedule do
   @spec create(map()) ::
           {:ok, %__MODULE__{}}
           | {:error, {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the athanor arrives in attrs and is validated required before the insert.
   def create(attrs) do
     Errors.with_db_rescue("CronSchedule.create", fn ->
       now = DateTime.utc_now()
@@ -108,6 +109,7 @@ defmodule Arca.CronSchedule do
           {:ok, %__MODULE__{}}
           | {:error,
              :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   def update(%Context{} = ctx, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do
@@ -272,6 +274,7 @@ defmodule Arca.CronSchedule do
           {:ok, %__MODULE__{}}
           | {:error,
              :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   def record_run(%Context{} = ctx, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do
@@ -296,6 +299,7 @@ defmodule Arca.CronSchedule do
           {:ok, %__MODULE__{}}
           | {:error,
              :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   def record_error(%Context{} = ctx, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do

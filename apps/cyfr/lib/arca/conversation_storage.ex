@@ -39,41 +39,47 @@ defmodule Arca.ConversationStorage do
   @doc "The athanor's conversations, most recently active first."
   @spec list(Context.t(), keyword()) :: [Conversation.t()]
   def list(%Context{} = ctx, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 200)
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.list", fn ->
+        limit = Keyword.get(opts, :limit, 200)
 
-    from(c in Conversation,
-      order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
-      limit: ^limit
-    )
-    |> QueryHelpers.where_tenant(ctx)
-    |> Repo.all()
+        from(c in Conversation,
+          order_by: [desc: coalesce(c.last_message_at, c.inserted_at)],
+          limit: ^limit
+        )
+        |> QueryHelpers.where_tenant(ctx)
+        |> Repo.all()
+    end)
   end
 
   @doc "One conversation of the context's athanor."
   @spec get(Context.t(), String.t()) :: {:ok, Conversation.t()} | {:error, :not_found}
   def get(%Context{} = ctx, id) when is_binary(id) do
-    from(c in Conversation, where: c.id == ^id)
-    |> QueryHelpers.where_tenant(ctx)
-    |> Repo.one()
-    |> case do
-      nil -> {:error, :not_found}
-      conv -> {:ok, conv}
-    end
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get", fn ->
+        from(c in Conversation, where: c.id == ^id)
+        |> QueryHelpers.where_tenant(ctx)
+        |> Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          conv -> {:ok, conv}
+        end
+    end)
   end
 
   @doc "Open a new conversation in the context's athanor, attributed to its user."
   @spec create(Context.t(), map()) :: {:ok, Conversation.t()} | {:error, Ecto.Changeset.t()}
   def create(%Context{} = ctx, attrs \\ %{}) do
-    Context.require_tenant!(ctx)
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.create", fn ->
+        Context.require_tenant!(ctx)
 
-    %Conversation{}
-    |> Conversation.changeset(%{
-      id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
-      athanor_id: ctx.athanor_id,
-      title: attrs[:title] || @default_title,
-      created_by: ctx.user_id || "system"
-    })
-    |> Repo.insert()
+        %Conversation{}
+        |> Conversation.changeset(%{
+          id: attrs[:id] || Cyfr.UUID7.generate_id("conv"),
+          athanor_id: ctx.athanor_id,
+          title: attrs[:title] || @default_title,
+          created_by: ctx.user_id || "system"
+        })
+        |> Repo.insert()
+    end)
   end
 
   @doc """
@@ -83,14 +89,16 @@ defmodule Arca.ConversationStorage do
   @spec update(Context.t(), String.t(), map()) ::
           {:ok, Conversation.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def update(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
-    with {:ok, conv} <- get(ctx, id) do
-      attrs =
-        attrs
-        |> Map.take([:title, :history, :execution_id, :orchestrator, :turn_seq, :last_message_at])
-        |> encode_history()
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.update", fn ->
+        with {:ok, conv} <- get(ctx, id) do
+          attrs =
+            attrs
+            |> Map.take([:title, :history, :execution_id, :orchestrator, :turn_seq, :last_message_at])
+            |> encode_history()
 
-      conv |> Conversation.changeset(attrs) |> Repo.update()
-    end
+          conv |> Conversation.changeset(attrs) |> Repo.update()
+        end
+    end)
   end
 
   @doc """
@@ -104,6 +112,10 @@ defmodule Arca.ConversationStorage do
   @spec delete(Context.t(), String.t()) ::
           :ok | {:error, :not_found | {:storage_delete_failed, term()}}
   def delete(%Context{} = ctx, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.delete", fn -> do_delete(ctx, id) end)
+  end
+
+  defp do_delete(ctx, id) do
     with {:ok, conv} <- get(ctx, id),
          :ok <- delete_blobs(ctx, conv.id) do
       # arca:unscoped-ok the messages are scoped transitively — `get(ctx, id)`
@@ -139,6 +151,12 @@ defmodule Arca.ConversationStorage do
   """
   @spec sweep_orphaned_blobs(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep_orphaned_blobs(%Context{} = ctx) do
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.sweep_orphaned_blobs", fn ->
+      do_sweep_orphaned_blobs(ctx)
+    end)
+  end
+
+  defp do_sweep_orphaned_blobs(ctx) do
     with {:ok, entries} <- Arca.list_typed(ctx, ["conversations"]) do
       dirs = for {name, :dir} <- entries, do: name
 
@@ -191,58 +209,64 @@ defmodule Arca.ConversationStorage do
   """
   @spec messages(Context.t(), String.t(), keyword()) :: [Message.t()]
   def messages(%Context{} = ctx, conversation_id, opts \\ []) when is_binary(conversation_id) do
-    query =
-      from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.messages", fn ->
+        query =
+          from(m in Message, where: m.conversation_id == ^conversation_id, order_by: [asc: m.seq])
 
-    query =
-      case Keyword.get(opts, :after_seq) do
-        nil -> query
-        seq -> from(m in query, where: m.seq > ^seq)
-      end
+        query =
+          case Keyword.get(opts, :after_seq) do
+            nil -> query
+            seq -> from(m in query, where: m.seq > ^seq)
+          end
 
-    query =
-      case Keyword.get(opts, :upto_seq) do
-        nil -> query
-        seq -> from(m in query, where: m.seq <= ^seq)
-      end
+        query =
+          case Keyword.get(opts, :upto_seq) do
+            nil -> query
+            seq -> from(m in query, where: m.seq <= ^seq)
+          end
 
-    # `:limit` bounds a read that would otherwise load every row of a
-    # long-lived conversation; unset loads all (turn assembly needs the
-    # whole transcript).
-    query =
-      case Keyword.get(opts, :limit) do
-        nil -> query
-        limit -> from(m in query, limit: ^limit)
-      end
+        # `:limit` bounds a read that would otherwise load every row of a
+        # long-lived conversation; unset loads all (turn assembly needs the
+        # whole transcript).
+        query =
+          case Keyword.get(opts, :limit) do
+            nil -> query
+            limit -> from(m in query, limit: ^limit)
+          end
 
-    query
-    |> QueryHelpers.where_tenant(ctx)
-    |> Repo.all()
+        query
+        |> QueryHelpers.where_tenant(ctx)
+        |> Repo.all()
+    end)
   end
 
   @doc "One message of the context's athanor."
   @spec get_message(Context.t(), String.t()) :: {:ok, Message.t()} | {:error, :not_found}
   def get_message(%Context{} = ctx, id) when is_binary(id) do
-    from(m in Message, where: m.id == ^id)
-    |> QueryHelpers.where_tenant(ctx)
-    |> Repo.one()
-    |> case do
-      nil -> {:error, :not_found}
-      msg -> {:ok, msg}
-    end
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.get_message", fn ->
+        from(m in Message, where: m.id == ^id)
+        |> QueryHelpers.where_tenant(ctx)
+        |> Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          msg -> {:ok, msg}
+        end
+    end)
   end
 
   @doc "The approval rows of a conversation still waiting on a decision."
   @spec pending_approvals(Context.t(), String.t()) :: [Message.t()]
   def pending_approvals(%Context{} = ctx, conversation_id) when is_binary(conversation_id) do
-    from(m in Message,
-      where:
-        m.conversation_id == ^conversation_id and m.kind == "approval" and
-          m.status == "pending",
-      order_by: [asc: m.seq]
-    )
-    |> QueryHelpers.where_tenant(ctx)
-    |> Repo.all()
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.pending_approvals", fn ->
+        from(m in Message,
+          where:
+            m.conversation_id == ^conversation_id and m.kind == "approval" and
+              m.status == "pending",
+          order_by: [asc: m.seq]
+        )
+        |> QueryHelpers.where_tenant(ctx)
+        |> Repo.all()
+    end)
   end
 
   @doc """
@@ -351,15 +375,17 @@ defmodule Arca.ConversationStorage do
   @spec update_message(Context.t(), String.t(), map()) ::
           {:ok, Message.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def update_message(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
-    with {:ok, msg} <- get_message(ctx, id) do
-      attrs =
-        attrs
-        |> Map.take([:content, :payload, :status, :execution_id])
-        |> Map.update(:payload, nil, &encode_json/1)
-        |> Map.reject(fn {_k, v} -> is_nil(v) end)
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.update_message", fn ->
+        with {:ok, msg} <- get_message(ctx, id) do
+          attrs =
+            attrs
+            |> Map.take([:content, :payload, :status, :execution_id])
+            |> Map.update(:payload, nil, &encode_json/1)
+            |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
-      msg |> Message.changeset(attrs) |> Repo.update()
-    end
+          msg |> Message.changeset(attrs) |> Repo.update()
+        end
+    end)
   end
 
   @doc """
@@ -374,6 +400,12 @@ defmodule Arca.ConversationStorage do
           {:ok, Message.t()} | {:error, :not_found | :already_resolved}
   def resolve_approval(%Context{} = ctx, id, from, to, attrs \\ %{})
       when is_binary(id) and to in ~w(running approved declined error) do
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.resolve_approval", fn ->
+      do_resolve_approval(ctx, id, from, to, attrs)
+    end)
+  end
+
+  defp do_resolve_approval(ctx, id, from, to, attrs) do
     Context.require_tenant!(ctx)
     from = List.wrap(from)
     now = DateTime.utc_now()
@@ -426,9 +458,12 @@ defmodule Arca.ConversationStorage do
   """
   @spec with_running_turn() :: [Conversation.t()]
   def with_running_turn do
-    # arca:unscoped-ok boot recovery walks every athanor's mid-turn rows;
-    # each conversation is then reconciled inside its own athanor's context.
-    Repo.all(from(c in Conversation, where: not is_nil(c.execution_id)))
+    # Fail-open default: boot recovery over an unreadable store recovers nothing now; the next boot retries.
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.with_running_turn", [], fn ->
+        # arca:unscoped-ok boot recovery walks every athanor's mid-turn rows;
+        # each conversation is then reconciled inside its own athanor's context.
+        Repo.all(from(c in Conversation, where: not is_nil(c.execution_id)))
+    end)
   end
 
   @doc """

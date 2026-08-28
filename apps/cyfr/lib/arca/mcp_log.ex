@@ -89,9 +89,11 @@ defmodule Arca.McpLog do
   Inserts a new MCP log entry.
   """
   def record(attrs) do
-    attrs
-    |> create_changeset()
-    |> Arca.Repo.insert()
+    Arca.Repo.Errors.with_db_rescue("McpLog.record", fn ->
+        attrs
+        |> create_changeset()
+        |> Arca.Repo.insert()
+    end)
   end
 
   @doc """
@@ -99,11 +101,14 @@ defmodule Arca.McpLog do
 
   Uses tenant-scoped lookup when a context is provided.
   """
+  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 one line above.
   def record_update(%Sanctum.Context{} = ctx, id, attrs) do
-    case get_tenant(ctx, id) do
-      nil -> {:error, :not_found}
-      log -> log |> update_changeset(attrs) |> Arca.Repo.update()
-    end
+    Arca.Repo.Errors.with_db_rescue("McpLog.record_update", fn ->
+        case get_tenant(ctx, id) do
+          nil -> {:error, :not_found}
+          log -> log |> update_changeset(attrs) |> Arca.Repo.update()
+        end
+    end)
   end
 
   @doc """
@@ -154,9 +159,11 @@ defmodule Arca.McpLog do
   """
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{} = ctx, id) do
-    from(l in __MODULE__, where: l.id == ^id)
-    |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-    |> Arca.Repo.one()
+    Arca.Repo.Errors.with_db_rescue("McpLog.get_tenant", fn ->
+        from(l in __MODULE__, where: l.id == ^id)
+        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+        |> Arca.Repo.one()
+    end)
   end
 
   @doc """

@@ -13,6 +13,7 @@ defmodule Arca.ProfileStorage do
   alias Arca.Schemas.Profile
 
   @spec put(map()) :: {:ok, Profile.t()} | {:error, term()}
+  # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly two lines down.
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.put", fn ->
       # A profile without an athanor is a construction bug — fail here, not

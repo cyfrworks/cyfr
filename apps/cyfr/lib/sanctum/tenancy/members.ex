@@ -37,6 +37,7 @@ defmodule Sanctum.Tenancy.Members do
   an invited row `:email`; `:athanor_id` is required by the changeset for
   the `"athanor"` scope and must name an existing athanor.
   """
+  # arca:unscoped-ok memberships are tenancy fabric — a platform row names no athanor by design.
   def create(attrs) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.create", fn ->
       now = DateTime.utc_now()
@@ -112,6 +113,7 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc "Every platform-admin row — the server's operators, as the rows say."
   @spec list_platform() :: {:ok, [Membership.t()]} | {:error, :database_error}
+  # arca:unscoped-ok platform memberships carry no athanor by design.
   def list_platform do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.list_platform", fn ->
       {:ok, Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))}
@@ -132,6 +134,7 @@ defmodule Sanctum.Tenancy.Members do
   logs anyone out.
   """
   @spec revoke_platform(String.t()) :: :ok | {:error, :database_error}
+  # arca:unscoped-ok platform memberships carry no athanor by design.
   def revoke_platform(user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.revoke_platform", fn ->
       {count, _} =
@@ -145,6 +148,7 @@ defmodule Sanctum.Tenancy.Members do
     end)
   end
 
+  # arca:unscoped-ok a membership is fabric, read by its own id; the athanor may be nil (platform).
   def get(id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.get", fn ->
       case Arca.Repo.get(Membership, id) do
@@ -276,6 +280,7 @@ defmodule Sanctum.Tenancy.Members do
   second row for the person and athanor). Returns how many activated.
   """
   @spec activate_invited(User.t()) :: {:ok, non_neg_integer()}
+  # arca:unscoped-ok invited rows are email-keyed fabric, activated across athanors.
   def activate_invited(%User{email: email, email_verified: verified, id: user_id})
       when is_binary(email) and verified != false do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.activate_invited", fn ->
@@ -331,6 +336,7 @@ defmodule Sanctum.Tenancy.Members do
   someone the operator threw out. Returns how many were withdrawn.
   """
   @spec withdraw_invites_for_email(String.t() | nil) :: non_neg_integer()
+  # arca:unscoped-ok invites are email-keyed fabric, withdrawn across every athanor that invited.
   def withdraw_invites_for_email(email) when is_binary(email) and email != "" do
     # Deliberate default: the deny's best-effort sweep — a withdrawal the
     # store missed leaves invited rows, not seats: activation re-checks the
@@ -357,6 +363,7 @@ defmodule Sanctum.Tenancy.Members do
 
   def withdraw_invites_for_email(_), do: 0
 
+  # arca:unscoped-ok deletes exactly the fabric row the caller already holds.
   def remove(%Membership{} = membership) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.remove", fn ->
       Arca.Repo.delete(membership)
@@ -457,6 +464,7 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc "Every row of a person: platform and athanor, active only. Uncapped."
   @spec list_by_user(String.t()) :: {:ok, [Membership.t()]} | {:error, :database_error}
+  # arca:unscoped-ok person-keyed by design — resolving a person's seats across athanors is the point.
   def list_by_user(user_id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.list_by_user", fn ->
       {:ok,

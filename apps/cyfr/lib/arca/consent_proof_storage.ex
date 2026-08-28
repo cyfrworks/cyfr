@@ -14,6 +14,7 @@ defmodule Arca.ConsentProofStorage do
   alias Arca.Schemas.ConsentProof
 
   @spec insert(map()) :: :ok | {:error, term()}
+  # arca:unscoped-ok the attrs are built by Sanctum.Consent.Proof.DB, athanor included and digest-bound.
   def insert(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentProofStorage.insert", fn ->
       case Arca.Repo.insert(struct(ConsentProof, attrs)) do

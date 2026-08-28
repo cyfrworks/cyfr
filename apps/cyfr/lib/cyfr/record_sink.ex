@@ -195,6 +195,7 @@ defmodule Cyfr.RecordSink do
   # `Repo.insert/1`, not validation.
   defp write_policy_logs([]), do: :ok
 
+  # arca:unscoped-ok each batched row passed PolicyLog's changeset, athanor required, before enqueue.
   defp write_policy_logs(items) do
     rows =
       items

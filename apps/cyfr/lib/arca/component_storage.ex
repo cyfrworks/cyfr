@@ -86,6 +86,7 @@ defmodule Arca.ComponentStorage do
     rescuing_db("put_component", fn -> do_put_component(attrs) end)
   end
 
+  # arca:unscoped-ok the attrs arrive with the athanor set by the caller-facing entry (ensure_tenant_fields).
   defp do_put_component(attrs) do
     Arca.Repo.insert_all(
       Component,
@@ -125,6 +126,7 @@ defmodule Arca.ComponentStorage do
   Returns `{:ok, attrs}` on success, `{:error, :already_exists}` if the
   athanor/publisher/name/version/type combination already exists.
   """
+  # arca:unscoped-ok ensure_tenant_fields/2 stamps the context's athanor onto the row before the write.
   def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(ctx, &1))
 

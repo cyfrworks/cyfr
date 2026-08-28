@@ -29,9 +29,14 @@ defmodule Arca.UnscopedQuerySeamTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  # `Repo.` as well as `Arca.Repo.` — half the modules alias it.
-  @repo_verbs ~r/\bRepo\.(all|one|update_all|delete_all|aggregate|exists\?|get|get_by)\b/
-  @scoped ~r/where_tenant|where_athanor|athanor_id/
+  # `Repo.` as well as `Arca.Repo.` — half the modules alias it. Writes
+  # count too: an unscoped `insert_all`/`update`/`delete` into a tenant
+  # table is exactly as tenant-relevant as a read, and the original verb
+  # list silently exempted them.
+  @repo_verbs ~r/\bRepo\.(all|one|update_all|delete_all|aggregate|exists\?|get|get_by|insert|insert_all|update|delete|transaction)\b/
+  # Scoped means the athanor column is USED — compared, bound or set —
+  # not merely mentioned (a `select:` naming athanor_id once counted).
+  @scoped ~r/where_tenant|where_athanor|athanor_id ==|athanor_id:/
   @tag_marker ~r/#\s*arca:unscoped-ok\s+\S/
 
   defp sources do
@@ -39,11 +44,15 @@ defmodule Arca.UnscopedQuerySeamTest do
   end
 
   # Modules whose schema declares an athanor column — the tables a query can
-  # be scoped to in the first place.
+  # be scoped to in the first place. Both spellings count: `field
+  # :athanor_id` and `belongs_to :athanor` (memberships — the one
+  # association in the codebase) declare the same column; detecting only
+  # the first would let a future `belongs_to` schema silently leave the
+  # roster.
   defp tenant_schemas do
     for path <- sources(),
         source = File.read!(path),
-        source =~ ~r/^\s*field :athanor_id/m,
+        source =~ ~r/^\s*(field :athanor_id|belongs_to :athanor)\b/m,
         [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),
         into: MapSet.new(),
         do: module

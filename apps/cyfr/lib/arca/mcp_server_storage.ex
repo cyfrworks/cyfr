@@ -85,6 +85,7 @@ defmodule Arca.McpServerStorage do
   (the caller serializes; Arca stores it verbatim). Optional: `:enabled`.
   """
   @spec put(Context.t(), map()) :: {:ok, McpServer.t()} | {:error, term()}
+  # arca:unscoped-ok the context's athanor is stamped onto the row below before the write.
   def put(%Context{} = ctx, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.put", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

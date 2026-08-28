@@ -109,6 +109,7 @@ defmodule Arca.ConsentStorage do
   end
 
   defp insert_refs([]), do: {0, nil}
+  # arca:unscoped-ok each row was derived from the consent being committed, athanor included.
   defp insert_refs(rows), do: Arca.Repo.insert_all(ConsentVaultRef, rows)
 
   @doc "The head consent revision of a profile, with its vault refs."

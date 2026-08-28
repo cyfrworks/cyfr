@@ -16,6 +16,7 @@ defmodule Arca.VaultStorage do
   alias Arca.Schemas.VaultEntry
 
   @spec put(map()) :: {:ok, VaultEntry.t()} | {:error, term()}
+  # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly one line down.
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.put", fn ->
       _ = Map.fetch!(attrs, :athanor_id)
