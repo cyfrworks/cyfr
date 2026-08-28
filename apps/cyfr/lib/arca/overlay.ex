@@ -444,7 +444,7 @@ defmodule Arca.Overlay do
 
       loc ->
         case unit_status(ctx, path) do
-          {:ok, :materialized} -> delete_unit(ctx, loc)
+          {:ok, :materialized} -> delete_unit_locked(ctx, loc)
           {:ok, own} when own in [:own, :own_shadowing] -> {:error, :not_a_copy}
           {:ok, :seed} -> {:error, :bundled}
           {:ok, :absent} -> {:error, :not_found}
@@ -482,7 +482,7 @@ defmodule Arca.Overlay do
             {:error, :not_found}
 
           {:ok, status} when status in [:materialized, :own, :own_shadowing] ->
-            with :ok <- delete_unit(ctx, loc) do
+            with :ok <- delete_unit_locked(ctx, loc) do
               if status == :own, do: {:ok, :deleted}, else: {:ok, :revealed_shipped}
             end
 
@@ -506,19 +506,24 @@ defmodule Arca.Overlay do
       {:ok, :materialized} ->
         loc = Arca.Storage.locate(path)
 
-        case diff_unit(ctx, unit_of(loc)) do
-          {:ok, %{added: [], removed: [], changed: []}} ->
-            case delete_unit(ctx, loc) do
-              :ok -> :collapsed
-              {:error, _} = error -> error
-            end
+        # Emptiness check and clear ride ONE lock hold: a write landing
+        # between the diff and the delete must not be destroyed as part
+        # of a "pristine" collapse.
+        Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit_of(loc)), fn ->
+          case diff_unit(ctx, unit_of(loc)) do
+            {:ok, %{added: [], removed: [], changed: []}} ->
+              case delete_unit(ctx, loc) do
+                :ok -> :collapsed
+                {:error, _} = error -> error
+              end
 
-          {:ok, _diff} ->
-            :kept
+            {:ok, _diff} ->
+              :kept
 
-          {:error, _} = error ->
-            error
-        end
+            {:error, _} = error ->
+              error
+          end
+        end)
 
       {:ok, own} when own in [:own, :own_shadowing] ->
         :kept
@@ -1090,6 +1095,16 @@ defmodule Arca.Overlay do
   # decorator's own delete callbacks clear the unit's origin mark.
   defp delete_unit(ctx, {:file, unit}), do: Arca.delete(ctx, unit)
   defp delete_unit(ctx, {:dir, unit, _sentinel}), do: Arca.delete_tree(ctx, unit)
+
+  # The whole-unit clear rides the same per-unit lock as the commit. A
+  # drop interleaving a commit's clear-then-write once deleted files the
+  # commit had already written, then let the commit land its sentinel —
+  # a unit that read COMPLETE while holding little more than the sentinel.
+  defp delete_unit_locked(ctx, loc) do
+    Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit_of(loc)), fn ->
+      delete_unit(ctx, loc)
+    end)
+  end
 
   # ---------------------------------------------------------------------------
   # Origin marks

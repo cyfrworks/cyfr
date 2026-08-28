@@ -93,6 +93,16 @@ defmodule Arca.Overlay.UnitLock do
         {:reply, :ok, Map.put(state, key, {pid, Process.monitor(pid), :queue.new()})}
 
       {holder, ref, waiters} ->
+        # The lock is not reentrant: a holder re-acquiring its own key can
+        # only queue behind itself for the full timeout. Loud, because the
+        # symptom (a 30s stall then :unit_locked) does not name the cause.
+        if holder == pid do
+          Logger.error(
+            "[Arca.Overlay.UnitLock] #{inspect(pid)} re-acquiring #{inspect(key)} it " <>
+              "already holds — the lock is not reentrant; this call can only time out"
+          )
+        end
+
         {:noreply, Map.put(state, key, {holder, ref, :queue.in(from, waiters)})}
     end
   end
