@@ -14,15 +14,19 @@ defmodule Locus.MixProject do
       lockfile: "../../mix.lock",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      aliases: aliases(),
       deps: deps()
     ]
   end
 
-  # Library-only app: Locus.Builder/Validator/MCP are called by cyfr and
-  # need no process tree of their own.
+  defp aliases do
+    [test: ["ecto.create -r Arca.Repo --quiet", "ecto.migrate -r Arca.Repo --quiet", "test"]]
+  end
+
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      mod: {Locus.Application, []}
     ]
   end
 

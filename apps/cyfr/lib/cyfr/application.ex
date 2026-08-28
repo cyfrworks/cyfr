@@ -4,10 +4,6 @@
 defmodule Cyfr.Application do
   @moduledoc false
 
-  # Locus depends on cyfr, never the reverse — the limiter child below is
-  # behind Code.ensure_loaded?.
-  @compile {:no_warn_undefined, [Locus.BuildLimiter]}
-
   require Logger
   require Arca.Repo.Errors
 
@@ -94,17 +90,6 @@ defmodule Cyfr.Application do
       # Request rate-limit counters — own table, isolated from Arca.Cache so an
       # attacker-cardinality flood cannot evict sessions or OAuth state.
       Cyfr.RateLimiter,
-      # Locus is a library app with no process tree; its build-slot limiter is
-      # supervised here. Guarded because cyfr does not depend on locus at
-      # compile time (the umbrella dependency runs the other way).
-      build_limiter_child(),
-      # And its own task pool. A component build is `cargo component build`
-      # or npm+Vite — minutes, not milliseconds — and it used to run on
-      # Emissary.TaskSupervisor, the pool that also serves MCP tool
-      # dispatch, progress pumping and webhook invocation. A few concurrent
-      # builds there are request capacity spent on something that is not a
-      # request.
-      {Task.Supervisor, name: Locus.TaskSupervisor},
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},
@@ -194,10 +179,6 @@ defmodule Cyfr.Application do
       Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
       _ -> []
     end
-  end
-
-  defp build_limiter_child do
-    if Code.ensure_loaded?(Locus.BuildLimiter), do: [Locus.BuildLimiter], else: []
   end
 
   defp tier(name, children) do
