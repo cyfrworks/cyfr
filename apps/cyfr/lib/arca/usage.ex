@@ -136,7 +136,7 @@ defmodule Arca.Usage do
   @spec invalidate(String.t()) :: :ok
   def invalidate(athanor_id) when is_binary(athanor_id) do
     Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(athanor_id))
-    Arca.Cache.delete_match({:scope_usage, athanor_id, :_, :_})
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_scope_usage(athanor_id))
     :ok
   end
 end

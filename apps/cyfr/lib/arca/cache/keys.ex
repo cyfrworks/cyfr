@@ -77,4 +77,18 @@ defmodule Arca.Cache.Keys do
 
   @doc "The file count under one tenant scope of an athanor (public quota)."
   def scope_usage_files(athanor_id, scope), do: {:scope_usage, athanor_id, scope, :files}
+
+  @doc "Match spec shape for every scope-usage counter of one athanor."
+  def match_scope_usage(athanor_id), do: {:scope_usage, athanor_id, :_, :_}
+
+  @doc """
+  An established caller memo — `Sanctum.Caller`'s short-TTL cache of one
+  finished Context, keyed by the session row hash, the surface, and the
+  focus coordinate.
+  """
+  def established(token_hash, surface, focus_coord),
+    do: {:established, token_hash, surface, focus_coord}
+
+  @doc "Match spec shape for every established memo of one session hash."
+  def match_established(token_hash), do: {:established, token_hash, :_, :_}
 end

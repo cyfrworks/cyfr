@@ -23,6 +23,13 @@ defmodule Arca.RowPlaneSeamTest do
   use ExUnit.Case, async: true
 
   # Namespaces that render or route, and must ask a domain module for rows.
+  #
+  # `apps/cyfr/lib/cyfr` is DELIBERATELY absent: the glue namespace holds
+  # boot, the write-behind sink and the retention sweep — infrastructure
+  # that batches rows for the domain modules rather than serving a surface.
+  # Its repo touches are covered by the arca-side seams
+  # (`Arca.UnscopedQuerySeamTest`, `Arca.DbRescueCoverageTest` for what it
+  # reaches through Arca modules), not by this roster.
   @surface_dirs ~w(
     apps/cyfr/lib/emissary
     apps/cyfr/lib/emissary_web

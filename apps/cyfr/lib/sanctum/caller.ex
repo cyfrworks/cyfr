@@ -198,13 +198,16 @@ defmodule Sanctum.Caller do
   """
   @spec invalidate_hash(binary()) :: :ok
   def invalidate_hash(hash) when is_binary(hash) do
-    Arca.Cache.delete_match({:established, hash, :_, :_})
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_established(hash))
     :ok
   end
 
   defp memo_key(token, opts) do
-    {:established, Session.token_hash(token), Keyword.get(opts, :surface, :console),
-     memo_coord(Keyword.get(opts, :focus))}
+    Arca.Cache.Keys.established(
+      Session.token_hash(token),
+      Keyword.get(opts, :surface, :console),
+      memo_coord(Keyword.get(opts, :focus))
+    )
   end
 
   defp memo_coord(%{id: id}), do: id

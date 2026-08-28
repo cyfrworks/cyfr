@@ -534,11 +534,19 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec put_settings(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
   def put_settings(%Athanor{} = athanor, patch) when is_map(patch) do
-    # Merge over what the row says now, not over the copy the caller is
-    # holding. `Sanctum.Provisioning` reads an athanor, runs a dozen steps,
-    # and only then writes its outcome here — anything else written to
-    # settings in between was silently dropped by the merge. A read failure
-    # falls back to the caller's copy: the write is still better than none.
+    put_settings_cas(athanor, patch, 3)
+  end
+
+  defp put_settings_cas(_athanor, _patch, 0), do: {:error, :settings_conflict}
+
+  defp put_settings_cas(%Athanor{} = athanor, patch, attempts) do
+    # Merge over what the row says NOW, and land only if it still says so.
+    # The earlier fix closed the stale-struct case (a caller merging over a
+    # copy read a dozen steps ago); this closes the concurrent one — two
+    # simultaneous merges each read-modify-write, and the second used to
+    # overwrite the first within milliseconds. The compare-and-set is
+    # `Arca.ProfileStorage.advance_head/4`'s shape. A read failure falls
+    # back to the caller's copy: the write is still better than none.
     current =
       case get(athanor.id) do
         {:ok, fresh} -> fresh
@@ -546,12 +554,33 @@ defmodule Sanctum.Tenancy.Athanors do
       end
 
     merged = deep_merge(settings(current), patch)
+    encoded = Jason.encode!(merged)
+    now = DateTime.utc_now()
 
-    with {:ok, updated} <- update(current, %{settings: Jason.encode!(merged)}) do
-      Sanctum.Notify.broadcast(updated.id, :athanor_changed, %{name: updated.name})
-      {:ok, updated}
+    result =
+      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.put_settings", fn ->
+        from(a in Athanor, where: a.id == ^current.id)
+        |> settings_guard(current.settings)
+        |> Arca.Repo.update_all(set: [settings: encoded, updated_at: now])
+      end)
+
+    case result do
+      {1, _} ->
+        with {:ok, updated} <- get(current.id) do
+          Sanctum.Notify.broadcast(updated.id, :athanor_changed, %{name: updated.name})
+          {:ok, updated}
+        end
+
+      {0, _} ->
+        put_settings_cas(athanor, patch, attempts - 1)
+
+      {:error, _} = error ->
+        error
     end
   end
+
+  defp settings_guard(query, nil), do: from(a in query, where: is_nil(a.settings))
+  defp settings_guard(query, expected), do: from(a in query, where: a.settings == ^expected)
 
   defp deep_merge(base, patch) do
     Enum.reduce(patch, base, fn

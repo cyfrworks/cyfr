@@ -38,14 +38,22 @@ defmodule Prism.AgentConfig do
   end
 
   defp update_tool_policy(ctx, agent_name, fun) do
-    with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => agent_name}),
-         policy = fun.(guide["tool_policy"] || %{}),
-         {:ok, _} <-
-           call_aqua(ctx, %{"action" => "update", "name" => agent_name, "tool_policy" => policy}) do
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
-    end
+    # A get→modify→update over the SHARED allowlist: two simultaneous
+    # editors (two members deciding "always" in different chats) each
+    # read, merged and wrote — and the second silently dropped the first.
+    # The whole read-modify-write rides the per-key mutex the overlay uses
+    # for unit replacement; the key is this athanor's policy for this
+    # agent, so unrelated edits never queue behind it.
+    Arca.Overlay.UnitLock.with_lock({ctx.athanor_id, {:agent_policy, agent_name}}, fn ->
+      with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => agent_name}),
+           policy = fun.(guide["tool_policy"] || %{}),
+           {:ok, _} <-
+             call_aqua(ctx, %{"action" => "update", "name" => agent_name, "tool_policy" => policy}) do
+        :ok
+      else
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @doc """
