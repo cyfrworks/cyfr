@@ -201,7 +201,10 @@ defmodule Opus.Chain do
          %{
            reference: name_ref,
            need: need,
-           activation_digest: component && Map.get(component, :release_digest),
+           # `inspect_component` answers string keys; an atom-only read
+           # here once made every child's digest nil, silently dropping
+           # bound children to zero authority.
+           activation_digest: component && component["release_digest"],
            declared_needs: Keyword.get(opts, :declared_needs, [])
          }}
 

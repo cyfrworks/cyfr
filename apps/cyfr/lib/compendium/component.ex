@@ -32,8 +32,15 @@ defmodule Compendium.Component do
       {:ok, component, ref} ->
         canonical = canonical_ref(ref)
 
+        # ONE key type on the way out. The registry row arrives atom-keyed
+        # (an Ecto struct dump) while the enrichment below adds string
+        # keys; readers of the mixed map grew `[:k] || ["k"]` at every
+        # site, and the one read that didn't (`["signature_verified"]` in
+        # the executor's telemetry) answered nil — every execution reported
+        # unverified, verified OCI components included.
         result =
           component
+          |> Map.new(fn {k, v} -> {to_string(k), v} end)
           |> Map.put("component_ref", canonical)
           |> Map.put("type", ref.type)
 

@@ -644,6 +644,25 @@ defmodule Compendium.RegistryTest do
       end
     end
 
+    test "inspect_component answers one key type, signature status included", %{
+      ctx: ctx,
+      segments: segments
+    } do
+      {:ok, _} = Registry.register_from_arca(ctx, segments)
+
+      {:ok, component} =
+        Compendium.Component.inspect_component(ctx, "reagent:local.test-tool:0.1.0")
+
+      # The registry row arrives atom-keyed and the enrichment adds string
+      # keys; the mixed map made readers grow `[:k] || ["k"]` — and the one
+      # plain string read (the executor's signature_verified telemetry)
+      # answered nil forever.
+      assert Enum.all?(Map.keys(component), &is_binary/1)
+      assert is_boolean(component["signature_verified"])
+      assert component["component_ref"] == "reagent:local.test-tool:0.1.0"
+      assert component["digest"]
+    end
+
     test "row type follows the path, never the manifest", %{ctx: ctx} do
       # A manifest that agrees with (or omits) identity registers with the
       # path's type — the type the artifact was validated under.
