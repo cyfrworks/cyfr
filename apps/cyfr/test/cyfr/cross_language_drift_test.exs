@@ -144,4 +144,50 @@ defmodule Cyfr.CrossLanguageDriftTest do
       assert root_go =~ ~s(payload["#{key}"]), "payload key #{key} not read by root.go"
     end
   end
+
+  # ==========================================================================
+  # MCP conformance vocabulary — the literals beyond the protocol revision
+  # ==========================================================================
+
+  test "the MCP conformance vocabulary is spelled the same in every client" do
+    # `Emissary.MCP.ClientProtocolDriftTest` pins the protocol REVISION;
+    # this pins the vocabulary AROUND it. Renaming a `_meta` key, a request
+    # header or the base64 sentinel on the Elixir side used to compile
+    # cleanly, pass the whole suite, and lock out both bundled clients at
+    # runtime with a -32602.
+    protocol = read!("apps/cyfr/lib/emissary/mcp/protocol.ex")
+    message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
+    mjs = read!("apps/mcp-bridge/server.mjs")
+    client_go = read!("apps/codex/internal/mcp/client.go")
+    types_go = read!("apps/codex/internal/mcp/types.go")
+    go = client_go <> types_go
+
+    # {literal, [sources that must carry it]} — a source is listed only
+    # where it genuinely speaks that part of the vocabulary (the bridge
+    # never reads clientInfo, so it is not held to it).
+    vocabulary = [
+      {"io.modelcontextprotocol/protocolVersion", [protocol, mjs, go]},
+      {"io.modelcontextprotocol/clientCapabilities", [protocol, mjs, go]},
+      {"io.modelcontextprotocol/clientInfo", [protocol, go]},
+      {"io.modelcontextprotocol/serverInfo", [protocol, mjs, go]},
+      {"=?base64?", [protocol, mjs, go]},
+      {"-32020", [message, mjs]},
+      {"-32022", [message, mjs]}
+    ]
+
+    for {literal, sources} <- vocabulary,
+        {source, index} <- Enum.with_index(sources) do
+      assert String.contains?(source, literal),
+             "conformance literal #{inspect(literal)} missing from source ##{index} " <>
+               "(order: as listed in the vocabulary table)"
+    end
+
+    # The three request headers, case-insensitively — Go title-cases them.
+    for header <- ["mcp-protocol-version", "mcp-method", "mcp-name"] do
+      for {name, source} <- [{"protocol.ex", protocol}, {"server.mjs", mjs}, {"go", go}] do
+        assert String.contains?(String.downcase(source), header),
+               "request header #{header} missing from #{name}"
+      end
+    end
+  end
 end
