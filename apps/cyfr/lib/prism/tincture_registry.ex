@@ -110,14 +110,14 @@ defmodule Prism.TinctureRegistry do
       |> Keyword.get(:name, __MODULE__)
       |> :ets.new([:named_table, :protected, :set, read_concurrency: true])
 
-    {:ok, %{table: table}}
+    {:ok, %{table: table, watching: MapSet.new()}}
   end
 
   @impl true
   def handle_call(:reload, _from, state) do
     count = store_tinctures(state.table, scan_tinctures())
     Logger.info("[TinctureRegistry] reloaded #{count} tincture(s)")
-    {:reply, :ok, state}
+    {:reply, :ok, watch_scanned(state)}
   end
 
   @impl true
@@ -128,14 +128,30 @@ defmodule Prism.TinctureRegistry do
       scan_athanor_into(state.table, athanor_id)
     end
 
-    {:reply, :ok, state}
+    {:reply, :ok, watch(state, athanor_id)}
   end
 
   @impl true
   def handle_call({:reload_athanor, athanor_id}, _from, state) do
     count = scan_athanor_into(state.table, athanor_id)
     Logger.info("[TinctureRegistry] reloaded #{count} tincture(s) for #{athanor_id}")
-    {:reply, :ok, state}
+    {:reply, :ok, watch(state, athanor_id)}
+  end
+
+  # Subscribed to each scanned athanor's tinctures topic, exactly once —
+  # so a registry change lands here without the domain naming this module.
+  defp watch(state, athanor_id) do
+    if MapSet.member?(state.watching, athanor_id) do
+      state
+    else
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.tinctures(athanor_id))
+      %{state | watching: MapSet.put(state.watching, athanor_id)}
+    end
+  end
+
+  defp watch_scanned(state) do
+    :ets.select(state.table, [{{{:scanned, :"$1"}, :_}, [], [:"$1"]}])
+    |> Enum.reduce(state, &watch(&2, &1))
   end
 
   defp scan_athanor_into(table, athanor_id) do
@@ -153,6 +169,14 @@ defmodule Prism.TinctureRegistry do
 
     :ets.insert(table, {{:scanned, athanor_id}, true})
     count
+  end
+
+  # The domain announced a change (Compendium.AutoIndexer broadcasts on the
+  # athanor's tinctures topic); this cache follows.
+  @impl true
+  def handle_info({:tinctures_changed, athanor_id}, state) do
+    scan_athanor_into(state.table, athanor_id)
+    {:noreply, state}
   end
 
   @impl true

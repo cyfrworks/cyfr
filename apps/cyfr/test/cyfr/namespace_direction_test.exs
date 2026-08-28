@@ -25,7 +25,16 @@ defmodule Cyfr.NamespaceDirectionTest do
 
   use ExUnit.Case, async: true
 
-  @engine_libs ["apps/opus/lib", "apps/locus/lib"]
+  @engine_libs [
+    "apps/opus/lib",
+    "apps/locus/lib",
+    # The domain inside cyfr holds the same rule: storage, components and
+    # identity never name the console (glue under lib/cyfr and the
+    # transport under lib/emissary* are out of scope here).
+    "apps/cyfr/lib/arca",
+    "apps/cyfr/lib/compendium",
+    "apps/cyfr/lib/sanctum"
+  ]
 
   # The console. An engine that names it has taken a UI module as a
   # dependency — `Prism.Topics` was the whole PubSub vocabulary, so opus,
@@ -45,6 +54,11 @@ defmodule Cyfr.NamespaceDirectionTest do
     |> Enum.flat_map(fn path ->
       path
       |> File.read!()
+      # Doc prose is not a dependency: blank out heredoc bodies (module
+      # and function docs), preserving line numbers for the report.
+      |> String.replace(~r/"""[\s\S]*?"""/, fn block ->
+        block |> String.split("\n") |> Enum.map_join("\n", fn _ -> "" end)
+      end)
       |> String.split("\n")
       |> Enum.with_index(1)
       # A mention in a comment is prose, not a dependency.
@@ -61,7 +75,7 @@ defmodule Cyfr.NamespaceDirectionTest do
 
     assert found == [],
            """
-           opus/locus reach into the Prism (console) namespace:
+           engine/domain code reaches into the Prism (console) namespace:
 
            #{Enum.map_join(found, "\n", &"  #{&1}")}
 

@@ -195,10 +195,15 @@ defmodule Compendium.AutoIndexer do
     has_tincture_changes =
       (results.registered > 0 and Map.get(results.by_type, "tincture", 0) > 0) or pruned > 0
 
-    # This scan is one athanor's, so the reload is too: a full rescan here
-    # walked every active athanor's tree for a change in one of them.
+    # This scan is one athanor's, so the announcement is too. The domain
+    # broadcasts; the console's registry (a shell-plane cache) subscribes —
+    # a direct Prism call from here was the one engine→console edge.
     if has_tincture_changes do
-      Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+      Phoenix.PubSub.broadcast(
+        Emissary.PubSub,
+        Cyfr.Topics.tinctures(ctx.athanor_id),
+        {:tinctures_changed, ctx.athanor_id}
+      )
     end
 
     summary = %{
