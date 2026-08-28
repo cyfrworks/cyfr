@@ -361,8 +361,8 @@ defmodule Prism.ConversationRunner do
       text == "" and attachments == [] ->
         {:reply, {:error, :empty}, state}
 
-      standing(ctx, state) != :ok ->
-        {:reply, standing(ctx, state), state}
+      (refusal = standing(ctx, state)) != :ok ->
+        {:reply, refusal, state}
 
       true ->
         state = refresh_orchestrators(state, opts)

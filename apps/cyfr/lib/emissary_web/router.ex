@@ -305,7 +305,9 @@ defmodule EmissaryWeb.Router do
     pipe_through :browser
 
     live "/login", LoginLive, :login
-    get "/auth/logout", SessionController, :logout
+    # POST, never GET: signing someone out must not be one <img src> away
+    # — the browser pipeline's CSRF token guards the state change.
+    post "/auth/logout", SessionController, :logout
   end
 
   # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as

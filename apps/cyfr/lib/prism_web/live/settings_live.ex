@@ -233,12 +233,13 @@ defmodule PrismWeb.SettingsLive do
     <div class="space-y-6">
       <.page_header title="Settings">
         <:actions>
-          <a
+          <.link
             href={~p"/auth/logout"}
+            method="post"
             class="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors"
           >
             <.icon name="logout" class="h-4 w-4" /> Sign Out
-          </a>
+          </.link>
         </:actions>
       </.page_header>
 

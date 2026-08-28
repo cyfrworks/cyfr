@@ -168,6 +168,9 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:register_log, [])
 
     lv = self()
+    # The context, never the socket, crosses into the task: a socket in
+    # the closure pins every assign (streams included) in the task's heap.
+    ctx = socket.assigns.context
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -175,7 +178,7 @@ defmodule PrismWeb.ComponentsLive do
            Cyfr.LoggerContext.restore(logger_metadata)
 
            result =
-             call_tool(socket, "component", %{
+             call_tool(ctx, "component", %{
                "action" => "register",
                "register_id" => register_id
              })

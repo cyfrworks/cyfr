@@ -742,7 +742,7 @@ defmodule PrismWeb.ConversationLive do
   defp attachment_path(athanor_route, message_id, filename) do
     PrismWeb.Focus.path(
       athanor_route,
-      "/attachments/#{URI.encode(message_id)}/#{URI.encode(filename)}"
+      "/attachments/#{URI.encode(message_id, &URI.char_unreserved?/1)}/#{URI.encode(filename, &URI.char_unreserved?/1)}"
     )
   end
 

@@ -43,15 +43,18 @@ defmodule PrismWeb.BuildsLive do
       |> assign(:build_log, [])
       |> assign(:build_output, nil)
 
-    # Run compile async so progress messages can be received
+    # Run compile async so progress messages can be received. The context,
+    # never the socket, crosses into the task: a socket in the closure pins
+    # every assign in the task's heap.
     lv = self()
+    ctx = socket.assigns.context
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
            args = %{"reference" => reference, "build_id" => build_id}
-           result = call_tool(socket, "build/compile", args)
+           result = call_tool(ctx, "build/compile", args)
            send(lv, {:build_complete, result})
          end) do
       {:ok, _pid} ->

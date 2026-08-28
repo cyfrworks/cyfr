@@ -42,8 +42,11 @@ defmodule PrismWeb.DisplayHelpers do
   def truncate(value, max)
   def truncate(nil, _max), do: "-"
 
+  # Guard and slice in the same unit: byte_size guarding a grapheme slice
+  # let multibyte text through longer than `max`. byte_slice respects
+  # codepoint boundaries, so nothing is torn mid-character.
   def truncate(s, max) when is_binary(s) and byte_size(s) > max,
-    do: String.slice(s, 0, max) <> "…"
+    do: String.byte_slice(s, 0, max) <> "…"
 
   def truncate(s, _max), do: to_string(s)
 

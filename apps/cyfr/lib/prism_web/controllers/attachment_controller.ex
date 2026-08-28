@@ -75,7 +75,17 @@ defmodule PrismWeb.AttachmentController do
   defp serve_type(_), do: Cyfr.MediaType.binary()
 
   defp disposition(filename) do
-    safe = filename |> to_string() |> String.replace(~s("), "")
-    ~s(attachment; filename="#{safe}")
+    # More than quotes must go: a CR/LF here splits the header, and any
+    # C0 control character has no place in one. Non-ASCII survives via
+    # the RFC 5987 filename* parameter.
+    name = to_string(filename)
+    safe = String.replace(name, ~r/[\x00-\x1f\x7f"\\]/, "")
+
+    if safe == name do
+      ~s(attachment; filename="#{safe}")
+    else
+      encoded = URI.encode(name, &URI.char_unreserved?/1)
+      ~s(attachment; filename="#{safe}"; filename*=UTF-8''#{encoded})
+    end
   end
 end

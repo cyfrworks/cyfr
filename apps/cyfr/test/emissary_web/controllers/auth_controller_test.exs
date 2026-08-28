@@ -506,16 +506,17 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert json_response(conn, 400)["code"] == "missing_token"
     end
 
-    test "refuses a token in the request body", %{conn: conn} do
+    test "a token in the request body is ignored", %{conn: conn} do
       # A credential in a body or query string lands in access logs and
-      # Referer headers. The header is the only way in, and POST is no
-      # longer routed at all.
+      # Referer headers. The header is the only way into the API logout;
+      # POST routes to the browser sign-out (CSRF-guarded), which reads
+      # only the cookie session and never the body.
       conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> post(~p"/auth/logout", Jason.encode!(%{"token" => "nonexistent_token"}))
 
-      assert conn.status == 404
+      assert redirected_to(conn) == "/login?error=signed_out"
     end
 
     test "ignores a body token on the routed verb", %{conn: conn} do

@@ -144,7 +144,10 @@ defmodule Prism.ConversationCompactor do
 
   defp truncate_tool_results(%{"role" => "tool", "content" => content} = msg)
        when is_binary(content) and byte_size(content) > @truncated_result_chars do
-    %{msg | "content" => String.slice(content, 0, @truncated_result_chars) <> "... [truncated]"}
+    %{
+      msg
+      | "content" => String.byte_slice(content, 0, @truncated_result_chars) <> "... [truncated]"
+    }
   end
 
   defp truncate_tool_results(%{"role" => "user", "content" => content} = msg)
@@ -155,7 +158,8 @@ defmodule Prism.ConversationCompactor do
           if byte_size(text) > @truncated_result_chars do
             %{
               part
-              | "content" => String.slice(text, 0, @truncated_result_chars) <> "... [truncated]"
+              | "content" =>
+                  String.byte_slice(text, 0, @truncated_result_chars) <> "... [truncated]"
             }
           else
             part
@@ -169,7 +173,7 @@ defmodule Prism.ConversationCompactor do
                   %{
                     inner
                     | "text" =>
-                        String.slice(text, 0, @truncated_result_chars) <> "... [truncated]"
+                        String.byte_slice(text, 0, @truncated_result_chars) <> "... [truncated]"
                   }
                 else
                   inner

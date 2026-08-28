@@ -61,7 +61,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/api/health/ready"} => :public_health,
 
     # Prism on the one endpoint — public
-    {:get, "/auth/logout"} => :browser_public_auth,
+    {:post, "/auth/logout"} => :browser_public_auth,
     {:get, "/login"} => :browser_public_login,
 
     # Prism — a chat attachment's bytes: session cookie + the URL's athanor

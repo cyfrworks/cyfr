@@ -59,7 +59,9 @@ defmodule Prism.Labels do
   @doc "Normalise a mode already resolved for a person (a layout assign)."
   @spec mode(term()) :: String.t()
   def mode(mode) when mode in @modes, do: mode
-  def mode(_), do: "dev"
+  # The same rule as `mode/2` with no user: a bare "dev" here briefly
+  # showed the dev chrome to lite viewers while assigns settled.
+  def mode(_), do: default(nil)
 
   @doc "The label for `noun` in `mode`."
   @spec label(atom(), String.t()) :: String.t()

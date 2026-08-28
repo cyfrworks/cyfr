@@ -847,12 +847,13 @@ defmodule PrismWeb.TopbarLive do
                 <dd class="text-gray-400 font-mono text-[11px] break-all">{@context.user_id}</dd>
               </div>
             </dl>
-            <a
+            <.link
               href={~p"/auth/logout"}
+              method="post"
               class="mt-3 flex items-center justify-center gap-2 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
             >
               <.icon name="logout" class="h-3.5 w-3.5" /> Sign out
-            </a>
+            </.link>
           </:popover>
         </.indicator>
       </div>
