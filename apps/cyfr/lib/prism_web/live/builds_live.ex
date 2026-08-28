@@ -59,7 +59,7 @@ defmodule PrismWeb.BuildsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        Logger.error("Failed to start build task: #{inspect(reason)}")
+        Logger.error("[BuildsLive] Failed to start build task: #{inspect(reason)}")
 
         {:noreply,
          socket |> assign(:building, false) |> put_flash(:error, "Failed to start build")}

@@ -135,7 +135,7 @@ defmodule PrismWeb.ComponentsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        Logger.error("Failed to start pull task: #{inspect(reason)}")
+        Logger.error("[ComponentsLive] Failed to start pull task: #{inspect(reason)}")
         {:noreply, socket |> assign(:pulling, false) |> put_flash(:error, "Failed to start pull")}
     end
   end
@@ -187,7 +187,7 @@ defmodule PrismWeb.ComponentsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        Logger.error("Failed to start register task: #{inspect(reason)}")
+        Logger.error("[ComponentsLive] Failed to start register task: #{inspect(reason)}")
 
         {:noreply,
          socket
@@ -291,7 +291,7 @@ defmodule PrismWeb.ComponentsLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        Logger.error("Failed to start push task: #{inspect(reason)}")
+        Logger.error("[ComponentsLive] Failed to start push task: #{inspect(reason)}")
 
         {:noreply, socket |> assign(:pushing, false) |> put_flash(:error, "Failed to start push")}
     end

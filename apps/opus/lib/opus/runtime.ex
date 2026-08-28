@@ -353,7 +353,7 @@ defmodule Opus.Runtime do
                  )
 
                  Logger.warning(
-                   "Field '#{name}' is outside the consent's projection for " <>
+                   "[Opus.Runtime] Field '#{name}' is outside the consent's projection for " <>
                      "'#{component_ref}'. Re-grant via the consent walk: " <>
                      "cyfr profile grant #{component_ref}"
                  )

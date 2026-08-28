@@ -98,7 +98,7 @@ defmodule Emissary.MCP.ResourceRegistry do
 
               nil ->
                 Logger.error(
-                  "ResourceRegistry: read timed out after #{@resource_timeout_ms}ms for #{uri}"
+                  "[ResourceRegistry] read timed out after #{@resource_timeout_ms}ms for #{uri}"
                 )
 
                 {:error, "Resource read timed out after #{@resource_timeout_ms}ms"}
@@ -206,7 +206,7 @@ defmodule Emissary.MCP.ResourceRegistry do
           Arca.Cache.put({:mcp_resource, provider}, resources, @cache_ttl)
 
           Logger.debug(
-            "ResourceRegistry: Registered #{length(resources)} resources from #{provider}"
+            "[ResourceRegistry] Registered #{length(resources)} resources from #{provider}"
           )
 
           # Also cache resource templates if the provider implements them
@@ -215,13 +215,13 @@ defmodule Emissary.MCP.ResourceRegistry do
             Arca.Cache.put({:mcp_resource_template, provider}, templates, @cache_ttl)
 
             Logger.debug(
-              "ResourceRegistry: Registered #{length(templates)} resource templates from #{provider}"
+              "[ResourceRegistry] Registered #{length(templates)} resource templates from #{provider}"
             )
           end
         rescue
           e ->
             Logger.warning(
-              "ResourceRegistry: Failed to load resources from #{provider}: #{inspect(e)}"
+              "[ResourceRegistry] Failed to load resources from #{provider}: #{inspect(e)}"
             )
         end
       end

@@ -690,11 +690,12 @@ defmodule Sanctum.Context do
   # checked, with no second vocabulary to drift.
   defp action_to_permission(action) when is_atom(action), do: action
 
+  # user_id and auth_method ride the rostered Logger metadata — the
+  # message carries only what the roster does not.
   defp log_denial(%__MODULE__{} = ctx, action, resource) do
     Logger.warning(
       "[Sanctum.Context] Authorization denied: " <>
-        "user=#{ctx.user_id} action=#{action} resource=#{inspect(resource)} " <>
-        "auth_method=#{ctx.auth_method} scope=#{ctx.scope}"
+        "action=#{action} resource=#{inspect(resource)} scope=#{ctx.scope}"
     )
   end
 

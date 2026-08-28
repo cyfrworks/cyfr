@@ -21,7 +21,7 @@ defmodule Cyfr.LoggerContext do
   # Every key this module ever sets. A key the formatter's roster omits is
   # written to the process dictionary and then dropped on the floor, which
   # reads exactly like the value being nil.
-  @keys [:request_id, :user_id, :athanor_id, :auth_method]
+  @keys [:request_id, :user_id, :athanor_id, :auth_method, :execution_id]
 
   @doc "The metadata keys this module sets, which the log roster must carry."
   @spec keys() :: [atom()]
@@ -45,6 +45,17 @@ defmodule Cyfr.LoggerContext do
   """
   def set_request_id(request_id) when is_binary(request_id) do
     Logger.metadata(request_id: request_id)
+  end
+
+  @doc """
+  Set the execution_id in Logger metadata.
+
+  The executor stamps it when an execution pipeline is built, so every
+  log line the run produces correlates to its execution record — the
+  same first-class correlator the events and rows already carry.
+  """
+  def set_execution_id(execution_id) when is_binary(execution_id) do
+    Logger.metadata(execution_id: execution_id)
   end
 
   @doc """

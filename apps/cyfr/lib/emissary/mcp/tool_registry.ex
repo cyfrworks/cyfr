@@ -810,7 +810,10 @@ defmodule Emissary.MCP.ToolRegistry do
 
       {:error, missing} ->
         lines = Enum.map(missing, &"  - #{&1.tool}.#{&1.action} (#{inspect(&1.provider)})")
-        Logger.warning("MCP tool actions missing :kind annotation:\n" <> Enum.join(lines, "\n"))
+
+        Logger.warning(
+          "[ToolRegistry] MCP tool actions missing :kind annotation:\n" <> Enum.join(lines, "\n")
+        )
     end
   rescue
     e ->
@@ -933,7 +936,9 @@ defmodule Emissary.MCP.ToolRegistry do
           {:error, reason}
 
         {:exit, {exception, stacktrace}} when is_exception(exception) ->
-          Logger.error("Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}")
+          Logger.error(
+            "[ToolRegistry] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
+          )
 
           {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(exception)}"}}
 
@@ -941,11 +946,11 @@ defmodule Emissary.MCP.ToolRegistry do
           {:error, {:exit, "Tool #{name} was cancelled"}}
 
         {:exit, reason} ->
-          Logger.error("Tool #{name} exited: #{inspect(reason)}")
+          Logger.error("[ToolRegistry] Tool #{name} exited: #{inspect(reason)}")
           {:error, {:exit, "Tool #{name} exited unexpectedly"}}
 
         nil ->
-          Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
+          Logger.error("[ToolRegistry] Tool #{name} timed out after #{@tool_timeout_ms}ms")
           {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
@@ -984,7 +989,7 @@ defmodule Emissary.MCP.ToolRegistry do
       end)
 
     Logger.info(
-      "MCP ToolRegistry loaded #{length(tools)} tools from #{length(providers)} providers"
+      "[ToolRegistry] loaded #{length(tools)} tools from #{length(providers)} providers"
     )
 
     length(tools)
@@ -1013,7 +1018,7 @@ defmodule Emissary.MCP.ToolRegistry do
         true
       else
         Logger.warning(
-          "Tool provider #{inspect(module)} not available — skipping. " <>
+          "[ToolRegistry] Tool provider #{inspect(module)} not available — skipping. " <>
             "Check that the application is started and the module exists."
         )
 

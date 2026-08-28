@@ -385,9 +385,31 @@ defmodule Emissary.MCP.ExternalServer do
         {:error, "#{state.name} changed protocol era mid-connection"}
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, mask_credentials(reason, state)}
     end
   end
+
+  # OTP crash reports and :sys.get_status print the full state — which
+  # holds resolved credential header values. Redact both header maps so a
+  # crashed server process cannot page a credential into the log.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %State{} = state} ->
+        {:state,
+         %{
+           state
+           | headers: redact_values(state.headers),
+             raw_headers: redact_values(state.raw_headers)
+         }}
+
+      other ->
+        other
+    end)
+  end
+
+  defp redact_values(map) when is_map(map), do: Map.new(map, fn {k, _} -> {k, "[REDACTED]"} end)
+  defp redact_values(other), do: other
 
   @impl true
   def terminate(reason, state) do
@@ -424,7 +446,10 @@ defmodule Emissary.MCP.ExternalServer do
       {:ok, state}
     else
       {:error, reason} ->
-        state = %{state | status: :error, error: inspect(reason)}
+        # state.error surfaces to callers and the status view — the same
+        # egress rule as results: mask the credentials this plane injected
+        # before a transport exception that echoed them can carry one out.
+        state = %{state | status: :error, error: mask_credentials(inspect(reason), state)}
 
         Logger.error("[ExternalServer] Failed to initialize #{state.name}: #{inspect(reason)}")
 
@@ -768,7 +793,10 @@ defmodule Emissary.MCP.ExternalServer do
       value = to_string(v)
 
       if valid_header_name?(name) and not control_chars?(value) do
-        [{name, value} | acc]
+        # keystore, not cons: an operator's content-type must REPLACE the
+        # client's base header — prepending sent both, and which one the
+        # upstream honored was its choice, not ours.
+        List.keystore(acc, name, 0, {name, value})
       else
         Logger.warning(
           "[ExternalServer] refusing header #{inspect(name)}: a header name must be an HTTP " <>

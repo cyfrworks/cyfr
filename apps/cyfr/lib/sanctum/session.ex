@@ -64,7 +64,7 @@ defmodule Sanctum.Session do
 
       hours when is_integer(hours) and hours < @min_session_ttl_hours ->
         Logger.warning(
-          "CYFR_SESSION_TTL_HOURS=#{hours} is below minimum (#{@min_session_ttl_hours}). " <>
+          "[Sanctum.Session] CYFR_SESSION_TTL_HOURS=#{hours} is below minimum (#{@min_session_ttl_hours}). " <>
             "Using #{@min_session_ttl_hours} hour(s). Set to 0 for infinite sessions."
         )
 

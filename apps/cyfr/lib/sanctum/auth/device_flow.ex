@@ -406,11 +406,11 @@ defmodule Sanctum.Auth.DeviceFlow do
         end
 
       {:ok, %{"message" => message}} ->
-        Logger.warning("Failed to fetch GitHub email: #{message}")
+        Logger.warning("[DeviceFlow] Failed to fetch GitHub email: #{message}")
         :none
 
       {:error, reason} ->
-        Logger.warning("Failed to fetch GitHub email: #{inspect(reason)}")
+        Logger.warning("[DeviceFlow] Failed to fetch GitHub email: #{inspect(reason)}")
         :none
     end
   end

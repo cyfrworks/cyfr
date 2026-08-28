@@ -344,11 +344,11 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         "ok"
 
       {:ok, status_code, _headers, _body} ->
-        Logger.warning("Registry health check returned status #{status_code}")
+        Logger.warning("[SystemProvider] Registry health check returned status #{status_code}")
         "error"
 
       {:error, reason} ->
-        Logger.warning("Registry health check failed: #{inspect(reason)}")
+        Logger.warning("[SystemProvider] Registry health check failed: #{inspect(reason)}")
         "unreachable"
     end
   rescue
@@ -401,7 +401,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         # unconditionally, as they always were on this surface.
         case Cyfr.Network.pinned_request(:post, target, headers, body, receive_timeout: 10_000) do
           {:ok, status_code, _resp_headers, _resp_body} ->
-            Logger.debug("Webhook sent to #{target}: status #{status_code}")
+            Logger.debug("[SystemProvider] Webhook sent to #{target}: status #{status_code}")
             {:ok, status_code}
 
           {:error, reason} when is_binary(reason) ->
@@ -409,7 +409,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
             {:error, "Webhook URL validation failed: #{reason}"}
 
           {:error, reason} ->
-            Logger.warning("Webhook failed to #{target}: #{inspect(reason)}")
+            Logger.warning("[SystemProvider] Webhook failed to #{target}: #{inspect(reason)}")
             {:error, inspect(reason)}
         end
     end

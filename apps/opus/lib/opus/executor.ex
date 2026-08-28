@@ -173,6 +173,8 @@ defmodule Opus.Executor do
       opts: opts
     }
 
+    Cyfr.LoggerContext.set_execution_id(record.id)
+
     try do
       with {:ok, p} <- stage_enforce_policy(p, input),
            {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),

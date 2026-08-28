@@ -439,7 +439,7 @@ defmodule EmissaryWeb.AuthController do
   defp friendly_error_message({:provider_error, _}), do: "Authentication provider error"
 
   defp friendly_error_message(reason) do
-    Logger.warning("Unhandled auth error: #{inspect(reason)}")
+    Logger.warning("[AuthController] Unhandled auth error: #{inspect(reason)}")
     "An error occurred during authentication"
   end
 end

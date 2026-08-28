@@ -201,7 +201,7 @@ defmodule Sanctum.Tenancy.Athanors do
   def home! do
     case home() do
       {:ok, athanor} -> athanor
-      {:error, reason} -> raise "Sanctum.Tenancy.Athanors: no Home athanor (#{inspect(reason)})"
+      {:error, reason} -> raise "[Sanctum.Tenancy.Athanors] no Home athanor (#{inspect(reason)})"
     end
   end
 
@@ -312,7 +312,7 @@ defmodule Sanctum.Tenancy.Athanors do
   rescue
     e ->
       Logger.warning(
-        "Sanctum.Tenancy.Athanors: cancel on archive failed (#{Exception.message(e)})"
+        "[Sanctum.Tenancy.Athanors] cancel on archive failed (#{Exception.message(e)})"
       )
 
       :ok

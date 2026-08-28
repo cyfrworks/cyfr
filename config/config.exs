@@ -59,7 +59,7 @@ config :cyfr, EmissaryWeb.Endpoint,
 # Configures Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id, :user_id, :athanor_id, :auth_method]
+  metadata: [:request_id, :user_id, :athanor_id, :auth_method, :execution_id]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

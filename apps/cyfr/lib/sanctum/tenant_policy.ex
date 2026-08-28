@@ -30,24 +30,24 @@ defmodule Sanctum.TenantPolicy do
   def verify(%Context{athanor_id: athanor_id}, _record) when athanor_id in [nil, ""],
     do: {:error, :missing_tenant}
 
-  def verify(%Context{athanor_id: athanor_id} = ctx, %{athanor_id: record_athanor})
+  def verify(%Context{athanor_id: athanor_id}, %{athanor_id: record_athanor})
       when is_binary(record_athanor) and record_athanor != "" do
     if athanor_id == record_athanor do
       :ok
     else
       Logger.warning(
         "[Sanctum.TenantPolicy] Tenant mismatch: " <>
-          "ctx=#{athanor_id} record=#{record_athanor} user=#{ctx.user_id}"
+          "ctx=#{athanor_id} record=#{record_athanor}"
       )
 
       {:error, :tenant_mismatch}
     end
   end
 
-  def verify(%Context{} = ctx, record) do
+  def verify(%Context{} = _ctx, record) do
     Logger.warning(
       "[Sanctum.TenantPolicy] Record without an athanor refused: " <>
-        "user=#{ctx.user_id} keys=#{inspect(record |> Map.keys() |> Enum.sort())}"
+        "keys=#{inspect(record |> Map.keys() |> Enum.sort())}"
     )
 
     {:error, :malformed_record}

@@ -209,7 +209,7 @@ defmodule Prism.TinctureRegistry do
 
       {:error, reason} ->
         Logger.warning(
-          "TinctureRegistry: cannot list #{athanor.id}/#{@tincture_type_plural}: #{inspect(reason)}"
+          "[TinctureRegistry] cannot list #{athanor.id}/#{@tincture_type_plural}: #{inspect(reason)}"
         )
 
         []
@@ -244,7 +244,7 @@ defmodule Prism.TinctureRegistry do
 
         {:error, reason} ->
           Logger.warning(
-            "TinctureRegistry: cannot read #{Enum.join(manifest_segs, "/")}: #{inspect(reason)}"
+            "[TinctureRegistry] cannot read #{Enum.join(manifest_segs, "/")}: #{inspect(reason)}"
           )
 
           []
@@ -301,7 +301,7 @@ defmodule Prism.TinctureRegistry do
       case {entry_result, blocked_image_refs(media_icon, media_previews)} do
         {{:error, message}, _} ->
           Logger.warning(
-            "TinctureRegistry: skipping tincture at #{Enum.join(manifest_segs, "/")} — #{message}"
+            "[TinctureRegistry] skipping tincture at #{Enum.join(manifest_segs, "/")} — #{message}"
           )
 
           []
@@ -330,7 +330,7 @@ defmodule Prism.TinctureRegistry do
 
         {_entry, refs} ->
           Logger.warning(
-            "TinctureRegistry: skipping tincture at #{Enum.join(manifest_segs, "/")} — raster " <>
+            "[TinctureRegistry] skipping tincture at #{Enum.join(manifest_segs, "/")} — raster " <>
               "image assets are blocked until CSAM hash matching ships. Offending refs: " <>
               Enum.join(refs, ", ") <>
               ". Use SVG or remove the media entries to unblock."
@@ -341,7 +341,7 @@ defmodule Prism.TinctureRegistry do
     else
       {:error, %Jason.DecodeError{} = err} ->
         Logger.warning(
-          "TinctureRegistry: invalid JSON in #{Enum.join(manifest_segs, "/")}: #{Exception.message(err)}"
+          "[TinctureRegistry] invalid JSON in #{Enum.join(manifest_segs, "/")}: #{Exception.message(err)}"
         )
 
         []
@@ -351,7 +351,7 @@ defmodule Prism.TinctureRegistry do
           {:ok, manifest} ->
             if manifest["type"] == "tincture" and not is_binary(manifest["name"]) do
               Logger.warning(
-                "TinctureRegistry: tincture manifest missing 'name' field: #{Enum.join(manifest_segs, "/")}"
+                "[TinctureRegistry] tincture manifest missing 'name' field: #{Enum.join(manifest_segs, "/")}"
               )
             end
 

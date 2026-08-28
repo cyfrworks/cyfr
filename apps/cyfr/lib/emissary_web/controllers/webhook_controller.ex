@@ -291,10 +291,14 @@ defmodule EmissaryWeb.WebhookController do
             routed_to: "opus"
           })
 
+          # A fixed slug, never the raw term: telemetry metadata fans out
+          # to consumers that must not see internal reasons (the rule
+          # Emissary.Tincture.Invoke's emit_stop states). The sanitized
+          # detail lives in the request log above.
           :telemetry.execute(
             [:cyfr, :emissary, :webhook, :invoke, :stop],
             %{duration_ms: duration_ms},
-            telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, inspect(reason))
+            telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "execution_failed")
           )
       end
     rescue
