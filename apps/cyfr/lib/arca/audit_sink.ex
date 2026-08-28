@@ -5,11 +5,12 @@ defmodule Arca.AuditSink do
   @moduledoc """
   Behaviour for audit event sinks.
 
-  Audit sinks receive security-relevant telemetry events and persist them
-  to various backends. Only the Console sink (`Arca.AuditSinks.Console`)
-  ships. Additional sinks (e.g. JSONL, SIEM, object store, or Postgres)
-  can be added by implementing this behaviour and adding them to the
-  `:audit_sinks` config.
+  Audit sinks receive security-relevant events as `Arca.Audit.Event`
+  structs — metadata already sanitized by `Arca.AuditHandler` — and
+  persist them to various backends. Only the Console sink
+  (`Arca.AuditSinks.Console`) ships. Additional sinks (e.g. JSONL, SIEM,
+  object store, or Postgres) can be added by implementing this behaviour
+  and adding them to the `:audit_sinks` config.
 
   ## Implementing a sink
 
@@ -17,7 +18,7 @@ defmodule Arca.AuditSink do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(event_name, measurements, metadata) do
+        def handle_audit_event(%Arca.Audit.Event{} = event) do
           # Forward to Splunk HEC endpoint
           :ok
         end
@@ -28,9 +29,5 @@ defmodule Arca.AuditSink do
       config :cyfr, :audit_sinks, [Arca.AuditSinks.Console, MyApp.AuditSinks.Splunk]
   """
 
-  @callback handle_audit_event(
-              event_name :: [atom()],
-              measurements :: map(),
-              metadata :: map()
-            ) :: :ok
+  @callback handle_audit_event(event :: Arca.Audit.Event.t()) :: :ok
 end

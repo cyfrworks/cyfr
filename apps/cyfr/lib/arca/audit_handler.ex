@@ -26,9 +26,12 @@ defmodule Arca.AuditHandler do
   - `[:cyfr, :opus, :execute, :exception]` — execution fails
   - `[:cyfr, :opus, :secret, :accessed]` — a component read a credential
   - `[:cyfr, :opus, :secret, :denied]` — a component was refused one
+  - `[:cyfr, :sanctum, :platform_context]` — the tenant-bypassing platform
+    scope was constructed
 
   The full roster is `@audit_events`; this list names the shapes, not every
-  entry.
+  entry. Each event reaches the sinks as one `Arca.Audit.Event` with the
+  emitter's metadata sanitized.
   """
 
   use GenServer
@@ -55,7 +58,13 @@ defmodule Arca.AuditHandler do
     # is the event this product exists to make accountable. It was emitted
     # from `Opus.Runtime`'s vault import and consumed by nothing.
     [:cyfr, :opus, :secret, :accessed],
-    [:cyfr, :opus, :secret, :denied]
+    [:cyfr, :opus, :secret, :denied],
+    # Every construction of the tenant-bypassing platform scope. Safe to
+    # subscribe ONLY because this handler builds no context of its own:
+    # Sanctum.internal_context/1 emits this very event, so constructing one
+    # per event here would recurse in the emitting process until the stack
+    # died.
+    [:cyfr, :sanctum, :platform_context]
   ]
 
   def start_link(opts \\ []) do
@@ -114,29 +123,24 @@ defmodule Arca.AuditHandler do
   defp do_handle_event(event_name, measurements, metadata, _config) do
     sinks = Application.get_env(:cyfr, :audit_sinks, [Arca.AuditSinks.Console])
 
-    # Inject tenant context into metadata for downstream sinks
-    metadata =
-      if metadata[:context] do
-        metadata
-      else
-        # An event that names its athanor is handled inside it; one that
-        # doesn't (a platform-level event) gets a platform context.
-        athanor_id = metadata[:athanor_id]
-
-        ctx =
-          Sanctum.internal_context(
-            user_id: metadata[:user_id] || "system",
-            athanor_id: athanor_id,
-            scope: if(is_binary(athanor_id), do: :athanor, else: :platform)
-          )
-
-        Map.put(metadata, :context, ctx)
-      end
+    # One struct per event, metadata sanitized on the way out — an
+    # operator-added SIEM sink must never see a credential that rode an
+    # emitter's metadata. Identity fields are audit content and survive.
+    # No Sanctum context is constructed here (see the roster note on
+    # :platform_context — doing so would recurse), and none is needed:
+    # no sink read one.
+    event = %Arca.Audit.Event{
+      name: event_name,
+      measurements: measurements,
+      metadata: Sanctum.Sanitizer.sanitize(metadata),
+      user_id: metadata[:user_id],
+      athanor_id: metadata[:athanor_id]
+    }
 
     failure_count =
       Enum.count(sinks, fn sink ->
         try do
-          sink.handle_audit_event(event_name, measurements, metadata)
+          sink.handle_audit_event(event)
           false
         rescue
           e ->

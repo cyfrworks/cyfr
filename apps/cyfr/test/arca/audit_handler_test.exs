@@ -7,11 +7,6 @@ defmodule Arca.AuditHandlerTest do
   import ExUnit.CaptureLog
 
   setup do
-    # handle_event/4 builds a scheduled context (namespace lookup → DB) entirely
-    # in the calling process, so a plain checkout is enough — no shared mode
-    # (which would globally mutate the sandbox and disrupt concurrent async tests).
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-
     original_sinks = Application.get_env(:cyfr, :audit_sinks)
 
     on_exit(fn ->
@@ -31,8 +26,8 @@ defmodule Arca.AuditHandlerTest do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(event_name, measurements, metadata) do
-          send(metadata[:test_pid], {:audit, event_name, measurements})
+        def handle_audit_event(%Arca.Audit.Event{} = event) do
+          send(event.metadata[:test_pid], {:audit, event.name, event.measurements})
           :ok
         end
       end
@@ -56,7 +51,7 @@ defmodule Arca.AuditHandlerTest do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(_event_name, _measurements, _metadata) do
+        def handle_audit_event(_event) do
           raise "boom"
         end
       end
@@ -65,8 +60,8 @@ defmodule Arca.AuditHandlerTest do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(event_name, _measurements, metadata) do
-          send(metadata[:test_pid], {:good_sink, event_name})
+        def handle_audit_event(%Arca.Audit.Event{} = event) do
+          send(event.metadata[:test_pid], {:good_sink, event.name})
           :ok
         end
       end
@@ -88,29 +83,35 @@ defmodule Arca.AuditHandlerTest do
       assert log =~ "failed"
     end
 
-    test "injects context into metadata when missing" do
+    test "sanitizes metadata and constructs no context" do
       test_pid = self()
 
-      defmodule ContextCheckSink do
+      defmodule StructCheckSink do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(_event_name, _measurements, metadata) do
-          send(metadata[:test_pid], {:context, metadata[:context]})
+        def handle_audit_event(%Arca.Audit.Event{} = event) do
+          send(event.metadata[:test_pid], {:event, event})
           :ok
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [ContextCheckSink])
+      Application.put_env(:cyfr, :audit_sinks, [StructCheckSink])
 
       Arca.AuditHandler.handle_event(
         [:cyfr, :sanctum, :auth],
         %{count: 1},
-        %{test_pid: test_pid, user_id: "test_user"},
+        %{test_pid: test_pid, user_id: "test_user", access_token: "gho_secret"},
         nil
       )
 
-      assert_receive {:context, %Sanctum.Context{user_id: "test_user"}}
+      assert_receive {:event, %Arca.Audit.Event{} = event}
+      assert event.user_id == "test_user"
+      # A credential riding the emitter's metadata never reaches a sink…
+      assert event.metadata[:access_token] == "[REDACTED]"
+      # …and no Sanctum context is constructed on the way (constructing one
+      # would recurse now that :platform_context is on the roster).
+      refute Map.has_key?(event.metadata, :context)
     end
 
     test "emits pipeline_failure telemetry when all sinks fail" do
@@ -129,7 +130,7 @@ defmodule Arca.AuditHandlerTest do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(_event_name, _measurements, _metadata) do
+        def handle_audit_event(_event) do
           raise "total failure"
         end
       end
@@ -183,8 +184,8 @@ defmodule Arca.AuditHandlerTest do
         @behaviour Arca.AuditSink
 
         @impl true
-        def handle_audit_event(event_name, measurements, metadata) do
-          send(metadata[:test_pid], {:audit, event_name, measurements})
+        def handle_audit_event(%Arca.Audit.Event{} = event) do
+          send(event.metadata[:test_pid], {:audit, event.name, event.measurements})
           :ok
         end
       end
@@ -214,6 +215,15 @@ defmodule Arca.AuditHandlerTest do
 
       assert "audit-cyfr-opus-secret-accessed" in ids
       assert "audit-cyfr-opus-secret-denied" in ids
+    end
+
+    test "the platform-context trail is attached" do
+      ids =
+        [:cyfr, :sanctum, :platform_context]
+        |> :telemetry.list_handlers()
+        |> Enum.map(& &1.id)
+
+      assert "audit-cyfr-sanctum-platform_context" in ids
     end
   end
 end
