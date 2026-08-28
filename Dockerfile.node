@@ -8,7 +8,7 @@
 #
 # e.g.  docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge .
 
-# Pinned to the same Node LTS the runner base ships (Dockerfile.runner-base
+# Pinned to the same Node LTS the builder image ships (Dockerfile.builder
 # NODE_VERSION) — `24-alpine` floated with every upstream release.
 FROM node:24.14.1-alpine AS base
 

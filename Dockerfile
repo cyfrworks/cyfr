@@ -1,10 +1,6 @@
 # syntax=docker/dockerfile:1.7-labs
 # (parser directive above must be the first line; needed for COPY --parents)
 
-# 2.x runner bases carry NO toolchains — builds live in the builder
-# container (Dockerfile.builder). Rebuild with scripts/build-runner-base.sh.
-ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:2.0.0
-
 # ---- Stage 1: Builder ----
 FROM hexpm/elixir:1.20.0-erlang-29.0.2-debian-bookworm-20260610 AS builder
 
@@ -46,11 +42,34 @@ COPY wit/ wit/
 RUN mix compile && mix assets.deploy && mix release cyfr
 
 # ---- Stage 2: Runner ----
-# Pre-built runtime base — libraries and the runtime user, no toolchains
-# (see Dockerfile.runner-base). Rebuild with: scripts/build-runner-base.sh
-ARG RUNNER_BASE
-FROM ${RUNNER_BASE} AS runner
+# Runtime base inlined: shared libraries, locales and the runtime user —
+# and deliberately NO toolchains (cargo/npm live in Dockerfile.builder;
+# this image structurally cannot run builds). It used to be a separately
+# pushed cyfr-runner-base image, which earned its keep only while it
+# carried the minutes-long cargo-component compile; a 30-second apt layer
+# does not justify an out-of-band artifact the build must wait on.
+FROM debian:bookworm-slim AS runner
 
+RUN apt-get update && apt-get install -y \
+    libstdc++6 \
+    openssl \
+    libncurses6 \
+    ca-certificates \
+    libsqlite3-0 \
+    curl \
+    locales \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen
+
+# Non-root user for runtime (the entrypoint drops to it via gosu)
+RUN groupadd -r app && useradd -r -g app -d /app app
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
 LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
 ENV ELIXIR_ERL_OPTIONS="+fnu"
