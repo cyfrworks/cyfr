@@ -117,7 +117,12 @@ defmodule Arca.McpLog do
   - `:tool` - Filter by tool name
   - `:since` - Filter logs after this DateTime
   """
+  @spec list(keyword()) :: {:ok, [%__MODULE__{}]} | {:error, :database_error}
   def list(opts) do
+    Arca.Repo.Errors.with_db_rescue("McpLog.list", fn -> {:ok, do_list(opts)} end)
+  end
+
+  defp do_list(opts) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     status = Keyword.get(opts, :status)
@@ -203,31 +208,45 @@ defmodule Arca.McpLog do
 
   Returns a map with `:total`, `:errors`, and `:avg_duration_ms`.
   """
+  @spec stats(keyword()) ::
+          {:ok, %{total: non_neg_integer(), errors: non_neg_integer(), avg_duration_ms: number()}}
+          | {:error, :database_error}
   def stats(opts) do
-    since = Keyword.get(opts, :since)
-    user_id = Keyword.get(opts, :user_id)
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
+    Arca.Repo.Errors.with_db_rescue("McpLog.stats", fn ->
+      since = Keyword.get(opts, :since)
+      user_id = Keyword.get(opts, :user_id)
+      athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-    query = Arca.QueryHelpers.where_athanor(__MODULE__, athanor_id)
+      query = Arca.QueryHelpers.where_athanor(__MODULE__, athanor_id)
 
-    query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
-    query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
+      query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
+      query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
 
-    total = Arca.Repo.aggregate(query, :count)
+      # One aggregate pass, not three — the same filter used to run as
+      # three separate queries.
+      row =
+        query
+        |> select([l], %{
+          total: count(l.id),
+          errors: fragment("SUM(CASE WHEN ? = 'error' THEN 1 ELSE 0 END)", l.status),
+          avg_duration: avg(l.duration_ms)
+        })
+        |> Arca.Repo.one()
 
-    errors =
-      query
-      |> where([l], l.status == "error")
-      |> Arca.Repo.aggregate(:count)
+      avg_duration =
+        case row.avg_duration do
+          nil -> 0
+          # Postgres returns a Decimal for AVG(); SQLite returns a float.
+          %Decimal{} = avg -> avg |> Decimal.to_float() |> round()
+          avg -> round(avg)
+        end
 
-    avg_duration =
-      case Arca.Repo.aggregate(query, :avg, :duration_ms) do
-        nil -> 0
-        # Postgres returns a Decimal for AVG(); SQLite returns a float.
-        %Decimal{} = avg -> avg |> Decimal.to_float() |> round()
-        avg -> round(avg)
-      end
-
-    %{total: total, errors: errors, avg_duration_ms: avg_duration}
+      {:ok, %{total: row.total, errors: normalize_count(row.errors), avg_duration_ms: avg_duration}}
+    end)
   end
+
+  defp normalize_count(nil), do: 0
+  defp normalize_count(%Decimal{} = d), do: Decimal.to_integer(d)
+  defp normalize_count(n) when is_integer(n), do: n
+  defp normalize_count(n) when is_float(n), do: round(n)
 end

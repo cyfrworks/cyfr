@@ -396,9 +396,12 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         |> maybe_put(:request_id, args["request_id"])
         |> maybe_put(:tool, args["tool"])
 
-      with {:ok, opts} <- parse_since_opt(opts, args["since"]) do
-        records = Arca.McpLog.list(opts)
+      with {:ok, opts} <- parse_since_opt(opts, args["since"]),
+           {:ok, records} <- Arca.McpLog.list(opts) do
         {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
+      else
+        {:error, :database_error} -> {:error, "Storage unavailable — try again shortly"}
+        {:error, _} = err -> err
       end
     end
   end
@@ -406,9 +409,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   def handle("mcp_log", %Context{} = ctx, %{"action" => "correlate", "request_id" => request_id}) do
     with :ok <- tenant_gate(ctx) do
       mcp_logs =
-        [request_id: request_id, limit: 100, athanor_id: ctx.athanor_id]
-        |> Arca.McpLog.list()
-        |> Enum.map(&mcp_log_to_map/1)
+        case Arca.McpLog.list(request_id: request_id, limit: 100, athanor_id: ctx.athanor_id) do
+          {:ok, rows} -> Enum.map(rows, &mcp_log_to_map/1)
+          {:error, _} -> []
+        end
 
       executions =
         ctx
@@ -423,8 +427,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         ]
 
       policy_logs =
-        Arca.PolicyLog.list(policy_log_opts)
-        |> Enum.map(&policy_log_to_map/1)
+        case Arca.PolicyLog.list(policy_log_opts) do
+          {:ok, rows} -> Enum.map(rows, &policy_log_to_map/1)
+          {:error, _} -> []
+        end
 
       {:ok,
        %{
@@ -466,17 +472,25 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
       opts = [since: since, athanor_id: ctx.athanor_id]
-      stats = Arca.McpLog.stats(opts)
 
-      {:ok,
-       %{
-         since: DateTime.to_iso8601(since),
-         total: stats.total,
-         errors: stats.errors,
-         avg_duration_ms: stats.avg_duration_ms,
-         error_rate:
-           if(stats.total > 0, do: Float.round(stats.errors / stats.total * 100, 1), else: 0.0)
-       }}
+      case Arca.McpLog.stats(opts) do
+        {:ok, stats} ->
+          {:ok,
+           %{
+             since: DateTime.to_iso8601(since),
+             total: stats.total,
+             errors: stats.errors,
+             avg_duration_ms: stats.avg_duration_ms,
+             error_rate:
+               if(stats.total > 0,
+                 do: Float.round(stats.errors / stats.total * 100, 1),
+                 else: 0.0
+               )
+           }}
+
+        {:error, :database_error} ->
+          {:error, "Storage unavailable — try again shortly"}
+      end
     end
   end
 
@@ -519,8 +533,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         |> maybe_put(:execution_id, args["execution_id"])
         |> maybe_put(:event_type, args["event_type"])
 
-      records = Arca.PolicyLog.list(opts)
-      {:ok, %{logs: Enum.map(records, &policy_log_to_map/1)}}
+      case Arca.PolicyLog.list(opts) do
+        {:ok, records} -> {:ok, %{logs: Enum.map(records, &policy_log_to_map/1)}}
+        {:error, :database_error} -> {:error, "Storage unavailable — try again shortly"}
+      end
     end
   end
 
@@ -537,8 +553,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         ]
 
       policy_logs =
-        Arca.PolicyLog.list(opts)
-        |> Enum.map(&policy_log_to_map/1)
+        case Arca.PolicyLog.list(opts) do
+          {:ok, rows} -> Enum.map(rows, &policy_log_to_map/1)
+          {:error, _} -> []
+        end
 
       {:ok, %{request_id: request_id, policy_logs: policy_logs}}
     end

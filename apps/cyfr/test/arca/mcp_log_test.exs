@@ -111,7 +111,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_l1", timestamp: t1}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_l2", timestamp: t2}))
 
-      logs = McpLog.list(athanor_id: "ath_test")
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test")
       ids = Enum.map(logs, & &1.id)
       assert "req_l2" in ids
       assert "req_l1" in ids
@@ -124,7 +124,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu1", user_id: "alice"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu2", user_id: "bob"}))
 
-      logs = McpLog.list(athanor_id: "ath_test", user_id: "alice")
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -132,7 +132,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs1", status: "success"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs2", status: "error"}))
 
-      logs = McpLog.list(athanor_id: "ath_test", status: "error")
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test", status: "error")
       assert logs != []
       assert Enum.all?(logs, &(&1.status == "error"))
     end
@@ -144,7 +144,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "call_a1", request_id: "req_root_a"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_root_b", request_id: "req_root_b"}))
 
-      logs = McpLog.list(athanor_id: "ath_test", request_id: "req_root_a")
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test", request_id: "req_root_a")
       assert logs != []
       assert length(logs) == 2
       assert Enum.all?(logs, &(&1.request_id == "req_root_a"))
@@ -155,7 +155,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft1", tool: "storage"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft2", tool: "execution"}))
 
-      logs = McpLog.list(athanor_id: "ath_test", tool: "storage")
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test", tool: "storage")
       assert logs != []
       assert Enum.all?(logs, &(&1.tool == "storage"))
     end
@@ -166,7 +166,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_since2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      logs = McpLog.list(athanor_id: "ath_test", since: cutoff)
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test", since: cutoff)
       ids = Enum.map(logs, & &1.id)
       assert "req_since2" in ids
       refute "req_since1" in ids
@@ -177,7 +177,7 @@ defmodule Arca.McpLogTest do
         {:ok, _} = McpLog.record(log_attrs(%{id: "req_lim_#{i}"}))
       end
 
-      logs = McpLog.list(athanor_id: "ath_test", limit: 2)
+      {:ok, logs} = McpLog.list(athanor_id: "ath_test", limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -296,7 +296,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_st2", status: "success", duration_ms: 200}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_st3", status: "error", duration_ms: 50}))
 
-      stats = McpLog.stats(athanor_id: "ath_test")
+      {:ok, stats} = McpLog.stats(athanor_id: "ath_test")
       assert stats.total >= 3
       assert stats.errors >= 1
       assert is_integer(stats.avg_duration_ms)
@@ -314,7 +314,7 @@ defmodule Arca.McpLogTest do
         )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      stats = McpLog.stats(athanor_id: "ath_test", since: cutoff)
+      {:ok, stats} = McpLog.stats(athanor_id: "ath_test", since: cutoff)
       # Only recent log should be counted
       assert stats.total >= 1
     end
@@ -330,8 +330,8 @@ defmodule Arca.McpLogTest do
       {:ok, _} =
         McpLog.record(log_attrs(%{id: "req_iso_b", athanor_id: ctx_b.athanor_id}))
 
-      logs_a = McpLog.list(athanor_id: ctx_a.athanor_id)
-      logs_b = McpLog.list(athanor_id: ctx_b.athanor_id)
+      {:ok, logs_a} = McpLog.list(athanor_id: ctx_a.athanor_id)
+      {:ok, logs_b} = McpLog.list(athanor_id: ctx_b.athanor_id)
 
       ids_a = Enum.map(logs_a, & &1.id)
       ids_b = Enum.map(logs_b, & &1.id)
@@ -363,8 +363,8 @@ defmodule Arca.McpLogTest do
           })
         )
 
-      stats_a = McpLog.stats(athanor_id: ctx_a.athanor_id)
-      stats_b = McpLog.stats(athanor_id: ctx_b.athanor_id)
+      {:ok, stats_a} = McpLog.stats(athanor_id: ctx_a.athanor_id)
+      {:ok, stats_b} = McpLog.stats(athanor_id: ctx_b.athanor_id)
 
       assert stats_a.errors >= 1
       assert stats_b.errors == 0

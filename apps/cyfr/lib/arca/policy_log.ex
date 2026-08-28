@@ -97,7 +97,12 @@ defmodule Arca.PolicyLog do
   - `:execution_id` - Filter by execution ID
   - `:event_type` - Filter by event type
   """
+  @spec list(keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list(opts) do
+    Arca.Repo.Errors.with_db_rescue("PolicyLog.list", fn -> {:ok, do_list(opts)} end)
+  end
+
+  defp do_list(opts) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     request_id = Keyword.get(opts, :request_id)

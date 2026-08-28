@@ -54,7 +54,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_1", timestamp: t1}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_2", timestamp: t2}))
 
-      logs = PolicyLog.list(athanor_id: "ath_test")
+      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test")
       ids = Enum.map(logs, & &1.id)
       assert "pl_list_2" in ids
       assert "pl_list_1" in ids
@@ -68,7 +68,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u1", user_id: "alice"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u2", user_id: "bob"}))
 
-      logs = PolicyLog.list(athanor_id: "ath_test", user_id: "alice")
+      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -76,7 +76,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r1", request_id: "req_123"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r2", request_id: "req_456"}))
 
-      logs = PolicyLog.list(athanor_id: "ath_test", request_id: "req_123")
+      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", request_id: "req_123")
       assert logs != []
       assert Enum.all?(logs, &(&1.request_id == "req_123"))
     end
@@ -85,7 +85,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e1", execution_id: "exec_1"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e2", execution_id: "exec_2"}))
 
-      logs = PolicyLog.list(athanor_id: "ath_test", execution_id: "exec_1")
+      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", execution_id: "exec_1")
       assert logs != []
       assert Enum.all?(logs, &(&1.execution_id == "exec_1"))
     end
@@ -94,7 +94,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et1", event_type: "denied"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et2", event_type: "violation"}))
 
-      logs = PolicyLog.list(athanor_id: "ath_test", event_type: "denied")
+      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", event_type: "denied")
       assert logs != []
       assert Enum.all?(logs, &(&1.event_type == "denied"))
     end
@@ -104,7 +104,7 @@ defmodule Arca.PolicyLogTest do
         {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_lim_#{i}"}))
       end
 
-      logs = PolicyLog.list(athanor_id: "ath_test", limit: 2)
+      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -219,8 +219,8 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} =
         PolicyLog.record(log_attrs(%{id: "pl_iso_b", athanor_id: ctx_b.athanor_id}))
 
-      logs_a = PolicyLog.list(athanor_id: ctx_a.athanor_id)
-      logs_b = PolicyLog.list(athanor_id: ctx_b.athanor_id)
+      {:ok, logs_a} = PolicyLog.list(athanor_id: ctx_a.athanor_id)
+      {:ok, logs_b} = PolicyLog.list(athanor_id: ctx_b.athanor_id)
 
       ids_a = Enum.map(logs_a, & &1.id)
       ids_b = Enum.map(logs_b, & &1.id)
