@@ -33,7 +33,7 @@ defmodule Cyfr.PathSafety do
 
   No unicode normalization happens here — this module validates, it never
   transforms, and the layer stores exactly the bytes it is given. The one
-  ingress of user-chosen names (`Prism.Attachments.safe_filename/1`)
+  ingress of user-chosen names (`Aqua.Attachments.safe_filename/1`)
   NFC-normalizes before the bytes get here.
   """
 

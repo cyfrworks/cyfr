@@ -4,7 +4,7 @@
 defmodule Arca.ConversationStorage do
   @moduledoc """
   Persistence for the athanor's conversations and their messages — the
-  durable record every member reads (`Prism.ConversationRunner` writes it,
+  durable record every member reads (`Aqua.ConversationRunner` writes it,
   `PrismWeb.ConversationLive` shows it).
 
   A conversation belongs to the athanor of the context that opened it;
@@ -152,7 +152,7 @@ defmodule Arca.ConversationStorage do
   Reclaim conversation blob directories no row backs — the retention
   sweep's leg. The directories are snapshotted FIRST, then the surviving
   rows: blobs are only ever written under an existing conversation row
-  (`Prism.Attachments`), so a snapshotted directory either has a row
+  (`Aqua.Attachments`), so a snapshotted directory either has a row
   (kept) or is a genuine orphan — a concurrent create can never lose its
   bytes to this sweep.
   """

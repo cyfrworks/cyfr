@@ -208,7 +208,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :locus, :build, :stop] => %{consumers: [:bridge]},
 
     # ——— agents ———
-    [:cyfr, :prism, :aqua, :approval] => %{
+    [:cyfr, :aqua, :approval] => %{
       consumers: [:audit],
       note: "a person approved or declined an agent's proposed action"
     },

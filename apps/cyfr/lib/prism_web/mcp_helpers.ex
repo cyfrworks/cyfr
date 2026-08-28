@@ -41,7 +41,7 @@ defmodule PrismWeb.MCPHelpers do
   @doc """
   Call an MCP tool with the socket's context, or with a context directly.
 
-  The second shape is for work a page hands to `Prism.TaskSupervisor`: a
+  The second shape is for work a page hands to `Aqua.TaskSupervisor`: a
   task has the context but no socket, which is why those call sites used to
   reach past this module and spell the registry call themselves — losing
   the `"tool/action"` split with them.

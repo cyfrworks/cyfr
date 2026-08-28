@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AgentConfig do
+defmodule Aqua.AgentConfig do
   require Logger
 
   @moduledoc """
@@ -326,7 +326,7 @@ defmodule Prism.AgentConfig do
         # Fail-open by design — an agent without instructions still runs —
         # but never silently: the substitution is an operator-visible fact.
         Logger.error(
-          "[Prism.AgentConfig] orchestrator #{inspect(orchestrator_name)} has no readable " <>
+          "[Aqua.AgentConfig] orchestrator #{inspect(orchestrator_name)} has no readable " <>
             "instructions — running on the generic fallback prompt"
         )
 

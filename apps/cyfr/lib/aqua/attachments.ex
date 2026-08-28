@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.Attachments do
+defmodule Aqua.Attachments do
   @moduledoc """
   The files members attach to chat messages, stored as blobs under the
   athanor's own storage — `conversations/<conversation>/<message>/<n>-<name>`
@@ -81,7 +81,7 @@ defmodule Prism.Attachments do
 
           {:error, reason} ->
             Logger.warning(
-              "[Prism.Attachments] storing #{inspect(stored_name)} failed: " <>
+              "[Aqua.Attachments] storing #{inspect(stored_name)} failed: " <>
                 "#{inspect(reason)}; removing #{length(refs)} already-written file(s)"
             )
 

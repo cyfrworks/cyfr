@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AttachmentsTest.FailingAdapter do
+defmodule Aqua.AttachmentsTest.FailingAdapter do
   @moduledoc false
   use Arca.Storage.TestDouble
 
@@ -9,17 +9,17 @@ defmodule Prism.AttachmentsTest.FailingAdapter do
   def put(ctx, path, content), do: Arca.Adapters.Local.put(ctx, path, content)
 end
 
-defmodule Prism.AttachmentsTest.UnverifiableUsageAdapter do
+defmodule Aqua.AttachmentsTest.UnverifiableUsageAdapter do
   @moduledoc false
   use Arca.Storage.TestDouble
 
   def usage(_ctx, _path), do: {:error, {:usage_walk, "unreachable", :eacces}}
 end
 
-defmodule Prism.AttachmentsTest do
+defmodule Aqua.AttachmentsTest do
   use ExUnit.Case, async: false
 
-  alias Prism.Attachments
+  alias Aqua.Attachments
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -121,7 +121,7 @@ defmodule Prism.AttachmentsTest do
     # The adapter seam is the designed swap point: fail the write whose
     # content says so, after earlier files already landed.
     original = Application.get_env(:cyfr, :storage_adapter)
-    Application.put_env(:cyfr, :storage_adapter, Prism.AttachmentsTest.FailingAdapter)
+    Application.put_env(:cyfr, :storage_adapter, Aqua.AttachmentsTest.FailingAdapter)
 
     on_exit(fn ->
       if original,
@@ -169,7 +169,7 @@ defmodule Prism.AttachmentsTest do
     Arca.Usage.invalidate(ctx.athanor_id)
 
     prev = Application.get_env(:cyfr, :storage_adapter)
-    Application.put_env(:cyfr, :storage_adapter, Prism.AttachmentsTest.UnverifiableUsageAdapter)
+    Application.put_env(:cyfr, :storage_adapter, Aqua.AttachmentsTest.UnverifiableUsageAdapter)
 
     on_exit(fn ->
       if prev,

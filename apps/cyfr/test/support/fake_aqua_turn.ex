@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.FakeAquaTurn do
+defmodule Aqua.FakeTurn do
   @moduledoc """
-  A stand-in for the engine half of `Prism.AquaTurn` — what
-  `Prism.ConversationRunner` calls to start, follow, cancel and act on a
+  A stand-in for the engine half of `Aqua.Turn` — what
+  `Aqua.ConversationRunner` calls to start, follow, cancel and act on a
   turn. Every call is reported to the listener process (`listen/0`), and
   the test drives the turn by sending execution events to the runner it
   subscribed from. Nothing here touches Opus.
 
-  Set `config :cyfr, :aqua_turn, Prism.FakeAquaTurn` (per test, restored on
+  Set `config :cyfr, :aqua_turn, Aqua.FakeTurn` (per test, restored on
   exit) before the runner under test starts.
   """
 

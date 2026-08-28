@@ -195,7 +195,7 @@ defmodule Emissary.MCP.ExternalProvider do
                 "inputSchema" => Sanctum.ToolServerDigest.normalize_input_schema(tool),
                 # Pass through upstream MCP-spec hints. AQUA classifies any
                 # `server:tool`-namespaced tool as `:external` via
-                # `Prism.AquaActions.kind_for/2`; no per-action annotation
+                # `Aqua.Actions.kind_for/2`; no per-action annotation
                 # needed. Users still override per-action in their
                 # tool_policy if they want to auto-allow trusted reads.
                 #

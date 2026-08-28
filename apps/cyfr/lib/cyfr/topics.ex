@@ -15,6 +15,11 @@ defmodule Cyfr.Topics do
   Naming them here makes a rename a compile error. `Sanctum.Notify` proves the
   shape: one function for the topic, a `@type` for what rides on it.
 
+  The `"prism:"` string prefix is historical and deliberately stable: it is
+  an in-VM PubSub address, not a module reference, and the aqua domain and
+  the console both speak it through this module — the one place its
+  spelling exists.
+
   ## Athanor-scoped topics
 
   These carry tenant data and go through `Sanctum.PubSub.topic/2`, which
@@ -190,7 +195,7 @@ defmodule Cyfr.Topics do
     do: PubSub.topic("execution:events:#{execution_id}", athanor)
 
   @doc """
-  One conversation's live events, fanned out by `Prism.ConversationRunner`.
+  One conversation's live events, fanned out by `Aqua.ConversationRunner`.
 
   Messages: `{:conversation, conversation_id, event}` — the event shapes
   are documented on the runner, which owns a turn's vocabulary.

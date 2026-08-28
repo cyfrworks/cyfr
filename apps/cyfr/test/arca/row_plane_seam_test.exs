@@ -35,6 +35,7 @@ defmodule Arca.RowPlaneSeamTest do
     apps/cyfr/lib/emissary_web
     apps/cyfr/lib/prism
     apps/cyfr/lib/prism_web
+    apps/cyfr/lib/aqua
     apps/cyfr/lib/compendium
   )
 

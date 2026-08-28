@@ -21,7 +21,7 @@ defmodule PrismWeb.AuthHelpers do
   @spec authenticate_session(String.t() | nil, String.t() | nil) ::
           {:ok, Context.t()} | {:error, Caller.refusal()}
   def authenticate_session(token, athanor_id \\ nil) do
-    case Caller.establish(token, focus: athanor_id, task_supervisor: Prism.TaskSupervisor) do
+    case Caller.establish(token, focus: athanor_id, task_supervisor: Aqua.TaskSupervisor) do
       {:ok, ctx} ->
         Cyfr.LoggerContext.set_from_context(ctx)
         {:ok, ctx}

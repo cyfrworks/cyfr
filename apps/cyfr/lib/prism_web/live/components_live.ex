@@ -115,7 +115,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
 
            result =
@@ -174,7 +174,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
 
            result =
@@ -274,7 +274,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
 
            result =
@@ -729,7 +729,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
 
       readiness =

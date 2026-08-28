@@ -8,7 +8,7 @@ defmodule PrismWeb.ToolSeamTest do
 
   Eight console call sites reached past it and spelled
   `ToolRegistry.call_external/3` themselves, all for the same reason:
-  `call_tool/3` wanted a socket, and work handed to `Prism.TaskSupervisor`
+  `call_tool/3` wanted a socket, and work handed to `Aqua.TaskSupervisor`
   has a context and no socket. The seam takes a context now, so the reason
   is gone — and this test is what keeps the sites from coming back.
   """

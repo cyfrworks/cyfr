@@ -131,7 +131,7 @@ defmodule PrismWeb.ShellLive do
         Arca.Cache.put(scan_key, true, :timer.seconds(60))
         logger_metadata = Cyfr.LoggerContext.capture()
 
-        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
 
           try do

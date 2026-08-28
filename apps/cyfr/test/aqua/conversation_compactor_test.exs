@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.ConversationCompactorTest do
+defmodule Aqua.ConversationCompactorTest do
   use ExUnit.Case, async: true
 
-  alias Prism.ConversationCompactor
+  alias Aqua.ConversationCompactor
 
   describe "compact/1" do
     test "passes through short conversations unchanged" do
@@ -390,7 +390,7 @@ defmodule Prism.ConversationCompactorTest do
           }
         end
 
-      compacted = Prism.ConversationCompactor.compact(messages)
+      compacted = Aqua.ConversationCompactor.compact(messages)
 
       refute compacted == messages,
              "a history of ~1.2MB of tool arguments was passed through untouched"
@@ -398,7 +398,7 @@ defmodule Prism.ConversationCompactorTest do
 
     test "an unencodable term does not take the turn down" do
       messages = [%{"role" => "user", "content" => [%{"pid" => self()}]}]
-      assert is_list(Prism.ConversationCompactor.compact(messages))
+      assert is_list(Aqua.ConversationCompactor.compact(messages))
     end
 
     test "small histories still pass through untouched" do
@@ -407,7 +407,7 @@ defmodule Prism.ConversationCompactorTest do
         %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "hi"}]}
       ]
 
-      assert Prism.ConversationCompactor.compact(messages) == messages
+      assert Aqua.ConversationCompactor.compact(messages) == messages
     end
   end
 end

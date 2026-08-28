@@ -5,7 +5,7 @@ defmodule PrismWeb.ConversationLive do
   @moduledoc """
   The athanor's chat — where `/a/<athanor>` lands.
 
-  A window onto `Prism.ConversationRunner`: the thread is the conversation's
+  A window onto `Aqua.ConversationRunner`: the thread is the conversation's
   rows plus whatever the runner is streaming right now, and every action
   (send, stop, approve, decline) is a call into the runner with this
   member's context. Two members with the same conversation open see the
@@ -21,7 +21,7 @@ defmodule PrismWeb.ConversationLive do
 
   alias Arca.ConversationStorage, as: Conversations
   alias Phoenix.LiveView.JS
-  alias Prism.ConversationRunner
+  alias Aqua.ConversationRunner
 
   @list_models_ref "formula:local.list-models"
 
@@ -59,10 +59,10 @@ defmodule PrismWeb.ConversationLive do
       |> assign(:answer_mode, answer_mode(socket))
       |> allow_upload(:attachments,
         accept: :any,
-        max_entries: Prism.Attachments.limits().max_files,
+        max_entries: Aqua.Attachments.limits().max_files,
         # 20 MB — sized with EmissaryWeb.Endpoint's Plug.Parsers :length so a
         # base64-encoded attachment of this size fits through POST /mcp.
-        max_file_size: Prism.Attachments.limits().max_file_bytes,
+        max_file_size: Aqua.Attachments.limits().max_file_bytes,
         auto_upload: true
       )
 
@@ -70,7 +70,7 @@ defmodule PrismWeb.ConversationLive do
       if connected?(socket) and ctx do
         Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
 
-        orchestrators = Prism.AquaTurn.orchestrators(ctx)
+        orchestrators = Aqua.Turn.orchestrators(ctx)
 
         socket
         |> assign(:orchestrators, orchestrators)
@@ -298,7 +298,7 @@ defmodule PrismWeb.ConversationLive do
 
     # The turn may be running in a thread this tab is not looking at: the
     # runner is the fact, not what this socket happens to be rendering.
-    if Prism.ConversationRunner.turn_running?(ctx, id) do
+    if Aqua.ConversationRunner.turn_running?(ctx, id) do
       {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
     else
       case Conversations.delete(ctx, id) do
@@ -321,7 +321,7 @@ defmodule PrismWeb.ConversationLive do
 
   def handle_event("select_orchestrator", %{"name" => name}, socket) do
     ctx = socket.assigns.context
-    {:noreply, assign(socket, :orchestrator, Prism.AquaTurn.orchestrator(ctx, name))}
+    {:noreply, assign(socket, :orchestrator, Aqua.Turn.orchestrator(ctx, name))}
   end
 
   def handle_event("select_model", %{"model" => model}, socket) do
@@ -595,7 +595,7 @@ defmodule PrismWeb.ConversationLive do
     message_id = Cyfr.UUID7.generate_id("msg")
 
     with {:ok, conv} <- current_or_new(socket),
-         {:ok, refs} <- Prism.Attachments.store(ctx, conv.id, message_id, files),
+         {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files),
          :ok <-
            send_or_discard(ctx, conv, message, message_id, refs, socket) do
       socket = assign(socket, :input, "")
@@ -665,7 +665,7 @@ defmodule PrismWeb.ConversationLive do
         :ok
 
       {:error, _reason} = error ->
-        Prism.Attachments.discard(ctx, conv.id, message_id, refs)
+        Aqua.Attachments.discard(ctx, conv.id, message_id, refs)
         error
     end
   end
@@ -709,7 +709,7 @@ defmodule PrismWeb.ConversationLive do
   # model with a key behind it. A fresh furnace has neither, and the chat is
   # where someone finds that out — not the drawer.
   defp model_ready(ctx, orchestrators) do
-    case Prism.AgentConfig.model_status(ctx, orchestrators) do
+    case Aqua.AgentConfig.model_status(ctx, orchestrators) do
       empty when map_size(empty) == 0 -> :no_model
       statuses -> if Enum.any?(statuses, &match?({_, {:ready, _}}, &1)), do: :ready, else: :no_key
     end
@@ -796,7 +796,7 @@ defmodule PrismWeb.ConversationLive do
     if Cyfr.Execution.available?() do
       logger_metadata = Cyfr.LoggerContext.capture()
 
-      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
 
         result =
@@ -1276,7 +1276,7 @@ defmodule PrismWeb.ConversationLive do
   defp message_bubble(assigns) do
     # Strip aqua-actions blocks for display, then trim — a stray block or the
     # model's surrounding whitespace would inflate the bubble.
-    display = assigns.content |> Prism.AquaActions.strip_blocks() |> String.trim()
+    display = assigns.content |> Aqua.Actions.strip_blocks() |> String.trim()
     assigns = assign(assigns, :display_content, display)
 
     ~H"""

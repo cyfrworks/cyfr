@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AquaActionsTest do
+defmodule Aqua.ActionsTest do
   use ExUnit.Case, async: true
 
-  alias Prism.AquaActions
+  alias Aqua.Actions, as: AquaActions
 
   # New-model allowlist: keys are `tool.action` (or `tool.*` globs), values are
   # "ask" (request approval) or "auto" (call directly). An absent key means the

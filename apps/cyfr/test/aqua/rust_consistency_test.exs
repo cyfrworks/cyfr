@@ -2,14 +2,14 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Prism.AquaRustConsistencyTest do
   # The agent's virtual tools are defined twice: in Rust, where they are
-  # dispatched, and in `Prism.AquaVirtualTools`, where the harness classifies
+  # dispatched, and in `Aqua.VirtualTools`, where the harness classifies
   # and displays them. Nothing kept the two in step, and they had already
   # drifted — the Rust `http` tool grew a `read` verb the Elixir catalog
   # never learned about, so `kind_for/2` returned nil for it and it would
   # have had no plane either.
   use ExUnit.Case, async: true
 
-  alias Prism.AquaVirtualTools
+  alias Aqua.VirtualTools, as: AquaVirtualTools
 
   @aqua_glob Path.join([
                __DIR__,

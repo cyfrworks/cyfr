@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.ConversationRunnerTest do
+defmodule Aqua.ConversationRunnerTest do
   # The runner owns the turn: rows and broadcasts come from it, not from a
   # browser session. Driven here with the fake engine — the turn's events
   # are sent to the runner the way Opus would deliver them.
   use ExUnit.Case, async: false
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Prism.ConversationRunner
+  alias Aqua.ConversationRunner
   alias Sanctum.Context
 
   setup do
@@ -21,13 +21,13 @@ defmodule Prism.ConversationRunnerTest do
     test_path = Path.join(System.tmp_dir!(), "conv_runner_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :aqua_turn, Prism.FakeAquaTurn)
-    Prism.FakeAquaTurn.listen()
+    Application.put_env(:cyfr, :aqua_turn, Aqua.FakeTurn)
+    Aqua.FakeTurn.listen()
 
     on_exit(fn ->
-      for {_id, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor),
+      for {_id, pid, _, _} <- DynamicSupervisor.which_children(Aqua.ConversationSupervisor),
           is_pid(pid) do
-        DynamicSupervisor.terminate_child(Prism.ConversationSupervisor, pid)
+        DynamicSupervisor.terminate_child(Aqua.ConversationSupervisor, pid)
       end
 
       Application.delete_env(:cyfr, :aqua_turn)
@@ -533,7 +533,7 @@ defmodule Prism.ConversationRunnerTest do
        %{alice: alice, conv: conv} do
     {eid, runner, _} = start_turn(alice, conv, "long question")
 
-    :ok = DynamicSupervisor.terminate_child(Prism.ConversationSupervisor, runner)
+    :ok = DynamicSupervisor.terminate_child(Aqua.ConversationSupervisor, runner)
     assert_receive {:conversation, _, {:message, %{kind: "system", content: text}}}, 5_000
     assert text =~ "the server stopped"
     assert_receive {:fake_cancel, ^eid}, 5_000

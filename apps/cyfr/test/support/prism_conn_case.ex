@@ -48,7 +48,7 @@ defmodule PrismWeb.ConnCase do
     # holding the sandbox connection makes the next test's first write
     # find the database busy.
     supervisors =
-      for name <- [Prism.TaskSupervisor, Emissary.TaskSupervisor],
+      for name <- [Aqua.TaskSupervisor, Emissary.TaskSupervisor],
           pid = Process.whereis(name),
           is_pid(pid) do
         Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, pid)
@@ -62,9 +62,9 @@ defmodule PrismWeb.ConnCase do
 
       # Conversation runners the chat page started idle out on their own,
       # which is far too late for the next test's sandbox.
-      for {_, pid, _, _} <- DynamicSupervisor.which_children(Prism.ConversationSupervisor),
+      for {_, pid, _, _} <- DynamicSupervisor.which_children(Aqua.ConversationSupervisor),
           is_pid(pid) do
-        DynamicSupervisor.terminate_child(Prism.ConversationSupervisor, pid)
+        DynamicSupervisor.terminate_child(Aqua.ConversationSupervisor, pid)
       end
     end)
 

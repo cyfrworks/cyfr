@@ -58,7 +58,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Emissary.MCP.ToolRegistry
-  alias Prism.AquaVirtualTools
+  alias Aqua.VirtualTools, as: AquaVirtualTools
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
   # The root suite loads all eight; assert the count so a standalone run

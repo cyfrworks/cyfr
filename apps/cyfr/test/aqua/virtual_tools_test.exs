@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AquaVirtualToolsTest do
+defmodule Aqua.VirtualToolsTest do
   use ExUnit.Case, async: true
 
-  alias Prism.AquaVirtualTools
+  alias Aqua.VirtualTools, as: AquaVirtualTools
 
   describe "catalog/0" do
     test "exposes the four expected virtual tools" do

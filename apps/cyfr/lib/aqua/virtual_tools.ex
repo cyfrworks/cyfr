@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AquaVirtualTools do
+defmodule Aqua.VirtualTools do
   @moduledoc """
   Catalog for AQUA virtual tools — `files`, `storage`, `http`, `request_setup`.
 

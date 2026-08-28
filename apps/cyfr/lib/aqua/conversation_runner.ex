@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.ConversationRunner do
+defmodule Aqua.ConversationRunner do
   @moduledoc """
   The process that owns a conversation's turn.
 
   One runner per conversation, started on demand under
-  `Prism.ConversationSupervisor` and found through
-  `Prism.ConversationRegistry`. A browser session never owns a turn: the
+  `Aqua.ConversationSupervisor` and found through
+  `Aqua.ConversationRegistry`. A browser session never owns a turn: the
   runner starts the AQUA execution, follows its events, writes the rows
   (`Arca.ConversationStorage`) and broadcasts what changed on `topic/1`, so
   every member watching the thread sees the same stream, a closed tab
@@ -56,7 +56,7 @@ defmodule Prism.ConversationRunner do
   next start (`recover_all/0`) or, if it finished meanwhile, closed off.
 
   The turn itself — the formula input, the execution, its events — is
-  `Prism.AquaTurn`; the module is read from `:cyfr, :aqua_turn` when a
+  `Aqua.Turn`; the module is read from `:cyfr, :aqua_turn` when a
   runner starts so a suite can stand in a fake engine.
   """
 
@@ -65,7 +65,8 @@ defmodule Prism.ConversationRunner do
   require Logger
 
   alias Arca.ConversationStorage, as: Conversations
-  alias Prism.{AquaTurn, Attachments}
+  alias Aqua.Attachments
+  alias Aqua.Turn, as: AquaTurn
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
@@ -91,19 +92,19 @@ defmodule Prism.ConversationRunner do
     GenServer.start_link(__MODULE__, {conversation_id, athanor_id}, name: via(conversation_id))
   end
 
-  defp via(conversation_id), do: {:via, Registry, {Prism.ConversationRegistry, conversation_id}}
+  defp via(conversation_id), do: {:via, Registry, {Aqua.ConversationRegistry, conversation_id}}
 
   @doc "The runner for a conversation, started if it is not running."
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure(conversation_id, athanor_id)
       when is_binary(conversation_id) and is_binary(athanor_id) do
-    case Registry.lookup(Prism.ConversationRegistry, conversation_id) do
+    case Registry.lookup(Aqua.ConversationRegistry, conversation_id) do
       [{pid, _}] ->
         {:ok, pid}
 
       [] ->
         case DynamicSupervisor.start_child(
-               Prism.ConversationSupervisor,
+               Aqua.ConversationSupervisor,
                {__MODULE__, {conversation_id, athanor_id}}
              ) do
           {:ok, pid} -> {:ok, pid}
@@ -118,7 +119,7 @@ defmodule Prism.ConversationRunner do
   @doc "The runner's pid when one is running."
   @spec whereis(String.t()) :: pid() | nil
   def whereis(conversation_id) do
-    case Registry.lookup(Prism.ConversationRegistry, conversation_id) do
+    case Registry.lookup(Aqua.ConversationRegistry, conversation_id) do
       [{pid, _}] -> pid
       [] -> nil
     end
@@ -271,7 +272,7 @@ defmodule Prism.ConversationRunner do
     :ok
   rescue
     e ->
-      Logger.warning("[Prism.ConversationRunner] boot recovery skipped: #{Exception.message(e)}")
+      Logger.warning("[Aqua.ConversationRunner] boot recovery skipped: #{Exception.message(e)}")
       :ok
   end
 
@@ -471,7 +472,7 @@ defmodule Prism.ConversationRunner do
 
       logger_metadata = Cyfr.LoggerContext.capture()
 
-      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
         turn.cancel_for_restart(ctx, exec_id, payload)
       end)
@@ -628,7 +629,7 @@ defmodule Prism.ConversationRunner do
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
 
       result =
@@ -876,7 +877,7 @@ defmodule Prism.ConversationRunner do
   def handle_info(:idle, state), do: {:noreply, touch(state)}
 
   def handle_info(msg, state) do
-    Logger.warning("[Prism.ConversationRunner] unexpected message: #{inspect(msg)}")
+    Logger.warning("[Aqua.ConversationRunner] unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
 
@@ -926,7 +927,7 @@ defmodule Prism.ConversationRunner do
       # running server-side while this runner reports itself stopped —
       # that orphan must be visible.
       Logger.warning(
-        "[Prism.ConversationRunner] shutdown cancel failed for #{inspect(state.execution_id)}: " <>
+        "[Aqua.ConversationRunner] shutdown cancel failed for #{inspect(state.execution_id)}: " <>
           Exception.message(e)
       )
 
@@ -934,7 +935,7 @@ defmodule Prism.ConversationRunner do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Prism.ConversationRunner] shutdown cancel exited for #{inspect(state.execution_id)}: " <>
+        "[Aqua.ConversationRunner] shutdown cancel exited for #{inspect(state.execution_id)}: " <>
           inspect(reason)
       )
 
@@ -1017,7 +1018,7 @@ defmodule Prism.ConversationRunner do
             broadcast(state, {:message, row})
 
           {:error, reason} ->
-            Logger.error("[Prism.ConversationRunner] reply append failed: #{inspect(reason)}")
+            Logger.error("[Aqua.ConversationRunner] reply append failed: #{inspect(reason)}")
             broadcast(state, {:error, "The reply could not be saved"})
         end
       else
@@ -1041,7 +1042,7 @@ defmodule Prism.ConversationRunner do
             [row]
 
           {:error, reason} ->
-            Logger.error("[Prism.ConversationRunner] approval append failed: #{inspect(reason)}")
+            Logger.error("[Aqua.ConversationRunner] approval append failed: #{inspect(reason)}")
 
             []
         end
@@ -1125,7 +1126,7 @@ defmodule Prism.ConversationRunner do
 
       logger_metadata = Cyfr.LoggerContext.capture()
 
-      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
         turn.cancel(ctx, exec_id)
       end)
@@ -1171,7 +1172,7 @@ defmodule Prism.ConversationRunner do
     # Bounded at the point of persistence, not only on the way into the
     # model: without this the row, the runner heap and every future JSON
     # decode of the history grew without limit.
-    history = Prism.ConversationCompactor.compact(state.history)
+    history = Aqua.ConversationCompactor.compact(state.history)
 
     Conversations.update(state.system_ctx, state.id, %{
       history: history,
@@ -1218,7 +1219,7 @@ defmodule Prism.ConversationRunner do
 
         logger_metadata = Cyfr.LoggerContext.capture()
 
-        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+        Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
 
           result =
@@ -1270,13 +1271,13 @@ defmodule Prism.ConversationRunner do
           :ok
 
         name ->
-          case Prism.AgentConfig.set_tool_auto(ctx, name, "#{tool}.#{action}") do
+          case Aqua.AgentConfig.set_tool_auto(ctx, name, "#{tool}.#{action}") do
             :ok ->
               :ok
 
             {:error, reason} ->
               Logger.warning(
-                "[Prism.ConversationRunner] could not persist always for #{tool}.#{action}: " <>
+                "[Aqua.ConversationRunner] could not persist always for #{tool}.#{action}: " <>
                   inspect(reason)
               )
           end
@@ -1292,7 +1293,7 @@ defmodule Prism.ConversationRunner do
   defp drop_from_policy(ctx, msg) do
     with %{tool: tool, action: action} <- proposal_of(approval_intent(msg)),
          name when is_binary(name) <- approval_orchestrator(msg) do
-      Prism.AgentConfig.drop_tool(ctx, name, "#{tool}.#{action}")
+      Aqua.AgentConfig.drop_tool(ctx, name, "#{tool}.#{action}")
     end
 
     :ok
@@ -1360,7 +1361,7 @@ defmodule Prism.ConversationRunner do
     proposal = proposal_of(approval_intent(msg)) || %{tool: nil, action: nil}
     intent = approval_intent(msg)
 
-    :telemetry.execute([:cyfr, :prism, :aqua, :approval], %{count: 1}, %{
+    :telemetry.execute([:cyfr, :aqua, :approval], %{count: 1}, %{
       id: msg.id,
       decision: outcome,
       scope: scope_atom(scope),
@@ -1378,7 +1379,7 @@ defmodule Prism.ConversationRunner do
     # it must leave a trace, even though it must not fail the decision.
     e ->
       Logger.warning(
-        "[Prism.ConversationRunner] approval telemetry dropped: " <> Exception.message(e)
+        "[Aqua.ConversationRunner] approval telemetry dropped: " <> Exception.message(e)
       )
 
       :ok

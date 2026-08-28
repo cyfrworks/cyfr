@@ -26,7 +26,7 @@ defmodule PrismWeb.AgentsLive.Catalog do
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   An action without a kind annotation is not policy-manageable — the
-  policy plane (`Prism.AquaActions.kind_for/2`) refuses it, so it is
+  policy plane (`Aqua.Actions.kind_for/2`) refuses it, so it is
   logged and left off this catalogue rather than mislabeled `:write`.
   """
   def enumerate_tool_actions do
@@ -71,7 +71,7 @@ defmodule PrismWeb.AgentsLive.Catalog do
       end)
       |> Enum.reject(fn {_name, actions} -> actions == [] end)
 
-    virtual = Prism.AquaVirtualTools.list_for_panel()
+    virtual = Aqua.VirtualTools.list_for_panel()
 
     # `native_search` is a bare-tool exclusivity gate — has no actions but
     # appears in the policy as a single boolean key.

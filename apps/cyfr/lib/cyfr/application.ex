@@ -140,14 +140,14 @@ defmodule Cyfr.Application do
       # Prism dashboard
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
-      {Task.Supervisor, name: Prism.TaskSupervisor},
+      {Task.Supervisor, name: Aqua.TaskSupervisor},
       # Conversation runners: one process per conversation with a live
       # turn, started on demand; the recovery task re-follows the turns
       # that were running when the server last stopped. Registry and the
       # supervisor whose children register in it restart together.
-      group(Prism.ConversationTree, [
-        {Registry, keys: :unique, name: Prism.ConversationRegistry},
-        {DynamicSupervisor, name: Prism.ConversationSupervisor, strategy: :one_for_one},
+      group(Aqua.ConversationTree, [
+        {Registry, keys: :unique, name: Aqua.ConversationRegistry},
+        {DynamicSupervisor, name: Aqua.ConversationSupervisor, strategy: :one_for_one},
         maybe_conversation_recovery()
       ]),
       # Last: mints Home's rows from the seed union on first boot (the
@@ -181,8 +181,8 @@ defmodule Cyfr.Application do
     if Application.get_env(:cyfr, :conversation_recovery, true) do
       [
         Supervisor.child_spec(
-          {Task, &Prism.ConversationRunner.recover_all/0},
-          id: Prism.ConversationRecovery,
+          {Task, &Aqua.ConversationRunner.recover_all/0},
+          id: Aqua.ConversationRecovery,
           restart: :temporary
         )
       ]

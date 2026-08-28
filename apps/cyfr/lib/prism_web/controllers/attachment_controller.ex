@@ -12,7 +12,7 @@ defmodule PrismWeb.AttachmentController do
   way a LiveView mount focuses it (`Sanctum.Context.focus/2`, so a
   non-member gets nothing); the message is read tenant-scoped, the file
   must be one of the message's own refs, and the path served is rebuilt
-  from the row's identity (`Prism.Attachments.blob_path/3`) — never taken
+  from the row's identity (`Aqua.Attachments.blob_path/3`) — never taken
   from the URL or the stored payload. What comes back is a download with
   a content type from a short allowlist (anything else is
   `application/octet-stream`), `nosniff`, and no caching — the uploader's
@@ -35,7 +35,7 @@ defmodule PrismWeb.AttachmentController do
          {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),
          {:ok, msg} <- Conversations.get_message(ctx, message_id),
          {:ok, ref} <- find_ref(msg, filename),
-         {:ok, path} <- Prism.Attachments.blob_path(msg.conversation_id, msg.id, ref) do
+         {:ok, path} <- Aqua.Attachments.blob_path(msg.conversation_id, msg.id, ref) do
       conn
       |> put_resp_header("content-type", serve_type(ref["media_type"]))
       |> put_resp_header("content-disposition", disposition(ref["filename"]))
@@ -58,7 +58,7 @@ defmodule PrismWeb.AttachmentController do
   end
 
   defp find_ref(msg, stored_name) do
-    case Enum.find(Prism.Attachments.refs_of(msg), &(&1["stored_name"] == stored_name)) do
+    case Enum.find(Aqua.Attachments.refs_of(msg), &(&1["stored_name"] == stored_name)) do
       %{"stored_name" => _} = ref -> {:ok, ref}
       _ -> {:error, :not_found}
     end

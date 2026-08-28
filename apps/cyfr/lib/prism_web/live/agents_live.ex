@@ -146,7 +146,7 @@ defmodule PrismWeb.AgentsLive do
   # Add/remove a `tool.action` from an agent's allowlist. On add, the default
   # value is "auto" for reads (they never ask) and "ask" for everything else —
   # with the kind DERIVED here from the action's own annotation
-  # (`Prism.AquaActions.kind_for/2`), never taken off the wire: a client-sent
+  # (`Aqua.Actions.kind_for/2`), never taken off the wire: a client-sent
   # kind could name any action "read" and write "auto" for it with no card
   # ever shown. A key that resolves to no known action is refused.
   def handle_event(
@@ -359,7 +359,7 @@ defmodule PrismWeb.AgentsLive do
   # has never heard of (fail closed).
   defp resolved_kind(key) when is_binary(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Prism.AquaActions.kind_for(tool, action)
+      [tool, action] -> Aqua.Actions.kind_for(tool, action)
       _ -> nil
     end
   end
@@ -429,7 +429,7 @@ defmodule PrismWeb.AgentsLive do
 
     socket
     |> assign(:editor_agents, agents)
-    |> assign(:model_status, Prism.AgentConfig.model_status(ctx, agents))
+    |> assign(:model_status, Aqua.AgentConfig.model_status(ctx, agents))
     |> ensure_tool_actions_loaded()
   end
 
@@ -475,7 +475,7 @@ defmodule PrismWeb.AgentsLive do
 
       logger_metadata = Cyfr.LoggerContext.capture()
 
-      Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
 
         result =
@@ -911,7 +911,7 @@ defmodule PrismWeb.AgentsLive do
   end
 
   # One owner for the aqua call and its key normalization.
-  defp call_aqua(ctx, args), do: Prism.AgentConfig.call_aqua(ctx, args)
+  defp call_aqua(ctx, args), do: Aqua.AgentConfig.call_aqua(ctx, args)
 
   # Count of capabilities the agent runs without asking that *aren't* reads —
   # i.e. the write/execute actions the user has blanket-approved ("auto").

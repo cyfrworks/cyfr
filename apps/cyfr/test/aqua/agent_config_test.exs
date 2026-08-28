@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AgentConfigTest do
+defmodule Aqua.AgentConfigTest do
   # The agent's tool_policy is the athanor's: a chat decision that outlives
   # the turn ("always" / "never") edits that one allowlist in place, and the
   # athanor's definitions come from the shipped template on first read.
   use ExUnit.Case, async: false
 
-  alias Prism.AgentConfig
+  alias Aqua.AgentConfig
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -32,7 +32,7 @@ defmodule Prism.AgentConfigTest do
     {:ok, guide} =
       Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
-    Prism.AgentConfig.stringify_deep(guide)["tool_policy"]
+    Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end
 
   test "the shipped roster reads through the overlay — no copy is ever made", %{ctx: ctx} do

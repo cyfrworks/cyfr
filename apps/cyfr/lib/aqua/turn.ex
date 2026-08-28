@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AquaTurn do
+defmodule Aqua.Turn do
   @moduledoc """
   One AQUA turn, as data: the orchestrator lookup, the formula input a
   message becomes, the execution that runs it, and what its output turns
-  into afterwards. `Prism.ConversationRunner` owns the process; this
+  into afterwards. `Aqua.ConversationRunner` owns the process; this
   module owns the shapes, so the runner stays a small state machine and the
   turn can be exercised without one.
   """
@@ -110,18 +110,18 @@ defmodule Prism.AquaTurn do
     # orchestrator call-site. Sub-agents are scoped task-runners — they
     # never emit UI intents.
     system_prompt =
-      Prism.AgentConfig.build_system_prompt(ctx, name) <>
-        Prism.AquaActions.system_prelude(tool_policy) <>
+      Aqua.AgentConfig.build_system_prompt(ctx, name) <>
+        Aqua.Actions.system_prelude(tool_policy) <>
         group_prelude(Keyword.get(opts, :group, false))
 
     resolved_catalyst =
-      case Prism.AgentConfig.resolve_catalyst(ctx, orchestrator["catalyst_ref"]) do
+      case Aqua.AgentConfig.resolve_catalyst(ctx, orchestrator["catalyst_ref"]) do
         {:ok, ref} -> ref
         _ -> orchestrator["catalyst_ref"]
       end
 
     sub_agents =
-      Prism.AgentConfig.sub_agent_definitions(ctx, name, resolved_catalyst, orchestrator["model"])
+      Aqua.AgentConfig.sub_agent_definitions(ctx, name, resolved_catalyst, orchestrator["model"])
 
     input =
       %{
@@ -131,7 +131,7 @@ defmodule Prism.AquaTurn do
         "catalyst_ref" => resolved_catalyst,
         "model" => Keyword.get(opts, :model) || orchestrator["model"]
       }
-      |> Prism.AgentConfig.put_formula_tool_surface(tool_policy)
+      |> Aqua.AgentConfig.put_formula_tool_surface(tool_policy)
       |> put_attachments(Keyword.get(opts, :attachments, []))
       |> put_messages(Keyword.get(opts, :history, []))
 
@@ -159,14 +159,14 @@ defmodule Prism.AquaTurn do
     # history back: the model must not meet its own literal block again and
     # copy it instead of treating it as already executed.
     cleaned = Enum.map(history, &strip_actions_in_message/1)
-    Map.put(input, "messages", Prism.ConversationCompactor.compact(cleaned))
+    Map.put(input, "messages", Aqua.ConversationCompactor.compact(cleaned))
   end
 
   defp put_messages(input, _), do: input
 
   defp strip_actions_in_message(%{"role" => "assistant", "content" => content} = msg)
        when is_binary(content) do
-    %{msg | "content" => Prism.AquaActions.strip_blocks(content)}
+    %{msg | "content" => Aqua.Actions.strip_blocks(content)}
   end
 
   defp strip_actions_in_message(%{"role" => "assistant", "content" => parts} = msg)
@@ -177,7 +177,7 @@ defmodule Prism.AquaTurn do
   defp strip_actions_in_message(msg), do: msg
 
   defp strip_actions_in_part(%{"type" => "text", "text" => text} = part) when is_binary(text) do
-    %{part | "text" => Prism.AquaActions.strip_blocks(text)}
+    %{part | "text" => Aqua.Actions.strip_blocks(text)}
   end
 
   defp strip_actions_in_part(part), do: part
@@ -262,7 +262,7 @@ defmodule Prism.AquaTurn do
   What a finished turn's text becomes: the display text with the
   aqua-actions block removed, the approval intents (each an
   `%{id, title, summary, proposal, action_kind, ...}` map from
-  `Prism.AquaActions.parse/2`), the client intents (navigate/copy…), and
+  `Aqua.Actions.parse/2`), the client intents (navigate/copy…), and
   the tripwire notices — intents the agent tried outside its policy, which
   the thread shows as errors.
   """
@@ -274,10 +274,10 @@ defmodule Prism.AquaTurn do
         }
   def parse_completion(raw, tool_policy) when is_binary(raw) and is_map(tool_policy) do
     %{stripped: stripped, intents: intents, drops: drops} =
-      Prism.AquaActions.parse(String.trim(raw), tool_policy)
+      Aqua.Actions.parse(String.trim(raw), tool_policy)
 
     Enum.each(drops, fn drop ->
-      Logger.warning("[Prism.AquaTurn] dropped aqua-actions intent: #{inspect(drop)}")
+      Logger.warning("[Aqua.Turn] dropped aqua-actions intent: #{inspect(drop)}")
     end)
 
     {approvals, client} = Enum.split_with(intents, &(&1.kind == "request_approval"))
@@ -439,7 +439,7 @@ defmodule Prism.AquaTurn do
   @doc false
   def call_aqua(%Context{} = ctx, args) do
     case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
-      {:ok, result} -> {:ok, Prism.AgentConfig.stringify_deep(result)}
+      {:ok, result} -> {:ok, Aqua.AgentConfig.stringify_deep(result)}
       other -> other
     end
   end

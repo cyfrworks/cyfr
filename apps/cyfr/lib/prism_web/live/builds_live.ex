@@ -51,7 +51,7 @@ defmodule PrismWeb.BuildsLive do
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
            args = %{"reference" => reference, "build_id" => build_id}
            result = call_tool(ctx, "build/compile", args)

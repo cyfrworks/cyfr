@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prism.AquaActions do
+defmodule Aqua.Actions do
   @moduledoc """
   Server-side parser/dispatcher for the `aqua-actions` text-intent protocol.
 
@@ -13,7 +13,7 @@ defmodule Prism.AquaActions do
       [{"kind": "ui.execution.focus", "id": "exec_abc"}]
       ```
 
-  Cyfr's host (`Prism.ConversationRunner`) parses + strips the block on
+  Cyfr's host (`Aqua.ConversationRunner`) parses + strips the block on
   stream complete; `PrismWeb.ConversationLive` `push_event/3`s the validated
   client intents to the `Conversation` JS hook for dispatch.
 
@@ -356,7 +356,7 @@ defmodule Prism.AquaActions do
   @spec kind_for(String.t(), String.t()) :: atom() | nil
   def kind_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
-      kind = Prism.AquaVirtualTools.kind_for(tool, action) ->
+      kind = Aqua.VirtualTools.kind_for(tool, action) ->
         kind
 
       String.contains?(tool, ":") ->
@@ -583,8 +583,8 @@ defmodule Prism.AquaActions do
   end
 
   defp refused?(tool, action) do
-    if Prism.AquaVirtualTools.virtual_tool?(tool) do
-      is_nil(Prism.AquaVirtualTools.kind_for(tool, action))
+    if Aqua.VirtualTools.virtual_tool?(tool) do
+      is_nil(Aqua.VirtualTools.kind_for(tool, action))
     else
       Emissary.MCP.ToolRegistry.in_chain_refused?(tool, action)
     end

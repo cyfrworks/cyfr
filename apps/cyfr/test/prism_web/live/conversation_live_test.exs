@@ -13,8 +13,8 @@ defmodule PrismWeb.ConversationLiveTest do
     test_path = Path.join(System.tmp_dir!(), "conv_live_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :aqua_turn, Prism.FakeAquaTurn)
-    Prism.FakeAquaTurn.listen()
+    Application.put_env(:cyfr, :aqua_turn, Aqua.FakeTurn)
+    Aqua.FakeTurn.listen()
 
     on_exit(fn ->
       Application.delete_env(:cyfr, :aqua_turn)
@@ -267,7 +267,7 @@ defmodule PrismWeb.ConversationLiveTest do
 
     [conv] = Conversations.list(ctx)
     [msg | _] = Conversations.messages(ctx, conv.id)
-    refs = msg |> Prism.Attachments.refs_of() |> Enum.sort_by(& &1["filename"])
+    refs = msg |> Aqua.Attachments.refs_of() |> Enum.sort_by(& &1["filename"])
     assert Enum.map(refs, & &1["filename"]) == ["note.txt", "plan.md"]
     assert Enum.map(refs, & &1["size"]) == [8, 6]
     # the bytes are the record: one blob per ref, under the message — the
@@ -276,7 +276,7 @@ defmodule PrismWeb.ConversationLiveTest do
       refute Map.has_key?(ref, "path")
 
       assert {:ok, ["conversations", conv_id, msg_id, _name] = blob} =
-               Prism.Attachments.blob_path(conv.id, msg.id, ref)
+               Aqua.Attachments.blob_path(conv.id, msg.id, ref)
 
       assert conv_id == conv.id and msg_id == msg.id
       assert Arca.exists?(ctx, blob)

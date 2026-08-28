@@ -1397,8 +1397,8 @@ defmodule Compendium.MCPTest do
       {:ok, before} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
       assert before.tool_policy["build.compile"] == "auto"
 
-      :ok = Prism.AgentConfig.drop_tool(ctx, "aqua_builder", "build.compile")
-      :ok = Prism.AgentConfig.set_tool_auto(ctx, "aqua_builder", "files.write")
+      :ok = Aqua.AgentConfig.drop_tool(ctx, "aqua_builder", "build.compile")
+      :ok = Aqua.AgentConfig.set_tool_auto(ctx, "aqua_builder", "files.write")
 
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
 

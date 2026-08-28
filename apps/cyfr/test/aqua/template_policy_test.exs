@@ -5,7 +5,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   @moduledoc """
   The shipped agent allowlist offers only what a chat can actually run.
 
-  An approved proposal is executed inside the chain (`Prism.AquaTurn.run_approved/2`),
+  An approved proposal is executed inside the chain (`Aqua.Turn.run_approved/2`),
   so an allowlist key whose action the chain cannot reach is a card that
   fails on the click — and an `"auto"` key of the same shape is a tool call
   the agent is told it may make and then cannot. Those actions live on their
@@ -14,7 +14,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   use ExUnit.Case, async: true
 
   alias Emissary.MCP.ToolRegistry
-  alias Prism.AquaVirtualTools
+  alias Aqua.VirtualTools, as: AquaVirtualTools
 
   @agents_dir Path.expand("../../../../seed/aqua/agents", __DIR__)
 

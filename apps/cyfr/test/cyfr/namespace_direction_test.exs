@@ -33,7 +33,10 @@ defmodule Cyfr.NamespaceDirectionTest do
     # transport under lib/emissary* are out of scope here).
     "apps/cyfr/lib/arca",
     "apps/cyfr/lib/compendium",
-    "apps/cyfr/lib/sanctum"
+    "apps/cyfr/lib/sanctum",
+    # The agent-orchestration domain: it drives the console's chat, but
+    # through PubSub and rows — never by naming the console.
+    "apps/cyfr/lib/aqua"
   ]
 
   # The console. An engine that names it has taken a UI module as a
