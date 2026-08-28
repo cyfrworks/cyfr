@@ -72,9 +72,17 @@ defmodule Cyfr.Application do
     infra_children = [
       # Arca storage layer
       Arca.Repo,
-      # The cache table's one owner — before anything that might read
-      # through it.
-      Arca.Cache.Sweeper,
+      # The cache table's one owner, grouped :rest_for_one with the two
+      # registries that write catalogues into it: when the sweeper dies the
+      # table dies with it, and the writers restart and repopulate instead
+      # of answering "Unknown tool" until a 23-hour refresh (this retires
+      # their hand-rolled :rebuild_cache recovery). Before anything that
+      # might read through the cache.
+      group(Arca.Cache.TreeSupervisor, [
+        Arca.Cache.Sweeper,
+        Emissary.MCP.ToolRegistry,
+        Emissary.MCP.ResourceRegistry
+      ]),
       # Orders whole-unit replacement so two commits to one unit cannot
       # interleave their clear-then-write (Arca.Overlay.UnitLock).
       Arca.Overlay.UnitLock,
@@ -93,14 +101,19 @@ defmodule Cyfr.Application do
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},
-      {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
       # subscriptions/listen stream slots — duplicate keys, one entry per open
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
       {Registry, keys: :duplicate, name: Emissary.MCP.SubscriptionRegistry},
-      {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
-      Emissary.MCP.ToolRegistry,
-      Emissary.MCP.ResourceRegistry,
+      # External MCP servers: the name registry, the server processes
+      # registered in it, and the reconciler that restarts them when a
+      # vault mutation must bite (§4.6) — one :rest_for_one group, so a
+      # dead registry never leaves live servers unfindable.
+      group(Emissary.MCP.ExternalServerTree, [
+        {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
+        {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
+        Emissary.MCP.ExternalServerReconciler
+      ]),
       Emissary.MCP.Progress,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       Emissary.MCP.RunningTasks,
@@ -110,9 +123,13 @@ defmodule Cyfr.Application do
       # connections; this pool keeps OAuth userinfo HTTP off that path and
       # reinforces the sliver boundary at the supervision level.
       {Finch, name: Sanctum.Auth.Finch},
-      # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock)
-      {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
-      {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor},
+      # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock): the
+      # registry and the task pool whose leaders register in it restart
+      # together.
+      group(Sanctum.OAuth.RefreshTree, [
+        {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
+        {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor}
+      ]),
       # Provisioning retries that must not ride a sign-in (registry pulls).
       {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
       # Single-use consent authorizations. The shipped store is the DB
@@ -120,19 +137,19 @@ defmodule Cyfr.Application do
       # when a deployment explicitly configures it, so production does not
       # carry a live, never-called singleton.
       maybe_proof_memory(),
-      # Vault mutations must bite immediately for external MCP servers
-      # holding resolved header credentials (§4.6).
-      Emissary.MCP.ExternalServerReconciler,
       # Prism dashboard
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       {Task.Supervisor, name: Prism.TaskSupervisor},
       # Conversation runners: one process per conversation with a live
       # turn, started on demand; the recovery task re-follows the turns
-      # that were running when the server last stopped.
-      {Registry, keys: :unique, name: Prism.ConversationRegistry},
-      {DynamicSupervisor, name: Prism.ConversationSupervisor, strategy: :one_for_one},
-      maybe_conversation_recovery(),
+      # that were running when the server last stopped. Registry and the
+      # supervisor whose children register in it restart together.
+      group(Prism.ConversationTree, [
+        {Registry, keys: :unique, name: Prism.ConversationRegistry},
+        {DynamicSupervisor, name: Prism.ConversationSupervisor, strategy: :one_for_one},
+        maybe_conversation_recovery()
+      ]),
       # Last: mints Home's rows from the seed union on first boot (the
       # overlay serves the bundle in place — no bytes are copied). Needs
       # the repo, the tincture registry (the scan reloads it) and nothing
@@ -179,6 +196,23 @@ defmodule Cyfr.Application do
       Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
       _ -> []
     end
+  end
+
+  # A registry and the processes that hold references into it restart
+  # together: :rest_for_one from the registry (or table owner) down, so a
+  # restart never leaves dependents holding a name that resolves to
+  # nothing — and the dependents' own hand-rolled recovery loops retire.
+  defp group(name, children) do
+    %{
+      id: name,
+      start:
+        {Supervisor, :start_link,
+         [
+           List.flatten(children),
+           [strategy: :rest_for_one, name: name, max_restarts: 10, max_seconds: 60]
+         ]},
+      type: :supervisor
+    }
   end
 
   defp tier(name, children) do

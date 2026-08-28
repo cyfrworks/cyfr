@@ -41,11 +41,29 @@ defmodule Opus.Application do
            :max_concurrent_executions_per_tenant,
            Opus.ExecutionSemaphore.default_tenant_slots()
          )},
-      # Process registry mapping execution_id -> task PID for cancellation
-      {Registry, keys: :unique, name: Opus.ExecutionRegistry},
-      # Registry + DynamicSupervisor for per-execution event buffer serialization
-      {Registry, keys: :unique, name: Opus.ExecutionEventBuffer.Registry},
-      {DynamicSupervisor, name: Opus.ExecutionEventBuffer.Supervisor, strategy: :one_for_one},
+      # Execution bookkeeping: the execution_id → task registry and the
+      # per-execution event-buffer pair. :rest_for_one, so a dead registry
+      # restarts the buffers that register in it rather than stranding them.
+      %{
+        id: Opus.ExecutionTree,
+        start:
+          {Supervisor, :start_link,
+           [
+             [
+               {Registry, keys: :unique, name: Opus.ExecutionRegistry},
+               {Registry, keys: :unique, name: Opus.ExecutionEventBuffer.Registry},
+               {DynamicSupervisor,
+                name: Opus.ExecutionEventBuffer.Supervisor, strategy: :one_for_one}
+             ],
+             [
+               strategy: :rest_for_one,
+               name: Opus.ExecutionTree,
+               max_restarts: 10,
+               max_seconds: 60
+             ]
+           ]},
+        type: :supervisor
+      },
       # Supervised fire-and-forget tasks (run_stream, cron execution spawns)
       Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
       # Cron scheduler for recurring component executions

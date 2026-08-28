@@ -47,10 +47,6 @@ defmodule Emissary.MCP.ToolRegistry do
   @refresh_interval :timer.hours(23)
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
-  # How long to wait for the sweeper to restart and re-create the table
-  # before rebuilding the catalogue into it.
-  @rebuild_delay_ms 250
-
   # ============================================================================
   # Client API
   # ============================================================================
@@ -785,7 +781,6 @@ defmodule Emissary.MCP.ToolRegistry do
     # Load all configured providers into Arca.Cache
     load_providers()
     schedule_refresh()
-    watch_cache_table()
     # Audit deferred to handle_continue so a bug in the audit (or in any
     # provider's tools/0) can't take down ToolRegistry at boot. Worst case,
     # a future refactor logs a warning instead of crashing the supervisor.
@@ -848,46 +843,10 @@ defmodule Emissary.MCP.ToolRegistry do
     {:noreply, state}
   end
 
-  # The cache table died with its owner and came back empty. This registry
-  # is the catalogue's only writer and refreshes on a 23-hour timer, so
-  # every tools/list and tools/call would answer "Unknown tool" until then
-  # — and silently, because Arca.Cache.get/1 turns the missing table into
-  # an ordinary miss. Rebuild instead.
-  @impl true
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
-    Process.send_after(self(), :rebuild_cache, @rebuild_delay_ms)
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info(:rebuild_cache, state) do
-    case Arca.Cache.Sweeper.ensure_table() do
-      :ok ->
-        Logger.warning("[ToolRegistry] cache table was lost — reloading the tool catalogue")
-        load_providers()
-        watch_cache_table()
-
-      {:error, :cache_unavailable} ->
-        # The sweeper has not finished restarting; it is a sibling under the
-        # same tier, so it is coming.
-        Process.send_after(self(), :rebuild_cache, @rebuild_delay_ms)
-    end
-
-    {:noreply, state}
-  end
-
   @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
-  end
-
-  defp watch_cache_table do
-    if is_nil(Arca.Cache.monitor_owner()) do
-      Process.send_after(self(), :rebuild_cache, @rebuild_delay_ms)
-    end
-
-    :ok
   end
 
   # ============================================================================

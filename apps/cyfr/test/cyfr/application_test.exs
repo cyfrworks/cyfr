@@ -53,7 +53,16 @@ defmodule Cyfr.ApplicationTest do
       assert Phoenix.PubSub.Supervisor in ids or
                Enum.any?(ids, fn id -> id == Emissary.PubSub end)
 
-      assert Emissary.MCP.ToolRegistry in ids
+      # The tool registry rides the cache-tree group: it restarts with the
+      # sweeper whose table it populates.
+      cache_tree_ids =
+        Arca.Cache.TreeSupervisor
+        |> Supervisor.which_children()
+        |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
+
+      assert Arca.Cache.TreeSupervisor in ids
+      assert Arca.Cache.Sweeper in cache_tree_ids
+      assert Emissary.MCP.ToolRegistry in cache_tree_ids
       refute EmissaryWeb.Endpoint in ids
     end
 
