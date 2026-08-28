@@ -293,7 +293,10 @@ defmodule Sanctum.Vault.OAuth do
     with :ok <- require_https(url, credential) do
       case Cyfr.Network.pinned_request(:post, url, headers, body,
              allow_private: :policy,
-             receive_timeout: 15_000
+             receive_timeout: 15_000,
+             # A token response is a small JSON object; the endpoint is
+             # caller-supplied, so the ceiling streams rather than trusting it.
+             max_response_bytes: 1024 * 1024
            ) do
         {:ok, status, _resp_headers, resp_body} when status in 200..299 ->
           case Jason.decode(resp_body) do

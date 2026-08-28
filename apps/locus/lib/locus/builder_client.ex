@@ -49,27 +49,54 @@ defmodule Locus.BuilderClient do
       json: body,
       headers: [{"authorization", "Bearer " <> (token() || "")}],
       receive_timeout: @receive_timeout_ms,
-      max_retries: 0
+      max_retries: 0,
+      compressed: false,
+      decode_body: false,
+      # The ceiling streams: a misbehaving builder cannot flood this node's
+      # heap before a post-hoc size check would run. `Cyfr.Network`'s
+      # collector is pure and compiled into the builder release too.
+      into: Cyfr.Network.bounded_collector(@max_response_bytes)
     ]
 
     case Req.request(request) do
-      {:ok, %Req.Response{status: 200, body: %{"ok" => true} = built}} ->
-        replay_logs(built, on_progress)
-        {:ok, decode_result(built)}
+      {:ok, %Req.Response{status: status} = resp} ->
+        case Cyfr.Network.collected_body(resp, @max_response_bytes) do
+          {:ok, raw} ->
+            handle_response(status, decode_json_body(raw), on_progress)
 
-      {:ok, %Req.Response{status: 422, body: %{"error" => error} = built}} ->
-        replay_logs(built, on_progress)
-        {:error, {:builder_failed, error}}
+          {:error, {:response_too_large, size, max}} ->
+            Logger.error(
+              "[Locus.BuilderClient] builder response exceeded #{max} bytes (#{size} seen) — aborted"
+            )
 
-      {:ok, %Req.Response{status: 401}} ->
-        {:error, :builder_unauthorized}
-
-      {:ok, %Req.Response{status: status}} ->
-        {:error, {:builder_unexpected_status, status}}
+            {:error, :builder_response_too_large}
+        end
 
       {:error, reason} ->
         Logger.error("[Locus.BuilderClient] builder unreachable: #{inspect(reason)}")
         {:error, :builder_unreachable}
+    end
+  end
+
+  defp handle_response(200, %{"ok" => true} = built, on_progress) do
+    replay_logs(built, on_progress)
+    {:ok, decode_result(built)}
+  end
+
+  defp handle_response(422, %{"error" => error} = built, on_progress) do
+    replay_logs(built, on_progress)
+    {:error, {:builder_failed, error}}
+  end
+
+  defp handle_response(401, _body, _on_progress), do: {:error, :builder_unauthorized}
+
+  defp handle_response(status, _body, _on_progress),
+    do: {:error, {:builder_unexpected_status, status}}
+
+  defp decode_json_body(raw) do
+    case Jason.decode(raw) do
+      {:ok, map} when is_map(map) -> map
+      _ -> %{}
     end
   end
 

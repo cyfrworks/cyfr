@@ -142,7 +142,12 @@ defmodule Opus.AsyncTracker do
 
   @impl true
   def handle_call({:spawn, fun, reference}, _from, state) do
-    active_count = map_size(state.tasks)
+    # Undrained results count against the cap too: a completed-but-never-
+    # awaited task still holds its full payload in tracker state, so a
+    # spawn/complete/never-await loop would otherwise grow per-execution
+    # memory without bound for the whole run. The guest frees a slot by
+    # awaiting (or polling then awaiting) what it spawned.
+    active_count = map_size(state.tasks) + map_size(state.results)
 
     if state.max_tasks > 0 and active_count >= state.max_tasks do
       {:reply, {:error, :max_tasks_exceeded}, state}
@@ -391,13 +396,16 @@ defmodule Opus.AsyncTracker do
   end
 
   defp split_completed(task_ids, state) do
-    Enum.reduce(task_ids, {%{}, []}, fn id, {completed, pending} ->
-      if Map.has_key?(state.results, id) do
-        {Map.put(completed, id, state.results[id]), pending}
-      else
-        {completed, pending ++ [id]}
-      end
-    end)
+    {completed, pending} =
+      Enum.reduce(task_ids, {%{}, []}, fn id, {completed, pending} ->
+        if Map.has_key?(state.results, id) do
+          {Map.put(completed, id, state.results[id]), pending}
+        else
+          {completed, [id | pending]}
+        end
+      end)
+
+    {completed, Enum.reverse(pending)}
   end
 
   defp find_first_completed(task_ids, state) do

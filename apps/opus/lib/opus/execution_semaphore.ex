@@ -55,6 +55,22 @@ defmodule Opus.ExecutionSemaphore do
   A periodic sweep runs every 30 seconds, force-releasing any slots held
   longer than 10 minutes. This prevents leaked slots from permanently
   reducing capacity.
+
+  ## Unreaped kills
+
+  Wasmex exposes no epoch interruption, so a timeout-killed execution's
+  component call keeps spinning on a detached native thread until node
+  restart (`Opus.SharedEngine` says why at length). The kill releases the
+  BEAM-side slot — which, uncorrected, lets one athanor cycle its full
+  per-tenant cap of killed executions indefinitely and accumulate spinning
+  cores. The executor therefore notes every timeout kill here
+  (`note_unreaped/0`), and a tenant with too many recent unreaped kills is
+  refused new root/background slots with `{:error, :tenant_unreaped_limit}`.
+  Entries decay after #{div(10 * 60 * 1000, 60_000)} minutes — there is no
+  completion signal to decrement on (the thread's JoinHandle is dropped), so
+  decay is what keeps a run of benign timeouts from locking a tenant out
+  forever. A real preemption fix is upstream (wasmex epoch support) or the
+  Stage-1.5 `CYFR_ROLE=worker` recycle story in `docs/0.6.0.md`.
   """
 
   use GenServer
@@ -65,6 +81,9 @@ defmodule Opus.ExecutionSemaphore do
   @default_tenant_slots 16
   @sweep_interval_ms 30_000
   @max_hold_ms 10 * 60 * 1000
+  # How long a noted unreaped kill counts against its tenant. Decay-based
+  # because nothing observable fires when (if ever) the native thread stops.
+  @unreaped_ttl_ms 10 * 60 * 1000
   @classes [:root, :child, :background]
 
   @type class :: :root | :child | :background
@@ -119,10 +138,15 @@ defmodule Opus.ExecutionSemaphore do
     skips per-tenant accounting (used by internal/test callers).
 
   Returns `{:error, :queue_full}` if the wait queue itself is at capacity,
-  or `{:error, :tenant_limit}` if a root's athanor is at its cap.
+  `{:error, :tenant_limit}` if a root's athanor is at its cap, or
+  `{:error, :tenant_unreaped_limit}` if the athanor has too many recent
+  unreaped timeout kills (see the moduledoc).
   """
   @spec acquire(timeout(), class(), term() | nil) ::
-          :ok | {:error, :queue_full} | {:error, :tenant_limit}
+          :ok
+          | {:error, :queue_full}
+          | {:error, :tenant_limit}
+          | {:error, :tenant_unreaped_limit}
   def acquire(timeout \\ 30_000, class \\ :root, tenant \\ nil) when class in @classes do
     try do
       GenServer.call(__MODULE__, {:acquire, class, tenant}, timeout)
@@ -145,6 +169,17 @@ defmodule Opus.ExecutionSemaphore do
   @spec release() :: :ok
   def release do
     GenServer.cast(__MODULE__, {:release, self()})
+  end
+
+  @doc """
+  Note that the calling holder's execution was timeout-killed with its
+  native thread unreaped (see the moduledoc). Called by the executor
+  BEFORE its `release/0`, from the same process, so the holder entry —
+  and with it the tenant — is still present when this arrives.
+  """
+  @spec note_unreaped() :: :ok
+  def note_unreaped do
+    GenServer.cast(__MODULE__, {:unreaped, self()})
   end
 
   @doc """
@@ -181,6 +216,7 @@ defmodule Opus.ExecutionSemaphore do
           holders: [],
           tenant_max: 0,
           tenants: %{},
+          unreaped: %{},
           error: :unavailable
         }
     end
@@ -226,6 +262,12 @@ defmodule Opus.ExecutionSemaphore do
        monitors: %{},
        # roots held per tenant (the per-athanor cap)
        tenant_roots: %{},
+       # tenant => [expiry_ms] — one entry per recent unreaped timeout kill
+       tenant_unreaped: %{},
+       # refusal threshold: half the tenant cap, never below 2 — a couple
+       # of benign timeouts must not trip it, half a cap of spinning cores
+       # must
+       unreaped_max: max(2, div(tenant_max, 2)),
        waiters: %{root: :queue.new(), child: :queue.new(), background: :queue.new()},
        # waiter pid => {from, monitor, class, tenant}
        waiter_monitors: %{},
@@ -250,6 +292,19 @@ defmodule Opus.ExecutionSemaphore do
       # at the glass.
       class == :background and tenant_at_background_cap?(state, tenant) ->
         enqueue_waiter(state, from, :background, tenant)
+
+      # A tenant with too many recent unreaped kills is in a decay-timed
+      # penalty box: its killed executions' native threads are still
+      # burning cores, so handing it fresh slots compounds the damage.
+      # Children pass — their parent already holds a slot.
+      class in [:root, :background] and tenant_unreaped_at_cap?(state, tenant) ->
+        Logger.warning(
+          "[Opus.ExecutionSemaphore] Tenant #{inspect(tenant)} refused: " <>
+            "#{live_unreaped(state, tenant)} unreaped timeout kills in the last " <>
+            "#{div(@unreaped_ttl_ms, 60_000)}min (threshold #{state.unreaped_max})"
+        )
+
+        {:reply, {:error, :tenant_unreaped_limit}, state}
 
       class == :root and tenant_at_cap?(state, tenant) ->
         Logger.warning(
@@ -299,7 +354,8 @@ defmodule Opus.ExecutionSemaphore do
       },
       holders: holders,
       tenant_max: state.tenant_max,
-      tenants: state.tenant_roots
+      tenants: state.tenant_roots,
+      unreaped: Map.new(state.tenant_unreaped, fn {t, _} -> {t, live_unreaped(state, t)} end)
     }
 
     {:reply, reply, state}
@@ -331,6 +387,10 @@ defmodule Opus.ExecutionSemaphore do
        | count: 0,
          monitors: %{},
          tenant_roots: %{},
+         # The operator's recovery gesture also clears the penalty box —
+         # the point of force_release is a fresh start, and the spinning
+         # threads it cannot stop are theirs to handle at the node level.
+         tenant_unreaped: %{},
          waiters: %{root: :queue.new(), child: :queue.new(), background: :queue.new()},
          waiter_monitors: %{},
          background_waiters: %{}
@@ -340,6 +400,31 @@ defmodule Opus.ExecutionSemaphore do
   @impl true
   def handle_cast({:release, pid}, state) do
     {:noreply, do_release(state, pid)}
+  end
+
+  # Casts from one process arrive in order, so the holder entry (and its
+  # tenant) is still in `monitors` when this lands ahead of the release.
+  @impl true
+  def handle_cast({:unreaped, pid}, state) do
+    case Map.get(state.monitors, pid) do
+      {_ref, _acquired_at, tenant, _class} when not is_nil(tenant) ->
+        expiry = System.monotonic_time(:millisecond) + @unreaped_ttl_ms
+
+        entries = [expiry | prune_unreaped(Map.get(state.tenant_unreaped, tenant, []))]
+
+        Logger.warning(
+          "[Opus.ExecutionSemaphore] Unreaped timeout kill noted for tenant " <>
+            "#{inspect(tenant)} (#{length(entries)}/#{state.unreaped_max} " <>
+            "in the decay window)"
+        )
+
+        Opus.Telemetry.unreaped_kill(tenant, length(entries))
+
+        {:noreply, %{state | tenant_unreaped: Map.put(state.tenant_unreaped, tenant, entries)}}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   # A caller that timed out of `acquire/3` dequeues itself. If the hand-off
@@ -376,7 +461,7 @@ defmodule Opus.ExecutionSemaphore do
 
   @impl true
   def handle_info(:sweep_stale, state) do
-    state = sweep_stale_holders(state)
+    state = state |> sweep_stale_holders() |> prune_all_unreaped()
     schedule_sweep()
     {:noreply, state}
   end
@@ -641,6 +726,40 @@ defmodule Opus.ExecutionSemaphore do
 
   defp tenant_at_cap?(state, tenant) do
     Map.get(state.tenant_roots, tenant, 0) >= state.tenant_max
+  end
+
+  defp tenant_unreaped_at_cap?(_state, nil), do: false
+
+  defp tenant_unreaped_at_cap?(state, tenant) do
+    live_unreaped(state, tenant) >= state.unreaped_max
+  end
+
+  # Counted live (without mutating state) so the acquire path stays a pure
+  # read; the periodic sweep does the actual pruning.
+  defp live_unreaped(state, tenant) do
+    state.tenant_unreaped |> Map.get(tenant, []) |> prune_unreaped() |> length()
+  end
+
+  defp prune_unreaped(entries) do
+    now = System.monotonic_time(:millisecond)
+    Enum.filter(entries, &(&1 > now))
+  end
+
+  defp prune_all_unreaped(%{tenant_unreaped: unreaped} = state) when map_size(unreaped) == 0,
+    do: state
+
+  defp prune_all_unreaped(state) do
+    pruned =
+      state.tenant_unreaped
+      |> Enum.flat_map(fn {tenant, entries} ->
+        case prune_unreaped(entries) do
+          [] -> []
+          live -> [{tenant, live}]
+        end
+      end)
+      |> Map.new()
+
+    %{state | tenant_unreaped: pruned}
   end
 
   defp tenant_at_background_cap?(_state, nil), do: false

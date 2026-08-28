@@ -21,8 +21,9 @@ defmodule Compendium.Transport.Retry do
     * **5xx, or a timeout after the request was sent** — ambiguous: the
       server may have processed it and failed to answer. Retry only
       idempotent methods; a POST that may have minted is never replayed.
-    * **An SSRF/DNS refusal** (a binary reason from `Cyfr.Network`) — a
-      decision, not a fault. Never retried.
+    * **An SSRF/DNS refusal** (a binary reason from `Cyfr.Network`) or a
+      **response over the caller's size ceiling** — a decision, not a
+      fault. Never retried.
   """
 
   @base_delay_ms 500
@@ -43,6 +44,10 @@ defmodule Compendium.Transport.Retry do
   def classify({:status, status}) when status >= 500, do: :retry_if_idempotent
   def classify({:status, _status}), do: :never
   def classify({:error, reason}) when is_binary(reason), do: :never
+
+  # A response that blew past the caller's size ceiling is a decision too:
+  # replaying the fetch downloads the same oversized body again.
+  def classify({:error, {:response_too_large, _size, _max}}), do: :never
 
   def classify({:error, reason}),
     do: if(unreached?(reason), do: :retry_always, else: :retry_if_idempotent)

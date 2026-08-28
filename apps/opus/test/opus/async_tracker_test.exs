@@ -88,6 +88,27 @@ defmodule Opus.AsyncTrackerTest do
       GenServer.stop(tracker)
     end
 
+    test "undrained results count against the cap" do
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
+
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :a end, "ref1")
+      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :b end, "ref2")
+
+      wait_completed(tracker, id1)
+      wait_completed(tracker, id2)
+
+      # Both tasks finished but were never awaited — their payloads still
+      # sit in tracker state, so no slot is free until the guest drains.
+      assert {:error, :max_tasks_exceeded} =
+               AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+
+      # Draining one frees exactly one slot.
+      assert {:ok, :a} = AsyncTracker.await_task(tracker, id1, 1000)
+      assert {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> :d end, "ref4")
+
+      GenServer.stop(tracker)
+    end
+
     test "max_tasks=0 means unlimited" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 0)
 

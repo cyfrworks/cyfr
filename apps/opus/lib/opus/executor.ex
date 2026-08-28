@@ -891,6 +891,11 @@ defmodule Opus.Executor do
 
       {:error, :tenant_limit} ->
         {:error, "Athanor at maximum concurrent executions. Retry later."}
+
+      {:error, :tenant_unreaped_limit} ->
+        {:error,
+         "Athanor has too many recently timed-out executions whose CPU could not be " <>
+           "reclaimed. Wait a few minutes, and check for components that never yield."}
     end
   end
 
@@ -1015,6 +1020,11 @@ defmodule Opus.Executor do
         # terminate this process before handle_failure can write the DB record.
         Process.unlink(pid)
         Process.exit(pid, :kill)
+        # The kill frees the BEAM process, not the component call's native
+        # thread (no epoch interruption) — tell the semaphore before the
+        # `after` block releases this slot, so the tenant's unreaped count
+        # gates its next acquisition.
+        Opus.ExecutionSemaphore.note_unreaped()
         {:error, "Execution timeout after #{timeout_ms}ms"}
 
       {:refs, _} ->
@@ -1053,6 +1063,9 @@ defmodule Opus.Executor do
         else
           Process.unlink(pid)
           Process.exit(pid, :kill)
+          # See the handshake-timeout kill above: the native thread survives
+          # this kill, so the semaphore counts it against the tenant.
+          Opus.ExecutionSemaphore.note_unreaped()
           # Clean up resources the dead process can't clean up
           if cleanup_refs[:stream_exec_ref],
             do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)

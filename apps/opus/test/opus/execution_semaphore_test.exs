@@ -779,6 +779,53 @@ defmodule Opus.ExecutionSemaphoreTest do
     end)
   end
 
+  describe "unreaped-kill accounting" do
+    test "a tenant past the unreaped threshold is refused; children, other tenants and recovery are not" do
+      tenant = "ath_unreaped_#{System.unique_integer([:positive])}"
+      threshold = max(2, div(ExecutionSemaphore.status().tenant_max, 2))
+
+      for _ <- 1..threshold do
+        Task.async(fn ->
+          :ok = ExecutionSemaphore.acquire(5_000, :root, tenant)
+          # Ordered before the release cast from this same process, so the
+          # holder entry still names the tenant when it lands.
+          ExecutionSemaphore.note_unreaped()
+          ExecutionSemaphore.release()
+        end)
+        |> Task.await()
+      end
+
+      wait_until(fn ->
+        Map.get(ExecutionSemaphore.status().unreaped, tenant, 0) >= threshold
+      end)
+
+      assert {:error, :tenant_unreaped_limit} =
+               ExecutionSemaphore.acquire(1_000, :root, tenant)
+
+      assert {:error, :tenant_unreaped_limit} =
+               ExecutionSemaphore.acquire(1_000, :background, tenant)
+
+      # Another athanor is untouched by this one's penalty box.
+      assert :ok = ExecutionSemaphore.acquire(1_000, :root, "ath_other_#{tenant}")
+      ExecutionSemaphore.release()
+
+      # Children pass: their parent already holds a slot.
+      assert :ok = ExecutionSemaphore.acquire(1_000, :child, tenant)
+      ExecutionSemaphore.release()
+
+      # The operator's recovery gesture clears the penalty box too.
+      ExecutionSemaphore.force_release_all()
+      assert :ok = ExecutionSemaphore.acquire(1_000, :root, tenant)
+      ExecutionSemaphore.release()
+    end
+
+    test "note_unreaped from a non-holder is a no-op" do
+      before = ExecutionSemaphore.status().unreaped
+      ExecutionSemaphore.note_unreaped()
+      assert ExecutionSemaphore.status().unreaped == before
+    end
+  end
+
   # Fire-and-forget: the next test's setup force_release_all clears any
   # release still in flight, and a late release for a freed slot is a no-op.
   defp release_holders(holders) do

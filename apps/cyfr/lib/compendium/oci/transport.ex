@@ -25,6 +25,11 @@ defmodule Compendium.OCI.Transport do
   @max_retries 3
   @receive_timeout 120_000
 
+  # Ceiling for API-shaped responses (manifests, tag lists, catalog pages,
+  # upload-session acks) when the caller names no bound of its own. Blob
+  # downloads pass their content-shaped ceiling via `:max_response_bytes`.
+  @default_max_response_bytes 10 * 1024 * 1024
+
   @type response :: {:ok, integer(), [{String.t(), String.t()}], binary()}
   @type error :: {:error, Errors.t() | String.t()}
 
@@ -37,6 +42,12 @@ defmodule Compendium.OCI.Transport do
   `ctx` is required (caller-first, matching the codebase convention) so the
   per-namespace push token is attached on writes. Pass `nil` only for the
   genuinely-public catalog reads (`discover`, `pull_bytes`).
+
+  ## Options
+
+    * `:max_response_bytes` — response-size ceiling, enforced while the
+      body streams in (default #{@default_max_response_bytes}). Blob
+      downloads pass the ceiling their content shape allows.
   """
   @spec request(
           Sanctum.Context.t() | nil,
@@ -44,21 +55,33 @@ defmodule Compendium.OCI.Transport do
           String.t(),
           Reference.t(),
           [{String.t(), String.t()}],
-          binary() | nil
+          binary() | nil,
+          keyword()
         ) ::
           response() | error()
-  def request(ctx, method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil) do
+  def request(ctx, method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil, opts \\ []) do
     base_url = Reference.api_base(ref)
     url = base_url <> path
 
-    do_request_with_retry(method, url, ref.registry, ref.repository, extra_headers, body, ctx, 0)
+    do_request_with_retry(
+      method,
+      url,
+      ref.registry,
+      ref.repository,
+      extra_headers,
+      body,
+      ctx,
+      opts,
+      0
+    )
   end
 
   @doc """
   Perform an HTTP request to an arbitrary URL (used for blob uploads where
   the registry may return a different location URL).
 
-  `ctx` is required (caller-first) for the same reason as `request/6`.
+  `ctx` is required (caller-first) for the same reason as `request/7`,
+  and `opts` carries the same `:max_response_bytes`.
   """
   @spec request_url(
           Sanctum.Context.t() | nil,
@@ -67,18 +90,38 @@ defmodule Compendium.OCI.Transport do
           String.t(),
           String.t(),
           [{String.t(), String.t()}],
-          binary() | nil
+          binary() | nil,
+          keyword()
         ) ::
           response() | error()
-  def request_url(ctx, method, url, registry, repository, extra_headers \\ [], body \\ nil) do
-    do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, 0)
+  def request_url(
+        ctx,
+        method,
+        url,
+        registry,
+        repository,
+        extra_headers \\ [],
+        body \\ nil,
+        opts \\ []
+      ) do
+    do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, opts, 0)
   end
 
   # ============================================================================
   # Private
   # ============================================================================
 
-  defp do_request_with_retry(_method, _url, registry, _repository, _headers, _body, _ctx, attempt)
+  defp do_request_with_retry(
+         _method,
+         _url,
+         registry,
+         _repository,
+         _headers,
+         _body,
+         _ctx,
+         _opts,
+         attempt
+       )
        when attempt >= @max_retries do
     Logger.error(
       "[Compendium.OCI.Transport] All #{@max_retries} retries exhausted for #{registry}"
@@ -87,7 +130,17 @@ defmodule Compendium.OCI.Transport do
     {:error, Errors.connection_error(registry, :max_retries_exceeded)}
   end
 
-  defp do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, attempt) do
+  defp do_request_with_retry(
+         method,
+         url,
+         registry,
+         repository,
+         extra_headers,
+         body,
+         ctx,
+         opts,
+         attempt
+       ) do
     namespace_slug = namespace_from_repository(repository)
     {:ok, auth_headers} = Auth.auth_headers(registry, repository, namespace_slug, ctx)
     headers = auth_headers ++ extra_headers
@@ -95,10 +148,12 @@ defmodule Compendium.OCI.Transport do
     # pinned_request validates the resolved IP and connects to it directly (no
     # second DNS resolution → no rebinding), preserving SNI/Host. A private
     # registry is reachable only when the operator named it in the
-    # private-egress allowlist.
+    # private-egress allowlist. The size ceiling is enforced while the body
+    # streams in — a hostile registry cannot flood the host's heap.
     case Cyfr.Network.pinned_request(method, url, headers, body,
            receive_timeout: @receive_timeout,
-           allow_private: :policy
+           allow_private: :policy,
+           max_response_bytes: Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
          ) do
       {:ok, 401, resp_headers, resp_body} ->
         # Push tokens don't do realm exchange. 401 means the token is missing
@@ -123,6 +178,7 @@ defmodule Compendium.OCI.Transport do
           extra_headers,
           body,
           ctx,
+          opts,
           attempt,
           Retry.classify({:status, 429}),
           "429",
@@ -139,6 +195,7 @@ defmodule Compendium.OCI.Transport do
           extra_headers,
           body,
           ctx,
+          opts,
           attempt,
           Retry.classify({:status, status}),
           "#{status}",
@@ -163,6 +220,7 @@ defmodule Compendium.OCI.Transport do
           extra_headers,
           body,
           ctx,
+          opts,
           attempt,
           Retry.classify({:error, reason}),
           inspect(reason),
@@ -184,6 +242,7 @@ defmodule Compendium.OCI.Transport do
          extra_headers,
          body,
          ctx,
+         opts,
          attempt,
          disposition,
          why,
@@ -191,6 +250,12 @@ defmodule Compendium.OCI.Transport do
          give_up
        ) do
     cond do
+      # A :never disposition (oversized response, policy refusal) is a
+      # decision — replaying it downloads or refuses the same thing again.
+      disposition == :never ->
+        Logger.error("[Compendium.OCI.Transport] #{registry}: #{why} — not retryable")
+        give_up.()
+
       attempt + 1 >= @max_retries ->
         Logger.error(
           "[Compendium.OCI.Transport] #{registry}: #{why} on final attempt — giving up"
@@ -222,6 +287,7 @@ defmodule Compendium.OCI.Transport do
           extra_headers,
           body,
           ctx,
+          opts,
           attempt + 1
         )
     end

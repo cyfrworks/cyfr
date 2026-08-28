@@ -338,7 +338,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     url = registry_url()
 
     case Cyfr.Network.pinned_request(:get, "https://#{url}/health", [], nil,
-           receive_timeout: 3_000
+           receive_timeout: 3_000,
+           max_response_bytes: 64 * 1024
          ) do
       {:ok, 200, _headers, _body} ->
         "ok"
@@ -399,7 +400,12 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         # IP, and never follows redirects — a target that 302s toward a
         # metadata endpoint goes nowhere. Private targets stay blocked
         # unconditionally, as they always were on this surface.
-        case Cyfr.Network.pinned_request(:post, target, headers, body, receive_timeout: 10_000) do
+        case Cyfr.Network.pinned_request(:post, target, headers, body,
+               receive_timeout: 10_000,
+               # Only the status is read; a hostile target still must not
+               # flood the host with a response body.
+               max_response_bytes: 1024 * 1024
+             ) do
           {:ok, status_code, _resp_headers, _resp_body} ->
             Logger.debug("[SystemProvider] Webhook sent to #{target}: status #{status_code}")
             {:ok, status_code}

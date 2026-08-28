@@ -51,6 +51,19 @@ defmodule Compendium.OCI.TransportTest do
     assert attempts() == 1
   end
 
+  test "a response over the size ceiling is refused once, never re-fetched" do
+    big = String.duplicate("x", 64 * 1024)
+    stub(fn conn -> Plug.Conn.send_resp(conn, 200, big) end)
+
+    assert {:error, %Errors{reason: :registry_unavailable, detail: detail}} =
+             Transport.request_url(nil, :get, @url, @registry, @repository, [], nil,
+               max_response_bytes: 1024
+             )
+
+    assert {:response_too_large, _seen, 1024} = detail
+    assert attempts() == 1
+  end
+
   test "a 5xx GET is retried to the budget" do
     stub(fn conn -> Plug.Conn.send_resp(conn, 502, "bad gateway") end)
 

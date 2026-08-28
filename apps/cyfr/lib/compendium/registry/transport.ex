@@ -40,6 +40,10 @@ defmodule Compendium.Registry.Transport do
   @max_retries 3
   @receive_timeout 30_000
 
+  # Every payload on this API is JSON (namespaces, tokens, members, reports,
+  # legal pages) — no blobs ride it. Enforced while the body streams in.
+  @max_response_bytes 5 * 1024 * 1024
+
   @type response ::
           {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, Errors.t()}
 
@@ -91,7 +95,8 @@ defmodule Compendium.Registry.Transport do
     result =
       Cyfr.Network.pinned_request(method, url, headers, body,
         receive_timeout: limits.receive_timeout,
-        allow_private: :policy
+        allow_private: :policy,
+        max_response_bytes: @max_response_bytes
       )
 
     case result do
@@ -150,6 +155,12 @@ defmodule Compendium.Registry.Transport do
 
   defp retry_or_give_up(method, url, headers, body, attempt, limits, when_to, why, delay, give_up) do
     cond do
+      # A :never disposition (oversized response, policy refusal) is a
+      # decision — replaying it changes nothing.
+      when_to == :never ->
+        Logger.error("[Compendium.Registry.Transport] #{why} — not retryable")
+        give_up.()
+
       attempt + 1 >= limits.max_attempts ->
         Logger.error("[Compendium.Registry.Transport] #{why} on final attempt — giving up")
         give_up.()

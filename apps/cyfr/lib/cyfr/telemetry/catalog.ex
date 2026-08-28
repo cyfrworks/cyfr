@@ -118,6 +118,13 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:operator],
       note: "a guest event could not reach its subscribers; the execution itself continues"
     },
+    [:cyfr, :opus, :execution, :unreaped_kill] => %{
+      consumers: [:operator],
+      note:
+        "a timeout kill left a native thread spinning (no wasmex epoch interruption) — " <>
+          "the one signal that a node is quietly losing cores; the semaphore refuses the " <>
+          "tenant past a threshold"
+    },
 
     # ——— guest activity (high-frequency observability) ———
     [:cyfr, :opus, :http, :request] => %{

@@ -19,6 +19,12 @@ defmodule Compendium.OCI.Blob do
   # 10MB
   @chunked_threshold 10 * 1024 * 1024
 
+  # The wire ceiling for a blob download, enforced while the body streams
+  # in. A compressed archive cannot legitimately exceed its own decompressed
+  # cap, and the tincture cap is the largest blob any pull may carry (WASM
+  # is bounded lower again, by Compendium.WasmValidator, after download).
+  defp max_blob_bytes, do: Compendium.Registry.tincture_max_decompressed_bytes()
+
   @doc """
   Check if a blob exists in the registry.
 
@@ -51,7 +57,9 @@ defmodule Compendium.OCI.Blob do
     path = "/v2/#{ref.repository}/blobs/#{digest}"
     headers = [{"accept", Cyfr.MediaType.binary()}]
 
-    case Transport.request(ctx, :get, path, ref, headers) do
+    case Transport.request(ctx, :get, path, ref, headers, nil,
+           max_response_bytes: max_blob_bytes()
+         ) do
       {:ok, 200, _headers, body} ->
         actual_digest = compute_digest(body)
 
@@ -61,8 +69,9 @@ defmodule Compendium.OCI.Blob do
           {:error, Errors.digest_mismatch(digest, actual_digest)}
         end
 
-      {:ok, 307, resp_headers, _body} ->
-        # Follow redirect for blob storage
+      # CDN-backed registries answer 302 as often as 307; every 3xx target
+      # goes through the same pinned SSRF validation in follow_redirect/3.
+      {:ok, status, resp_headers, _body} when status in [301, 302, 303, 307, 308] ->
         location = get_header(resp_headers, "location")
 
         if location do
@@ -216,8 +225,14 @@ defmodule Compendium.OCI.Blob do
   defp follow_redirect(url, expected_digest, registry) do
     # A redirect target is attacker-influenced (a malicious/compromised registry
     # chooses it). pinned_request validates the resolved IP AND connects to that
-    # exact IP (no second resolution), closing the DNS-rebinding window.
-    opts = [receive_timeout: 60_000, allow_private: :policy]
+    # exact IP (no second resolution), closing the DNS-rebinding window. The
+    # size ceiling streams — this is the most attacker-influenced hop, so the
+    # body must never buffer past the largest legitimate blob.
+    opts = [
+      receive_timeout: 60_000,
+      allow_private: :policy,
+      max_response_bytes: max_blob_bytes()
+    ]
 
     case Cyfr.Network.pinned_request(:get, url, [], nil, opts) do
       {:ok, 200, _headers, body} ->

@@ -182,9 +182,16 @@ defmodule Opus.HttpStreamHandler do
     timeout_ms = HttpRequestValidation.timeout_ms(limits, @stream_timeout_ms)
     max_response_size = limits.max_response_size
 
-    # Create a buffer agent to collect chunks
+    # Create a buffer agent to collect chunks. A :queue keeps both ends O(1):
+    # the byte ceiling bounds total size but not chunk count, and an SSE
+    # stream of many small frames would pay O(n²) on a plain list append.
+    #
+    # Deliberately LINKED to the calling Wasmex host process — unlike the
+    # streaming task below — because the link is what reaps the buffer when
+    # the executor brutal-kills the runtime at timeout; an Agent exits only
+    # abnormally if its own anonymous fn raises, which none here can.
     {:ok, buffer} =
-      Agent.start_link(fn -> %{chunks: [], done: false, total_bytes: 0, error: nil} end)
+      Agent.start_link(fn -> %{chunks: :queue.new(), done: false, total_bytes: 0, error: nil} end)
 
     # Start an unlinked but SUPERVISED process for the streaming request:
     # Task.Supervisor.start_child links the task to the supervisor, not to
@@ -341,7 +348,7 @@ defmodule Opus.HttpStreamHandler do
                  "Stream response (#{new_total} bytes) exceeds limit (#{max_response_size} bytes)"}
           }
         else
-          %{state | chunks: state.chunks ++ [data], total_bytes: new_total}
+          %{state | chunks: :queue.in(data, state.chunks), total_bytes: new_total}
         end
     end)
   end
@@ -350,9 +357,9 @@ defmodule Opus.HttpStreamHandler do
     # Atomically pop the first chunk to avoid race with the streaming process
     # appending new chunks between a get and a separate update.
     case Agent.get_and_update(stream_state.buffer, fn state ->
-           case state.chunks do
-             [chunk | rest] -> {{:chunk, chunk}, %{state | chunks: rest}}
-             [] -> {{:empty, state.done, state.error}, state}
+           case :queue.out(state.chunks) do
+             {{:value, chunk}, rest} -> {{:chunk, chunk}, %{state | chunks: rest}}
+             {:empty, _} -> {{:empty, state.done, state.error}, state}
            end
          end) do
       {:empty, _done, {type, message}} ->

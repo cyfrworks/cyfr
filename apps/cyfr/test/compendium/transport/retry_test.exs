@@ -30,6 +30,10 @@ defmodule Compendium.Transport.RetryTest do
     test "an SSRF refusal — a binary reason — is a decision, never retried" do
       assert Retry.classify({:error, "private IP 127.0.0.1 blocked"}) == :never
     end
+
+    test "a response over the caller's size ceiling is never re-fetched" do
+      assert Retry.classify({:error, {:response_too_large, 99_999_999, 10_485_760}}) == :never
+    end
   end
 
   test "idempotent?/1 excludes exactly the minting methods" do

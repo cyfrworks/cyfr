@@ -892,7 +892,13 @@ defmodule Compendium.Registry do
   # `config :cyfr, :tincture_max_decompressed_bytes`.
   @default_tincture_max_decompressed 256 * 1024 * 1024
 
-  defp tincture_max_decompressed_bytes do
+  @doc """
+  The decompressed-tincture ceiling (config-overridable). Public because it
+  is also the largest blob any pull may legitimately carry, so the OCI blob
+  transport uses it as its wire-size ceiling.
+  """
+  @spec tincture_max_decompressed_bytes() :: pos_integer()
+  def tincture_max_decompressed_bytes do
     Application.get_env(
       :cyfr,
       :tincture_max_decompressed_bytes,

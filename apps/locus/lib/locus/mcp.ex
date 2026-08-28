@@ -471,6 +471,9 @@ defmodule Locus.MCP do
         {:error,
          "The builder refused this server's token — check CYFR_BUILDER_TOKEN on both ends"}
 
+      {:error, :builder_response_too_large} ->
+        {:error, "The builder's response exceeded the size ceiling — the build was aborted"}
+
       {:error, reason} ->
         {:error, "Compilation error: #{inspect(reason)}"}
     end

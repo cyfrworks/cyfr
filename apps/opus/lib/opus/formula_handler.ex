@@ -167,12 +167,24 @@ defmodule Opus.FormulaHandler do
         "await-all" =>
           {:fn,
            fn json_request ->
-             handle_await_all(json_request, tracker, batch_timeout_ms, parent_execution_id)
+             handle_await_all(
+               json_request,
+               tracker,
+               batch_timeout_ms,
+               parent_execution_id,
+               max_tasks
+             )
            end},
         "await-any" =>
           {:fn,
            fn json_request ->
-             handle_await_any(json_request, tracker, batch_timeout_ms, parent_execution_id)
+             handle_await_any(
+               json_request,
+               tracker,
+               batch_timeout_ms,
+               parent_execution_id,
+               max_tasks
+             )
            end},
         "poll" =>
           {:fn,
@@ -566,8 +578,19 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp handle_await_all(json_request, tracker, timeout_ms, parent_execution_id) do
+  defp handle_await_all(json_request, tracker, timeout_ms, parent_execution_id, max_tasks) do
     case Jason.decode(json_request) do
+      # The spawn cap bounds live-plus-undrained entries at max_tasks, so no
+      # honest await list is longer; a fabricated one would burn quadratic
+      # time in the tracker (which serializes every guest async op) for a
+      # list of :unknown_task errors.
+      {:ok, %{"task_ids" => task_ids}}
+      when is_list(task_ids) and length(task_ids) > max_tasks ->
+        encode_error(
+          :invalid_request,
+          "task_ids exceeds the concurrent-task limit (#{max_tasks})"
+        )
+
       {:ok, %{"task_ids" => task_ids}} when is_list(task_ids) and task_ids != [] ->
         start = System.monotonic_time(:millisecond)
 
@@ -606,8 +629,16 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp handle_await_any(json_request, tracker, timeout_ms, parent_execution_id) do
+  defp handle_await_any(json_request, tracker, timeout_ms, parent_execution_id, max_tasks) do
     case Jason.decode(json_request) do
+      # Same bound as await-all, for the same reason.
+      {:ok, %{"task_ids" => task_ids}}
+      when is_list(task_ids) and length(task_ids) > max_tasks ->
+        encode_error(
+          :invalid_request,
+          "task_ids exceeds the concurrent-task limit (#{max_tasks})"
+        )
+
       {:ok, %{"task_ids" => task_ids}} when is_list(task_ids) and task_ids != [] ->
         start = System.monotonic_time(:millisecond)
 
