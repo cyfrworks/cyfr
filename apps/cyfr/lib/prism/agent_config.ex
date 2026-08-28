@@ -104,10 +104,16 @@ defmodule Prism.AgentConfig do
           parent == agent_name
         end)
 
+      listing =
+        case catalyst_listing(ctx) do
+          {:ok, components} -> components
+          _ -> []
+        end
+
       parent_agents
       |> Enum.map(fn g ->
         name = g["name"]
-        build_sub_agent(ctx, name, fallback_catalyst, fallback_model)
+        build_sub_agent(ctx, listing, name, fallback_catalyst, fallback_model)
       end)
       |> Enum.reject(&is_nil/1)
     else
@@ -117,7 +123,7 @@ defmodule Prism.AgentConfig do
 
   # --- Private helpers ---
 
-  defp build_sub_agent(ctx, name, fallback_catalyst, fallback_model) do
+  defp build_sub_agent(ctx, listing, name, fallback_catalyst, fallback_model) do
     with {:ok, guide} <- call_aqua(ctx, %{"action" => "get", "name" => name}) do
       content = guide["content"] || ""
       description = guide["description"] || ""
@@ -128,7 +134,7 @@ defmodule Prism.AgentConfig do
 
       # Resolve per-role catalyst, falling back to orchestrator's
       {catalyst_ref, model} =
-        resolve_role_model(ctx, raw_catalyst, raw_model, fallback_catalyst, fallback_model)
+        resolve_role_model(listing, raw_catalyst, raw_model, fallback_catalyst, fallback_model)
 
       %{
         "name" => name,
@@ -161,9 +167,9 @@ defmodule Prism.AgentConfig do
     Map.put(input, "tool_policy", tool_policy || %{})
   end
 
-  defp resolve_role_model(ctx, catalyst_ref, model, fallback_catalyst, fallback_model) do
-    if is_binary(catalyst_ref) and is_binary(model) do
-      case resolve_catalyst(ctx, catalyst_ref) do
+  defp resolve_role_model(listing, catalyst_ref, model, fallback_catalyst, fallback_model) do
+    if is_binary(catalyst_ref) and is_binary(model) and listing != [] do
+      case find_matching_catalyst(listing, catalyst_ref) do
         {:ok, resolved} -> {resolved, model}
         _ -> {fallback_catalyst, fallback_model}
       end
@@ -184,16 +190,22 @@ defmodule Prism.AgentConfig do
   def model_status(nil, _agents), do: %{}
 
   def model_status(%Context{} = ctx, agents) when is_list(agents) do
+    listing =
+      case catalyst_listing(ctx) do
+        {:ok, components} -> components
+        _ -> []
+      end
+
     agents
     |> Enum.filter(&(&1["type"] == "orchestrator"))
     |> Enum.map(& &1["catalyst_ref"])
     |> Enum.filter(&(is_binary(&1) and &1 != ""))
     |> Enum.uniq()
-    |> Map.new(fn ref -> {ref, catalyst_status(ctx, ref)} end)
+    |> Map.new(fn ref -> {ref, catalyst_status(ctx, listing, ref)} end)
   end
 
-  defp catalyst_status(ctx, ref) do
-    with {:ok, resolved} <- resolve_catalyst(ctx, ref),
+  defp catalyst_status(ctx, listing, ref) do
+    with {:ok, resolved} <- find_matching_catalyst(listing, ref),
          {:ok, plan} <-
            Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
              "action" => "setup_plan",
@@ -207,6 +219,16 @@ defmodule Prism.AgentConfig do
 
   @doc false
   def resolve_catalyst(%Context{} = ctx, versionless_ref) when is_binary(versionless_ref) do
+    with {:ok, components} <- catalyst_listing(ctx) do
+      find_matching_catalyst(components, versionless_ref)
+    end
+  end
+
+  def resolve_catalyst(_ctx, nil), do: {:error, :no_catalyst_ref}
+
+  # One listing for a whole pass: sub-agent resolution and model_status
+  # used to fetch the full catalyst listing once per agent.
+  defp catalyst_listing(ctx) do
     result =
       Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
         "action" => "list",
@@ -216,19 +238,14 @@ defmodule Prism.AgentConfig do
     case result do
       {:ok, listing} when is_map(listing) ->
         case stringify_deep(listing) do
-          %{"components" => components} when is_list(components) ->
-            find_matching_catalyst(components, versionless_ref)
-
-          _ ->
-            {:error, :catalyst_lookup_failed}
+          %{"components" => components} when is_list(components) -> {:ok, components}
+          _ -> {:error, :catalyst_lookup_failed}
         end
 
       _ ->
         {:error, :catalyst_lookup_failed}
     end
   end
-
-  def resolve_catalyst(_ctx, nil), do: {:error, :no_catalyst_ref}
 
   defp find_matching_catalyst(components, versionless_ref) do
     prefix = versionless_ref <> ":"
