@@ -36,7 +36,6 @@ defmodule PrismWeb.LiveAuth do
         {:cont,
          socket
          |> assign(:context, ctx)
-         |> assign(:session_token, token)
          |> assign(:personal_namespace_slug, slug)
          |> assign(:ui_mode, ui_mode(ctx))
          |> attach_hook(:sanctum_standing, :handle_info, &standing_changed/2)}
@@ -91,13 +90,22 @@ defmodule PrismWeb.LiveAuth do
   # Any other membership change — joined a group, the operator bit granted —
   # re-derives the caller instead of trusting the Context assigned at mount
   # for the socket's lifetime.
+  #
+  # From the Context, not from the session token. Memberships, the operator
+  # bit and whether the focused athanor is still granted are all `revalidate/1`
+  # answers, and the two questions a token would additionally settle already
+  # have their own clauses above: a revoked session arrives as
+  # `:sessions_revoked`, a lost seat as `:left`. Keeping the raw token in
+  # assigns for this one call put a live bearer credential in every page
+  # socket's state, which `Phoenix.LiveView.Socket` prints in a crash report.
   defp standing_changed({:membership_changed, _}, socket) do
-    token = socket.assigns[:session_token]
-    focus = socket.assigns.context.athanor_id
+    case Sanctum.Tenancy.revalidate(socket.assigns.context) do
+      %Sanctum.Context{authenticated: true, athanor_id: id} = ctx when is_binary(id) ->
+        Cyfr.LoggerContext.set_from_context(ctx)
+        {:halt, assign(socket, :context, ctx)}
 
-    case PrismWeb.AuthHelpers.authenticate_session(token, focus) do
-      {:ok, ctx} -> {:halt, assign(socket, :context, ctx)}
-      {:error, _} -> {:halt, redirect(socket, to: "/")}
+      _ ->
+        {:halt, redirect(socket, to: "/")}
     end
   end
 

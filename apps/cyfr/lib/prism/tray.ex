@@ -9,16 +9,26 @@ defmodule Prism.Tray do
   survives every page navigation (the topbar remounts on each) and dies
   with the session. Nothing is derived from tables here — the counts are
   the notifies the topbar saw; opening an athanor clears its count.
+
+  Every verb takes that hash (`session_hash/1`), never the token. The tray
+  only ever needed an opaque per-session name, and taking the credential to
+  derive one meant the caller had to hold a live token for the socket's
+  lifetime — in assigns, which a LiveView crash report prints.
   """
 
   @ttl_ms :timer.hours(24)
 
   @type badges :: %{optional(String.t()) => pos_integer()}
 
+  @doc "The per-session tray name derived from a session token."
+  @spec session_hash(String.t() | nil) :: String.t() | nil
+  def session_hash(token) when is_binary(token), do: Cyfr.Digest.sha256_hex(token)
+  def session_hash(_), do: nil
+
   @doc "The badges of a session."
   @spec get(String.t() | nil) :: badges()
-  def get(token) when is_binary(token) do
-    case Arca.Cache.get(key(token)) do
+  def get(hash) when is_binary(hash) do
+    case Arca.Cache.get(key(hash)) do
       {:ok, %{} = badges} -> badges
       _ -> %{}
     end
@@ -28,9 +38,9 @@ defmodule Prism.Tray do
 
   @doc "One more thing happened in `athanor_id`; returns the badges."
   @spec bump(String.t() | nil, String.t()) :: badges()
-  def bump(token, athanor_id) when is_binary(token) and is_binary(athanor_id) do
-    badges = Map.update(get(token), athanor_id, 1, &(&1 + 1))
-    Arca.Cache.put(key(token), badges, @ttl_ms)
+  def bump(hash, athanor_id) when is_binary(hash) and is_binary(athanor_id) do
+    badges = Map.update(get(hash), athanor_id, 1, &(&1 + 1))
+    Arca.Cache.put(key(hash), badges, @ttl_ms)
     badges
   end
 
@@ -38,14 +48,13 @@ defmodule Prism.Tray do
 
   @doc "The person opened `athanor_id`: its count is gone; returns the badges."
   @spec clear(String.t() | nil, String.t() | nil) :: badges()
-  def clear(token, athanor_id) when is_binary(token) and is_binary(athanor_id) do
-    badges = Map.delete(get(token), athanor_id)
-    Arca.Cache.put(key(token), badges, @ttl_ms)
+  def clear(hash, athanor_id) when is_binary(hash) and is_binary(athanor_id) do
+    badges = Map.delete(get(hash), athanor_id)
+    Arca.Cache.put(key(hash), badges, @ttl_ms)
     badges
   end
 
-  def clear(token, _), do: get(token)
+  def clear(hash, _), do: get(hash)
 
-  # The token itself never sits in a cache key.
-  defp key(token), do: {:tray, Cyfr.Digest.sha256_hex(token)}
+  defp key(hash), do: {:tray, hash}
 end

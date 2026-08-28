@@ -326,6 +326,37 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert loaded.athanor_id == personal_id
     end
 
+    test "signing in does not carry the pre-login session across",
+         %{conn: conn, bypass: bypass} do
+      # The anonymous session's `_csrf_token` is what binds a device-flow
+      # ticket to a browser, so anything an attacker could plant on this
+      # origin before sign-in must not survive it. Nothing set before the
+      # exchange is still readable after.
+      n = System.unique_integer([:positive])
+      uid = "auth_cb_renew_#{n}"
+
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 200, %{
+          "personal_namespace" => %{"slug" => "renew#{n}", "token" => "cyfr_pt_personal"},
+          "memberships" => []
+        })
+      end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> Plug.Conn.put_session(:planted, "pre-login")
+        |> Plug.Conn.put_session("_csrf_token", "pre-login-csrf")
+
+      assert Plug.Conn.get_session(conn, :planted) == "pre-login"
+
+      conn = callback(conn, verified_github_auth(uid))
+
+      assert is_binary(session_of(conn))
+      refute Plug.Conn.get_session(conn, :planted)
+      refute Plug.Conn.get_session(conn, "_csrf_token") == "pre-login-csrf"
+    end
+
     test "an operator's first sign-in lands in their own athanor, not the Home seat",
          %{conn: conn, bypass: bypass} do
       n = System.unique_integer([:positive])

@@ -158,6 +158,20 @@ defmodule PrismWeb.SignInResponse do
     ArgumentError -> conn
   end
 
+  # Start the authenticated session on a clean one. Whatever the browser
+  # carried while anonymous — most of all Phoenix's `_csrf_token`, which is
+  # the value `AuthController.same_browser?/2` binds a device-flow ticket to
+  # — must not survive the exchange, or a session an attacker could plant on
+  # this origin beforehand keeps its hold afterwards. `clear_session/1` drops
+  # the data (the cookie store keeps no id to rotate) and `renew: true` moves
+  # the id for a server-side store. Everything this module writes for the
+  # claim and legal pages is written after, inside the outcome's callback.
+  defp renew_session(conn) do
+    conn |> configure_session(renew: true) |> clear_session()
+  rescue
+    ArgumentError -> conn
+  end
+
   # The session, then the cookie, then whatever the outcome renders. A
   # session that cannot be written is a 500 — the only non-redirect answer
   # a browser sees on an admitted sign-in.
@@ -166,7 +180,7 @@ defmodule PrismWeb.SignInResponse do
       {:mint, ctx} ->
         case Sanctum.Session.create(ctx) do
           {:ok, session} ->
-            fun.(put_session(conn, @session_key, session.token))
+            fun.(conn |> renew_session() |> put_session(@session_key, session.token))
 
           {:error, reason} ->
             Logger.error("[PrismWeb.SignInResponse] session create failed: #{inspect(reason)}")
@@ -186,7 +200,7 @@ defmodule PrismWeb.SignInResponse do
         end
 
       {:token, token} ->
-        fun.(put_session(conn, @session_key, token))
+        fun.(conn |> renew_session() |> put_session(@session_key, token))
 
       :existing ->
         fun.(conn)

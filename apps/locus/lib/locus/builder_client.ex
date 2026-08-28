@@ -80,7 +80,7 @@ defmodule Locus.BuilderClient do
 
   defp handle_response(200, %{"ok" => true} = built, on_progress) do
     replay_logs(built, on_progress)
-    {:ok, decode_result(built)}
+    decode_result(built)
   end
 
   defp handle_response(422, %{"error" => error} = built, on_progress) do
@@ -100,26 +100,87 @@ defmodule Locus.BuilderClient do
     end
   end
 
-  defp decode_result(%{"wasm_base64" => b64} = built) when is_binary(b64) do
-    %{
-      wasm_bytes: Base.decode64!(b64),
-      digest: built["digest"],
-      size: built["size"],
-      exports: built["exports"] || [],
-      language: built["language"],
-      target_type: built["target_type"]
-    }
+  @doc """
+  The builder's answer, checked rather than believed.
+
+  The container is a separate trust domain: everything below is input. The
+  in-process path validates the bytes it produced and derives the digest,
+  size and exports from that validation (`Locus.Builder.do_compile/5`), so
+  this path does the same instead of copying the claim — otherwise a
+  compromised or simply buggy builder names the digest a component is
+  registered under. Output paths are held to `Cyfr.PathSafety` on the way
+  OUT for the same reason they are on the way in: they become
+  `Path.split/1` segments of a version directory, and Arca does not itself
+  refuse a `..`.
+  """
+  @spec decode_result(map()) :: {:ok, map()} | {:error, term()}
+  def decode_result(%{"wasm_base64" => b64} = built) when is_binary(b64) do
+    with {:ok, bytes} <- decode64(b64, "wasm_base64"),
+         {:ok, validation} <- validate_wasm(bytes) do
+      {:ok,
+       %{
+         wasm_bytes: bytes,
+         digest: validation.digest,
+         size: validation.size,
+         exports: validation.exports,
+         language: built["language"],
+         target_type: built["target_type"]
+       }}
+    end
   end
 
-  defp decode_result(%{"output_files" => files} = built) when is_map(files) do
-    %{
-      output_files: Map.new(files, fn {path, b64} -> {path, Base.decode64!(b64)} end),
-      digest: built["digest"],
-      size: built["size"],
-      exports: built["exports"] || [],
-      language: built["language"],
-      target_type: built["target_type"]
-    }
+  def decode_result(%{"output_files" => files} = built) when is_map(files) do
+    with {:ok, decoded} <- decode_output_files(files) do
+      {:ok,
+       %{
+         output_files: decoded,
+         digest: built["digest"],
+         size: built["size"],
+         exports: built["exports"] || [],
+         language: built["language"],
+         target_type: built["target_type"]
+       }}
+    end
+  end
+
+  def decode_result(built),
+    do: {:error, {:builder_malformed_result, Map.keys(built)}}
+
+  defp decode_output_files(files) do
+    Enum.reduce_while(files, {:ok, %{}}, fn {path, b64}, {:ok, acc} ->
+      with :ok <- safe_path(path),
+           {:ok, content} <- decode64(b64, path) do
+        {:cont, {:ok, Map.put(acc, path, content)}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp safe_path(path) when is_binary(path) do
+    case Cyfr.PathSafety.validate_relative_path(path) do
+      :ok -> :ok
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, {:builder_unsafe_path, path, reason}}
+    end
+  end
+
+  defp safe_path(path), do: {:error, {:builder_unsafe_path, path, :not_a_string}}
+
+  defp decode64(b64, where) when is_binary(b64) do
+    case Base.decode64(b64) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, {:builder_invalid_base64, where}}
+    end
+  end
+
+  defp decode64(_b64, where), do: {:error, {:builder_invalid_base64, where}}
+
+  defp validate_wasm(bytes) do
+    case Compendium.WasmValidator.validate(bytes) do
+      {:ok, validation} -> {:ok, validation}
+      {:error, reason} -> {:error, {:builder_invalid_wasm, reason}}
+    end
   end
 
   defp replay_logs(%{"logs" => logs}, on_progress) when is_list(logs) do

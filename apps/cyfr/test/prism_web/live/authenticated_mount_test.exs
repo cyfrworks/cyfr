@@ -40,6 +40,33 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert_redirect(view, "/")
   end
 
+  test "no mounted socket keeps the raw session token in its assigns", %{conn: conn} do
+    # `Phoenix.LiveView.Socket` derives Inspect with `:assigns` in the `only:`
+    # list, so a crash in any LiveView prints them in the GenServer terminate
+    # report — and `PrismWeb.LiveDefaults` exists precisely because a client
+    # can name an event that crashes one. The HTTP plug stamps only
+    # `Session.token_hash/1` for the same reason; the socket now matches.
+    user = test_user()
+    conn = log_in_user(conn, user)
+    token = Plug.Conn.get_session(conn, PrismWeb.SignInResponse.session_key())
+    assert is_binary(token)
+
+    {view, _html} = mount_athanor(conn, "/settings")
+
+    for {name, assigns} <- [{"page", :sys.get_state(view.pid).socket.assigns}] do
+      refute token in Map.values(assigns),
+             "the #{name} socket holds the raw session token in assigns"
+    end
+
+    # ...and it still re-derives standing when a membership changes, which is
+    # what it used to keep the token for.
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Re #{user.namespace}")
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: group.id)
+    Sanctum.Tenancy.Members.broadcast_change(user.user_id, group.id, :joined)
+
+    assert render(view) =~ "Settings"
+  end
+
   test "an anonymous conn is redirected to /login", %{conn: conn} do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/settings"))
   end

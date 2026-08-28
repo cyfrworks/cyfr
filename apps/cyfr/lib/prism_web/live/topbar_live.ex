@@ -73,7 +73,7 @@ defmodule PrismWeb.TopbarLive do
             |> assign(:context, ctx)
             |> assign(:personal_namespace_slug, ctx.namespace)
             |> assign(:authenticated, true)
-            |> assign(:session_token, token)
+            |> assign(:tray_key, Prism.Tray.session_hash(token))
             |> assign(:ui_mode, ui_mode)
             |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
             |> assign(:badges, %{})
@@ -95,7 +95,7 @@ defmodule PrismWeb.TopbarLive do
           |> assign(:context, nil)
           |> assign(:personal_namespace_slug, nil)
           |> assign(:authenticated, false)
-          |> assign(:session_token, nil)
+          |> assign(:tray_key, nil)
           |> assign(:ui_mode, Prism.Labels.mode(session["ui_mode"]))
           |> assign(:athanor_route, nil)
           |> assign(:athanors, [])
@@ -173,7 +173,7 @@ defmodule PrismWeb.TopbarLive do
     socket =
       socket
       # Opening an athanor reads its badge; the others stay.
-      |> assign(:badges, Prism.Tray.clear(socket.assigns.session_token, ctx.athanor_id))
+      |> assign(:badges, Prism.Tray.clear(socket.assigns.tray_key, ctx.athanor_id))
       |> assign(:platform_requests, platform_requests(ctx))
       |> load_athanors(ctx)
       |> load_initial_state()
@@ -242,7 +242,7 @@ defmodule PrismWeb.TopbarLive do
     if athanor_id == socket.assigns.context.athanor_id do
       {:noreply, socket}
     else
-      badges = Prism.Tray.bump(socket.assigns.session_token, athanor_id)
+      badges = Prism.Tray.bump(socket.assigns.tray_key, athanor_id)
       {:noreply, assign(socket, :badges, badges)}
     end
   end
