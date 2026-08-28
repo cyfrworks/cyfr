@@ -58,6 +58,35 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.poll_for_session("github", "fake_device_code")
     end
+
+    test "polls beyond the per-code budget answer slow_down without provider contact" do
+      Application.delete_env(:cyfr, :github_client_id)
+      System.delete_env("CYFR_GITHUB_CLIENT_ID")
+      Cyfr.RateLimiter.reset()
+      on_exit(fn -> Cyfr.RateLimiter.reset() end)
+
+      code = "budget_test_code"
+
+      # Inside the budget every poll proceeds (and here dies on the missing
+      # client id — no provider is ever contacted in this suite).
+      for _ <- 1..30 do
+        assert {:error, {:client_id_not_configured, :github}} =
+                 DeviceFlow.poll_for_session("github", code)
+      end
+
+      # The 31st answers the protocol's own back-pressure shape, before
+      # any config or provider is consulted.
+      assert {:ok, %{status: "pending", slow_down: true}} =
+               DeviceFlow.poll_for_session("github", code)
+
+      # A different device code has its own budget.
+      assert {:error, {:client_id_not_configured, :github}} =
+               DeviceFlow.poll_for_session("github", "another_code")
+
+      # The appeal-path poll shares the same budget vocabulary.
+      assert {:ok, %{status: "pending", slow_down: true}} =
+               DeviceFlow.poll_for_access_token("github", code)
+    end
   end
 
   # Note: Full integration tests for device flow require mocking HTTP calls

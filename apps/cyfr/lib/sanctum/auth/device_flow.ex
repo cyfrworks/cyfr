@@ -135,7 +135,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   """
   @spec poll_for_session(provider(), String.t()) :: {:ok, map()} | {:error, term()}
   def poll_for_session(provider, device_code) do
-    with {:ok, provider, client_id} <- usable(provider) do
+    with :ok <- check_poll_budget(device_code),
+         {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
         {:ok, tokens} ->
           # Got tokens: user info, the door, what sign-in records, then the
@@ -166,6 +167,9 @@ defmodule Sanctum.Auth.DeviceFlow do
         {:error, reason} ->
           {:error, reason}
       end
+    else
+      {:budget, :slow_down} -> {:ok, %{status: "pending", slow_down: true}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -188,7 +192,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   """
   @spec poll_for_access_token(provider(), String.t()) :: {:ok, map()} | {:error, term()}
   def poll_for_access_token(provider, device_code) do
-    with {:ok, provider, client_id} <- usable(provider) do
+    # The appeal flow's raw-token poll deliberately bypasses the Door — an
+    # appellant is by definition someone the takedown cascade already
+    # revoked, and they must still be able to prove who they are to
+    # cyfr.run. The Door exemption is the point; the poll BUDGET below is
+    # not exempt.
+    with :ok <- check_poll_budget(device_code),
+         {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
         {:ok, tokens} ->
           with {:ok, user_info} <- fetch_user_info(provider, tokens) do
@@ -218,6 +228,31 @@ defmodule Sanctum.Auth.DeviceFlow do
         {:error, reason} ->
           {:error, reason}
       end
+    else
+      {:budget, :slow_down} -> {:ok, %{status: "pending", slow_down: true}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Both poll surfaces are anonymous, and every poll POSTs to the IdP
+  # with THIS server's client id — unbudgeted, an abuser could spend the
+  # client id's reputation at the provider. A well-behaved client polls
+  # every 5s, so 30/min per device code leaves generous headroom; the
+  # server-wide ceiling keeps a swarm of fabricated codes from
+  # multiplying the per-code budget. An over-budget poll answers the
+  # protocol's own back-pressure shape without contacting the provider.
+  @poll_per_code_max 30
+  @poll_global_max 300
+  @poll_window_ms 60_000
+
+  defp check_poll_budget(device_code) do
+    per_code_key = {:device_poll, Cyfr.Digest.sha256_hex(device_code)}
+
+    with :ok <- Cyfr.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms),
+         :ok <- Cyfr.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms) do
+      :ok
+    else
+      {:deny, _retry_ms} -> {:budget, :slow_down}
     end
   end
 
