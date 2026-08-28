@@ -792,7 +792,7 @@ defmodule Opus.Executor do
     identity = verify["identity"] || verify[:identity]
     issuer = verify["issuer"] || verify[:issuer]
 
-    case Opus.SignatureVerifier.verify(component, identity, issuer) do
+    case Opus.SignatureAttestation.verify(component, identity, issuer) do
       :ok -> :ok
       {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
     end

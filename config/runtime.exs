@@ -78,6 +78,11 @@ if config_env() != :test do
   # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
   config :cyfr, :auto_migrate, env_bool.("CYFR_AUTO_MIGRATE", true)
 
+  # Whether a pull refuses a component whose OCI signature cannot be
+  # verified (default: false — the component is stored as unverified and
+  # the recorded attestation is checked again at execution time).
+  config :cyfr, :require_signed_pulls, env_bool.("CYFR_REQUIRE_SIGNED_PULLS", false)
+
   # A headless node (default: false) serves the API, MCP and public tinctures
   # and no browser surface: every route on the browser pipeline answers 404.
   # Codex signs in through the session tool on /mcp, so it does not notice.

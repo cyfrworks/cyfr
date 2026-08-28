@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.SignatureVerifier do
+defmodule Opus.SignatureAttestation do
   @moduledoc """
-  Signature verification for WASM components at execution time.
+  Reads the signature attestation recorded at pull time.
 
-  Verifies that OCI-sourced components have been signature-verified at pull time
-  by checking stored metadata (set by Compendium.Cosign during `cyfr pull`).
+  No cryptography happens here: `Compendium.Cosign` verified (or failed to
+  verify) the OCI signature when the component was pulled and the result was
+  recorded on the row (`signature_verified`, `signer_identity`,
+  `signer_issuer`). This module checks that recorded attestation at
+  execution time — the name says what it reads, not what it proves.
 
   ## Trust Model
 
@@ -17,11 +20,11 @@ defmodule Opus.SignatureVerifier do
 
   ## Usage
 
-      # Verify a component's signature metadata
-      :ok = SignatureVerifier.verify(component_map, nil, nil)
+      # Check a component's recorded attestation
+      :ok = SignatureAttestation.verify(component_map, nil, nil)
 
       # Verify with identity/issuer requirements
-      :ok = SignatureVerifier.verify(component_map, "dev@cyfr.run", "https://accounts.google.com")
+      :ok = SignatureAttestation.verify(component_map, "dev@cyfr.run", "https://accounts.google.com")
   """
 
   @doc """

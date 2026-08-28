@@ -534,20 +534,28 @@ defmodule Compendium.OCI.Client do
   # Private: Component Storage
   # ============================================================================
 
-  # Verify OCI image signature via cosign. Returns {:ok, sig_meta} always —
-  # verification failure is not fatal (component is stored as unverified).
+  # Verify OCI image signature via cosign. By default a verification failure
+  # is not fatal: the component is stored as unverified and the recorded
+  # attestation is checked again at execution time (Opus.SignatureAttestation).
+  # CYFR_REQUIRE_SIGNED_PULLS makes the failure refuse the pull instead.
   defp verify_signature(oci_ref) do
     case Compendium.Cosign.verify(oci_ref) do
       {:ok, %{identity: identity, issuer: issuer}} ->
         {:ok, %{verified: true, identity: identity, issuer: issuer}}
 
       {:error, reason} ->
-        Logger.warning(
-          "[Compendium.OCI.Client] Signature verification failed for #{oci_ref}: #{reason}. " <>
-            "Component will be stored as unverified."
-        )
+        if Application.get_env(:cyfr, :require_signed_pulls, false) do
+          {:error,
+           "Signature verification failed for #{oci_ref}: #{reason} — " <>
+             "this server requires signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"}
+        else
+          Logger.warning(
+            "[Compendium.OCI.Client] Signature verification failed for #{oci_ref}: #{reason}. " <>
+              "Component will be stored as unverified."
+          )
 
-        {:ok, %{verified: false, identity: nil, issuer: nil}}
+          {:ok, %{verified: false, identity: nil, issuer: nil}}
+        end
     end
   end
 
