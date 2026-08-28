@@ -162,10 +162,14 @@ defmodule Sanctum.Door do
 
   defp record_request(_reason, _user_id, _email), do: :ok
 
+  @doc "The operator emails named in `CYFR_PLATFORM_ADMIN_EMAILS` (lowercased)."
+  @spec platform_admin_emails() :: [String.t()]
+  def platform_admin_emails, do: Application.get_env(:cyfr, :platform_admin_emails, [])
+
   @doc "Is this email one of the operators named in `CYFR_PLATFORM_ADMIN_EMAILS`?"
   @spec platform_admin_email?(String.t() | nil) :: boolean()
   def platform_admin_email?(email) when is_binary(email) do
-    String.downcase(email) in Application.get_env(:cyfr, :platform_admin_emails, [])
+    String.downcase(email) in platform_admin_emails()
   end
 
   def platform_admin_email?(_), do: false

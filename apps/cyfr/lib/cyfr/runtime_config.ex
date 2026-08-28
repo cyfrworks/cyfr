@@ -133,6 +133,31 @@ defmodule Cyfr.RuntimeConfig do
   @spec headless?() :: boolean()
   def headless?, do: Application.get_env(:cyfr, :headless, false) == true
 
+  @doc "Whether this node runs as an OTP release (RELEASE_ROOT is set)."
+  @spec release?() :: boolean()
+  def release?, do: System.get_env("RELEASE_ROOT") != nil
+
+  @doc "The consent-proof store module (default: the DB store)."
+  @spec consent_proof_store() :: module()
+  def consent_proof_store,
+    do: Application.get_env(:cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB)
+
+  @doc "The configured OIDC issuer URL, or nil."
+  @spec oidc_issuer() :: String.t() | nil
+  def oidc_issuer, do: Application.get_env(:cyfr, :oidc_issuer)
+
+  @doc "Whether the Prometheus /metrics endpoint is enabled."
+  @spec prometheus_metrics_enabled?() :: boolean()
+  def prometheus_metrics_enabled?,
+    do: Application.get_env(:cyfr, :prometheus_metrics_enabled, false)
+
+  @doc """
+  The resolved crypto keyring. Raises when read before boot resolution —
+  a sealed row must never be touched with a guessed key.
+  """
+  @spec crypto_keyring!() :: map()
+  def crypto_keyring!, do: Application.fetch_env!(:cyfr, :crypto_keyring)
+
   @doc """
   The externally reachable base URL of this instance, without a trailing
   slash, or `nil` when the operator has not declared one.

@@ -19,7 +19,7 @@ defmodule EmissaryWeb.MetricsPlug do
 
   @impl true
   def call(%Plug.Conn{request_path: "/metrics", method: "GET"} = conn, _opts) do
-    if Application.get_env(:cyfr, :prometheus_metrics_enabled, false) do
+    if Cyfr.RuntimeConfig.prometheus_metrics_enabled?() do
       metrics = TelemetryMetricsPrometheus.Core.scrape(:cyfr_prometheus)
 
       conn

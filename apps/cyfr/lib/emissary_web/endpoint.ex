@@ -29,7 +29,7 @@ defmodule EmissaryWeb.Endpoint do
     # The salt is a domain separator, not a key (signing strength comes
     # from secret_key_base) — but a release running on the repo's default
     # deserves to know, once, like the derived-keyring warning at boot.
-    if salt == @default_session_salt and System.get_env("RELEASE_ROOT") != nil do
+    if salt == @default_session_salt and Cyfr.RuntimeConfig.release?() do
       warn_default_salt_once()
     end
 

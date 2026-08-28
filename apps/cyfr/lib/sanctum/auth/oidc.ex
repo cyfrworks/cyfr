@@ -198,7 +198,7 @@ defmodule Sanctum.Auth.OIDC do
     # user-id issuer deterministic and reads the SAME source as the boot
     # reserved-host check (Cyfr.Application.validate_oidc_issuer_config!/0).
     iss =
-      case Application.get_env(:cyfr, :oidc_issuer) do
+      case Cyfr.RuntimeConfig.oidc_issuer() do
         issuer when is_binary(issuer) and issuer != "" ->
           issuer
 

@@ -125,7 +125,7 @@ defmodule Sanctum.Cipher do
   # Internal
   # ============================================================================
 
-  defp keyring, do: Application.fetch_env!(:cyfr, :crypto_keyring)
+  defp keyring, do: Cyfr.RuntimeConfig.crypto_keyring!()
 
   # Length-prefixed framing of the full identifying tuple. Absent fields frame
   # as "" so the AAD is well-defined and identical across encrypt/decrypt for

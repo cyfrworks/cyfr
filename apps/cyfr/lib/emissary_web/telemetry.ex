@@ -35,7 +35,7 @@ defmodule EmissaryWeb.Telemetry do
   end
 
   defp maybe_prometheus_reporter do
-    if Application.get_env(:cyfr, :prometheus_metrics_enabled, false) do
+    if Cyfr.RuntimeConfig.prometheus_metrics_enabled?() do
       [{TelemetryMetricsPrometheus.Core, metrics: metrics(), name: :cyfr_prometheus}]
     else
       []

@@ -175,7 +175,7 @@ defmodule Cyfr.Application do
   end
 
   defp maybe_proof_memory do
-    case Application.get_env(:cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB) do
+    case Cyfr.RuntimeConfig.consent_proof_store() do
       Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
       _ -> []
     end
@@ -312,7 +312,7 @@ defmodule Cyfr.Application do
       cors_enforcement(
         Sanctum.auth_configured?(),
         Cyfr.RuntimeConfig.cors_allowed_origins(),
-        System.get_env("RELEASE_ROOT") != nil
+        Cyfr.RuntimeConfig.release?()
       )
 
     case decision do
@@ -386,7 +386,7 @@ defmodule Cyfr.Application do
   # quiet in test, where no auth provider is configured.
   defp warn_if_no_platform_admin do
     auth_configured? = Sanctum.auth_configured?()
-    no_admins? = Application.get_env(:cyfr, :platform_admin_emails, []) == []
+    no_admins? = Sanctum.Door.platform_admin_emails() == []
 
     if auth_configured? and no_admins? do
       Logger.warning(
@@ -403,7 +403,7 @@ defmodule Cyfr.Application do
   # Surface it at boot so a deploy fails loudly instead of every login.
   defp validate_oidc_issuer_config! do
     if Cyfr.RuntimeConfig.auth_provider() == Sanctum.Auth.OIDC do
-      case check_oidc_issuer(Application.get_env(:cyfr, :oidc_issuer)) do
+      case check_oidc_issuer(Cyfr.RuntimeConfig.oidc_issuer()) do
         :ok -> :ok
         {:error, message} -> raise "[Cyfr] FATAL: #{message}"
       end
@@ -466,7 +466,7 @@ defmodule Cyfr.Application do
         # should know their ciphertexts are keyed to the Phoenix secret:
         # rotating CYFR_SECRET_KEY_BASE orphans every sealed blob. The
         # neighbouring boot checks warn; so does this one.
-        if System.get_env("RELEASE_ROOT") != nil do
+        if Cyfr.RuntimeConfig.release?() do
           Logger.warning(
             "[Cyfr] No CYFR_CRYPTO_KEYRING set — deriving the crypto keyring from " <>
               "CYFR_SECRET_KEY_BASE. Rotating that secret will orphan everything " <>

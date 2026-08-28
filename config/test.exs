@@ -43,8 +43,8 @@ config :cyfr, :registry_health_probe, false
 # it owns, so a burst of concurrent tasks each writing an audit row queues on
 # it. The production queue drop target (50 ms) is tuned for a real pool and
 # would drop those requests under load; give the single shared connection room.
-case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
-  "sqlite" ->
+case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
+  :sqlite ->
     # Stable across runs (so migrations are reused) and keyed by checkout
     # (so two worktrees never share a file) — but OUT of the repo's data/:
     # a run that dies mid-suite must not leave a database that poisons the
@@ -64,7 +64,7 @@ case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
       journal_mode: :wal,
       busy_timeout: 5_000
 
-  "postgres" ->
+  :postgres ->
     config :cyfr, Arca.Repo,
       url:
         System.get_env("CYFR_DATABASE_URL") ||

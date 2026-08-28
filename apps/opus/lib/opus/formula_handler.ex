@@ -741,7 +741,10 @@ defmodule Opus.FormulaHandler do
   # invocations, while an agent emits a text_delta per token — reusing it
   # would break streaming on day one.
   defp check_emit_rate(execution_id, ctx) do
-    limit = Application.get_env(:cyfr, :emit_rate_limit, %{requests: 3000, window: "1m"})
+    # A constant, not config: the :emit_rate_limit key was documented by
+    # nothing, set by nothing, and readable only here. A knob that only
+    # looks turnable is worse than a number.
+    limit = %{requests: 3000, window: "1m"}
 
     case Opus.RateLimiter.check(ctx.athanor_id, "emit:" <> execution_id, %{
            rate_limit: limit

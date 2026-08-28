@@ -78,12 +78,14 @@ config :cyfr, :execution_impl, Opus
 # Sanctum.Sanitizer.sanitize/1.
 
 # Arca Repo adapter is selected at build time — Ecto can't swap adapters at
-# runtime. Default is SQLite; set CYFR_DATABASE=postgres to build for
-# Postgres. Adapter-specific Repo defaults are scoped accordingly so
+# runtime. The one CYFR_DATABASE parse lives in database_choice.exs (shared
+# with test.exs). Adapter-specific Repo defaults are scoped accordingly so
 # SQLite-only keys (journal_mode, busy_timeout) never bleed into the Postgres
 # build's merged config; Postgres URL/pool/ssl are set in config/runtime.exs.
-case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
-  "sqlite" ->
+Code.require_file("database_choice.exs", __DIR__)
+
+case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
+  :sqlite ->
     config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
 
     config :cyfr, Arca.Repo,
@@ -92,12 +94,9 @@ case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
       journal_mode: :wal,
       busy_timeout: 5_000
 
-  "postgres" ->
+  :postgres ->
     config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
     config :cyfr, Arca.Repo, []
-
-  other ->
-    raise "Unknown CYFR_DATABASE=#{other}; expected \"sqlite\" or \"postgres\""
 end
 
 config :cyfr, ecto_repos: [Arca.Repo]
