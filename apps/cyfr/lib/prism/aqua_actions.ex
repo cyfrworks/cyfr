@@ -223,8 +223,8 @@ defmodule Prism.AquaActions do
 
   defp validate_kind("ui.component.focus", obj, _policy) do
     with {:ok, ref} <- string_field(obj, "ref"),
-         :ok <- check_id_shape(ref, "ui.component.focus", "ref") do
-      {:ok, %{kind: "navigate", to: "/components/#{ref}"}}
+         :ok <- component_focus_ref(ref) do
+      {:ok, %{kind: "navigate", to: "/components/#{URI.encode(ref, &URI.char_unreserved?/1)}"}}
     end
   end
 
@@ -458,6 +458,17 @@ defmodule Prism.AquaActions do
     text
     |> String.replace(~r/[\x00-\x08\x0B-\x1F\x7F]/, "")
     |> String.trim_trailing("\n")
+  end
+
+  # A full component ref (`type:ns.name:version` — the grammar the prompt
+  # teaches, validated by its owner) or a bare dotted name. The generic
+  # id-shape regex alone refused `:`, so every full ref was silently
+  # dropped.
+  defp component_focus_ref(ref) do
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, _} -> :ok
+      {:error, _} -> check_id_shape(ref, "ui.component.focus", "ref")
+    end
   end
 
   defp check_id_shape(value, kind, key) do

@@ -756,6 +756,10 @@ defmodule PrismWeb.ConversationLive do
   defp push_intents(socket, []), do: socket
 
   defp push_intents(socket, intents) do
+    mode = socket.assigns[:ui_mode]
+
+    intents = Enum.filter(intents, &mode_permits?(&1, mode))
+
     route = socket.assigns.athanor_route
 
     intents =
@@ -766,6 +770,20 @@ defmodule PrismWeb.ConversationLive do
 
     push_event(socket, "aqua:intents", %{intents: intents})
   end
+
+  # A navigate to a page the current mode's nav does not show is dropped —
+  # `PrismWeb.Nav` is the one owner of what a mode surfaces, and an
+  # agent's intent gets no wider view than the person's own chrome.
+  defp mode_permits?(%{kind: "navigate", to: to}, mode) do
+    base = to |> String.split("?", parts: 2) |> hd()
+
+    Enum.any?(PrismWeb.Nav.items(mode), fn %{path: path} ->
+      (path == "" and base == "") or
+        (path != "" and (base == path or String.starts_with?(base, path <> "/")))
+    end)
+  end
+
+  defp mode_permits?(_intent, _mode), do: true
 
   # ---------------------------------------------------------------------------
   # Models (async, best-effort)

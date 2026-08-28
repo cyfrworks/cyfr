@@ -25,7 +25,9 @@ defmodule PrismWeb.AgentsLive.Catalog do
   virtual tools, and external server tools. Every entry has a kind atom
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
-  Missing-annotation actions default to `:write` and are logged.
+  An action without a kind annotation is not policy-manageable — the
+  policy plane (`Prism.AquaActions.kind_for/2`) refuses it, so it is
+  logged and left off this catalogue rather than mislabeled `:write`.
   """
   def enumerate_tool_actions do
     mcp =
@@ -43,19 +45,22 @@ defmodule PrismWeb.AgentsLive.Catalog do
             [_ | _] = enum ->
               enum
               |> Enum.filter(&reachable?(name, &1))
-              |> Enum.map(fn a ->
+              |> Enum.flat_map(fn a ->
                 meta = actions_meta[a] || default_meta
-                {a, kind_from_meta(meta, name, a)}
+
+                case kind_from_meta(meta, name, a) do
+                  nil -> []
+                  kind -> [{a, kind}]
+                end
               end)
 
             _ when is_binary(name) ->
               # External `server:tool` names never enter the registry cache
               # this enumerates, so enum-less tools can only be internal:
               # fall back to the default-meta entry when one exists.
-              if default_meta do
-                [{"_default", kind_from_meta(default_meta, name, "_default")}]
-              else
-                []
+              case default_meta && kind_from_meta(default_meta, name, "_default") do
+                nil -> []
+                kind -> [{"_default", kind}]
               end
 
             _ ->
@@ -94,10 +99,11 @@ defmodule PrismWeb.AgentsLive.Catalog do
 
   def kind_from_meta(_, tool, action) do
     Logger.warning(
-      "[AgentsLive] Tool action `#{tool}.#{action}` has no kind annotation — defaulting to :write"
+      "[AgentsLive] Tool action `#{tool}.#{action}` has no kind annotation — " <>
+        "left off the policy catalogue (the policy plane refuses it too)"
     )
 
-    :write
+    nil
   end
 
   # Resolve a string to an already-existing atom, or `nil` when it isn't one.

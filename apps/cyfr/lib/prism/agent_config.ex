@@ -2,6 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Prism.AgentConfig do
+  require Logger
+
   @moduledoc """
   Builds agent configuration for formula input by querying the `aqua` MCP tool.
 
@@ -234,7 +236,9 @@ defmodule Prism.AgentConfig do
     match =
       components
       |> Enum.filter(fn c -> String.starts_with?(c["reference"] || "", prefix) end)
-      |> Enum.max_by(fn c -> c["version"] || "0" end, fn -> nil end)
+      # Semver precedence, not lexicographic max — "10.0.0" outranks "9.0.0".
+      |> Compendium.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
+      |> List.first()
 
     case match do
       nil -> {:error, :catalyst_not_found}
@@ -302,6 +306,13 @@ defmodule Prism.AgentConfig do
         content
 
       _ ->
+        # Fail-open by design — an agent without instructions still runs —
+        # but never silently: the substitution is an operator-visible fact.
+        Logger.error(
+          "[Prism.AgentConfig] orchestrator #{inspect(orchestrator_name)} has no readable " <>
+            "instructions — running on the generic fallback prompt"
+        )
+
         "You are an agent inside CYFR, a secure personal foundry that forges brilliance into reality."
     end
   end

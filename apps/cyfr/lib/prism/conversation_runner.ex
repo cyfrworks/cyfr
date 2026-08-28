@@ -750,11 +750,11 @@ defmodule Prism.ConversationRunner do
           is_nil(Keyword.get(opts, :orchestrator)) ->
         {:ok, state.orchestrator}
 
-      Enum.any?(state.orchestrators, &(&1["name"] == name)) ->
-        {:ok, {:by_name, name}}
-
       true ->
-        {:error, :no_orchestrator}
+        # Name only; the turn-start task resolves (and thereby validates)
+        # the detail — an unknown name fails the turn there rather than
+        # holding the send hostage to a 60s roster cache.
+        {:ok, {:by_name, name}}
     end
   end
 
