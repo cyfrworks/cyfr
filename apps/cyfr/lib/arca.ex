@@ -528,12 +528,15 @@ defmodule Arca do
         {:error, :seed_read_only}
 
       # The reserved tenant roots (`meta/` — the overlay's origin marks)
-      # mutate only under the overlay's own internal-write scope or a
-      # system context: a member-level write there could forge a mark and
-      # turn "reset to shipped" into deleting member work. Reads stay
-      # ordinary tenant reads.
+      # mutate ONLY under the overlay's lexical internal-write scope: a
+      # forged mark would turn "reset to shipped" into deleting member
+      # work. Every legitimate mark writer already rides
+      # `with_internal_writes/1`, so the `auth_method == :system` key this
+      # gate once also accepted only widened the forge surface to every
+      # system-context caller in the codebase. Reads stay ordinary tenant
+      # reads.
       List.first(path) in Arca.Storage.reserved_roots() and
-          not (Arca.Overlay.internal_writes?() or ctx.auth_method == :system) ->
+          not Arca.Overlay.internal_writes?() ->
         {:error, :forbidden}
 
       # A put/append/delete at depth 0 or 1 names the athanor root or a

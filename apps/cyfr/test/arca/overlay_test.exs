@@ -738,18 +738,28 @@ defmodule Arca.OverlayTest do
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
     end
 
-    test "a member-level write cannot forge a mark — meta/ is reserved", %{ctx: ctx} do
+    test "no context outside the overlay's own scope can forge a mark — meta/ is reserved",
+         %{ctx: ctx} do
       mark = ["meta", "origin" | @version_dir]
       assert {:error, :forbidden} = Arca.put(ctx, mark, ~s({"origin":"seed"}))
       assert {:error, :forbidden} = Arca.delete_tree(ctx, ["meta", "origin"])
 
-      # Reads stay ordinary tenant reads; a system context may write.
+      # Reads stay ordinary tenant reads.
       assert {:error, :not_found} = Arca.get(ctx, mark)
 
+      # A system context is refused too: `auth_method == :system` used to be
+      # a second key to this gate, which made the forge surface every
+      # system-context caller in the codebase. Only the overlay's lexical
+      # internal-write scope writes here.
       system =
         Sanctum.internal_context(user_id: "_test", athanor_id: ctx.athanor_id, scope: :athanor)
 
-      assert :ok = Arca.put(system, ["meta", "note.txt"], "server-side")
+      assert {:error, :forbidden} = Arca.put(system, ["meta", "note.txt"], "server-side")
+
+      assert :ok =
+               Arca.Overlay.with_internal_writes(fn ->
+                 Arca.put(system, ["meta", "note.txt"], "server-side")
+               end)
     end
 
     test "deleting a subtree clears the marks beneath it", %{ctx: ctx, seed_dir: seed} do
