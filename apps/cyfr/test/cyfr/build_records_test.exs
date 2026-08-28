@@ -83,4 +83,38 @@ defmodule Cyfr.BuildRecordsTest do
     # The foreign finish touched nothing.
     assert {:ok, %{"status" => "started"}} = BuildRecords.get(ctx, "build_t")
   end
+
+  test "a foreign start cannot overwrite another athanor's record", %{ctx: ctx} do
+    # `build_id` is caller-supplied — `Locus.MCP` takes `args["build_id"]`
+    # straight off the request — so a start had to be scoped like every other
+    # verb here. Upserting on the id alone let anyone who knew a build id
+    # reset another athanor's row to "started" and blank its result.
+    :ok = BuildRecords.record_started(ctx, "build_shared", "reagent:local.demo:0.1.0")
+    :ok = BuildRecords.record_finished(ctx, "build_shared", "compiled", %{"digest" => "sha256:a"})
+
+    other = %{ctx | athanor_id: "ath_other_#{:rand.uniform(100_000)}"}
+
+    assert {:error, :not_found} =
+             BuildRecords.record_started(other, "build_shared", "reagent:evil.x:9.9.9")
+
+    assert {:ok, mine} = BuildRecords.get(ctx, "build_shared")
+    assert mine["status"] == "compiled"
+    assert mine["result"] == %{"digest" => "sha256:a"}
+    assert mine["reference"] == "reagent:local.demo:0.1.0"
+
+    # ...and the foreign athanor got no row of its own out of the attempt.
+    assert {:error, :not_found} = BuildRecords.get(other, "build_shared")
+  end
+
+  test "restarting a build of one's own id still overwrites the stale row", %{ctx: ctx} do
+    :ok = BuildRecords.record_started(ctx, "build_retry", "reagent:local.demo:0.1.0")
+    :ok = BuildRecords.record_finished(ctx, "build_retry", "failed", "boom")
+
+    :ok = BuildRecords.record_started(ctx, "build_retry", "reagent:local.demo:0.2.0")
+
+    assert {:ok, again} = BuildRecords.get(ctx, "build_retry")
+    assert again["status"] == "started"
+    assert again["reference"] == "reagent:local.demo:0.2.0"
+    refute Map.has_key?(again, "error")
+  end
 end

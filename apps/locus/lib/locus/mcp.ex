@@ -506,7 +506,7 @@ defmodule Locus.MCP do
     files =
       Enum.map(output_files, fn {rel_path, content} -> {Path.split(rel_path), content} end)
 
-    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, []) do
+    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, cap: :exempt) do
       {:ok, _written} -> :ok
       {:error, reason} -> {:error, reason}
     end

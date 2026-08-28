@@ -40,5 +40,9 @@ defmodule Arca.Schemas.BuildRecord do
     record
     |> cast(attrs, @fields)
     |> validate_required([:id, :athanor_id, :user_id, :reference, :status, :started_at])
+    # The id is caller-supplied, so a collision is an ordinary answer, not an
+    # exception: `Cyfr.BuildRecords.record_started/3` reads it as "that id
+    # belongs to another athanor" after its own tenant-scoped update missed.
+    |> unique_constraint(:id, name: "build_records_id_index")
   end
 end

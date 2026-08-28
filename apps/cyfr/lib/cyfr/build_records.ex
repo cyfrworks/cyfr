@@ -19,27 +19,63 @@ defmodule Cyfr.BuildRecords do
   alias Arca.Schemas.BuildRecord
   alias Sanctum.Context
 
-  @doc "Record a build as started. Overwrites a stale row with the same id."
+  @doc """
+  Record a build as started. Overwrites the caller's own stale row with the
+  same id; a row belonging to another athanor is `{:error, :not_found}`.
+
+  `build_id` is caller-supplied (`Locus.MCP` reads `args["build_id"]` off the
+  request), so this is a tenant-scoped update-then-insert rather than an
+  upsert on the id: keying the conflict on the id alone let anyone who knew a
+  build id reset another athanor's row to "started" and blank its result.
+  """
   @spec record_started(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def record_started(%Context{} = ctx, build_id, reference) do
-    attrs = %{
-      id: build_id,
-      athanor_id: Context.athanor!(ctx),
-      user_id: ctx.user_id,
+    now = DateTime.utc_now()
+
+    refreshed = [
       reference: reference,
+      user_id: ctx.user_id,
       status: "started",
-      started_at: DateTime.utc_now()
-    }
+      started_at: now,
+      finished_at: nil,
+      error: nil,
+      result: nil
+    ]
+
+    {count, _} =
+      BuildRecord
+      |> where([b], b.id == ^build_id)
+      |> QueryHelpers.where_tenant(ctx)
+      |> Arca.Repo.update_all(set: refreshed)
+
+    if count == 1, do: :ok, else: insert_started(ctx, build_id, reference, now)
+  end
+
+  defp insert_started(ctx, build_id, reference, now) do
+    attrs =
+      QueryHelpers.stamp_tenant!(ctx, %{
+        id: build_id,
+        user_id: ctx.user_id,
+        reference: reference,
+        status: "started",
+        started_at: now
+      })
 
     %BuildRecord{}
     |> BuildRecord.changeset(attrs)
-    |> Arca.Repo.insert(
-      on_conflict: {:replace, [:status, :started_at, :finished_at, :error, :result]},
-      conflict_target: :id
-    )
+    |> Arca.Repo.insert()
     |> case do
-      {:ok, _} -> :ok
-      {:error, changeset} -> {:error, changeset}
+      {:ok, _} ->
+        :ok
+
+      # The id is taken and the scoped update above did not find it, so it
+      # belongs to another athanor. Same answer every other verb here gives
+      # for a foreign id — never "you may not", which would confirm it exists.
+      {:error, %Ecto.Changeset{errors: errors}} when errors != [] ->
+        if Keyword.has_key?(errors, :id), do: {:error, :not_found}, else: {:error, :invalid}
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 

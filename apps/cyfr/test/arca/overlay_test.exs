@@ -834,6 +834,44 @@ defmodule Arca.OverlayTest do
   describe "commit_unit/4 — the one way a unit lands" do
     @own_dir ["components", "catalysts", "local", "committed", "1.0.0"]
 
+    test "every caller names a cap" do
+      # `cap:` is `Keyword.fetch!`ed on the first line, so omitting it is a
+      # KeyError raised after the work is done, not a compile error. That is
+      # how every tincture build came to fail at the store step while its
+      # own comment said "cap-exempt": in async mode the raise killed the
+      # task, so `record_finished` never ran and `build.status` answered
+      # "started" for good.
+      root = Path.expand("../../../..", __DIR__)
+
+      offenders =
+        [
+          Path.join(root, "apps/*/lib/**/*.ex")
+        ]
+        |> Enum.flat_map(&Path.wildcard/1)
+        |> Enum.flat_map(fn path ->
+          source = File.read!(path)
+
+          # Each call, with the argument list that follows it.
+          ~r/Arca\.Overlay\.commit_unit\(/
+          |> Regex.split(source, parts: :infinity)
+          |> Enum.drop(1)
+          |> Enum.with_index()
+          |> Enum.reject(fn {tail, _i} ->
+            # The options are the last argument; `cap:` appears before the
+            # call's closing paren, which for every real call is inside the
+            # next ~400 characters.
+            tail |> binary_part(0, min(400, byte_size(tail))) |> String.contains?("cap:")
+          end)
+          |> Enum.map(fn {_tail, i} ->
+            "#{Path.relative_to(path, root)} (call ##{i + 1})"
+          end)
+        end)
+        # The definition itself, which names the option rather than passing it.
+        |> Enum.reject(&String.starts_with?(&1, "apps/cyfr/lib/arca/overlay.ex"))
+
+      assert offenders == [], "commit_unit called with no cap: #{inspect(offenders)}"
+    end
+
     test "files source: sentinel lands last; write order is the return", %{ctx: ctx} do
       files = [
         {[@sentinel], ~s({"type":"catalyst"})},

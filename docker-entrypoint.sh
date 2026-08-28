@@ -8,7 +8,14 @@ set -e
 # bake defaults into /app/aqua-defaults at image build time and copy them on
 # first start so the directory always has working orchestrators — works
 # whether /app/seed/aqua is the image filesystem or a host bind mount.
-if [ -d /app/aqua-defaults ] && [ ! -f /app/seed/aqua/agent.json ]; then
+#
+# FIRST start only: the mount is the operator's to edit, so a copy that ran
+# every boot would revert their changes to the shipped files. The guard is
+# the agents/ directory the v3 template is made of. It used to be
+# agent.json, which is the v2 shape Compendium.AquaTemplate.seed_check/0
+# rejects — never present, so the condition was always true and every
+# restart overwrote the mount.
+if [ -d /app/aqua-defaults ] && [ ! -d /app/seed/aqua/agents ]; then
     mkdir -p /app/seed/aqua
     cp -r /app/aqua-defaults/. /app/seed/aqua/
 fi

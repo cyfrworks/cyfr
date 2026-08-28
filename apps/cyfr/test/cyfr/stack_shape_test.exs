@@ -100,6 +100,25 @@ defmodule Cyfr.StackShapeTest do
     assert dockerfile =~ ~r/^COPY seed\/aqua\/ \/app\/aqua-defaults\/$/m
     assert entrypoint =~ "cp -r /app/aqua-defaults/. /app/seed/aqua/"
 
+    # "On FIRST start" is the whole contract: the mount is operator-editable
+    # (`Arca.Storage` calls it install media, not athanor state), so a copy
+    # that runs every boot silently reverts their edits to the shipped files.
+    # The guard has to name something the shipped tree actually contains —
+    # it once tested for `agent.json`, which is the v2 shape
+    # `Compendium.AquaTemplate.seed_check/0` REJECTS, so it was never there
+    # and the copy ran on every restart.
+    agents = Compendium.AquaPath.agents_dirname()
+
+    code =
+      entrypoint
+      |> String.split("\n")
+      |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+      |> Enum.join("\n")
+
+    assert code =~ "[ ! -d /app/seed/aqua/#{agents} ]"
+    refute code =~ "agent.json"
+    assert File.dir?(Path.join(@root, "seed/aqua/#{agents}"))
+
     # WIT rides in the BUILD context (Compendium.WITSource embeds it — an
     # absent tree fails the compile), and the runtime image no longer
     # carries a wit/ directory to read.
