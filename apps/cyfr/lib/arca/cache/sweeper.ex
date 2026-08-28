@@ -100,19 +100,34 @@ defmodule Arca.Cache.Sweeper do
       0
   end
 
+  # Short-TTL auth state — a vault OAuth grant mid-flight, a device-login
+  # ticket, an established-caller memo. Nearest-to-expiry eviction targets
+  # exactly these (they always expire soonest), so a caller-cardinality
+  # flood of cache entries could sign other tenants out mid-flow — the
+  # precise class the moduledoc promises this table does not couple.
+  @protected_key_heads [:vault_oauth_pending, :login_device_ticket, :established]
+
   # After expired rows are gone, if the table is still over the cap, drop the
-  # nearest-to-expiry rows down to it. Runs at most once per interval.
+  # nearest-to-expiry rows down to it — never the protected auth state; a
+  # cap breach evicts caches, not credentials in flight. Runs at most once
+  # per interval.
   defp enforce_cap(table, max) do
     size = :ets.info(table, :size)
 
     if is_integer(size) and size > max do
       table
       |> :ets.tab2list()
+      |> Enum.reject(fn {key, _value, _expires_at} -> protected?(key) end)
       |> Enum.sort_by(fn {_key, _value, expires_at} -> expires_at end)
       |> Enum.take(size - max)
       |> Enum.each(fn {key, _value, _expires_at} -> :ets.delete(table, key) end)
     end
   end
+
+  defp protected?(key) when is_tuple(key) and tuple_size(key) > 0,
+    do: elem(key, 0) in @protected_key_heads
+
+  defp protected?(_key), do: false
 
   # The entry cap counts rows, not bytes — 10k multi-MB WASM blobs is a very
   # different table than 10k session rows. Binary values get their own byte

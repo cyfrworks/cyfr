@@ -10,8 +10,10 @@ defmodule Arca.WebhookDeliveryStorage do
   inserts safe — the second one fails with a unique-constraint violation
   and the caller treats it as a duplicate.
 
-  Rows are swept on the `Cyfr.RetentionScheduler` cadence when retention
-  is enabled; otherwise the table grows (single-user volumes are negligible).
+  Rows are swept UNCONDITIONALLY on the `Cyfr.RetentionScheduler` cadence
+  (its sweep roster runs whether or not per-kind retention policy is set),
+  past `:webhook_idempotency_ttl_seconds` — an authenticated sender cannot
+  grow this table without bound.
   """
 
   import Ecto.Query

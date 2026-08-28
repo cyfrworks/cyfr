@@ -92,9 +92,16 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
       {:error, _} ->
         # Database error — let the request proceed rather than 500. The
-        # target component runs, possibly twice. Operators see the warn log
-        # from WebhookDeliveryStorage and can investigate. Failing closed
-        # would create a hard outage on temporary DB hiccups.
+        # target component runs, possibly twice. Failing closed would
+        # create a hard outage on temporary DB hiccups. This is a fail-open
+        # in the REPLAY control specifically, so it leaves a structured
+        # trace an operator can alarm on, not just a warn log.
+        :telemetry.execute(
+          [:cyfr, :emissary, :webhook, :dedup_unavailable],
+          %{count: 1},
+          %{webhook_id: webhook_id}
+        )
+
         conn
     end
   end

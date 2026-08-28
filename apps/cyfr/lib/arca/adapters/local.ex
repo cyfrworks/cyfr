@@ -132,9 +132,28 @@ defmodule Arca.Adapters.Local do
         {:error, :symlink_denied}
 
       _ ->
-        with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
+        with :ok <- check_append_ceiling(full_path, content),
+             :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
           File.write(full_path, content, [:append])
         end
+    end
+  end
+
+  # The same append ceiling the S3 adapter enforces, from the same
+  # constant — one bound for both adapters, so the same guest program
+  # cannot grow a file here that an object-store deployment would refuse
+  # (`{:error, :object_too_large}` either way).
+  defp check_append_ceiling(full_path, content) do
+    existing =
+      case File.stat(full_path) do
+        {:ok, %{size: size}} -> size
+        _ -> 0
+      end
+
+    if existing + byte_size(content) > Sanctum.Limits.default_max_response_size() do
+      {:error, :object_too_large}
+    else
+      :ok
     end
   end
 
