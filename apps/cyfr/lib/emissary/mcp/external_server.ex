@@ -223,15 +223,11 @@ defmodule Emissary.MCP.ExternalServer do
       true ->
         {request_id, state} = next_request_id(state)
 
-        body = %{
-          "jsonrpc" => "2.0",
-          "id" => request_id,
-          "method" => "tools/call",
-          "params" => %{
+        body =
+          Emissary.MCP.Message.encode_request(request_id, "tools/call", %{
             "name" => tool_name,
             "arguments" => arguments || %{}
-          }
-        }
+          })
 
         # The upstream HTTP round-trip runs OUTSIDE this process so one slow
         # server never head-of-line-blocks every other caller of the same
@@ -506,19 +502,15 @@ defmodule Emissary.MCP.ExternalServer do
   defp send_initialize(state) do
     {request_id, state} = next_request_id(state)
 
-    body = %{
-      "jsonrpc" => "2.0",
-      "id" => request_id,
-      "method" => "initialize",
-      "params" => %{
+    body =
+      Emissary.MCP.Message.encode_request(request_id, "initialize", %{
         "protocolVersion" => @legacy_protocol_version,
         "capabilities" => %{},
         "clientInfo" => %{
           "name" => "cyfr",
           "version" => Cyfr.Version.current()
         }
-      }
-    }
+      })
 
     case http_post(state, body) do
       {:ok, %{"result" => result}} -> {:ok, result, state}
@@ -528,10 +520,7 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   defp send_initialized_notification(state) do
-    body = %{
-      "jsonrpc" => "2.0",
-      "method" => "notifications/initialized"
-    }
+    body = Emissary.MCP.Message.encode_notification("notifications/initialized")
 
     case http_post(state, body) do
       # Notifications may return empty or accepted
@@ -545,12 +534,7 @@ defmodule Emissary.MCP.ExternalServer do
   defp send_tools_list(state) do
     {request_id, state} = next_request_id(state)
 
-    body = %{
-      "jsonrpc" => "2.0",
-      "id" => request_id,
-      "method" => "tools/list",
-      "params" => %{}
-    }
+    body = Emissary.MCP.Message.encode_request(request_id, "tools/list", %{})
 
     case http_post(state, body) do
       {:ok, %{"result" => %{"tools" => tools}}} ->

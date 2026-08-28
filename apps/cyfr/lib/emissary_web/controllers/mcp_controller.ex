@@ -299,7 +299,7 @@ defmodule EmissaryWeb.MCPController do
     else
       case EmissaryWeb.SSE.claim_slot(:mcp_listen, context, :mcp_subscription_max_concurrent) do
         :ok ->
-          open_stream(conn, context, params, request_id, id)
+          open_subscription_stream(conn, context, params, request_id, id)
 
         {:error, :stream_limit} ->
           listen_error(
@@ -313,7 +313,10 @@ defmodule EmissaryWeb.MCPController do
     end
   end
 
-  defp open_stream(conn, context, params, request_id, id) do
+  # Distinct name from `open_stream/1` below (the bare SSE open): this one
+  # opens the SUBSCRIPTION stream and adds the two MCP-specific headers;
+  # the four SSE mechanics belong to `EmissaryWeb.SSE.open/1`.
+  defp open_subscription_stream(conn, context, params, request_id, id) do
     filter = get_in(params, ["params", "notifications"]) || %{}
     {:ok, acknowledged} = Subscriptions.listen(context, filter)
     deadline = EmissaryWeb.SSE.deadline(:mcp_subscription_max_ms)
@@ -321,10 +324,7 @@ defmodule EmissaryWeb.MCPController do
     conn
     |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("x-request-id", request_id)
-    |> put_resp_header("content-type", "text/event-stream")
-    |> put_resp_header("cache-control", "no-cache")
-    |> put_resp_header("x-accel-buffering", "no")
-    |> send_chunked(200)
+    |> EmissaryWeb.SSE.open()
     |> acknowledge(id, acknowledged)
     |> listen_loop(id, deadline)
   end

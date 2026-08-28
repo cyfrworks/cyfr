@@ -241,6 +241,22 @@ defmodule Emissary.MCP.Message do
   defp maybe_add_data(error, data), do: Map.put(error, "data", data)
 
   @doc """
+  Encode a request this node sends AS a client (external MCP servers).
+
+  Plain JSON-RPC: the CYFR envelope stamping (`_meta`) belongs to
+  `encode_result/3`, on responses this node serves — never on what it
+  asks an upstream.
+  """
+  def encode_request(id, method, params \\ nil) do
+    %{
+      "jsonrpc" => @jsonrpc_version,
+      "id" => id,
+      "method" => method
+    }
+    |> maybe_add_params(params)
+  end
+
+  @doc """
   Encode a notification (no id, no response expected).
   """
   def encode_notification(method, params \\ nil) do
