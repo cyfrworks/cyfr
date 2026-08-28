@@ -425,14 +425,23 @@ defmodule Emissary.MCP.ExternalServer do
     Logger.info("[ExternalServer] Connecting to #{state.name} at #{state.url}")
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond)}
 
+    # The handshake runs inside handle_call while callers wait only
+    # @initialize_timeout_ms — clamp the wire timeout to match, so a
+    # stalling upstream cannot head-of-line-block the server process for
+    # the full per-call budget. The operator's timeout applies to tool
+    # calls, which run detached.
+    handshake_timeout = min(state.timeout_ms, @initialize_timeout_ms)
+    call_timeout = state.timeout_ms
+
     with {:ok, resolved_headers} <-
            resolve_headers(state.raw_headers, state.athanor_id),
-         state <- %{state | headers: resolved_headers},
+         state <- %{state | headers: resolved_headers, timeout_ms: handshake_timeout},
          :ok <- validate_server_url(state.url),
          {:ok, tools, server_info, state} <- connect(state) do
       state = %{
         state
-        | status: :ready,
+        | timeout_ms: call_timeout,
+          status: :ready,
           tools: tools,
           server_info: server_info,
           error: nil

@@ -20,10 +20,12 @@ defmodule Prism.TinctureRegistry do
   A shell-plane UI cache, member-facing only: the public `/t/` route is
   served by `Sanctum.TinctureAccess`, not this table, so `list_tinctures/2`
   takes the member's `Sanctum.Context` like every other storage-derived
-  reader. The table exists from `init/1` on (readers never crash) and is
-  EMPTY until the first scan completes — the scan runs in
-  `handle_continue`, so a slow object-store walk never blocks supervisor
-  startup; `reload/1` calls queue behind it.
+  reader. The table exists from `init/1` on (readers never crash) and
+  populates LAZILY, one athanor at a time: the first `list_tinctures/2`
+  for an athanor scans exactly that athanor (a `{:scanned, id}` marker
+  row remembers it), so boot never walks every athanor's tree and a
+  server with a thousand furnaces pays only for the ones whose shell is
+  actually opened. `reload/1` remains the full rescan.
   """
 
   use GenServer
@@ -47,6 +49,8 @@ defmodule Prism.TinctureRegistry do
   def list_tinctures(server \\ __MODULE__, %Context{athanor_id: athanor_id}) do
     case athanor_id do
       id when is_binary(id) and id != "" ->
+        ensure_scanned(server, id)
+
         server
         |> :ets.match_object({{id, :_, :_}, :_})
         |> Enum.map(fn {_key, tincture} -> tincture end)
@@ -54,6 +58,20 @@ defmodule Prism.TinctureRegistry do
       _unresolved ->
         []
     end
+  end
+
+  # First read for an athanor scans exactly that athanor. A busy or
+  # restarting registry lists what the table already holds rather than
+  # crashing the page.
+  defp ensure_scanned(server, athanor_id) do
+    if :ets.lookup(server, {:scanned, athanor_id}) == [] do
+      GenServer.call(server, {:ensure_scanned, athanor_id}, 30_000)
+    end
+
+    :ok
+  catch
+    :exit, _ -> :ok
+    :error, :badarg -> :ok
   end
 
   @doc """
@@ -92,14 +110,7 @@ defmodule Prism.TinctureRegistry do
       |> Keyword.get(:name, __MODULE__)
       |> :ets.new([:named_table, :protected, :set, read_concurrency: true])
 
-    {:ok, %{table: table}, {:continue, :initial_scan}}
-  end
-
-  @impl true
-  def handle_continue(:initial_scan, state) do
-    count = store_tinctures(state.table, scan_tinctures())
-    Logger.info("[TinctureRegistry] loaded #{count} tincture(s)")
-    {:noreply, state}
+    {:ok, %{table: table}}
   end
 
   @impl true
@@ -110,21 +121,38 @@ defmodule Prism.TinctureRegistry do
   end
 
   @impl true
+  def handle_call({:ensure_scanned, athanor_id}, _from, state) do
+    # Re-check under the serializing process: a second caller that queued
+    # behind the first scan finds the marker and pays nothing.
+    if :ets.lookup(state.table, {:scanned, athanor_id}) == [] do
+      scan_athanor_into(state.table, athanor_id)
+    end
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
   def handle_call({:reload_athanor, athanor_id}, _from, state) do
+    count = scan_athanor_into(state.table, athanor_id)
+    Logger.info("[TinctureRegistry] reloaded #{count} tincture(s) for #{athanor_id}")
+    {:reply, :ok, state}
+  end
+
+  defp scan_athanor_into(table, athanor_id) do
     count =
       case Sanctum.Tenancy.Athanors.get(athanor_id) do
         {:ok, %{status: "active"} = athanor} ->
-          store_athanor_tinctures(state.table, athanor_id, scan_one(athanor))
+          store_athanor_tinctures(table, athanor_id, scan_one(athanor))
 
         # Archived, gone, or unreadable: it contributes nothing, and its rows
         # go with it. `scan_tinctures/0` reaches the same end by not
         # enumerating it.
         _ ->
-          store_athanor_tinctures(state.table, athanor_id, [])
+          store_athanor_tinctures(table, athanor_id, [])
       end
 
-    Logger.info("[TinctureRegistry] reloaded #{count} tincture(s) for #{athanor_id}")
-    {:reply, :ok, state}
+    :ets.insert(table, {{:scanned, athanor_id}, true})
+    count
   end
 
   @impl true
@@ -135,10 +163,20 @@ defmodule Prism.TinctureRegistry do
 
   # Insert the fresh rows first (a list insert is a single atomic ETS op),
   # then prune keys that vanished — readers never observe an empty table
-  # mid-reload. Returns the fresh tincture count.
+  # mid-reload. Returns the fresh tincture count. The 3-tuple match keeps
+  # {:scanned, id} marker rows out of the prune; the full scan then marks
+  # every athanor it walked as scanned.
   defp store_tinctures(table, tinctures) do
-    old_keys = :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])
-    replace(table, old_keys, tinctures)
+    old_keys =
+      :ets.select(table, [{{{:"$1", :"$2", :"$3"}, :_}, [], [{{:"$1", :"$2", :"$3"}}]}])
+
+    count = replace(table, old_keys, tinctures)
+
+    for athanor_id <- Enum.uniq(Enum.map(tinctures, & &1.athanor_id)) do
+      :ets.insert(table, {{:scanned, athanor_id}, true})
+    end
+
+    count
   end
 
   # The same insert-then-prune, with the prune confined to one athanor's

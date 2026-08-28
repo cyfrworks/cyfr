@@ -99,7 +99,19 @@ defmodule EmissaryWeb.Endpoint do
   plug(EmissaryWeb.Router)
 
   defp dynamic_session(conn, _opts) do
-    opts = Plug.Session.init(session_options())
+    # Session config is boot-static; the first request pays Plug.Session.init/1
+    # once and pins the result instead of re-deriving it per request.
+    opts =
+      case :persistent_term.get({__MODULE__, :session_plug_opts}, nil) do
+        nil ->
+          opts = Plug.Session.init(session_options())
+          :persistent_term.put({__MODULE__, :session_plug_opts}, opts)
+          opts
+
+        opts ->
+          opts
+      end
+
     Plug.Session.call(conn, opts)
   end
 

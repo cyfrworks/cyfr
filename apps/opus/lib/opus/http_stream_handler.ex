@@ -186,13 +186,14 @@ defmodule Opus.HttpStreamHandler do
     {:ok, buffer} =
       Agent.start_link(fn -> %{chunks: [], done: false, total_bytes: 0, error: nil} end)
 
-    # Start an unlinked process to perform the streaming request.
-    # NOTE: We use spawn (not Task.async or spawn_link) because this code
-    # runs inside the Wasmex.Components GenServer. Task.async sends a
-    # completion message that crashes handle_info/2, and spawn_link sends
-    # an EXIT signal on process termination — both unhandled by Wasmex.
-    pid =
-      spawn(fn ->
+    # Start an unlinked but SUPERVISED process for the streaming request:
+    # Task.Supervisor.start_child links the task to the supervisor, not to
+    # this caller — the Wasmex.Components GenServer must receive neither a
+    # Task.async completion message nor a spawn_link EXIT signal (both
+    # unhandled by Wasmex), and a bare spawn left the request outside every
+    # tree at shutdown.
+    {:ok, pid} =
+      Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
         try do
           perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size)
         rescue

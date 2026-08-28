@@ -606,8 +606,9 @@ defmodule Prism.TinctureRegistryTest do
     test "list and get answer from ETS while the server is suspended" do
       name = :test_suspended_reads
       {:ok, pid} = TinctureRegistry.start_link(name: name)
-      # The initial scan runs in handle_continue; a call synchronizes with it.
-      :sys.get_state(pid)
+      # Populate (and mark) the athanor first; the suspended read below
+      # must then come straight from ETS.
+      :ok = TinctureRegistry.reload_athanor(name, "ath_test")
 
       :ok = :sys.suspend(pid)
 
@@ -620,17 +621,13 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "startup" do
-    test "the table answers (empty) before the first scan completes" do
-      # init only creates the table; the scan runs in handle_continue —
-      # a slow object-store walk must not block supervisor startup, and
-      # readers in the window see an empty roster, never a crash.
+    test "the table starts empty and the first list populates its athanor" do
+      # init only creates the table — there is no boot walk. The first
+      # read for an athanor scans exactly that athanor and marks it.
       name = :test_async_init
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      assert is_list(TinctureRegistry.list_tinctures(name, lookup("ath_test")))
-
-      # After the continue drains, the scan has populated the table.
-      :sys.get_state(pid)
+      assert :ets.info(name, :size) == 0
       assert [_ | _] = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       GenServer.stop(pid)
     end

@@ -136,7 +136,7 @@ defmodule PrismWeb.ShellLive do
 
           try do
             Compendium.AutoIndexer.scan(ctx: ctx)
-            Prism.TinctureRegistry.reload()
+            Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
           after
             Arca.Cache.delete_match(scan_key)
           end
@@ -371,8 +371,10 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp load_tinctures(socket) do
-    Prism.TinctureRegistry.reload()
     ctx = socket.assigns.context
+    # Scoped, not the whole-server walk a mount used to pay: one athanor's
+    # shell refreshes exactly that athanor's rows.
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
 
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
