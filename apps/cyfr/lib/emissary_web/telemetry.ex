@@ -75,6 +75,26 @@ defmodule EmissaryWeb.Telemetry do
         tags: [:reason],
         description: "Webhook signature verification failures"
       ),
+      # The success half of the pair — without it there is a failure count
+      # but no failure *rate*.
+      counter("cyfr.emissary.webhook.verify_succeeded.count",
+        event_name: [:cyfr, :emissary, :webhook, :verify_succeeded],
+        description: "Webhook signature verification successes"
+      ),
+      # Start counters pair with the stop distributions: a request that
+      # died mid-invoke shows as start-without-stop instead of vanishing.
+      counter("cyfr.emissary.webhook.invoke.start.count",
+        event_name: [:cyfr, :emissary, :webhook, :invoke, :start],
+        description: "Webhook invocations begun"
+      ),
+      counter("cyfr.emissary.tincture.invoke.start.count",
+        event_name: [:cyfr, :emissary, :tincture, :invoke, :start],
+        description: "Tincture invocations begun"
+      ),
+      counter("cyfr.emissary.webhook.dedup_unavailable.count",
+        event_name: [:cyfr, :emissary, :webhook, :dedup_unavailable],
+        description: "Webhook deliveries accepted without dedup protection (store down)"
+      ),
       distribution("cyfr.emissary.tincture.invoke.stop.duration_ms",
         event_name: [:cyfr, :emissary, :tincture, :invoke, :stop],
         measurement: :duration_ms,

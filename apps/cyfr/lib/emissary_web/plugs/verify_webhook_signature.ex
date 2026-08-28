@@ -91,15 +91,18 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
       |> assign(:webhook, webhook)
       |> assign(:raw_body, raw_body)
     else
-      {:error, reason} -> deny_with_telemetry(conn, webhook.slug, reason)
+      {:error, reason} -> deny_with_telemetry(conn, webhook, reason)
     end
   end
 
   # Map verification failure reasons to telemetry + HTTP response. Status
   # bucketing is unchanged; the wrapper just adds an observability hook so
   # operators can see *why* a webhook is failing.
-  defp deny_with_telemetry(conn, slug, reason) do
-    emit_telemetry(slug, conn.assigns[:webhook] && conn.assigns[:webhook].id, reason)
+  defp deny_with_telemetry(conn, webhook, reason) do
+    # The webhook row is in hand here — reading it back off an assign only
+    # set on the success path made webhook_id structurally nil on every
+    # failure event.
+    emit_telemetry(webhook.slug, webhook.id, reason)
 
     case reason do
       :missing_raw_body -> deny_500(conn)

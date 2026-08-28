@@ -29,43 +29,21 @@ defmodule Arca.AuditHandler do
   - `[:cyfr, :sanctum, :platform_context]` — the tenant-bypassing platform
     scope was constructed
 
-  The full roster is `@audit_events`; this list names the shapes, not every
-  entry. Each event reaches the sinks as one `Arca.Audit.Event` with the
-  emitter's metadata sanitized.
+  The full roster is `Cyfr.Telemetry.Catalog.consumed_by(:audit)`; this
+  list names the shapes, not every entry. Each event reaches the sinks as
+  one `Arca.Audit.Event` with the emitter's metadata sanitized.
   """
 
   use GenServer
   require Logger
 
-  @audit_events [
-    [:cyfr, :sanctum, :auth],
-    # A release digest that no longer re-derives from its row is a tamper
-    # signal — it belongs in the audit sinks, not only in the server log.
-    [:cyfr, :sanctum, :consent, :integrity_alarm],
-    # The widest grant in the system, and its only input is an email address —
-    # under a generic OIDC issuer `email_verified` may legitimately be absent,
-    # so the address is asserted rather than proven. Minting it must not be
-    # silent.
-    [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-    # The door: a refused sign-in and an operator's deny are both events an
-    # operator wants to find later.
-    [:cyfr, :sanctum, :door, :refused],
-    [:cyfr, :sanctum, :door, :denied],
-    [:cyfr, :opus, :execute, :start],
-    [:cyfr, :opus, :execute, :stop],
-    [:cyfr, :opus, :execute, :exception],
-    # A component reaching an operator's credential — and being refused one —
-    # is the event this product exists to make accountable. It was emitted
-    # from `Opus.Runtime`'s vault import and consumed by nothing.
-    [:cyfr, :opus, :secret, :accessed],
-    [:cyfr, :opus, :secret, :denied],
-    # Every construction of the tenant-bypassing platform scope. Safe to
-    # subscribe ONLY because this handler builds no context of its own:
-    # Sanctum.internal_context/1 emits this very event, so constructing one
-    # per event here would recurse in the emitting process until the stack
-    # died.
-    [:cyfr, :sanctum, :platform_context]
-  ]
+  # The roster derives from the one catalog — an event is audited exactly
+  # when `Cyfr.Telemetry.Catalog` names :audit among its consumers. The
+  # catalog's notes say why each entry earns its place (including why
+  # :platform_context is safe to subscribe: this handler constructs no
+  # context of its own, so the emit inside Sanctum.internal_context/1
+  # cannot recurse through here).
+  @audit_events Cyfr.Telemetry.Catalog.consumed_by(:audit)
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)

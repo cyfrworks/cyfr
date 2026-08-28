@@ -83,6 +83,7 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :opus, :schedule, :failed], :schedule_failed},
       {[:cyfr, :compendium, :component, :install], :component_install},
       {[:cyfr, :compendium, :component, :remove], :component_remove},
+      {[:cyfr, :compendium, :component, :push], :component_push},
       {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
       {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop}
     ]
@@ -148,6 +149,10 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :compendium, :component, :remove], measurements, metadata, _config) do
     safe_broadcast(&Topics.components/1, metadata, {:component_removed, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :compendium, :component, :push], measurements, metadata, _config) do
+    safe_broadcast(&Topics.components/1, metadata, {:component_pushed, metadata, measurements})
   end
 
   def handle_event(
