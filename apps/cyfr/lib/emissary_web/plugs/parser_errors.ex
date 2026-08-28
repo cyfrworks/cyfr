@@ -19,10 +19,6 @@ defmodule EmissaryWeb.Plugs.ParserErrors do
 
   @behaviour Plug
 
-  alias Emissary.MCP.Message
-
-  @protocol_version_header "mcp-protocol-version"
-
   @impl true
   def init(opts), do: Plug.Parsers.init(opts)
 
@@ -73,13 +69,10 @@ defmodule EmissaryWeb.Plugs.ParserErrors do
 
   defp mcp?(conn), do: String.starts_with?(conn.request_path, "/mcp")
 
+  # The one JSON-RPC rejection seam — the envelope, the protocol header
+  # and the (absent, here correctly nil) request id all come from
+  # `EmissaryWeb.MCPError`, not a fourteenth hand-rolled copy.
   defp answer(conn, status, code, message) do
-    body = Message.encode_error(nil, code, message)
-
-    conn
-    |> Plug.Conn.put_resp_header(@protocol_version_header, Emissary.MCP.Protocol.version())
-    |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(status, Jason.encode!(body))
-    |> Plug.Conn.halt()
+    EmissaryWeb.MCPError.halt(conn, status, code, message)
   end
 end

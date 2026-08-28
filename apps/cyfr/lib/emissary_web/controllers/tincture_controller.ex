@@ -119,7 +119,7 @@ defmodule EmissaryWeb.TinctureController do
             |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
 
           :error ->
-            send_resp(conn, 404, "Not Found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
         end
 
       {:ok, tincture, :private, ctx} ->
@@ -143,11 +143,11 @@ defmodule EmissaryWeb.TinctureController do
             |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
 
           :error ->
-            send_resp(conn, 404, "Not Found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
         end
 
       {:error, :not_found} ->
-        send_resp(conn, 404, "Not Found")
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
     end
   end
 
@@ -239,23 +239,54 @@ defmodule EmissaryWeb.TinctureController do
             )
 
           {:error, :not_found} ->
-            send_resp(conn, 404, "Not Found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
         end
     end
   end
 
+  # Each refusal answers by name — a bare `_ -> 404` here once collapsed
+  # five distinct outcomes (token expired, token invalid or for another
+  # tincture, standing lost, athanor gone, tincture missing), so a client
+  # could not tell "re-mint your token" from "you were removed", and the
+  # access log said nothing either. The signed URL already names the
+  # tincture, so distinguishing these reveals nothing its holder lacks.
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
-    with {:ok, {^athanor, ^publisher, ^tincture_name, user_id}} <-
-           Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token, max_age: @token_max_age),
-         {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
-         :ok <- asset_reader_standing(user_id, public_ctx.athanor_id),
-         {:ok, tincture} <- TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
-      Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,
-        public: false
-      )
-    else
+    outcome =
+      with {:ok, {^athanor, ^publisher, ^tincture_name, user_id}} <-
+             Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token,
+               max_age: @token_max_age
+             ),
+           {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
+           :ok <- asset_reader_standing(user_id, public_ctx.athanor_id),
+           {:ok, tincture} <- TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
+        {:serve, public_ctx, tincture}
+      end
+
+    case outcome do
+      {:serve, public_ctx, tincture} ->
+        Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,
+          public: false
+        )
+
+      {:error, :expired} ->
+        EmissaryWeb.ApiError.send(
+          conn,
+          401,
+          :asset_token_expired,
+          "Signed asset token expired — reload the tincture"
+        )
+
+      {:ok, _other_tincture} ->
+        EmissaryWeb.ApiError.send(conn, 401, :asset_token_invalid, "Signed asset token invalid")
+
+      {:error, reason} when reason in [:invalid, :missing, :no_user] ->
+        EmissaryWeb.ApiError.send(conn, 401, :asset_token_invalid, "Signed asset token invalid")
+
+      {:error, :not_member} ->
+        EmissaryWeb.ApiError.send(conn, 403, :not_member, "No longer a member of this athanor")
+
       _ ->
-        send_resp(conn, 404, "Not Found")
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
     end
   end
 

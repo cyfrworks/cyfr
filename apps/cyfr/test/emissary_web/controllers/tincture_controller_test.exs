@@ -395,9 +395,11 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert get_resp_header(conn, "cache-control") == ["private, max-age=3600"]
     end
 
-    test "a prefix minted for someone else opens nothing", %{conn: conn} do
+    test "a prefix minted for someone else opens nothing — by name", %{conn: conn} do
       # The URL is the whole credential a sandboxed iframe has, so a shared
-      # one must not be a shared key: it names its reader.
+      # one must not be a shared key: it names its reader. A non-member
+      # reader is refused as such, not hidden behind a 404 — the signed URL
+      # already names the tincture.
       stranger =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
@@ -405,15 +407,18 @@ defmodule EmissaryWeb.TinctureControllerTest do
           {"test", "local", "auth-dash", "github|https://github.com|stranger"}
         )
 
-      assert get(conn, "/t/test/local/auth-dash/_s/#{stranger}/app.js").status == 404
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{stranger}/app.js")
+      assert conn.status == 403
+      assert json_response(conn, 403)["code"] == "not_member"
     end
 
-    test "returns 404 for invalid token", %{conn: conn} do
+    test "an invalid token is refused by name", %{conn: conn} do
       conn = get(conn, "/t/test/local/auth-dash/_s/garbage_token/app.js")
-      assert conn.status == 404
+      assert conn.status == 401
+      assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "returns 404 for token scoped to different tincture", %{conn: conn} do
+    test "a token scoped to a different tincture is refused as invalid", %{conn: conn} do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
@@ -422,10 +427,11 @@ defmodule EmissaryWeb.TinctureControllerTest do
         )
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 404
+      assert conn.status == 401
+      assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "returns 404 for token with wrong publisher", %{conn: conn} do
+    test "a token with the wrong publisher is refused as invalid", %{conn: conn} do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
@@ -434,10 +440,11 @@ defmodule EmissaryWeb.TinctureControllerTest do
         )
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 404
+      assert conn.status == 401
+      assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "returns 404 for token whose athanor differs from the URL", %{conn: conn} do
+    test "a token whose athanor differs from the URL is refused as invalid", %{conn: conn} do
       token =
         Phoenix.Token.sign(
           EmissaryWeb.Endpoint,
@@ -446,7 +453,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
         )
 
       conn = get(conn, "/t/other/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 404
+      assert conn.status == 401
+      assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
     test "blocks data.db even with valid token", %{conn: conn} do
@@ -471,7 +479,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
   end
 
   describe "assets — signed token expiry" do
-    test "returns 404 for expired signed token", %{conn: conn} do
+    test "a dead signed token is refused by name", %{conn: conn} do
       # The controller verifies internally, so expiry cannot be waited out
       # here: a token under the wrong salt fails the same verification the
       # same way, which is the path under test.
@@ -483,7 +491,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
         )
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{expired_token}/app.js")
-      assert conn.status == 404
+      assert conn.status == 401
+      assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
   end
 
