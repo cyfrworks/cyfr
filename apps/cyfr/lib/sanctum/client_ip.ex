@@ -106,12 +106,16 @@ defmodule Sanctum.ClientIp do
 
   # Drop trailing hops that match a trusted IP/CIDR entry; the first
   # non-matching hop from the right is the client. If every hop is a trusted
-  # proxy, the caller IS a proxy — return the innermost entry.
+  # proxy, the caller IS a proxy — return the innermost entry, which is the
+  # socket peer appended by `extract_forwarded_ip/1` and the only hop in the
+  # chain the caller could not have written. `List.first(chain)` named the
+  # OUTERMOST hop instead: a caller whose own peer sits inside a trusted
+  # range could then choose the address every IP allowlist would see.
   defp strip_trusted(chain, cidrs) do
     chain
     |> Enum.reverse()
     |> Enum.drop_while(fn hop -> Enum.any?(cidrs, &Sanctum.Cidr.match?(hop, &1)) end)
-    |> List.first(List.first(chain))
+    |> List.first(List.last(chain))
   end
 
   defp trusted_proxy_hops do

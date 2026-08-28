@@ -118,13 +118,24 @@ defmodule Sanctum.Vault do
   # Rename
   # ---------------------------------------------------------------------------
 
-  @doc "Rename the mutable label. Identity, bindings and consents are untouched."
+  @doc """
+  Rename the mutable label. Identity, bindings and consents are untouched.
+
+  It is announced like every other mutation even so. Consents bind an entry
+  *id*, but the external-MCP header plane binds a `vault:<name>` reference
+  that `Sanctum.VaultReader.unseal_by_name/2` resolves at request time — so
+  moving a name from one entry to another changes what a running server
+  dispenses without any entry's material changing. That is a resolution
+  change, and the reconciler is what acts on those.
+  """
   @spec rename(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def rename(%Context{} = ctx, id, new_name) when is_binary(new_name) and new_name != "" do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, _entry} <- get_living(ctx, id),
-         :ok <- check_name_free(ctx, new_name) do
-      Arca.VaultStorage.update_meta(Context.athanor!(ctx), id, %{name: new_name})
+         :ok <- check_name_free(ctx, new_name),
+         :ok <- Arca.VaultStorage.update_meta(Context.athanor!(ctx), id, %{name: new_name}) do
+      broadcast(ctx, id, :rename)
+      :ok
     end
   end
 

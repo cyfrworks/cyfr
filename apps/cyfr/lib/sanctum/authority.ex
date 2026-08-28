@@ -393,7 +393,12 @@ defmodule Sanctum.Authority do
 
   defp wire_policy(%{} = map) do
     case Blob.parse(map) do
-      {:ok, blob} -> {:ok, blob}
+      # Clamped on the way in, exactly as `root/3` clamps on the way out of a
+      # consent. A wire map is the one route to an Authority that does not
+      # pass through `root/3`, so it re-establishes the ceiling itself — a
+      # sender that could install its own limits would be a sender that
+      # writes its own roof.
+      {:ok, blob} -> {:ok, Blob.clamp(blob, Sanctum.Policy.Ceiling.platform_ceiling())}
       {:error, reason} -> {:error, {:invalid_wire_policy, reason}}
     end
   end
@@ -441,7 +446,11 @@ defmodule Sanctum.Authority do
 
   defp wire_activation(other), do: {:error, {:invalid_wire_activation, other}}
 
-  defp wire_depth(depth) when is_integer(depth) and depth >= 0, do: :ok
+  # Bounded by the same cap `Sanctum.Authority.Transition` checks before every
+  # invoke. Accepting any non-negative integer let a wire map hand back an
+  # authority already past the cap — or restart the count at zero, which is
+  # the other half of the same hole.
+  defp wire_depth(depth) when is_integer(depth) and depth >= 0 and depth <= @depth_cap, do: :ok
   defp wire_depth(other), do: {:error, {:invalid_wire_depth, other}}
 
   # ============================================================================

@@ -268,8 +268,29 @@ defmodule Sanctum.VaultTest do
 
       assert_receive {:vault_entry_changed, _, :rotate}
 
+      :ok = Vault.rename(ctx, view.id, "renamed")
+      assert_receive {:vault_entry_changed, _, :rename}
+
       {:ok, _} = Vault.revoke(ctx, view.id)
       assert_receive {:vault_entry_changed, _, :revoke}
+    end
+
+    test "a rename is a resolution change, so the global signal carries it too", %{ctx: ctx} do
+      # External MCP servers hold `vault:<name>` header references that
+      # `VaultReader.unseal_by_name/2` resolves at request time, so renaming a
+      # different entry onto a name changes what a running server dispenses
+      # without touching any entry's material. That is exactly what the global
+      # signal exists to tell the reconciler about, and rename was the one
+      # mutation that stayed quiet.
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed_global())
+
+      view = create!(ctx)
+      assert_receive {:vault_entry_changed_global, _, _, :create}
+
+      :ok = Vault.rename(ctx, view.id, "moved")
+      assert_receive {:vault_entry_changed_global, _, _, :rename}
+
+      assert :rename in Emissary.MCP.ExternalServerReconciler.relevant_verbs()
     end
 
     defp view_fields(_ctx, view) do

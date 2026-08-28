@@ -81,6 +81,19 @@ defmodule Sanctum.S3ClientIpTest do
       assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 10.0.0.9")) == "203.0.113.9"
     end
 
+    test "an all-trusted chain resolves the socket peer, not the hop the caller wrote" do
+      # Every hop matched, so there is no untrusted hop to name the client and
+      # the caller IS a proxy. The innermost entry is the socket peer, the one
+      # address in the chain nobody could forge — the leftmost is whatever the
+      # caller typed, and returning that let anyone inside the trusted range
+      # pick their own address for an API key's IP allowlist.
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:cyfr, :trusted_proxy_cidrs, ["10.0.0.0/8"])
+
+      assert ClientIp.resolve(conn({10, 0, 0, 5}, "10.1.2.3")) == "10.0.0.5"
+      assert ClientIp.resolve(conn({10, 0, 0, 5}, "10.1.2.3, 10.9.9.9")) == "10.0.0.5"
+    end
+
     test "XFF chains split across multiple header instances are joined" do
       Application.put_env(:cyfr, :trust_x_forwarded_for, true)
       assert ClientIp.resolve(conn({10, 0, 0, 5}, ["1.2.3.4", "203.0.113.9"])) == "203.0.113.9"

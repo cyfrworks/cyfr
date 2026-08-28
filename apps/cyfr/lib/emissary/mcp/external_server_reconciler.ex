@@ -6,12 +6,16 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   Makes vault mutations bite immediately for external MCP servers.
 
   Server processes cache resolved header credentials for their lifetime,
-  so a rotate, rebind, revoke or delete of a referenced entry would
+  so a rotate, rebind, revoke, delete or rename of a referenced entry would
   otherwise keep flowing until a restart. This listener watches the
   global vault signal, finds the tenant's servers whose header templates
   reference the changed entry (`vault:<name>`), stops their processes and
   drops the tenant caches — the next call re-resolves fresh, or fails
   closed if the credential is gone.
+
+  A rename belongs in that set even though it touches no material: header
+  templates reference an entry by NAME and resolve at request time, so moving
+  a name between entries changes what a live server sends.
 
   Reconcile failures are **not** swallowed: a raise or transient storage error
   emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
@@ -24,7 +28,11 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   require Logger
 
   @topic Cyfr.Topics.vault_changed_global()
-  @relevant_verbs [:rotate, :rebind, :revoke, :delete]
+  @relevant_verbs [:rotate, :rebind, :revoke, :delete, :rename]
+
+  @doc "The vault verbs this reconciler acts on — pinned by `Sanctum.VaultTest`."
+  @spec relevant_verbs() :: [atom()]
+  def relevant_verbs, do: @relevant_verbs
 
   # A reconcile that raises or hits a transient storage error is retried
   # instead of being dropped: a swallowed failure leaves a revoked credential

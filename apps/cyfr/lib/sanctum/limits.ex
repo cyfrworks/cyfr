@@ -348,8 +348,14 @@ defmodule Sanctum.Limits do
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}
 
-      not (is_binary(window) and match?({:ok, _}, parse_duration(window))) ->
-        {:error, "window must be a duration string, got: #{inspect(window)}"}
+      # Strictly positive, not merely parseable. `Opus.RateLimiter` counts
+      # what falls after `now - window_ms`: at zero that window holds nothing
+      # and a negative one starts in the future, so either spelling counts
+      # nothing and the limit never fires — a limit that reads as configured
+      # and enforces nothing. The duration fields refuse a negative for the
+      # same reason.
+      not (is_binary(window) and match?({:ok, ms} when ms > 0, parse_duration(window))) ->
+        {:error, "window must be a positive duration string, got: #{inspect(window)}"}
 
       true ->
         {:ok, %{requests: requests, window: window}}

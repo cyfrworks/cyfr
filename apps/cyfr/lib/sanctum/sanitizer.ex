@@ -28,7 +28,23 @@ defmodule Sanctum.Sanitizer do
   # is not enough to tell those apart; exact matching is. `state` is the
   # vault-OAuth CSRF binding — but "state" as a token inside a longer key
   # (an execution's state, a connection state) is ordinary data.
-  @exact_sensitive_keys ~w(code state)
+  #
+  # `key` is a credential wherever it stands alone: it is the `key` argument
+  # of `key.validate` (an API key value, which reached `mcp_logs` in the
+  # clear) and the `_key` tincture query param — separators are stripped
+  # before this comparison, so both spellings land here. `keyboard` and
+  # `monkey` are words and keep reading.
+  @exact_sensitive_keys ~w(code state key)
+
+  # Compared against the key as written, separators and all. `_t` and
+  # `_session` are the tincture credential query params
+  # (`Sanctum.TinctureAuth.sensitive_query_keys/0`, pinned to this roster by
+  # test): the plug scrubs them from `conn.query_string`, but the same names
+  # arrive again as decoded params, where it cannot reach them. They stay
+  # here rather than in the list above because their bare spellings are not
+  # credentials — `session` is usually a session object worth reading in an
+  # error, and `t` is a short name for anything.
+  @exact_raw_sensitive_keys ~w(_t _session)
 
   @doc """
   The redaction vocabulary as Phoenix's `:filter_parameters` consumes it.
@@ -40,7 +56,8 @@ defmodule Sanctum.Sanitizer do
   direction for a log.
   """
   @spec filter_parameters() :: [String.t()]
-  def filter_parameters, do: @sensitive_keys ++ @exact_sensitive_keys
+  def filter_parameters,
+    do: @sensitive_keys ++ @exact_sensitive_keys ++ @exact_raw_sensitive_keys
 
   @doc """
   Sanitize data by redacting values under sensitive keys.
@@ -131,7 +148,8 @@ defmodule Sanctum.Sanitizer do
     tokens = tokenize(key)
     normalized = String.downcase(key) |> String.replace(["-", "_"], "")
 
-    normalized in @exact_sensitive_keys or
+    String.downcase(key) in @exact_raw_sensitive_keys or
+      normalized in @exact_sensitive_keys or
       Enum.any?(@sensitive_keys, fn pattern ->
         case tokenize(pattern) do
           [single] ->

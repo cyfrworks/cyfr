@@ -115,6 +115,24 @@ defmodule Sanctum.LimitsTest do
                @valid |> Map.put(:rate_limit, %{requests: 100, window: "never"}) |> Limits.new()
     end
 
+    test "a rate-limit window must be positive" do
+      # `parse_duration` accepts a leading minus, and the limiter computes its
+      # window as `now - window_ms`: at zero nothing is ever in the window, and
+      # negative moves the window into the future, so either spelling counts
+      # nothing and the limit never fires. The duration fields already refuse
+      # a negative for the same reason; this one did not.
+      for window <- ["0s", "0ms", "-1s", "-1m"] do
+        assert {:error, {:invalid_limit, :rate_limit, _}} =
+                 @valid
+                 |> Map.put(:rate_limit, %{requests: 100, window: window})
+                 |> Limits.new(),
+               "#{window} was accepted as a rate-limit window"
+      end
+
+      assert {:ok, _} =
+               @valid |> Map.put(:rate_limit, %{requests: 100, window: "1ms"}) |> Limits.new()
+    end
+
     test "normalizes string-keyed rate_limit to atom keys" do
       {:ok, limits} =
         @valid

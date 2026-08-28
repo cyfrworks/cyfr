@@ -56,6 +56,35 @@ defmodule Sanctum.RedactionRosterTest do
     assert kept == %{"execution_state" => "running", "error_code" => -32000}
   end
 
+  test "the tincture credential query keys are in the one roster too" do
+    # `TinctureAuth` scrubs `_t`/`_key`/`_session` out of `conn.query_string`,
+    # but the same names arrive again as decoded params, and the Sanitizer
+    # tokenizes them to "t"/"key"/"session" — none of which its patterns held.
+    # A path that logs a params map rather than the query string wrote a live
+    # tincture token in the clear.
+    for key <- Sanctum.TinctureAuth.sensitive_query_keys() do
+      assert Sanitizer.sensitive_key?(key), "#{key} must be in the roster"
+    end
+
+    assert Sanitizer.sanitize(%{"_t" => "tok", "_key" => "cyfr_pk_x", "_session" => "sess"}) ==
+             %{"_t" => "[REDACTED]", "_key" => "[REDACTED]", "_session" => "[REDACTED]"}
+
+    # `key` alone is a credential in its own right: it is what `key.validate`
+    # is handed, and those arguments were reaching `mcp_logs` in the clear.
+    assert Sanitizer.sensitive_key?("key")
+
+    assert Sanitizer.sanitize(%{"action" => "validate", "key" => "cyfr_pk_LIVE"}) ==
+             %{"action" => "validate", "key" => "[REDACTED]"}
+
+    # `session` and `t` bare are not credentials — a session object in an
+    # error term is worth reading — so only the query spellings redact.
+    refute Sanitizer.sensitive_key?("session")
+    refute Sanitizer.sensitive_key?("t")
+
+    assert Sanitizer.sanitize(%{"keyboard" => "kept", "session_count" => 3}) ==
+             %{"keyboard" => "kept", "session_count" => 3}
+  end
+
   test "no module outside the Sanitizer declares a sensitive-key roster" do
     offenders =
       Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))

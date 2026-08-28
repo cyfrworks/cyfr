@@ -98,6 +98,38 @@ defmodule Sanctum.Authority.WirePropertyTest do
     assert {:error, {:invalid_wire, _}} = Authority.from_wire("not a map")
   end
 
+  test "the wire cannot raise its own ceiling or restart its own depth" do
+    # `root/3` clamps the blob to the platform ceiling and starts at depth 0;
+    # everything downstream trusts those two facts. A wire map is the one way
+    # into an Authority that does not go through `root/3`, so it has to
+    # re-establish them itself — otherwise the first non-test caller (a remote
+    # worker) is a worker that writes its own ceiling and its own depth.
+    {graph, meta} = Gen.graph() |> Enum.take(1) |> hd()
+    wire = Authority.to_wire(Gen.rooted({graph, meta}))
+
+    ceiling = Sanctum.Policy.Ceiling.platform_ceiling()
+
+    over =
+      update_in(wire["policy"]["nodes"], fn nodes ->
+        Map.new(nodes, fn {ref, node} ->
+          {ref, put_in(node["limits"]["max_memory_bytes"], ceiling.max_memory_bytes * 4)}
+        end)
+      end)
+
+    assert {:ok, back} = Authority.from_wire(over)
+
+    for {_ref, node} <- back.policy.nodes do
+      assert node.limits.max_memory_bytes <= ceiling.max_memory_bytes
+    end
+
+    # Depth is bounded by the same cap `Transition` checks against, so a wire
+    # map cannot hand back an authority already past it.
+    assert {:error, {:invalid_wire_depth, _}} =
+             Authority.from_wire(%{wire | "depth" => Authority.depth_cap() + 1})
+
+    assert {:ok, _} = Authority.from_wire(%{wire | "depth" => Authority.depth_cap()})
+  end
+
   test "Blob.to_map is the inverse of Blob.parse" do
     {graph, _meta} = Gen.graph() |> Enum.take(1) |> hd()
     {:ok, blob} = Blob.parse(graph)

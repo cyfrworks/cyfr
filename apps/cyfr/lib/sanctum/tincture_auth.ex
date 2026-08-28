@@ -269,6 +269,16 @@ defmodule Sanctum.TinctureAuth do
   @sensitive_query_keys ~w(_t _key _session)
 
   @doc """
+  The credential query params this surface accepts or has to scrub.
+
+  `Sanctum.RedactionRosterTest` holds `Sanctum.Sanitizer` to this list: the
+  same names arrive again as decoded params, where the query-string scrub
+  below cannot reach them.
+  """
+  @spec sensitive_query_keys() :: [String.t()]
+  def sensitive_query_keys, do: @sensitive_query_keys
+
+  @doc """
   Redact tincture credential query params (`_t`, `_key`, `_session`) in a
   query string, replacing each value with `[REDACTED]`.
 
