@@ -135,7 +135,11 @@ defmodule Opus.CronScheduler do
         Arca.CronSchedule.release_claim(schedule_id, node_name())
 
         # Look up schedule for tenant context
-        schedule = Arca.CronSchedule.get_for_daemon(schedule_id)
+        schedule =
+          case Arca.CronSchedule.get_for_daemon(schedule_id) do
+            {:ok, row} -> row
+            {:error, _} -> nil
+          end
 
         ctx =
           if schedule do
@@ -217,7 +221,40 @@ defmodule Opus.CronScheduler do
   # Private helpers
 
   defp load_all_schedules(state) do
-    schedules = Arca.CronSchedule.active_schedules()
+    case Arca.CronSchedule.active_schedules() do
+      # The storage layer already logged the fault; ride the same backoff
+      # the raise path below uses.
+      {:error, :database_error} ->
+        load_retry(state, "storage unavailable")
+
+      {:ok, schedules} ->
+        do_load_all_schedules(state, schedules)
+    end
+  rescue
+    e in @db_load_errors ->
+      # Ownership errors are expected during test sandbox teardown — log at
+      # warning, not error.
+      level = if match?(%DBConnection.OwnershipError{}, e), do: :warning, else: :error
+      load_retry(state, Exception.message(e), level)
+  catch
+    :exit, reason ->
+      load_retry(state, "exited: " <> inspect(reason), :warning)
+  end
+
+  defp load_retry(state, why, level \\ :error) do
+    retry_count = state.load_retry_count + 1
+    delay_ms = min(5_000 * Integer.pow(2, retry_count - 1), 60_000)
+
+    Logger.log(
+      level,
+      "CronScheduler: failed to load schedules (#{why}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms"
+    )
+
+    Process.send_after(self(), :retry_load, delay_ms)
+    %{state | load_retry_count: retry_count}
+  end
+
+  defp do_load_all_schedules(state, schedules) do
     Logger.info("[CronScheduler] loading #{length(schedules)} active schedule(s)")
 
     state =
@@ -248,40 +285,17 @@ defmodule Opus.CronScheduler do
 
     # Reset retry counter on successful load
     %{state | load_retry_count: 0}
-  rescue
-    e in @db_load_errors ->
-      retry_count = state.load_retry_count + 1
-      delay_ms = min(5_000 * Integer.pow(2, retry_count - 1), 60_000)
-
-      # Ownership errors are expected during test sandbox teardown — log at warning, not error
-      level = if match?(%DBConnection.OwnershipError{}, e), do: :warning, else: :error
-
-      Logger.log(
-        level,
-        "CronScheduler: failed to load schedules (#{Exception.message(e)}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms"
-      )
-
-      Process.send_after(self(), :retry_load, delay_ms)
-      %{state | load_retry_count: retry_count}
-  catch
-    :exit, reason ->
-      retry_count = state.load_retry_count + 1
-      delay_ms = min(5_000 * Integer.pow(2, retry_count - 1), 60_000)
-
-      Logger.warning(
-        "CronScheduler: load_all_schedules exited (#{inspect(reason)}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms"
-      )
-
-      Process.send_after(self(), :retry_load, delay_ms)
-      %{state | load_retry_count: retry_count}
   end
 
   defp fire_schedule(schedule_id, state) do
     case Arca.CronSchedule.get_for_daemon(schedule_id) do
-      nil ->
+      {:error, :not_found} ->
         state
 
-      %{status: "active"} = schedule ->
+      {:error, :database_error} ->
+        retry_later(schedule_id, state)
+
+      {:ok, %{status: "active"} = schedule} ->
         ctx =
           Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
 
@@ -313,7 +327,7 @@ defmodule Opus.CronScheduler do
           fire_active_schedule(schedule_id, schedule, ctx, state)
         end
 
-      _other ->
+      {:ok, _other_status} ->
         state
     end
   rescue
@@ -402,6 +416,9 @@ defmodule Opus.CronScheduler do
 
           {:ok, input} ->
             case Arca.CronSchedule.claim(schedule_id, node_name(), @claim_ttl_seconds) do
+              {:error, :database_error} ->
+                retry_later(schedule_id, state)
+
               :held ->
                 # Another node holds this firing; take the next one.
                 Logger.debug(
@@ -657,7 +674,12 @@ defmodule Opus.CronScheduler do
     state = cancel_timer(schedule_id, state)
 
     case Arca.CronSchedule.get_for_daemon(schedule_id) do
-      %{status: "active"} = schedule ->
+      # A row the store could not answer for must be retried — silently
+      # dropping the timer would orphan the schedule until restart.
+      {:error, :database_error} ->
+        retry_later(schedule_id, state)
+
+      {:ok, %{status: "active"} = schedule} ->
         case compute_next_run(schedule.cron_expression) do
           {:ok, next_run} ->
             delay_ms = max(DateTime.diff(next_run, DateTime.utc_now(), :millisecond), 1_000)

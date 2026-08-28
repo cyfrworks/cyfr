@@ -121,7 +121,7 @@ defmodule Opus.CronSchedulerTest do
         "No resolved reference — re-create or update the schedule"
       )
 
-      updated = CronSchedule.get_for_daemon(schedule.id)
+      {:ok, updated} = CronSchedule.get_for_daemon(schedule.id)
       assert updated.error_count == 1
     end
   end

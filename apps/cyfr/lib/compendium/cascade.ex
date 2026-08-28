@@ -87,13 +87,18 @@ defmodule Compendium.Cascade do
   end
 
   defp disable_schedules(ctx, name_ref) do
-    ctx
-    |> Arca.CronSchedule.list(limit: 1000)
-    |> Enum.filter(fn schedule ->
-      targets?(schedule.resolved_reference, name_ref) or
-        targets?(Map.get(schedule, :reference), name_ref)
-    end)
-    |> Enum.each(fn schedule -> Arca.CronSchedule.soft_delete(ctx, schedule.id) end)
+    case Arca.CronSchedule.list(ctx, limit: 1000) do
+      {:ok, schedules} ->
+        schedules
+        |> Enum.filter(fn schedule ->
+          targets?(schedule.resolved_reference, name_ref) or
+            targets?(Map.get(schedule, :reference), name_ref)
+        end)
+        |> Enum.each(fn schedule -> Arca.CronSchedule.soft_delete(ctx, schedule.id) end)
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.Cascade] schedule sweep skipped: #{inspect(reason)}")
+    end
 
     :ok
   rescue

@@ -135,8 +135,8 @@ defmodule Opus.CronMCP do
           Opus.CronScheduler.add(schedule.id)
           {:ok, format_schedule(schedule)}
 
-        {:error, changeset} ->
-          {:error, format_changeset_error(changeset)}
+        {:error, reason} ->
+          {:error, format_store_error(reason)}
       end
     end
   end
@@ -144,20 +144,25 @@ defmodule Opus.CronMCP do
   # List
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
     limit = min(args["limit"] || 25, 1000)
-    schedules = Arca.CronSchedule.list(ctx, limit: limit)
 
-    {:ok,
-     %{
-       schedules: Enum.map(schedules, &format_schedule/1),
-       count: length(schedules)
-     }}
+    case Arca.CronSchedule.list(ctx, limit: limit) do
+      {:ok, schedules} ->
+        {:ok,
+         %{
+           schedules: Enum.map(schedules, &format_schedule/1),
+           count: length(schedules)
+         }}
+
+      {:error, reason} ->
+        {:error, format_store_error(reason)}
+    end
   end
 
   # Get
   def handle("schedule", %Context{} = ctx, %{"action" => "get", "schedule_id" => id}) do
     case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
-      nil -> {:error, "Schedule not found: #{id}"}
-      schedule -> {:ok, format_schedule(schedule)}
+      {:ok, schedule} -> {:ok, format_schedule(schedule)}
+      {:error, reason} -> {:error, format_store_error(reason, id)}
     end
   end
 
@@ -167,7 +172,7 @@ defmodule Opus.CronMCP do
 
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
-    with {:schedule, schedule} when not is_nil(schedule) <-
+    with {:schedule, {:ok, schedule}} <-
            {:schedule, Arca.CronSchedule.get_by_id_or_name(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]) do
       update_attrs = %{}
@@ -217,12 +222,12 @@ defmodule Opus.CronMCP do
             Opus.CronScheduler.update(updated.id)
             {:ok, format_schedule(updated)}
 
-          {:error, changeset} ->
-            {:error, format_changeset_error(changeset)}
+          {:error, reason} ->
+            {:error, format_store_error(reason, id)}
         end
       end
     else
-      {:schedule, nil} -> {:error, "Schedule not found: #{id}"}
+      {:schedule, {:error, reason}} -> {:error, format_store_error(reason, id)}
       {:error, _} = err -> err
     end
   end
@@ -234,17 +239,17 @@ defmodule Opus.CronMCP do
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
     case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
-      nil ->
-        {:error, "Schedule not found: #{id}"}
+      {:error, reason} ->
+        {:error, format_store_error(reason, id)}
 
-      schedule ->
+      {:ok, schedule} ->
         case Arca.CronSchedule.update(ctx, schedule.id, %{status: "paused"}) do
           {:ok, updated} ->
             Opus.CronScheduler.pause(updated.id)
             {:ok, format_schedule(updated)}
 
-          {:error, changeset} ->
-            {:error, format_changeset_error(changeset)}
+          {:error, reason} ->
+            {:error, format_store_error(reason, id)}
         end
     end
   end
@@ -256,10 +261,10 @@ defmodule Opus.CronMCP do
   # Resume
   def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
     case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
-      nil ->
-        {:error, "Schedule not found: #{id}"}
+      {:error, reason} ->
+        {:error, format_store_error(reason, id)}
 
-      schedule ->
+      {:ok, schedule} ->
         next_run =
           case compute_next_run(schedule.cron_expression) do
             {:ok, dt} -> dt
@@ -274,8 +279,8 @@ defmodule Opus.CronMCP do
             Opus.CronScheduler.resume(updated.id)
             {:ok, format_schedule(updated)}
 
-          {:error, changeset} ->
-            {:error, format_changeset_error(changeset)}
+          {:error, reason} ->
+            {:error, format_store_error(reason, id)}
         end
     end
   end
@@ -287,17 +292,17 @@ defmodule Opus.CronMCP do
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
     case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
-      nil ->
-        {:error, "Schedule not found: #{id}"}
+      {:error, reason} ->
+        {:error, format_store_error(reason, id)}
 
-      schedule ->
+      {:ok, schedule} ->
         case Arca.CronSchedule.soft_delete(ctx, schedule.id) do
           {:ok, _} ->
             Opus.CronScheduler.remove(schedule.id)
             {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
-          {:error, changeset} ->
-            {:error, format_changeset_error(changeset)}
+          {:error, reason} ->
+            {:error, format_store_error(reason, id)}
         end
     end
   end
@@ -309,10 +314,10 @@ defmodule Opus.CronMCP do
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
     case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
-      nil ->
-        {:error, "Schedule not found: #{id}"}
+      {:error, reason} ->
+        {:error, format_store_error(reason, id)}
 
-      schedule ->
+      {:ok, schedule} ->
         case Compendium.Resolver.resolve(ctx, schedule.reference) do
           {:ok, pinned, _metadata} ->
             case Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
@@ -320,8 +325,8 @@ defmodule Opus.CronMCP do
                 Opus.CronScheduler.update(updated.id)
                 {:ok, format_schedule(updated)}
 
-              {:error, changeset} ->
-                {:error, format_changeset_error(changeset)}
+              {:error, reason} ->
+                {:error, format_store_error(reason, id)}
             end
 
           {:error, reason} ->
@@ -379,12 +384,17 @@ defmodule Opus.CronMCP do
   end
 
   defp validate_limit(ctx) do
-    count = Arca.CronSchedule.count_active(ctx)
+    # A cap check the store cannot answer refuses — a default of zero
+    # would wave every create through during an outage.
+    case Arca.CronSchedule.count_active(ctx) do
+      {:ok, count} when count >= @max_schedules_per_athanor ->
+        {:error, "Schedule limit reached (#{@max_schedules_per_athanor} per athanor)"}
 
-    if count >= @max_schedules_per_athanor do
-      {:error, "Schedule limit reached (#{@max_schedules_per_athanor} per athanor)"}
-    else
-      :ok
+      {:ok, _count} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, format_store_error(reason)}
     end
   end
 
@@ -429,18 +439,17 @@ defmodule Opus.CronMCP do
     end
   end
 
-  defp format_changeset_error(%Ecto.Changeset{} = changeset) do
-    errors =
-      Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-        Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
-          opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-        end)
-      end)
+  # The storage layer answers typed reasons; this seam renders them.
+  defp format_store_error(reason, id \\ nil)
+  defp format_store_error(:not_found, nil), do: "Schedule not found"
+  defp format_store_error(:not_found, id), do: "Schedule not found: #{id}"
+  defp format_store_error(:database_error, _), do: "Storage unavailable — try again shortly"
 
-    inspect(errors)
+  defp format_store_error({:validation, errors}, _) when is_map(errors) do
+    Enum.map_join(errors, "; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
   end
 
-  defp format_changeset_error(other), do: inspect(other)
+  defp format_store_error(other, _), do: inspect(other)
 
   defp resolve_for_schedule(ctx, reference, label) do
     case Compendium.Resolver.resolve(ctx, reference) do

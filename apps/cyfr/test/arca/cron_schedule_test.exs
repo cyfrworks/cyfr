@@ -67,20 +67,20 @@ defmodule Arca.CronScheduleTest do
   describe "get_by_id_or_name/2" do
     test "finds by name", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "find-me"}))
-      found = CronSchedule.get_by_id_or_name(ctx, "find-me")
+      {:ok, found} = CronSchedule.get_by_id_or_name(ctx, "find-me")
       assert found.id == schedule.id
     end
 
     test "finds by id", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs())
-      found = CronSchedule.get_by_id_or_name(ctx, schedule.id)
+      {:ok, found} = CronSchedule.get_by_id_or_name(ctx, schedule.id)
       assert found.id == schedule.id
     end
 
     test "does not find deleted schedules", %{ctx: ctx} do
       {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "deleted-one"}))
       CronSchedule.soft_delete(ctx, schedule.id)
-      assert CronSchedule.get_by_id_or_name(ctx, "deleted-one") == nil
+      assert CronSchedule.get_by_id_or_name(ctx, "deleted-one") == {:error, :not_found}
     end
 
     test "finds a fellow member's schedule in the same athanor (interchangeable)" do
@@ -98,7 +98,7 @@ defmodule Arca.CronScheduleTest do
         )
 
       # Same athanor, different creator — visible.
-      found = CronSchedule.get_by_id_or_name(ctx, "private")
+      {:ok, found} = CronSchedule.get_by_id_or_name(ctx, "private")
       assert found != nil
       assert found.id == created.id
     end
@@ -111,7 +111,7 @@ defmodule Arca.CronScheduleTest do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "other", user_id: "other_user"}))
       CronSchedule.soft_delete(ctx, s2.id)
 
-      schedules = CronSchedule.list(ctx)
+      {:ok, schedules} = CronSchedule.list(ctx)
       names = Enum.map(schedules, & &1.name)
 
       assert length(schedules) == 2
@@ -127,7 +127,7 @@ defmodule Arca.CronScheduleTest do
       {:ok, paused} = CronSchedule.create(valid_attrs(%{name: "paused1"}))
       CronSchedule.update(ctx, paused.id, %{status: "paused"})
 
-      active = CronSchedule.active_schedules()
+      {:ok, active} = CronSchedule.active_schedules()
       names = Enum.map(active, & &1.name)
       assert "active1" in names
       refute "paused1" in names
@@ -186,7 +186,7 @@ defmodule Arca.CronScheduleTest do
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "c2"}))
       CronSchedule.soft_delete(ctx, s2.id)
 
-      assert CronSchedule.count_active(ctx) == 1
+      assert CronSchedule.count_active(ctx) == {:ok, 1}
     end
   end
 end

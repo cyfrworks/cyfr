@@ -257,11 +257,11 @@ defmodule Arca.TenantIsolationTest do
           athanor_id: ctx_b.athanor_id
         })
 
-      a_schedules = Arca.CronSchedule.list(ctx_a)
+      {:ok, a_schedules} = Arca.CronSchedule.list(ctx_a)
       assert length(a_schedules) == 1
       assert hd(a_schedules).name == "sched-a"
 
-      b_schedules = Arca.CronSchedule.list(ctx_b)
+      {:ok, b_schedules} = Arca.CronSchedule.list(ctx_b)
       assert length(b_schedules) == 1
       assert hd(b_schedules).name == "sched-b"
     end
@@ -279,8 +279,8 @@ defmodule Arca.TenantIsolationTest do
           athanor_id: ctx_a.athanor_id
         })
 
-      assert Arca.CronSchedule.count_active(ctx_a) == 1
-      assert Arca.CronSchedule.count_active(ctx_b) == 0
+      assert Arca.CronSchedule.count_active(ctx_a) == {:ok, 1}
+      assert Arca.CronSchedule.count_active(ctx_b) == {:ok, 0}
     end
 
     test "get_by_id_or_name scoped to tenant" do
@@ -297,10 +297,10 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can find by name
-      assert Arca.CronSchedule.get_by_id_or_name(ctx_a, "get-sched-a") != nil
+      assert {:ok, _} = Arca.CronSchedule.get_by_id_or_name(ctx_a, "get-sched-a")
 
       # B cannot find A's schedule even by ID
-      assert Arca.CronSchedule.get_by_id_or_name(ctx_b, sched.id) == nil
+      assert Arca.CronSchedule.get_by_id_or_name(ctx_b, sched.id) == {:error, :not_found}
     end
   end
 
