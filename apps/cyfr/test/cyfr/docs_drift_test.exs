@@ -10,7 +10,9 @@ defmodule Cyfr.DocsDriftTest do
   """
   use ExUnit.Case, async: true
 
-  @claude_md Path.expand("../../../..", __DIR__) |> Path.join("CLAUDE.md")
+  @repo_root Path.expand("../../../..", __DIR__)
+  @claude_md Path.join(@repo_root, "CLAUDE.md")
+  @readme Path.join(@repo_root, "README.md")
 
   test "CLAUDE.md's storage tree names every tenant root and global prefix" do
     doc = File.read!(@claude_md)
@@ -25,6 +27,17 @@ defmodule Cyfr.DocsDriftTest do
     for prefix <- Arca.Storage.global_prefixes() do
       assert doc =~ prefix,
              "global prefix #{prefix} is missing from CLAUDE.md's storage tree"
+    end
+  end
+
+  test "README's storage tree names every tenant root and global prefix" do
+    doc = File.read!(@readme)
+
+    # The README draws the tree with a trailing slash per directory —
+    # matched with the slash so "metadata" prose can't stand in for `meta/`.
+    for root <- Arca.Storage.tenant_roots() ++ Arca.Storage.global_prefixes() do
+      assert doc =~ root <> "/",
+             "root #{root}/ is missing from README's storage tree"
     end
   end
 end

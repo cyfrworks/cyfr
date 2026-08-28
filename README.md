@@ -137,7 +137,8 @@ your-project/
             │   └── tinctures/   # Bundled example tinctures + your own
             ├── aqua/       # The athanor's own AQUA agent definitions
             ├── conversations/  # Chat attachment files
-            └── guest/      # Files WASM components store (their `data/` scope)
+            ├── guest/      # Files WASM components store (their `data/` scope)
+            └── meta/       # Tenant-reserved: overlay origin marks, system-written
 ```
 
 > The seed bundle every athanor starts from rides inside the container image

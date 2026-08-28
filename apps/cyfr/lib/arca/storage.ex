@@ -79,13 +79,14 @@ defmodule Arca.Storage do
       ├── mcp-bridge/                    # the mcp-bridge sidecar's own files — inside the
       │                                  # root (compose mounts it), never an Arca path
       ├── cache/                         # Global: immutable cached artifacts
-      │   └── oci/{digest}/
+      │   └── oci/                       # blobs/sha256/{hex}; manifests/{registry}/{repo}/{tag}.json
       ├── system/                        # Global: server-internal scratch (health probe)
       └── athanors/{athanor_id}/         # Tenant-scoped: everything the athanor owns
           ├── components/{type}s/{publisher}/{name}/{version}/
           ├── aqua/                      # the athanor's AQUA agent definitions
           ├── conversations/             # chat attachment blobs
-          └── guest/                     # guest (WASM) files — the guest's `data/` scope
+          ├── guest/                     # guest (WASM) files — the guest's `data/` scope
+          └── meta/                      # tenant-reserved: overlay origin marks, system-written
 
   Per-athanor settings (retention policy included) are rows — the
   `athanors.settings` document — never blobs; the tree holds only content.
@@ -243,8 +244,8 @@ defmodule Arca.Storage do
   Global path prefixes that are NOT tenant-scoped.
 
   These paths are stored at the root level — they bypass the
-  `{athanor_id}/` prefix that `tenant_segments/1` builds for everything
-  else.
+  `athanors/{athanor_id}/` prefix that `tenant_segments/1` builds for
+  everything else.
 
   - `cache` — global cache (OCI blobs, etc.) under `data/cache/`
   - `system` — server-internal scratch (the storage health probe) under
