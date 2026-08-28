@@ -36,7 +36,9 @@ RUN mix compile && mix release builder
 FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
-LABEL org.opencontainers.image.licenses="Apache-2.0"
+# The release loads (never starts) the cyfr app, whose lib/sanctum modules
+# (Sanctum.Limits reaches the builder via Locus.Builder) are FSL-licensed.
+LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
 
 RUN apt-get update && apt-get install -y \
     libstdc++6 \
@@ -109,8 +111,9 @@ COPY --from=relbuilder /app/_build/prod/rel/builder ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
-# The WIT tree the compile step vendors into each build.
-COPY wit/ /app/wit/
+# No `COPY wit/` here: Compendium.WITSource embeds the whole WIT tree at
+# COMPILE time (stage 1 copies it for that), and the runtime never reads
+# it from disk — a release without its ABI fails the build instead.
 
 USER app
 

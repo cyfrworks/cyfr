@@ -67,8 +67,11 @@ services:
   # Toolchain builds isolated from the app image: cargo/npm run here, not
   # in cyfr's container. Opt in with
   #   docker compose --profile builder up -d
-  # and set CYFR_BUILDER_URL=http://builder:4100 plus CYFR_BUILDER_TOKEN
-  # in .env (both containers read the same file).      [profile: builder]
+  # and set CYFR_BUILDER_URL=http://builder:4100 in .env plus the shared
+  # CYFR_BUILDER_TOKEN in BOTH .env and .env.builder. The builder reads
+  # only .env.builder — the blast-radius container must not be handed the
+  # app's secrets (key base, DB URL, OAuth) alongside the one it needs.
+  #                                                     [profile: builder]
   builder:
     container_name: cyfr-builder
     build:
@@ -78,9 +81,11 @@ services:
     expose:
       - "4100"
     env_file:
-      - .env
+      - path: .env.builder
+        required: false
     environment:
       - CYFR_BUILDER_LISTEN=true
+      - CYFR_BUILDER_TOKEN=${CYFR_BUILDER_TOKEN:-}
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response, and
     # the only writable surface is its own build scratch.
@@ -93,6 +98,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          # The one container that runs multi-minute cargo/npm compiles —
+          # without a ceiling a runaway build starves the host.
+          memory: ${CYFR_BUILDER_MEMORY_LIMIT:-3G}
+          cpus: "${CYFR_BUILDER_CPU_LIMIT:-2}"
 
   mcp-bridge:
     # Built locally from Dockerfile.node (not a published image), so `docker
@@ -104,11 +116,13 @@ services:
     expose:
       - "8001"
     environment:
-      # When set, /mcp requires `Authorization: Bearer <token>`. `cyfr init`
-      # generates this token so the bridge boots closed. Register the bridge in
-      # Prism with header `Authorization: vault:mcp_bridge_token` (store the same
-      # value in a Vault entry named `mcp_bridge_token`). Unset = open on the
-      # trusted container network only. The port is `expose`d, never published.
+      # /mcp requires `Authorization: Bearer <token>`. `cyfr init` generates
+      # this token. Register the bridge in Prism with header
+      # `Authorization: vault:mcp_bridge_token` (store the same value in a
+      # Vault entry named `mcp_bridge_token`). The bridge FAILS CLOSED:
+      # unset, it refuses to boot (and restart-loops here) unless
+      # MCP_BRIDGE_ALLOW_INSECURE=1 explicitly opts into an open bridge on
+      # the container network. The port is `expose`d, never published.
       - MCP_BRIDGE_TOKEN=${MCP_BRIDGE_TOKEN:-}
     volumes:
       # Host-visible persistence: backends.json lives here, easy to inspect

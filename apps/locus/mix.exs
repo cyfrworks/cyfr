@@ -39,8 +39,13 @@ defmodule Locus.MixProject do
       {:req, "~> 0.5"},
       # runtime: false so the `builder` release can start :locus with the
       # cyfr app LOADED but not STARTED — the builder needs cyfr's pure
-      # modules (PathSafety, WasmValidator, WITSource, Digest), never its
-      # supervision tree. The cyfr release starts :cyfr explicitly.
+      # modules (PathSafety, Digest, LoggerContext, WasmValidator,
+      # Scaffold, WITSource, Sanctum.Limits), never its supervision tree.
+      # The cyfr release starts :cyfr explicitly, and its ordering in the
+      # root mix.exs is what guarantees :cyfr boots first there — OTP has
+      # no edge for it. The one locus module that DOES need the started
+      # app (Locus.MCP: Repo, Arca, ToolRegistry) is reachable only
+      # through Emissary's tool registry, which never runs in the builder.
       {:cyfr, in_umbrella: true, runtime: false}
     ]
   end

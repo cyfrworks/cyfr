@@ -36,11 +36,26 @@ defmodule Locus.BuilderService do
 
   post "/build" do
     with :ok <- check_token(conn),
-         {:ok, source_files, language, target_type} <- decode_request(conn.body_params) do
-      run_build(conn, source_files, language, target_type)
+         {:ok, source_files, language, target_type} <- decode_request(conn.body_params),
+         # The cap is enforced on THIS side of the wire too: the client-side
+         # limiter governs one app node, but two app nodes (or anything else
+         # holding the token) could otherwise run unbounded concurrent
+         # cargo builds in the one container sized for a couple.
+         :ok <- acquire_slot() do
+      try do
+        run_build(conn, source_files, language, target_type)
+      after
+        Locus.BuildLimiter.release()
+      end
     else
       {:error, :unauthorized} ->
         send_json(conn, 401, %{ok: false, error: "unauthorized"})
+
+      {:error, :busy} ->
+        send_json(conn, 429, %{
+          ok: false,
+          error: "builder at capacity (#{Locus.BuildLimiter.max_builds()} concurrent builds)"
+        })
 
       {:error, message} when is_binary(message) ->
         send_json(conn, 400, %{ok: false, error: message})
@@ -98,13 +113,29 @@ defmodule Locus.BuilderService do
     end)
   end
 
+  # The service has no tenant identity — the client side already applied
+  # the per-athanor cap; this is the container's own global ceiling.
+  defp acquire_slot do
+    Locus.BuildLimiter.acquire(Locus.BuildLimiter, nil)
+  end
+
   defp run_build(conn, source_files, language, target_type) do
     log = :ets.new(:build_log, [:public])
-    counter = :counters.new(1, [])
+    # [line_seq, bytes_retained] — the byte budget mirrors Locus.Builder's
+    # own retained-output cap, so a chatty build cannot grow this table
+    # without bound while its lines wait to be replayed.
+    counter = :counters.new(2, [])
+    max_log_bytes = Locus.Builder.max_port_output_bytes()
 
     on_progress = fn stage, message ->
-      :counters.add(counter, 1, 1)
-      :ets.insert(log, {:counters.get(counter, 1), "#{stage}: #{message}"})
+      line = "#{stage}: #{message}"
+
+      if :counters.get(counter, 2) < max_log_bytes do
+        :counters.add(counter, 1, 1)
+        :counters.add(counter, 2, byte_size(line))
+        :ets.insert(log, {:counters.get(counter, 1), line})
+      end
+
       :ok
     end
 

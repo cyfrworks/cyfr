@@ -171,6 +171,59 @@ defmodule Locus.BuildLimiterTest do
     assert message =~ "Unknown build"
   end
 
+  test "the sweep reclaims only dead holders; a live wedged holder keeps its slot" do
+    name = :"limiter_sweep_#{System.unique_integer([:positive])}"
+    {:ok, limiter} = BuildLimiter.start_link(name: name)
+
+    parent = self()
+
+    live =
+      spawn(fn ->
+        :ok = BuildLimiter.acquire(name, nil)
+        send(parent, :acquired)
+
+        receive do
+          :done -> :ok
+        end
+      end)
+
+    assert_receive :acquired, 2_000
+
+    dead = spawn(fn -> :ok end)
+    mref = Process.monitor(dead)
+    assert_receive {:DOWN, ^mref, _, _, _}
+
+    # Age the live holder past the threshold, and plant a dead holder whose
+    # DOWN the limiter never saw (a fabricated ref — demonitor of an unknown
+    # ref is a no-op, so drop_holder stays safe).
+    eleven_min_ago = System.monotonic_time(:millisecond) - 11 * 60 * 1000
+
+    :sys.replace_state(limiter, fn state ->
+      holders =
+        Map.new(state.holders, fn {p, {r, c, _s, t}} -> {p, {r, c, eleven_min_ago, t}} end)
+
+      %{
+        state
+        | holders: Map.put(holders, dead, {make_ref(), 1, eleven_min_ago, nil}),
+          in_use: state.in_use + 1
+      }
+    end)
+
+    send(limiter, :sweep_stale)
+
+    wait_until(fn ->
+      state = :sys.get_state(limiter)
+      not Map.has_key?(state.holders, dead)
+    end)
+
+    state = :sys.get_state(limiter)
+    assert Map.has_key?(state.holders, live)
+    assert state.in_use == 1
+
+    send(live, :done)
+    GenServer.stop(limiter)
+  end
+
   defp wait_until(fun, deadline_ms \\ 1_000) do
     deadline = System.monotonic_time(:millisecond) + deadline_ms
 

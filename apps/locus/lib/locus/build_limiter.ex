@@ -18,8 +18,14 @@ defmodule Locus.BuildLimiter do
   5-minute deadline, an SSE disconnect exits it with `:cancelled`, and a
   crash in the builder's linked inner task propagates the same way —
   none of those run `after`), and a periodic sweep that reclaims slots
-  from live-but-wedged holders. Without the monitor, two killed builds
-  permanently exhausted the cap until the application restarted.
+  whose holder is dead but whose `:DOWN` never arrived. A holder that is
+  still ALIVE keeps its slot however long it has held it — reclaiming a
+  live holder's slot admits a second build beside a first that is still
+  burning a core, a silent 50% capacity breach at a cap of 2
+  (`Opus.ExecutionSemaphore.sweep_stale_holders/1` argues the same rule);
+  the sweep warns about a live wedged holder instead. Without the
+  monitor, two killed builds permanently exhausted the cap until the
+  application restarted.
 
   A holder may acquire more than once (slots are refcounted per pid);
   its `:DOWN` releases everything it held. `Locus.Application` supervises
@@ -126,19 +132,32 @@ defmodule Locus.BuildLimiter do
   def handle_info(:sweep_stale, state) do
     now = System.monotonic_time(:millisecond)
 
-    stale =
-      for {pid, {_ref, _count, since, _tenant}} <- state.holders,
-          now - since > @max_hold_ms,
-          do: pid
+    {dead, wedged} =
+      state.holders
+      |> Enum.filter(fn {_pid, {_ref, _count, since, _tenant}} ->
+        now - since > @max_hold_ms
+      end)
+      |> Enum.map(fn {pid, _} -> pid end)
+      |> Enum.split_with(&(not Process.alive?(&1)))
 
-    if stale != [] do
+    if dead != [] do
       Logger.warning(
-        "[Locus.BuildLimiter] Sweeping #{length(stale)} build slot holder(s) " <>
-          "alive but held >#{div(@max_hold_ms, 60_000)}min: #{inspect(stale)}"
+        "[Locus.BuildLimiter] Sweeping #{length(dead)} abandoned build slot(s) whose " <>
+          "holder is gone and whose DOWN never arrived: #{inspect(dead)}"
       )
     end
 
-    state = Enum.reduce(stale, state, &drop_holder(&2, &1))
+    # A live holder keeps its slot: reclaiming it would admit a build
+    # beside one still burning a core (see the moduledoc). Warn so the
+    # wedge is findable, and let the operator kill the holder if real.
+    if wedged != [] do
+      Logger.warning(
+        "[Locus.BuildLimiter] #{length(wedged)} build slot holder(s) alive but held " <>
+          ">#{div(@max_hold_ms, 60_000)}min — NOT reclaimed: #{inspect(wedged)}"
+      )
+    end
+
+    state = Enum.reduce(dead, state, &drop_holder(&2, &1))
     schedule_sweep()
     {:noreply, state}
   end

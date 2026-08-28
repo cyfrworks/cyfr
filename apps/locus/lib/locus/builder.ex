@@ -21,7 +21,7 @@ defmodule Locus.Builder do
 
   - Temp directory per compilation, cleaned up immediately
   - Source size and path traversal validated before writing to disk
-  - Compiled WASM validated (`Locus.WasmValidator`) before returning
+  - Compiled WASM validated (`Compendium.WasmValidator`) before returning
   - Output bounded: dist file count/bytes capped, compiler chatter capped
   - npm runs with `--ignore-scripts`: a dependency's lifecycle script
     never executes on this host
@@ -631,6 +631,11 @@ defmodule Locus.Builder do
   # the tail is dropped (the progress stream already delivered every line)
   # so a runaway build cannot balloon this process's heap.
   @max_port_output_bytes 2_000_000
+
+  @doc false
+  # Exposed so Locus.BuilderService bounds its replay log with the same
+  # budget this module bounds its retained output with.
+  def max_port_output_bytes, do: @max_port_output_bytes
 
   defp collect_port_output(port, acc, on_progress),
     do: collect_port_output(port, acc, 0, on_progress)

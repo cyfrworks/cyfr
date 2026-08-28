@@ -55,6 +55,15 @@ if config_env() != :test do
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
 
+  # Which release evaluates this file: "cyfr" (the app), "builder" (the
+  # build-isolation container), or nil under plain `mix` (dev). Set by the
+  # release scripts before the runtime config provider runs. The builder
+  # evaluates only the build-plane blocks — it must never be REQUIRED to
+  # hold the app's secrets (endpoint key base, database URL, OAuth client
+  # secrets) just to run compilers: the blast-radius container holds one
+  # secret, CYFR_BUILDER_TOKEN.
+  release_name = env_str.("RELEASE_NAME", nil)
+
   # JSON log format for structured logging (Datadog, Splunk, ELK, Loki)
   if env_str.("CYFR_LOG_FORMAT", nil) == "json" do
     # Only the format changes. `Config` deep-merges keyword values, so the
@@ -63,29 +72,32 @@ if config_env() != :test do
     config :logger, :default_formatter, format: {Cyfr.JsonFormatter, :format}
   end
 
-  # The explicit at-rest keyring, as JSON (parsed and pinned at boot by
-  # Cyfr.Application.resolve_crypto_keyring!/0; unset = derive from
-  # CYFR_SECRET_KEY_BASE). Through Dotenvy like every other secret: it was
-  # the one secret read with System.get_env/1, which silently ignored a
-  # keyring an operator put in .env alongside everything else.
-  config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
+  if release_name != "builder" do
+    # The explicit at-rest keyring, as JSON (parsed and pinned at boot by
+    # Cyfr.Application.resolve_crypto_keyring!/0; unset = derive from
+    # CYFR_SECRET_KEY_BASE). Through Dotenvy like every other secret: it was
+    # the one secret read with System.get_env/1, which silently ignored a
+    # keyring an operator put in .env alongside everything else.
+    config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
 
-  # Device label attached to registry credentials (unset = hostname).
-  config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
+    # Device label attached to registry credentials (unset = hostname).
+    config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
 
-  # Whether the server migrates the database on boot (default: true). Several
-  # nodes on one Postgres, or an operator who runs the schema step by hand
-  # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
-  config :cyfr, :auto_migrate, env_bool.("CYFR_AUTO_MIGRATE", true)
+    # Whether the server migrates the database on boot (default: true). Several
+    # nodes on one Postgres, or an operator who runs the schema step by hand
+    # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
+    config :cyfr, :auto_migrate, env_bool.("CYFR_AUTO_MIGRATE", true)
 
-  # Whether a pull refuses a component whose OCI signature cannot be
-  # verified (default: false — the component is stored as unverified and
-  # the recorded attestation is checked again at execution time).
-  config :cyfr, :require_signed_pulls, env_bool.("CYFR_REQUIRE_SIGNED_PULLS", false)
+    # Whether a pull refuses a component whose OCI signature cannot be
+    # verified (default: false — the component is stored as unverified and
+    # the recorded attestation is checked again at execution time).
+    config :cyfr, :require_signed_pulls, env_bool.("CYFR_REQUIRE_SIGNED_PULLS", false)
+  end
 
   # Concurrent toolchain builds (cargo/npm — a CPU core and hundreds of MB
   # each for minutes). The per-tenant cap keeps one athanor from holding
-  # every slot.
+  # every slot. Shared with the builder release: its service-side limiter
+  # reads the same knobs.
   if max_builds = env_int.("CYFR_MAX_CONCURRENT_BUILDS", nil) do
     if max_builds < 1, do: raise("CYFR_MAX_CONCURRENT_BUILDS must be >= 1")
     config :cyfr, :max_concurrent_builds, max_builds
@@ -105,507 +117,511 @@ if config_env() != :test do
   config :cyfr, :builder_listen, env_bool.("CYFR_BUILDER_LISTEN", false)
   config :cyfr, :builder_port, env_int.("CYFR_BUILDER_PORT", 4100)
 
-  # A headless node (default: false) serves the API, MCP and public tinctures
-  # and no browser surface: every route on the browser pipeline answers 404.
-  # Codex signs in through the session tool on /mcp, so it does not notice.
-  headless? = env_bool.("CYFR_HEADLESS", false)
-  config :cyfr, :headless, headless?
+  if release_name != "builder" do
+    # A headless node (default: false) serves the API, MCP and public tinctures
+    # and no browser surface: every route on the browser pipeline answers 404.
+    # Codex signs in through the session tool on /mcp, so it does not notice.
+    headless? = env_bool.("CYFR_HEADLESS", false)
+    config :cyfr, :headless, headless?
 
-  # Maximum concurrent WASM executions (default: 128)
-  # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions.
-  # A quarter of the slots is reserved for chain children (a formula's hops);
-  # that reserve must hold a chain of the full authority depth (8), so the
-  # floor is 32 — below it a deep chain could wait on itself.
-  if max_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS", nil) do
-    if max_exec < 32 do
-      raise ArgumentError,
-            "CYFR_MAX_CONCURRENT_EXECUTIONS must be at least 32 (a quarter of the slots " <>
-              "is the child reserve, which must fit a chain of depth 8), got #{max_exec}"
-    end
-
-    config :cyfr, :max_concurrent_executions, max_exec
-  end
-
-  # Maximum concurrent WASM executions per tenant (default: 16)
-  # Bounds the blast radius of one athanor queueing many long-running executions
-  if max_tenant_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", nil) do
-    config :cyfr, :max_concurrent_executions_per_tenant, max_tenant_exec
-  end
-
-  # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
-  # Counts requests and SSE connection opens, not stream duration.
-  if mcp_rl_max = env_int.("CYFR_MCP_RATE_LIMIT_MAX", nil) do
-    config :cyfr, :mcp_rate_limit_max, mcp_rl_max
-  end
-
-  if mcp_rl_window = env_int.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", nil) do
-    config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
-  end
-
-  # Webhook replay window (default 300s). A delivery whose `timestamp_header`
-  # is further than this from now is refused. Senders differ in how well they
-  # keep a clock; the value was a constant nothing could set, so operators
-  # facing a drifting sender had no answer short of turning the header off.
-  if skew = env_int.("CYFR_WEBHOOK_MAX_SKEW_SECONDS", nil) do
-    if skew <= 0, do: raise("CYFR_WEBHOOK_MAX_SKEW_SECONDS must be > 0")
-    config :cyfr, :webhook_max_skew_seconds, skew
-  end
-
-  # How long delivered webhook idempotency keys are kept (default 86_400s).
-  # This is the window a retried delivery is recognised as a duplicate in, so
-  # it trades table size against how late a sender may retry.
-  if ttl = env_int.("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS", nil) do
-    if ttl <= 0, do: raise("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS must be > 0")
-    config :cyfr, :webhook_idempotency_ttl_seconds, ttl
-  end
-
-  # How long `/health/ready` reuses its last probe (default 5000ms). On an
-  # object store the write probe is a billable PUT per uncached hit, so a
-  # frequent prober is a line item; the code documented this as settable
-  # while nothing could set it.
-  if ready_ms = env_int.("CYFR_HEALTH_READY_CACHE_MS", nil) do
-    if ready_ms < 0, do: raise("CYFR_HEALTH_READY_CACHE_MS must be >= 0")
-    config :cyfr, :health_ready_cache_ms, ready_ms
-  end
-
-  # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
-  # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
-  if ttl_hours = env_int.("CYFR_SESSION_TTL_HOURS", nil) do
-    if ttl_hours < 0 do
-      raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
-    end
-
-    config :cyfr, :session_ttl_hours, ttl_hours
-  end
-
-  # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
-  # In production, this env var is required. In dev/test, the config file provides a static key.
-  # Blank reads as unset (see env_str above), so the prod guard below fires
-  # on `CYFR_SECRET_KEY_BASE=` — the line .env.example ships. It used to
-  # pass `""` through a truthiness check, leaving the documented raise dead
-  # and the endpoint holding an empty key base, with both signing salts
-  # derived from a publicly computable constant.
-  env_key_base = env_str.("CYFR_SECRET_KEY_BASE", nil)
-
-  if env_key_base do
-    config :cyfr, :secret_key_base, env_key_base
-  end
-
-  if config_env() == :prod do
-    secret_key_base =
-      env_key_base ||
-        raise """
-        environment variable CYFR_SECRET_KEY_BASE is missing.
-        You can generate one by calling: mix phx.gen.secret
-        """
-
-    # A misspelled bind address used to fall back to loopback, which starts
-    # the server on an interface nobody asked for and reads as "the deploy
-    # worked" until the first request from outside never arrives.
-    parse_ip = fn var, ip_string ->
-      case :inet.parse_address(String.to_charlist(ip_string)) do
-        {:ok, ip_tuple} ->
-          ip_tuple
-
-        {:error, _} ->
-          raise "environment variable #{var} is not a valid IP address: #{inspect(ip_string)}"
+    # Maximum concurrent WASM executions (default: 128)
+    # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions.
+    # A quarter of the slots is reserved for chain children (a formula's hops);
+    # that reserve must hold a chain of the full authority depth (8), so the
+    # floor is 32 — below it a deep chain could wait on itself.
+    if max_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS", nil) do
+      if max_exec < 32 do
+        raise ArgumentError,
+              "CYFR_MAX_CONCURRENT_EXECUTIONS must be at least 32 (a quarter of the slots " <>
+                "is the child reserve, which must fit a chain of depth 8), got #{max_exec}"
       end
+
+      config :cyfr, :max_concurrent_executions, max_exec
     end
 
-    emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env_str.("CYFR_BIND_ADDRESS", "0.0.0.0"))
-
-    host = env_str.("CYFR_HOST", "localhost")
-    port = env_int.("CYFR_PORT", 4000)
-
-    # Origins the browser will send for this deployment. We include both schemes
-    # so the same compose stack works whether Caddy serves plain HTTP on :80 (a
-    # localhost / bare-IP deploy) or terminates TLS for a real domain. Localhost
-    # variants stay in the list so the host-bound CLI / dev curls still work.
-    host_origins = [
-      "https://#{host}",
-      "http://#{host}",
-      "https://#{host}:#{port}",
-      "http://#{host}:#{port}"
-    ]
-
-    # Loopback, but only on the port this server actually listens on: an
-    # `http://localhost` with no port is port 80, which is a page on the
-    # victim's own machine — a trusted origin for their LiveView socket, with
-    # their cookie. Every local flow (the SSH forward the README documents,
-    # dev, the host-bound CLI) names the port.
-    localhost_origins = [
-      "http://localhost:#{port}",
-      "https://localhost:#{port}",
-      "http://127.0.0.1:#{port}",
-      "https://127.0.0.1:#{port}",
-      "http://[::1]:#{port}",
-      "https://[::1]:#{port}"
-    ]
-
-    config :cyfr, EmissaryWeb.Endpoint,
-      url: [host: host, port: port],
-      http: [
-        ip: emissary_bind,
-        port: port,
-        thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
-      ],
-      check_origin: host_origins ++ localhost_origins,
-      secret_key_base: secret_key_base,
-      server: true
-
-    # MCP origin allowlist (EmissaryWeb.Plugs.MCPOrigin). Same set as
-    # check_origin above, plus any extra origins listed in
-    # CYFR_MCP_ALLOWED_ORIGINS (comma-separated) for embedding the PWA on a
-    # different origin or running multiple frontends against the same server.
-    extra_mcp_origins = env_list.("CYFR_MCP_ALLOWED_ORIGINS")
-
-    config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins ++ extra_mcp_origins
-
-    # Derive signing salts from secret_key_base (or use explicit env overrides)
-    emissary_salt =
-      env_str.("CYFR_EMISSARY_SESSION_SALT", nil) ||
-        :crypto.hash(:sha256, "emissary_session" <> secret_key_base)
-        |> Base.url_encode64(padding: false)
-        |> binary_part(0, 16)
-
-    lv_salt =
-      env_str.("CYFR_LV_SALT", nil) ||
-        :crypto.hash(:sha256, "live_view" <> secret_key_base)
-        |> Base.url_encode64(padding: false)
-        |> binary_part(0, 16)
-
-    config :cyfr, :emissary_session_salt, emissary_salt
-    config :cyfr, EmissaryWeb.Endpoint, live_view: [signing_salt: lv_salt]
-
-    # Session cookies must be secure in production (HTTPS-only).
-    # Dev/test leave this false so http://localhost works.
-    config :cyfr, :cookie_secure, true
-
-    # Read once, as the boolean it is. Read as a string and tested for
-    # truthiness — as both sites below did — `"false"` is truthy, so the
-    # shipped `CYFR_BEHIND_PROXY=false` (uncommented in .env.example, and
-    # compose's default) turned X-Forwarded-For trust ON for the one
-    # deployment that has no proxy in front of it, and silenced the
-    # plain-HTTP warning meant for exactly that deployment. With XFF
-    # trusted, the client picks its own address: API-key IP allowlists and
-    # every IP-keyed rate limiter answer to whatever it sends.
-    behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
-
-    # Warn if plain HTTP in production without a reverse proxy declaration
-    unless behind_proxy? do
-      IO.puts(
-        :stderr,
-        "[warning] CYFR is running plain HTTP in production. " <>
-          "Set CYFR_BEHIND_PROXY=true if behind a TLS-terminating reverse proxy, " <>
-          "and set CYFR_BIND_ADDRESS=127.0.0.1 to bind only to localhost."
-      )
+    # Maximum concurrent WASM executions per tenant (default: 16)
+    # Bounds the blast radius of one athanor queueing many long-running executions
+    if max_tenant_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", nil) do
+      config :cyfr, :max_concurrent_executions_per_tenant, max_tenant_exec
     end
 
-    # If behind a proxy, enable X-Forwarded-For trust for IP-based API key allowlists.
-    # The client IP is taken right-to-left from the XFF chain, stripping the
-    # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
-    # Caddy) the default of 1 hop is correct; stacking more layers requires
-    # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
-    # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
-    if behind_proxy? do
-      config :cyfr, :trust_x_forwarded_for, true
+    # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
+    # Counts requests and SSE connection opens, not stream duration.
+    if mcp_rl_max = env_int.("CYFR_MCP_RATE_LIMIT_MAX", nil) do
+      config :cyfr, :mcp_rate_limit_max, mcp_rl_max
+    end
 
-      config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
+    if mcp_rl_window = env_int.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", nil) do
+      config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
+    end
 
-      case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
-        [] -> :ok
-        cidrs -> config :cyfr, :trusted_proxy_cidrs, cidrs
+    # Webhook replay window (default 300s). A delivery whose `timestamp_header`
+    # is further than this from now is refused. Senders differ in how well they
+    # keep a clock; the value was a constant nothing could set, so operators
+    # facing a drifting sender had no answer short of turning the header off.
+    if skew = env_int.("CYFR_WEBHOOK_MAX_SKEW_SECONDS", nil) do
+      if skew <= 0, do: raise("CYFR_WEBHOOK_MAX_SKEW_SECONDS must be > 0")
+      config :cyfr, :webhook_max_skew_seconds, skew
+    end
+
+    # How long delivered webhook idempotency keys are kept (default 86_400s).
+    # This is the window a retried delivery is recognised as a duplicate in, so
+    # it trades table size against how late a sender may retry.
+    if ttl = env_int.("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS", nil) do
+      if ttl <= 0, do: raise("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS must be > 0")
+      config :cyfr, :webhook_idempotency_ttl_seconds, ttl
+    end
+
+    # How long `/health/ready` reuses its last probe (default 5000ms). On an
+    # object store the write probe is a billable PUT per uncached hit, so a
+    # frequent prober is a line item; the code documented this as settable
+    # while nothing could set it.
+    if ready_ms = env_int.("CYFR_HEALTH_READY_CACHE_MS", nil) do
+      if ready_ms < 0, do: raise("CYFR_HEALTH_READY_CACHE_MS must be >= 0")
+      config :cyfr, :health_ready_cache_ms, ready_ms
+    end
+
+    # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
+    # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
+    if ttl_hours = env_int.("CYFR_SESSION_TTL_HOURS", nil) do
+      if ttl_hours < 0 do
+        raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
       end
-    end
-  end
 
-  # The filesystem roots, resolved and validated in one place
-  # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
-  # (every athanor's data and components, the cache/ and system/ globals,
-  # and the SQLite database unless CYFR_DATABASE_PATH points it
-  # elsewhere), plus the seed tree read in place — the repo/scaffold
-  # checkout by default, the baked image copy in Docker (the Dockerfile
-  # sets CYFR_SEED_PATH; the operator mount overlays its aqua/).
-  #
-  # Dev and prod resolve identically — a path knob that only worked in
-  # releases was a silent fallback in dev, against this module's own
-  # contract. Test keeps its tmp pins: the whole file is skipped there.
-  # With the vars unset the defaults expand from CWD, so run dev from the
-  # umbrella root (locus builds already require it).
-  paths =
-    case Cyfr.RuntimeConfig.resolve_paths(getenv) do
-      {:ok, paths} -> paths
-      {:error, message} -> raise message
+      config :cyfr, :session_ttl_hours, ttl_hours
     end
 
-  config :cyfr, :base_path, paths.base_path
-  config :cyfr, :seed_path, paths.seed_path
+    # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
+    # In production, this env var is required. In dev/test, the config file provides a static key.
+    # Blank reads as unset (see env_str above), so the prod guard below fires
+    # on `CYFR_SECRET_KEY_BASE=` — the line .env.example ships. It used to
+    # pass `""` through a truthiness check, leaving the documented raise dead
+    # and the endpoint holding an empty key base, with both signing salts
+    # derived from a publicly computable constant.
+    env_key_base = env_str.("CYFR_SECRET_KEY_BASE", nil)
 
-  # Database connection config. The adapter is selected at compile time in
-  # config.exs from CYFR_DATABASE; here we supply connection parameters for
-  # whichever adapter was built — gated so SQLite-only keys (journal_mode,
-  # busy_timeout) never bleed into a Postgres build and vice versa.
-  case Cyfr.RuntimeConfig.repo_adapter() do
-    Ecto.Adapters.SQLite3 ->
-      pool_size =
-        case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do
-          {:ok, pool_size} -> pool_size
-          {:error, message} -> raise message
+    if env_key_base do
+      config :cyfr, :secret_key_base, env_key_base
+    end
+
+    if config_env() == :prod do
+      secret_key_base =
+        env_key_base ||
+          raise """
+          environment variable CYFR_SECRET_KEY_BASE is missing.
+          You can generate one by calling: mix phx.gen.secret
+          """
+
+      # A misspelled bind address used to fall back to loopback, which starts
+      # the server on an interface nobody asked for and reads as "the deploy
+      # worked" until the first request from outside never arrives.
+      parse_ip = fn var, ip_string ->
+        case :inet.parse_address(String.to_charlist(ip_string)) do
+          {:ok, ip_tuple} ->
+            ip_tuple
+
+          {:error, _} ->
+            raise "environment variable #{var} is not a valid IP address: #{inspect(ip_string)}"
         end
+      end
 
-      config :cyfr, Arca.Repo,
-        database: paths.database_path,
-        pool_size: pool_size,
-        journal_mode: :wal,
-        busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
+      emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env_str.("CYFR_BIND_ADDRESS", "0.0.0.0"))
 
-    Ecto.Adapters.Postgres ->
-      # A Postgres build carries no connection config from config.exs, so a
-      # CYFR_DATABASE_URL is required — its absence is a hard boot error
-      # rather than a silent attempt against a default localhost.
-      case Cyfr.RuntimeConfig.resolve_postgres(getenv) do
-        {:ok, repo_opts} -> config :cyfr, Arca.Repo, repo_opts
+      host = env_str.("CYFR_HOST", "localhost")
+      port = env_int.("CYFR_PORT", 4000)
+
+      # Origins the browser will send for this deployment. We include both schemes
+      # so the same compose stack works whether Caddy serves plain HTTP on :80 (a
+      # localhost / bare-IP deploy) or terminates TLS for a real domain. Localhost
+      # variants stay in the list so the host-bound CLI / dev curls still work.
+      host_origins = [
+        "https://#{host}",
+        "http://#{host}",
+        "https://#{host}:#{port}",
+        "http://#{host}:#{port}"
+      ]
+
+      # Loopback, but only on the port this server actually listens on: an
+      # `http://localhost` with no port is port 80, which is a page on the
+      # victim's own machine — a trusted origin for their LiveView socket, with
+      # their cookie. Every local flow (the SSH forward the README documents,
+      # dev, the host-bound CLI) names the port.
+      localhost_origins = [
+        "http://localhost:#{port}",
+        "https://localhost:#{port}",
+        "http://127.0.0.1:#{port}",
+        "https://127.0.0.1:#{port}",
+        "http://[::1]:#{port}",
+        "https://[::1]:#{port}"
+      ]
+
+      config :cyfr, EmissaryWeb.Endpoint,
+        url: [host: host, port: port],
+        http: [
+          ip: emissary_bind,
+          port: port,
+          thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
+        ],
+        check_origin: host_origins ++ localhost_origins,
+        secret_key_base: secret_key_base,
+        server: true
+
+      # MCP origin allowlist (EmissaryWeb.Plugs.MCPOrigin). Same set as
+      # check_origin above, plus any extra origins listed in
+      # CYFR_MCP_ALLOWED_ORIGINS (comma-separated) for embedding the PWA on a
+      # different origin or running multiple frontends against the same server.
+      extra_mcp_origins = env_list.("CYFR_MCP_ALLOWED_ORIGINS")
+
+      config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins ++ extra_mcp_origins
+
+      # Derive signing salts from secret_key_base (or use explicit env overrides)
+      emissary_salt =
+        env_str.("CYFR_EMISSARY_SESSION_SALT", nil) ||
+          :crypto.hash(:sha256, "emissary_session" <> secret_key_base)
+          |> Base.url_encode64(padding: false)
+          |> binary_part(0, 16)
+
+      lv_salt =
+        env_str.("CYFR_LV_SALT", nil) ||
+          :crypto.hash(:sha256, "live_view" <> secret_key_base)
+          |> Base.url_encode64(padding: false)
+          |> binary_part(0, 16)
+
+      config :cyfr, :emissary_session_salt, emissary_salt
+      config :cyfr, EmissaryWeb.Endpoint, live_view: [signing_salt: lv_salt]
+
+      # Session cookies must be secure in production (HTTPS-only).
+      # Dev/test leave this false so http://localhost works.
+      config :cyfr, :cookie_secure, true
+
+      # Read once, as the boolean it is. Read as a string and tested for
+      # truthiness — as both sites below did — `"false"` is truthy, so the
+      # shipped `CYFR_BEHIND_PROXY=false` (uncommented in .env.example, and
+      # compose's default) turned X-Forwarded-For trust ON for the one
+      # deployment that has no proxy in front of it, and silenced the
+      # plain-HTTP warning meant for exactly that deployment. With XFF
+      # trusted, the client picks its own address: API-key IP allowlists and
+      # every IP-keyed rate limiter answer to whatever it sends.
+      behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
+
+      # Warn if plain HTTP in production without a reverse proxy declaration
+      unless behind_proxy? do
+        IO.puts(
+          :stderr,
+          "[warning] CYFR is running plain HTTP in production. " <>
+            "Set CYFR_BEHIND_PROXY=true if behind a TLS-terminating reverse proxy, " <>
+            "and set CYFR_BIND_ADDRESS=127.0.0.1 to bind only to localhost."
+        )
+      end
+
+      # If behind a proxy, enable X-Forwarded-For trust for IP-based API key allowlists.
+      # The client IP is taken right-to-left from the XFF chain, stripping the
+      # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
+      # Caddy) the default of 1 hop is correct; stacking more layers requires
+      # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
+      # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
+      if behind_proxy? do
+        config :cyfr, :trust_x_forwarded_for, true
+
+        config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
+
+        case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
+          [] -> :ok
+          cidrs -> config :cyfr, :trusted_proxy_cidrs, cidrs
+        end
+      end
+    end
+
+    # The filesystem roots, resolved and validated in one place
+    # (Cyfr.RuntimeConfig.resolve_paths/1): the one runtime storage root
+    # (every athanor's data and components, the cache/ and system/ globals,
+    # and the SQLite database unless CYFR_DATABASE_PATH points it
+    # elsewhere), plus the seed tree read in place — the repo/scaffold
+    # checkout by default, the baked image copy in Docker (the Dockerfile
+    # sets CYFR_SEED_PATH; the operator mount overlays its aqua/).
+    #
+    # Dev and prod resolve identically — a path knob that only worked in
+    # releases was a silent fallback in dev, against this module's own
+    # contract. Test keeps its tmp pins: the whole file is skipped there.
+    # With the vars unset the defaults expand from CWD, so run dev from the
+    # umbrella root (locus builds already require it).
+    paths =
+      case Cyfr.RuntimeConfig.resolve_paths(getenv) do
+        {:ok, paths} -> paths
         {:error, message} -> raise message
       end
-  end
 
-  # CORS allowlist for the browser-facing HTTP surface (comma-separated
-  # origins). The boot guard refuses to start a release that has
-  # authentication configured while the wildcard default is in effect, so any
-  # deployment with OAuth/OIDC enabled must set this. An empty value allows no
-  # cross-origin callers at all (fail-closed).
-  # An empty value is a decision — no cross-origin callers at all — so it is
-  # distinguished from unset, which leaves the wildcard default in place for
-  # the boot guard to refuse alongside configured auth.
-  if env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
-    config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
-  end
+    config :cyfr, :base_path, paths.base_path
+    config :cyfr, :seed_path, paths.seed_path
 
-  # Private egress: the hostnames, IPs or CIDRs on the private network that
-  # the *server's own* outbound requests may reach — an MCP server on the
-  # compose network, an internal registry or IdP, a vault OAuth token
-  # endpoint. Empty refuses every private target; the link-local metadata
-  # range is refused regardless.
-  #
-  # It does not reach components. A guest's HTTP calls are checked against
-  # its consent's `egress.private_ips` (`Opus.EdgeGuard.allows_private_ip?/2`)
-  # and nothing else, so a LAN device is reachable from a chain only as an
-  # MCP server on this list, never as a URL the bundled http catalyst fetches.
-  config :cyfr, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
+    # Database connection config. The adapter is selected at compile time in
+    # config.exs from CYFR_DATABASE; here we supply connection parameters for
+    # whichever adapter was built — gated so SQLite-only keys (journal_mode,
+    # busy_timeout) never bleed into a Postgres build and vice versa.
+    case Cyfr.RuntimeConfig.repo_adapter() do
+      Ecto.Adapters.SQLite3 ->
+        pool_size =
+          case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do
+            {:ok, pool_size} -> pool_size
+            {:error, message} -> raise message
+          end
 
-  # GitHub OAuth
-  # Device flow (CLI and Prism) only needs client ID — no secret.
-  # Ueberauth's leftover web-callback strategy is registered only when a
-  # secret is also set (otherwise GET /auth/github 500s inside the strategy).
-  github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
-  github_secret = env_str.("CYFR_GITHUB_CLIENT_SECRET", nil)
+        config :cyfr, Arca.Repo,
+          database: paths.database_path,
+          pool_size: pool_size,
+          journal_mode: :wal,
+          busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
 
-  if github_id && github_secret do
-    config :ueberauth, Ueberauth.Strategy.Github.OAuth,
-      client_id: github_id,
-      client_secret: github_secret
-  end
-
-  # Google OAuth
-  # Device flow (CLI and Prism) requires client ID + secret: Google's
-  # device-flow token endpoint rejects exchanges that omit client_secret
-  # with {"error": "invalid_request"}. The leftover Ueberauth web-callback
-  # strategy uses the same pair.
-  google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
-  google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
-
-  if google_id && google_secret do
-    config :ueberauth, Ueberauth.Strategy.Google.OAuth,
-      client_id: google_id,
-      client_secret: google_secret
-  end
-
-  # Device Flow credentials for Google. `google_client_id` is sent on both
-  # the device-code request and the token exchange; `google_client_secret`
-  # is sent only on the token exchange (required per Google OAuth spec for
-  # all device-flow clients).
-  if google_id do
-    config :cyfr, :google_client_id, google_id
-  end
-
-  if google_secret do
-    config :cyfr, :google_client_secret, google_secret
-  end
-
-  # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
-  # Default: `registry_url` is `"cyfr.run"` and `oci_registry_url` derives as
-  # `"registry.#{registry_url}"`. Self-hosted deployments may override both
-  # independently for co-host or split topologies.
-  #
-  # cyfr.run issues per-user push tokens automatically via
-  # `/v1/identity/probe` after login, so there is no static
-  # username/password to configure at deploy time.
-  registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
-  config :cyfr, :registry_url, registry_url_config
-
-  # The address this instance is reachable at from outside — needed to hand a
-  # webhook sender an absolute URL, which behind a proxy or a tunnel is
-  # neither the bind address nor any request's Host. Unset means the console
-  # and the CLI show the path and say to set this.
-  config :cyfr, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
-
-  oci_registry_url_config =
-    env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
-
-  config :cyfr, :oci_registry_url, oci_registry_url_config
-
-  # Device Flow Client IDs for Sanctum authentication
-  # Device Flow only needs client ID, no secret required.
-  # (`github_id` was read once above, next to the Ueberauth pair.)
-  if github_id do
-    config :cyfr, :github_client_id, github_id
-  end
-
-  # Platform admins (comma-separated emails). On first sign-in, a listed email
-  # is granted a platform-scope membership (full access, bypasses the tenant
-  # gate). This is the bootstrap mechanism for any deployment — a solo operator
-  # lists their own email; a shared server lists the platform staff.
-  # Downcased because the door compares addresses that way.
-  platform_admins = "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
-
-  config :cyfr, :platform_admin_emails, platform_admins
-
-  # The public-door caps (Sanctum.Tenancy.Caps). Unset means off: a private
-  # box needs none of them; a server whose door is `*` sets them.
-  config :cyfr, :caps,
-    max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
-    max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
-    max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
-    mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
-    athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
-
-  # Auto-configure the auth provider from the environment.
-  # Priority: explicit config > GitHub/Google credentials > none.
-  #
-  # The provider is selected purely from configuration. A deployment with
-  # GitHub/Google credentials uses the built-in OAuth provider. A deployment
-  # that federates against an enterprise IdP supplies its own release runtime
-  # config setting `:cyfr, :auth_provider` to its own module. A deployment with
-  # no credentials runs without sign-in: requests reach the public read-only
-  # surface as an unauthenticated context (tenant-scoped routes are rejected).
-  # Set-or-default: an unset CYFR_AUTH_PROVIDER auto-detects from credentials;
-  # an explicit value must be satisfiable or the boot fails — it never silently
-  # degrades to no authentication.
-  auth_provider =
-    case Cyfr.RuntimeConfig.resolve_auth_provider(getenv) do
-      {:ok, provider} -> provider
-      {:error, message} -> raise message
+      Ecto.Adapters.Postgres ->
+        # A Postgres build carries no connection config from config.exs, so a
+        # CYFR_DATABASE_URL is required — its absence is a hard boot error
+        # rather than a silent attempt against a default localhost. (The
+        # builder release skips this whole block: it starts no Repo and must
+        # not be handed database credentials at all.)
+        case Cyfr.RuntimeConfig.resolve_postgres(getenv) do
+          {:ok, repo_opts} -> config :cyfr, Arca.Repo, repo_opts
+          {:error, message} -> raise message
+        end
     end
 
-  config :cyfr, :auth_provider, auth_provider
+    # CORS allowlist for the browser-facing HTTP surface (comma-separated
+    # origins). The boot guard refuses to start a release that has
+    # authentication configured while the wildcard default is in effect, so any
+    # deployment with OAuth/OIDC enabled must set this. An empty value allows no
+    # cross-origin callers at all (fail-closed).
+    # An empty value is a decision — no cross-origin callers at all — so it is
+    # distinguished from unset, which leaves the wildcard default in place for
+    # the boot guard to refuse alongside configured auth.
+    if env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
+      config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
+    end
 
-  # A headless node has no browser page, and an external OIDC provider signs
-  # people in through one (the CLI's device flow is the built-in provider's):
-  # together they leave no way in. Refuse the pair rather than boot a box
-  # nobody can log in to.
-  if headless? and auth_provider == Sanctum.Auth.OIDC do
-    raise "CYFR_HEADLESS=true cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
-            "an OIDC provider signs in through the browser page a headless node refuses"
-  end
+    # Private egress: the hostnames, IPs or CIDRs on the private network that
+    # the *server's own* outbound requests may reach — an MCP server on the
+    # compose network, an internal registry or IdP, a vault OAuth token
+    # endpoint. Empty refuses every private target; the link-local metadata
+    # range is refused regardless.
+    #
+    # It does not reach components. A guest's HTTP calls are checked against
+    # its consent's `egress.private_ips` (`Opus.EdgeGuard.allows_private_ip?/2`)
+    # and nothing else, so a LAN device is reachable from a chain only as an
+    # MCP server on this list, never as a URL the bundled http catalyst fetches.
+    config :cyfr, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
-  # Build Ueberauth providers list dynamically
-  providers = []
+    # GitHub OAuth
+    # Device flow (CLI and Prism) only needs client ID — no secret.
+    # Ueberauth's leftover web-callback strategy is registered only when a
+    # secret is also set (otherwise GET /auth/github 500s inside the strategy).
+    github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
+    github_secret = env_str.("CYFR_GITHUB_CLIENT_SECRET", nil)
 
-  providers =
     if github_id && github_secret do
-      [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
-    else
-      providers
+      config :ueberauth, Ueberauth.Strategy.Github.OAuth,
+        client_id: github_id,
+        client_secret: github_secret
     end
 
-  providers =
+    # Google OAuth
+    # Device flow (CLI and Prism) requires client ID + secret: Google's
+    # device-flow token endpoint rejects exchanges that omit client_secret
+    # with {"error": "invalid_request"}. The leftover Ueberauth web-callback
+    # strategy uses the same pair.
+    google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
+    google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
+
     if google_id && google_secret do
-      [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
-    else
-      providers
+      config :ueberauth, Ueberauth.Strategy.Google.OAuth,
+        client_id: google_id,
+        client_secret: google_secret
     end
 
-  # Generic OIDC. When selected, register the issuer for ueberauth_oidcc and add
-  # the strategy. CYFR_OIDC_ISSUER is also pinned at `:cyfr, :oidc_issuer` — the
-  # single source both the boot reserved-host check
-  # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the login id builder
-  # (`Sanctum.Auth.OIDC.resolve_issuer/2`) read.
-  providers =
-    if auth_provider == Sanctum.Auth.OIDC do
-      {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
-
-      config :cyfr, :oidc_issuer, oidc.issuer
-      config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
-
-      # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
-      # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
-      # and the canonical `oidcc|<iss>|<sub>` id form.
-      oidc_provider =
-        {:oidcc,
-         {Ueberauth.Strategy.Oidcc,
-          issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}}
-
-      [oidc_provider | providers]
-    else
-      providers
+    # Device Flow credentials for Google. `google_client_id` is sent on both
+    # the device-code request and the token exchange; `google_client_secret`
+    # is sent only on the token exchange (required per Google OAuth spec for
+    # all device-flow clients).
+    if google_id do
+      config :cyfr, :google_client_id, google_id
     end
 
-  if providers != [] do
-    config :ueberauth, Ueberauth, providers: providers
-  end
+    if google_secret do
+      config :cyfr, :google_client_secret, google_secret
+    end
 
-  # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
-  # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).
-  case Cyfr.RuntimeConfig.resolve_storage(getenv) do
-    {:ok, :local} ->
-      :ok
+    # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
+    # Default: `registry_url` is `"cyfr.run"` and `oci_registry_url` derives as
+    # `"registry.#{registry_url}"`. Self-hosted deployments may override both
+    # independently for co-host or split topologies.
+    #
+    # cyfr.run issues per-user push tokens automatically via
+    # `/v1/identity/probe` after login, so there is no static
+    # username/password to configure at deploy time.
+    registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
+    config :cyfr, :registry_url, registry_url_config
 
-    {:ok, {:s3, s3_opts}} ->
-      config :cyfr, :storage_adapter, Arca.Adapters.S3
-      config :cyfr, :s3, s3_opts
+    # The address this instance is reachable at from outside — needed to hand a
+    # webhook sender an absolute URL, which behind a proxy or a tunnel is
+    # neither the bind address nor any request's Host. Unset means the console
+    # and the CLI show the path and say to set this.
+    config :cyfr, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
 
-    {:error, message} ->
-      raise message
-  end
+    oci_registry_url_config =
+      env_str.("CYFR_OCI_REGISTRY_URL", "registry.#{registry_url_config}")
 
-  # Sigstore Configuration. Keyless verification checks the signing
-  # certificate against a named identity and issuer (regexps); without both,
-  # `Compendium.Cosign` refuses rather than accepting any signer at all.
-  if cosign_key = env_str.("CYFR_COSIGN_KEY", nil) do
-    config :cyfr, :sigstore,
-      verification: :keyed,
-      key_path: cosign_key,
-      password: env_str.("CYFR_COSIGN_PASSWORD", nil)
-  else
-    config :cyfr, :sigstore,
-      verification: :keyless,
-      identity: env_str.("CYFR_COSIGN_IDENTITY", nil),
-      issuer: env_str.("CYFR_COSIGN_ISSUER", nil)
-  end
+    config :cyfr, :oci_registry_url, oci_registry_url_config
 
-  # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is
-  # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
-  if env_str.("CYFR_PROMETHEUS_METRICS", nil) == "true" do
-    config :cyfr, :prometheus_metrics_enabled, true
-  end
+    # Device Flow Client IDs for Sanctum authentication
+    # Device Flow only needs client ID, no secret required.
+    # (`github_id` was read once above, next to the Ueberauth pair.)
+    if github_id do
+      config :cyfr, :github_client_id, github_id
+    end
 
-  # OpenTelemetry Configuration
-  # Set CYFR_OTEL_ENABLED=true to enable distributed tracing.
-  # Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT
-  # (defaults to http://localhost:4318 for HTTP/protobuf).
-  if env_str.("CYFR_OTEL_ENABLED", nil) == "true" do
-    config :cyfr, :opentelemetry_enabled, true
+    # Platform admins (comma-separated emails). On first sign-in, a listed email
+    # is granted a platform-scope membership (full access, bypasses the tenant
+    # gate). This is the bootstrap mechanism for any deployment — a solo operator
+    # lists their own email; a shared server lists the platform staff.
+    # Downcased because the door compares addresses that way.
+    platform_admins = "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
 
-    config :opentelemetry,
-      resource: %{service: %{name: "cyfr"}},
-      span_processor: :batch,
-      traces_exporter: :otlp
+    config :cyfr, :platform_admin_emails, platform_admins
 
-    config :opentelemetry_exporter,
-      otlp_protocol: :http_protobuf,
-      otlp_endpoint: env_str.("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-  else
-    config :opentelemetry,
-      traces_exporter: :none
+    # The public-door caps (Sanctum.Tenancy.Caps). Unset means off: a private
+    # box needs none of them; a server whose door is `*` sets them.
+    config :cyfr, :caps,
+      max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
+      max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", nil),
+      max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
+      mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
+      athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
+
+    # Auto-configure the auth provider from the environment.
+    # Priority: explicit config > GitHub/Google credentials > none.
+    #
+    # The provider is selected purely from configuration. A deployment with
+    # GitHub/Google credentials uses the built-in OAuth provider. A deployment
+    # that federates against an enterprise IdP supplies its own release runtime
+    # config setting `:cyfr, :auth_provider` to its own module. A deployment with
+    # no credentials runs without sign-in: requests reach the public read-only
+    # surface as an unauthenticated context (tenant-scoped routes are rejected).
+    # Set-or-default: an unset CYFR_AUTH_PROVIDER auto-detects from credentials;
+    # an explicit value must be satisfiable or the boot fails — it never silently
+    # degrades to no authentication.
+    auth_provider =
+      case Cyfr.RuntimeConfig.resolve_auth_provider(getenv) do
+        {:ok, provider} -> provider
+        {:error, message} -> raise message
+      end
+
+    config :cyfr, :auth_provider, auth_provider
+
+    # A headless node has no browser page, and an external OIDC provider signs
+    # people in through one (the CLI's device flow is the built-in provider's):
+    # together they leave no way in. Refuse the pair rather than boot a box
+    # nobody can log in to.
+    if headless? and auth_provider == Sanctum.Auth.OIDC do
+      raise "CYFR_HEADLESS=true cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
+              "an OIDC provider signs in through the browser page a headless node refuses"
+    end
+
+    # Build Ueberauth providers list dynamically
+    providers = []
+
+    providers =
+      if github_id && github_secret do
+        [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
+      else
+        providers
+      end
+
+    providers =
+      if google_id && google_secret do
+        [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
+      else
+        providers
+      end
+
+    # Generic OIDC. When selected, register the issuer for ueberauth_oidcc and add
+    # the strategy. CYFR_OIDC_ISSUER is also pinned at `:cyfr, :oidc_issuer` — the
+    # single source both the boot reserved-host check
+    # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the login id builder
+    # (`Sanctum.Auth.OIDC.resolve_issuer/2`) read.
+    providers =
+      if auth_provider == Sanctum.Auth.OIDC do
+        {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
+
+        config :cyfr, :oidc_issuer, oidc.issuer
+        config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
+
+        # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
+        # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
+        # and the canonical `oidcc|<iss>|<sub>` id form.
+        oidc_provider =
+          {:oidcc,
+           {Ueberauth.Strategy.Oidcc,
+            issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}}
+
+        [oidc_provider | providers]
+      else
+        providers
+      end
+
+    if providers != [] do
+      config :ueberauth, Ueberauth, providers: providers
+    end
+
+    # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
+    # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).
+    case Cyfr.RuntimeConfig.resolve_storage(getenv) do
+      {:ok, :local} ->
+        :ok
+
+      {:ok, {:s3, s3_opts}} ->
+        config :cyfr, :storage_adapter, Arca.Adapters.S3
+        config :cyfr, :s3, s3_opts
+
+      {:error, message} ->
+        raise message
+    end
+
+    # Sigstore Configuration. Keyless verification checks the signing
+    # certificate against a named identity and issuer (regexps); without both,
+    # `Compendium.Cosign` refuses rather than accepting any signer at all.
+    if cosign_key = env_str.("CYFR_COSIGN_KEY", nil) do
+      config :cyfr, :sigstore,
+        verification: :keyed,
+        key_path: cosign_key,
+        password: env_str.("CYFR_COSIGN_PASSWORD", nil)
+    else
+      config :cyfr, :sigstore,
+        verification: :keyless,
+        identity: env_str.("CYFR_COSIGN_IDENTITY", nil),
+        issuer: env_str.("CYFR_COSIGN_ISSUER", nil)
+    end
+
+    # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is
+    # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
+    if env_str.("CYFR_PROMETHEUS_METRICS", nil) == "true" do
+      config :cyfr, :prometheus_metrics_enabled, true
+    end
+
+    # OpenTelemetry Configuration
+    # Set CYFR_OTEL_ENABLED=true to enable distributed tracing.
+    # Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT
+    # (defaults to http://localhost:4318 for HTTP/protobuf).
+    if env_str.("CYFR_OTEL_ENABLED", nil) == "true" do
+      config :cyfr, :opentelemetry_enabled, true
+
+      config :opentelemetry,
+        resource: %{service: %{name: "cyfr"}},
+        span_processor: :batch,
+        traces_exporter: :otlp
+
+      config :opentelemetry_exporter,
+        otlp_protocol: :http_protobuf,
+        otlp_endpoint: env_str.("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    else
+      config :opentelemetry,
+        traces_exporter: :none
+    end
   end
 end
