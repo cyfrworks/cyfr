@@ -89,7 +89,28 @@ const INIT_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_INIT_TIMEOUT_MS || 15_000)
 // entries a flood could park against a slow child.
 const MAX_IN_FLIGHT = Number(process.env.MCP_BRIDGE_MAX_IN_FLIGHT || 32);
 
+// Ceiling on the number of backends. Every other resource here is bounded
+// (frames, in-flight calls, body size, timeouts); this bounds the one that
+// spawns OS processes.
+const MAX_BACKENDS = Number(process.env.MCP_BRIDGE_MAX_BACKENDS || 32);
+
 const backends = new Map();
+
+// The one name rule, asserted at BOTH doors (admin add and the revival
+// loop): `__` is the tool-routing separator (`dispatchToolCall` splits on
+// the first one) and `:` collides with cyfr's namespaced-tool spelling. A
+// duplicate would make `backends.set` silently replace an earlier entry,
+// leaking its child process.
+function validateBackendName(name) {
+  if (!name) throw new Error("name is required");
+  if (name.includes("__") || name.includes(":")) {
+    throw new Error("backend name cannot contain `__` or `:`");
+  }
+  if (backends.has(name)) throw new Error(`backend '${name}' already exists`);
+  if (backends.size >= MAX_BACKENDS) {
+    throw new Error(`backend limit reached (${MAX_BACKENDS})`);
+  }
+}
 
 const ADMIN_TOOLS = [
   {
@@ -148,6 +169,8 @@ const ADMIN_TOOLS = [
 // ============================================================================
 
 function spawnBackend(name, command, env) {
+  validateBackendName(name);
+
   // Children never see the bridge's own admin bearer: any npx backend that
   // inherited it could re-enter /mcp as an administrator. Everything else
   // in the environment passes through (PATH, HOME, npm caches).
@@ -323,10 +346,17 @@ function stopBackend(name, markRemoved = true) {
   try {
     backend.proc.kill("SIGTERM");
   } catch {}
-  // Hard-kill if it ignores SIGTERM.
+  // Hard-kill if it ignores SIGTERM. `proc.killed` is the wrong test — Node
+  // sets it once a signal is successfully SENT, so after the SIGTERM above
+  // it is always true and the escalation never fired; a child ignoring
+  // SIGTERM survived remove/restart/shutdown with its only handle dropped.
+  // Exit is the fact that matters: no exit code and no terminating signal
+  // means the child is still running.
   setTimeout(() => {
     try {
-      if (!backend.proc.killed) backend.proc.kill("SIGKILL");
+      if (backend.proc.exitCode === null && backend.proc.signalCode === null) {
+        backend.proc.kill("SIGKILL");
+      }
     } catch {}
   }, 2000).unref();
 }
@@ -429,12 +459,8 @@ async function adminAddBackend(args) {
   const command = String(args?.command || "").trim();
   const env = args?.env && typeof args.env === "object" ? args.env : undefined;
 
-  if (!name) throw new Error("name is required");
   if (!command) throw new Error("command is required");
-  if (name.includes("__") || name.includes(":")) {
-    throw new Error("backend name cannot contain `__` or `:`");
-  }
-  if (backends.has(name)) throw new Error(`backend '${name}' already exists`);
+  validateBackendName(name);
 
   spawnBackend(name, command, env);
   await initializeBackend(name);
@@ -604,6 +630,24 @@ app.post("/mcp", async (req, res) => {
       },
     });
   }
+});
+
+// express.json's own failures (a malformed body, an over-limit one) surface
+// as thrown errors that would otherwise render express's default HTML page —
+// the one refusal on this port that wasn't JSON-RPC shaped, the same class
+// of bug the unshaped 401 once caused in cyfr's era heuristic. Registered
+// after the routes, as express error middleware must be.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  if (err?.type === "entity.too.large") {
+    return rpcError(res, 413, null, -32600, "Request body too large");
+  }
+  if (err?.status === 400 || err instanceof SyntaxError) {
+    return rpcError(res, 400, null, -32700, "Parse error: body is not valid JSON");
+  }
+  console.error("[mcp-bridge] request error:", err);
+  return rpcError(res, 500, null, -32603, err?.message || "internal error");
 });
 
 class UnknownMethod extends Error {}
@@ -805,7 +849,15 @@ process.on("unhandledRejection", (reason) => {
   for (const entry of persisted) {
     if (!entry?.name || !entry?.command) continue;
     console.log(`[mcp-bridge] reviving '${entry.name}': ${entry.command}`);
-    spawnBackend(entry.name, entry.command, entry.env);
+    // The revival loop is the second door into spawnBackend: a hand-edited
+    // persistence file with a routing-ambiguous or duplicate name must be
+    // refused here exactly as the admin door refuses it, not spawned.
+    try {
+      spawnBackend(entry.name, entry.command, entry.env);
+    } catch (e) {
+      console.error(`[mcp-bridge] not reviving '${entry.name}': ${e.message}`);
+      continue;
+    }
     // Fire-and-forget — children come online in parallel.
     initializeBackend(entry.name).catch(() => {});
   }
