@@ -136,7 +136,8 @@ defmodule Cyfr.PathSafety do
         {:error, {:empty_segment, "Path rejected: empty segments are not allowed"}}
 
       segment in [".", ".."] ->
-        {:error, {:dot_segment, "Path traversal rejected: segment #{inspect(segment)} is not allowed"}}
+        {:error,
+         {:dot_segment, "Path traversal rejected: segment #{inspect(segment)} is not allowed"}}
 
       String.contains?(segment, <<0>>) ->
         {:error, {:null_bytes, "Path traversal rejected: null bytes are not allowed"}}
@@ -151,7 +152,8 @@ defmodule Cyfr.PathSafety do
         {:error, {:encoded_dots, "Path traversal rejected: encoded dot segments are not allowed"}}
 
       byte_size(segment) > @max_segment_bytes ->
-        {:error, {:segment_too_long, "Path rejected: segment longer than #{@max_segment_bytes} bytes"}}
+        {:error,
+         {:segment_too_long, "Path rejected: segment longer than #{@max_segment_bytes} bytes"}}
 
       true ->
         :ok
@@ -159,7 +161,8 @@ defmodule Cyfr.PathSafety do
   end
 
   defp check_segment(other) do
-    {:error, {:non_string_segment, "Path traversal rejected: non-string segment #{inspect(other)}"}}
+    {:error,
+     {:non_string_segment, "Path traversal rejected: non-string segment #{inspect(other)}"}}
   end
 
   # Decode URI-encoded segments until output stabilizes, catching multi-layer encoding.

@@ -83,9 +83,9 @@ defmodule Arca.PolicyLog do
   """
   def record(attrs) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.record", fn ->
-        attrs
-        |> create_changeset()
-        |> Arca.Repo.insert()
+      attrs
+      |> create_changeset()
+      |> Arca.Repo.insert()
     end)
   end
 
@@ -215,9 +215,9 @@ defmodule Arca.PolicyLog do
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{} = ctx, id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_tenant", fn ->
-        from(l in __MODULE__, where: l.id == ^id)
-        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-        |> Arca.Repo.one()
+      from(l in __MODULE__, where: l.id == ^id)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.Repo.one()
     end)
   end
 
@@ -229,9 +229,9 @@ defmodule Arca.PolicyLog do
   @spec get_by_request_id_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_by_request_id_tenant(%Sanctum.Context{} = ctx, request_id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_by_request_id_tenant", fn ->
-        from(l in __MODULE__, where: l.request_id == ^request_id, limit: 1)
-        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-        |> Arca.Repo.one()
+      from(l in __MODULE__, where: l.request_id == ^request_id, limit: 1)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.Repo.one()
     end)
   end
 end

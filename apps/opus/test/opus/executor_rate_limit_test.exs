@@ -93,7 +93,7 @@ defmodule Opus.ExecutorRateLimitTest do
           limit: 50
         ]
         |> Arca.PolicyLog.list()
-    |> then(fn {:ok, rows} -> rows end)
+        |> then(fn {:ok, rows} -> rows end)
         |> Enum.filter(&(&1.component_ref == ref))
 
       assert [row] = rows

@@ -692,7 +692,14 @@ defmodule Opus.FormulaHandler do
   # a guest event from the host's. It is also an egress: the event reaches
   # SSE/LiveView subscribers and the replay buffer, so a credential the
   # guest was handed is masked before the event leaves the runtime.
-  defp handle_emit(json_event, execution_id, counter, ctx, %Sanctum.Authority{} = authority, secrets) do
+  defp handle_emit(
+         json_event,
+         execution_id,
+         counter,
+         ctx,
+         %Sanctum.Authority{} = authority,
+         secrets
+       ) do
     limits = Sanctum.Authority.limits(authority)
 
     with :ok <- check_emit_size(json_event, limits.max_request_size),

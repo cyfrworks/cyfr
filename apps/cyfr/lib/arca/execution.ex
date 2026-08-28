@@ -123,9 +123,9 @@ defmodule Arca.Execution do
   """
   def record_start(attrs) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_start", fn ->
-        attrs
-        |> start_changeset()
-        |> Arca.Repo.insert()
+      attrs
+      |> start_changeset()
+      |> Arca.Repo.insert()
     end)
   end
 
@@ -136,15 +136,15 @@ defmodule Arca.Execution do
   """
   def record_complete(%Sanctum.Context{} = ctx, id, attrs) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_complete", fn ->
-        case get_tenant(ctx, id) do
-          nil ->
-            {:error, :not_found}
+      case get_tenant(ctx, id) do
+        nil ->
+          {:error, :not_found}
 
-          execution ->
-            execution
-            |> complete_changeset(attrs)
-            |> Arca.Repo.update()
-        end
+        execution ->
+          execution
+          |> complete_changeset(attrs)
+          |> Arca.Repo.update()
+      end
     end)
   end
 
@@ -158,49 +158,51 @@ defmodule Arca.Execution do
   """
   def list(opts) do
     Arca.Repo.Errors.with_db_rescue("Execution.list", fn ->
-        limit = Keyword.get(opts, :limit, 20)
-        user_id = Keyword.get(opts, :user_id)
-        status = Keyword.get(opts, :status)
-        athanor_id = Keyword.fetch!(opts, :athanor_id)
+      limit = Keyword.get(opts, :limit, 20)
+      user_id = Keyword.get(opts, :user_id)
+      status = Keyword.get(opts, :status)
+      athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-        query =
-          from e in __MODULE__,
-            order_by: [desc: e.started_at],
-            limit: ^limit,
-            select:
-              map(e, [
-                :id,
-                :reference,
-                :input_hash,
-                :user_id,
-                :athanor_id,
-                :request_id,
-                :component_type,
-                :component_digest,
-                :started_at,
-                :completed_at,
-                :duration_ms,
-                :status,
-                :error_message,
-                :parent_execution_id,
-                :root_execution_id,
-                :resolver_digest,
-                :activation_digest
-              ])
+      query =
+        from e in __MODULE__,
+          order_by: [desc: e.started_at],
+          limit: ^limit,
+          select:
+            map(e, [
+              :id,
+              :reference,
+              :input_hash,
+              :user_id,
+              :athanor_id,
+              :request_id,
+              :component_type,
+              :component_digest,
+              :started_at,
+              :completed_at,
+              :duration_ms,
+              :status,
+              :error_message,
+              :parent_execution_id,
+              :root_execution_id,
+              :resolver_digest,
+              :activation_digest
+            ])
 
-        query = Arca.QueryHelpers.where_athanor(query, athanor_id)
+      query = Arca.QueryHelpers.where_athanor(query, athanor_id)
 
-        query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
+      query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
 
-        query =
-          if status && status != :all,
-            do: where(query, [e], e.status == ^to_string(status)),
-            else: query
+      query =
+        if status && status != :all,
+          do: where(query, [e], e.status == ^to_string(status)),
+          else: query
 
-        parent_id = Keyword.get(opts, :parent_execution_id)
-        query = if parent_id, do: where(query, [e], e.parent_execution_id == ^parent_id), else: query
+      parent_id = Keyword.get(opts, :parent_execution_id)
 
-        Arca.Repo.all(query)
+      query =
+        if parent_id, do: where(query, [e], e.parent_execution_id == ^parent_id), else: query
+
+      Arca.Repo.all(query)
     end)
   end
 
@@ -214,9 +216,9 @@ defmodule Arca.Execution do
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{} = ctx, id) do
     Arca.Repo.Errors.with_db_rescue("Execution.get_tenant", fn ->
-        from(e in __MODULE__, where: e.id == ^id)
-        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-        |> Arca.Repo.one()
+      from(e in __MODULE__, where: e.id == ^id)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.Repo.one()
     end)
   end
 
@@ -234,16 +236,16 @@ defmodule Arca.Execution do
   def list_by_request(%Sanctum.Context{} = ctx, request_id, limit \\ 100)
       when is_binary(request_id) do
     Arca.Repo.Errors.with_db_rescue("Execution.list_by_request", fn ->
-        from(e in __MODULE__,
-          where: e.request_id == ^request_id,
-          order_by: [desc: e.started_at],
-          limit: ^limit
-        )
-        # Scoped to the caller's athanor — no per-user narrowing (members are
-        # interchangeable), and no cross-athanor reach for an operator either:
-        # only a server-internal context reads unfiltered.
-        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-        |> Arca.Repo.all()
+      from(e in __MODULE__,
+        where: e.request_id == ^request_id,
+        order_by: [desc: e.started_at],
+        limit: ^limit
+      )
+      # Scoped to the caller's athanor — no per-user narrowing (members are
+      # interchangeable), and no cross-athanor reach for an operator either:
+      # only a server-internal context reads unfiltered.
+      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.Repo.all()
     end)
   end
 
@@ -255,20 +257,20 @@ defmodule Arca.Execution do
   @spec count_by_request(Sanctum.Context.t(), [String.t()]) :: %{String.t() => non_neg_integer()}
   def count_by_request(%Sanctum.Context{} = ctx, request_ids) when is_list(request_ids) do
     Arca.Repo.Errors.with_db_rescue("Execution.count_by_request", fn ->
-        case Enum.filter(request_ids, &is_binary/1) do
-          [] ->
-            %{}
+      case Enum.filter(request_ids, &is_binary/1) do
+        [] ->
+          %{}
 
-          ids ->
-            from(e in __MODULE__,
-              where: e.request_id in ^ids,
-              group_by: e.request_id,
-              select: {e.request_id, count(e.id)}
-            )
-            |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-            |> Arca.Repo.all()
-            |> Map.new()
-        end
+        ids ->
+          from(e in __MODULE__,
+            where: e.request_id in ^ids,
+            group_by: e.request_id,
+            select: {e.request_id, count(e.id)}
+          )
+          |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+          |> Arca.Repo.all()
+          |> Map.new()
+      end
     end)
   end
 
@@ -324,18 +326,18 @@ defmodule Arca.Execution do
   """
   def list_running_children(parent_execution_id) do
     Arca.Repo.Errors.with_db_rescue("Execution.list_running_children", fn ->
-        case Arca.Repo.get(__MODULE__, parent_execution_id) do
-          %{athanor_id: athanor_id} ->
-            from(e in __MODULE__,
-              where: e.parent_execution_id == ^parent_execution_id,
-              where: e.status == "running"
-            )
-            |> Arca.QueryHelpers.where_athanor(athanor_id)
-            |> Arca.Repo.all()
+      case Arca.Repo.get(__MODULE__, parent_execution_id) do
+        %{athanor_id: athanor_id} ->
+          from(e in __MODULE__,
+            where: e.parent_execution_id == ^parent_execution_id,
+            where: e.status == "running"
+          )
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.Repo.all()
 
-          nil ->
-            []
-        end
+        nil ->
+          []
+      end
     end)
   end
 
@@ -350,21 +352,21 @@ defmodule Arca.Execution do
   def mark_failed_if_running(id, attrs) do
     # Fail-open default: a row the store could not fail stays running; the sweep retries next tick.
     Arca.Repo.Errors.with_db_rescue("Execution.mark_failed_if_running", {0, nil}, fn ->
-        # arca:unscoped-ok the id comes from trusted runtime state (the
-        # tenant-scoped cancellation cascade or the sweeper's own scan), never
-        # from caller input — see the doc above.
-        from(e in __MODULE__,
-          where: e.id == ^id,
-          where: e.status == "running"
-        )
-        |> Arca.Repo.update_all(
-          set: [
-            status: "failed",
-            completed_at: attrs[:completed_at],
-            duration_ms: attrs[:duration_ms],
-            error_message: attrs[:error_message]
-          ]
-        )
+      # arca:unscoped-ok the id comes from trusted runtime state (the
+      # tenant-scoped cancellation cascade or the sweeper's own scan), never
+      # from caller input — see the doc above.
+      from(e in __MODULE__,
+        where: e.id == ^id,
+        where: e.status == "running"
+      )
+      |> Arca.Repo.update_all(
+        set: [
+          status: "failed",
+          completed_at: attrs[:completed_at],
+          duration_ms: attrs[:duration_ms],
+          error_message: attrs[:error_message]
+        ]
+      )
     end)
   end
 
@@ -379,11 +381,11 @@ defmodule Arca.Execution do
   def renew_lease(id, %DateTime{} = until) do
     # Fail-open default: a lease the store could not renew lapses; the sweeper only reaps well past it.
     Arca.Repo.Errors.with_db_rescue("Execution.renew_lease", 0, fn ->
-        {count, _} =
-          from(e in __MODULE__, where: e.id == ^id and e.status == "running")
-          |> Arca.Repo.update_all(set: [lease_until: until])
+      {count, _} =
+        from(e in __MODULE__, where: e.id == ^id and e.status == "running")
+        |> Arca.Repo.update_all(set: [lease_until: until])
 
-        count
+      count
     end)
   end
 
@@ -398,15 +400,15 @@ defmodule Arca.Execution do
   def list_stale_running(now, limit \\ 50) do
     # Fail-open default: an unreadable store sweeps nothing this tick; the next tick retries.
     Arca.Repo.Errors.with_db_rescue("Execution.list_stale_running", [], fn ->
-        # arca:unscoped-ok the sweeper reaps orphaned rows across all tenants
-        # when no tenant context can be reconstructed — system-internal only.
-        from(e in __MODULE__,
-          where: e.status == "running",
-          where: e.lease_until < ^now,
-          order_by: [asc: e.lease_until],
-          limit: ^limit
-        )
-        |> Arca.Repo.all()
+      # arca:unscoped-ok the sweeper reaps orphaned rows across all tenants
+      # when no tenant context can be reconstructed — system-internal only.
+      from(e in __MODULE__,
+        where: e.status == "running",
+        where: e.lease_until < ^now,
+        order_by: [asc: e.lease_until],
+        limit: ^limit
+      )
+      |> Arca.Repo.all()
     end)
   end
 

@@ -90,9 +90,9 @@ defmodule Arca.McpLog do
   """
   def record(attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record", fn ->
-        attrs
-        |> create_changeset()
-        |> Arca.Repo.insert()
+      attrs
+      |> create_changeset()
+      |> Arca.Repo.insert()
     end)
   end
 
@@ -104,10 +104,10 @@ defmodule Arca.McpLog do
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 one line above.
   def record_update(%Sanctum.Context{} = ctx, id, attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record_update", fn ->
-        case get_tenant(ctx, id) do
-          nil -> {:error, :not_found}
-          log -> log |> update_changeset(attrs) |> Arca.Repo.update()
-        end
+      case get_tenant(ctx, id) do
+        nil -> {:error, :not_found}
+        log -> log |> update_changeset(attrs) |> Arca.Repo.update()
+      end
     end)
   end
 
@@ -160,9 +160,9 @@ defmodule Arca.McpLog do
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{} = ctx, id) do
     Arca.Repo.Errors.with_db_rescue("McpLog.get_tenant", fn ->
-        from(l in __MODULE__, where: l.id == ^id)
-        |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
-        |> Arca.Repo.one()
+      from(l in __MODULE__, where: l.id == ^id)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.Repo.one()
     end)
   end
 
@@ -248,7 +248,8 @@ defmodule Arca.McpLog do
           avg -> round(avg)
         end
 
-      {:ok, %{total: row.total, errors: normalize_count(row.errors), avg_duration_ms: avg_duration}}
+      {:ok,
+       %{total: row.total, errors: normalize_count(row.errors), avg_duration_ms: avg_duration}}
     end)
   end
 

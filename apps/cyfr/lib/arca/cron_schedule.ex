@@ -107,8 +107,7 @@ defmodule Arca.CronSchedule do
   @doc "Updates an existing cron schedule with tenant-scoped lookup."
   @spec update(Context.t(), String.t(), map()) ::
           {:ok, %__MODULE__{}}
-          | {:error,
-             :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   def update(%Context{} = ctx, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
@@ -234,7 +233,8 @@ defmodule Arca.CronSchedule do
   exactly one wins; a claimant that dies is superseded once its claim lapses.
   Returns `:claimed` or `:held`.
   """
-  @spec claim(String.t(), String.t(), pos_integer()) :: :claimed | :held | {:error, :database_error}
+  @spec claim(String.t(), String.t(), pos_integer()) ::
+          :claimed | :held | {:error, :database_error}
   # arca:unscoped-ok a claim races nodes over one known schedule id, before
   # any context exists; the id came from `active_schedules/0`.
   def claim(id, node_name, ttl_seconds) when is_binary(id) and is_binary(node_name) do
@@ -272,8 +272,7 @@ defmodule Arca.CronSchedule do
   @doc "Records a successful run with tenant-scoped lookup."
   @spec record_run(Context.t(), String.t(), String.t()) ::
           {:ok, %__MODULE__{}}
-          | {:error,
-             :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   def record_run(%Context{} = ctx, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
@@ -297,8 +296,7 @@ defmodule Arca.CronSchedule do
   @doc "Records an error with tenant-scoped lookup."
   @spec record_error(Context.t(), String.t(), term()) ::
           {:ok, %__MODULE__{}}
-          | {:error,
-             :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   def record_error(%Context{} = ctx, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
@@ -320,8 +318,7 @@ defmodule Arca.CronSchedule do
   @doc "Soft-deletes a schedule with tenant-scoped lookup."
   @spec soft_delete(Context.t(), String.t()) ::
           {:ok, %__MODULE__{}}
-          | {:error,
-             :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
+          | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   def soft_delete(%Context{} = ctx, id) do
     Errors.with_db_rescue("CronSchedule.soft_delete", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do

@@ -145,7 +145,9 @@ defmodule Sanctum.Consent.Authz do
   def message(:guest_plane), do: "consent_class_required: guest-plane contexts cannot consent"
   def message(:not_authenticated), do: "consent_class_required: authentication required"
   def message(:anonymous), do: "consent_class_required: anonymous callers cannot consent"
-  def message(:no_capability), do: "consent_class_required: this key carries no consent capability"
+
+  def message(:no_capability),
+    do: "consent_class_required: this key carries no consent capability"
 
   def message(:capability_digest_mismatch),
     do: "consent_class_required: the key's capability pins a different commit digest"
