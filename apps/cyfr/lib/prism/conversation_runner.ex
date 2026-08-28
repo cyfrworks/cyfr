@@ -415,6 +415,10 @@ defmodule Prism.ConversationRunner do
   end
 
   def handle_call({:decline, ctx, message_id, reason, scope}, _from, state) do
+    # The card's maxlength=80 is advice to the browser; the reason enters
+    # the next turn's prompt, so the bound is enforced here too.
+    reason = String.slice(reason || "", 0, 80)
+
     with :ok <- standing(ctx, state),
          {:ok, msg} <- Conversations.get_message(ctx, message_id),
          intent = approval_intent(msg),
@@ -1164,14 +1168,20 @@ defmodule Prism.ConversationRunner do
 
   # Persist the history and clear the running execution; broadcast the end.
   defp finish_turn(state) do
+    # Bounded at the point of persistence, not only on the way into the
+    # model: without this the row, the runner heap and every future JSON
+    # decode of the history grew without limit.
+    history = Prism.ConversationCompactor.compact(state.history)
+
     Conversations.update(state.system_ctx, state.id, %{
-      history: state.history,
+      history: history,
       execution_id: nil
     })
 
     %{
       state
-      | running: false,
+      | history: history,
+        running: false,
         execution_id: nil,
         starting: nil,
         cancel_requested: false,

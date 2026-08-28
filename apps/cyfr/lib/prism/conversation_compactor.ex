@@ -122,16 +122,20 @@ defmodule Prism.ConversationCompactor do
   defp drop_groups_until_fits([], recent), do: recent
 
   defp drop_groups_until_fits(groups, recent) do
-    remaining_msgs = Enum.flat_map(groups, & &1)
-    candidate = remaining_msgs ++ recent
-    total_chars = estimate_chars(candidate)
+    # Each group is measured once and its size subtracted as it drops —
+    # re-measuring the whole remainder on every drop made this quadratic
+    # in message count.
+    sized = Enum.map(groups, fn group -> {group, estimate_chars(group)} end)
+    total = estimate_chars(recent) + Enum.sum(Enum.map(sized, &elem(&1, 1)))
 
-    if total_chars <= @token_budget_chars do
-      candidate
-    else
-      # Drop the oldest group
-      drop_groups_until_fits(tl(groups), recent)
-    end
+    kept = drop_sized(sized, total)
+    Enum.flat_map(kept, &elem(&1, 0)) ++ recent
+  end
+
+  defp drop_sized([], _total), do: []
+
+  defp drop_sized([{_group, size} | rest] = sized, total) do
+    if total <= @token_budget_chars, do: sized, else: drop_sized(rest, total - size)
   end
 
   # ---------------------------------------------------------------------------
