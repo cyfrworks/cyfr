@@ -69,7 +69,12 @@ defmodule Sanctum.OAuth.RefreshLock do
         end
       end)
 
-    case Task.yield(task, timeout_ms + 1_000) || Task.shutdown(task, :brutal_kill) do
+    # The margin over timeout_ms covers the leader's full worst case — the
+    # provider POST (15s receive ceiling) plus the CAS write-back and a
+    # possible conflict merge. A margin of one second used to let this
+    # brutal-kill land between the POST and the write, losing a refresh
+    # token the provider had already rotated.
+    case Task.yield(task, timeout_ms + 15_000) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:leader, result}} ->
         result
 

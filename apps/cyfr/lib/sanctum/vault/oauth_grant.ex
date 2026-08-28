@@ -280,7 +280,12 @@ defmodule Sanctum.Vault.OAuthGrant do
     {headers, body_params} = VaultOAuth.apply_auth_style(auth_style, creds, body_params)
     headers = [{"content-type", "application/x-www-form-urlencoded"} | headers]
 
-    case VaultOAuth.http_post(endpoints["token_url"], headers, URI.encode_query(body_params)) do
+    case VaultOAuth.http_post(
+           endpoints["token_url"],
+           headers,
+           URI.encode_query(body_params),
+           :auth_code
+         ) do
       {:ok, %{"access_token" => token} = response} when is_binary(token) ->
         {:ok, response}
 

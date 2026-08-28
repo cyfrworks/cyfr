@@ -114,6 +114,10 @@ defmodule Sanctum.Vault.OAuth do
     endpoints = decode_endpoints(entry.oauth_endpoints)
 
     with {:ok, token_url} <- fetch_token_url(endpoints),
+         # The scheme refusal lands before credentials are read or any
+         # telemetry fires — a refresh token is never sent in the clear,
+         # and the same rule runs again inside http_post for every caller.
+         :ok <- require_https(token_url, :refresh_token),
          {:ok, creds} <- fetch_provider_creds(entry, provider) do
       body_params = %{
         "grant_type" => "refresh_token",
@@ -128,7 +132,7 @@ defmodule Sanctum.Vault.OAuth do
 
       case http_post(token_url, headers, URI.encode_query(body_params)) do
         {:ok, response} ->
-          write_back(entry, apply_refresh_response(payload, oauth, response))
+          write_back(entry, apply_refresh_response(payload, oauth, response), oauth)
 
         {:error, reason} ->
           emit_telemetry(entry, provider, :error)
@@ -140,32 +144,72 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
+  @doc false
   # CAS at the revision read inside the lock. A conflict means a concurrent
-  # vault.rotate landed mid-refresh; the material writer wins and this
-  # refresh re-reads rather than clobbering.
-  defp write_back(entry, new_payload) do
+  # vault.rotate landed mid-refresh — and by then the provider has already
+  # rotated the refresh token this refresh consumed, so simply dropping the
+  # response would strand the entry on a dead token family (permanent
+  # re-consent). The conflict is resolved by what the rotate actually
+  # wrote — see merge_after_conflict/3. Public for tests, like
+  # apply_refresh_response/3: the HTTP half is exercised separately.
+  def write_back(entry, new_payload, consumed_oauth) do
+    case seal_and_cas(entry, new_payload) do
+      :ok ->
+        emit_telemetry(entry, entry.provider_hint, :ok)
+        {:ok, get_in(new_payload, ["oauth", "access_token"])}
+
+      {:error, :payload_conflict} ->
+        merge_after_conflict(entry, new_payload, consumed_oauth)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp seal_and_cas(entry, new_payload) do
     aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
     with {:ok, json} <- encode_payload(new_payload),
          {:ok, sealed} <- Sanctum.Cipher.encrypt(json, aad) do
-      case Arca.VaultStorage.rotate_payload(
-             entry.athanor_id,
-             entry.id,
-             entry.payload_rev,
-             sealed
-           ) do
-        :ok ->
-          emit_telemetry(entry, entry.provider_hint, :ok)
-          {:ok, get_in(new_payload, ["oauth", "access_token"])}
+      Arca.VaultStorage.rotate_payload(entry.athanor_id, entry.id, entry.payload_rev, sealed)
+    end
+  end
 
-        {:error, :payload_conflict} ->
-          case recheck(entry.athanor_id, entry.id) do
-            {:ok, token} -> {:ok, token}
-            :stale -> {:error, :payload_conflict}
+  # The concurrent writer was a vault.rotate. Two cases, told apart by the
+  # refresh token the fresh row carries:
+  #
+  #   * a DIFFERENT refresh token — the rotate brought its own bundle (a
+  #     fresh grant). Its material wins outright: the bundle this refresh
+  #     minted descends from a token family the re-auth abandoned.
+  #   * the SAME refresh token — the rotate touched only the fields. The
+  #     provider has already invalidated that stored token by answering
+  #     this refresh, so the refreshed bundle is folded into the fresh
+  #     payload (the rotate's fields win) and written once more. A second
+  #     conflict gives up rather than looping.
+  defp merge_after_conflict(entry, refreshed_payload, consumed_oauth) do
+    with {:ok, fresh_entry, fresh_payload} <- load_fresh(entry.athanor_id, entry.id) do
+      fresh_oauth = fresh_payload["oauth"]
+
+      cond do
+        is_map(fresh_oauth) and
+            fresh_oauth["refresh_token"] != consumed_oauth["refresh_token"] ->
+          if token_valid?(fresh_oauth) do
+            {:ok, fresh_oauth["access_token"]}
+          else
+            {:error, :payload_conflict}
           end
 
-        {:error, reason} ->
-          {:error, reason}
+        true ->
+          merged = Map.put(fresh_payload, "oauth", refreshed_payload["oauth"])
+
+          case seal_and_cas(fresh_entry, merged) do
+            :ok ->
+              emit_telemetry(fresh_entry, fresh_entry.provider_hint, :ok)
+              {:ok, get_in(merged, ["oauth", "access_token"])}
+
+            {:error, _} ->
+              {:error, :payload_conflict}
+          end
       end
     end
   end
@@ -206,14 +250,9 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  defp fetch_token_url(%{"token_url" => url}) when is_binary(url) do
-    if String.starts_with?(url, "https://") do
-      {:ok, url}
-    else
-      {:error, "token_url must use https://"}
-    end
-  end
-
+  # Scheme policy lives in `require_https/2` inside http_post — one rule
+  # for both token-endpoint dialects, not a second spelling here.
+  defp fetch_token_url(%{"token_url" => url}) when is_binary(url), do: {:ok, url}
   defp fetch_token_url(_), do: {:error, :no_token_url}
 
   defp fetch_provider_creds(entry, provider) do
@@ -245,12 +284,10 @@ defmodule Sanctum.Vault.OAuth do
   # other outbound request: resolve-validate once, connect to the validated
   # IP, never follow redirects. A private token endpoint (an internal IdP)
   # is reachable only when the operator named it in the private-egress
-  # allowlist; once an auth provider is configured the exchange must ride
-  # https.
-  def http_post(url, headers, body) do
-    door_server? = Sanctum.auth_configured?()
-
-    with :ok <- require_https(url, door_server?) do
+  # allowlist. The scheme rule is `require_https/2` — the ONE spelling for
+  # both token-endpoint dialects, keyed on what the POST carries.
+  def http_post(url, headers, body, credential \\ :refresh_token) do
+    with :ok <- require_https(url, credential) do
       case Cyfr.Network.pinned_request(:post, url, headers, body,
              allow_private: :policy,
              receive_timeout: 15_000
@@ -271,9 +308,19 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  defp require_https(_url, false), do: :ok
+  # One scheme rule, keyed on what the POST carries. A refresh token is a
+  # long-lived credential: it never travels in the clear, door or no door,
+  # and the refusal lands before a socket is ever opened. An authorization
+  # code is single-use and short-lived: a doorless dev server may exchange
+  # it against a local http IdP; a configured door makes https mandatory
+  # for it too. This used to be two independent spellings 60 lines apart.
+  defp require_https(url, :refresh_token), do: https_or_refuse(url)
 
-  defp require_https(url, true) do
+  defp require_https(url, :auth_code) do
+    if Sanctum.auth_configured?(), do: https_or_refuse(url), else: :ok
+  end
+
+  defp https_or_refuse(url) do
     if String.starts_with?(url, "https://") do
       :ok
     else
@@ -295,7 +342,13 @@ defmodule Sanctum.Vault.OAuth do
   defp token_valid?(_), do: false
 
   @doc false
-  # Shared with Sanctum.Vault.OAuthGrant.
+  # Shared with Sanctum.Vault.OAuthGrant. An ABSENT `expires_in` is a
+  # non-expiring token (nil, never refreshed — correct). A PRESENT but
+  # unusable one must not be read the same way: `token_valid?/1` answers
+  # true for a nil expiry forever, so the entry would work until the
+  # provider expires it and then 401 with no refresh ever attempted.
+  # Present-but-unparseable records the token as already expired instead,
+  # forcing one refresh attempt on the next dispense.
   def compute_expires_at(nil), do: nil
 
   def compute_expires_at(expires_in)
@@ -305,19 +358,33 @@ defmodule Sanctum.Vault.OAuth do
     |> DateTime.to_iso8601()
   end
 
-  # RFC 6749 says `expires_in` is a number, and plenty of providers send it
-  # as a JSON string anyway. Read as "no expiry", a token that has one is
-  # never refreshed — `token_valid?/1` answers true for a nil expiry
-  # forever — so the entry works until the provider expires it and then
-  # returns 401s that no refresh is ever attempted for.
+  # An expiry past the one-year ceiling is clamped, not treated as absent —
+  # the token still expires, just later than we track.
+  def compute_expires_at(expires_in) when is_integer(expires_in) and expires_in > @max_expires_in,
+    do: compute_expires_at(@max_expires_in)
+
+  # RFC 6749 says `expires_in` is a number; plenty of providers send a
+  # JSON string, and a few send a float.
   def compute_expires_at(expires_in) when is_binary(expires_in) do
     case Integer.parse(String.trim(expires_in)) do
       {seconds, ""} -> compute_expires_at(seconds)
-      _ -> nil
+      _ -> expired_now(expires_in)
     end
   end
 
-  def compute_expires_at(_), do: nil
+  def compute_expires_at(expires_in) when is_float(expires_in) and expires_in > 0,
+    do: compute_expires_at(trunc(expires_in))
+
+  def compute_expires_at(other), do: expired_now(other)
+
+  defp expired_now(value) do
+    Logger.warning(
+      "[Sanctum.Vault.OAuth] unusable expires_in #{inspect(value)} — recording the token " <>
+        "as already expired so a refresh is attempted rather than never"
+    )
+
+    DateTime.to_iso8601(DateTime.utc_now())
+  end
 
   defp emit_telemetry(entry, provider, status) do
     :telemetry.execute(

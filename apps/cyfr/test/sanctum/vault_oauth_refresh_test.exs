@@ -184,13 +184,96 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       assert Sanctum.Vault.OAuth.compute_expires_at(" 3600 ")
     end
 
-    test "an integer is unchanged, and nonsense is still no expiry" do
+    test "an integer is unchanged, and an absence stays an absence" do
       assert Sanctum.Vault.OAuth.compute_expires_at(3600)
       assert Sanctum.Vault.OAuth.compute_expires_at(nil) == nil
-      assert Sanctum.Vault.OAuth.compute_expires_at("soon") == nil
-      assert Sanctum.Vault.OAuth.compute_expires_at("3600 seconds") == nil
-      assert Sanctum.Vault.OAuth.compute_expires_at("-5") == nil
-      assert Sanctum.Vault.OAuth.compute_expires_at("0") == nil
+    end
+
+    test "a present-but-unusable expiry reads as already expired, never as absence" do
+      # nil would mean "never refresh" — the entry works until the provider
+      # expires it, then 401s forever with no refresh ever attempted.
+      for bad <- ["soon", "3600 seconds", "-5", "0", %{"weird" => true}] do
+        assert expiry = Sanctum.Vault.OAuth.compute_expires_at(bad)
+        assert {:ok, dt, _} = DateTime.from_iso8601(expiry)
+        assert DateTime.diff(dt, DateTime.utc_now()) <= 0
+      end
+    end
+
+    test "a float truncates, an over-year expiry clamps rather than vanishing" do
+      assert Sanctum.Vault.OAuth.compute_expires_at(3600.5)
+
+      assert clamped = Sanctum.Vault.OAuth.compute_expires_at(86_400 * 365 * 10)
+      assert {:ok, dt, _} = DateTime.from_iso8601(clamped)
+      assert DateTime.diff(dt, DateTime.utc_now()) <= 86_400 * 365 + 5
+    end
+  end
+
+  describe "write_back/3 — a rotate landing mid-refresh" do
+    defp rotate_behind!(ctx, entry, fields, oauth) do
+      aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, "google")
+      {:ok, json} = Payload.encode_material(fields, oauth)
+      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+      {:ok, fresh} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
+      :ok = Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, fresh.payload_rev, sealed)
+    end
+
+    defp unseal!(ctx, entry_id) do
+      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, entry_id)
+      aad = CipherAAD.vault_entry(ctx.athanor_id, entry_id, "google")
+      {:ok, plaintext} = Sanctum.Cipher.decrypt(row.sealed_payload, aad)
+      {:ok, payload} = Payload.decode(plaintext)
+      payload
+    end
+
+    test "a fields-only rotate keeps its fields AND the refreshed bundle — the rotated refresh token is not discarded",
+         %{ctx: ctx} do
+      {entry, _resource} = mint_oauth_entry(ctx, @expired)
+
+      # The concurrent vault.rotate: new fields, same oauth bundle.
+      rotate_behind!(ctx, entry, %{"api_key" => "rotated-field"}, @expired)
+
+      refreshed =
+        Sanctum.Vault.OAuth.apply_refresh_response(
+          %{"fields" => %{}, "oauth" => @expired},
+          @expired,
+          %{"access_token" => "tok-new", "refresh_token" => "rt-2", "expires_in" => 3600}
+        )
+
+      # The provider has already rotated rt-1 → rt-2; losing this response
+      # would strand the entry in re-consent.
+      assert {:ok, "tok-new"} = Sanctum.Vault.OAuth.write_back(entry, refreshed, @expired)
+
+      stored = unseal!(ctx, entry.id)
+      assert stored["fields"] == %{"api_key" => "rotated-field"}
+      assert stored["oauth"]["access_token"] == "tok-new"
+      assert stored["oauth"]["refresh_token"] == "rt-2"
+    end
+
+    test "a rotate that brought its own bundle (fresh grant) wins outright", %{ctx: ctx} do
+      {entry, _resource} = mint_oauth_entry(ctx, @expired)
+
+      fresh_grant = %{
+        "access_token" => "tok-rotate",
+        "refresh_token" => "rt-9",
+        "token_type" => "bearer"
+      }
+
+      rotate_behind!(ctx, entry, %{}, fresh_grant)
+
+      refreshed =
+        Sanctum.Vault.OAuth.apply_refresh_response(
+          %{"fields" => %{}, "oauth" => @expired},
+          @expired,
+          %{"access_token" => "tok-new", "refresh_token" => "rt-2", "expires_in" => 3600}
+        )
+
+      # The refresh descends from a token family the re-auth abandoned; the
+      # rotate's material stands and its token is what the caller gets.
+      assert {:ok, "tok-rotate"} = Sanctum.Vault.OAuth.write_back(entry, refreshed, @expired)
+
+      stored = unseal!(ctx, entry.id)
+      assert stored["oauth"]["access_token"] == "tok-rotate"
+      assert stored["oauth"]["refresh_token"] == "rt-9"
     end
   end
 end
