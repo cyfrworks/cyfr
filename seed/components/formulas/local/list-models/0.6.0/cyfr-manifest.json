@@ -2,7 +2,7 @@
   "name": "list-models",
   "type": "formula",
   "version": "0.6.0",
-  "publisher": "moonmoon69",
+  "publisher": "local",
   "description": "Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemini, Grok, OpenRouter)",
   "dependencies": {
     "static": [

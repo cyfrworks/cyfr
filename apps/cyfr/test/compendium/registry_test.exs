@@ -619,6 +619,48 @@ defmodule Compendium.RegistryTest do
       assert component.component_type == "catalyst"
     end
 
+    test "refuses a manifest whose identity disagrees with its directory", %{ctx: ctx} do
+      # The path is the identity; a manifest naming a different
+      # name/version/type/publisher must be refused, not preferred.
+      for {field, value} <- [
+            {"name", "other-name"},
+            {"version", "9.9.9"},
+            {"type", "catalyst"},
+            {"publisher", "acme"}
+          ] do
+        segments = ["components", "reagents", "local", "identity-#{field}", "0.1.0"]
+        comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
+        File.mkdir_p!(comp_dir)
+
+        manifest = %{"type" => "reagent", "description" => "lying manifest", field => value}
+        File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+        File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+        assert {:error, {:manifest_identity_mismatch, message}} =
+                 Registry.register_from_arca(ctx, segments),
+               "expected mismatched #{field} to be refused"
+
+        assert message =~ field
+      end
+    end
+
+    test "row type follows the path, never the manifest", %{ctx: ctx} do
+      # A manifest that agrees with (or omits) identity registers with the
+      # path's type — the type the artifact was validated under.
+      segments = ["components", "reagents", "local", "path-typed", "0.1.0"]
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"description" => "no identity fields at all"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      {:ok, component} = Registry.register_from_arca(ctx, segments)
+      assert component.component_type == "reagent"
+      assert component.name == "path-typed"
+      assert component.version == "0.1.0"
+    end
+
     test "rejects non-local publisher namespaces", %{ctx: ctx} do
       segments = ["components", "catalysts", "stripe", "payment", "1.0.0"]
       comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)

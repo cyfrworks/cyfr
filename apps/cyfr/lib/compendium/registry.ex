@@ -296,6 +296,10 @@ defmodule Compendium.Registry do
   Reads manifest + WASM via `Arca`, so it works on the Local FS adapter and
   any configured object-store adapter without code changes.
 
+  The directory names the component's identity. A manifest may omit
+  `name`/`version`/`type`/`publisher`, but one that disagrees with its
+  directory is refused with `{:error, {:manifest_identity_mismatch, _}}`.
+
   ## Parameters
 
   - `ctx` - User context (used by Arca for tenant scoping)
@@ -305,16 +309,48 @@ defmodule Compendium.Registry do
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
     with {:ok, manifest} <- read_manifest_arca(ctx, segments),
-         {:ok, publisher, component_type, dir_name, dir_version} <-
-           infer_segment_metadata(segments),
+         {:ok, publisher, component_type, name, version} <- infer_segment_metadata(segments),
          :ok <- validate_register_namespace(publisher),
-         name = manifest["name"] || dir_name,
-         version = manifest["version"] || dir_version,
+         :ok <- validate_manifest_identity(manifest, publisher, component_type, name, version),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          :ok <- validate_manifest_capability_blocks(manifest),
          {:ok, validation} <- validate_artifact_arca(ctx, segments, component_type) do
       do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
+    end
+  end
+
+  # The path is the identity; the manifest is metadata about it. A manifest
+  # naming a different name/version than its directory would mint a row whose
+  # blob path points nowhere; a different type would hand the artifact a WASI
+  # capability set it was never validated under. Disagreement is refused,
+  # never resolved in the manifest's favor.
+  defp validate_manifest_identity(manifest, publisher, type, name, version) do
+    declared_publisher =
+      case manifest["publisher"] do
+        nil -> nil
+        value -> ComponentPath.normalize_publisher(value)
+      end
+
+    mismatch =
+      Enum.find(
+        [
+          {"name", manifest["name"], name},
+          {"version", manifest["version"], version},
+          {"type", manifest["type"], type},
+          {"publisher", declared_publisher, publisher}
+        ],
+        fn {_field, declared, actual} -> declared != nil and declared != actual end
+      )
+
+    case mismatch do
+      nil ->
+        :ok
+
+      {field, declared, actual} ->
+        {:error,
+         {:manifest_identity_mismatch,
+          "manifest #{field} #{inspect(declared)} disagrees with its directory (#{inspect(actual)})"}}
     end
   end
 
@@ -1389,9 +1425,11 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp build_metadata_from_manifest(manifest, default_type) do
+  defp build_metadata_from_manifest(manifest, path_type) do
     %{
-      type: manifest["type"] || default_type,
+      # Identity (including type) is validated against the directory at
+      # ingress; the path's type is what the artifact was validated under.
+      type: path_type,
       description: manifest["description"] || "",
       tags: manifest_tags(manifest),
       category: manifest["category"],
