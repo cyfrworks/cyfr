@@ -821,13 +821,18 @@ defmodule PrismWeb.ComponentsLive do
     publisher = comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
     version = comp_field(comp, :version)
 
-    base =
-      if publisher && publisher != @local_publisher,
-        do: "#{publisher}.#{name}",
-        else: name
-
-    ref = if type, do: "#{type}:#{base}", else: base
-    if version, do: "#{ref}:#{version}", else: ref
+    # The one ref constructor. The hand-built ref here once DROPPED the
+    # `local` namespace ("catalyst:files:0.5.1"), which the parser rightly
+    # refuses — so every action on a merged remote-search row without a
+    # stored ref failed.
+    if is_binary(type) and is_binary(name) do
+      Sanctum.ComponentRef.build(
+        type,
+        Compendium.ComponentPath.normalize_publisher(publisher),
+        name,
+        version
+      )
+    end
   end
 
   defp plan_field(nil, _key), do: nil

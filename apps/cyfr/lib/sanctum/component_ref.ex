@@ -70,7 +70,12 @@ defmodule Sanctum.ComponentRef do
 
   @name_regex ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/
   @single_char_name_regex ~r/^[a-z0-9]$/
-  @version_regex ~r/^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
+  # Strict semver (semver.org): no leading zeros in the numeric parts or
+  # in numeric prerelease identifiers — the SAME grammar `Version.parse/1`
+  # (the ordering authority in Compendium.Semver) accepts. The looser
+  # spelling admitted `1.0.0-01`, which registered fine and then sorted by
+  # the byte-compare fallback instead of semver.
+  @version_regex ~r/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$/
 
   # Personal slug: GitHub-style. 1–39 chars, lowercase alphanumeric with
   # single-hyphen separators; no leading/trailing/consecutive hyphens.
@@ -482,6 +487,12 @@ defmodule Sanctum.ComponentRef do
         {:error,
          "'latest' is not a version — omit the version segment instead " <>
            "(e.g., c:local.my-tool)"}
+
+      # A version segment that is present must be semver — parse/1 used to
+      # skip this entirely, so `build.compile` accepted any string here and
+      # ordering silently fell back to byte compare.
+      is_binary(version) and not Regex.match?(@version_regex, version) ->
+        {:error, "version must be valid semver (e.g., 1.0.0)"}
 
       true ->
         case split_last(ns_name, ".") do

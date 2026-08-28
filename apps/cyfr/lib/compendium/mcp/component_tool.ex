@@ -1354,7 +1354,12 @@ defmodule Compendium.MCP.ComponentTool do
           type = comp[:type] || comp["type"] || comp[:component_type] || comp["component_type"],
           name = comp[:name] || comp["name"],
           is_binary(type) and is_binary(name),
-          do: "#{type}:#{Compendium.ComponentPath.default_publisher()}.#{name}"
+          do:
+            Sanctum.ComponentRef.build(
+              type,
+              Compendium.ComponentPath.default_publisher(),
+              name
+            )
 
     case refs do
       [] ->

@@ -252,7 +252,7 @@ defmodule PrismWeb.AgentsLive do
         {:model, provider, model} ->
           catalyst_ref =
             case socket.assigns[:catalyst_refs][provider] do
-              nil -> "catalyst:moonmoon69.#{provider}"
+              nil -> Sanctum.ComponentRef.build("catalyst", "moonmoon69", provider)
               ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
             end
 

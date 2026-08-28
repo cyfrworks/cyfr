@@ -112,7 +112,8 @@ defmodule Compendium.OCI.Reference do
   @spec from_component_ref(Sanctum.ComponentRef.t(), String.t()) ::
           {:ok, t()} | {:error, String.t()}
   def from_component_ref(%Sanctum.ComponentRef{} = cref, registry) when is_binary(registry) do
-    repository = "#{cref.namespace}/#{cref.type}s/#{cref.name}"
+    repository =
+      "#{cref.namespace}/#{Compendium.ComponentPath.type_plural(cref.type)}/#{cref.name}"
 
     {:ok,
      %__MODULE__{
@@ -140,7 +141,7 @@ defmodule Compendium.OCI.Reference do
 
     case String.split(repo, "/") do
       [publisher, type_plural, name] ->
-        type = String.trim_trailing(type_plural, "s")
+        type = Compendium.ComponentPath.singular(type_plural)
 
         if type in Sanctum.ComponentRef.valid_types() do
           {:ok,

@@ -21,13 +21,21 @@ defmodule Compendium.Catalogue do
   @doc """
   Assemble a component reference from its parts:
   `("catalyst", "alice", "api", "1.0.0")` → `"catalyst:alice.api:1.0.0"`.
-  Absent parts are omitted.
+  A thin adapter over the ONE constructor (`Sanctum.ComponentRef.build/4`):
+  an absent publisher normalizes to `local` rather than being omitted,
+  because an omitted namespace produced a ref the parser refuses.
   """
   def build_ref(type, publisher, name, version) do
-    base = if publisher && publisher != "", do: "#{publisher}.#{name}", else: name
-    ref = if type && type != "", do: "#{type}:#{base}", else: base
-    if version, do: "#{ref}:#{version}", else: ref
+    Sanctum.ComponentRef.build(
+      type,
+      Compendium.ComponentPath.normalize_publisher(presence(publisher)),
+      name,
+      version
+    )
   end
+
+  defp presence(""), do: nil
+  defp presence(value), do: value
 
   @doc """
   Group merged-search rows by `{name, publisher, type}`: one entry per

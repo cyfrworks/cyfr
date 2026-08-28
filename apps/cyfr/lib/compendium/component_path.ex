@@ -85,7 +85,7 @@ defmodule Compendium.ComponentPath do
          :ok <- Sanctum.ComponentRef.validate_version(version) do
       {:ok,
        %{
-         type: String.trim_trailing(type_plural, "s"),
+         type: singular(type_plural),
          publisher: publisher,
          name: name,
          version: version,
@@ -235,6 +235,18 @@ defmodule Compendium.ComponentPath do
   """
   @spec type_plural(String.t()) :: String.t()
   def type_plural(type) when is_binary(type), do: type <> "s"
+
+  @doc """
+  The inverse of `type_plural/1` — the one de-pluralization, so the OCI
+  repository convention and the on-disk layout cannot each spell it.
+
+      iex> Compendium.ComponentPath.singular("catalysts")
+      "catalyst"
+
+  """
+  @spec singular(String.t()) :: String.t()
+  def singular(type_plural) when is_binary(type_plural),
+    do: String.trim_trailing(type_plural, "s")
 
   @doc "Path segments to a component version directory."
   @spec version_dir(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]

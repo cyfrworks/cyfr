@@ -120,10 +120,13 @@ defmodule Compendium.Scaffold do
       {:error,
        "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
 
+  # The one version grammar — `Sanctum.ComponentRef.validate_version/1`,
+  # which every other ingress (registry, fork, path) already uses. Scaffold
+  # once carried its own `Version.parse` spelling, the sole outlier.
   defp validate_version(version) when is_binary(version) do
-    case Version.parse(version) do
-      {:ok, _} -> :ok
-      :error -> {:error, "Invalid version: '#{version}'. Must be valid semver (e.g. 0.1.0)"}
+    case Sanctum.ComponentRef.validate_version(version) do
+      :ok -> :ok
+      {:error, _} -> {:error, "Invalid version: '#{version}'. Must be valid semver (e.g. 0.1.0)"}
     end
   end
 

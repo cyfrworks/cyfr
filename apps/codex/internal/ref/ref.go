@@ -77,7 +77,9 @@ var nameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 var singleCharNameRegex = regexp.MustCompile(`^[a-z0-9]$`)
 
 // versionRegex matches semver with optional pre-release and build metadata.
-var versionRegex = regexp.MustCompile(`^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$`)
+// Strict semver (semver.org), byte-identical to Sanctum.ComponentRef's
+// @version_regex — the cross-language drift test pins the spelling.
+var versionRegex = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$`)
 
 // IsTypePrefix returns true if s is a known type name or shorthand.
 func IsTypePrefix(s string) bool {
