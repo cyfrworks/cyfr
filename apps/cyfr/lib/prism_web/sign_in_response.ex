@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.SignInResponse do
+defmodule PrismWeb.SignInResponse do
   @moduledoc """
   One transcription of the sign-in outcome to a browser response.
 
@@ -114,7 +114,7 @@ defmodule EmissaryWeb.SignInResponse do
       end
 
     {title, inner} = unavailable_page(reason, Keyword.get(opts, :retry_path, "/login"))
-    EmissaryWeb.MinimalPage.send_page(conn, 503, title, inner)
+    PrismWeb.MinimalPage.send_page(conn, 503, title, inner)
   end
 
   @doc """
@@ -169,14 +169,14 @@ defmodule EmissaryWeb.SignInResponse do
             fun.(put_session(conn, @session_key, session.token))
 
           {:error, reason} ->
-            Logger.error("[EmissaryWeb.SignInResponse] session create failed: #{inspect(reason)}")
+            Logger.error("[PrismWeb.SignInResponse] session create failed: #{inspect(reason)}")
 
             # A page, not JSON. This module's whole contract is that every
             # outcome of a browser sign-in is a redirect or a page, and this
             # arm was dumping an error object into the person's window —
             # in a third envelope shape besides, neither ApiError's nor the
             # JSON-RPC one.
-            EmissaryWeb.MinimalPage.send_page(
+            PrismWeb.MinimalPage.send_page(
               conn,
               500,
               "Couldn't finish signing in",
@@ -220,7 +220,7 @@ defmodule EmissaryWeb.SignInResponse do
     rescue
       e ->
         Logger.warning(
-          "[EmissaryWeb.SignInResponse] failed to stash pending_probe cookie: #{Exception.message(e)}"
+          "[PrismWeb.SignInResponse] failed to stash pending_probe cookie: #{Exception.message(e)}"
         )
 
         conn
@@ -276,10 +276,10 @@ defmodule EmissaryWeb.SignInResponse do
   # try again.
   defp unavailable_page(reason, retry_path) do
     {title, message} = unavailable_copy(reason)
-    href = EmissaryWeb.MinimalPage.h(retry_path)
+    href = PrismWeb.MinimalPage.h(retry_path)
 
     {title,
-     "<p>#{EmissaryWeb.MinimalPage.h(message)}</p>" <>
+     "<p>#{PrismWeb.MinimalPage.h(message)}</p>" <>
        "<p><a href=\"#{href}\">Try again</a></p>"}
   end
 end

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.MinimalPage do
+defmodule PrismWeb.MinimalPage do
   @moduledoc """
   The one no-session HTML shell.
 

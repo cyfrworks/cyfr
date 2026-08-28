@@ -45,7 +45,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
     else
       conn = fetch_session(conn)
 
-      case get_session(conn, EmissaryWeb.SignInResponse.session_key()) do
+      case get_session(conn, PrismWeb.SignInResponse.session_key()) do
         token when is_binary(token) and token != "" -> gate(conn, token)
         _ -> conn
       end

@@ -47,14 +47,14 @@ defmodule EmissaryWeb.OAuthCallbackController do
   # Override the endpoint's `default-src 'none'` CSP to allow inline styles
   # for this HTML response. This is a one-off browser-facing page (post-OAuth
   # redirect), not an API endpoint, so relaxing CSP here is safe. The page
-  # itself is EmissaryWeb.MinimalPage — the one no-session shell.
+  # itself is PrismWeb.MinimalPage — the one no-session shell.
   defp send_page(conn, status, title, inner, opts) do
     conn
     |> put_resp_header(
       "content-security-policy",
       "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
     )
-    |> EmissaryWeb.MinimalPage.send_page(status, title, inner, opts)
+    |> PrismWeb.MinimalPage.send_page(status, title, inner, opts)
   end
 
   defp success_page(conn, provider, connection_name) do
@@ -65,7 +65,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
       200,
       "Connected to #{provider_display}",
       """
-      <p class="detail">#{EmissaryWeb.MinimalPage.h(connection_name)}</p>
+      <p class="detail">#{PrismWeb.MinimalPage.h(connection_name)}</p>
       <p>You can close this window and return to your terminal.</p>
       """,
       icon: "\u2713",
@@ -79,7 +79,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
       400,
       title,
       """
-      <p>#{EmissaryWeb.MinimalPage.h(message)}</p>
+      <p>#{PrismWeb.MinimalPage.h(message)}</p>
       <p>Close this window and try again.</p>
       """,
       icon: "\u2717",

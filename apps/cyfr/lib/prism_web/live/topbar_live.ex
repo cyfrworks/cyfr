@@ -44,7 +44,7 @@ defmodule PrismWeb.TopbarLive do
 
   @impl true
   def mount(_params, session, socket) do
-    token = session[to_string(EmissaryWeb.SignInResponse.session_key())]
+    token = session[to_string(PrismWeb.SignInResponse.session_key())]
 
     socket =
       case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do

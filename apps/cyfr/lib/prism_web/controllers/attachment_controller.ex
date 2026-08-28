@@ -29,7 +29,7 @@ defmodule PrismWeb.AttachmentController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv application/json)
 
   def show(conn, %{"athanor" => route, "message_id" => message_id, "filename" => filename}) do
-    token = get_session(conn, EmissaryWeb.SignInResponse.session_key())
+    token = get_session(conn, PrismWeb.SignInResponse.session_key())
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),

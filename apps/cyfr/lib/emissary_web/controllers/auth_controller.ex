@@ -28,7 +28,7 @@ defmodule EmissaryWeb.AuthController do
 
   plug EmissaryWeb.Plugs.ConfiguredUeberauth
 
-  alias EmissaryWeb.SignInResponse
+  alias PrismWeb.SignInResponse
   alias Sanctum.Session
 
   @doc """
@@ -40,7 +40,7 @@ defmodule EmissaryWeb.AuthController do
     # Ueberauth plug handles the redirect; this is the no-strategy branch.
     # A browser pipeline answers in HTML — these arms used to dump JSON
     # into the person's window.
-    EmissaryWeb.MinimalPage.send_page(
+    PrismWeb.MinimalPage.send_page(
       conn,
       404,
       "Unknown sign-in provider",
@@ -171,36 +171,36 @@ defmodule EmissaryWeb.AuthController do
       {:error, {:door, _reason}} ->
         # Refused at the door: no session, no cookie, no cyfr.run call. One
         # message whichever branch refused.
-        EmissaryWeb.MinimalPage.send_page(
+        PrismWeb.MinimalPage.send_page(
           conn,
           403,
           "Not allowed on this server",
-          "<p>#{EmissaryWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+          "<p>#{PrismWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
         )
 
       {:error, reason} ->
-        EmissaryWeb.MinimalPage.send_page(
+        PrismWeb.MinimalPage.send_page(
           conn,
           401,
           "Sign-in failed",
-          "<p>#{EmissaryWeb.MinimalPage.h(friendly_error_message(reason))}</p>" <>
+          "<p>#{PrismWeb.MinimalPage.h(friendly_error_message(reason))}</p>" <>
             "<p><a href=\"/login\">Try again</a></p>"
         )
     end
   end
 
   def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
-    EmissaryWeb.MinimalPage.send_page(
+    PrismWeb.MinimalPage.send_page(
       conn,
       401,
       "Sign-in failed",
-      "<p>#{EmissaryWeb.MinimalPage.h(failure_message(failure))}</p>" <>
+      "<p>#{PrismWeb.MinimalPage.h(failure_message(failure))}</p>" <>
         "<p><a href=\"/login\">Try again</a></p>"
     )
   end
 
   def callback(conn, _params) do
-    EmissaryWeb.MinimalPage.send_page(
+    PrismWeb.MinimalPage.send_page(
       conn,
       400,
       "Invalid sign-in callback",
@@ -235,7 +235,7 @@ defmodule EmissaryWeb.AuthController do
   end
 
   defp do_post_legal_accept(conn, access_token) do
-    case get_session(conn, EmissaryWeb.SignInResponse.session_key()) do
+    case get_session(conn, PrismWeb.SignInResponse.session_key()) do
       session_token when is_binary(session_token) and session_token != "" ->
         with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
              {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do

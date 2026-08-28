@@ -187,8 +187,11 @@ defmodule EmissaryWeb.Router do
     delete "/", MCPController, :method_not_allowed
   end
 
-  # Tincture serving — auth via signed `?_t=` token or Authorization bearer
-  # No session cookie auth (EmissaryWeb and PrismWeb have separate session stores).
+  # Tincture serving — auth via signed `?_t=` token or Authorization bearer.
+  # No session cookie auth: a tincture page is embeddable cross-origin (see
+  # the invoke pipeline below), and an ambient cookie credential on a
+  # cross-origin surface is exactly the CSRF/rebinding food the design
+  # refuses — there is one session store, and this surface ignores it.
   # Tinctures set their own CSP (the controller); the closed set here only
   # supplies what it does not touch (nosniff, referrer policy, HSTS) — the
   # controller replaces the CSP and framing headers on what it serves.

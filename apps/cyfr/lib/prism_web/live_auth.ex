@@ -22,7 +22,7 @@ defmodule PrismWeb.LiveAuth do
   import Phoenix.Component
 
   def on_mount(:require_auth, _params, session, socket) do
-    token = session[to_string(EmissaryWeb.SignInResponse.session_key())]
+    token = session[to_string(PrismWeb.SignInResponse.session_key())]
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
       {:ok, ctx} ->

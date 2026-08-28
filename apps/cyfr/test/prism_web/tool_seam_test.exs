@@ -56,7 +56,12 @@ defmodule PrismWeb.ToolSeamTest do
     {"apps/cyfr/lib/prism_web/live/settings_live.ex", "Sanctum.Tenancy.Users.put_prefs"},
     # Dropping the in-flight marker after a manual tincture refresh. Cache
     # invalidation, not persistence.
-    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Arca.Cache.delete_match"}
+    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Arca.Cache.delete_match"},
+    # The one transcription of a sign-in outcome to a browser response —
+    # it mints and retires the person's OWN session, before any console
+    # exists for them. Door placement is pinned by Sanctum.DoorPlacementTest.
+    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.create"},
+    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.destroy"}
   ]
 
   @mutating_call ~r/\b((?:Arca|Sanctum|Compendium|Opus|Locus|Emissary)(?:\.[A-Z]\w+)*)\.(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|save\w*|destroy\w*|add_\w+)\b/

@@ -38,7 +38,7 @@ defmodule PrismWeb.PendingProbe do
         {:ok, conn, token}
 
       _ ->
-        case get_session(conn, EmissaryWeb.SignInResponse.session_key()) do
+        case get_session(conn, PrismWeb.SignInResponse.session_key()) do
           token when is_binary(token) and token != "" -> {:expired, conn}
           _ -> {:not_logged_in, conn}
         end
@@ -70,7 +70,7 @@ defmodule PrismWeb.PendingProbe do
   # roster's first entry. The `params` path above still validates, because
   # that value does come from the request.
   defp session_provider(conn) do
-    case Sanctum.Caller.peek(get_session(conn, EmissaryWeb.SignInResponse.session_key())) do
+    case Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())) do
       {:ok, %{provider: p}} when is_binary(p) and p != "" -> p
       _ -> default_provider()
     end

@@ -205,7 +205,7 @@ defmodule PrismWeb.LoginLive do
   # Browser copy for a registry outage — the CLI's sentences say to run
   # `cyfr login`, which is not this surface. One owner for the words.
   defp browser_unavailable(reason),
-    do: EmissaryWeb.SignInResponse.unavailable_copy(reason) |> elem(1)
+    do: PrismWeb.SignInResponse.unavailable_copy(reason) |> elem(1)
 
   defp assign_idle(socket, error) do
     socket

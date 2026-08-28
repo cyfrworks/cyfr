@@ -14,7 +14,7 @@ defmodule Sanctum.DoorPlacementTest do
 
   # The CLI device flow mints for itself; the browser flows mint through
   # the shared sign-in responder.
-  @minters ~w(emissary_web/sign_in_response.ex sanctum/auth/device_flow.ex)
+  @minters ~w(prism_web/sign_in_response.ex sanctum/auth/device_flow.ex)
 
   test "every Session.create/1 call site sits behind Sanctum.Door.admit_identity/2" do
     callers =

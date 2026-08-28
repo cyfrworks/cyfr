@@ -166,7 +166,7 @@ defmodule PrismWeb.ClaimNamespaceController do
   end
 
   defp current_user_id(conn) do
-    case Sanctum.Caller.peek(get_session(conn, EmissaryWeb.SignInResponse.session_key())) do
+    case Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())) do
       {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
       _ -> {:not_logged_in, conn}
     end
