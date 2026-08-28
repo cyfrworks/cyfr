@@ -25,10 +25,26 @@ defmodule Sanctum.TinctureAuth do
   ## Returns
 
   - `{:ok, %Sanctum.Context{}}` — Authenticated context
-  - `:unauthenticated` — No valid credentials found
+  - `:unauthenticated` — no credential was presented at all
+  - `{:error, refusal}` — a credential was presented and is dead or
+    refused; the surface renders the named refusal instead of silently
+    serving the anonymous fallback
   """
 
   alias Sanctum.Context
+
+  @typedoc """
+  Why a *presented* credential was refused. Distinct from
+  `:unauthenticated` (nothing presented), so a caller holding a dead
+  credential learns so.
+  """
+  @type refusal ::
+          :invalid_credential
+          | :expired_token
+          | :denied
+          | :not_standing
+          | :no_athanor
+          | :unavailable
 
   # Distinct from the `/_s/` asset token (tincture_controller.ex,
   # @token_salt "tincture_asset_v2"): a single-purpose, minimal-payload,
@@ -69,7 +85,8 @@ defmodule Sanctum.TinctureAuth do
   defp mint_kind(:api_key), do: :api_key
   defp mint_kind(_), do: :person
 
-  @spec authenticate(Plug.Conn.t()) :: {:ok, Context.t()} | :unauthenticated
+  @spec authenticate(Plug.Conn.t()) ::
+          {:ok, Context.t()} | :unauthenticated | {:error, refusal()}
   def authenticate(conn) do
     with :skip <- try_bearer_header(conn),
          :skip <- try_access_token(conn) do
@@ -79,10 +96,10 @@ defmodule Sanctum.TinctureAuth do
       # context without a tenant check; a context that names no athanor
       # must not authenticate for tincture access.
       {:ok, %Context{} = ctx} ->
-        if tenant_resolved?(ctx), do: {:ok, ctx}, else: :unauthenticated
+        if tenant_resolved?(ctx), do: {:ok, ctx}, else: {:error, :no_athanor}
 
-      other ->
-        other
+      {:error, _} = refusal ->
+        refusal
     end
   end
 
@@ -114,7 +131,7 @@ defmodule Sanctum.TinctureAuth do
   defp validate_api_key(token, conn) do
     case Sanctum.ApiKey.validate(token, client_ip: Sanctum.ClientIp.resolve(conn)) do
       {:ok, metadata} -> {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
-      _ -> :skip
+      _ -> {:error, :invalid_credential}
     end
   end
 
@@ -123,23 +140,36 @@ defmodule Sanctum.TinctureAuth do
   defp try_access_token(conn) do
     # namespace is identity-only (may be nil); the tenant gate in authenticate/1
     # (tenant_resolved?) is the real control, so no namespace guard here.
-    with token when is_binary(token) and token != "" <- query_param(conn, "_t"),
-         {:ok, %{u: user_id, a: athanor_id, n: namespace} = payload} <-
-           Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
-             max_age: @access_token_max_age
-           ) do
-      Context.build(
-        user_id: user_id,
-        namespace: namespace,
-        athanor_id: athanor_id,
-        permissions: [:execute],
-        scope: :athanor,
-        auth_method: :tincture,
-        authenticated: true
-      )
-      |> still_standing(athanor_id, Map.get(payload, :m, :person))
-    else
-      _ -> :skip
+    case query_param(conn, "_t") do
+      token when is_binary(token) and token != "" ->
+        verify_access_token(token)
+
+      _ ->
+        :skip
+    end
+  end
+
+  defp verify_access_token(token) do
+    case Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
+           max_age: @access_token_max_age
+         ) do
+      {:ok, %{u: user_id, a: athanor_id, n: namespace} = payload} ->
+        Context.build(
+          user_id: user_id,
+          namespace: namespace,
+          athanor_id: athanor_id,
+          permissions: [:execute],
+          scope: :athanor,
+          auth_method: :tincture,
+          authenticated: true
+        )
+        |> still_standing(athanor_id, Map.get(payload, :m, :person))
+
+      {:error, :expired} ->
+        {:error, :expired_token}
+
+      _ ->
+        {:error, :invalid_credential}
     end
   end
 
@@ -151,27 +181,51 @@ defmodule Sanctum.TinctureAuth do
   # athanor is open and the creator is not denied, but a key outlives its
   # creator's membership on purpose.
   defp still_standing(%Context{} = ctx, athanor_id, :api_key) do
-    if Sanctum.Tenancy.channel_active?(athanor_id, ctx.user_id), do: {:ok, ctx}, else: :skip
+    if Sanctum.Tenancy.channel_active?(athanor_id, ctx.user_id),
+      do: {:ok, ctx},
+      else: {:error, :not_standing}
   end
 
   defp still_standing(%Context{} = ctx, athanor_id, _person) do
     case Sanctum.Tenancy.revalidate(ctx) do
       %Context{authenticated: true, athanor_id: ^athanor_id} = current -> {:ok, current}
-      _ -> :skip
+      _ -> {:error, :not_standing}
     end
   end
 
+  # A session token goes through the one door — `Sanctum.Caller.establish/2`
+  # — so the memo, the door/claim/denied refusal mapping and the tenant
+  # resolve are the same ones every other surface uses (the `:tincture`
+  # surface stamps auth_method `:session` in the loader). Two arms read
+  # differently from the console:
+  #
+  #   * `claim_pending` — a valid session whose person has not claimed a
+  #     namespace yet. Tincture access is not tenant administration and is
+  #     deliberately granted on the session's athanor (documented at the
+  #     loader's `:not_claimed` arm), so the pre-claim context is upgraded
+  #     to the tincture shape here — the ONE deliberate exception, no
+  #     longer a blanket upgrade of whatever loaded.
+  #   * `denied` — the door stopped admitting this person after the session
+  #     was minted. Refused; the old blanket upgrade re-authenticated it.
   defp try_sanctum_session(token) do
-    case Sanctum.Session.load(token, surface: :tincture) do
-      {:ok, ctx} ->
-        # The :tincture surface stamps auth_method :session in the loader.
-        # Tincture access always runs athanor-scoped and authenticated,
-        # regardless of the operator's restored console session (and for
-        # a not-yet-claimed user, whose load yields authenticated: false).
-        {:ok, %{ctx | auth_method: :session, scope: :athanor, authenticated: true}}
+    case Sanctum.Caller.establish(token, surface: :tincture, refresh: false) do
+      {:ok, %Context{} = ctx} ->
+        {:ok, ctx}
 
-      _ ->
-        :skip
+      {:error, {:claim_pending, %Context{} = pre}} ->
+        {:ok, %{pre | auth_method: :session, scope: :athanor, authenticated: true}}
+
+      {:error, {:denied, _ctx}} ->
+        {:error, :denied}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      {:error, :no_athanor} ->
+        {:error, :no_athanor}
+
+      {:error, _} ->
+        {:error, :invalid_credential}
     end
   end
 

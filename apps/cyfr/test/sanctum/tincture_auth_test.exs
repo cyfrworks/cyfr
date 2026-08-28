@@ -31,18 +31,21 @@ defmodule Sanctum.TinctureAuthTest do
       assert TinctureAuth.authenticate(conn("")) == :unauthenticated
     end
 
-    test "a non-cyfr bearer token that is no session → :unauthenticated" do
-      assert TinctureAuth.authenticate(bearer_conn("not-a-cyfr-key")) == :unauthenticated
+    test "a presented non-session bearer is a named refusal, not silence" do
+      assert TinctureAuth.authenticate(bearer_conn("not-a-cyfr-key")) ==
+               {:error, :invalid_credential}
     end
 
-    test "an unknown session bearer falls through → :unauthenticated" do
-      assert TinctureAuth.authenticate(bearer_conn("sess_does_not_exist")) == :unauthenticated
+    test "an unknown session bearer is refused by name" do
+      assert TinctureAuth.authenticate(bearer_conn("sess_does_not_exist")) ==
+               {:error, :invalid_credential}
     end
 
     test "malformed remote_ip does not crash (client_ip rescue → nil)" do
       # cyfr-prefixed but invalid key; the point is client_ip/1's rescue path
       # is exercised without raising.
-      assert TinctureAuth.authenticate(bearer_conn("cyfr_pk_bogus", nil)) == :unauthenticated
+      assert TinctureAuth.authenticate(bearer_conn("cyfr_pk_bogus", nil)) ==
+               {:error, :invalid_credential}
     end
   end
 
@@ -128,11 +131,11 @@ defmodule Sanctum.TinctureAuthTest do
   end
 
   describe "authenticate/1 — tenant gate" do
-    test "a session that resolves to no athanor fails the tenant gate → :unauthenticated" do
+    test "a session that resolves to no athanor is refused by name" do
       # A signed-in user with no membership carries no athanor. The tincture
-      # surface still stamps scope :athanor / authenticated, but
-      # `tenant_resolved?/1` flips the otherwise-valid auth to
-      # :unauthenticated (the tincture HTTP isolation guarantee).
+      # surface still stamps scope :athanor / authenticated, but the tenant
+      # gate refuses a context that names no athanor (the tincture HTTP
+      # isolation guarantee) — and says so.
       unresolved =
         Context.build(
           user_id: "u-nowhere-#{System.unique_integer([:positive])}",
@@ -147,7 +150,41 @@ defmodule Sanctum.TinctureAuthTest do
 
       {:ok, session} = Sanctum.Session.create(unresolved)
 
-      assert TinctureAuth.authenticate(bearer_conn(session.token)) == :unauthenticated
+      assert TinctureAuth.authenticate(bearer_conn(session.token)) ==
+               {:error, :no_athanor}
+    end
+  end
+
+  describe "authenticate/1 — a denied person's surviving session" do
+    test "is refused, not re-upgraded", %{ctx: ctx} do
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: ctx.user_id,
+          provider: "local",
+          email: "denied-tincture@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
+      Sanctum.TestContext.athanor!()
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
+
+      {:ok, session} = Sanctum.Session.create(ctx)
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(bearer_conn(session.token))
+
+      # Mark the row denied WITHOUT `Users.deny/1`'s session revocation —
+      # the race window between an operator's deny and its reconcile. The
+      # old blanket upgrade re-authenticated exactly this session.
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(status: "denied")
+        |> Arca.Repo.update()
+
+      Sanctum.Caller.invalidate_hash(Sanctum.Session.token_hash(session.token))
+
+      assert TinctureAuth.authenticate(bearer_conn(session.token)) == {:error, :denied}
     end
   end
 end

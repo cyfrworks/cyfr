@@ -64,10 +64,10 @@ defmodule EmissaryWeb.TinctureController do
         # A `?_t=` token must not mint its own successor — that would turn a
         # leaked one-hour token into a permanent credential. Minting requires
         # the primary credential; expiry means re-authenticating with it.
-        conn
-        |> put_resp_header("www-authenticate", "Bearer")
-        |> put_status(401)
-        |> EmissaryWeb.ApiError.send(
+        # 403, not 401: the caller IS authenticated, just not with a
+        # credential that may mint.
+        EmissaryWeb.ApiError.send(
+          conn,
           403,
           :token_cannot_renew_itself,
           "A minted tincture token cannot mint another"
@@ -82,11 +82,17 @@ defmodule EmissaryWeb.TinctureController do
         })
 
       :unauthenticated ->
-        # RFC 9110 §15.5.2 makes a challenge mandatory on a 401.
-        conn
-        |> put_resp_header("www-authenticate", "Bearer")
-        |> put_status(401)
-        |> EmissaryWeb.ApiError.send(401, :unauthenticated, "Authentication required")
+        # ApiError attaches the RFC 9110 §15.5.2 challenge on every 401.
+        EmissaryWeb.ApiError.send(conn, 401, :unauthenticated, "Authentication required")
+
+      {:error, :unavailable} ->
+        EmissaryWeb.ApiError.send(conn, 503, :unavailable, "Try again shortly")
+
+      {:error, reason} ->
+        # A presented-but-dead credential says so — the named refusal is
+        # what tells a client "re-authenticate" apart from "you never sent
+        # anything".
+        EmissaryWeb.ApiError.send(conn, 401, reason, "Credential refused")
     end
   end
 

@@ -80,7 +80,7 @@ defmodule Sanctum.S7TinctureTokenTest do
       # The seat goes: the signature is still valid, the standing is not.
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_acme")
       :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: @person)
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == :unauthenticated
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
 
       # Back in, and the same token works again — the check is standing, not
       # a revocation list.
@@ -90,11 +90,12 @@ defmodule Sanctum.S7TinctureTokenTest do
       # ...and a person the door has denied opens nothing at all.
       {:ok, user} = Sanctum.Tenancy.Users.get(@person)
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == :unauthenticated
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
     end
 
-    test "a tampered/garbage ?_t= is rejected" do
-      assert TinctureAuth.authenticate(conn("_t=not-a-valid-token")) == :unauthenticated
+    test "a tampered/garbage ?_t= is refused by name" do
+      assert TinctureAuth.authenticate(conn("_t=not-a-valid-token")) ==
+               {:error, :invalid_credential}
     end
 
     test "?_t= still flows through the tenant gate" do
@@ -112,7 +113,7 @@ defmodule Sanctum.S7TinctureTokenTest do
         )
 
       token = TinctureAuth.issue_access_token(unresolved)
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == :unauthenticated
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :no_athanor}
     end
   end
 
@@ -124,9 +125,9 @@ defmodule Sanctum.S7TinctureTokenTest do
                TinctureAuth.authenticate(conn("", [{"authorization", "Bearer #{key}"}]))
     end
 
-    test "non-cyfr Bearer is skipped" do
+    test "a presented non-cyfr Bearer is refused by name" do
       assert TinctureAuth.authenticate(conn("", [{"authorization", "Bearer abc"}])) ==
-               :unauthenticated
+               {:error, :invalid_credential}
     end
 
     test "unknown Mcp-Session-Id header falls through to :unauthenticated" do
