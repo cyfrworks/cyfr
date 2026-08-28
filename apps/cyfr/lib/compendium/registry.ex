@@ -818,6 +818,20 @@ defmodule Compendium.Registry do
                 extras = Keyword.get(opts, :unit_files, [])
                 extras_bytes = Enum.sum(for {_rel, bytes} <- extras, do: byte_size(bytes))
 
+                # The recorded digest covers exactly what gets stored:
+                # extras are part of the unit, so they are part of the hash.
+                validation =
+                  case extras do
+                    [] ->
+                      validation
+
+                    _ ->
+                      {digest, size} =
+                        Compendium.TinctureValidator.digest_with_extras(tmp_dir, extras)
+
+                      %{validation | digest: digest, size: size}
+                  end
+
                 # One unit commit: the validated files stream from the
                 # scratch dir one at a time (lazy reads keep the memory
                 # bound), the manifest sentinel lands last, a partial

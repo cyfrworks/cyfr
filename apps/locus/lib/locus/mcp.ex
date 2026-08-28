@@ -471,15 +471,18 @@ defmodule Locus.MCP do
   defp store_tincture_output(ctx, type, publisher, name, version, output_files) do
     base = Compendium.ComponentPath.version_dir(type, publisher, name, version)
 
-    Enum.reduce_while(output_files, :ok, fn {rel_path, content}, :ok ->
-      path = base ++ Path.split(rel_path)
+    # One unit commit, like every other writer of this unit shape
+    # (Registry, Fork): sentinel-last, rollback on failure — a file-by-file
+    # loop once halted mid-way and left a partially-written version
+    # directory behind. Cap-exempt like the WASM save above — build
+    # outputs, same policy.
+    files =
+      Enum.map(output_files, fn {rel_path, content} -> {Path.split(rel_path), content} end)
 
-      # Cap-exempt like the WASM save above — build outputs, same policy.
-      case Arca.put(ctx, path, content, cap: :exempt) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, cap: :exempt) do
+      {:ok, _written} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp build_progress_callback(build_id, ctx, build_meta) do
