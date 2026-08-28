@@ -21,6 +21,12 @@ defmodule Cyfr.DigestSSOTTest do
   # of the spelling, not producers, and stay allowed.
   @construction ~r/"sha256:" <>\s*(\(|Base\.|:crypto)/
 
+  # The bare-hex spelling (no "sha256:" prefix): hashing into lowercase hex
+  # is `Cyfr.Digest.sha256_hex/1`'s job. Hashes that stay raw binaries
+  # (session/api-key token columns) or use another encoding (PKCE's
+  # base64url) are different conventions and don't match.
+  @bare_hex ~r/:crypto\.hash\(:sha256.*(\n.*)?\|>\s*Base\.encode16|Base\.encode16\(\s*:crypto\.hash\(:sha256/
+
   test ~s(the "sha256:" spelling is constructed only in Cyfr.Digest) do
     offenders =
       Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
@@ -30,5 +36,16 @@ defmodule Cyfr.DigestSSOTTest do
 
     assert offenders == [],
            "digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"
+  end
+
+  test "the bare-hex spelling is constructed only in Cyfr.Digest" do
+    offenders =
+      Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+      |> Enum.filter(fn path -> Regex.match?(@bare_hex, File.read!(path)) end)
+      |> Enum.map(&Path.relative_to(&1, @umbrella_root))
+      |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
+
+    assert offenders == [],
+           "bare-hex digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"
   end
 end

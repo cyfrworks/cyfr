@@ -83,7 +83,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           "Read any file in the athanor's storage by path (" <>
             Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
             ") — :storage_read spans the whole tree",
-        mimeType: "application/octet-stream"
+        mimeType: Cyfr.MediaType.binary()
       }
     ]
   end
@@ -110,7 +110,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
          :ok <- validate_segments(segments) do
       case Arca.get(ctx, segments) do
         {:ok, content} ->
-          {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
+          {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
 
         {:error, :not_found} ->
           {:error, "File not found: #{path}"}

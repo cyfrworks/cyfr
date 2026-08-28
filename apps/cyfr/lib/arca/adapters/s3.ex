@@ -582,8 +582,7 @@ defmodule Arca.Adapters.S3 do
   defp method_string(:delete), do: "DELETE"
   defp method_string(:head), do: "HEAD"
 
-  defp sha256_hex(""), do: :crypto.hash(:sha256, "") |> Base.encode16(case: :lower)
-  defp sha256_hex(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+  defp sha256_hex(body), do: Cyfr.Digest.sha256_hex(body)
 
   defp config(key) do
     Application.get_env(:cyfr, :s3, [])[key]

@@ -20,6 +20,19 @@ defmodule Cyfr.Digest do
   end
 
   @doc """
+  SHA-256 of the bytes as bare lowercase hex — no `sha256:` prefix.
+
+  The keyed-lookup spelling: a secret hashed into a cache key or an index
+  column, or a protocol that demands the bare form (AWS SigV4, id
+  derivation). Content digests use `sha256/1`; this exists so the bare
+  form has one author too.
+  """
+  @spec sha256_hex(binary()) :: String.t()
+  def sha256_hex(bytes) when is_binary(bytes) do
+    Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+  end
+
+  @doc """
   SHA-256 over a chunk sequence, formatted `sha256:<lowercase hex>`.
 
   Same result as `sha256(IO.iodata_to_binary(chunks))` without materializing

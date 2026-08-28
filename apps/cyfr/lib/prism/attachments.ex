@@ -73,7 +73,7 @@ defmodule Prism.Attachments do
             ref = %{
               "filename" => safe_filename(file["filename"]),
               "stored_name" => stored_name,
-              "media_type" => file["media_type"] || "application/octet-stream",
+              "media_type" => file["media_type"] || Cyfr.MediaType.binary(),
               "size" => byte_size(bytes)
             }
 

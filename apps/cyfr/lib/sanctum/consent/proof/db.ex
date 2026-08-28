@@ -71,7 +71,7 @@ defmodule Sanctum.Consent.Proof.DB do
   # Encoding
   # ---------------------------------------------------------------------------
 
-  defp hash(token), do: :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
+  defp hash(token), do: Cyfr.Digest.sha256_hex(token)
 
   defp encode_optional(bindings) do
     bindings

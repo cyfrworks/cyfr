@@ -46,13 +46,13 @@ defmodule Sanctum.MCP do
         uri: "sanctum://identity",
         name: "Current Identity",
         description: "Current authenticated user identity",
-        mimeType: "application/json"
+        mimeType: Cyfr.MediaType.json()
       },
       %{
         uri: "sanctum://permissions",
         name: "User Permissions",
         description: "Current user's granted permissions",
-        mimeType: "application/json"
+        mimeType: Cyfr.MediaType.json()
       }
     ]
   end
@@ -74,7 +74,7 @@ defmodule Sanctum.MCP do
         {:error, _} -> ~s({"error":"encoding_error"})
       end
 
-    {:ok, %{content: content, mimeType: "application/json"}}
+    {:ok, %{content: content, mimeType: Cyfr.MediaType.json()}}
   end
 
   def read(%Context{} = ctx, "sanctum://permissions") do
@@ -84,7 +84,7 @@ defmodule Sanctum.MCP do
         {:error, _} -> ~s({"error":"encoding_error"})
       end
 
-    {:ok, %{content: content, mimeType: "application/json"}}
+    {:ok, %{content: content, mimeType: Cyfr.MediaType.json()}}
   end
 
   def read(_ctx, uri) do

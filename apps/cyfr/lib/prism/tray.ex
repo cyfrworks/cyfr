@@ -47,5 +47,5 @@ defmodule Prism.Tray do
   def clear(token, _), do: get(token)
 
   # The token itself never sits in a cache key.
-  defp key(token), do: {:tray, :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)}
+  defp key(token), do: {:tray, Cyfr.Digest.sha256_hex(token)}
 end

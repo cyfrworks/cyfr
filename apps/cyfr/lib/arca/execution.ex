@@ -31,6 +31,18 @@ defmodule Arca.Execution do
   import Ecto.Changeset
   import Ecto.Query
 
+  # The execution lifecycle vocabulary, in one place like its sibling
+  # stores. A row starts "running" and ends in exactly one of the
+  # terminal three.
+  @statuses ~w(running completed failed cancelled)
+  @terminal_statuses ~w(completed failed cancelled)
+
+  @doc "Every status an execution row can carry."
+  def statuses, do: @statuses
+
+  @doc "The statuses a finished execution can carry."
+  def terminal_statuses, do: @terminal_statuses
+
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
 
@@ -101,7 +113,7 @@ defmodule Arca.Execution do
       :status,
       :component_type
     ])
-    |> validate_inclusion(:status, ["running", "completed", "failed", "cancelled"])
+    |> validate_inclusion(:status, @statuses)
     # Which component types exist is product vocabulary — sourced from the
     # canonical list rather than re-declared in the persistence layer.
     # Tinctures never execute server-side, hence executable_types.
@@ -115,7 +127,7 @@ defmodule Arca.Execution do
     execution
     |> cast(attrs, [:completed_at, :duration_ms, :status, :error_message, :output])
     |> validate_required([:completed_at, :duration_ms, :status])
-    |> validate_inclusion(:status, ["completed", "failed", "cancelled"])
+    |> validate_inclusion(:status, @terminal_statuses)
   end
 
   @doc """
@@ -418,9 +430,7 @@ defmodule Arca.Execution do
   def hash_input(input) when is_map(input) do
     case Jason.encode(input) do
       {:ok, json} ->
-        json
-        |> then(&:crypto.hash(:sha256, &1))
-        |> Base.encode16(case: :lower)
+        Cyfr.Digest.sha256_hex(json)
 
       {:error, _} ->
         nil

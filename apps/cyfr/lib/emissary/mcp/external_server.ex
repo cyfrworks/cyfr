@@ -22,7 +22,6 @@ defmodule Emissary.MCP.ExternalServer do
 
   alias Emissary.MCP.Protocol
 
-  @default_timeout_ms 30_000
   @initialize_timeout_ms 15_000
   # Client-side deadline for a call_tool round-trip. The upstream timeout is
   # operator-settable per server (config timeout_ms), so the caller's wait
@@ -173,7 +172,11 @@ defmodule Emissary.MCP.ExternalServer do
       name: config[:name],
       url: config[:url],
       raw_headers: config[:headers] || %{},
-      timeout_ms: min(config[:timeout_ms] || @default_timeout_ms, @max_upstream_timeout_ms),
+      timeout_ms:
+        min(
+          config[:timeout_ms] || Emissary.MCP.ExternalServers.default_timeout_ms(),
+          @max_upstream_timeout_ms
+        ),
       athanor_id: athanor_id!(config)
     }
 

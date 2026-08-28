@@ -274,7 +274,7 @@ defmodule Emissary.MCP.ResourceRegistry do
       "name" => Map.get(resource, :name) || Map.get(resource, "name"),
       "description" => Map.get(resource, :description) || Map.get(resource, "description"),
       "mimeType" =>
-        Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || "application/json"
+        Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || Cyfr.MediaType.json()
     }
   end
 
@@ -284,7 +284,7 @@ defmodule Emissary.MCP.ResourceRegistry do
       "name" => Map.get(template, :name) || Map.get(template, "name"),
       "description" => Map.get(template, :description) || Map.get(template, "description"),
       "mimeType" =>
-        Map.get(template, :mimeType) || Map.get(template, "mimeType") || "application/json"
+        Map.get(template, :mimeType) || Map.get(template, "mimeType") || Cyfr.MediaType.json()
     }
   end
 end

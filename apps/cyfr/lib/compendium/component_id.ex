@@ -29,8 +29,8 @@ defmodule Compendium.ComponentId do
     component_type = component_type || ""
 
     hash =
-      :crypto.hash(:sha256, "#{athanor_id}:#{publisher}:#{name}:#{version}:#{component_type}")
-      |> Base.encode16(case: :lower)
+      "#{athanor_id}:#{publisher}:#{name}:#{version}:#{component_type}"
+      |> Cyfr.Digest.sha256_hex()
       |> binary_part(0, 16)
 
     "comp_#{hash}"

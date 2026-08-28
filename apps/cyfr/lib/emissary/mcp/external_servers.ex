@@ -24,6 +24,10 @@ defmodule Emissary.MCP.ExternalServers do
 
   @default_timeout_ms 30_000
 
+  @doc "The default upstream call timeout for a server whose config names none."
+  @spec default_timeout_ms() :: pos_integer()
+  def default_timeout_ms, do: @default_timeout_ms
+
   @doc """
   The keyword config `Emissary.MCP.ExternalServerSupervisor.ensure_started/1`
   takes, from a stored row or a freshly-built `%{name:, url:, config:}`.

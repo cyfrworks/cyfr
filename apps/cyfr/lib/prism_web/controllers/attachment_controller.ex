@@ -72,7 +72,7 @@ defmodule PrismWeb.AttachmentController do
   end
 
   defp serve_type(type) when type in @inline_types, do: type
-  defp serve_type(_), do: "application/octet-stream"
+  defp serve_type(_), do: Cyfr.MediaType.binary()
 
   defp disposition(filename) do
     safe = filename |> to_string() |> String.replace(~s("), "")

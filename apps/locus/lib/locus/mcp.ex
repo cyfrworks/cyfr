@@ -96,7 +96,10 @@ defmodule Locus.MCP do
   # Intentionally public (no auth check): stateless WASM binary validation.
   # Caller supplies the bytes; no server-side data is exposed.
   # Max base64 input size: 50MB binary ≈ 67MB base64
-  @max_base64_size 67_108_864
+  # 64 MiB — the shared memory ceiling's spelling
+  # (`Sanctum.Limits.default_max_memory_bytes/0`), reused as the base64
+  # input bound so the two cannot drift apart.
+  @max_base64_size Sanctum.Limits.default_max_memory_bytes()
 
   def handle("build", %Context{} = _ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
       when is_binary(wasm_base64) do

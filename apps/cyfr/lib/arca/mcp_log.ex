@@ -32,6 +32,12 @@ defmodule Arca.McpLog do
   import Ecto.Changeset
   import Ecto.Query
 
+  # The request-log status vocabulary, in one place like its sibling stores.
+  @statuses ~w(pending success error)
+
+  @doc "Every status a log row can carry."
+  def statuses, do: @statuses
+
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
 
@@ -73,7 +79,7 @@ defmodule Arca.McpLog do
     %__MODULE__{}
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ["pending", "success", "error"])
+    |> validate_inclusion(:status, @statuses)
   end
 
   @doc """
@@ -82,7 +88,7 @@ defmodule Arca.McpLog do
   def update_changeset(log, attrs) do
     log
     |> cast(attrs, [:status, :duration_ms, :routed_to, :error_code, :output, :error])
-    |> validate_inclusion(:status, ["pending", "success", "error"])
+    |> validate_inclusion(:status, @statuses)
   end
 
   @doc """

@@ -54,6 +54,18 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
     assert zero.max_concurrent_tasks == 1 and default.max_concurrent_tasks == 10
   end
 
+  test "zero byte ceilings equal the shared Limits defaults" do
+    # The doctrine keeps ZeroAuthority's numbers literal (never derived),
+    # but they are meant to be the SAME numbers Sanctum.Limits owns for
+    # everyone else. This pin turns a divergence — either side edited
+    # alone — into a red test instead of a silent split.
+    zero = Authority.zero_limits()
+
+    assert zero.max_request_size == Limits.default_max_request_size()
+    assert zero.max_memory_bytes == Limits.default_max_memory_bytes()
+    assert zero.max_response_size == Limits.default_max_response_size()
+  end
+
   test "zero budget admits exactly one spawn" do
     zero = Authority.zero()
 

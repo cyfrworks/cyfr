@@ -54,13 +54,13 @@ defmodule Compendium.MCP do
         uriTemplate: "compendium://components/{reference}",
         name: "Component Metadata",
         description: "Component metadata by OCI reference",
-        mimeType: "application/json"
+        mimeType: Cyfr.MediaType.json()
       },
       %{
         uriTemplate: "compendium://assets/{reference}/{path}",
         name: "Component Assets",
         description: "Static assets from components",
-        mimeType: "application/octet-stream"
+        mimeType: Cyfr.MediaType.binary()
       }
     ]
   end
@@ -100,7 +100,7 @@ defmodule Compendium.MCP do
     case Shared.resolve_component(ctx, reference) do
       {:ok, component, _ref} ->
         case Jason.encode(component) do
-          {:ok, json} -> {:ok, %{content: json, mimeType: "application/json"}}
+          {:ok, json} -> {:ok, %{content: json, mimeType: Cyfr.MediaType.json()}}
           {:error, _} -> {:error, "Failed to encode component as JSON"}
         end
 
@@ -128,7 +128,7 @@ defmodule Compendium.MCP do
 
           case Arca.get(ctx, asset_path) do
             {:ok, content} ->
-              {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
+              {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
 
             {:error, reason} ->
               Logger.error("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")

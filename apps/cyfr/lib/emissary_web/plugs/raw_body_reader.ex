@@ -36,7 +36,9 @@ defmodule EmissaryWeb.Plugs.RawBodyReader do
   payloads that exceed the per-chunk read length.
   """
 
-  @default_webhook_max_body_bytes 1_048_576
+  # The shared 1 MiB default (`Sanctum.Limits.default_max_request_size/0`),
+  # spelled by its owner rather than a sixth literal.
+  @default_webhook_max_body_bytes Sanctum.Limits.default_max_request_size()
 
   @doc """
   Plug.Parsers `:body_reader` callback.

@@ -49,7 +49,7 @@ defmodule Compendium.OCI.Blob do
           {:ok, binary()} | {:error, term()}
   def download(ctx, %Reference{} = ref, digest) do
     path = "/v2/#{ref.repository}/blobs/#{digest}"
-    headers = [{"accept", "application/octet-stream"}]
+    headers = [{"accept", Cyfr.MediaType.binary()}]
 
     case Transport.request(ctx, :get, path, ref, headers) do
       {:ok, 200, _headers, body} ->
@@ -97,7 +97,7 @@ defmodule Compendium.OCI.Blob do
   """
   @spec upload(Context.t() | nil, Reference.t(), binary(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
-  def upload(ctx, %Reference{} = ref, content, content_type \\ "application/octet-stream") do
+  def upload(ctx, %Reference{} = ref, content, content_type \\ Cyfr.MediaType.binary()) do
     digest = compute_digest(content)
 
     # Check if blob already exists

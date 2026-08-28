@@ -289,12 +289,12 @@ defmodule Emissary.MCP.Router do
   defp read_resource(ctx, uri, _id) do
     case ResourceRegistry.read(ctx, uri) do
       {:ok, content} ->
-        mime_type = Map.get(content, :mimeType, "application/json")
+        mime_type = Map.get(content, :mimeType, Cyfr.MediaType.json())
         encoded = encode_content(content)
 
         # Per MCP spec: binary content uses "blob" field, text uses "text" field
         content_entry =
-          if binary_mime?(mime_type) do
+          if Cyfr.MediaType.binary_mime?(mime_type) do
             %{"uri" => uri, "mimeType" => mime_type, "blob" => encoded}
           else
             %{"uri" => uri, "mimeType" => mime_type, "text" => encoded}
@@ -344,16 +344,6 @@ defmodule Emissary.MCP.Router do
     Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
     "The tool call failed."
   end
-
-  defp binary_mime?("application/octet-stream"), do: true
-  defp binary_mime?("image/" <> _), do: true
-  defp binary_mime?("audio/" <> _), do: true
-  defp binary_mime?("video/" <> _), do: true
-  defp binary_mime?("application/pdf"), do: true
-  defp binary_mime?("application/zip"), do: true
-  defp binary_mime?("application/gzip"), do: true
-  defp binary_mime?("application/wasm"), do: true
-  defp binary_mime?(_), do: false
 
   defp encode_content(%{content: content}) when is_binary(content), do: content
 
