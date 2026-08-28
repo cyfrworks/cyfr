@@ -246,15 +246,14 @@ defmodule Sanctum.Vault.OAuthGrant do
   # ---------------------------------------------------------------------------
 
   defp fetch_pending(state) do
-    # Single-use: consumed on read — a replayed callback with the same
-    # state finds nothing.
-    case Arca.Cache.get({:vault_oauth_pending, state}) do
-      {:ok, pending} ->
-        Arca.Cache.invalidate({:vault_oauth_pending, state})
-        {:ok, pending}
-
-      :miss ->
-        {:error, :unknown_state}
+    # Single-use: consumed atomically — a replayed or concurrent callback
+    # with the same state finds nothing. (A read-then-delete here was the
+    # race `Sanctum.Consent.Proof.Memory`'s moduledoc names as its
+    # counter-example: two concurrent callbacks both read the pending
+    # record before either deleted it.)
+    case Arca.Cache.take({:vault_oauth_pending, state}) do
+      {:ok, pending} -> {:ok, pending}
+      :miss -> {:error, :unknown_state}
     end
   end
 
@@ -301,12 +300,25 @@ defmodule Sanctum.Vault.OAuthGrant do
   # Applying the grant
   # ---------------------------------------------------------------------------
 
-  defp apply_grant(%{target: %{kind: :new} = target} = pending, bundle) do
-    with {:ok, json} <- Payload.encode_material(%{}, bundle) do
-      id = Cyfr.UUID7.generate_id("vlt")
-      aad = CipherAAD.vault_entry(pending.athanor_id, id, target.provider)
-      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+  # A cipher fault (a missing or rotated keyring — `Cipher.encrypt/2`
+  # RAISES on those; its success type is `{:ok, binary}` only) at this
+  # point is unrecoverable either way: the single-use authorization code
+  # is already spent. But a typed refusal reaches the operator with the
+  # cause; an unrescued raise was a 500 with the grant half-applied.
+  defp seal(json, aad) do
+    Sanctum.Cipher.encrypt(json, aad)
+  rescue
+    e ->
+      Logger.error("[Sanctum.Vault.OAuthGrant] credential seal failed: #{Exception.message(e)}")
+      {:error, "credential seal failed — check the crypto keyring"}
+  end
 
+  defp apply_grant(%{target: %{kind: :new} = target} = pending, bundle) do
+    id = Cyfr.UUID7.generate_id("vlt")
+    aad = CipherAAD.vault_entry(pending.athanor_id, id, target.provider)
+
+    with {:ok, json} <- Payload.encode_material(%{}, bundle),
+         {:ok, sealed} <- seal(json, aad) do
       attrs = %{
         id: id,
         athanor_id: pending.athanor_id,
@@ -337,13 +349,10 @@ defmodule Sanctum.Vault.OAuthGrant do
     with {:ok, entry} <- Arca.VaultStorage.get(pending.athanor_id, target.entry_id),
          :ok <- still_living(entry) do
       fields = current_fields(entry)
+      aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
-      with {:ok, json} <- Payload.encode_material(fields, bundle) do
-        aad =
-          CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
-
-        {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-
+      with {:ok, json} <- Payload.encode_material(fields, bundle),
+           {:ok, sealed} <- seal(json, aad) do
         case Arca.VaultStorage.rotate_payload(
                entry.athanor_id,
                entry.id,
@@ -383,12 +392,10 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp retry_grant(%{target: target} = pending, bundle) do
     case Arca.VaultStorage.get(pending.athanor_id, target.entry_id) do
       {:ok, entry} ->
-        with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle) do
-          aad =
-            CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+        aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
-          {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-
+        with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle),
+             {:ok, sealed} <- seal(json, aad) do
           case Arca.VaultStorage.rotate_payload(
                  entry.athanor_id,
                  entry.id,
@@ -502,8 +509,19 @@ defmodule Sanctum.Vault.OAuthGrant do
     )
   end
 
+  @doc """
+  The OAuth callback route, spelled once: the router mounts it, the
+  callback controller rebuilds the redirect_uri from it, and the grant
+  sends it to the provider — three copies of one wire contract collapse
+  to this accessor (a moved route silently broke the flow before).
+  """
+  @spec callback_path() :: String.t()
+  def callback_path, do: "/auth/oauth/callback"
+
+  # The HOST still comes from the endpoint's configured URL — the one
+  # place the deployment's public origin is known; only the path is ours.
   defp build_redirect_uri do
-    EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
+    EmissaryWeb.Endpoint.url() <> callback_path()
   end
 
   defp decode_map(nil), do: %{}

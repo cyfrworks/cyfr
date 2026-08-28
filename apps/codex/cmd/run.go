@@ -141,7 +141,6 @@ Run without arguments for interactive selection.`,
 			} else {
 				fmt.Println("Execution cancelled.")
 			}
-			_ = result
 			return nil
 		}
 

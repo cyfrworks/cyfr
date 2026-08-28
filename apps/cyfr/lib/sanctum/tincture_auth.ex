@@ -61,6 +61,13 @@ defmodule Sanctum.TinctureAuth do
   @spec access_token_max_age() :: pos_integer()
   def access_token_max_age, do: @access_token_max_age
 
+  # The signing key comes from config, not from the web endpoint's module:
+  # the auth domain must not reach into the web layer for key material.
+  # In every deployed env this is the same secret the endpoint signs with
+  # (runtime.exs and dev.exs set both from one value), read through the
+  # domain's own key.
+  defp signing_secret, do: Application.fetch_env!(:cyfr, :secret_key_base)
+
   @doc """
   Mint a short-lived tincture access token from an authenticated context.
 
@@ -71,7 +78,7 @@ defmodule Sanctum.TinctureAuth do
   """
   @spec issue_access_token(Context.t()) :: String.t()
   def issue_access_token(%Context{} = ctx) do
-    Phoenix.Token.sign(EmissaryWeb.Endpoint, @access_token_salt, %{
+    Phoenix.Token.sign(signing_secret(), @access_token_salt, %{
       u: ctx.user_id,
       a: ctx.athanor_id,
       n: ctx.namespace,
@@ -150,7 +157,7 @@ defmodule Sanctum.TinctureAuth do
   end
 
   defp verify_access_token(token) do
-    case Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
+    case Phoenix.Token.verify(signing_secret(), @access_token_salt, token,
            max_age: @access_token_max_age
          ) do
       {:ok, %{u: user_id, a: athanor_id, n: namespace} = payload} ->

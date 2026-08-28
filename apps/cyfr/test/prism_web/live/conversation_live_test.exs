@@ -28,11 +28,21 @@ defmodule PrismWeb.ConversationLiveTest do
     :ok
   end
 
+  # Attributed like production events: the runner drops an event that names
+  # no execution (the guarded clause is the contract, not a convenience).
   defp emit(runner, kind, data) do
-    send(runner, {:execution_event, %{type: "emit", data: Map.put(data, "kind", kind)}})
+    %{execution_id: eid} = :sys.get_state(runner)
+
+    send(
+      runner,
+      {:execution_event, %{execution_id: eid, type: "emit", data: Map.put(data, "kind", kind)}}
+    )
   end
 
-  defp complete(runner), do: send(runner, {:execution_event, %{type: "complete", data: %{}}})
+  defp complete(runner) do
+    %{execution_id: eid} = :sys.get_state(runner)
+    send(runner, {:execution_event, %{execution_id: eid, type: "complete", data: %{}}})
+  end
 
   test "the athanor's root is the chat, and a sent message becomes everyone's thread", %{
     conn: conn

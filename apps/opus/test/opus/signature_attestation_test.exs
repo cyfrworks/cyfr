@@ -17,9 +17,13 @@ defmodule Opus.SignatureAttestationTest do
       assert :ok = SignatureAttestation.verify(component, nil, nil)
     end
 
-    test "allows nil source (legacy local components)" do
+    test "refuses a nil source — an unclassified value, not a legacy pass" do
+      # The components.source column is NOT NULL with a default, so a nil
+      # here is a malformed caller, never a real row; the closed source
+      # vocabulary fails closed on it like any other unknown value.
       component = %{source: nil, signature_verified: false}
-      assert :ok = SignatureAttestation.verify(component, nil, nil)
+      assert {:error, message} = SignatureAttestation.verify(component, nil, nil)
+      assert message =~ "signature policy undefined"
     end
 
     test "allows filesystem source even with identity/issuer requested" do

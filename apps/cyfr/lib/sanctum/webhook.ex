@@ -609,8 +609,8 @@ defmodule Sanctum.Webhook do
       description: row.description,
       enabled: row.enabled,
       rate_limit: row.rate_limit,
-      created_at: format_datetime(row.inserted_at),
-      rotated_at: format_datetime(row.rotated_at)
+      created_at: Cyfr.Time.iso8601(row.inserted_at),
+      rotated_at: Cyfr.Time.iso8601(row.rotated_at)
     }
   end
 
@@ -620,7 +620,7 @@ defmodule Sanctum.Webhook do
         map
 
       {:error, reason} ->
-        Logger.warning(
+        Logger.error(
           "[Sanctum.Webhook] corrupted input_template for slug=#{inspect(slug)} reason=#{inspect(reason)} — falling back to empty map"
         )
 
@@ -656,8 +656,4 @@ defmodule Sanctum.Webhook do
   # writing context via the single `Sanctum.CipherAAD` definition.
   defp webhook_aad(webhook),
     do: Sanctum.CipherAAD.webhook_secret(webhook.athanor_id, webhook.name)
-
-  defp format_datetime(nil), do: nil
-  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp format_datetime(other), do: other
 end

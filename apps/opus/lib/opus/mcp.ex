@@ -52,7 +52,7 @@ defmodule Opus.MCP do
         uriTemplate: "opus://executions/{id}",
         name: "Execution State",
         description: "Get execution state by ID",
-        mimeType: "application/json"
+        mimeType: Cyfr.MediaType.json()
       },
       %{
         uriTemplate: "opus://executions/{id}/logs",
@@ -135,7 +135,7 @@ defmodule Opus.MCP do
         end
 
       {:error, :not_found} ->
-        {:error, "Execution not found: #{exec_id}"}
+        {:error, {:not_found, "Execution", exec_id}}
     end
   end
 
@@ -150,7 +150,7 @@ defmodule Opus.MCP do
         {:ok, logs}
 
       {:error, :not_found} ->
-        {:error, "Execution not found: #{exec_id}"}
+        {:error, {:not_found, "Execution", exec_id}}
     end
   end
 
@@ -183,7 +183,7 @@ defmodule Opus.MCP do
           # A missing row reports as missing; the caller learns nothing
           # about executions outside its chain either way.
           {:error, :not_found} ->
-            {:error, "Execution not found: #{execution_id}"}
+            {:error, {:not_found, "Execution", execution_id}}
         end
 
       _ ->
@@ -202,8 +202,8 @@ defmodule Opus.MCP do
       "Status: #{record.status}",
       "Component Type: #{record.component_type || :reagent}",
       "Component Digest: #{record.component_digest || "unknown"}",
-      "Started: #{format_datetime(record.started_at)}",
-      "Completed: #{format_datetime(record.completed_at)}",
+      "Started: #{Cyfr.Time.iso8601(record.started_at) || "N/A"}",
+      "Completed: #{Cyfr.Time.iso8601(record.completed_at) || "N/A"}",
       "Duration: #{record.duration_ms || 0}ms",
       "",
       "Reference: #{inspect(record.reference)}",
@@ -240,9 +240,6 @@ defmodule Opus.MCP do
     Enum.join(lines, "\n")
   end
 
-  defp format_datetime(nil), do: "N/A"
-  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-
   # ============================================================================
   # ToolProvider Protocol (validated at runtime)
   # ============================================================================
@@ -271,7 +268,10 @@ defmodule Opus.MCP do
             # in-chain plane rather than serve a number that means nothing
             # to the caller.
             "status" => %{kind: :read, planes: [:external], permission: :execute},
-            # Releasing every athanor's slots is the operator's lever alone.
+            # Releasing every athanor's slots is the operator's lever
+            # alone. Until the in-flight executions it released drain, the
+            # node runs OVER-admitted by that many slots — the recovery
+            # trades a wedged semaphore for a temporary over-cap.
             "force_release" => %{kind: :destructive, planes: [:external], scope: :platform}
           }
         },
@@ -503,7 +503,7 @@ defmodule Opus.MCP do
         end
 
       {:error, :not_found} ->
-        {:error, "Execution not found: #{execution_id}"}
+        {:error, {:not_found, "Execution", execution_id}}
     end
   end
 
@@ -521,12 +521,18 @@ defmodule Opus.MCP do
         } = args
       ) do
     with :ok <- check_chain_scope(ctx, execution_id, args) do
-      case Opus.Executor.cancel(ctx, execution_id) do
+      # Through the port for the same two reasons run/run_stream go through
+      # it (a stubbed :execution_impl must intercept, available?/0 must
+      # gate) — Opus delegates cancel straight back to the executor, so
+      # this is one dispatch hop, not a behavior change. status and
+      # force_release stay engine-direct: the port is the execution plane,
+      # not a general engine facade (Opus.Host says why).
+      case Cyfr.Execution.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}
 
         {:error, :not_found} ->
-          {:error, "Execution not found: #{execution_id}"}
+          {:error, {:not_found, "Execution", execution_id}}
 
         {:error, :not_cancellable} ->
           {:error, "Execution already completed, failed, or cancelled"}

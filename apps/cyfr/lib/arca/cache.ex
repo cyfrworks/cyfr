@@ -47,7 +47,16 @@ defmodule Arca.Cache do
   @spec init() :: :ok
   def init do
     if :ets.whereis(@table_name) == :undefined do
-      :ets.new(@table_name, [:set, :public, :named_table, read_concurrency: true])
+      :ets.new(@table_name, [
+        :set,
+        :public,
+        :named_table,
+        read_concurrency: true,
+        # Written on hot paths (HTTP-stream chunks, session state, tool
+        # catalogs) from many processes — without this, every write takes
+        # a whole-table lock. The sibling limiter tables set it too.
+        write_concurrency: true
+      ])
     end
 
     :ok
@@ -102,6 +111,36 @@ defmodule Arca.Cache do
     ArgumentError ->
       Logger.warning(
         "[Arca.Cache] ETS table #{@table_name} not available during get(#{inspect(key)})"
+      )
+
+      :miss
+  end
+
+  @doc """
+  Atomically get AND remove a cached value — `:ets.take/2`, one operation.
+
+  For single-use state (OAuth pending records, one-shot tickets): a
+  `get/1` followed by a separate delete leaves a window where two
+  concurrent readers both see the value, which is exactly the replay the
+  single-use contract exists to refuse.
+  """
+  @spec take(term()) :: {:ok, term()} | :miss
+  def take(key) do
+    case :ets.take(@table_name, key) do
+      [{^key, value, expires_at}] ->
+        if System.monotonic_time(:millisecond) < expires_at do
+          {:ok, value}
+        else
+          :miss
+        end
+
+      [] ->
+        :miss
+    end
+  rescue
+    ArgumentError ->
+      Logger.warning(
+        "[Arca.Cache] ETS table #{@table_name} not available during take(#{inspect(key)})"
       )
 
       :miss

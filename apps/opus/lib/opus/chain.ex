@@ -150,11 +150,14 @@ defmodule Opus.Chain do
       start =
         Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
-          Registry.register(Opus.ExecutionRegistry, execution_id, :running)
           # The task holds the charged slot: a kill through the registry
           # (execution.cancel) skips the `after`, so the guard's :DOWN
-          # compensation releases it instead.
+          # compensation releases it instead. Guard BEFORE registering —
+          # the registry is what cancel kills through, so the compensation
+          # must exist before the pid is findable, or a kill in the gap
+          # leaked the slot step_invoke charged.
           Authority.guard_invoke(decision.authority)
+          Registry.register(Opus.ExecutionRegistry, execution_id, :running)
 
           try do
             execute_child(decision, input, opts)

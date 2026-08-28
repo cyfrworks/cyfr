@@ -40,7 +40,7 @@ defmodule Compendium.OCI.Cache do
         if BlobUtil.compute_digest(bytes) == digest do
           {:ok, bytes}
         else
-          Logger.warning("[OCI.Cache.get_blob] Corrupt cache entry for #{digest}, removing")
+          Logger.error("[OCI.Cache.get_blob] Corrupt cache entry for #{digest}, removing")
           Arca.delete(ctx(), blob_segments(hex))
           :miss
         end

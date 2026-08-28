@@ -293,10 +293,7 @@ defmodule Emissary.MCP.RequestLog do
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value
 
-  defp encode_json(value) do
-    case Jason.encode(value) do
-      {:ok, encoded} -> encoded
-      {:error, _} -> inspect(value)
-    end
-  end
+  # Never inspect/1 into a stored column — Elixir term syntax in a JSON
+  # field reads as data to every later decoder.
+  defp encode_json(value), do: Cyfr.Json.safe_encode(value)
 end

@@ -247,6 +247,29 @@ defmodule Arca.ConversationStorage do
     end)
   end
 
+  @doc """
+  The newest `n` messages of a conversation, in ascending order.
+
+  The console's transcript view: `messages/3`'s `:limit` takes the OLDEST
+  rows (it bounds windowed turn assembly), which is the wrong end for a
+  reader opening a long-lived conversation.
+  """
+  @spec latest_messages(Context.t(), String.t(), pos_integer()) ::
+          [Message.t()] | {:error, term()}
+  def latest_messages(%Context{} = ctx, conversation_id, n)
+      when is_binary(conversation_id) and is_integer(n) and n > 0 do
+    Arca.Repo.Errors.with_db_rescue("ConversationStorage.latest_messages", fn ->
+      from(m in Message,
+        where: m.conversation_id == ^conversation_id,
+        order_by: [desc: m.seq],
+        limit: ^n
+      )
+      |> QueryHelpers.where_tenant(ctx)
+      |> Repo.all()
+      |> Enum.reverse()
+    end)
+  end
+
   @doc "One message of the context's athanor."
   @spec get_message(Context.t(), String.t()) :: {:ok, Message.t()} | {:error, :not_found}
   def get_message(%Context{} = ctx, id) when is_binary(id) do

@@ -134,7 +134,12 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 					} else if client.SessionID != "" {
 						cfg.Current().SessionID = client.SessionID
 					}
-					_ = cfg.Save()
+					if err := cfg.Save(); err != nil {
+						// Login already succeeded server-side; a failed local save
+						// must say so or the next command's "not authenticated"
+						// has no visible cause.
+						fmt.Fprintf(os.Stderr, "warning: could not persist session locally: %v\n", err)
+					}
 				}
 
 				// Swap the in-flight MCP client onto the newly issued Sanctum
@@ -583,7 +588,9 @@ var logoutCmd = &cobra.Command{
 		cfg, _ := config.Load()
 		if cfg.Current() != nil {
 			cfg.Current().SessionID = ""
-			_ = cfg.Save()
+			if err := cfg.Save(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not clear the saved session: %v\n", err)
+			}
 		}
 
 		result, err := client.CallTool(cmd.Context(), "session", map[string]any{

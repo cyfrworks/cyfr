@@ -31,12 +31,16 @@ defmodule Aqua.Turn do
   @doc "The athanor's orchestrators — `[%{\"name\", \"title\"}]`, manifest order."
   @spec orchestrators(Context.t()) :: [map()]
   def orchestrators(%Context{} = ctx) do
-    case call_aqua(ctx, %{"action" => "list", "type" => "orchestrator"}) do
+    case Aqua.AgentConfig.call_aqua(ctx, %{"action" => "list", "type" => "orchestrator"}) do
       {:ok, result} ->
         (result["guides"] || [])
         |> Enum.map(fn g -> %{"name" => g["name"], "title" => g["title"] || g["name"]} end)
         |> Enum.reject(fn g -> is_nil(g["name"]) end)
 
+      # Fail-open BY CHOICE: a broken aqua tool reads as "no orchestrators"
+      # — the chat still renders and a send still runs on the fallback
+      # prompt, which beats refusing the whole conversation for a catalog
+      # read. The runner logs the underlying failure when it matters.
       _ ->
         []
     end
@@ -47,7 +51,9 @@ defmodule Aqua.Turn do
   def orchestrator(_ctx, nil), do: nil
 
   def orchestrator(%Context{} = ctx, name) when is_binary(name) do
-    case call_aqua(ctx, %{"action" => "get", "name" => name}) do
+    case Aqua.AgentConfig.call_aqua(ctx, %{"action" => "get", "name" => name}) do
+      # Same deliberate fail-open as orchestrators/1: nil means "run on
+      # the fallback prompt", never "refuse the turn".
       {:ok, %{"type" => "orchestrator"} = detail} ->
         %{
           "name" => name,
@@ -212,11 +218,17 @@ defmodule Aqua.Turn do
         "input" => input
       })
 
+    # Normalize once, match one spelling — keeping both an atom-key and a
+    # string-key clause after normalizing would leave dead defensive code.
     case result do
-      {:ok, %{execution_id: eid}} -> {:ok, eid}
-      {:ok, %{"execution_id" => eid}} -> {:ok, eid}
-      {:ok, other} -> {:error, {:no_execution_id, other}}
-      {:error, reason} -> {:error, reason}
+      {:ok, reply} ->
+        case Aqua.AgentConfig.stringify_deep(reply) do
+          %{"execution_id" => eid} -> {:ok, eid}
+          other -> {:error, {:no_execution_id, other}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -426,21 +438,6 @@ defmodule Aqua.Turn do
     case target do
       {_entry, i} -> List.update_at(activity, i, &%{&1 | status: :done, preview: preview})
       nil -> activity ++ [%{tool: tool, status: :done, preview: preview}]
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # aqua tool
-  # ---------------------------------------------------------------------------
-
-  # Every aqua-tool call goes through here so guide maps arrive with ONE key
-  # spelling: in-process results are atom-keyed, wire round-trips
-  # string-keyed.
-  @doc false
-  def call_aqua(%Context{} = ctx, args) do
-    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
-      {:ok, result} -> {:ok, Aqua.AgentConfig.stringify_deep(result)}
-      other -> other
     end
   end
 end

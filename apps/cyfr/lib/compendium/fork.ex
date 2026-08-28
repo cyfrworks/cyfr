@@ -113,8 +113,18 @@ defmodule Compendium.Fork do
 
   defp check_target_not_exists(ctx, target_base, target_ref_str) do
     case Arca.get(ctx, target_base ++ [ComponentPath.manifest_name()]) do
-      {:ok, _} -> {:error, "Target already exists: #{target_ref_str}"}
-      {:error, _} -> :ok
+      {:ok, _} ->
+        {:error, "Target already exists: #{target_ref_str}"}
+
+      {:error, :not_found} ->
+        :ok
+
+      # A storage fault must not read as "the target is free" — the fork
+      # would then commit over a component this check could not see. The
+      # check-then-act window that remains is closed by commit_unit's
+      # per-unit lock.
+      {:error, reason} ->
+        {:error, "Could not check the fork target: #{inspect(reason)}"}
     end
   end
 

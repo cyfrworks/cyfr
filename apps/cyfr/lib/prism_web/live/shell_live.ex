@@ -58,6 +58,17 @@ defmodule PrismWeb.ShellLive do
 
     socket =
       if connected?(socket) do
+        # The chat and members pages subscribe to this topic themselves;
+        # the shell must too — it invokes tinctures with its mount-time
+        # context, and it was the one surface an archive did not reach
+        # until the next mount (the HTTP tincture path revalidates per
+        # request; the conversation runner stops itself).
+        ctx = socket.assigns.context
+
+        if ctx.athanor_id do
+          Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
+        end
+
         load_tinctures(socket)
       else
         socket
@@ -121,7 +132,7 @@ defmodule PrismWeb.ShellLive do
   def handle_event("refresh_tinctures", _params, socket) do
     ctx = socket.assigns.context
     lv = self()
-    scan_key = {:tincture_scan_running, ctx.athanor_id}
+    scan_key = Arca.Cache.Keys.tincture_scan_running(ctx.athanor_id)
 
     case Arca.Cache.get(scan_key) do
       {:ok, _} ->
@@ -585,7 +596,10 @@ defmodule PrismWeb.ShellLive do
 
     key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}
 
-    match?({:deny, _}, Cyfr.RateLimiter.check(key, max, 60_000))
+    match?(
+      {:deny, _},
+      Cyfr.RateLimiter.check(key, max, EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms())
+    )
   end
 
   defp handle_invoke(socket, window_id, tincture, msg) do
@@ -640,6 +654,25 @@ defmodule PrismWeb.ShellLive do
      |> load_tinctures()
      |> put_flash(:info, "Tinctures registered and refreshed")}
   end
+
+  # An archived athanor must let go of already-mounted shells — every
+  # ingress gate refuses it, and a socket invoking tinctures from before
+  # the archive must not be the exception.
+  def handle_info({:notify, athanor_id, :athanor_changed, _payload}, socket) do
+    ctx = socket.assigns.context
+
+    if athanor_id == ctx.athanor_id and not Sanctum.Tenancy.Athanors.active?(athanor_id) do
+      {:noreply,
+       socket
+       |> put_flash(:error, "This athanor was archived.")
+       |> redirect(to: "/")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Other tray traffic on the athanor's topic is for the topbar, not the shell.
+  def handle_info({:notify, _athanor_id, _kind, _payload}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Logger.debug("[ShellLive] unexpected message: #{inspect(msg)}")

@@ -96,10 +96,12 @@ defmodule Arca.Overlay do
   alias Sanctum.Context
 
   # One origin mark per materialized unit, at `meta/origin/{unit...}` —
-  # under the reserved, non-overlaid `meta/` root: invisible to every
-  # union merge and diff, honestly counted by the cap, mutable only by
-  # the internal-write scope.
-  @origin_root ["meta", "origin"]
+  # under the reserved, non-overlaid root the layout table names (derived,
+  # not re-spelled; the destructure asserts the layout still has exactly
+  # one tenant-reserved root): invisible to every union merge and diff,
+  # honestly counted by the cap, mutable only by the internal-write scope.
+  [reserved_root] = Arca.Storage.reserved_roots()
+  @origin_root [reserved_root, "origin"]
 
   @internal_writes_key {__MODULE__, :internal_writes}
 

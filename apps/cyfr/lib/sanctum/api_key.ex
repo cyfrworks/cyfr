@@ -362,7 +362,7 @@ defmodule Sanctum.ApiKey do
           {:ok, key_type} ->
             new_key = generate_key(key_type)
             now = DateTime.utc_now() |> DateTime.to_iso8601()
-            scope_list = decode_json(row.scope, [])
+            scope_list = Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey")
 
             case Arca.ApiKeyStorage.rotate_key(
                    athanor_id,
@@ -463,7 +463,7 @@ defmodule Sanctum.ApiKey do
         {:error, :revoked}
 
       {:ok, row} ->
-        ip_allowlist = decode_json(row.ip_allowlist, nil)
+        ip_allowlist = Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.ApiKey")
 
         cond do
           not Sanctum.Tenancy.channel_active?(row.athanor_id, row.created_by) ->
@@ -545,9 +545,9 @@ defmodule Sanctum.ApiKey do
       id: row.id,
       name: row.name,
       type: key_type,
-      scope: decode_json(row.scope, []),
+      scope: Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey"),
       rate_limit: row.rate_limit,
-      ip_allowlist: decode_json(row.ip_allowlist, nil),
+      ip_allowlist: Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.ApiKey"),
       user_id: row.created_by,
       athanor_id: row.athanor_id
     }
@@ -674,33 +674,13 @@ defmodule Sanctum.ApiKey do
       name: row.name,
       type: key_type,
       key_prefix: (row.key_prefix || "") <> "...",
-      scope: decode_json(row.scope, []),
+      scope: Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey"),
       rate_limit: row.rate_limit,
-      ip_allowlist: decode_json(row.ip_allowlist, nil),
-      created_at: format_datetime(row.inserted_at),
-      rotated_at: format_datetime(row.rotated_at)
+      ip_allowlist: Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.ApiKey"),
+      created_at: Cyfr.Time.iso8601(row.inserted_at),
+      rotated_at: Cyfr.Time.iso8601(row.rotated_at)
     }
   end
-
-  defp decode_json(nil, default), do: default
-
-  defp decode_json(json, default) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, value} ->
-        value
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Sanctum.ApiKey] Failed to decode JSON field: #{inspect(reason)}, input: #{String.slice(json, 0, 100)}. Using default: #{inspect(default)}"
-        )
-
-        default
-    end
-  end
-
-  defp format_datetime(nil), do: nil
-  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp format_datetime(other), do: other
 
   # The athanor every key path keys on, behind the tenant chokepoint: an
   # athanor-less context raises before it can touch any row.

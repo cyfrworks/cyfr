@@ -29,10 +29,13 @@ defmodule Emissary.MCP.ToolRegistry do
       # Call a tool
       ToolRegistry.call_external("retention", context, %{"action" => "get"})
 
-  ## Future: Distributed
+  ## One node, honestly
 
-  When running multiple workers, this registry will be extended to
-  track node availability and route using :pg or Horde.
+  This registry is single-node by design. An earlier note here promised
+  :pg/Horde routing across workers; `Opus.HostSurfaceTest` records why
+  that framing was wrong by two orders of magnitude — the engine names
+  ~40 cyfr modules, so a remote worker is a protocol project
+  (docs/0.6.0.md Stage 2), not a routing patch on this table.
   """
 
   use GenServer
@@ -59,8 +62,25 @@ defmodule Emissary.MCP.ToolRegistry do
   List all registered tools.
 
   Returns a list of tool definitions suitable for MCP tools/list response.
+
+  Memoized briefly: the raw build is an `:ets.match_object` table scan
+  over the whole shared cache on every `tools/list` request; the catalog
+  changes only at registration/refresh (which invalidates the memo), so
+  the short TTL is a backstop, not the freshness mechanism.
   """
   def list_tools do
+    case Arca.Cache.get(:mcp_tool_list) do
+      {:ok, tools} ->
+        tools
+
+      :miss ->
+        tools = build_tool_list()
+        Arca.Cache.put(:mcp_tool_list, tools, :timer.seconds(60))
+        tools
+    end
+  end
+
+  defp build_tool_list do
     Arca.Cache.match({:mcp_tool, :_})
     |> Enum.map(fn {_key, {_module, meta}} ->
       name = meta.name
@@ -138,10 +158,14 @@ defmodule Emissary.MCP.ToolRegistry do
   # cache key, which is this module's private representation.
   def register_tool(name, module, meta, ttl \\ @cache_ttl) do
     Arca.Cache.put({:mcp_tool, name}, {module, meta}, ttl)
+    Arca.Cache.invalidate(:mcp_tool_list)
   end
 
   @doc false
-  def unregister_tool(name), do: Arca.Cache.invalidate({:mcp_tool, name})
+  def unregister_tool(name) do
+    Arca.Cache.invalidate({:mcp_tool, name})
+    Arca.Cache.invalidate(:mcp_tool_list)
+  end
 
   @doc """
   Get a specific tool's definition.

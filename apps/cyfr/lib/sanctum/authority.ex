@@ -415,6 +415,10 @@ defmodule Sanctum.Authority do
 
   defp wire_resources(other), do: {:error, {:invalid_wire_resources, other}}
 
+  # Shape-validated only — the wire names its own budget id and cap. When
+  # `from_wire/1` gains a non-test caller (a remote worker), the budget
+  # must be RE-MINTED host-side rather than trusted from the wire: a
+  # worker that writes its own cap writes its own ceiling.
   defp wire_budget(%{"id" => id, "cap" => cap} = map)
        when is_binary(id) and id != "" and is_integer(cap) and cap >= 0 and map_size(map) == 2,
        do: {:ok, %Budget{id: id, cap: cap}}

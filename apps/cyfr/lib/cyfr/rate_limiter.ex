@@ -10,7 +10,16 @@ defmodule Cyfr.RateLimiter do
   bounded table with sessions, OAuth CSRF state and tool metadata let a flood of
   distinct IPs evict that security state (and forced an O(n) eviction scan on the
   hot path). Here the counters live in their own table, swept on a timer, so a
-  flood is contained to counters that self-expire within their window.
+  flood is contained to this table alone. The honest bound: the sweep
+  reclaims counters a few minutes past their window, so the table holds up
+  to a few minutes of DISTINCT key arrivals — small fixed rows, an
+  attacker buys table entries, never evictions of security state.
+
+  `check/3` is a read-then-count without a lock: N concurrent boundary
+  requests can each pass the `count >= max` read before any increments, so
+  the overshoot is off-by-concurrency, not off-by-one. Acceptable for a
+  rate limit (not a security boundary); the storage/authority caps make
+  the same call explicitly at their own sites.
 
   The transport plugs (`EmissaryWeb.Plugs.*RateLimit`) all share `check/3`:
 

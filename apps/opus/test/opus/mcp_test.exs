@@ -324,13 +324,15 @@ defmodule Opus.MCPTest do
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do
-      {:error, msg} =
+      # Typed at the provider; every boundary renders it to one sentence.
+      {:error, reason} =
         MCP.handle("execution", ctx, %{
           "action" => "logs",
           "execution_id" => "exec_nonexistent"
         })
 
-      assert msg =~ "not found"
+      assert reason == {:not_found, "Execution", "exec_nonexistent"}
+      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
     end
   end
 
@@ -345,13 +347,14 @@ defmodule Opus.MCPTest do
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do
-      {:error, msg} =
+      {:error, reason} =
         MCP.handle("execution", ctx, %{
           "action" => "cancel",
           "execution_id" => "exec_nonexistent"
         })
 
-      assert msg =~ "not found"
+      assert reason == {:not_found, "Execution", "exec_nonexistent"}
+      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
     end
 
     test "returns error for failed execution", %{ctx: ctx, ref: ref} do
@@ -849,9 +852,10 @@ defmodule Opus.MCPTest do
 
     test "returns error for non-existent execution", %{ctx: ctx} do
       uri = "opus://executions/exec_nonexistent"
-      {:error, msg} = MCP.read(ctx, uri)
+      {:error, reason} = MCP.read(ctx, uri)
 
-      assert msg =~ "not found"
+      assert reason == {:not_found, "Execution", "exec_nonexistent"}
+      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
     end
 
     test "parses execution ID correctly", %{ctx: ctx, ref: ref} do
@@ -903,9 +907,10 @@ defmodule Opus.MCPTest do
 
     test "returns error for non-existent execution logs", %{ctx: ctx} do
       uri = "opus://executions/exec_nonexistent/logs"
-      {:error, msg} = MCP.read(ctx, uri)
+      {:error, reason} = MCP.read(ctx, uri)
 
-      assert msg =~ "not found"
+      assert reason == {:not_found, "Execution", "exec_nonexistent"}
+      assert Emissary.MCP.ToolError.message(reason) =~ "not found"
     end
 
     test "includes error in logs for failed execution", %{ctx: ctx} do

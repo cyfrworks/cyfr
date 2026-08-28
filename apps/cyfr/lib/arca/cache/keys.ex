@@ -9,7 +9,9 @@ defmodule Arca.Cache.Keys do
   component) is built here — writers, readers, the invalidation in
   `Compendium.Registry`, and the caps in `Arca.Cache.Sweeper` (which
   pattern-matches the compiled-component key) all agree on the shape
-  because none of them spell it themselves.
+  because none of them spell it themselves. (Keys that carry no athanor —
+  a legal-bodies version, a device-login ticket, an OAuth pending state —
+  stay spelled at their single owner.)
   """
 
   @doc """
@@ -80,6 +82,13 @@ defmodule Arca.Cache.Keys do
 
   @doc "Match spec shape for every scope-usage counter of one athanor."
   def match_scope_usage(athanor_id), do: {:scope_usage, athanor_id, :_, :_}
+
+  @doc """
+  The per-athanor tincture-scan de-dup lock (the console's refresh
+  button). Used as mutual exclusion, so the Sweeper's protected-head list
+  names it: an evicted lock would admit a duplicate scan.
+  """
+  def tincture_scan_running(athanor_id), do: {:tincture_scan_running, athanor_id}
 
   @doc """
   An established caller memo — `Sanctum.Caller`'s short-TTL cache of one

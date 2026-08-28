@@ -676,23 +676,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     }
   end
 
-  defp format_datetime(nil), do: nil
-  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-
-  defp format_datetime(%NaiveDateTime{} = ndt),
-    do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
-
-  defp format_datetime(dt) when is_binary(dt) do
-    # Defensive: if a datetime ever arrives as a string without an offset,
-    # append "Z" to ensure valid ISO 8601.
-    if String.ends_with?(dt, "Z") or Regex.match?(~r/[+-]\d{2}:\d{2}$/, dt) do
-      dt
-    else
-      dt <> "Z"
-    end
-  end
-
-  defp format_datetime(dt), do: to_string(dt)
+  defp format_datetime(value), do: Cyfr.Time.iso8601(value)
 
   defp mcp_log_to_map(%Arca.McpLog{} = log) do
     %{
@@ -731,11 +715,14 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   defp decode_json(nil), do: nil
 
+  # A policy-audit field: corrupt JSON must read AS corruption, never
+  # silently pass through as a string where a map was recorded.
   defp decode_json(str) when is_binary(str) do
-    case Jason.decode(str) do
-      {:ok, val} -> val
-      _ -> str
-    end
+    Cyfr.Json.decode_or(
+      str,
+      %{"_decode_error" => "stored snapshot was not valid JSON"},
+      "Emissary.MCP.RecordsProvider"
+    )
   end
 
   defp decode_json(val), do: val

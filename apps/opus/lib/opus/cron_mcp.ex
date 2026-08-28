@@ -14,8 +14,6 @@ defmodule Opus.CronMCP do
 
   def service, do: "opus"
 
-  require Logger
-
   alias Sanctum.Context
 
   @max_schedules_per_athanor 25
@@ -427,19 +425,10 @@ defmodule Opus.CronMCP do
     }
   end
 
-  defp decode_json(nil), do: nil
-  defp decode_json(""), do: nil
-
-  defp decode_json(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, data} ->
-        data
-
-      _ ->
-        Logger.warning("[CronMCP] Failed to decode JSON: #{inspect(json)}")
-        nil
-    end
-  end
+  # Display plane: a corrupt stored column renders as null (logged); the
+  # scheduler's EXECUTION read of the same columns stays fail-closed
+  # (Opus.CronScheduler skips the run).
+  defp decode_json(value), do: Cyfr.Json.decode_or(value, nil, "Opus.CronMCP")
 
   # The storage layer answers typed reasons; this seam renders them.
   defp format_store_error(reason, id \\ nil)
@@ -490,12 +479,7 @@ defmodule Opus.CronMCP do
 
   defp maybe_resolve_reference(_ctx, _args, update_attrs), do: {:ok, update_attrs}
 
-  defp safe_encode(value) do
-    case Jason.encode(value) do
-      {:ok, json} -> json
-      {:error, _} -> ~s({"_encoding_error":"value not encodable"})
-    end
-  end
+  defp safe_encode(value), do: Cyfr.Json.safe_encode(value)
 
   # Binding a schedule to a profile mints a standing, attacker-timed
   # invocation conduit for that profile's authority — the consent

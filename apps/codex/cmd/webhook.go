@@ -283,7 +283,6 @@ var webhookRevokeCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Webhook '%s' revoked.\n", name)
 		}
-		_ = result
 		return nil
 	},
 }

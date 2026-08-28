@@ -107,6 +107,8 @@ defmodule Aqua.AgentConfig do
       listing =
         case catalyst_listing(ctx) do
           {:ok, components} -> components
+          # Fail-open by choice: no listing means sub-agents fall back to
+          # the parent's catalyst rather than the roster refusing to build.
           _ -> []
         end
 
@@ -117,6 +119,8 @@ defmodule Aqua.AgentConfig do
       end)
       |> Enum.reject(&is_nil/1)
     else
+      # Fail-open by choice: a broken aqua tool reads as "no sub-agents",
+      # not as a refused turn — the parent still runs.
       _ -> []
     end
   end

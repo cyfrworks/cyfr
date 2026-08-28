@@ -162,7 +162,14 @@ defmodule PrismWeb.ConversationLive do
     ConversationRunner.subscribe(conv.id, conv.athanor_id)
     live = ConversationRunner.state(conv.id, conv.athanor_id)
 
-    rows = Conversations.messages(ctx, conv.id)
+    # Newest window only: unbounded, this read loaded every row of a
+    # long-lived conversation into every viewer's socket. The runner's own
+    # turn assembly stays windowed separately (after_seq/upto_seq).
+    rows =
+      case Conversations.latest_messages(ctx, conv.id, 500) do
+        rows when is_list(rows) -> rows
+        {:error, _} -> []
+      end
 
     socket
     |> assign(:conversation, conv)
@@ -298,6 +305,11 @@ defmodule PrismWeb.ConversationLive do
 
     # The turn may be running in a thread this tab is not looking at: the
     # runner is the fact, not what this socket happens to be rendering.
+    # Check-then-act across a process boundary: a turn that starts in the
+    # window has its conversation deleted from under it — accepted, because
+    # the runner degrades cleanly (its next append re-fetches and gets
+    # :not_found), and serializing would mean starting a runner just to
+    # delete its conversation.
     if Aqua.ConversationRunner.turn_running?(ctx, id) do
       {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
     else

@@ -21,7 +21,7 @@ defmodule Opus.OAuthHandler do
 
   Follows the same pattern as `Opus.HttpHandler` and `Opus.StorageHandler`.
   Dispensed tokens are tracked by `Opus.OAuthTokenTracker`, a supervised
-  process owning a `:protected` ETS table — the host-function closure (running
+  process owning a `:private` ETS table — the host-function closure (running
   in the Wasmex process) records a token via a synchronous call, and
   `finalize_execution` (in the executor process) drains it for masking.
   """

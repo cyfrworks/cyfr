@@ -49,8 +49,11 @@ defmodule Opus.SignatureAttestation do
     stored_issuer = component["signer_issuer"] || component[:signer_issuer]
 
     cond do
-      # Local/filesystem components are trusted by ownership
-      source in [Compendium.Source.filesystem(), Compendium.Source.published(), nil] ->
+      # Local/filesystem components are trusted by ownership. `nil` is NOT
+      # in this list: a missing source is an unclassified value, and the
+      # closed-vocabulary arm below refuses it (the column is NOT NULL with
+      # a default, so a nil here is a malformed caller, not a real row).
+      source in [Compendium.Source.filesystem(), Compendium.Source.published()] ->
         :ok
 
       # OCI component with verification — check identity/issuer match if requested

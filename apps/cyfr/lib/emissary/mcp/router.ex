@@ -314,6 +314,10 @@ defmodule Emissary.MCP.Router do
           reason == :database_error ->
             {:error, :internal_error, "Failed to read resource: the store could not answer"}
 
+          # A typed tool refusal renders through its vocabulary.
+          Emissary.MCP.ToolError.reason?(reason) ->
+            {:error, :resource_not_found, Emissary.MCP.ToolError.message(reason)}
+
           # A binary reason is a handler's crafted, client-safe diagnosis
           # ("Invalid URI format: …", "No provider found for scheme …").
           is_binary(reason) ->
@@ -341,25 +345,21 @@ defmodule Emissary.MCP.Router do
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do
-    Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
-    "The tool call failed."
+    # Typed tool refusals render through their vocabulary — the same move
+    # Sanctum.Unauthorized gets above; everything else stays an internal
+    # term that must not be reflected.
+    if Emissary.MCP.ToolError.reason?(reason) do
+      Emissary.MCP.ToolError.message(reason)
+    else
+      Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
+      "The tool call failed."
+    end
   end
 
   defp encode_content(%{content: content}) when is_binary(content), do: content
 
-  defp encode_content(%{content: content}) do
-    case Jason.encode(content) do
-      {:ok, encoded} -> encoded
-      {:error, _} -> inspect(content)
-    end
-  end
-
-  defp encode_content(content) when is_map(content) do
-    case Jason.encode(content) do
-      {:ok, encoded} -> encoded
-      {:error, _} -> inspect(content)
-    end
-  end
+  defp encode_content(%{content: content}), do: Cyfr.Json.safe_encode(content)
+  defp encode_content(content) when is_map(content), do: Cyfr.Json.safe_encode(content)
 
   # ============================================================================
   # Notifications

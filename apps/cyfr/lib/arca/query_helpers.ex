@@ -88,6 +88,28 @@ defmodule Arca.QueryHelpers do
   end
 
   @doc """
+  The write-side mirror of `where_tenant/2`: stamp the context's athanor
+  into an attrs map, raising for an unresolved context — same fail-closed
+  backstop, same message shape. Storage writes had grown several private
+  spellings of this (a stamping helper, an explicit `fetch!`, an
+  incidental dot-access); rows with no athanor column (registry tokens,
+  webhook deliveries) and the two documented nullable fabrics stay
+  outside it.
+  """
+  @spec stamp_tenant!(Sanctum.Context.t(), map()) :: map()
+  def stamp_tenant!(%Sanctum.Context{athanor_id: athanor_id} = ctx, attrs)
+      when is_map(attrs) do
+    if athanor_id in [nil, ""] do
+      raise ArgumentError,
+            "Arca.QueryHelpers.stamp_tenant!/2: a resolved athanor_id is required " <>
+              "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
+              "auth_method=#{inspect(ctx.auth_method)})"
+    end
+
+    Map.put(attrs, :athanor_id, athanor_id)
+  end
+
+  @doc """
   Conditionally add a key-value pair to a keyword list.
   Returns the keyword list unchanged if the value is nil.
   """

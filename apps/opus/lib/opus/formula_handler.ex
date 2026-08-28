@@ -992,5 +992,15 @@ defmodule Opus.FormulaHandler do
   defp normalize_keys(data), do: data
 
   defp stringify_reason(reason) when is_binary(reason), do: reason
-  defp stringify_reason(reason), do: inspect(reason)
+
+  defp stringify_reason(reason) do
+    # A typed tool refusal renders as its one client-safe sentence — the
+    # guest sees what the console and the wire see, never Elixir term
+    # syntax for the vocabulary's tuples.
+    if Emissary.MCP.ToolError.reason?(reason) do
+      Emissary.MCP.ToolError.message(reason)
+    else
+      inspect(reason)
+    end
+  end
 end

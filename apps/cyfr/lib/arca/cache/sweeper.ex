@@ -101,11 +101,18 @@ defmodule Arca.Cache.Sweeper do
   end
 
   # Short-TTL auth state — a vault OAuth grant mid-flight, a device-login
-  # ticket, an established-caller memo. Nearest-to-expiry eviction targets
-  # exactly these (they always expire soonest), so a caller-cardinality
-  # flood of cache entries could sign other tenants out mid-flow — the
-  # precise class the moduledoc promises this table does not couple.
-  @protected_key_heads [:vault_oauth_pending, :login_device_ticket, :established]
+  # ticket, an established-caller memo — plus the one key used as a LOCK
+  # (the tincture-scan de-dup). Nearest-to-expiry eviction targets exactly
+  # these (they always expire soonest), so a caller-cardinality flood of
+  # cache entries could sign other tenants out mid-flow or admit a
+  # duplicate scan — the precise class the moduledoc promises this table
+  # does not couple.
+  @protected_key_heads [
+    :vault_oauth_pending,
+    :login_device_ticket,
+    :established,
+    :tincture_scan_running
+  ]
 
   # After expired rows are gone, if the table is still over the cap, drop the
   # nearest-to-expiry rows down to it — never the protected auth state; a

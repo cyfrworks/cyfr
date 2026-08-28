@@ -82,7 +82,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
         body =
           Jason.encode!(%{
             "status" => "duplicate",
-            "first_seen_at" => format_datetime(first_seen_at)
+            "first_seen_at" => Cyfr.Time.iso8601(first_seen_at)
           })
 
         conn
@@ -105,8 +105,4 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
         conn
     end
   end
-
-  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp format_datetime(value) when is_binary(value), do: value
-  defp format_datetime(_), do: nil
 end

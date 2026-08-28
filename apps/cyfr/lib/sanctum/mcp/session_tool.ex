@@ -144,7 +144,7 @@ defmodule Sanctum.MCP.SessionTool do
         {:ok, %{message: "Logged out successfully"}}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] logout failed: #{inspect(reason)}")
+        Logger.warning("[Sanctum.MCP] logout failed: #{inspect(reason)}")
         {:error, "Logout failed"}
     end
   end
@@ -183,14 +183,14 @@ defmodule Sanctum.MCP.SessionTool do
           # Provider returned a structured error body (e.g. Google's
           # "unsupported_grant_type" when the OAuth client isn't a
           # "TV & Limited Input" type, or "invalid_client" for a bad id).
-          Logger.error("[Sanctum.MCP] Device flow init rejected by provider: #{inspect(code)}")
+          Logger.warning("[Sanctum.MCP] Device flow init rejected by provider: #{inspect(code)}")
 
           {:error,
            "Device flow rejected by provider: #{code}. " <>
              "For Google, the OAuth client must be type \"TV and Limited Input devices\"."}
 
         {:error, {:device_code_request_failed, reason}} ->
-          Logger.error("[Sanctum.MCP] Device flow network error: #{inspect(reason)}")
+          Logger.warning("[Sanctum.MCP] Device flow network error: #{inspect(reason)}")
           {:error, "Device flow request failed: #{inspect(reason)}"}
 
         {:error, {:unknown_provider, name}} ->
@@ -228,18 +228,18 @@ defmodule Sanctum.MCP.SessionTool do
           # Provider returned a structured error on the token exchange —
           # e.g. Google's "invalid_request" when client_secret is missing,
           # or "invalid_grant" for an expired device code.
-          Logger.error("[Sanctum.MCP] Token exchange rejected by provider: #{inspect(code)}")
+          Logger.warning("[Sanctum.MCP] Token exchange rejected by provider: #{inspect(code)}")
           {:error, "Token exchange rejected by provider: #{code}"}
 
         {:error, {:token_request_failed, reason}} ->
-          Logger.error("[Sanctum.MCP] Token exchange network error: #{inspect(reason)}")
+          Logger.warning("[Sanctum.MCP] Token exchange network error: #{inspect(reason)}")
           {:error, "Token exchange failed: #{inspect(reason)}"}
 
         {:error, {:unknown_provider, name}} ->
           {:error, unknown_provider_message(name)}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to poll for token: #{inspect(reason)}")
+          Logger.warning("[Sanctum.MCP] Failed to poll for token: #{inspect(reason)}")
           {:error, "Failed to poll for token: #{inspect(reason)}"}
       end
     else

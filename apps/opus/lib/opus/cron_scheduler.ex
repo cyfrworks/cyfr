@@ -750,10 +750,9 @@ defmodule Opus.CronScheduler do
   defp decode_json(""), do: {:ok, %{}}
 
   defp decode_json(json) when is_binary(json) do
-    case Jason.decode(json) do
+    case Cyfr.Json.decode(json) do
       {:ok, map} when is_map(map) -> {:ok, map}
-      {:ok, _} -> {:error, :invalid_json}
-      {:error, _} -> {:error, :invalid_json}
+      _ -> {:error, :invalid_json}
     end
   end
 

@@ -199,7 +199,11 @@ defmodule EmissaryWeb.Router do
     plug :accepts, ["html", "json"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.ScrubTinctureCredentials
-    plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :page, max_requests: 60, window_ms: 60_000
+
+    plug EmissaryWeb.Plugs.TinctureRateLimit,
+      bucket: :page,
+      max_requests: 60,
+      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
   end
 
   pipeline :tincture_invoke do
@@ -221,14 +225,18 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.TinctureRateLimit,
       bucket: :invoke,
       max_requests: EmissaryWeb.Plugs.TinctureRateLimit.default_invoke_max(),
-      window_ms: 60_000
+      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
   end
 
   pipeline :tincture_asset do
     # No :accepts — assets serve arbitrary content types.
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.ScrubTinctureCredentials
-    plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :asset, max_requests: 300, window_ms: 60_000
+
+    plug EmissaryWeb.Plugs.TinctureRateLimit,
+      bucket: :asset,
+      max_requests: 300,
+      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
   end
 
   scope "/t", EmissaryWeb do

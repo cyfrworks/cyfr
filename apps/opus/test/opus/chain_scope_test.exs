@@ -185,7 +185,7 @@ defmodule Opus.ChainScopeTest do
           lineage: %{root_execution_id: stranger.id}
         )
 
-      assert message =~ "not found"
+      assert {:not_found, "Execution", _} = message
     end
   end
 

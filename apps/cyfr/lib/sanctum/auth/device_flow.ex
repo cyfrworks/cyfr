@@ -61,6 +61,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Default polling configuration
   @default_poll_interval 5
 
+  # Anonymous-surface budgets (checked before any provider round-trip;
+  # rationale at check_poll_budget/1 and check_init_budget/0).
+  @poll_per_code_max 30
+  @poll_global_max 300
+  @poll_window_ms 60_000
+  @init_global_max 60
+
   @type provider :: :github | :google | String.t()
   @type device_code_response :: %{
           device_code: String.t(),
@@ -87,8 +94,22 @@ defmodule Sanctum.Auth.DeviceFlow do
   """
   @spec init_device_flow(provider()) :: {:ok, device_code_response()} | {:error, term()}
   def init_device_flow(provider) do
-    with {:ok, provider, client_id} <- usable(provider) do
+    # The init round-trip is the same anonymous POST with this server's
+    # client id that the polls are budgeted for — reachable from the
+    # session tool and the login page, where a per-socket debounce is the
+    # only other bound and an abuser just opens more sockets. Same
+    # server-wide ceiling, same reason: the client id's reputation at the
+    # provider is spent by whoever asks.
+    with :ok <- check_init_budget(),
+         {:ok, provider, client_id} <- usable(provider) do
       request_device_code(provider, client_id)
+    end
+  end
+
+  defp check_init_budget do
+    case Cyfr.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
+      :ok -> :ok
+      {:deny, _retry_ms} -> {:error, "Too many sign-in attempts — try again shortly"}
     end
   end
 
@@ -241,10 +262,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   # server-wide ceiling keeps a swarm of fabricated codes from
   # multiplying the per-code budget. An over-budget poll answers the
   # protocol's own back-pressure shape without contacting the provider.
-  @poll_per_code_max 30
-  @poll_global_max 300
-  @poll_window_ms 60_000
-
+  # (The budget attributes live at the top of the module — init reads
+  # them too, and attributes must be defined before use.)
   defp check_poll_budget(device_code) do
     per_code_key = {:device_poll, Cyfr.Digest.sha256_hex(device_code)}
 

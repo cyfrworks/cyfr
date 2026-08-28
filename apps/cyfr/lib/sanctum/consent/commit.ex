@@ -19,6 +19,8 @@ defmodule Sanctum.Consent.Commit do
   surfaces as `consent_conflict`, never as a grant against stale facts.
   """
 
+  require Logger
+
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
@@ -307,6 +309,12 @@ defmodule Sanctum.Consent.Commit do
               {edge_key, publish_edge(edge, edge_key, need_ids, durable?)}
             end)
 
+          # Only the SOURCE node drops to the public constants: the public
+          # ceiling governs what the anonymous caller can drive, and every
+          # request enters at the source. Children keep the owner's clamped
+          # limits — they are reachable only through the source's edges, so
+          # the public budget already bounds how often they run, and
+          # re-clamping them here would change consented in-chain behavior.
           limits =
             if node_key == source_ref, do: @public_limits, else: node["limits"]
 
@@ -775,7 +783,18 @@ defmodule Sanctum.Consent.Commit do
       {:ok, %{status: "needs_consent"}} ->
         Arca.ProfileStorage.set_status(ctx.athanor_id, profile_id, "active")
 
-      _ ->
+      {:ok, _other_status} ->
+        :ok
+
+      # A store fault leaves the profile blocked while the commit reports
+      # success — fail-closed in effect, but it must not be silent: the
+      # person consented and their profile stayed stuck.
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Consent.Commit] could not reactivate profile #{profile_id} " <>
+            "after commit: #{inspect(reason)} — it stays needs_consent until re-read"
+        )
+
         :ok
     end
   end

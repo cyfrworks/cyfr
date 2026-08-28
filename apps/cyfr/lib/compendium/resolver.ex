@@ -102,10 +102,14 @@ defmodule Compendium.Resolver do
   This is the convenience wrapper for handlers (inspect, pull) that should:
   - Resolve typed version-less refs (e.g., `c:local.claude` → `catalyst:local.claude:0.1.0`)
   - Pass through already-pinned refs unchanged
-  - Pass through unrecognized refs (OCI, untyped) for downstream handling
-  - Only fail when a typed version-less ref can't be resolved
+  - Pass through everything else — unrecognized refs (OCI, untyped) AND
+    typed refs that did not resolve — for downstream handling; the caller
+    is the one that knows whether an unknown ref is an error
 
-  Returns `{:ok, ref_string}` or `{:error, reason}`.
+  Never fails: the error arm of the spec exists for callers that match on
+  it structurally, not because this function produces one today.
+
+  Returns `{:ok, ref_string}`.
   """
   @spec resolve_or_passthrough(Context.t(), String.t()) ::
           {:ok, String.t()} | {:error, String.t()}

@@ -15,6 +15,16 @@ defmodule Cyfr.RuntimeConfig do
   Every function takes a `getenv` reader — `(String.t() -> String.t() | nil)` —
   so it is exercised directly in tests without touching the real environment.
   `config/runtime.exs` passes a reader backed by `Dotenvy.env!/3`.
+
+  This module holds two jobs, deliberately:
+
+  1. **Boot-time parsers** (the `getenv`-taking resolvers above) — env in,
+     validated config out, evaluated once by `runtime.exs`.
+  2. **Runtime accessors** (the zero-arity readers: `auth_provider/0`,
+     `cookie_secure?/0`, `cors_allowed_origins/0`, …) — added ONLY when a
+     default was being re-spelled at several call sites. A key with a
+     single reader stays with the module that owns it; blanket
+     centralization is not the pattern here, one-spelling-per-default is.
   """
 
   @type getenv :: (String.t() -> String.t() | nil)

@@ -1010,4 +1010,29 @@ defmodule Arca.OverlayTest do
       assert {:error, :adapter_down} = Arca.Overlay.collapse_unit(ctx, @version_dir)
     end
   end
+
+  describe "internal-write scope stays in-process" do
+    # `Arca.Overlay.with_internal_writes/1` is Process-dictionary-scoped:
+    # work handed to another process does not inherit it and refuses
+    # loudly. `commit_unit/4`'s {:tree, _} source runs `Arca.copy_tree/4`
+    # in the caller, which holds today only because copy_tree is
+    # sequential — this pins that shape so a future
+    # `Task.async_stream` parallelization fails here instead of turning
+    # every tree commit into a refusal.
+    test "copy_tree spawns no processes (the overlay's tree commits depend on it)" do
+      source =
+        [__DIR__, "../../lib/arca.ex"] |> Path.join() |> Path.expand() |> File.read!()
+
+      [_, copy_tree_body] =
+        Regex.run(~r/def copy_tree\(.*?(?=\n  @doc|\n  defp normalize)/s, source)
+        |> case do
+          nil -> flunk("copy_tree/4 not found in arca.ex")
+          [match] -> [match, match]
+        end
+
+      refute copy_tree_body =~ ~r/Task\.|spawn|async_stream/,
+             "Arca.copy_tree/4 must stay in-process: commit_unit's tree copies " <>
+               "run under with_internal_writes/1, which no child process inherits"
+    end
+  end
 end

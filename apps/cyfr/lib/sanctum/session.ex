@@ -72,6 +72,16 @@ defmodule Sanctum.Session do
 
       hours when is_integer(hours) ->
         hours
+
+      # A non-integer (a string that slipped past runtime.exs, a typo'd
+      # override) must not turn every create/refresh into a CaseClauseError.
+      other ->
+        Logger.warning(
+          "[Sanctum.Session] invalid :session_ttl_hours #{inspect(other)} — " <>
+            "using the #{@default_session_ttl_hours}h default"
+        )
+
+        @default_session_ttl_hours
     end
   end
 
@@ -401,18 +411,7 @@ defmodule Sanctum.Session do
   # One return shape — {:ok, ctx} | {:error, :namespace_unavailable} — so
   # the caller stops discriminating structurally on struct-vs-tuple.
   defp row_to_context(row, surface) do
-    permissions =
-      case Jason.decode(row.permissions || "[]") do
-        {:ok, list} when is_list(list) ->
-          Enum.map(list, &safe_to_atom/1)
-
-        _ ->
-          Logger.warning(
-            "[Sanctum.Session] Malformed permissions JSON for user #{row.user_id}, defaulting to empty"
-          )
-
-          []
-      end
+    permissions = row |> decode_permissions() |> Enum.map(&safe_to_atom/1)
 
     case Sanctum.Namespace.lookup_status(row.user_id) do
       :not_claimed ->
@@ -471,11 +470,7 @@ defmodule Sanctum.Session do
   defp surface_auth_method(:tincture), do: :session
 
   defp row_to_external(row, token) do
-    permissions =
-      case Jason.decode(row.permissions || "[]") do
-        {:ok, list} when is_list(list) -> list
-        _ -> []
-      end
+    permissions = decode_permissions(row)
 
     %{
       token: token,
@@ -483,19 +478,29 @@ defmodule Sanctum.Session do
       email: row.email,
       provider: row.provider,
       permissions: permissions,
-      created_at: format_datetime(row.inserted_at),
-      expires_at: format_datetime(row.expires_at)
+      created_at: Cyfr.Time.iso8601(row.inserted_at),
+      expires_at: Cyfr.Time.iso8601(row.expires_at)
     }
   end
 
-  # The schema loads timestamps as `%DateTime{}` on both adapters; pass nil
-  # through and stringify the rest for the external session contract.
-  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp format_datetime(nil), do: nil
-  defp format_datetime(other), do: other
-
   defp coerce_datetime(%DateTime{} = dt), do: dt
   defp coerce_datetime(_), do: nil
+
+  # One decoder for both readers, so the same corruption is observed the
+  # same way whichever surface reads the row first.
+  defp decode_permissions(row) do
+    case Jason.decode(row.permissions || "[]") do
+      {:ok, list} when is_list(list) ->
+        list
+
+      _ ->
+        Logger.warning(
+          "[Sanctum.Session] Malformed permissions JSON for user #{row.user_id}, defaulting to empty"
+        )
+
+        []
+    end
+  end
 
   defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
 

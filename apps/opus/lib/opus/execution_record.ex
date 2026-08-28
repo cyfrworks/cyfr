@@ -471,12 +471,7 @@ defmodule Opus.ExecutionRecord do
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value
 
-  defp encode_json(value) do
-    case Jason.encode(value) do
-      {:ok, json} -> json
-      {:error, _} -> ~s({"_encoding_error":"value not encodable"})
-    end
-  end
+  defp encode_json(value), do: Cyfr.Json.safe_encode(value)
 
   # The row's shape has one owner: the Ecto schema. The read map carries
   # every schema column except the lease mechanics, which belong to the

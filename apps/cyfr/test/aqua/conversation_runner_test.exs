@@ -70,11 +70,21 @@ defmodule Aqua.ConversationRunnerTest do
     )
   end
 
+  # Attributed like production events: the runner drops an event that names
+  # no execution (the guarded clause is the contract, not a convenience).
   defp emit(runner, kind, data) do
-    send(runner, {:execution_event, %{type: "emit", data: Map.put(data, "kind", kind)}})
+    %{execution_id: eid} = :sys.get_state(runner)
+
+    send(
+      runner,
+      {:execution_event, %{execution_id: eid, type: "emit", data: Map.put(data, "kind", kind)}}
+    )
   end
 
-  defp complete(runner), do: send(runner, {:execution_event, %{type: "complete", data: %{}}})
+  defp complete(runner) do
+    %{execution_id: eid} = :sys.get_state(runner)
+    send(runner, {:execution_event, %{execution_id: eid, type: "complete", data: %{}}})
+  end
 
   defp start_turn(ctx, conv, text) do
     :ok = ConversationRunner.send_message(ctx, conv.id, text)

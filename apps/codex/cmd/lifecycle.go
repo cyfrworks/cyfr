@@ -194,7 +194,9 @@ database_path: ./data/cyfr.db
 		}
 		cfg.Contexts["local"] = &config.Context{URL: "http://127.0.0.1:4000"}
 		cfg.CurrentContext = "local"
-		_ = cfg.Save()
+		if err := cfg.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not save CLI config: %v\n", err)
+		}
 
 		fmt.Println("CYFR project initialized.")
 		if releaseBuild {

@@ -44,6 +44,15 @@ defmodule Cyfr.NamespaceDirectionTest do
   # locus, Sanctum and Compendium all did.
   @forbidden_from_engines ~r/\bPrism(Web)?\.[A-Z]/
 
+  # The HTTP surface. Emissary (the MCP contract) is fair game for the
+  # engine APPS — but EmissaryWeb (endpoint, router, plugs) is the web
+  # layer, and an engine that names it has taken the browser surface as a
+  # dependency. Scoped to apps/opus and apps/locus only: inside cyfr,
+  # Sanctum and Aqua legitimately name it today (the tincture token's
+  # asset sibling, the router introspection Aqua.Actions documents).
+  @engine_apps ["apps/opus/lib", "apps/locus/lib"]
+  @forbidden_web_from_engine_apps ~r/\bEmissaryWeb\.[A-Z]/
+
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp offenders(dirs, pattern) do
@@ -86,6 +95,20 @@ defmodule Cyfr.NamespaceDirectionTest do
            glue and belongs under `Cyfr.` — that is what `Cyfr.Topics` and
            `Cyfr.UUID7` are. Emissary is fair game (the MCP contract); a
            user interface is not.
+           """
+  end
+
+  test "the engine apps do not depend on the web layer" do
+    found = offenders(@engine_apps, @forbidden_web_from_engine_apps)
+
+    assert found == [],
+           """
+           engine app code reaches into the EmissaryWeb (web layer) namespace:
+
+           #{Enum.map_join(found, "\n", &"  #{&1}")}
+
+           Emissary (the MCP contract) is the engines' honest dependency;
+           the endpoint, router and plugs are not.
            """
   end
 

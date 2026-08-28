@@ -334,12 +334,10 @@ defmodule Opus.HttpHandler do
   defp normalize_response_body(nil), do: ""
   defp normalize_response_body(body) when is_binary(body), do: body
 
-  defp normalize_response_body(body) when is_map(body) or is_list(body) do
-    case Jason.encode(body) do
-      {:ok, json} -> json
-      {:error, _} -> inspect(body)
-    end
-  end
+  # Never inspect/1 toward the guest: Elixir term syntax in a body reads
+  # as data to whatever parses it next.
+  defp normalize_response_body(body) when is_map(body) or is_list(body),
+    do: Cyfr.Json.safe_encode(body)
 
   defp normalize_response_body(body), do: to_string(body)
 

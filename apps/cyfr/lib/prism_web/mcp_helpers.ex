@@ -97,11 +97,16 @@ defmodule PrismWeb.MCPHelpers do
   def error_message(%{message: msg}) when is_binary(msg), do: msg
 
   def error_message(reason) do
-    if Sanctum.Unauthorized.reason?(reason) do
-      Sanctum.Unauthorized.message(reason)
-    else
-      Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
-      "The request failed — try again."
+    cond do
+      Sanctum.Unauthorized.reason?(reason) ->
+        Sanctum.Unauthorized.message(reason)
+
+      Emissary.MCP.ToolError.reason?(reason) ->
+        Emissary.MCP.ToolError.message(reason)
+
+      true ->
+        Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
+        "The request failed — try again."
     end
   end
 

@@ -607,7 +607,13 @@ defmodule Arca.Adapters.S3 do
   end
 
   defp log_and_error(op, status, body) do
-    Logger.warning("[Arca.S3.#{op}] status=#{status} body=#{inspect(body)}")
+    # Truncated: an S3 error body is XML that can echo request parameters
+    # (a presigned URL's X-Amz-Credential among them) — 500 bytes carries
+    # the error code and message without the echo.
+    Logger.warning(
+      "[Arca.S3.#{op}] status=#{status} body=#{inspect(String.slice(to_string(body), 0, 500))}"
+    )
+
     {:error, {:s3_error, status}}
   end
 end

@@ -138,7 +138,10 @@ defmodule Sanctum.Policy.Ceiling do
               acc
             end
           else
-            _ -> acc
+            # Fail closed, matching lower_of/3: a duration the parser
+            # rejects must not pass through UNCLAMPED — that would let an
+            # unparseable timeout escape the platform ceiling entirely.
+            _ -> Map.put(acc, field, max_dur)
           end
       end
     end)

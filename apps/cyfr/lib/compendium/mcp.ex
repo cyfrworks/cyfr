@@ -131,7 +131,7 @@ defmodule Compendium.MCP do
               {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
 
             {:error, reason} ->
-              Logger.error("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")
+              Logger.warning("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")
               {:error, "Asset not found: #{rest}"}
           end
         end

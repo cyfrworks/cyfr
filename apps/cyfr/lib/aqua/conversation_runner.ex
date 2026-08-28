@@ -80,6 +80,12 @@ defmodule Aqua.ConversationRunner do
   @window_bytes 60_000
   # The athanor's orchestrator names are an MCP round trip; cached briefly.
   @orchestrators_ttl_ms 60_000
+  # A turn's streamed text and tool feed are model-driven — without caps
+  # they were the only two unbounded accumulations in a module that bounds
+  # its queue, its task window and its persisted history. Applied BEFORE
+  # the broadcast, so every subscribed viewer inherits the same bound.
+  @max_streaming_text_bytes 512 * 1024
+  @max_tool_activity 200
 
   @type scope :: :once | :conversation | :always
 
@@ -404,6 +410,11 @@ defmodule Aqua.ConversationRunner do
     # than trusted from the mount that opened the socket.
     with :ok <- standing(ctx, state),
          {:ok, peek} <- Conversations.get_message(ctx, message_id),
+         # get_message is tenant-scoped, not conversation-scoped: without
+         # this pin a member could drive conversation A's runner to settle
+         # conversation B's card — the outcome note, the broadcast topic and
+         # the tray attribution would all name the wrong conversation.
+         :ok <- same_conversation(peek, state.id),
          :ok <- scope_permitted(peek, scope),
          {:ok, msg} <-
            Conversations.resolve_approval(ctx, message_id, "pending", "running", %{
@@ -422,6 +433,8 @@ defmodule Aqua.ConversationRunner do
 
     with :ok <- standing(ctx, state),
          {:ok, msg} <- Conversations.get_message(ctx, message_id),
+         # Same conversation pin as approve — see the comment there.
+         :ok <- same_conversation(msg, state.id),
          intent = approval_intent(msg),
          {summary, system_text} =
            AquaTurn.outcome_summary(:declined, %{reason: reason}, intent["title"] || ""),
@@ -512,6 +525,9 @@ defmodule Aqua.ConversationRunner do
         {:reply, :ok, state}
     end
   end
+
+  defp same_conversation(%{conversation_id: id}, id), do: :ok
+  defp same_conversation(_msg, _id), do: {:error, :not_found}
 
   # What every act in a live conversation is held to: the furnace is open and
   # the caller still belongs to it.
@@ -808,7 +824,11 @@ defmodule Aqua.ConversationRunner do
         end
 
       {:error, reason} ->
-        {:noreply, fail_turn(state, "Execution failed to start: #{inspect(reason)}")}
+        # Sanitize BEFORE inspect — this text persists as a conversation
+        # message every member reads, and a flattened string is past the
+        # sanitizer's reach.
+        safe = inspect(Sanctum.Sanitizer.sanitize(reason))
+        {:noreply, fail_turn(state, "Execution failed to start: #{safe}")}
     end
   end
 
@@ -829,8 +849,17 @@ defmodule Aqua.ConversationRunner do
     end
   end
 
+  # An event that names no execution cannot be attributed to a turn, and
+  # applying it to whichever turn happens to be current reintroduces
+  # exactly the contamination the guarded clause above exists to prevent —
+  # a stray `complete` would end a turn it never belonged to. Dropped.
   def handle_info({:execution_event, event}, state) do
-    {:noreply, apply_execution_event(state, event)}
+    Logger.debug(
+      "[Aqua.ConversationRunner] dropping execution event with no execution_id: " <>
+        inspect(event[:type] || event["type"])
+    )
+
+    {:noreply, state}
   end
 
   def handle_info({:approval_result, message_id, ctx, outcome, payload}, state) do
@@ -948,15 +977,32 @@ defmodule Aqua.ConversationRunner do
 
   defp handle_emit(state, "text_delta", data) do
     chunk = data["content"] || data[:content] || ""
+    streamed = byte_size(state.streaming_text)
 
-    %{state | streaming_text: state.streaming_text <> chunk}
-    |> broadcast({:delta, chunk})
+    cond do
+      streamed >= @max_streaming_text_bytes ->
+        state
+
+      streamed + byte_size(chunk) > @max_streaming_text_bytes ->
+        marker = "\n\n_(output truncated)_"
+
+        %{state | streaming_text: state.streaming_text <> marker}
+        |> broadcast({:delta, marker})
+
+      true ->
+        %{state | streaming_text: state.streaming_text <> chunk}
+        |> broadcast({:delta, chunk})
+    end
   end
 
   defp handle_emit(state, "tool_use", data) do
-    tool = data["tool"] || data[:tool] || "tool"
-    activity = state.tool_activity ++ [%{tool: tool, status: :running, preview: nil}]
-    %{state | tool_activity: activity} |> broadcast({:tool_activity, activity})
+    if length(state.tool_activity) >= @max_tool_activity do
+      state
+    else
+      tool = data["tool"] || data[:tool] || "tool"
+      activity = state.tool_activity ++ [%{tool: tool, status: :running, preview: nil}]
+      %{state | tool_activity: activity} |> broadcast({:tool_activity, activity})
+    end
   end
 
   defp handle_emit(state, "tool_result", data) do
@@ -1136,15 +1182,20 @@ defmodule Aqua.ConversationRunner do
 
     state =
       if partial != "" do
-        {:ok, row} =
-          Conversations.append(turn_ctx, state.id, %{
-            author: "aqua",
-            kind: "text",
-            content: partial <> "\n\n_(cancelled)_",
-            execution_id: exec_id
-          })
-
-        broadcast(state, {:message, row})
+        # No bang-match — the same rule complete_turn states: a store
+        # hiccup must degrade to a broadcast, never crash the runner
+        # mid-cancel. A crash here is worse than mid-completion: it skips
+        # terminate/2 (which fires only on normal/shutdown), so the engine
+        # is never told to cancel and the execution orphans.
+        case Conversations.append(turn_ctx, state.id, %{
+               author: "aqua",
+               kind: "text",
+               content: partial <> "\n\n_(cancelled)_",
+               execution_id: exec_id
+             }) do
+          {:ok, row} -> broadcast(state, {:message, row})
+          {:error, _} -> broadcast(state, {:error, "the cancelled reply could not be saved"})
+        end
       else
         state
       end
@@ -1313,7 +1364,10 @@ defmodule Aqua.ConversationRunner do
         case Conversations.resolve_approval(ctx, message_id, "running", status, %{
                resolution: %{
                  "summary" => summary,
-                 "reason" => payload[:reason] && inspect(payload[:reason]),
+                 # Sanitize before inspect: an arbitrary tool failure term
+                 # lands on a row every member reads.
+                 "reason" =>
+                   payload[:reason] && inspect(Sanctum.Sanitizer.sanitize(payload[:reason])),
                  "scope" => scope
                }
              }) do

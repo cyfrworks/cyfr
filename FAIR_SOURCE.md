@@ -16,7 +16,11 @@ differs from the license texts, the license texts control.
 
 The rule is simply the directory: everything under
 `apps/cyfr/lib/sanctum/` and `apps/cyfr/test/sanctum/` is FSL-1.1-Apache-2.0,
-and everything else in the repo is Apache-2.0. Elixir files carry an in-band
+and everything else in the repo is Apache-2.0. The Apache-licensed portion
+is not independently buildable: it calls into Sanctum throughout (storage
+consults the tenant policy and cipher; the builder embeds `Sanctum.Limits`),
+so running any part of CYFR means running the FSL part under its terms —
+the split governs what you may reuse elsewhere, not what boots alone. Elixir files carry an in-band
 `SPDX-License-Identifier` header (there is no `REUSE.toml`), and the
 [license-lint CI](.github/workflows/license-lint.yml) enforces the boundary
 mechanically.

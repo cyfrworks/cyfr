@@ -47,6 +47,26 @@ const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
 const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
 const PERSIST = process.env.MCP_BRIDGE_DATA || "/data/backends.json";
 
+// Structured logs on the same switch the Elixir side honors
+// (CYFR_LOG_FORMAT=json → Cyfr.JsonFormatter): the bridge runs in the
+// same compose stack, and an aggregator that parses one service's lines
+// as JSON must not fall back to prose for its sidecar. Text mode keeps
+// the exact console output this file always had.
+if (process.env.CYFR_LOG_FORMAT === "json") {
+  const jsonLine = (level, args) => {
+    const message = args
+      .map((a) => (typeof a === "string" ? a : (a && a.stack) || String(a)))
+      .join(" ");
+    process.stderr.write(
+      JSON.stringify({ timestamp: new Date().toISOString(), level, message, service: "mcp-bridge" }) +
+        "\n",
+    );
+  };
+  console.log = (...args) => jsonLine("info", args);
+  console.warn = (...args) => jsonLine("warning", args);
+  console.error = (...args) => jsonLine("error", args);
+}
+
 // The bridge speaks two protocols, in two directions, and they are not the
 // same revision.
 //
@@ -345,7 +365,9 @@ function stopBackend(name, markRemoved = true) {
   failPending(backend, new Error("backend stopped"));
   try {
     backend.proc.kill("SIGTERM");
-  } catch {}
+  } catch {
+    // Killing an already-exited child throws ESRCH — the outcome we wanted.
+  }
   // Hard-kill if it ignores SIGTERM. `proc.killed` is the wrong test — Node
   // sets it once a signal is successfully SENT, so after the SIGTERM above
   // it is always true and the escalation never fired; a child ignoring
@@ -357,7 +379,9 @@ function stopBackend(name, markRemoved = true) {
       if (backend.proc.exitCode === null && backend.proc.signalCode === null) {
         backend.proc.kill("SIGKILL");
       }
-    } catch {}
+    } catch {
+      // Same ESRCH race as above: exited between the check and the kill.
+    }
   }, 2000).unref();
 }
 

@@ -167,7 +167,7 @@ defmodule Opus.SecurityTest do
           "execution_id" => execution_id
         })
 
-      assert msg =~ "not found"
+      assert {:not_found, "Execution", _} = msg
     end
 
     test "execution listing is tenant-scoped", %{ctx: ctx, ref: ref} do
@@ -222,7 +222,7 @@ defmodule Opus.SecurityTest do
           "execution_id" => record.id
         })
 
-      assert msg =~ "not found"
+      assert {:not_found, "Execution", _} = msg
     end
   end
 

@@ -261,8 +261,12 @@ defmodule Opus.Runtime do
         %{}
       end
 
+    # `&& execution_id` matches the formula guard below: with a nil id
+    # the tracker's `put/2` (guarded is_binary) would raise inside the
+    # host closure AFTER the access token was dispensed — and an
+    # untracked token is one the SecretMasker cannot redact.
     oauth_imports =
-      if component_type == :catalyst && ctx do
+      if component_type == :catalyst && ctx && execution_id do
         Opus.OAuthHandler.build_oauth_imports(
           ctx,
           component_ref,

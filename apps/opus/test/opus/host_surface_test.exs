@@ -61,9 +61,12 @@ defmodule Opus.HostSurfaceTest do
     # Shared primitives — glue, by construction available to any node.
     "Cyfr.Digest",
     "Cyfr.Execution",
+    "Cyfr.Json",
     "Cyfr.LoggerContext",
+    "Cyfr.MediaType",
     "Cyfr.Network",
     "Cyfr.PathSafety",
+    "Cyfr.Time",
     "Cyfr.Topics",
     "Cyfr.UUID7"
   ]

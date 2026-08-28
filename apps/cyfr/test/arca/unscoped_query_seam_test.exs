@@ -36,11 +36,15 @@ defmodule Arca.UnscopedQuerySeamTest do
   @repo_verbs ~r/\bRepo\.(all|one|update_all|delete_all|aggregate|exists\?|get|get_by|insert|insert_all|update|delete|transaction)\b/
   # Scoped means the athanor column is USED — compared, bound or set —
   # not merely mentioned (a `select:` naming athanor_id once counted).
-  @scoped ~r/where_tenant|where_athanor|athanor_id ==|athanor_id:/
+  # `stamp_tenant!` is the write-side spelling (Arca.QueryHelpers).
+  @scoped ~r/where_tenant|where_athanor|stamp_tenant!|athanor_id ==|athanor_id:/
   @tag_marker ~r/#\s*arca:unscoped-ok\s+\S/
 
+  # All apps, not just cyfr: opus and locus hold no Repo call today, so the
+  # wider glob costs nothing — and the first engine-side query would
+  # otherwise escape the roster by construction.
   defp sources do
-    [@root, "apps/cyfr/lib", "**/*.ex"] |> Path.join() |> Path.wildcard()
+    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Path.wildcard()
   end
 
   # Modules whose schema declares an athanor column — the tables a query can

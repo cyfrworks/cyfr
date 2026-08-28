@@ -307,7 +307,6 @@ var scheduleDeleteCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			fmt.Println("Schedule deleted.")
-			_ = result
 		}
 		return nil
 	},

@@ -212,6 +212,11 @@ defmodule Arca do
 
   Useful for logs stored as JSONL (JSON Lines) format.
 
+  On the S3 adapter, append is a read-modify-write with last-writer-wins:
+  concurrent appends to one key can lose lines (the adapter documents the
+  race). Concurrent JSONL streams that must not lose lines belong on
+  per-writer keys.
+
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
@@ -392,6 +397,11 @@ defmodule Arca do
   source is left untouched, so a *move* is a successful `copy_tree/3`
   followed by `delete_tree/2`. Returns `{:ok, copied_relatives}` in copy
   order, or the first `{:error, reason}`.
+
+  NO rollback: a mid-copy failure leaves the files already copied in
+  place. Unit-shaped copies get atomicity by going through
+  `Arca.Overlay.commit_unit/4` (clean-slate + sentinel-last + rollback);
+  a direct caller owns its own compensation.
 
   `exclude: fn relative_segments -> boolean end` skips matching files before
   their content is ever read — how `Arca.Overlay.materialize/2` keeps build

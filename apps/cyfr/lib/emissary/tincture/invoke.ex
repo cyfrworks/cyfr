@@ -64,8 +64,12 @@ defmodule Emissary.Tincture.Invoke do
 
     ctx = %{Sanctum.build_tincture_context(auth_ctx, tincture) | request_id: request_id()}
 
-    # Same key on the log lines as on the RequestLog row this run files.
+    # Same key on the log lines as on the RequestLog row this run files —
+    # and the tenant metadata with it: this ingress never runs the
+    # Authenticate plug (the stamping site), and the roster exists so an
+    # aggregator can filter these lines by athanor.
     Cyfr.LoggerContext.set_request_id(ctx.request_id)
+    Cyfr.LoggerContext.set_from_context(ctx)
 
     telemetry_meta = %{
       request_id: ctx.request_id,

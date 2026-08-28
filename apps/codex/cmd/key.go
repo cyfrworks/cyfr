@@ -214,7 +214,6 @@ var keyRevokeCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Key '%s' revoked.\n", name)
 		}
-		_ = result
 		return nil
 	},
 }

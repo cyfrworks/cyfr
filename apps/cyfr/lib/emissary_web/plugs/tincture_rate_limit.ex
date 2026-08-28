@@ -5,11 +5,14 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   @moduledoc """
   Transport-level rate limiting for the public tincture surface.
 
-  Keys buckets per (bucket, client IP, publisher, tincture_name) so one hot
-  dashboard can't starve another and one hostile IP can't exhaust a shared
-  budget. The IP comes from `Sanctum.ClientIp.resolve/1`, honoring the same
-  X-Forwarded-For trust boundary as the other limiters. Configured per
-  pipeline via `init/1` opts:
+  Keys buckets per (bucket, client IP, athanor, publisher, tincture_name)
+  so one hot dashboard can't starve another, one hostile IP can't exhaust
+  a shared budget, and two athanors hosting the same publisher/name never
+  share a counter — without the athanor segment, tenant A's traffic
+  throttled tenant B's identically-named tincture. The IP comes from
+  `Sanctum.ClientIp.resolve/1`, honoring the same X-Forwarded-For trust
+  boundary as the other limiters. Configured per pipeline via `init/1`
+  opts:
 
       plug EmissaryWeb.Plugs.TinctureRateLimit,
         bucket: :page,
@@ -17,7 +20,8 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
         window_ms: 60_000
 
   Routes without tincture path params (e.g. `/t/access-token`) key as
-  `{"unknown", "unknown"}`, making their limit effectively per-IP.
+  `{"unknown", "unknown", "unknown"}`, making their limit effectively
+  per-IP.
 
   This is a transport back-stop under the policy-level limit: a tincture
   policy's `rate_limit` (when configured) throttles invokes per
@@ -25,8 +29,9 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   per-IP request volume — including for tinctures with no policy limit.
 
   Counters live in `Cyfr.RateLimiter` (ETS) so the plug is single-node only; the
-  off-by-one on concurrent boundary requests is acceptable for rate limits
-  (not a security boundary).
+  off-by-concurrency overshoot on boundary requests (N concurrent readers
+  can each pass the cap check) is acceptable for rate limits (not a
+  security boundary).
 
   `config :cyfr, :tincture_rate_limit_max` overrides `max_requests` when set
   (used by the test env so unrelated controller suites don't trip the limit).
@@ -41,6 +46,14 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   @doc "The default per-window invoke budget (both ingress surfaces)."
   def default_invoke_max, do: @default_invoke_max
 
+  # The window both surfaces share, for the same no-drift reason as the
+  # budget: the console shell keys the same capability by person and used
+  # to re-spell this literal.
+  @default_window_ms 60_000
+
+  @doc "The rate window (ms) both ingress surfaces share."
+  def default_window_ms, do: @default_window_ms
+
   def init(opts) do
     %{
       bucket: Keyword.fetch!(opts, :bucket),
@@ -53,20 +66,21 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
     max_requests = Application.get_env(:cyfr, :tincture_rate_limit_max) || default_max
     ip = Sanctum.ClientIp.resolve(conn)
 
-    {publisher, tincture_name} =
-      case {conn.path_params["publisher"], conn.path_params["tincture_name"]} do
-        {pub, name} when is_binary(pub) and is_binary(name) ->
-          {pub, name}
+    {athanor, publisher, tincture_name} =
+      case {conn.path_params["athanor"], conn.path_params["publisher"],
+            conn.path_params["tincture_name"]} do
+        {ath, pub, name} when is_binary(ath) and is_binary(pub) and is_binary(name) ->
+          {ath, pub, name}
 
         _ ->
           # Tincture paths are /t/:athanor/:publisher/:tincture_name[/...].
           case conn.path_info do
-            ["t", _athanor, pub, name | _] -> {pub, name}
-            _ -> {"unknown", "unknown"}
+            ["t", ath, pub, name | _] -> {ath, pub, name}
+            _ -> {"unknown", "unknown", "unknown"}
           end
       end
 
-    key = {:rate_limit, bucket, ip, publisher, tincture_name}
+    key = {:rate_limit, bucket, ip, athanor, publisher, tincture_name}
 
     case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
       :ok ->

@@ -119,6 +119,11 @@ defmodule Compendium.Activation do
     with {:ok, rows} <- walk(ctx, component, %{}, 0),
          graph = graph_from_rows(rows),
          {:ok, digest} <- hash_graph(graph) do
+      # Deliberately uncached (verification must be fresh) — but it is the
+      # walk on the consent-load hot path, so it must be visible in the
+      # same telemetry the cached resolve emits, or its cost is invisible.
+      emit_resolve(ctx, component, false)
+
       nodes =
         Map.new(rows, fn {key, row} ->
           {key, %{release_digest: release_digest(row), integrity: integrity(row)}}

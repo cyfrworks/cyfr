@@ -95,7 +95,7 @@ defmodule Arca.McpServerStorage do
         |> Map.put_new(:id, Cyfr.UUID7.generate_id("mcp"))
         |> Map.put_new(:enabled, true)
         |> Map.put_new(:config_json, "{}")
-        |> Map.put(:athanor_id, ctx.athanor_id)
+        |> then(&Arca.QueryHelpers.stamp_tenant!(ctx, &1))
         |> Map.put_new(:inserted_at, now)
         |> Map.put(:updated_at, now)
 

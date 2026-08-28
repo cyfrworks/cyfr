@@ -236,7 +236,12 @@ defmodule Compendium.Registry do
 
     with {:ok, name} <- get_required(metadata, :name),
          {:ok, version} <- get_required(metadata, :version),
-         {:ok, "tincture"} <- get_required(metadata, :type),
+         # An explicit refusal, not a success-shaped pin: `{:ok, "tincture"}
+         # <-` in this else-less `with` returned a WRONG type verbatim —
+         # `{:ok, "catalyst"}`, success-shaped — to any caller whose
+         # metadata disagreed. Unreachable from the OCI pull (its case pins
+         # the ref type first); kept impossible here.
+         :ok <- require_type(metadata, "tincture"),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
@@ -625,8 +630,24 @@ defmodule Compendium.Registry do
 
         case Arca.get(ctx, path) do
           {:ok, content} ->
-            Logger.debug("[Registry.get_blob] OK: read #{byte_size(content)} bytes")
-            {:ok, content}
+            # The caller asked BY DIGEST, so the answer is verified against
+            # it here — the row and blob planes can diverge (an
+            # allow_overwrite republish, an overlay materialization), and
+            # verifying inside the one reader means every caller inherits
+            # the guarantee instead of one (the executor) re-doing it.
+            actual = Cyfr.Digest.sha256(content)
+
+            if actual == digest do
+              Logger.debug("[Registry.get_blob] OK: read #{byte_size(content)} bytes")
+              {:ok, content}
+            else
+              Logger.error(
+                "[Registry.get_blob] digest mismatch for #{component.name}:#{component.version} — " <>
+                  "row says #{digest}, bytes hash to #{actual}"
+              )
+
+              {:error, :digest_mismatch}
+            end
 
           {:error, reason} ->
             Logger.warning(
@@ -796,7 +817,11 @@ defmodule Compendium.Registry do
 
     # arca:bypass-ok=D — `:erl_tar.extract` requires a real local FS to write
     # to. After extraction we validate the bundle and write the validated
-    # files back through Arca via `store_tincture_files/4`.
+    # files back through Arca via `store_tincture_files/4`. Entry-path
+    # traversal is OTP's own guarantee, not ours: erl_tar routes every
+    # entry through `filelib:safe_relative_path/2` and throws
+    # `unsafe_path`/`unsafe_symlink` — an invisible dependency worth
+    # naming, since nothing here re-checks it.
     File.mkdir_p!(tmp_dir)
 
     try do
@@ -1143,12 +1168,12 @@ defmodule Compendium.Registry do
   defp decode_json(value) when is_list(value), do: value
 
   defp decode_json(value) when is_binary(value) do
-    case Jason.decode(value) do
+    case Cyfr.Json.decode(value) do
       {:ok, list} when is_list(list) ->
         list
 
       other ->
-        Logger.warning("[Registry] Failed to decode JSON field: #{inspect(other)}")
+        Logger.warning("[Registry] Failed to decode JSON list field: #{inspect(other)}")
         []
     end
   end
@@ -1182,6 +1207,14 @@ defmodule Compendium.Registry do
       nil -> {:error, {:missing_required, key}}
       "" -> {:error, {:missing_required, key}}
       value -> {:ok, value}
+    end
+  end
+
+  defp require_type(metadata, expected) do
+    case get_required(metadata, :type) do
+      {:ok, ^expected} -> :ok
+      {:ok, other} -> {:error, {:invalid_type, other}}
+      {:error, _} = err -> err
     end
   end
 

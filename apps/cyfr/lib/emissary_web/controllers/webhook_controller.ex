@@ -78,6 +78,10 @@ defmodule EmissaryWeb.WebhookController do
     # Same key on the log lines as on the RequestLog row this run files.
     Cyfr.LoggerContext.set_request_id(request_id)
     ctx = build_webhook_context(webhook, request_id)
+    # This pipeline never runs Authenticate (the plug that stamps), so the
+    # tenant metadata lands here — the roster exists so an aggregator can
+    # filter by athanor, and webhook lines are exactly the ones that need it.
+    Cyfr.LoggerContext.set_from_context(ctx)
 
     with :ok <- Sanctum.Context.tenant_ok(ctx),
          {:ok, template} <- Webhook.decode_input_template(webhook.input_template) do
@@ -307,8 +311,14 @@ defmodule EmissaryWeb.WebhookController do
         formatted = Exception.format(:error, e, __STACKTRACE__)
         Logger.error("[WebhookInvoke] crashed slug=#{webhook.slug}\n#{formatted}")
 
+        # The crash arm obeys the same two rules as the {:error, reason}
+        # arm above: the stored row gets the exception SANITIZED AS A
+        # STRUCT then rendered (a KeyError's message quotes the map it
+        # raised on — flattened first, the sanitizer could no longer see
+        # it), and telemetry gets the fixed slug — its consumers must not
+        # see internal reasons.
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: Exception.message(e),
+          error: inspect(Sanctum.Sanitizer.sanitize(e)),
           duration_ms: duration_ms,
           routed_to: "opus"
         })
@@ -318,7 +328,7 @@ defmodule EmissaryWeb.WebhookController do
           %{duration_ms: duration_ms},
           telemetry_meta
           |> Map.put(:status, :error)
-          |> Map.put(:error, Exception.message(e))
+          |> Map.put(:error, "execution_crashed")
         )
     end
   end

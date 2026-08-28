@@ -163,7 +163,9 @@ verify_checksum() {
         return
     fi
 
-    expected="$(grep "$file" "$dir/checksums.txt" | awk '{print $1}')"
+    # -F: the filename is a literal, not a regex — its dots would otherwise
+    # match any character, and the version comes from user-settable input.
+    expected="$(grep -F "$file" "$dir/checksums.txt" | awk '{print $1}')"
     if [ -z "$expected" ]; then
         printf "Error: no checksum found for %s in checksums.txt — refusing to install.\n" "$file" >&2
         printf "Set CYFR_INSECURE_SKIP_VERIFY=1 to bypass (NOT recommended).\n" >&2

@@ -168,10 +168,6 @@ defmodule EmissaryWeb.TinctureController do
 
     with {:ok, tincture, visibility, auth_ctx} <-
            resolve_tincture(conn, athanor, publisher, tincture_name) do
-      tincture_ref = Sanctum.ComponentRef.build("tincture", publisher, tincture_name)
-
-      _ = tincture_ref
-
       # One implementation for both invoke surfaces (the console shell is
       # the other) — validation, context, logging, telemetry and the
       # readiness gate live in Emissary.Tincture.Invoke; this surface only

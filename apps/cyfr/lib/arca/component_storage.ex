@@ -299,19 +299,9 @@ defmodule Arca.ComponentStorage do
   end
 
   # The row's athanor is the context's; a caller cannot write into another.
-  defp ensure_tenant_fields(%Context{athanor_id: athanor_id}, attrs)
-       when is_binary(athanor_id) and athanor_id != "" do
-    Map.put(attrs, :athanor_id, athanor_id)
-  end
-
-  defp ensure_tenant_fields(%Context{} = ctx, _attrs) do
-    # Host programmer error — fail loud with a message, the same shape as
-    # `Arca.Storage.tenant_segments/1`, not a bare FunctionClauseError.
-    raise ArgumentError,
-          "Arca.ComponentStorage: a resolved athanor_id is required to write component rows " <>
-            "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
-            "auth_method=#{inspect(ctx.auth_method)})"
-  end
+  # One spelling for the whole storage layer: Arca.QueryHelpers.stamp_tenant!/2.
+  defp ensure_tenant_fields(%Context{} = ctx, attrs),
+    do: Arca.QueryHelpers.stamp_tenant!(ctx, attrs)
 
   # One rescue for the module's typed-refusal contract: DB errors log with
   # the operation's name and answer `{:error, :database_error}`

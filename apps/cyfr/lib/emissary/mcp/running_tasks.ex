@@ -88,7 +88,15 @@ defmodule Emissary.MCP.RunningTasks do
   @impl true
   def init(_opts) do
     if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:named_table, :public, :set])
+      # Written on every MCP request from the request processes themselves;
+      # both flags, like the limiter tables.
+      :ets.new(@table, [
+        :named_table,
+        :public,
+        :set,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
     end
 
     # monitors: %{monitor_ref => request_id}

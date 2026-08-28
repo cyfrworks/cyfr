@@ -90,6 +90,9 @@ defmodule Compendium.TinctureValidator do
     end
   end
 
+  # Kept on Jason directly (not Cyfr.Json.decode/1): the validator's
+  # message carries the parser's own detail, which the strict helper
+  # deliberately flattens.
   defp decode_json(raw) do
     case Jason.decode(raw) do
       {:ok, parsed} -> {:ok, parsed}

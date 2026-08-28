@@ -132,8 +132,10 @@ defmodule Sanctum.MCP.KeyTool do
           {:error,
            "Scope #{inspect(scope_list)} exceeds allowed scopes for this key type: #{inspect(ceiling)}"}
 
-        {:error, reason} ->
-          Logger.error("[Sanctum.MCP] Failed to create key: #{inspect(reason)}")
+        # No re-log: the storage layer already logged this failure with the
+        # exception detail (Arca.ApiKeyStorage); a second error line here
+        # carried nothing the first lacked.
+        {:error, _reason} ->
           {:error, "Failed to create key"}
       end
     end

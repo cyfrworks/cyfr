@@ -10,7 +10,6 @@ defmodule Emissary.MCP.ToolProvider do
 
   1. **Service-owned tools**: Each service defines and handles its own tools
   2. **Decoupled transport**: Emissary stays domain-agnostic
-  3. **Future distributed support**: Same interface works with :rpc.call
 
   ## Implementing a Provider
 
@@ -46,16 +45,9 @@ defmodule Emissary.MCP.ToolProvider do
         Compendium.MCP
       ]
 
-  ## Future: Distributed Workers
-
-  When running multiple Opus/Locus containers, the registry will be
-  extended to track node availability and route accordingly:
-
-      def handle(tool, ctx, args) do
-        node = pick_healthy_node(tool)
-        :rpc.call(node, __MODULE__, :handle, [tool, ctx, args])
-      end
-
+  Providers are in-process by design — remote workers are a protocol
+  project, not an `:rpc.call` on this behaviour (`Opus.HostSurfaceTest`
+  and docs/0.6.0.md Stage 2 say why the earlier claim here was wrong).
   """
 
   alias Sanctum.Context
