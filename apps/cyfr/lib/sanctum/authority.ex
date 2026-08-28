@@ -275,13 +275,25 @@ defmodule Sanctum.Authority do
 
   @doc """
   Take one root-keyed invoke-budget slot. Every acquire must be paired with
-  `release_invoke/1` when the spawned work completes.
+  `release_invoke/1` when the spawned work completes — and the process
+  doing the work registers itself with `guard_invoke/2` so a slot whose
+  holder is brutally killed (the cancel and await-timeout paths) is
+  released by the guard's `:DOWN` compensation instead of leaking.
   """
   @spec try_acquire_invoke(t()) :: :ok | {:error, :invoke_budget_exhausted}
   def try_acquire_invoke(%__MODULE__{budget: %Budget{} = budget}), do: Budget.try_acquire(budget)
 
+  @doc """
+  Register the calling (or named) process as the holder of one charged
+  slot — see `Sanctum.Authority.BudgetGuard`.
+  """
+  @spec guard_invoke(t(), pid()) :: :ok
+  def guard_invoke(%__MODULE__{budget: %Budget{} = budget}, pid \\ self()),
+    do: Sanctum.Authority.BudgetGuard.guard(budget, pid)
+
   @spec release_invoke(t()) :: :ok
-  def release_invoke(%__MODULE__{budget: %Budget{} = budget}), do: Budget.release(budget)
+  def release_invoke(%__MODULE__{budget: %Budget{} = budget}),
+    do: Sanctum.Authority.BudgetGuard.release(budget, self())
 
   @spec budget(t()) :: %{in_flight: non_neg_integer(), cap: non_neg_integer()}
   def budget(%__MODULE__{budget: %Budget{} = budget}), do: Budget.snapshot(budget)

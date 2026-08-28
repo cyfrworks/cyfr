@@ -151,6 +151,10 @@ defmodule Opus.Chain do
         Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
           Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+          # The task holds the charged slot: a kill through the registry
+          # (execution.cancel) skips the `after`, so the guard's :DOWN
+          # compensation releases it instead.
+          Authority.guard_invoke(decision.authority)
 
           try do
             execute_child(decision, input, opts)

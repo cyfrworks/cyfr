@@ -83,6 +83,9 @@ defmodule Cyfr.Application do
       Cyfr.RecordSink,
       Cyfr.RetentionScheduler,
       Arca.AuditHandler,
+      # Releases a charged invoke-budget slot when its holder dies without
+      # running its `after` (the brutal-kill cancel/timeout paths).
+      Sanctum.Authority.BudgetGuard,
       # Request rate-limit counters — own table, isolated from Arca.Cache so an
       # attacker-cardinality flood cannot evict sessions or OAuth state.
       Cyfr.RateLimiter,

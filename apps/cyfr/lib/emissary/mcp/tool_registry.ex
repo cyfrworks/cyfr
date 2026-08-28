@@ -229,6 +229,11 @@ defmodule Emissary.MCP.ToolRegistry do
         {:allow_tool, resource} ->
           warn_on_description_drift(ctx, authority, resource)
 
+          # A spawn-shaped transition charged the invoke budget; this
+          # process holds the slot, and the executor's wall-clock kill
+          # would skip the `after` — the guard releases on :DOWN.
+          if guest_fn == :spawn, do: Sanctum.Authority.guard_invoke(authority)
+
           try do
             do_call(
               name,

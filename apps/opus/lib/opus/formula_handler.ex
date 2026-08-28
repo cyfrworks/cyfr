@@ -417,6 +417,11 @@ defmodule Opus.FormulaHandler do
         case Opus.Chain.step_invoke(authority, reference, need, child_opts) do
           {:ok, decision} ->
             fun = fn ->
+              # The task holds the charged slot from here on: the guard's
+              # :DOWN compensation releases it if the task is brutally
+              # killed (cancel / await timeout), where the `after` below
+              # cannot run.
+              Sanctum.Authority.guard_invoke(decision.authority)
               start_time = System.monotonic_time(:millisecond)
 
               try do
