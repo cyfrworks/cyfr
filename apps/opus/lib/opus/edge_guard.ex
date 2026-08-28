@@ -214,8 +214,17 @@ defmodule Opus.EdgeGuard do
   @spec check_response_size(Limits.t(), binary() | nil) ::
           :ok | {:error, :response_too_large, String.t()}
   def check_response_size(%Limits{} = limits, body) do
-    size = byte_size(body || "")
+    check_response_bytes(limits, byte_size(body || ""))
+  end
 
+  @doc """
+  The size-arity form of `check_response_size/2` — for the streaming path,
+  where the byte count is known at the abort without assembling the body.
+  One message for both arities, so the denial contract cannot fork.
+  """
+  @spec check_response_bytes(Limits.t(), non_neg_integer()) ::
+          :ok | {:error, :response_too_large, String.t()}
+  def check_response_bytes(%Limits{} = limits, size) when is_integer(size) and size >= 0 do
     if size > limits.max_response_size do
       {:error, :response_too_large,
        "Response body (#{size} bytes) exceeds limit (#{limits.max_response_size} bytes)"}

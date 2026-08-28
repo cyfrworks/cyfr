@@ -229,24 +229,43 @@ defmodule Opus.HttpHandler do
   defp perform_request(request, limits, component_ref, ctx) do
     start_time = System.monotonic_time(:millisecond)
 
-    req_opts = build_req_opts(request, limits)
+    # The response ceiling is enforced WHILE the body streams in — the
+    # collector aborts the transfer at the limit, so a hostile server on
+    # an allowed domain cannot make the host buffer an arbitrarily large
+    # binary before the check runs.
+    max_bytes = limits.max_response_size
+
+    req_opts =
+      request
+      |> build_req_opts(limits)
+      |> Keyword.put(:into, Cyfr.Network.bounded_collector(max_bytes))
 
     case Req.request(req_opts) do
       {:ok, response} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
-        response_body = normalize_response_body(response.body)
 
-        case EdgeGuard.check_response_size(limits, response_body) do
-          :ok ->
-            emit_telemetry(component_ref, request, response.status, duration_ms)
+        case Cyfr.Network.collected_body(response, max_bytes) do
+          {:ok, body} ->
+            response_body = normalize_response_body(body)
 
-            if request.response_encoding == "base64" do
-              encode_response_base64(response.status, response.headers, response_body)
-            else
-              encode_response(response.status, response.headers, response_body)
+            case EdgeGuard.check_response_size(limits, response_body) do
+              :ok ->
+                emit_telemetry(component_ref, request, response.status, duration_ms)
+
+                if request.response_encoding == "base64" do
+                  encode_response_base64(response.status, response.headers, response_body)
+                else
+                  encode_response(response.status, response.headers, response_body)
+                end
+
+              {:error, type, message} ->
+                emit_telemetry(component_ref, request, :response_too_large, duration_ms)
+                record_egress_denial(ctx, component_ref, type, message)
+                encode_error(type, message)
             end
 
-          {:error, type, message} ->
+          {:error, {:response_too_large, size, _max}} ->
+            {:error, type, message} = EdgeGuard.check_response_bytes(limits, size)
             emit_telemetry(component_ref, request, :response_too_large, duration_ms)
             record_egress_denial(ctx, component_ref, type, message)
             encode_error(type, message)

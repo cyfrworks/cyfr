@@ -555,16 +555,19 @@ defmodule Emissary.MCP.ExternalServer do
         # only when the operator named it in the private-egress allowlist.
         opts = [
           receive_timeout: state.timeout_ms,
-          allow_private: :policy
+          allow_private: :policy,
+          # Enforced while the body streams in — the transfer aborts at the
+          # ceiling, so a hostile peer cannot make this node buffer an
+          # arbitrarily large body before a post-hoc check.
+          max_response_bytes: @max_response_body_bytes
         ]
 
         case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
           {:ok, status, _headers, resp_body} when status in 200..299 ->
-            if byte_size(resp_body) > @max_response_body_bytes do
-              {:error, "Response too large (max 10MB)"}
-            else
-              parse_response(resp_body)
-            end
+            parse_response(resp_body)
+
+          {:error, {:response_too_large, _size, _max}} ->
+            {:error, "Response too large (max 10MB)"}
 
           {:ok, status, _headers, resp_body} ->
             # A 4xx while speaking the current revision is how a peer says it

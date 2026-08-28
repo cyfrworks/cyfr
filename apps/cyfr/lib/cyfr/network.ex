@@ -183,6 +183,10 @@ defmodule Cyfr.Network do
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
+    * `:max_response_bytes` — enforce a response-size ceiling WHILE the
+      body streams in (via `bounded_collector/1`), aborting the transfer
+      at the limit instead of buffering an arbitrarily large body first.
+      Exceeding it returns `{:error, {:response_too_large, size, max}}`.
   """
   @spec pinned_request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
           {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
@@ -192,15 +196,20 @@ defmodule Cyfr.Network do
     # no Req-level retry — `pin/2` bakes exactly that policy in.
     case pin(url, translate_legacy_opts(opts)) do
       {:ok, %{req_opts: req_opts}} ->
+        max_bytes = Keyword.get(opts, :max_response_bytes)
+
         req_opts =
           req_opts
           |> Keyword.put(:method, method)
           |> Keyword.put(:headers, headers)
           |> maybe_put(:body, body)
+          |> maybe_put(:into, max_bytes && bounded_collector(max_bytes))
 
         case Req.request(req_opts) do
-          {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
-            {:ok, status, flatten_headers(resp_headers), resp_body}
+          {:ok, %Req.Response{status: status, headers: resp_headers} = resp} ->
+            with {:ok, resp_body} <- response_body(resp, max_bytes) do
+              {:ok, status, flatten_headers(resp_headers), resp_body}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -208,6 +217,53 @@ defmodule Cyfr.Network do
 
       {:error, _type, message} ->
         {:error, message}
+    end
+  end
+
+  defp response_body(%Req.Response{body: body}, nil), do: {:ok, body}
+  defp response_body(resp, max_bytes), do: collected_body(resp, max_bytes)
+
+  @doc """
+  A Req `into:` collector that aborts the transfer once the accumulated
+  body exceeds `max_bytes` — the ceiling is enforced while the body
+  streams in, so a hostile or misconfigured server cannot make the host
+  buffer an arbitrarily large binary before a post-hoc size check runs.
+
+  Read the result with `collected_body/2`; `resp.body` stays empty.
+  Shared by `pinned_request/5` and the guest HTTP handler, so both
+  outbound planes bound the response the same way.
+  """
+  @spec bounded_collector(pos_integer()) :: fun()
+  def bounded_collector(max_bytes) when is_integer(max_bytes) and max_bytes > 0 do
+    fn {:data, data}, {req, resp} ->
+      chunks = [data | resp.private[:network_chunks] || []]
+      size = (resp.private[:network_size] || 0) + byte_size(data)
+
+      resp =
+        resp
+        |> Req.Response.put_private(:network_chunks, chunks)
+        |> Req.Response.put_private(:network_size, size)
+
+      if size > max_bytes do
+        {:halt, {req, Req.Response.put_private(resp, :network_truncated, true)}}
+      else
+        {:cont, {req, resp}}
+      end
+    end
+  end
+
+  @doc """
+  The body a `bounded_collector/1` accumulated: `{:ok, binary}` for a
+  complete transfer, `{:error, {:response_too_large, size, max_bytes}}`
+  for one aborted at the ceiling (`size` is the bytes seen at the abort).
+  """
+  @spec collected_body(Req.Response.t(), pos_integer()) ::
+          {:ok, binary()} | {:error, {:response_too_large, non_neg_integer(), pos_integer()}}
+  def collected_body(%Req.Response{} = resp, max_bytes) do
+    if resp.private[:network_truncated] do
+      {:error, {:response_too_large, resp.private[:network_size] || 0, max_bytes}}
+    else
+      {:ok, (resp.private[:network_chunks] || []) |> Enum.reverse() |> IO.iodata_to_binary()}
     end
   end
 

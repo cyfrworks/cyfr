@@ -218,4 +218,30 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "DNS resolution failed"
     end
   end
+
+  describe "bounded_collector/1 + collected_body/2" do
+    test "collects a within-limit body in order" do
+      collector = Network.bounded_collector(10)
+      resp = %Req.Response{}
+
+      {:cont, {_req, resp}} = collector.({:data, "12345"}, {:req, resp})
+      {:cont, {_req, resp}} = collector.({:data, "67890"}, {:req, resp})
+
+      assert Network.collected_body(resp, 10) == {:ok, "1234567890"}
+    end
+
+    test "halts the transfer past the ceiling and reports the size" do
+      collector = Network.bounded_collector(10)
+      resp = %Req.Response{}
+
+      {:cont, {_req, resp}} = collector.({:data, "1234567890"}, {:req, resp})
+      {:halt, {_req, resp}} = collector.({:data, "x"}, {:req, resp})
+
+      assert Network.collected_body(resp, 10) == {:error, {:response_too_large, 11, 10}}
+    end
+
+    test "an empty transfer collects an empty body" do
+      assert Network.collected_body(%Req.Response{}, 10) == {:ok, ""}
+    end
+  end
 end
