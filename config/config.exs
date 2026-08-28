@@ -64,6 +64,13 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# The execution engine, as configuration rather than a boot-time
+# registration — the endpoint must never be live before the engine is
+# named. `Cyfr.Execution.impl/0` answers nil until the module is actually
+# loadable, so a build without the opus app (a headless control plane,
+# the cyfr app's own test runs) still reports the engine unavailable.
+config :cyfr, :execution_impl, Opus
+
 # Inbound request-param redaction (:filter_parameters) is set at boot by
 # Cyfr.Application from Sanctum.Sanitizer.filter_parameters/0 — the one
 # redaction vocabulary. It is not spelled here so it cannot drift from it.

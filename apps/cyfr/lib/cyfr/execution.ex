@@ -6,7 +6,7 @@ defmodule Cyfr.Execution do
   The execution port: how cyfr asks for a component to run, follows its
   events, and stops it — without a compile-time path into the engine.
 
-  The engine (`Opus`) registers itself as the implementation when it starts
+  The engine (`Opus`) is named in configuration
   (`config :cyfr, :execution_impl`); a build without it — a headless control
   plane, a test that stubs the engine — answers `available?/0` false and
   every call `{:error, :execution_unavailable}`. The functions mirror the
@@ -33,9 +33,17 @@ defmodule Cyfr.Execution do
   @callback list(Context.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   @callback ready?() :: boolean()
 
-  @doc "The registered engine module, or nil when none has started."
+  @doc "The configured engine module, or nil when none is loadable."
   @spec impl() :: impl() | nil
-  def impl, do: Application.get_env(:cyfr, :execution_impl)
+  def impl do
+    # The load check keeps one static config honest across builds: the
+    # cyfr app alone (its own tests, a control-plane-only node) has no
+    # Opus on the code path, and a name that cannot load is no engine.
+    case Application.get_env(:cyfr, :execution_impl) do
+      nil -> nil
+      mod -> if Code.ensure_loaded?(mod), do: mod, else: nil
+    end
+  end
 
   @doc "Whether an engine is registered and ready to admit work."
   @spec available?() :: boolean()
