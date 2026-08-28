@@ -22,10 +22,10 @@ defmodule Locus.BuildLimiter do
   permanently exhausted the cap until the application restarted.
 
   A holder may acquire more than once (slots are refcounted per pid);
-  its `:DOWN` releases everything it held. Locus is a library app with
-  no process tree, so `Cyfr.Application` supervises this server — if it
-  is not running, `acquire/0` fails closed with `{:error, :busy}` rather
-  than admitting unbounded builds.
+  its `:DOWN` releases everything it held. `Locus.Application` supervises
+  this server — if it is not running, `acquire/2` fails closed with
+  `{:error, :busy}` rather than admitting unbounded builds. A per-tenant
+  cap (`tenant_max/0`) keeps one athanor from holding every slot.
   """
 
   use GenServer
@@ -33,6 +33,9 @@ defmodule Locus.BuildLimiter do
   require Logger
 
   @default_max 2
+  # One build per tenant by default: the global cap is small, and a
+  # single athanor must not be able to hold every slot.
+  @default_tenant_max 1
   @sweep_interval_ms 30_000
   # Well past the builder's own compile deadline and the tool layer's
   # 5-minute kill: a live holder this old is wedged, not working.
@@ -47,9 +50,9 @@ defmodule Locus.BuildLimiter do
   retryable message rather than queueing. Also `{:error, :busy}` when the
   limiter is not running: an unaccounted build is worse than a refused one.
   """
-  @spec acquire() :: :ok | {:error, :busy}
-  def acquire(server \\ __MODULE__) do
-    GenServer.call(server, :acquire)
+  @spec acquire(atom() | pid(), String.t() | nil) :: :ok | {:error, :busy}
+  def acquire(server \\ __MODULE__, athanor_id \\ nil) do
+    GenServer.call(server, {:acquire, athanor_id})
   catch
     :exit, _ -> {:error, :busy}
   end
@@ -68,6 +71,10 @@ defmodule Locus.BuildLimiter do
   @doc "The configured cap (`:cyfr, :max_concurrent_builds`, default #{@default_max})."
   def max_builds, do: Application.get_env(:cyfr, :max_concurrent_builds, @default_max)
 
+  @doc "The per-tenant cap (`:cyfr, :max_concurrent_builds_per_tenant`, default #{@default_tenant_max})."
+  def tenant_max,
+    do: Application.get_env(:cyfr, :max_concurrent_builds_per_tenant, @default_tenant_max)
+
   # ---------------------------------------------------------------------------
   # Server — state: %{holders: %{pid => {monitor_ref, count, since_ms}}, in_use: n}
   # ---------------------------------------------------------------------------
@@ -79,20 +86,31 @@ defmodule Locus.BuildLimiter do
   end
 
   @impl true
-  def handle_call(:acquire, {pid, _tag}, state) do
-    if state.in_use >= max_builds() do
-      {:reply, {:error, :busy}, state}
-    else
-      holders =
-        Map.update(
-          state.holders,
-          pid,
-          {Process.monitor(pid), 1, System.monotonic_time(:millisecond)},
-          fn {ref, count, since} -> {ref, count + 1, since} end
-        )
+  def handle_call({:acquire, athanor_id}, {pid, _tag}, state) do
+    cond do
+      state.in_use >= max_builds() ->
+        {:reply, {:error, :busy}, state}
 
-      {:reply, :ok, %{state | holders: holders, in_use: state.in_use + 1}}
+      is_binary(athanor_id) and tenant_in_use(state, athanor_id) >= tenant_max() ->
+        {:reply, {:error, :busy}, state}
+
+      true ->
+        holders =
+          Map.update(
+            state.holders,
+            pid,
+            {Process.monitor(pid), 1, System.monotonic_time(:millisecond), athanor_id},
+            fn {ref, count, since, tenant} -> {ref, count + 1, since, tenant} end
+          )
+
+        {:reply, :ok, %{state | holders: holders, in_use: state.in_use + 1}}
     end
+  end
+
+  defp tenant_in_use(state, athanor_id) do
+    state.holders
+    |> Enum.filter(fn {_pid, {_ref, _count, _since, tenant}} -> tenant == athanor_id end)
+    |> Enum.reduce(0, fn {_pid, {_ref, count, _since, _tenant}}, acc -> acc + count end)
   end
 
   @impl true
@@ -109,7 +127,9 @@ defmodule Locus.BuildLimiter do
     now = System.monotonic_time(:millisecond)
 
     stale =
-      for {pid, {_ref, _count, since}} <- state.holders, now - since > @max_hold_ms, do: pid
+      for {pid, {_ref, _count, since, _tenant}} <- state.holders,
+          now - since > @max_hold_ms,
+          do: pid
 
     if stale != [] do
       Logger.warning(
@@ -136,14 +156,14 @@ defmodule Locus.BuildLimiter do
       nil ->
         state
 
-      {ref, 1, _since} ->
+      {ref, 1, _since, _tenant} ->
         Process.demonitor(ref, [:flush])
         %{state | holders: Map.delete(state.holders, pid), in_use: state.in_use - 1}
 
-      {ref, count, since} ->
+      {ref, count, since, tenant} ->
         %{
           state
-          | holders: Map.put(state.holders, pid, {ref, count - 1, since}),
+          | holders: Map.put(state.holders, pid, {ref, count - 1, since, tenant}),
             in_use: state.in_use - 1
         }
     end
@@ -155,7 +175,7 @@ defmodule Locus.BuildLimiter do
       nil ->
         state
 
-      {ref, count, _since} ->
+      {ref, count, _since, _tenant} ->
         Process.demonitor(ref, [:flush])
         %{state | holders: Map.delete(state.holders, pid), in_use: state.in_use - count}
     end

@@ -83,6 +83,19 @@ if config_env() != :test do
   # the recorded attestation is checked again at execution time).
   config :cyfr, :require_signed_pulls, env_bool.("CYFR_REQUIRE_SIGNED_PULLS", false)
 
+  # Concurrent toolchain builds (cargo/npm — a CPU core and hundreds of MB
+  # each for minutes). The per-tenant cap keeps one athanor from holding
+  # every slot.
+  if max_builds = env_int.("CYFR_MAX_CONCURRENT_BUILDS", nil) do
+    if max_builds < 1, do: raise("CYFR_MAX_CONCURRENT_BUILDS must be >= 1")
+    config :cyfr, :max_concurrent_builds, max_builds
+  end
+
+  if tenant_builds = env_int.("CYFR_MAX_CONCURRENT_BUILDS_PER_TENANT", nil) do
+    if tenant_builds < 1, do: raise("CYFR_MAX_CONCURRENT_BUILDS_PER_TENANT must be >= 1")
+    config :cyfr, :max_concurrent_builds_per_tenant, tenant_builds
+  end
+
   # A headless node (default: false) serves the API, MCP and public tinctures
   # and no browser surface: every route on the browser pipeline answers 404.
   # Codex signs in through the session tool on /mcp, so it does not notice.

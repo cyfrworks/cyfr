@@ -174,7 +174,7 @@ defmodule Locus.MCP do
   end
 
   defp run_compile(ctx, reference, build_id) do
-    case Locus.BuildLimiter.acquire() do
+    case Locus.BuildLimiter.acquire(Locus.BuildLimiter, ctx.athanor_id) do
       :ok ->
         try do
           do_run_compile(ctx, reference, build_id)
@@ -257,7 +257,7 @@ defmodule Locus.MCP do
             # Build artifacts write cap-exempt by design: failing a build
             # half-way through its save is worse than any over-cap state,
             # and the bytes still count against usage accounting.
-            Arca.put(ctx, wasm_path, result.wasm_bytes, cap: :exempt)
+            Arca.put(ctx, wasm_path, result.wasm_bytes)
           end
 
         case store_result do
@@ -484,7 +484,7 @@ defmodule Locus.MCP do
     files =
       Enum.map(output_files, fn {rel_path, content} -> {Path.split(rel_path), content} end)
 
-    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, cap: :exempt) do
+    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, []) do
       {:ok, _written} -> :ok
       {:error, reason} -> {:error, reason}
     end

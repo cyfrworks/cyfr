@@ -17,13 +17,23 @@ defmodule Locus.Builder do
   read from, and deleted entirely within `compile/3`. No Arca-tracked
   content ever sits on disk outside the function call.
 
-  ## Security Properties
+  ## Security Properties (what is actually enforced here)
 
   - Temp directory per compilation, cleaned up immediately
-  - Source size validated before writing to disk
-  - Compiled WASM validated before returning
-  - No network access from compiler beyond crates.io / npm registry
-  - WASM output goes through Opus WASM sandbox when executed
+  - Source size and path traversal validated before writing to disk
+  - Compiled WASM validated (`Locus.WasmValidator`) before returning
+  - Output bounded: dist file count/bytes capped, compiler chatter capped
+  - npm runs with `--ignore-scripts`: a dependency's lifecycle script
+    never executes on this host
+  - WASM output executes only inside the Opus sandbox
+
+  What is NOT enforced here and is honest to say: the compilers
+  themselves (`cargo`, `npm run build`) run as this OS user with the
+  network reachable — crates.io/npm access is how builds work, and a
+  malicious build script in the USER'S OWN sources runs with this
+  process's ambient authority. Deployments that need a harder wall run
+  builds in the separate builder container (`CYFR_BUILDER_URL`), which
+  carries the toolchains so the app image does not.
 
   ## Usage
 
@@ -421,7 +431,10 @@ defmodule Locus.Builder do
 
     run_with_timeout(
       sh,
-      ["-c", "npm install --no-audit --no-fund 2>&1 && npm run build 2>&1"],
+      # --ignore-scripts: a dependency's postinstall never runs on this
+      # host. Modern esbuild/Vite ship platform binaries as optional
+      # dependencies, so tincture builds do not need lifecycle scripts.
+      ["-c", "npm install --no-audit --no-fund --ignore-scripts 2>&1 && npm run build 2>&1"],
       tmp_dir,
       nil,
       timeout_ms,
@@ -433,22 +446,56 @@ defmodule Locus.Builder do
     dist_dir = Path.join(tmp_dir, "dist")
 
     if File.dir?(dist_dir) do
-      files =
-        dist_dir
-        |> list_files_recursive()
-        |> Enum.reduce(%{}, fn file_path, acc ->
-          rel = Path.relative_to(file_path, dist_dir)
-          {:ok, content} = File.read(file_path)
-          Map.put(acc, rel, content)
-        end)
+      paths = list_files_recursive(dist_dir)
 
-      if map_size(files) == 0 do
-        {:error, {:compilation_failed, 0, "Build produced no output files in dist/"}}
-      else
-        {:ok, files}
+      with :ok <- check_output_count(paths),
+           {:ok, files} <- read_dist_files(dist_dir, paths) do
+        if map_size(files) == 0 do
+          {:error, {:compilation_failed, 0, "Build produced no output files in dist/"}}
+        else
+          {:ok, files}
+        end
       end
     else
       {:error, {:compilation_failed, 0, "Build did not produce a dist/ directory"}}
+    end
+  end
+
+  @max_output_files 500
+  # The shared 64 MiB ceiling — the same bound the base64 ingress uses.
+  @max_output_total_bytes Sanctum.Limits.default_max_memory_bytes()
+
+  defp check_output_count(paths) when length(paths) > @max_output_files,
+    do:
+      {:error,
+       {:compilation_failed, 0,
+        "Build produced #{length(paths)} files in dist/ (max #{@max_output_files})"}}
+
+  defp check_output_count(_paths), do: :ok
+
+  # Reads answer with a refusal, never a raise, and the running byte total
+  # is bounded — a build's output cannot balloon this process.
+  defp read_dist_files(dist_dir, paths) do
+    Enum.reduce_while(paths, {:ok, {%{}, 0}}, fn file_path, {:ok, {acc, bytes}} ->
+      rel = Path.relative_to(file_path, dist_dir)
+
+      case File.read(file_path) do
+        {:ok, content} when bytes + byte_size(content) > @max_output_total_bytes ->
+          {:halt,
+           {:error,
+            {:compilation_failed, 0,
+             "Build output exceeds #{@max_output_total_bytes} bytes in dist/"}}}
+
+        {:ok, content} ->
+          {:cont, {:ok, {Map.put(acc, rel, content), bytes + byte_size(content)}}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:compilation_failed, 0, "Cannot read dist/#{rel}: #{reason}"}}}
+      end
+    end)
+    |> case do
+      {:ok, {files, _bytes}} -> {:ok, files}
+      {:error, _} = error -> error
     end
   end
 
@@ -580,7 +627,15 @@ defmodule Locus.Builder do
       :ok
   end
 
-  defp collect_port_output(port, acc, on_progress) do
+  # Compiler chatter kept for the error report is bounded; past the cap
+  # the tail is dropped (the progress stream already delivered every line)
+  # so a runaway build cannot balloon this process's heap.
+  @max_port_output_bytes 2_000_000
+
+  defp collect_port_output(port, acc, on_progress),
+    do: collect_port_output(port, acc, 0, on_progress)
+
+  defp collect_port_output(port, acc, acc_bytes, on_progress) do
     receive do
       {^port, {:data, data}} ->
         data
@@ -588,10 +643,19 @@ defmodule Locus.Builder do
         |> Enum.reject(&(&1 == ""))
         |> Enum.each(&on_progress.(:output, &1))
 
-        collect_port_output(port, [data | acc], on_progress)
+        if acc_bytes < @max_port_output_bytes do
+          collect_port_output(port, [data | acc], acc_bytes + byte_size(data), on_progress)
+        else
+          collect_port_output(port, acc, acc_bytes, on_progress)
+        end
 
       {^port, {:exit_status, status}} ->
         {:ok, status, acc |> Enum.reverse() |> Enum.join()}
+    after
+      # The Task.yield deadline outside is the real bound; this is the
+      # belt for a port that dies without ever sending an exit_status.
+      :timer.minutes(15) ->
+        {:ok, -1, acc |> Enum.reverse() |> Enum.join()}
     end
   end
 end
