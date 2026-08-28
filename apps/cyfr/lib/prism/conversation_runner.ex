@@ -383,6 +383,8 @@ defmodule Prism.ConversationRunner do
     # allowlist: the same standing a send is held to, asked again here rather
     # than trusted from the mount that opened the socket.
     with :ok <- standing(ctx, state),
+         {:ok, peek} <- Conversations.get_message(ctx, message_id),
+         :ok <- scope_permitted(peek, scope),
          {:ok, msg} <-
            Conversations.resolve_approval(ctx, message_id, "pending", "running", %{
              resolution: %{"scope" => scope}
@@ -1154,6 +1156,22 @@ defmodule Prism.ConversationRunner do
         state
     end
   end
+
+  # `:always` writes "auto" into the athanor's SHARED agent allowlist —
+  # every member's future runs stop asking. The card hides that button for
+  # destructive/external actions, but the card is a client; the rule is
+  # decided here, on the kind the intent already carries.
+  defp scope_permitted(msg, :always) do
+    case approval_intent(msg)["action_kind"] do
+      kind when kind in ["destructive", "external"] ->
+        {:error, {:scope_not_permitted, kind}}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp scope_permitted(_msg, _scope), do: :ok
 
   # `:conversation` remembers the pair for the rest of this chat; `:always`
   # also writes `"auto"` for it into the athanor's agent allowlist.

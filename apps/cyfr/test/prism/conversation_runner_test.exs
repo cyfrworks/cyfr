@@ -375,6 +375,46 @@ defmodule Prism.ConversationRunnerTest do
            )
   end
 
+  test "':always' on a destructive or external card is refused server-side", %{
+    alice: alice,
+    bob: bob,
+    conv: conv
+  } do
+    # The card hides the button; the rule lives in the runner. A crafted
+    # scope=always on a destructive/external action must not write "auto"
+    # into the athanor's shared allowlist.
+    {_eid, _runner, _} = start_turn(alice, conv, "plant")
+
+    for kind <- ["destructive", "external"] do
+      {:ok, apr} =
+        Conversations.append(alice, conv.id, %{
+          author: "aqua",
+          kind: "approval",
+          status: "pending",
+          content: "Wipe things",
+          payload: %{
+            "orchestrator" => "aqua",
+            "intent" => %{
+              "kind" => "request_approval",
+              "title" => "Wipe things",
+              "action_kind" => kind,
+              "proposal" => %{"tool" => "component", "action" => "delete", "args" => %{}}
+            }
+          }
+        })
+
+      assert {:error, {:scope_not_permitted, ^kind}} =
+               ConversationRunner.approve(bob, conv.id, apr.id, :always)
+
+      # The card is still pending — a refused scope decides nothing.
+      {:ok, still} = Conversations.get_message(bob, apr.id)
+      assert still.status == "pending"
+
+      # A scope that writes nothing shared is still every member's to give.
+      :ok = ConversationRunner.approve(bob, conv.id, apr.id, :conversation)
+    end
+  end
+
   test "decline records the reason; a proposal outside policy is a tripwire", %{
     alice: alice,
     conv: conv
