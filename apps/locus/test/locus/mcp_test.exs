@@ -156,6 +156,19 @@ defmodule Locus.MCPTest do
       assert msg =~ "package.json" or msg =~ "Vanilla tinctures"
     end
 
+    test "refuses a non-local namespace instead of renamespacing it" do
+      # `catalyst:acme.foo` would resolve acme's version and then compile
+      # into local/foo — a different component. The namespace policy refuses.
+      assert {:error, msg} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "compile",
+                 "reference" => "catalyst:acme.foo:1.0.0"
+               })
+
+      assert msg =~ "local namespace"
+      assert msg =~ "acme"
+    end
+
     test "accepts tincture type in reference" do
       # Should fail at source lookup, not at type validation
       assert {:error, msg} =

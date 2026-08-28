@@ -67,4 +67,22 @@ defmodule Compendium.NamespacePolicy do
       :ok
     end
   end
+
+  @doc """
+  Require the `local` namespace for a build — `Locus` reads source from
+  and writes artifacts into the tree the scanner indexes, so a reference
+  naming any other namespace would resolve that namespace's version and
+  then overwrite `local/{name}` with a different component's build.
+  Refused, never silently renamespaced.
+  """
+  @spec require_local_build(String.t() | nil) :: :ok | {:error, String.t()}
+  def require_local_build(namespace) do
+    if ComponentPath.local_publisher?(namespace) do
+      :ok
+    else
+      {:error,
+       "build.compile builds only the local namespace, got: #{namespace}. " <>
+         "Fork the component into local/ first, then build."}
+    end
+  end
 end

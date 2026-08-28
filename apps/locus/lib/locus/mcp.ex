@@ -332,11 +332,18 @@ defmodule Locus.MCP do
   # ============================================================================
 
   defp parse_reference(reference) do
-    # ComponentRef.parse/1 already gates the type against the canonical list;
-    # a second check here could only drift from it.
+    # ComponentRef.parse/1 already gates the type against the canonical
+    # list, and the shared namespace policy gates the namespace — both
+    # checks live with their owners so a second spelling here could only
+    # drift. Every later step (source read, version resolution's target,
+    # artifact store) uses the local publisher, so a non-local reference
+    # must be refused here rather than silently renamespaced.
     case Sanctum.ComponentRef.parse(reference) do
       {:ok, ref} ->
-        {:ok, ref.type, ref.name, ref.version}
+        case Compendium.NamespacePolicy.require_local_build(ref.namespace) do
+          :ok -> {:ok, ref.type, ref.name, ref.version}
+          {:error, _} = refusal -> refusal
+        end
 
       {:error, reason} ->
         {:error, "Invalid reference: #{reason}"}
