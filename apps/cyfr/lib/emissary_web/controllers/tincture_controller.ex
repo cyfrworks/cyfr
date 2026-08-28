@@ -74,12 +74,26 @@ defmodule EmissaryWeb.TinctureController do
         )
 
       {:ok, ctx} ->
-        conn
-        |> put_status(200)
-        |> json(%{
-          token: Sanctum.TinctureAuth.issue_access_token(ctx),
-          expires_in: Sanctum.TinctureAuth.access_token_max_age()
-        })
+        # The token opens one tincture, so the mint asks which. Without that
+        # the endpoint could only issue an athanor-wide credential, which is
+        # the thing the scoping exists to prevent.
+        case {conn.params["publisher"], conn.params["tincture_name"]} do
+          {publisher, name} when is_binary(publisher) and is_binary(name) ->
+            conn
+            |> put_status(200)
+            |> json(%{
+              token: Sanctum.TinctureAuth.issue_access_token(ctx, publisher, name),
+              expires_in: Sanctum.TinctureAuth.access_token_max_age()
+            })
+
+          _ ->
+            EmissaryWeb.ApiError.send(
+              conn,
+              400,
+              :tincture_required,
+              "Name the tincture: publisher and tincture_name"
+            )
+        end
 
       :unauthenticated ->
         # ApiError attaches the RFC 9110 §15.5.2 challenge on every 401.

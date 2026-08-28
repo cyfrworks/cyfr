@@ -44,8 +44,25 @@ defmodule Sanctum.S7TinctureTokenTest do
   end
 
   defp conn(query_string, headers \\ []) do
-    %Plug.Conn{query_string: query_string, req_headers: headers, remote_ip: {127, 0, 0, 1}}
+    %Plug.Conn{
+      query_string: query_string,
+      req_headers: headers,
+      remote_ip: {127, 0, 0, 1},
+      path_params: %{"publisher" => "acme", "tincture_name" => "dash"}
+    }
   end
+
+  defp conn_for(query_string, publisher, tincture_name) do
+    %Plug.Conn{
+      query_string: query_string,
+      req_headers: [],
+      remote_ip: {127, 0, 0, 1},
+      path_params: %{"publisher" => publisher, "tincture_name" => tincture_name}
+    }
+  end
+
+  defp token_for(publisher \\ "acme", name \\ "dash"),
+    do: TinctureAuth.issue_access_token(authed_ctx(), publisher, name)
 
   defp authed_ctx do
     Context.build(
@@ -61,7 +78,7 @@ defmodule Sanctum.S7TinctureTokenTest do
 
   describe "issue_access_token/1 + ?_t= round-trip" do
     test "mints a token that rebuilds an athanor-scoped :execute tincture context" do
-      token = TinctureAuth.issue_access_token(authed_ctx())
+      token = token_for()
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(conn("_t=#{token}"))
       assert out.user_id == @person
@@ -74,7 +91,7 @@ defmodule Sanctum.S7TinctureTokenTest do
     end
 
     test "a token stops opening the athanor its holder has left, or been denied at the door" do
-      token = TinctureAuth.issue_access_token(authed_ctx())
+      token = token_for()
       assert {:ok, %Context{}} = TinctureAuth.authenticate(conn("_t=#{token}"))
 
       # The seat goes: the signature is still valid, the standing is not.
@@ -112,8 +129,37 @@ defmodule Sanctum.S7TinctureTokenTest do
           authenticated: true
         )
 
-      token = TinctureAuth.issue_access_token(unresolved)
+      token = TinctureAuth.issue_access_token(unresolved, "acme", "dash")
       assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :no_athanor}
+    end
+  end
+
+  describe "the token names one tincture" do
+    test "it does not open a sibling in the same athanor" do
+      # The token rides a URL into a sandboxed iframe, where the tincture's own
+      # scripts can read it and send it anywhere its manifest's connect-src
+      # allows. Athanor-wide :execute would make one tincture's leak the whole
+      # athanor's; the `/_s/` asset token in the same feature already binds
+      # publisher and name, and this is the same kind of grant.
+      token = token_for("acme", "dash")
+
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "dash"))
+
+      assert TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "billing")) ==
+               {:error, :wrong_tincture}
+
+      assert TinctureAuth.authenticate(conn_for("_t=#{token}", "other", "dash")) ==
+               {:error, :wrong_tincture}
+    end
+
+    test "a token minted for one tincture is still held to standing" do
+      token = token_for("acme", "dash")
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_acme")
+      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: @person)
+
+      assert TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "dash")) ==
+               {:error, :not_standing}
     end
   end
 

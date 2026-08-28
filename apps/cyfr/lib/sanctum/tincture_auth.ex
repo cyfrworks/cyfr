@@ -44,17 +44,20 @@ defmodule Sanctum.TinctureAuth do
           | :denied
           | :not_standing
           | :no_athanor
+          | :wrong_tincture
           | :unavailable
 
-  # Distinct from the `/_s/` asset token (tincture_controller.ex,
-  # @token_salt "tincture_asset_v2"): a single-purpose, minimal-payload,
-  # athanor-scoped :execute token. The Prism picker bakes the URL at
-  # render time and the user may click a tincture minutes later, so the
-  # lifetime must comfortably outlast an open picker session. 1h is still a
-  # dramatic improvement over the prior raw session token in the URL (which
-  # carried the full-TTL session credential); this token grants only
-  # tincture :execute for one athanor and expires regardless.
-  @access_token_salt "tincture_access_v3"
+  # A sibling of the `/_s/` asset token (tincture_controller.ex,
+  # @token_salt "tincture_asset_v2") and scoped the same way: one publisher
+  # and one name, not a whole athanor. It travels in a URL into a sandboxed
+  # iframe, where the tincture's own scripts can read `location.search` and
+  # send it to any origin its manifest put in `connect-src` — so an
+  # athanor-wide grant would make any one tincture's leak open every other
+  # tincture in that athanor, private ones included. The Prism picker bakes
+  # the URL at render time and the user may click minutes later, so the
+  # lifetime outlasts an open picker session; v4 is the scoped payload, and
+  # the salt bump retires every unscoped token still in flight.
+  @access_token_salt "tincture_access_v4"
   @access_token_max_age 3600
 
   @doc "Access-token lifetime in seconds — the value verify enforces and the API reports."
@@ -69,19 +72,26 @@ defmodule Sanctum.TinctureAuth do
   defp signing_secret, do: Application.fetch_env!(:cyfr, :secret_key_base)
 
   @doc """
-  Mint a short-lived tincture access token from an authenticated context.
+  Mint a short-lived access token for ONE tincture, from an authenticated
+  context.
 
-  The payload is the minimum needed to rebuild an athanor-scoped, `:execute`
-  tincture context — never the API key, never the raw session id. Useless for
-  the MCP API and expires in #{@access_token_max_age}s, so even if logged it
-  is low-value and short-lived.
+  The payload is the minimum needed to rebuild an `:execute` tincture context
+  bound to `publisher`/`tincture_name` — never the API key, never the raw
+  session id. Useless for the MCP API, refused on any other tincture, and
+  expires in #{@access_token_max_age}s, so even if it leaks out of the iframe
+  that carried it, what it opens is the one page the holder was already
+  looking at.
   """
-  @spec issue_access_token(Context.t()) :: String.t()
-  def issue_access_token(%Context{} = ctx) do
+  @spec issue_access_token(Context.t(), String.t(), String.t()) :: String.t()
+  def issue_access_token(%Context{} = ctx, publisher, tincture_name)
+      when is_binary(publisher) and is_binary(tincture_name) do
     Phoenix.Token.sign(signing_secret(), @access_token_salt, %{
       u: ctx.user_id,
       a: ctx.athanor_id,
       n: ctx.namespace,
+      # The one tincture this token opens.
+      p: publisher,
+      t: tincture_name,
       # What was exchanged for it, so the standing it is held to is the
       # standing of the credential behind it — a person's session or an
       # athanor-owned key are not the same thing.
@@ -149,28 +159,30 @@ defmodule Sanctum.TinctureAuth do
     # (tenant_resolved?) is the real control, so no namespace guard here.
     case query_param(conn, "_t") do
       token when is_binary(token) and token != "" ->
-        verify_access_token(token)
+        verify_access_token(token, conn)
 
       _ ->
         :skip
     end
   end
 
-  defp verify_access_token(token) do
+  defp verify_access_token(token, conn) do
     case Phoenix.Token.verify(signing_secret(), @access_token_salt, token,
            max_age: @access_token_max_age
          ) do
-      {:ok, %{u: user_id, a: athanor_id, n: namespace} = payload} ->
-        Context.build(
-          user_id: user_id,
-          namespace: namespace,
-          athanor_id: athanor_id,
-          permissions: [:execute],
-          scope: :athanor,
-          auth_method: :tincture,
-          authenticated: true
-        )
-        |> still_standing(athanor_id, Map.get(payload, :m, :person))
+      {:ok, %{u: user_id, a: athanor_id, n: namespace, p: publisher, t: name} = payload} ->
+        with :ok <- names_this_tincture(conn, publisher, name) do
+          Context.build(
+            user_id: user_id,
+            namespace: namespace,
+            athanor_id: athanor_id,
+            permissions: [:execute],
+            scope: :athanor,
+            auth_method: :tincture,
+            authenticated: true
+          )
+          |> still_standing(athanor_id, Map.get(payload, :m, :person))
+        end
 
       {:error, :expired} ->
         {:error, :expired_token}
@@ -179,6 +191,24 @@ defmodule Sanctum.TinctureAuth do
         {:error, :invalid_credential}
     end
   end
+
+  # The token opens the tincture it was minted for and no other. The request's
+  # own tincture comes from the router's path params, so this holds for every
+  # `/t/:athanor/:publisher/:tincture_name` route — index, asset and invoke —
+  # at one place. A route that names no tincture (the `/t/access-token` mint)
+  # has nothing to compare and refuses minted tokens on its own account.
+  defp names_this_tincture(conn, publisher, name) do
+    case {path_param(conn, "publisher"), path_param(conn, "tincture_name")} do
+      {nil, nil} -> :ok
+      {^publisher, ^name} -> :ok
+      _ -> {:error, :wrong_tincture}
+    end
+  end
+
+  defp path_param(%Plug.Conn{path_params: params}, key) when is_map(params),
+    do: Map.get(params, key)
+
+  defp path_param(_conn, _key), do: nil
 
   # A signature says who minted the token, not what they may still do. A
   # token exchanged for a person's session is held to that person's standing

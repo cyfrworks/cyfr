@@ -438,8 +438,10 @@ defmodule PrismWeb.ShellLive do
     base = Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name)
 
     # Short-lived, single-purpose access token instead of the raw session
-    # token — a credential must never travel in a URL/query string.
-    "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
+    # token — a credential must never travel in a URL/query string — and
+    # scoped to this tincture, because the sandboxed frame can read it back
+    # out of its own location and send it wherever its manifest allows.
+    "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)}"
   end
 
   # Build a same-origin asset URL for icons/previews. Returns nil for missing
@@ -459,7 +461,7 @@ defmodule PrismWeb.ShellLive do
         Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name) <>
           "/" <> encoded
 
-      "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
+      "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)}"
     end
   end
 

@@ -332,10 +332,19 @@ defmodule Sanctum.Consent.Commit do
   defp publish_edge(edge, edge_key, need_ids, durable?) do
     edge =
       case Map.get(edge, "storage") do
-        %{"actions" => actions} = storage when not durable? ->
+        # Any storage block, whether or not it spells `actions`. An absent
+        # roster already denies every action downstream (`Opus.EdgeGuard`
+        # reads a missing list as the empty one), so writing the filtered
+        # list here changes nothing — it just makes the transform total, so
+        # the promise above holds by construction rather than by agreement
+        # with a fail-closed reader two modules away.
+        storage when is_map(storage) and not durable? ->
           Map.put(edge, "storage", %{
             "paths" => storage["paths"] || [],
-            "actions" => Enum.filter(actions, &(&1 in @readonly_storage_actions))
+            "actions" =>
+              storage
+              |> Map.get("actions", [])
+              |> Enum.filter(&(&1 in @readonly_storage_actions))
           })
 
         _ ->
