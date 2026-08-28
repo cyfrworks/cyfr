@@ -543,7 +543,7 @@ The declared capability **ask**. Unlike the `setup.policy` block it replaces, `c
 | `egress.schemes` | string[] | URL schemes. Omitted = `["https"]` at consent |
 | `egress.private_ips` | string[] | Private IPs/CIDRs to reach (SSRF exception; `169.254.0.0/16` always blocked) |
 | `storage.paths` | string[] | Storage paths for `cyfr:storage/files`. `"data/"` is the component-private scope and the default choice; `"components/"` reaches the athanor's real component trees (writes copy-on-write whole version directories against the storage cap) — grant it only when the component genuinely manages components |
-| `storage.actions` | string[] | Storage actions (`read`, `write`, `list`, `delete`, `exists`) |
+| `storage.actions` | string[] | Storage actions (`read`, `write`, `append`, `list`, `delete`, `exists`) |
 | `tools` | string[] | MCP tool patterns (formulas): `"*"`, exact (`"execution.run"`), or prefix glob (`"component.*"`) |
 | `limits.timeout`, `limits.batch_timeout` | string | Durations like `"30s"`, `"3m"` |
 | `limits.max_memory_bytes`, `.max_request_size`, `.max_response_size`, `.max_concurrent_tasks` | int | Positive integers |
@@ -807,6 +807,7 @@ let token = bindings::cyfr::oauth::token::get_access_token("google")
 |--------|-----------|----------|
 | `read` | `path` | `{status, path, content (base64), size, encoding: "base64"}` |
 | `write` | `path`, `content` (base64) | `{status, path, written, size}` |
+| `append` | `path`, `content` (base64) | `{status, path, appended, size}` |
 | `list` | `path` | `{status, path, files[]}` |
 | `delete` | `path` | `{status, path, deleted}` |
 | `exists` | `path` | `{status, path, exists}` |

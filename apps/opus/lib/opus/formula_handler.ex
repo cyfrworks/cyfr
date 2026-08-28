@@ -32,6 +32,7 @@ defmodule Opus.FormulaHandler do
   | `await-any` | Blocks until FIRST task completes |
   | `poll` | Non-blocking status check |
   | `cancel` | Cancel a spawned task |
+  | `emit` | Push a progress/UI event to the root execution's stream |
 
   ## Architecture
 
@@ -81,7 +82,7 @@ defmodule Opus.FormulaHandler do
   Build Wasmex import map for the `cyfr:formula/invoke@0.1.0` host function.
 
   Returns a `{imports_map, tracker_pid}` tuple. The imports map contains the
-  `"cyfr:formula/invoke@0.1.0"` namespace with all seven invoke functions.
+  `"cyfr:formula/invoke@0.1.0"` namespace with all eight invoke functions.
 
   ## Parameters
 
