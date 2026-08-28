@@ -100,13 +100,20 @@ defmodule PrismWeb.AgentsLive do
     {:noreply, assign(socket, :editor_creating_sub_for, next)}
   end
 
+  # `field` names exactly what the forms edit — never an arbitrary map key.
+  # An unconstrained key could shadow the "action" verb (a later duplicate
+  # key wins in a map literal) or write any guide field, the system prompt
+  # included, from an event the templates never send.
+  @editable_fields ~w(title description)
+
   def handle_event(
         "editor_update_field",
         %{"name" => name, "field" => field, "value" => value},
         socket
-      ) do
+      )
+      when field in @editable_fields do
     ctx = socket.assigns.context
-    args = %{"action" => "update", "name" => name, field => value}
+    args = Map.merge(%{field => value}, %{"action" => "update", "name" => name})
 
     case call_aqua(ctx, args) do
       {:ok, _} ->
@@ -117,6 +124,8 @@ defmodule PrismWeb.AgentsLive do
         {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
     end
   end
+
+  def handle_event("editor_update_field", _params, socket), do: {:noreply, socket}
 
   def handle_event("editor_delete", %{"name" => name}, socket) do
     ctx = socket.assigns.context
@@ -135,38 +144,49 @@ defmodule PrismWeb.AgentsLive do
   end
 
   # Add/remove a `tool.action` from an agent's allowlist. On add, the default
-  # value is "auto" for reads (they never ask) and "ask" for everything else.
+  # value is "auto" for reads (they never ask) and "ask" for everything else —
+  # with the kind DERIVED here from the action's own annotation
+  # (`Prism.AquaActions.kind_for/2`), never taken off the wire: a client-sent
+  # kind could name any action "read" and write "auto" for it with no card
+  # ever shown. A key that resolves to no known action is refused.
   def handle_event(
         "editor_toggle_capability",
-        %{"name" => agent_name, "key" => key} = params,
+        %{"name" => agent_name, "key" => key},
         socket
       ) do
     agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
     current = (agent && agent["tool_policy"]) || %{}
 
-    new_policy =
-      if Map.has_key?(current, key) do
-        Map.delete(current, key)
-      else
-        default = if params["kind"] == "read", do: "auto", else: "ask"
-        Map.put(current, key, default)
-      end
+    cond do
+      Map.has_key?(current, key) ->
+        {:noreply, update_agent_tool_policy(socket, agent_name, Map.delete(current, key))}
 
-    {:noreply, update_agent_tool_policy(socket, agent_name, new_policy)}
+      resolved_kind(key) == nil ->
+        {:noreply, put_flash(socket, :error, "Unknown capability: #{key}")}
+
+      true ->
+        default = if resolved_kind(key) == :read, do: "auto", else: "ask"
+        {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, default))}
+    end
   end
 
   # Toggle a write/execute capability between "ask" (request approval) and
-  # "auto" (run without asking). Reads and destructive/external rows don't
-  # expose this — but guard the value space anyway.
+  # "auto" (run without asking). Destructive/external rows don't expose this
+  # in the UI — and the rule is enforced here, on the derived kind: "auto"
+  # for a destructive or external action is refused whatever the client sent.
   def handle_event(
         "editor_set_capability_mode",
         %{"name" => agent_name, "key" => key, "mode" => mode},
         socket
       )
       when mode in ["ask", "auto"] do
-    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
-    current = (agent && agent["tool_policy"]) || %{}
-    {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, mode))}
+    if mode == "auto" and not auto_permitted?(key) do
+      {:noreply, put_flash(socket, :error, "#{key} always asks — it cannot be set to auto")}
+    else
+      agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+      current = (agent && agent["tool_policy"]) || %{}
+      {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, mode))}
+    end
   end
 
   # Toggle the provider-native search grant. It is an ordinary policy key
@@ -323,6 +343,20 @@ defmodule PrismWeb.AgentsLive do
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  # The action's kind, resolved from its own annotation — the server-owned
+  # fact the ask/auto decisions above key on. nil for a key the catalog
+  # has never heard of (fail closed).
+  defp resolved_kind(key) when is_binary(key) do
+    case String.split(key, ".", parts: 2) do
+      [tool, action] -> Prism.AquaActions.kind_for(tool, action)
+      _ -> nil
+    end
+  end
+
+  # "auto" (run with no card) is only for kinds a card can be skipped for.
+  # Destructive and external actions always ask; an unknown kind refuses.
+  defp auto_permitted?(key), do: resolved_kind(key) in [:read, :write, :execute]
 
   defp update_agent_tool_policy(socket, agent_name, new_policy) do
     case call_aqua(socket.assigns.context, %{
@@ -800,7 +834,6 @@ defmodule PrismWeb.AgentsLive do
                         phx-click="editor_toggle_capability"
                         phx-value-name={@agent["name"]}
                         phx-value-key={key}
-                        phx-value-kind={Atom.to_string(kind)}
                         class="rounded bg-gray-900 border-gray-600"
                       />
                       <span class="text-[11px] font-mono text-gray-400">
