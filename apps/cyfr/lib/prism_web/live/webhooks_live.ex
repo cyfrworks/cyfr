@@ -322,8 +322,9 @@ defmodule PrismWeb.WebhooksLive do
 
   defp extract(_, _), do: nil
 
-  defp format_tool_error(reason) when is_binary(reason), do: reason
-  defp format_tool_error(reason), do: inspect(reason)
+  # The one console rendering of a tool refusal — `inspect/1` once put
+  # internal terms on the page here while 30 other call sites generalized.
+  defp format_tool_error(reason), do: error_message(reason)
 
   # Display the URL exactly as the server returned it (a path — clients
   # prepend their own host). The LiveView never reconstructs it.

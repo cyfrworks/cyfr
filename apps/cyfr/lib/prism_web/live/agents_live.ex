@@ -239,35 +239,45 @@ defmodule PrismWeb.AgentsLive do
   def handle_event("editor_set_model", %{"name" => agent_name, "value" => value}, socket) do
     ctx = socket.assigns.context
 
-    case Catalog.decode_model_choice(value) do
-      {:inherit} ->
-        call_aqua(ctx, %{
-          "action" => "update",
-          "name" => agent_name,
-          "model" => nil,
-          "catalyst_ref" => nil
-        })
+    result =
+      case Catalog.decode_model_choice(value) do
+        {:inherit} ->
+          call_aqua(ctx, %{
+            "action" => "update",
+            "name" => agent_name,
+            "model" => nil,
+            "catalyst_ref" => nil
+          })
 
-      {:model, provider, model} ->
-        catalyst_ref =
-          case socket.assigns[:catalyst_refs][provider] do
-            nil -> "catalyst:moonmoon69.#{provider}"
-            ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
-          end
+        {:model, provider, model} ->
+          catalyst_ref =
+            case socket.assigns[:catalyst_refs][provider] do
+              nil -> "catalyst:moonmoon69.#{provider}"
+              ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
+            end
 
-        call_aqua(ctx, %{
-          "action" => "update",
-          "name" => agent_name,
-          "model" => model,
-          "catalyst_ref" => catalyst_ref
-        })
+          call_aqua(ctx, %{
+            "action" => "update",
+            "name" => agent_name,
+            "model" => model,
+            "catalyst_ref" => catalyst_ref
+          })
 
-      :noop ->
-        :ok
-    end
+        :noop ->
+          {:ok, :noop}
+      end
 
     send(self(), :editor_refresh)
-    {:noreply, socket}
+
+    case result do
+      {:ok, _} ->
+        {:noreply, socket}
+
+      {:error, reason} ->
+        # A discarded refusal made the select box appear to work — the
+        # refresh then quietly snapped it back.
+        {:noreply, put_flash(socket, :error, "Model update failed: #{error_message(reason)}")}
+    end
   end
 
   # ============================================================================

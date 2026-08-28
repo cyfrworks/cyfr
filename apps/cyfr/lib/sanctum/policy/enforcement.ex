@@ -141,8 +141,18 @@ defmodule Sanctum.Policy.Enforcement do
           emit_telemetry(record_attrs)
           :ok
 
-        {:error, changeset} ->
-          {:error, changeset}
+        {:error, %Ecto.Changeset{} = changeset} ->
+          # A raw changeset must not escape the audit plane — the caller
+          # gets a typed reason; the detail goes to the log.
+          Logger.warning(
+            "[Sanctum.Policy.Enforcement] denial record refused: " <>
+              inspect(changeset.errors)
+          )
+
+          {:error, :audit_write_failed}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -172,7 +182,14 @@ defmodule Sanctum.Policy.Enforcement do
       ])
     )
   rescue
-    _ -> :ok
+    # A raising telemetry handler must not fail the decision — but a
+    # swallowed raise here would hide a broken audit pipeline entirely.
+    e ->
+      Logger.warning(
+        "[Sanctum.Policy.Enforcement] decision telemetry raised: " <> Exception.message(e)
+      )
+
+      :ok
   end
 
   # Audit writes are best-effort, but a sustained failure means policy decisions
@@ -185,7 +202,14 @@ defmodule Sanctum.Policy.Enforcement do
       %{reason: inspect(reason)}
     )
   rescue
-    _ -> :ok
+    # This function exists to make dropped audit writes visible; its own
+    # failure must at least reach the log.
+    e ->
+      Logger.warning(
+        "[Sanctum.Policy.Enforcement] audit-failure telemetry raised: " <> Exception.message(e)
+      )
+
+      :ok
   end
 
   defp safe_encode(map) do

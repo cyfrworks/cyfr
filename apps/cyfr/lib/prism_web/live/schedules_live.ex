@@ -104,7 +104,7 @@ defmodule PrismWeb.SchedulesLive do
            |> put_flash(:info, "Schedule created")}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed: #{reason}")}
+          {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
       end
     end
   end
@@ -112,21 +112,21 @@ defmodule PrismWeb.SchedulesLive do
   def handle_event("pause", %{"id" => id}, socket) do
     case call_tool(socket, "schedule", %{"action" => "pause", "schedule_id" => id}) do
       {:ok, _} -> {:noreply, fetch_schedules(socket)}
-      {:error, reason} -> {:noreply, put_flash(socket, :error, "Failed: #{reason}")}
+      {:error, reason} -> {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
   end
 
   def handle_event("resume", %{"id" => id}, socket) do
     case call_tool(socket, "schedule", %{"action" => "resume", "schedule_id" => id}) do
       {:ok, _} -> {:noreply, fetch_schedules(socket)}
-      {:error, reason} -> {:noreply, put_flash(socket, :error, "Failed: #{reason}")}
+      {:error, reason} -> {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
     case call_tool(socket, "schedule", %{"action" => "delete", "schedule_id" => id}) do
       {:ok, _} -> {:noreply, fetch_schedules(socket) |> put_flash(:info, "Schedule deleted")}
-      {:error, reason} -> {:noreply, put_flash(socket, :error, "Failed: #{reason}")}
+      {:error, reason} -> {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
   end
 

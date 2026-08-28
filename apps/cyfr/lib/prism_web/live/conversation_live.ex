@@ -301,13 +301,20 @@ defmodule PrismWeb.ConversationLive do
     if Prism.ConversationRunner.turn_running?(id) do
       {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
     else
-      Conversations.delete(ctx, id)
-      current = socket.assigns.conversation && socket.assigns.conversation.id
+      case Conversations.delete(ctx, id) do
+        :ok ->
+          current = socket.assigns.conversation && socket.assigns.conversation.id
 
-      if current == id do
-        {:noreply, push_patch(socket, to: chat_path(socket, nil))}
-      else
-        {:noreply, assign(socket, :conversations, Conversations.list(ctx))}
+          if current == id do
+            {:noreply, push_patch(socket, to: chat_path(socket, nil))}
+          else
+            {:noreply, assign(socket, :conversations, Conversations.list(ctx))}
+          end
+
+        {:error, reason} ->
+          # A failed delete leaves the row listed; saying nothing made the
+          # button look broken.
+          {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
       end
     end
   end
@@ -359,34 +366,55 @@ defmodule PrismWeb.ConversationLive do
 
   def handle_info({:conversation, _other, _event}, socket), do: {:noreply, socket}
 
-  # Approval cards dispatch the decision to their parent; the runner runs it.
+  # Approval cards dispatch the decision to their parent; the runner runs
+  # it. A refusal reaches the person who clicked — log-only made the button
+  # appear to do nothing.
   def handle_info({:approval_approve, id, scope}, socket) do
-    with %{id: conv_id} <- socket.assigns.conversation do
-      case ConversationRunner.approve(socket.assigns.context, conv_id, id, scope) do
-        :ok ->
-          :ok
+    case socket.assigns.conversation do
+      %{id: conv_id} ->
+        case ConversationRunner.approve(socket.assigns.context, conv_id, id, scope) do
+          :ok ->
+            {:noreply, socket}
 
-        {:error, :already_resolved} ->
-          :ok
+          {:error, :already_resolved} ->
+            {:noreply, socket}
 
-        {:error, reason} ->
-          Logger.warning("[ConversationLive] approve failed: #{inspect(reason)}")
-      end
+          {:error, {:scope_not_permitted, kind}} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "A #{kind} action always asks — 'always' cannot be granted for it."
+             )}
+
+          {:error, reason} ->
+            Logger.warning("[ConversationLive] approve failed: #{inspect(reason)}")
+            {:noreply, put_flash(socket, :error, "Approve failed: #{error_message(reason)}")}
+        end
+
+      _ ->
+        {:noreply, socket}
     end
-
-    {:noreply, socket}
   end
 
   def handle_info({:approval_decline, id, reason, scope}, socket) do
-    with %{id: conv_id} <- socket.assigns.conversation do
-      case ConversationRunner.decline(socket.assigns.context, conv_id, id, reason, scope) do
-        :ok -> :ok
-        {:error, :already_resolved} -> :ok
-        {:error, why} -> Logger.warning("[ConversationLive] decline failed: #{inspect(why)}")
-      end
-    end
+    case socket.assigns.conversation do
+      %{id: conv_id} ->
+        case ConversationRunner.decline(socket.assigns.context, conv_id, id, reason, scope) do
+          :ok ->
+            {:noreply, socket}
 
-    {:noreply, socket}
+          {:error, :already_resolved} ->
+            {:noreply, socket}
+
+          {:error, why} ->
+            Logger.warning("[ConversationLive] decline failed: #{inspect(why)}")
+            {:noreply, put_flash(socket, :error, "Decline failed: #{error_message(why)}")}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   # The consent sheet closes itself once the grant lands; the running turn

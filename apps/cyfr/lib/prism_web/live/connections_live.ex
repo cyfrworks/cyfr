@@ -330,8 +330,9 @@ defmodule PrismWeb.ConnectionsLive do
 
   defp maybe_endpoints(args, _params), do: args
 
-  defp fmt(reason) when is_binary(reason), do: reason
-  defp fmt(reason), do: inspect(reason)
+  # Renders through the console's one refusal seam — never `inspect/1`,
+  # which put internal terms on the page.
+  defp fmt(reason), do: error_message(reason)
 
   defp status_class("active"), do: "text-emerald-500"
   defp status_class("needs_reauth"), do: "text-amber-500"
