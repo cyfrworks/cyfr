@@ -130,11 +130,12 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "handles provider errors gracefully" do
       ctx = Sanctum.TestContext.local()
 
-      # Call system with invalid action to trigger error
-      {:error, message} =
+      # Call system with invalid action to trigger error — the dispatch
+      # gate answers with the typed default-deny.
+      {:error, {:unknown_action, message}} =
         ToolRegistry.call_external("system", ctx, %{"action" => "invalid_action"})
 
-      assert message =~ "Unknown action"
+      assert message == "system.invalid_action"
     end
 
     test "passes context and args to provider" do
@@ -227,8 +228,9 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # The registry should catch this and return an error tuple
       result = ToolRegistry.call_external("system", ctx, %{"action" => "crash_intentionally"})
 
-      # Should return error instead of crashing
-      assert {:error, message} = result
+      # Should return error instead of crashing — an undeclared action is
+      # the typed default-deny, refused before the handler could raise.
+      assert {:error, {:unknown_action, message}} = result
       assert is_binary(message)
     end
 
@@ -315,19 +317,18 @@ defmodule Emissary.MCP.ToolRegistryTest do
       ctx = Sanctum.TestContext.local()
 
       # This should fail due to missing required action, but not crash
-      {:error, message} = ToolRegistry.call_external("system", ctx, %{})
-
-      assert message =~ "action"
+      assert {:error, :action_missing} = ToolRegistry.call_external("system", ctx, %{})
     end
 
     test "provider errors are wrapped with context" do
       ctx = Sanctum.TestContext.local()
 
-      # Invalid action will trigger an error from the provider
-      {:error, message} = ToolRegistry.call_external("system", ctx, %{"action" => "nonexistent"})
+      # Invalid action is the dispatcher's typed default-deny, naming the
+      # tool.action it refused.
+      {:error, {:unknown_action, message}} =
+        ToolRegistry.call_external("system", ctx, %{"action" => "nonexistent"})
 
-      # Error should be descriptive
-      assert is_binary(message)
+      assert message == "system.nonexistent"
     end
 
     test "call returns error tuple on missing context fields" do
@@ -469,11 +470,11 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "provider exception is caught and returns error" do
       ctx = Sanctum.TestContext.local()
 
-      # The system tool with an invalid action should trigger an error
-      # that is caught by the rescue block
+      # The system tool with an invalid action is refused by the dispatch
+      # gate's typed default-deny before any handler could raise.
       result = ToolRegistry.call_external("system", ctx, %{"action" => "this_will_cause_error"})
 
-      assert {:error, message} = result
+      assert {:error, {:unknown_action, message}} = result
       assert is_binary(message)
     end
 
@@ -506,7 +507,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     test "error messages from provider are descriptive" do
       ctx = Sanctum.TestContext.local()
 
-      {:error, message} =
+      {:error, {:unknown_action, message}} =
         ToolRegistry.call_external("system", ctx, %{"action" => "unknown_action"})
 
       # Error should mention the issue

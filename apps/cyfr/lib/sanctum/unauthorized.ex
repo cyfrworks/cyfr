@@ -27,6 +27,7 @@ defmodule Sanctum.Unauthorized do
           | {:guest_plane_call, String.t()}
           | {:tool_auth_required, String.t()}
           | {:malformed_resource, :execution | :tenant}
+          | {:consent_class_required, term()}
 
   @doc """
   Whether a term is a refusal from this vocabulary. Dispatchers use it to
@@ -51,6 +52,7 @@ defmodule Sanctum.Unauthorized do
   def reason?({:guest_plane_call, n}) when is_binary(n), do: true
   def reason?({:tool_auth_required, n}) when is_binary(n), do: true
   def reason?({:malformed_resource, tag}) when tag in [:execution, :tenant], do: true
+  def reason?({:consent_class_required, _refusal}), do: true
   def reason?(_), do: false
 
   @doc """
@@ -112,5 +114,12 @@ defmodule Sanctum.Unauthorized do
 
   def message({:malformed_resource, tag}, _) do
     "Unauthorized: malformed #{tag} resource (missing tenant/owner identity)"
+  end
+
+  # The consent-class refusal renders through the vocabulary's owner —
+  # one spelling whichever layer refused (the dispatch gate here, the
+  # profile tool's domain arms there).
+  def message({:consent_class_required, refusal}, _) do
+    Sanctum.Consent.Authz.message(refusal)
   end
 end

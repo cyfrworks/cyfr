@@ -321,19 +321,21 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:proof, reason}),
     do: "proof_invalid: #{inspect(reason)} — re-run preview to mint a fresh proof"
 
-  defp fmt({:surface_not_permitted, method}),
-    do: "consent_class_required: this surface (#{method}) cannot consent"
+  # The consent-class vocabulary renders through its owner — one spelling
+  # for this tool and the MCP dispatch gate alike.
+  defp fmt({:surface_not_permitted, _} = refusal), do: Sanctum.Consent.Authz.message(refusal)
 
-  defp fmt(:guest_plane), do: "consent_class_required: guest-plane contexts cannot consent"
-  defp fmt(:no_capability), do: "consent_class_required: this key carries no consent capability"
-
-  defp fmt(:capability_digest_mismatch),
-    do: "consent_class_required: the key's capability pins a different commit digest"
-
-  defp fmt(:capability_expired), do: "consent_class_required: the key's capability has expired"
-
-  defp fmt(:override_requires_interactive),
-    do: "consent_class_required: overrides are always interactive"
+  defp fmt(refusal)
+       when refusal in [
+              :guest_plane,
+              :not_authenticated,
+              :anonymous,
+              :no_capability,
+              :capability_digest_mismatch,
+              :capability_expired,
+              :override_requires_interactive
+            ],
+       do: Sanctum.Consent.Authz.message(refusal)
 
   defp fmt({:unknown_need, need}),
     do: "unknown_need: #{inspect(need)} — this component declares no such need"

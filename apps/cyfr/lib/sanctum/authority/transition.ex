@@ -95,6 +95,25 @@ defmodule Sanctum.Authority.Transition do
           | {:allow_emit, {:attributed, String.t()} | :untrusted}
           | {:invalid, {:malformed_target, guest_fn(), atom()}}
 
+  @doc """
+  Render a deny reason as the sentence the refused guest reads — the one
+  spelling of this closed vocabulary, so a dispatcher never `inspect`s
+  internal terms onto its wire.
+  """
+  @spec deny_message(deny_reason()) :: String.t()
+  def deny_message(:depth_cap), do: "invocation depth cap reached"
+  def deny_message(:invoke_budget_exhausted), do: "invoke budget exhausted"
+  def deny_message(:edge_only), do: "this need is edge-only and cannot be invoked"
+  def deny_message({:need, :required}), do: "a declared need is required for this invocation"
+  def deny_message({:need, :undeclared}), do: "the named need is not declared by this node"
+  def deny_message(:tool_not_granted), do: "tool not granted on this node's consent"
+
+  def deny_message(:tool_server_not_granted),
+    do: "tool server not granted on this node's consent"
+
+  def deny_message(:unbound_control_plane),
+    do: "an unbound context cannot reach the control plane"
+
   @outcome_tags [:child, :child_zero, :deny, :allow_tool, :allow_async, :allow_emit, :invalid]
 
   # ============================================================================

@@ -628,10 +628,10 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       ]
 
       for {tool, verb} <- retired do
-        {:error, msg} =
+        {:error, {:unknown_action, name_action}} =
           Emissary.MCP.ToolRegistry.call_external(tool, ctx, %{"action" => verb})
 
-        assert msg =~ "Unknown action: #{tool}.#{verb}"
+        assert name_action == "#{tool}.#{verb}"
       end
     end
   end

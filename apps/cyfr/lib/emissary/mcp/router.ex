@@ -336,6 +336,8 @@ defmodule Emissary.MCP.Router do
   defp format_error_reason({:timeout, msg}) when is_binary(msg), do: msg
   defp format_error_reason({:crashed, msg}) when is_binary(msg), do: msg
   defp format_error_reason({:exit, msg}) when is_binary(msg), do: msg
+  defp format_error_reason(:action_missing), do: "Missing required argument: action"
+  defp format_error_reason({:unknown_action, name_action}), do: "Unknown action: #{name_action}"
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do

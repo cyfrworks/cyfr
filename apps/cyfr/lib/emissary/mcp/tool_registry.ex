@@ -247,7 +247,11 @@ defmodule Emissary.MCP.ToolRegistry do
           end
 
         {:deny, reason} ->
-          {:error, "Denied by chain authority: #{inspect(reason)} for '#{name}'"}
+          # Rendered through the vocabulary's own renderer — never
+          # `inspect`, which put internal terms on the guest's wire.
+          {:error,
+           "Denied by chain authority: " <>
+             "#{Sanctum.Authority.Transition.deny_message(reason)} for '#{name}'"}
 
         {:invalid, {:malformed_target, fun, tag}} ->
           {:error, "Invalid in-chain call: #{fun}/#{tag}"}
@@ -503,21 +507,23 @@ defmodule Emissary.MCP.ToolRegistry do
   # Public solely so the discovery-parity test can ask the exact question
   # dispatch answers without executing any handler.
   @spec authorize_annotated_action(String.t(), map(), Context.t(), map()) ::
-          :ok | {:error, String.t()}
+          :ok
+          | {:error,
+             Sanctum.Unauthorized.reason() | :action_missing | {:unknown_action, String.t()}}
   def authorize_annotated_action(name, meta, ctx, args) do
     action = args["action"] || args[:action]
     annotation = ActionAnnotations.annotation(meta, action)
 
     cond do
       is_nil(action) ->
-        {:error, "Missing required argument: action"}
+        {:error, :action_missing}
 
       is_nil(annotation) ->
         # Default-deny: an action without an access declaration is not
         # dispatchable, whatever the handler would have said. The HTTP path
         # never gets here (InputValidator enforces the schema enum first);
         # this refuses the in-process callers.
-        {:error, "Unknown action: #{name}.#{action}"}
+        {:error, {:unknown_action, "#{name}.#{action}"}}
 
       true ->
         with :ok <- check_auth(name, ctx, annotation),
@@ -554,6 +560,11 @@ defmodule Emissary.MCP.ToolRegistry do
     end
   end
 
+  # A consent refusal stays typed here — `Sanctum.Consent.Authz`'s own
+  # vocabulary wrapped in the `Sanctum.Unauthorized` reason it maps to —
+  # and the wire boundary renders it through `Authz.message/1`. This gate
+  # used to flatten it to prose bound to ProfileTool's spelling by comment
+  # alone.
   defp check_consent(ctx, annotation) do
     case Map.get(annotation, :consent) do
       nil ->
@@ -562,26 +573,16 @@ defmodule Emissary.MCP.ToolRegistry do
       :interactive ->
         case Sanctum.Consent.Authz.authorize_interactive(ctx) do
           {:ok, :interactive} -> :ok
-          {:error, refusal} -> {:error, consent_refusal(refusal)}
+          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
         end
 
       :staging ->
         case Sanctum.Consent.Authz.authorize_staging(ctx) do
           :ok -> :ok
-          {:error, refusal} -> {:error, consent_refusal(refusal)}
+          {:error, refusal} -> {:error, {:consent_class_required, refusal}}
         end
     end
   end
-
-  # The same vocabulary Sanctum.MCP.ProfileTool speaks for domain-level
-  # refusals, so a caller sees one phrasing whichever layer refused.
-  defp consent_refusal({:surface_not_permitted, method}),
-    do: "consent_class_required: this surface (#{method}) cannot consent"
-
-  defp consent_refusal(:guest_plane),
-    do: "consent_class_required: guest-plane contexts cannot consent"
-
-  defp consent_refusal(other), do: "consent_class_required: #{inspect(other)}"
 
   defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
     in_chain? = Keyword.get(opts, :in_chain, false)

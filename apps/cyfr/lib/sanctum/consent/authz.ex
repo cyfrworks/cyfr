@@ -131,6 +131,33 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
+  @doc """
+  Render a refusal as the `consent_class_required:` sentence the caller
+  reads — the ONE spelling of this vocabulary's prose. Every surface that
+  answers a consent refusal (`Sanctum.MCP.ProfileTool`, the MCP dispatch
+  gate via `Sanctum.Unauthorized`) renders through here, so the phrasing
+  cannot fork per surface. The tag prefix is wire-stable: clients grep it.
+  """
+  @spec message(refusal() | term()) :: String.t()
+  def message({:surface_not_permitted, method}),
+    do: "consent_class_required: this surface (#{method}) cannot consent"
+
+  def message(:guest_plane), do: "consent_class_required: guest-plane contexts cannot consent"
+  def message(:not_authenticated), do: "consent_class_required: authentication required"
+  def message(:anonymous), do: "consent_class_required: anonymous callers cannot consent"
+  def message(:no_capability), do: "consent_class_required: this key carries no consent capability"
+
+  def message(:capability_digest_mismatch),
+    do: "consent_class_required: the key's capability pins a different commit digest"
+
+  def message(:capability_expired), do: "consent_class_required: the key's capability has expired"
+
+  def message(:override_requires_interactive),
+    do: "consent_class_required: overrides are always interactive"
+
+  def message(:invalid_request), do: "consent_class_required: invalid consent request"
+  def message(other), do: "consent_class_required: #{inspect(other)}"
+
   # ============================================================================
   # Private
   # ============================================================================
