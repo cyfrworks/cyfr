@@ -1,6 +1,6 @@
 # Reverse proxy for the CYFR self-hosted stack. See docker-compose.yml.
 #
-#   everything → cyfr:4000 (the one endpoint: Prism, /mcp, /api, /auth, /t)
+#   everything → cyfr:{$CYFR_PORT:4000} (the one endpoint: Prism, /mcp, /api, /auth, /t)
 #
 # Set CYFR_HOST and CADDY_ACME_EMAIL in .env. With CYFR_HOST=localhost Caddy
 # serves plain HTTP on :80 (no ACME); with a real domain it auto-provisions TLS.
@@ -8,7 +8,7 @@
 # This service only runs when the `tls` compose profile is active — `cyfr
 # init` sets CYFR_BEHIND_PROXY=true when you answer "yes" to the TLS prompt
 # and `cyfr up` adds `--profile tls` accordingly. In direct mode cyfr answers
-# on http://localhost:4000 itself, no Caddy needed.
+# on http://localhost:${CYFR_PORT} itself, no Caddy needed.
 #
 # Client-IP trust: Caddy's default reverse_proxy behavior APPENDS the peer IP
 # to X-Forwarded-For (no explicit directive needed), and cyfr resolves the
@@ -30,6 +30,6 @@
 	# Everything: cyfr's one endpoint (Prism, /mcp, /api, /auth, /t). cyfr sets
 	# its own CSP/XFO/HSTS on every response it serves.
 	handle {
-		reverse_proxy cyfr:4000
+		reverse_proxy cyfr:{$CYFR_PORT:4000}
 	}
 }

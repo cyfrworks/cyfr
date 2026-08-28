@@ -14,11 +14,13 @@ defmodule Cyfr.StackShapeTest do
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
 
-  test "the Caddyfile proxies everything to cyfr:4000 and is well-formed" do
+  test "the Caddyfile proxies everything to cyfr's one (parameterized) port" do
     caddy = read!("Caddyfile")
 
     proxies = Regex.scan(~r/^\s*reverse_proxy\s+(\S+)/m, caddy, capture: :all_but_first)
-    assert proxies == [["cyfr:4000"]], "expected exactly one reverse_proxy to cyfr:4000"
+
+    assert proxies == [["cyfr:{$CYFR_PORT:4000}"]],
+           "expected exactly one reverse_proxy to cyfr:{$CYFR_PORT:4000}"
 
     opens = caddy |> String.graphemes() |> Enum.count(&(&1 == "{"))
     closes = caddy |> String.graphemes() |> Enum.count(&(&1 == "}"))
@@ -45,6 +47,27 @@ defmodule Cyfr.StackShapeTest do
 
     # One runtime root: the old components bind mount must not come back.
     refute compose =~ ~r/^\s*- \.\/components:/m
+  end
+
+  test "the port is a parameter everywhere, 4000 only as its default" do
+    # CYFR_PORT=8000 must work by setting one variable. A bare 4000
+    # outside a default-expansion is a site the variable does not reach —
+    # exactly the drift this test exists to refuse.
+    for file <- ["docker-compose.yml", "Caddyfile", "Dockerfile"] do
+      stripped =
+        file
+        |> read!()
+        |> String.split("\n")
+        |> Enum.map(&String.replace(&1, ~r/(^|\s)#.*$/, ""))
+        |> Enum.join("\n")
+
+      bare =
+        ~r/(?<!:-)(?<!=)(?<!:)4000/
+        |> Regex.scan(stripped)
+        |> List.flatten()
+
+      assert bare == [], "bare 4000 outside a default-expansion in #{file}"
+    end
   end
 
   test "the image carries the seed tree and reads it in place" do

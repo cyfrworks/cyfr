@@ -31,7 +31,7 @@ defmodule EmissaryWeb.HealthController do
   def ready(conn, _params) do
     checks = cached_checks()
 
-    all_ok = Enum.all?(checks, fn {_k, v} -> v == :ok end)
+    all_ok = Enum.all?(checks, fn {_k, v} -> v == :ok or match?({:degraded, _}, v) end)
 
     status_code = if all_ok, do: 200, else: 503
 
@@ -47,7 +47,11 @@ defmodule EmissaryWeb.HealthController do
         Map.new(checks, fn {k, v} ->
           # Anonymous callers get pass/fail only; raw DB/storage error
           # internals go to the log line above.
-          {k, if(v == :ok, do: "ok", else: "failed")}
+          case v do
+            :ok -> {k, "ok"}
+            {:degraded, _} -> {k, "degraded"}
+            _ -> {k, "failed"}
+          end
         end)
     })
   end
@@ -81,7 +85,11 @@ defmodule EmissaryWeb.HealthController do
       storage: check_storage(),
       tool_registry: check_process(Emissary.MCP.ToolRegistry),
       resource_registry: check_process(Emissary.MCP.ResourceRegistry),
-      progress: check_process(Emissary.MCP.Progress.Registry)
+      progress: check_process(Emissary.MCP.Progress.Registry),
+      # Degrading, never failing: a control-plane node without the engine
+      # still serves everything else, and the probe says so instead of
+      # flapping the container.
+      execution: if(Cyfr.Execution.available?(), do: :ok, else: {:degraded, "engine unavailable"})
     }
   end
 

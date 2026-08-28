@@ -93,16 +93,24 @@ RUN set -eux; \
     chmod +x /usr/local/bin/gosu; \
     gosu nobody true
 
+# Only what the runtime user writes: the release itself stays root-owned
+# and read-only to `app` (RELEASE_TMP points the release's generated
+# sys.config at /tmp); the entrypoint re-chowns bind-mounted data at start.
 RUN mkdir -p /app/data \
-    && chown -R app:app /app /app/data
+    && chown app:app /app/data
+ENV RELEASE_TMP=/tmp
 
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-EXPOSE 4000
+ARG CYFR_PORT=4000
+EXPOSE ${CYFR_PORT}
 
-HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health || exit 1
+# Readiness, not liveness: /api/health/ready answers 503 until the DB,
+# cache and registries are actually up; start-period covers boot
+# migrations.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health/ready || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["sh", "-c", "exec /app/bin/cyfr start"]

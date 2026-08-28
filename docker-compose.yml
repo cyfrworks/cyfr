@@ -21,11 +21,12 @@ services:
     container_name: cyfr
     image: ghcr.io/cyfrworks/cyfr:latest
     expose:
-      - "4000"
+      - "${CYFR_PORT:-4000}"
     ports:
       # Loopback-only: the Codex CLI and the browser talk to
-      # http://127.0.0.1:4000; a hostname deploy fronts it with Caddy.
-      - "127.0.0.1:4000:4000"
+      # http://127.0.0.1:${CYFR_PORT:-4000}; a hostname deploy fronts it
+      # with Caddy.
+      - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"
     volumes:
       - ./data:/app/data
       - ./aqua:/app/seed/aqua
@@ -60,12 +61,8 @@ services:
           # Caps aggregate damage from WASM components that never yield
           # (a killed tight-loop leaks a spinning native thread).
           cpus: "${CYFR_CPU_LIMIT:-4}"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
-      interval: 10s
-      timeout: 3s
-      start_period: 15s
-      retries: 3
+    # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
+    # port and the probed path have one author.
 
   mcp-bridge:
     # Built locally from Dockerfile.node (not a published image), so `docker
