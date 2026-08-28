@@ -291,13 +291,15 @@ defmodule Prism.AquaTurn do
   end
 
   # Only request_approval drops whose proposal violated policy are surfaced
-  # — those are the security-relevant ones. Routine drops (malformed JSON, a
-  # path outside the allowlist) stay in the log.
+  # — those are the security-relevant ones, told by the drop's typed tag,
+  # never by matching the reason's wording (a rewording in AquaActions once
+  # silently disabled this). Routine drops (malformed JSON, an action the
+  # chat plane refuses) stay in the log.
   defp tripwires(drops) do
     drops
     |> Enum.filter(fn
-      %{raw: %{"kind" => "ui.request_approval"}, reason: reason} when is_binary(reason) ->
-        reason =~ "allowlist"
+      %{raw: %{"kind" => "ui.request_approval"}} = drop ->
+        Map.get(drop, :tag) in [:not_in_allowlist, :unknown_allowlist_value]
 
       _ ->
         false

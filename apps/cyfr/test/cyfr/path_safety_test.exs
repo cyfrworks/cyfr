@@ -62,30 +62,40 @@ defmodule Cyfr.PathSafetyTest do
       assert :ok = PathSafety.validate_relative_path("")
     end
 
+    # Each refusal carries its typed reason next to the prose — callers
+    # branch on the atom, so the wording is rendering, not contract.
     test "rejects absolute paths" do
-      assert {:error, message} = PathSafety.validate_relative_path("/etc/passwd")
+      assert {:error, {:absolute_path, message}} =
+               PathSafety.validate_relative_path("/etc/passwd")
+
       assert message =~ "Absolute paths"
     end
 
     test "rejects .. traversal" do
-      assert {:error, message} =
+      assert {:error, {:dot_segment, message}} =
                PathSafety.validate_relative_path("components/agent/../../evil/x.wasm")
 
       assert message =~ ".."
     end
 
     test "rejects null bytes (gained from the Arca side of the merge)" do
-      assert {:error, message} = PathSafety.validate_relative_path("data/x" <> <<0>> <> "y")
+      assert {:error, {:null_bytes, message}} =
+               PathSafety.validate_relative_path("data/x" <> <<0>> <> "y")
+
       assert message =~ "null bytes"
     end
 
     test "rejects encoded traversal (gained from the Arca side of the merge)" do
-      assert {:error, message} = PathSafety.validate_relative_path("data/%2e%2e/secrets")
+      assert {:error, {:encoded_dots, message}} =
+               PathSafety.validate_relative_path("data/%2e%2e/secrets")
+
       assert message =~ "encoded"
     end
 
     test "rejects backslashes" do
-      assert {:error, message} = PathSafety.validate_relative_path("data\\..\\secrets")
+      assert {:error, {:backslash, message}} =
+               PathSafety.validate_relative_path("data\\..\\secrets")
+
       assert message =~ "backslashes"
     end
   end
@@ -104,7 +114,7 @@ defmodule Cyfr.PathSafetyTest do
         PathSafety.validate_segments!(["guest", String.duplicate("四", 81)])
       end
 
-      assert {:error, message} =
+      assert {:error, {:segment_too_long, message}} =
                PathSafety.validate_relative_path("data/" <> String.duplicate("a", 241))
 
       assert message =~ "segment longer than 240 bytes"
@@ -120,7 +130,9 @@ defmodule Cyfr.PathSafetyTest do
         PathSafety.validate_segments!(deep_bad)
       end
 
-      assert {:error, message} = PathSafety.validate_relative_path(Enum.join(deep_bad, "/"))
+      assert {:error, {:too_deep, message}} =
+               PathSafety.validate_relative_path(Enum.join(deep_bad, "/"))
+
       assert message =~ "more than 32 segments"
     end
 
@@ -137,7 +149,7 @@ defmodule Cyfr.PathSafetyTest do
   describe "validate_segments/1 (tuple contract)" do
     test "answers instead of raising — the exists? contract" do
       assert :ok = PathSafety.validate_segments(["guest", "notes.txt"])
-      assert {:error, message} = PathSafety.validate_segments(["guest", ".."])
+      assert {:error, {:dot_segment, message}} = PathSafety.validate_segments(["guest", ".."])
       assert message =~ "not allowed"
     end
   end

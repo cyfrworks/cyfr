@@ -129,17 +129,25 @@ defmodule Cyfr.TinctureHelpers do
 
   def validate_entry(_other), do: {:error, "entry must be a string"}
 
+  # Branches on the typed refusal, never on the message's wording — a
+  # `true ->` fallback over prose once misreported seven distinct causes
+  # as a traversal.
   defp path_safe(entry) do
     case Cyfr.PathSafety.validate_relative_path(entry) do
       :ok ->
         :ok
 
-      {:error, message} ->
-        cond do
-          message =~ "null bytes" -> {:error, "entry must not contain null bytes"}
-          message =~ "Absolute paths" -> {:error, "entry must be a relative path"}
-          true -> {:error, "entry must not contain '..'"}
-        end
+      {:error, {:null_bytes, _}} ->
+        {:error, "entry must not contain null bytes"}
+
+      {:error, {:absolute_path, _}} ->
+        {:error, "entry must be a relative path"}
+
+      {:error, {reason, _}} when reason in [:dot_segment, :encoded_dots] ->
+        {:error, "entry must not contain '..'"}
+
+      {:error, {_reason, message}} ->
+        {:error, "entry rejected: #{message}"}
     end
   end
 

@@ -138,7 +138,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   defp validate_segments(segments) do
     case Cyfr.PathSafety.validate_segments(segments) do
       :ok -> :ok
-      {:error, message} -> {:error, "Invalid path: #{message}"}
+      {:error, {_reason, message}} -> {:error, "Invalid path: #{message}"}
     end
   end
 

@@ -49,16 +49,18 @@ defmodule Cyfr.PathSafety do
   def validate_segments!(segments) when is_list(segments) do
     case validate_segments(segments) do
       :ok -> :ok
-      {:error, message} -> raise ArgumentError, message
+      {:error, {_reason, message}} -> raise ArgumentError, message
     end
   end
 
   @doc """
-  Validate a list of path segments. Returns `:ok` or `{:error, message}` —
-  the same denylist as `validate_segments!/1`, for callers whose contract
-  answers rather than raises (`Arca.exists?/2`).
+  Validate a list of path segments. Returns `:ok` or
+  `{:error, {reason, message}}` — the same denylist as
+  `validate_segments!/1`, for callers whose contract answers rather than
+  raises (`Arca.exists?/2`). `reason` is the typed refusal (see
+  `t:refusal/0`); a caller branches on it, never on the message's wording.
   """
-  @spec validate_segments([String.t()]) :: :ok | {:error, String.t()}
+  @spec validate_segments([String.t()]) :: :ok | {:error, {refusal(), String.t()}}
   def validate_segments(segments) when is_list(segments) do
     with :ok <- check_shape(segments) do
       Enum.reduce_while(segments, :ok, fn segment, :ok ->
@@ -70,15 +72,32 @@ defmodule Cyfr.PathSafety do
     end
   end
 
+  @typedoc """
+  Why a path was refused. The structured half of every refusal — prose is
+  for rendering, the atom is for deciding (a `true ->` fallback over the
+  wording once misreported seven distinct causes as a traversal).
+  """
+  @type refusal ::
+          :empty_segment
+          | :dot_segment
+          | :null_bytes
+          | :backslash
+          | :absolute_path
+          | :encoded_dots
+          | :segment_too_long
+          | :too_deep
+          | :too_long
+          | :non_string_segment
+
   @doc """
   Validate a relative, slash-separated path string.
 
-  Returns `:ok` or `{:error, message}`.
+  Returns `:ok` or `{:error, {reason, message}}`.
   """
-  @spec validate_relative_path(String.t()) :: :ok | {:error, String.t()}
+  @spec validate_relative_path(String.t()) :: :ok | {:error, {refusal(), String.t()}}
   def validate_relative_path(path) when is_binary(path) do
     if String.starts_with?(path, "/") do
-      {:error, "Absolute paths are not allowed."}
+      {:error, {:absolute_path, "Absolute paths are not allowed."}}
     else
       path
       |> String.split("/")
@@ -99,10 +118,10 @@ defmodule Cyfr.PathSafety do
 
     cond do
       length(segments) > @max_depth ->
-        {:error, "Path rejected: more than #{@max_depth} segments"}
+        {:error, {:too_deep, "Path rejected: more than #{@max_depth} segments"}}
 
       total > @max_path_bytes ->
-        {:error, "Path rejected: longer than #{@max_path_bytes} bytes"}
+        {:error, {:too_long, "Path rejected: longer than #{@max_path_bytes} bytes"}}
 
       true ->
         :ok
@@ -114,25 +133,25 @@ defmodule Cyfr.PathSafety do
 
     cond do
       segment == "" ->
-        {:error, "Path rejected: empty segments are not allowed"}
+        {:error, {:empty_segment, "Path rejected: empty segments are not allowed"}}
 
       segment in [".", ".."] ->
-        {:error, "Path traversal rejected: segment #{inspect(segment)} is not allowed"}
+        {:error, {:dot_segment, "Path traversal rejected: segment #{inspect(segment)} is not allowed"}}
 
       String.contains?(segment, <<0>>) ->
-        {:error, "Path traversal rejected: null bytes are not allowed"}
+        {:error, {:null_bytes, "Path traversal rejected: null bytes are not allowed"}}
 
       String.contains?(segment, "\\") ->
-        {:error, "Path traversal rejected: backslashes are not allowed"}
+        {:error, {:backslash, "Path traversal rejected: backslashes are not allowed"}}
 
       String.starts_with?(segment, "/") ->
-        {:error, "Path traversal rejected: absolute segments are not allowed"}
+        {:error, {:absolute_path, "Path traversal rejected: absolute segments are not allowed"}}
 
       decoded in [".", ".."] or decoded =~ ~r/(^|[\/\\])\.\.($|[\/\\])/ ->
-        {:error, "Path traversal rejected: encoded dot segments are not allowed"}
+        {:error, {:encoded_dots, "Path traversal rejected: encoded dot segments are not allowed"}}
 
       byte_size(segment) > @max_segment_bytes ->
-        {:error, "Path rejected: segment longer than #{@max_segment_bytes} bytes"}
+        {:error, {:segment_too_long, "Path rejected: segment longer than #{@max_segment_bytes} bytes"}}
 
       true ->
         :ok
@@ -140,7 +159,7 @@ defmodule Cyfr.PathSafety do
   end
 
   defp check_segment(other) do
-    {:error, "Path traversal rejected: non-string segment #{inspect(other)}"}
+    {:error, {:non_string_segment, "Path traversal rejected: non-string segment #{inspect(other)}"}}
   end
 
   # Decode URI-encoded segments until output stabilizes, catching multi-layer encoding.

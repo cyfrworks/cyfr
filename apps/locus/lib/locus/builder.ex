@@ -168,7 +168,7 @@ defmodule Locus.Builder do
     |> Enum.reduce_while(:ok, fn path, :ok ->
       case Cyfr.PathSafety.validate_relative_path(path) do
         :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, {:invalid_source_path, path, reason}}}
+        {:error, {_reason, message}} -> {:halt, {:error, {:invalid_source_path, path, message}}}
       end
     end)
   end
@@ -312,6 +312,7 @@ defmodule Locus.Builder do
            :ok <- File.write(dest, content) do
         {:cont, :ok}
       else
+        {:error, {_reason, message}} -> {:halt, {:error, {:write_failed, rel_path, message}}}
         {:error, reason} -> {:halt, {:error, {:write_failed, rel_path, reason}}}
       end
     end)

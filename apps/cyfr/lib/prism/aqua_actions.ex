@@ -96,7 +96,7 @@ defmodule Prism.AquaActions do
       %{
         stripped: "<message minus all blocks, trimmed>",
         intents:  [%{kind: "navigate", to: "/path"}, ...],
-        drops:    [%{raw: term, reason: String.t()}, ...]
+        drops:    [%{raw: term, reason: String.t()}, ...]   # policy refusals also carry tag: atom
       }
   """
   @spec parse(String.t(), map()) :: %{
@@ -132,8 +132,14 @@ defmodule Prism.AquaActions do
       {:ok, parsed} when is_list(parsed) ->
         Enum.reduce(parsed, {intents, drops}, fn entry, {is, ds} ->
           case validate(entry, tool_policy) do
-            {:ok, intent} -> {[intent | is], ds}
-            {:error, reason} -> {is, [%{raw: entry, reason: reason} | ds]}
+            {:ok, intent} ->
+              {[intent | is], ds}
+
+            {:error, {tag, reason}} when is_atom(tag) and is_binary(reason) ->
+              {is, [%{raw: entry, reason: reason, tag: tag} | ds]}
+
+            {:error, reason} ->
+              {is, [%{raw: entry, reason: reason} | ds]}
           end
         end)
 
@@ -292,7 +298,10 @@ defmodule Prism.AquaActions do
   # Allowlist values: "ask" (request approval) | "auto" (call directly). An
   # absent key (and no matching `tool.*` glob) means the agent cannot perform
   # the action at all. Only "ask" should result in a proposal flowing to the
-  # user; the others are validation errors at this stage.
+  # user; the others are validation errors at this stage. Policy refusals
+  # carry a typed tag alongside the prose — the tripwire surface decides on
+  # the tag, never by matching the wording (rewording a reason once silently
+  # disabled the tripwire).
   defp lookup_proposal(policy, tool, action) do
     key = "#{tool}.#{action}"
 
@@ -303,21 +312,26 @@ defmodule Prism.AquaActions do
         # click. Say so here instead, where the agent can act on it.
         if refused?(tool, action) do
           {:error,
-           "ui.request_approval: '#{key}' cannot be run from a chat — tell the person to " <>
-             "open its page"}
+           {:chat_refused,
+            "ui.request_approval: '#{key}' cannot be run from a chat — tell the person to " <>
+              "open its page"}}
         else
           :ok
         end
 
       "auto" ->
         {:error,
-         "ui.request_approval: '#{key}' is allowlisted as 'auto' — call it directly, do not request approval"}
+         {:auto_allowlisted,
+          "ui.request_approval: '#{key}' is allowlisted as 'auto' — call it directly, do not request approval"}}
 
       nil ->
-        {:error, "ui.request_approval: '#{key}' is not in your tool allowlist"}
+        {:error,
+         {:not_in_allowlist, "ui.request_approval: '#{key}' is not in your tool allowlist"}}
 
       other ->
-        {:error, "ui.request_approval: '#{key}' has unknown allowlist value #{inspect(other)}"}
+        {:error,
+         {:unknown_allowlist_value,
+          "ui.request_approval: '#{key}' has unknown allowlist value #{inspect(other)}"}}
     end
   end
 

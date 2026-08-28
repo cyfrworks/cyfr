@@ -147,7 +147,7 @@ defmodule Compendium.MCP do
       {:ok, segments}
     else
       [] -> {:error, "Invalid asset path: empty"}
-      {:error, message} -> {:error, "Invalid asset path: #{message}"}
+      {:error, {_reason, message}} -> {:error, "Invalid asset path: #{message}"}
     end
   end
 

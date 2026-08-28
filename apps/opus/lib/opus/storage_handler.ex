@@ -444,7 +444,7 @@ defmodule Opus.StorageHandler do
   def validate_path_safe(path) do
     case Cyfr.PathSafety.validate_relative_path(path) do
       :ok -> :ok
-      {:error, message} -> {:error, :storage_path_denied, message}
+      {:error, {_reason, message}} -> {:error, :storage_path_denied, message}
     end
   end
 
