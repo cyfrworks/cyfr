@@ -48,6 +48,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  def service, do: "arca"
+
   require Logger
 
   alias Sanctum.Context

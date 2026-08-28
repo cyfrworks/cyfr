@@ -3,29 +3,37 @@
 
 defmodule Emissary.MCP.Services do
   @moduledoc """
-  The one roster mapping tool-provider modules to the service each
-  belongs to. `system.status` derives its scopes and per-service checks
-  from this, and the request log's `routed_to` label reads the same map —
-  so the same provider cannot be one service in the status report and
-  another in the log.
+  The service vocabulary over the tool providers. Each provider declares
+  its own service (`c:Emissary.MCP.ToolProvider.service/0`); this module
+  only aggregates — `system.status` derives its scopes and per-service
+  checks from the same answers the request log's `routed_to` label reads.
   """
 
   alias Emissary.MCP.ToolRegistry
 
-  @provider_services %{
-    Sanctum.MCP => "sanctum",
-    Emissary.MCP.Tools.RecordsProvider => "arca",
-    Opus.MCP => "opus",
-    Opus.CronMCP => "opus",
-    Locus.MCP => "locus",
-    Compendium.MCP => "compendium",
-    Emissary.MCP.McpServersTool => "emissary",
-    Emissary.MCP.Tools.SystemProvider => "emissary"
-  }
+  require Logger
 
-  @doc "The service a provider module belongs to; an unlisted one is emissary's."
+  @doc """
+  The service a provider module belongs to — asked of the module itself
+  (`c:Emissary.MCP.ToolProvider.service/0`), so a provider cannot be one
+  service in the status report and another in the log, and a renamed
+  module cannot silently fall out of a central map. A module that answers
+  nothing is labeled emissary's, LOUDLY — that fallback is a defect, not
+  a default.
+  """
   @spec service_name(module()) :: String.t()
-  def service_name(module), do: Map.get(@provider_services, module, "emissary")
+  def service_name(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :service, 0) do
+      module.service()
+    else
+      Logger.error(
+        "[Emissary.MCP.Services] provider #{inspect(module)} exports no service/0 — " <>
+          "labeling as \"emissary\"; declare `service/0` on the provider"
+      )
+
+      "emissary"
+    end
+  end
 
   @doc "Every service with at least one configured provider, sorted."
   @spec service_names() :: [String.t()]

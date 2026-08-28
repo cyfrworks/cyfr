@@ -12,6 +12,8 @@ defmodule Opus.CronMCP do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  def service, do: "opus"
+
   require Logger
 
   alias Sanctum.Context

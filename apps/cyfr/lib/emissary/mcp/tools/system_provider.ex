@@ -14,6 +14,9 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  @impl true
+  def service, do: "emissary"
+
   alias Sanctum.Context
   require Logger
 

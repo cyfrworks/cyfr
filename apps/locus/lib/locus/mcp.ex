@@ -21,6 +21,8 @@ defmodule Locus.MCP do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  def service, do: "locus"
+
   require Logger
 
   alias Sanctum.Context

@@ -24,6 +24,9 @@ defmodule Emissary.MCP.McpServersTool do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  @impl true
+  def service, do: "emissary"
+
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.ExternalServers
   alias Sanctum.Context

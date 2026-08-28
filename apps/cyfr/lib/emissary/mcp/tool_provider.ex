@@ -133,6 +133,14 @@ defmodule Emissary.MCP.ToolProvider do
   @type handle_result :: {:ok, map()} | {:error, String.t()}
 
   @doc """
+  The service this provider belongs to — the label `system.status` groups
+  by and the request log's `routed_to` carries. Each provider owns its own
+  name (like it owns its tools); the old central map fell back to
+  "emissary" silently when a module was renamed.
+  """
+  @callback service() :: String.t()
+
+  @doc """
   Return list of tool definitions this provider offers.
 
   Each tool definition must include:

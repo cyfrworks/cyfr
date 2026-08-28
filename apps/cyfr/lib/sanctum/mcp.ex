@@ -28,6 +28,8 @@ defmodule Sanctum.MCP do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  def service, do: "sanctum"
+
   alias Sanctum.Context
   alias Sanctum.MCP.Shared
 

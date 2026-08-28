@@ -27,6 +27,8 @@ defmodule Compendium.MCP do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  def service, do: "compendium"
+
   require Logger
 
   alias Sanctum.Context

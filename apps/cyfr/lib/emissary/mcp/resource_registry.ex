@@ -10,11 +10,12 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   ## Configuration
 
-  Optional. When `:resource_providers` is unset (the default), the built-in list
-  `[Emissary.MCP.Tools.RecordsProvider, Opus.MCP, Compendium.MCP, Sanctum.MCP]` is used, filtered to the
-  modules that are loaded. Set the key only to override that list:
-
-      config :cyfr, :resource_providers, [Emissary.MCP.Tools.RecordsProvider, Opus.MCP]
+  None of its own. The resource roster DERIVES from the one provider
+  declaration (`config :cyfr, :tool_providers`): the configured tool
+  providers that export `read/2` with a non-empty resource surface serve
+  resources. The separate `:resource_providers` key was documented,
+  settable, set by nothing anywhere, and shadowed by a second shorter
+  hardcoded list — a knob that only looked turnable.
 
   Providers must implement the `Emissary.MCP.ResourceProvider` behaviour.
   """
@@ -118,8 +119,12 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   @impl true
   def init(_opts) do
-    # Load providers from config
-    providers = Application.get_env(:cyfr, :resource_providers, default_providers())
+    # Derived from the ONE roster (`:tool_providers`): the providers that
+    # actually serve resources are the configured tool providers exporting
+    # `read/2` with a non-empty resource surface. The separate
+    # `:resource_providers` key was set by nothing anywhere and fell back
+    # to a second, shorter hardcoded list.
+    providers = resource_providers()
     register_providers(providers)
     schedule_refresh()
     watch_cache_table()
@@ -181,14 +186,16 @@ defmodule Emissary.MCP.ResourceRegistry do
     Process.send_after(self(), :refresh_cache, @refresh_interval)
   end
 
-  defp default_providers do
-    [
-      Emissary.MCP.Tools.RecordsProvider,
-      Opus.MCP,
-      Compendium.MCP,
-      Sanctum.MCP
-    ]
-    |> Enum.filter(&Code.ensure_loaded?/1)
+  defp resource_providers do
+    Emissary.MCP.ToolRegistry.available_providers()
+    |> Enum.filter(fn provider ->
+      function_exported?(provider, :read, 2) and
+        (non_empty?(provider, :resources) or non_empty?(provider, :resource_templates))
+    end)
+  end
+
+  defp non_empty?(provider, fun) do
+    function_exported?(provider, fun, 0) and provider |> apply(fun, []) |> Enum.any?()
   end
 
   defp register_providers(providers) do
