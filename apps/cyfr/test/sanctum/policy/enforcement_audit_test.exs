@@ -69,7 +69,7 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
         value_source: "vault:vlt_123"
       })
 
-    [row] = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
+    {:ok, [row]} = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
 
     assert row.consent_id == consent.id
     assert row.activation_digest == "sha256:activation"
@@ -93,10 +93,10 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
         consent_id: consent.id
       })
 
-    [plain] = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
+    {:ok, [plain]} = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
     refute Map.has_key?(plain, :consent)
 
-    [joined] =
+    {:ok, [joined]} =
       Arca.PolicyLog.list(
         athanor_id: ctx.athanor_id,
         limit: 1,
@@ -120,14 +120,14 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
         decision_reason: "domain not allowed"
       })
 
-    [row] = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
+    {:ok, [row]} = Arca.PolicyLog.list(athanor_id: ctx.athanor_id, limit: 1)
 
     assert row.consent_id == nil
     assert row.chain == nil
     assert row.decision == "denied"
 
     # The join is a no-op for rows with no consent.
-    [unjoined] =
+    {:ok, [unjoined]} =
       Arca.PolicyLog.list(
         athanor_id: ctx.athanor_id,
         limit: 1,

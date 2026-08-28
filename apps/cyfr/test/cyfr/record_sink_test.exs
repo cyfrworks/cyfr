@@ -38,7 +38,7 @@ defmodule Cyfr.RecordSinkTest do
     # Nothing is written until the sink drains.
     :ok = RecordSink.flush()
 
-    rows = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
     assert Enum.all?(ids, fn id -> Enum.any?(rows, &(&1.id == id)) end)
   end
 
@@ -48,7 +48,7 @@ defmodule Cyfr.RecordSinkTest do
     :ok = RecordSink.enqueue({:policy_log, %{id: "plog_bad"}})
     :ok = RecordSink.flush()
 
-    rows = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
     assert Enum.any?(rows, &(&1.id == good))
     refute Enum.any?(rows, &(&1.id == "plog_bad"))
   end
@@ -93,7 +93,8 @@ defmodule Cyfr.RecordSinkTest do
     Application.put_env(:cyfr, :record_sink_inline, true)
     id = Cyfr.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
-    assert Enum.any?(Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100), &(&1.id == id))
+    assert {:ok, sink_rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    assert Enum.any?(sink_rows, &(&1.id == id))
   end
 
   # The buffer is bounded by the batch size, but the mailbox is not: a drain

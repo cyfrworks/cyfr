@@ -83,11 +83,14 @@ defmodule Emissary.MCP.ChainLoggingTest do
   end
 
   defp rows_for(ctx, request_id) do
-    Arca.McpLog.list(
-      request_id: request_id,
-      athanor_id: ctx.athanor_id,
-      limit: 100
-    )
+    {:ok, rows} =
+      Arca.McpLog.list(
+        request_id: request_id,
+        athanor_id: ctx.athanor_id,
+        limit: 100
+      )
+
+    rows
   end
 
   test "an in-chain call gets its own row, filed under the request that started it", %{ctx: ctx} do
@@ -149,9 +152,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
     {:ok, _} = ToolRegistry.call_external("system", ctx, %{"action" => "status"})
 
-    [row] =
-      Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
-      |> Enum.filter(&(&1.tool == "system"))
+    {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
+    [row] = Enum.filter(rows, &(&1.tool == "system"))
 
     # It is a root: the row's id and its chain key are the same value.
     assert row.request_id == row.id
@@ -166,7 +168,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
     {:ok, _} = ToolRegistry.call_external("mcp_log", ctx, %{"action" => "list"})
 
-    assert Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100) == [],
+    assert Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100) == {:ok, []},
            "listing the log wrote a row to the log"
   end
 end

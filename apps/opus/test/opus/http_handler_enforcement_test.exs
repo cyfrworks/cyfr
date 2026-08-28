@@ -16,6 +16,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
   defp rows_for(ctx, component_ref) do
     [athanor_id: ctx.athanor_id, limit: 50]
     |> Arca.PolicyLog.list()
+    |> then(fn {:ok, rows} -> rows end)
     |> Enum.filter(&(&1.component_ref == component_ref))
   end
 
