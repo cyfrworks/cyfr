@@ -631,9 +631,12 @@ defmodule Compendium.Registry.Client do
 
   # Wraps calls to token-returning endpoints so we never log raw tokens.
   # Phoenix's :filter_parameters only covers inbound request params; outbound
-  # response bodies must be redacted explicitly.
+  # response bodies are redacted here, by the same vocabulary.
   defp log_token_returning_result(op, {:ok, body}) do
-    Logger.info("[Compendium.Registry.Client] #{op} succeeded — body=#{inspect(redact(body))}")
+    Logger.info(
+      "[Compendium.Registry.Client] #{op} succeeded — body=#{inspect(Sanctum.Sanitizer.sanitize(body))}"
+    )
+
     {:ok, body}
   end
 
@@ -643,23 +646,6 @@ defmodule Compendium.Registry.Client do
   end
 
   defp log_token_returning_result(_op, other), do: other
-
-  @sensitive_keys ~w(token push_token access_token refresh_token client_secret password)
-
-  defp redact(map) when is_map(map) do
-    Enum.into(map, %{}, fn {k, v} ->
-      cond do
-        is_binary(k) and k in @sensitive_keys -> {k, "[REDACTED]"}
-        is_atom(k) and Atom.to_string(k) in @sensitive_keys -> {k, "[REDACTED]"}
-        is_map(v) -> {k, redact(v)}
-        is_list(v) -> {k, Enum.map(v, &redact/1)}
-        true -> {k, v}
-      end
-    end)
-  end
-
-  defp redact(list) when is_list(list), do: Enum.map(list, &redact/1)
-  defp redact(other), do: other
 
   defp api_base_url do
     # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable

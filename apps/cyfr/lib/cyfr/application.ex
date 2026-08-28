@@ -15,6 +15,11 @@ defmodule Cyfr.Application do
 
   @impl true
   def start(_type, _args) do
+    # One redaction vocabulary: Phoenix's inbound request-param filter is
+    # fed from its owner (config/config.exs deliberately does not spell a
+    # list — config files run before this module exists).
+    Application.put_env(:phoenix, :filter_parameters, Sanctum.Sanitizer.filter_parameters())
+
     # Arca storage setup
     ensure_db_directory!()
     # Overlay wiring fails loud here — before Bootstrap or the tincture

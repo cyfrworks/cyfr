@@ -34,7 +34,7 @@ config :cyfr,
     Emissary.MCP.Tools.SystemProvider
   ]
 
-# Consent proofs are durable: the plan â preview â commit walk spans human
+# Consent proofs are durable: the plan → preview → commit walk spans human
 # minutes and must survive a restart. Tests override to the ETS store.
 config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
 
@@ -45,7 +45,7 @@ config :cyfr, :consent_source, Sanctum.Consent.Source.DB
 
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
-# LiveViews all answer on it â one origin, one cookie, one login.
+# LiveViews all answer on it — one origin, one cookie, one login.
 config :cyfr, EmissaryWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
@@ -64,19 +64,13 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Redact sensitive values from inbound request logs.
-# Note: this only masks inbound request params. Outbound response bodies must be
-# redacted separately â see Compendium.Registry.Client token-redacting wrapper.
-config :phoenix, :filter_parameters, [
-  "password",
-  "secret",
-  "token",
-  "push_token",
-  "access_token",
-  "client_secret"
-]
+# Inbound request-param redaction (:filter_parameters) is set at boot by
+# Cyfr.Application from Sanctum.Sanitizer.filter_parameters/0 — the one
+# redaction vocabulary. It is not spelled here so it cannot drift from it.
+# Outbound response bodies are redacted at their call sites with
+# Sanctum.Sanitizer.sanitize/1.
 
-# Arca Repo adapter is selected at build time â Ecto can't swap adapters at
+# Arca Repo adapter is selected at build time — Ecto can't swap adapters at
 # runtime. Default is SQLite; set CYFR_DATABASE=postgres to build for
 # Postgres. Adapter-specific Repo defaults are scoped accordingly so
 # SQLite-only keys (journal_mode, busy_timeout) never bleed into the Postgres
@@ -142,12 +136,12 @@ config :cyfr, :read_subtree_concurrency, 10
 # Decompression ceiling for published tincture archives (zip-bomb guard).
 config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
 
-# CORS Configuration â wildcard default for fresh installs. The boot guard in
+# CORS Configuration — wildcard default for fresh installs. The boot guard in
 # Cyfr.Application requires an explicit allowlist once authentication is
 # configured. Override via CYFR_CORS_ALLOWED_ORIGINS.
 config :cyfr, :cors_allowed_origins, ["*"]
 
-# Prometheus metrics â off by default because the /metrics endpoint is
+# Prometheus metrics — off by default because the /metrics endpoint is
 # unauthenticated. Opt in via CYFR_PROMETHEUS_METRICS=true (dev.exs enables it
 # for local development).
 config :cyfr, :prometheus_metrics_enabled, false

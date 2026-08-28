@@ -18,14 +18,29 @@ defmodule Sanctum.Sanitizer do
     passwd pwd api-key x-api-key authorization session_token
     session_id registry_token cosign_key signing_key jwt client_secret
     device_code stripe basic_auth cookie signature code_verifier
+    proof ticket
   )
 
   # Keys sensitive only when they are the WHOLE key. `code` is the OAuth
   # authorization code — a single-use credential — but it is also the tail of
   # `error_code`, `status_code` and `code_challenge`, none of which are
   # secret and all of which are worth reading in a log. Whole-token matching
-  # is not enough to tell those apart; exact matching is.
-  @exact_sensitive_keys ~w(code)
+  # is not enough to tell those apart; exact matching is. `state` is the
+  # vault-OAuth CSRF binding — but "state" as a token inside a longer key
+  # (an execution's state, a connection state) is ordinary data.
+  @exact_sensitive_keys ~w(code state)
+
+  @doc """
+  The redaction vocabulary as Phoenix's `:filter_parameters` consumes it.
+
+  Set into `config :phoenix, :filter_parameters` at boot by
+  `Cyfr.Application`, so inbound request-param logging redacts by the same
+  roster as everything else. Phoenix matches by substring, which
+  over-covers relative to `sensitive_key?/1`'s token matching — the safe
+  direction for a log.
+  """
+  @spec filter_parameters() :: [String.t()]
+  def filter_parameters, do: @sensitive_keys ++ @exact_sensitive_keys
 
   @doc """
   Sanitize data by redacting values under sensitive keys.

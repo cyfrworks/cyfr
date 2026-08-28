@@ -315,12 +315,13 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   describe "token redaction" do
-    # The log_token_returning_result/redact pipeline runs on every call to a
+    # The log_token_returning_result pipeline runs on every call to a
     # token-returning endpoint. We can't observe the redaction on the error
-    # path (redact only runs on {:ok, body}), but we CAN confirm that a
-    # probe call with a fake access_token never leaks the raw token value
-    # into Logger output — the access_token goes into the request body, and
-    # Phoenix's :filter_parameters + Client.redact cover the response side.
+    # path (Sanctum.Sanitizer.sanitize/1 only runs on {:ok, body}), but we
+    # CAN confirm that a probe call with a fake access_token never leaks the
+    # raw token value into Logger output — the access_token goes into the
+    # request body, and :filter_parameters + the sanitizer cover the
+    # response side.
     #
     # This test intentionally uses a connection-refused host so no real
     # response bytes are generated, only the error-side Logger line which
