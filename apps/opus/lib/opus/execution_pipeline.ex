@@ -45,4 +45,20 @@ defmodule Opus.ExecutionPipeline do
     started_written: nil,
     opts: []
   ]
+
+  @doc """
+  Every credential value dispensed to this execution's guest: the vault
+  fields the executor preloaded plus whatever OAuth tokens were handed out
+  during the run. Every egress of guest-influenced text (output, failure
+  message, event) masks with this set.
+
+  The OAuth half is collect-and-delete, so take the list once per egress
+  decision and reuse it rather than calling again.
+  """
+  @spec secrets(t()) :: [String.t()]
+  def secrets(%__MODULE__{record: nil} = p), do: Map.values(p.preloaded_fields)
+
+  def secrets(%__MODULE__{} = p) do
+    Map.values(p.preloaded_fields) ++ Opus.OAuthHandler.collect_dispensed(p.record.id)
+  end
 end

@@ -12,8 +12,12 @@ defmodule Opus.SecretMasker do
   ## Usage
 
   The caller supplies the values, because it is the caller that dispensed
-  them: `Opus.Executor` masks with the fields it preloaded from the vault
-  plus whatever `Opus.OAuthHandler` dispensed during the run.
+  them — `Opus.ExecutionPipeline.secrets/1` is the one collector (vault
+  fields preloaded by the executor plus whatever `Opus.OAuthHandler`
+  dispensed during the run). Masking happens at each egress of
+  guest-influenced text: completed output and failure messages in
+  `Opus.Executor` (record, telemetry, terminal event), and guest-emitted
+  events in `Opus.FormulaHandler.handle_emit`.
 
       masked_output = Opus.SecretMasker.mask(output, secret_values)
 

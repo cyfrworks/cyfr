@@ -888,6 +888,34 @@ defmodule Opus.FormulaHandlerTest do
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
+    test "emit masks dispensed secrets before the event leaves the runtime", %{ctx: ctx} do
+      execution_id = "exec_emit_mask_#{:rand.uniform(100_000)}"
+      limits = Sanctum.Limits.defaults(:formula)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, execution_id,
+          limits: limits,
+          authority: Sanctum.Authority.zero(),
+          secrets: ["sk-super-secret-value"]
+        )
+
+      Opus.ExecutionEventBuffer.subscribe(execution_id, ctx)
+
+      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
+      emit_fn = elem(invoke_ns["emit"], 1)
+
+      emit_fn.(
+        Jason.encode!(%{"kind" => "text_delta", "content" => "key is sk-super-secret-value"})
+      )
+
+      assert_receive {:execution_event, event}, 2000
+      assert event.data["content"] == "key is [REDACTED]"
+      refute inspect(event) =~ "sk-super-secret-value"
+
+      Opus.ExecutionEventBuffer.unsubscribe(execution_id, ctx)
+      FormulaHandler.cleanup_registry(tracker_pid)
+    end
+
     test "emit buffers events for replay via since/2", %{ctx: ctx} do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
       limits = Sanctum.Limits.defaults(:formula)

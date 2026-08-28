@@ -99,12 +99,15 @@ defmodule Opus.FormulaHandler do
     and this fetch keeps a direct caller honest too.
   - `:declared_needs` / `:activation_digest` - host-derived transition inputs
     for this node's onward invocations
+  - `:secrets` - credential values dispensed to this execution; emitted
+    events are masked with them before leaving the runtime
   """
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
     authority = Keyword.fetch!(opts, :authority)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     limits = opts[:limits]
+    secrets = Keyword.get(opts, :secrets, [])
 
     batch_timeout_ms =
       case limits && Limits.batch_timeout_ms(limits) do
@@ -183,7 +186,7 @@ defmodule Opus.FormulaHandler do
         "emit" =>
           {:fn,
            fn json_event ->
-             handle_emit(json_event, root_execution_id, emit_counter, ctx, authority)
+             handle_emit(json_event, root_execution_id, emit_counter, ctx, authority, secrets)
            end}
       }
     }
@@ -680,8 +683,10 @@ defmodule Opus.FormulaHandler do
   # Guest text accumulates into buffers that trusted UI parses into
   # pending cards, so every emit is transition-checked, size-capped by the
   # node's own request limit, and attributed — the consumer can always tell
-  # a guest event from the host's.
-  defp handle_emit(json_event, execution_id, counter, ctx, %Sanctum.Authority{} = authority) do
+  # a guest event from the host's. It is also an egress: the event reaches
+  # SSE/LiveView subscribers and the replay buffer, so a credential the
+  # guest was handed is masked before the event leaves the runtime.
+  defp handle_emit(json_event, execution_id, counter, ctx, %Sanctum.Authority{} = authority, secrets) do
     limits = Sanctum.Authority.limits(authority)
 
     with :ok <- check_emit_size(json_event, limits.max_request_size),
@@ -696,6 +701,7 @@ defmodule Opus.FormulaHandler do
         end
 
       seq = :atomics.add_get(counter, 1, 1)
+      data = Opus.SecretMasker.mask(data, secrets)
       Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx, origin_opts)
       Opus.Telemetry.formula_emit(execution_id, seq)
       safe_encode(%{"ok" => true, "sequence" => seq})

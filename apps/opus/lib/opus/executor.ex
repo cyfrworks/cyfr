@@ -183,7 +183,7 @@ defmodule Opus.Executor do
       else
         {:error, reason} when is_binary(reason) ->
           maybe_emit_setup_event(ctx, reason, opts)
-          handle_failure(p.record, reason, p.started_written)
+          handle_failure(p, reason)
 
         {:error, {tag, payload} = typed}
         when tag in [:setup_required, :consent_required] and is_map(payload) ->
@@ -191,15 +191,15 @@ defmodule Opus.Executor do
           # term — the error envelope needs the structural payload, and
           # callers already receive these tuples from consent loading.
           maybe_emit_setup_event(ctx, typed, opts)
-          _ = handle_failure(p.record, failure_message(typed), p.started_written)
+          _ = handle_failure(p, failure_message(typed))
           {:error, typed}
 
         {:error, reason} ->
-          handle_failure(p.record, "Execution failed: #{inspect(reason)}", p.started_written)
+          handle_failure(p, "Execution failed: #{inspect(reason)}")
       end
     rescue
       e ->
-        handle_failure(p.record, "Execution error: #{Exception.message(e)}", p.started_written)
+        handle_failure(p, "Execution error: #{Exception.message(e)}")
     end
   end
 
@@ -429,9 +429,7 @@ defmodule Opus.Executor do
   # ===========================================================================
 
   defp finalize_execution(%ExecutionPipeline{} = p, output, exec_metadata) do
-    oauth_tokens = Opus.OAuthHandler.collect_dispensed(p.record.id)
-    secret_values = Map.values(p.preloaded_fields) ++ oauth_tokens
-    masked_output = Opus.SecretMasker.mask(output, secret_values)
+    masked_output = Opus.SecretMasker.mask(output, ExecutionPipeline.secrets(p))
 
     with :ok <- check_application_error(p, masked_output),
          :ok <- check_response_size(p, masked_output) do
@@ -512,7 +510,7 @@ defmodule Opus.Executor do
   defp check_application_error(p, masked_output) do
     case detect_application_error(masked_output) do
       nil -> :ok
-      error -> handle_failure(p.record, error, p.started_written)
+      error -> handle_failure(p, error)
     end
   end
 
@@ -525,16 +523,15 @@ defmodule Opus.Executor do
       {:ok, output_json} ->
         if byte_size(output_json) > max_response do
           handle_failure(
-            p.record,
-            "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)",
-            p.started_written
+            p,
+            "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)"
           )
         else
           :ok
         end
 
       {:error, _} ->
-        handle_failure(p.record, "Output could not be serialized to JSON", p.started_written)
+        handle_failure(p, "Output could not be serialized to JSON")
     end
   end
 
@@ -1105,11 +1102,19 @@ defmodule Opus.Executor do
   defp vault_setup_reason(reason) when is_atom(reason), do: reason
   defp vault_setup_reason(reason), do: inspect(reason)
 
-  defp handle_failure(record, error_msg, started_written) do
-    Opus.OAuthHandler.collect_dispensed(record.id)
+  # Failure is an egress like success: the error message reaches the
+  # execution row, telemetry, and the terminal event stream, and it can
+  # carry guest-influenced text (an application error, an exception whose
+  # message echoes a request) — so it is masked with the same
+  # dispensed-secret set as completed output. `secrets/1` also drains the
+  # OAuth tracker, which this function previously did with a bare
+  # collect-and-discard.
+  defp handle_failure(%ExecutionPipeline{} = p, error_msg) do
+    record = p.record
+    error_msg = Opus.SecretMasker.mask(error_msg, ExecutionPipeline.secrets(p))
     failed_record = ExecutionRecord.fail(record, error_msg)
 
-    if :atomics.get(started_written, 1) == 0 do
+    if :atomics.get(p.started_written, 1) == 0 do
       case Opus.Host.record_start(record) do
         :ok ->
           :ok

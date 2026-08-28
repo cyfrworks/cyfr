@@ -286,7 +286,8 @@ defmodule Opus.Runtime do
           limits: limits,
           authority: authority_info.authority,
           declared_needs: authority_info.declared_needs,
-          activation_digest: authority_info.activation_digest
+          activation_digest: authority_info.activation_digest,
+          secrets: Map.values(preloaded_fields)
         )
       else
         {%{}, nil}
