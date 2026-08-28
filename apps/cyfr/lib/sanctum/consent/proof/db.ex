@@ -26,7 +26,7 @@ defmodule Sanctum.Consent.Proof.DB do
   # The only binding keys a stored proof may round-trip. String→atom
   # conversion at read is restricted to this list, so a tampered bindings
   # column cannot mint atoms.
-  @optional_binding_keys ~w(actor athanor_id profile_id expected_revision)
+  @optional_binding_keys ~w(actor profile_id expected_revision)
 
   @impl Sanctum.Consent.Proof
   def mint(bindings, ttl_ms) do
@@ -75,7 +75,9 @@ defmodule Sanctum.Consent.Proof.DB do
 
   defp encode_optional(bindings) do
     bindings
-    |> Map.drop([:kind, :commit_digest])
+    # kind, commit_digest and athanor_id live in their own columns — the
+    # JSON carries only what has no column, so each fact has one owner.
+    |> Map.drop([:kind, :commit_digest, :athanor_id])
     |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
     |> Jason.encode!()
   end
@@ -94,7 +96,8 @@ defmodule Sanctum.Consent.Proof.DB do
 
     Map.merge(optional, %{
       kind: kind_atom(row.kind),
-      commit_digest: row.digest
+      commit_digest: row.digest,
+      athanor_id: row.athanor_id
     })
   end
 

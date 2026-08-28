@@ -36,8 +36,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   which fails closed to `needs_consent`.
   """
   # The live shape is a function of the athanor's registered manifests: it
-  # is cached briefly and swept when the registry changes
-  # (`Compendium.Registry.invalidate_executor_caches/1`).
+  # is cached briefly and swept when the registry changes. EVERY mutation
+  # of the registry must run `Compendium.Registry.invalidate_executor_caches/1`
+  # — register, delete, and the auto-indexer's stale sweep do today — or a
+  # commit (which derives fresh) and the loader (which reads this cache)
+  # would answer different shapes for up to a minute.
   @live_cache_ttl_ms :timer.seconds(60)
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}

@@ -42,7 +42,7 @@ defmodule Sanctum.Consent.Authz do
 
     @type capability :: %{
             required(:commit_digest) => String.t(),
-            optional(:expires_at) => DateTime.t()
+            required(:expires_at) => DateTime.t()
           }
 
     @type t :: %__MODULE__{
@@ -221,9 +221,11 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
+  # An expiry is part of the envelope, not an option: the moduledoc
+  # promises "one exact commit digest, with an expiry", so a capability
+  # without one (or with a malformed one) is refused, never eternal.
   defp expired?(capability, now) do
     case Map.get(capability, :expires_at) do
-      nil -> false
       %DateTime{} = expires_at -> DateTime.compare(now, expires_at) != :lt
       _ -> true
     end

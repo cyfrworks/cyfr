@@ -24,7 +24,9 @@ defmodule Sanctum.Consent.AuthzTest do
   end
 
   defp capability(attrs \\ []) do
-    Map.merge(%{commit_digest: @digest}, Map.new(attrs))
+    # An expiry is required — the envelope is "with an expiry", enforced.
+    %{commit_digest: @digest, expires_at: DateTime.add(DateTime.utc_now(), 60, :second)}
+    |> Map.merge(Map.new(attrs))
   end
 
   # ============================================================================
@@ -32,6 +34,16 @@ defmodule Sanctum.Consent.AuthzTest do
   # ============================================================================
 
   describe "interactive" do
+    test "a capability without an expiry is refused, never eternal" do
+      no_expiry = %{commit_digest: @digest}
+
+      assert Authz.authorize(
+               ctx(auth_method: :api_key, api_key_type: :admin),
+               request(key_capability: no_expiry)
+             ) ==
+               {:error, :capability_expired}
+    end
+
     test "a Sanctum session may consent" do
       assert Authz.authorize(ctx(auth_method: :oidc), request()) == {:ok, :interactive}
     end
