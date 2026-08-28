@@ -84,6 +84,31 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
+  Whether the named unrevoked key carries a consent capability.
+
+  `capability` is deliberately outside `@returned_fields` — the envelope is
+  never part of a read answer — so the one caller that must branch on its
+  presence asks for the predicate rather than the value. It gates an
+  admission decision, so an unanswerable store refuses rather than defaults.
+  """
+  @spec capability_bearing?(String.t(), String.t()) ::
+          {:ok, boolean()} | {:error, :database_error}
+  def capability_bearing?(athanor_id, name) do
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.capability_bearing?", fn ->
+      found =
+        from(k in ApiKey,
+          where: k.name == ^name and k.revoked == ^false and not is_nil(k.capability),
+          limit: 1,
+          select: 1
+        )
+        |> where_athanor(athanor_id)
+        |> Arca.Repo.one()
+
+      {:ok, found != nil}
+    end)
+  end
+
+  @doc """
   Get a key by name within an athanor. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.

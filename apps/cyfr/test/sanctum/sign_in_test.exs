@@ -94,25 +94,30 @@ defmodule Sanctum.SignInTest do
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
   end
 
-  test "an address the provider never claimed activates its invitations; one it refuses does not" do
-    {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Other Team")
-    {:ok, :invited} = Members.add(group, [email: "user5@example.com"], "creator2")
+  test "only a proved address claims its invitations; the seat waits for the rest" do
+    # Admission and seating are different questions. The door may let an
+    # identity in on an unasserted address (`*`, or a `user_id` entry), but an
+    # invited row is keyed on the email alone, so seating it needs the address
+    # proved — otherwise an issuer asserting someone else's address inherits
+    # their groups. The seat is held, not withdrawn.
+    for {n, claim} <- [{5, :unknown}, {9, false}] do
+      {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Team #{n}")
+      {:ok, :invited} = Members.add(group, [email: "user#{n}@example.com"], "creator2")
 
-    # An issuer that emits no `email_verified` (many enterprise IdPs) must not
-    # read as one that denied the address: the door already admitted them.
-    assert {:ok, %{email_verified: nil}} =
-             SignIn.admitted(info(5, %{verified: :unknown}), :allowed)
+      assert {:ok, _} = SignIn.admitted(info(n, %{verified: claim}), :allowed)
 
-    assert Members.member?(info(5).id, group.id)
+      refute Members.member?(info(n).id, group.id)
+      assert Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
+    end
 
-    {:ok, group2} = Athanors.create_group("github|https://github.com|creator2", "Refused Team")
-    {:ok, :invited} = Members.add(group2, [email: "user9@example.com"], "creator2")
+    {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Proved Team")
+    {:ok, :invited} = Members.add(group, [email: "user11@example.com"], "creator2")
 
-    assert {:ok, %{email_verified: false}} =
-             SignIn.admitted(info(9, %{verified: false}), :allowed)
+    assert {:ok, %{email_verified: true}} =
+             SignIn.admitted(info(11, %{verified: true}), :allowed)
 
-    refute Members.member?(info(9).id, group2.id)
-    assert Enum.any?(rows!(Members.list_by_athanor(group2.id)), &(&1.status == "invited"))
+    assert Members.member?(info(11).id, group.id)
+    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
   end
 
   test "record_namespace/2 lands the claim on the users row, mints the athanor, and refuses a slug another identity holds" do

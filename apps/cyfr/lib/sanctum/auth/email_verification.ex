@@ -23,8 +23,9 @@ defmodule Sanctum.Auth.EmailVerification do
   @doc """
   Verify the email on a Ueberauth.Auth struct for the given provider.
 
-  Reads `auth.extra.raw_info.user["email_verified"]` (Ueberauth stashes the
-  provider's raw userinfo there for both GitHub and Google).
+  Reads the claim wherever the strategy put it: `raw_info.userinfo` then
+  `raw_info.claims` for `ueberauth_oidcc`, `raw_info.user` for the OAuth
+  strategies (GitHub, Google).
   """
   @spec verify(atom(), String.t() | nil, map() | any()) :: result()
   def verify(_provider, email, _extra) when email in [nil, ""], do: {:error, :missing_email}
@@ -83,6 +84,18 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
+  # Ueberauth's OAuth strategies stash the provider's raw userinfo under
+  # `raw_info.user`. `ueberauth_oidcc` does not: it builds a
+  # `%UeberauthOidcc.RawInfo{opts, claims, userinfo, introspection}` with no
+  # `:user` key, so a generic-OIDC sign-in read as `:unknown` however loudly
+  # the issuer spoke — the `false` arm above was unreachable and the door's
+  # exact-email entry (which admits only on `true`) could never match.
+  #
+  # The userinfo response wins over the id token when both speak: it is the
+  # fresher of the two, and an issuer that re-asserts the address there is
+  # answering about it directly.
+  defp email_verified_claim(%{raw_info: %{userinfo: %{"email_verified" => v}}}), do: v
+  defp email_verified_claim(%{raw_info: %{claims: %{"email_verified" => v}}}), do: v
   defp email_verified_claim(%{raw_info: %{user: %{"email_verified" => v}}}), do: v
   defp email_verified_claim(%{raw_info: %{user: %{email_verified: v}}}), do: v
   defp email_verified_claim(%{raw_info: %{"user" => %{"email_verified" => v}}}), do: v

@@ -175,6 +175,11 @@ defmodule Sanctum.MCP.KeyTool do
       {:error, :not_found} ->
         {:error, "Key not found: #{name}"}
 
+      {:error, :capability_key_immutable} ->
+        {:error,
+         "#{name} carries a consent capability and cannot be rotated — " <>
+           "revoke it and mint a new key, which asks for consent again"}
+
       {:error, reason} ->
         Logger.error("[Sanctum.MCP] Failed to rotate key: #{inspect(reason)}")
         {:error, "Failed to rotate key"}

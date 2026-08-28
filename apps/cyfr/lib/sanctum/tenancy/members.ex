@@ -272,17 +272,26 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc """
   Turn every `invited` row for the person's email into their active
-  membership — unless their provider positively says the address is not
-  theirs, which is the one answer that refuses — two set-based statements in one transaction, so two
-  first sign-ins of the same identity cannot both claim a row: invitations
-  for athanors where the person is already active are dropped, the rest are
-  activated with the email consumed (the assignment index then admits no
-  second row for the person and athanor). Returns how many activated.
+  membership — but only for an address the provider **proved**.
+
+  An invited row names an email and no person, so activating it is a grant
+  keyed on the address alone: anyone who can get an issuer to assert
+  `carol@acme.com` would inherit every seat held for Carol. `Sanctum.Door`
+  already refuses an exact email allowlist entry on anything but `true`, and
+  a group seat is the same kind of grant, so it takes the same answer. An
+  issuer that never asserts `email_verified` seats nobody by email; the seat
+  is not withdrawn, and a later sign-in that does prove the address claims it.
+
+  Two set-based statements in one transaction, so two first sign-ins of the
+  same identity cannot both claim a row: invitations for athanors where the
+  person is already active are dropped, the rest are activated with the email
+  consumed (the assignment index then admits no second row for the person and
+  athanor). Returns how many activated.
   """
   @spec activate_invited(User.t()) :: {:ok, non_neg_integer()}
   # arca:unscoped-ok invited rows are email-keyed fabric, activated across athanors.
-  def activate_invited(%User{email: email, email_verified: verified, id: user_id})
-      when is_binary(email) and verified != false do
+  def activate_invited(%User{email: email, email_verified: true, id: user_id})
+      when is_binary(email) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Members.activate_invited", fn ->
       now = DateTime.utc_now()
 

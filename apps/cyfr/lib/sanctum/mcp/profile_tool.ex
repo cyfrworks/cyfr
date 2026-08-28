@@ -75,7 +75,7 @@ defmodule Sanctum.MCP.ProfileTool do
             "type" => "object",
             "description" =>
               "The operator's choices: ref, scope, invoke_mode, bindings " <>
-                "[{need:'@ingress', entry_id, fields, scopes}], override, limits"
+                "[{need:'@ingress', entry_id, fields, scopes}], override"
           },
           "plan_token" => %{"type" => "string", "description" => "From plan"},
           "proof" => %{"type" => "string", "description" => "From preview"},
@@ -215,7 +215,8 @@ defmodule Sanctum.MCP.ProfileTool do
   # ---------------------------------------------------------------------------
 
   defp decode_decisions(raw) do
-    with {:ok, kind} <- kind(raw),
+    with :ok <- refuse_limits(raw),
+         {:ok, kind} <- kind(raw),
          {:ok, scope} <- enum(raw, "scope", %{"versionless" => :versionless, "pinned" => :pinned}),
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
@@ -226,11 +227,28 @@ defmodule Sanctum.MCP.ProfileTool do
         |> Cyfr.MapUtil.put_present(:label, raw["label"])
         |> Cyfr.MapUtil.put_present(:scope, scope)
         |> Cyfr.MapUtil.put_present(:invoke_mode, invoke_mode)
-        |> Cyfr.MapUtil.put_present(:limits, raw["limits"])
         |> Map.put(:override, raw["override"] == true)
         |> maybe_publish_passthrough(raw)
 
       {:ok, decisions}
+    end
+  end
+
+  # A limits decision used to travel into the commit digest and no further:
+  # the blob is built from the manifest's caps and `Limits.defaults`, so a
+  # tightened number was signed, proofed and recorded while the runtime kept
+  # the manifest's. Refuse it rather than keep signing a knob nothing turns.
+  # The manifest's own limits are already covered by `shape_digest`; raising
+  # or lowering them per consent is an unbuilt sheet feature, not a silent one.
+  defp refuse_limits(raw) do
+    case Map.get(raw, "limits") do
+      nil ->
+        :ok
+
+      _ ->
+        {:error,
+         "limits are not a consent decision — a component's limits come from its " <>
+           "manifest caps, which shape_digest already covers"}
     end
   end
 

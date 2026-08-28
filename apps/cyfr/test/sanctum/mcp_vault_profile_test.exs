@@ -139,4 +139,21 @@ defmodule Sanctum.MCPVaultProfileTest do
     assert {:error, "consent_class_required:" <> _} =
              Sanctum.MCP.handle("vault", session_ctx, %{"action" => "list"})
   end
+
+  test "a limits decision is refused rather than signed and ignored", %{ctx: ctx} do
+    # It rode the commit digest and stopped there: the blob is built from the
+    # manifest's caps, so the operator's number was proofed and recorded while
+    # the runtime kept the manifest's. Refusing keeps the digest a promise
+    # about what actually runs.
+    for action <- ["preview", "commit"] do
+      assert {:error, "limits are not a consent decision" <> _} =
+               Sanctum.MCP.handle("profile", ctx, %{
+                 "action" => action,
+                 "decisions" => %{
+                   "ref" => "reagent:local.mcp-walk",
+                   "limits" => %{"timeout" => "1s"}
+                 }
+               })
+    end
+  end
 end

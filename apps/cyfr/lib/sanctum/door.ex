@@ -10,9 +10,14 @@ defmodule Sanctum.Door do
   `CYFR_PLATFORM_ADMIN_EMAILS` names the operators — always admitted, and
   admitted as platform admins; the server allowlist (`Sanctum.Door.Store`)
   names everyone else, by email, by IdP subject, or as `*` (any identity the
-  configured provider authenticates). A specific deny wins over everything —
-  including `*` — so a public door still has an eject; allowing that
-  identity again is an explicit operator act.
+  configured provider authenticates). A specific deny wins over everything a
+  stored row can grant — `*` included — so a public door still has an eject;
+  allowing that identity again is an explicit operator act. The one thing it
+  does not outrank is the env list: an operator is admitted whatever rows
+  exist, and `Sanctum.Door.Store.deny/4` refuses to write one naming them (by
+  address, or by the subject of an identity that signed in with it). The
+  server's operators change by changing `CYFR_PLATFORM_ADMIN_EMAILS`, never
+  by a door entry that would leave nobody able to sign in and remove it.
 
   Emails admit only what the provider proved: an exact email entry needs
   `verified == true` (a provider that does not assert verification is
@@ -48,8 +53,13 @@ defmodule Sanctum.Door do
     email = normalize_email(email)
 
     cond do
-      Store.denied?(user_id, email) -> {:error, :denied}
+      # The operator arm sits above the deny on purpose: who runs this server
+      # is the env list's answer, and a stored row must not be able to
+      # contradict it. `Store.deny/4` already refuses to name an operator, so
+      # a row that reaches here predates the promotion; it stays on the list
+      # (demote them and it bites again) but it does not lock the box.
       platform_admin_email?(email) and verified != false -> {:ok, :admin}
+      Store.denied?(user_id, email) -> {:error, :denied}
       Store.wildcard?() and verified != false -> {:ok, :allowed}
       Store.allowed?("user_id", user_id) -> {:ok, :allowed}
       verified == true and Store.allowed?("email", email) -> {:ok, :allowed}

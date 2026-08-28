@@ -98,6 +98,32 @@ defmodule Sanctum.ApiKeyCapabilityTest do
       assert capability.commit_digest == @digest
       assert DateTime.diff(capability.expires_at, expires) == 0
     end
+
+    test "rotation cannot re-issue a capability the rotator could not mint", %{ctx: ctx} do
+      # Rotate is `permission: :admin` and mints no capability of its own, so
+      # it must not hand a fresh secret to a row that already bears one:
+      # that is the interactive gate above, paid once and spent twice.
+      {:ok, _} =
+        ApiKey.create(ctx, %{
+          name: "cap-rotate",
+          consent_capability: %{commit_digest: @digest, expires_at: future()}
+        })
+
+      assert {:error, :capability_key_immutable} = ApiKey.rotate(ctx, "cap-rotate")
+
+      # The refusal leaves the key exactly as it was — a refused rotation is
+      # not a silent revocation.
+      {:ok, row} = Arca.ApiKeyStorage.get_key(ctx.athanor_id, "cap-rotate")
+      assert {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
+      assert capability.commit_digest == @digest
+    end
+
+    test "an ordinary key still rotates", %{ctx: ctx} do
+      {:ok, %{api_key: original}} = ApiKey.create(ctx, %{name: "plain-rotate"})
+
+      assert {:ok, %{api_key: rotated}} = ApiKey.rotate(ctx, "plain-rotate")
+      assert rotated != original
+    end
   end
 
   describe "the scoped-automation walk" do

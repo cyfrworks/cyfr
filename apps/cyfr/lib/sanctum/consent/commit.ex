@@ -41,7 +41,6 @@ defmodule Sanctum.Consent.Commit do
           optional(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [map()],
           optional(:override) => boolean(),
-          optional(:limits) => map(),
           optional(:publish_from) => String.t(),
           optional(:need_ids) => [String.t()],
           optional(:durable_storage) => boolean()
@@ -503,24 +502,21 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
+  # Every field here must be one the blob actually carries: the digest is a
+  # promise about what will run. `limits` used to be threaded in from the
+  # decisions and never reached `build_blob/2`, so a tightened number was
+  # signed and then ignored. The manifest's limits ride `shape_digest`.
   defp commit_input(shape_digest, kind, invoke_mode, bindings, tool_servers, decisions) do
-    input = %{
-      shape_digest: shape_digest,
-      kind: kind,
-      invoke_mode: invoke_mode,
-      bindings: bindings,
-      tool_servers:
-        Enum.map(tool_servers, &Map.take(&1, [:server_name, :server_digest, :tool_patterns])),
-      override: Map.get(decisions, :override, false)
-    }
-
-    input =
-      case Map.get(decisions, :limits) do
-        nil -> input
-        limits -> Map.put(input, :limits, limits)
-      end
-
-    {:ok, input}
+    {:ok,
+     %{
+       shape_digest: shape_digest,
+       kind: kind,
+       invoke_mode: invoke_mode,
+       bindings: bindings,
+       tool_servers:
+         Enum.map(tool_servers, &Map.take(&1, [:server_name, :server_digest, :tool_patterns])),
+       override: Map.get(decisions, :override, false)
+     }}
   end
 
   # ---------------------------------------------------------------------------

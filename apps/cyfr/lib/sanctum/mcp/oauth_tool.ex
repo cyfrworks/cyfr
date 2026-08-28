@@ -32,12 +32,21 @@ defmodule Sanctum.MCP.OAuthTool do
           # vault.create, webhook.create). This one writes the operator's
           # OAuth *client* secret, so a component reaching it from inside
           # the sandbox would be the widest of the set, not the narrowest.
-          "set_client" => %{kind: :write, planes: [:external], permission: :vault_write},
+          #
+          # The mutations are interactive for the same reason `vault.*` is:
+          # this is the athanor's OAuth app identity, the material
+          # `vault.authorize` spends to obtain third-party tokens. It sits on
+          # the OUTBOUND side of the credential line, with vault entries —
+          # not with the inbound credentials CYFR mints for itself (key,
+          # webhook), which stay permission-gated. A key with `:vault_write`
+          # must not be able to point the athanor's next consent screen at
+          # someone else's OAuth app. `list` stays a read.
+          "set_client" => %{kind: :write, planes: [:external], consent: :interactive},
           "list" => %{kind: :read, planes: [:external], permission: :vault_read},
           "delete_client" => %{
             kind: :destructive,
             planes: [:external],
-            permission: :vault_write
+            consent: :interactive
           }
         }
       },

@@ -248,6 +248,43 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       assert [%{status: "active"}] = rows
     end
+
+    test "an unproven address claims no seat", %{athanor: athanor} do
+      # An invited row is email-keyed, so activating it on an address the
+      # provider never asserted hands the seat to whoever can get the IdP to
+      # claim it. The door already refuses an exact email allowlist entry on
+      # anything but `true`; a group seat is the same kind of grant.
+      n = System.unique_integer([:positive])
+      email = "unproven#{n}@example.com"
+      {:ok, :invited} = Members.add(athanor, [email: email], "system")
+
+      user = person(n)
+
+      for claim <- [nil, false] do
+        {:ok, user} =
+          Sanctum.Tenancy.Users.upsert_from_provider(%{
+            id: user.id,
+            provider: "oidcc",
+            email: email,
+            verified: claim
+          })
+
+        assert {:ok, 0} = Members.activate_invited(user)
+        refute Members.member?(user.id, athanor.id)
+      end
+
+      # The seat is still held, so proving the address later still claims it.
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user.id,
+          provider: "oidcc",
+          email: email,
+          verified: true
+        })
+
+      assert {:ok, 1} = Members.activate_invited(user)
+      assert Members.member?(user.id, athanor.id)
+    end
   end
 
   describe "remove_member/2" do

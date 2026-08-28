@@ -91,6 +91,72 @@ defmodule Sanctum.Auth.EmailVerificationTest do
     end
   end
 
+  describe "the real ueberauth_oidcc shape" do
+    # `%UeberauthOidcc.RawInfo{}` carries `opts/claims/userinfo/introspection`
+    # and no `:user` key at all, so every synthetic shape above misses it. The
+    # generic-OIDC arms are only real if they read what the strategy actually
+    # builds (`Ueberauth.Strategy.Oidcc.extra/1`).
+    defp oidcc(fields), do: %{raw_info: struct!(UeberauthOidcc.RawInfo, fields)}
+
+    test "userinfo email_verified is read" do
+      assert :ok =
+               EmailVerification.verify(
+                 :oidcc,
+                 "carol@acme.com",
+                 oidcc(userinfo: %{"email_verified" => true})
+               )
+
+      assert {:error, :email_not_verified} =
+               EmailVerification.verify(
+                 :oidcc,
+                 "carol@acme.com",
+                 oidcc(userinfo: %{"email_verified" => false})
+               )
+    end
+
+    test "id-token claims are read when userinfo is absent" do
+      assert :ok =
+               EmailVerification.verify(
+                 :oidcc,
+                 "carol@acme.com",
+                 oidcc(claims: %{"email_verified" => true})
+               )
+
+      assert {:error, :email_not_verified} =
+               EmailVerification.verify(
+                 :oidcc,
+                 "carol@acme.com",
+                 oidcc(claims: %{"email_verified" => false})
+               )
+    end
+
+    test "userinfo wins over the id token" do
+      extra = oidcc(claims: %{"email_verified" => true}, userinfo: %{"email_verified" => false})
+
+      assert {:error, :email_not_verified} =
+               EmailVerification.verify(:oidcc, "carol@acme.com", extra)
+    end
+
+    test "silence is still accepted for generic OIDC" do
+      assert :ok = EmailVerification.verify(:oidcc, "carol@acme.com", oidcc(claims: %{}))
+    end
+
+    test "a proven address reaches the door as `true`, so an email entry can admit it" do
+      # `Door.admit/3` only consults an exact email allowlist entry on `true`;
+      # while this read returned `:unknown` for every OIDC sign-in, allowlisting
+      # an address by email could never let anyone in.
+      assert {:ok, true} =
+               EmailVerification.verify_with_claim(
+                 :oidcc,
+                 "carol@acme.com",
+                 oidcc(userinfo: %{"email_verified" => true})
+               )
+
+      assert {:ok, :unknown} =
+               EmailVerification.verify_with_claim(:oidcc, "carol@acme.com", oidcc(claims: %{}))
+    end
+  end
+
   describe "unknown provider — fail closed" do
     test "rejects when email_verified is false" do
       assert {:error, :email_not_verified} =

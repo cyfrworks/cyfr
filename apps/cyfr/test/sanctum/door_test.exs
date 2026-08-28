@@ -84,6 +84,35 @@ defmodule Sanctum.DoorTest do
       assert {:error, :wildcard_cannot_be_denied} = Store.deny("wildcard", "*", "ops")
     end
 
+    test "an operator cannot be denied by their IdP subject either" do
+      # The email guard alone left the same lockout one `kind` away: deny is
+      # evaluated before the platform-admin arm and `Users.deny/1` revokes
+      # sessions and keys, so an operator denied by subject could never sign
+      # in to remove the row. The store's invariant is that operators leave
+      # only by leaving the env list.
+      {:ok, _} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: uid(42),
+          provider: "github",
+          email: "ops@example.com",
+          verified: true
+        })
+
+      assert {:error, :platform_admin} = Store.deny("user_id", uid(42), "ops")
+      assert {:ok, :admin} = Door.admit(uid(42), "ops@example.com", true)
+    end
+
+    test "a deny that predates the operator's promotion does not lock them out" do
+      # Denied first, made an operator afterwards: the row is legitimate and
+      # stays, but the env list is what says who runs the server.
+      {:ok, _} = Store.deny("user_id", uid(43), "ops")
+      assert {:error, :denied} = Door.admit(uid(43), "bob@example.com", true)
+
+      Application.put_env(:cyfr, :platform_admin_emails, ["ops@example.com", "bob@example.com"])
+
+      assert {:ok, :admin} = Door.admit(uid(43), "bob@example.com", true)
+    end
+
     test "a request admits nobody until resolved" do
       {:ok, :created, req} = Store.request("email", "grace@example.com", uid(1))
       assert req.status == "requested"

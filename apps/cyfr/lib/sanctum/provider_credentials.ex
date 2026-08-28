@@ -13,8 +13,11 @@ defmodule Sanctum.ProviderCredentials do
   execute-permission context (public tinctures, webhooks, cron) read the
   client secret by name. This store separates the planes:
 
-  - **Management** (`put/4`, `delete/2`, `configured?/2`) is caller-gated:
-    tenant scope plus `:vault_write` / `:vault_read`.
+  - **Management** is caller-gated on tenant scope plus the class the write
+    deserves. `put/4` and `delete/2` are **interactive** (`Consent.Authz`),
+    like every `vault.*` mutation: this is the athanor's OAuth app identity,
+    and a key that could rewrite it could point the next consent screen at
+    another app. `configured?/2` is a read and keeps `:vault_read`.
   - **Use** (`fetch_for_oauth/2`) takes an explicit athanor id and no
     caller context at all — it is reachable only from the host's OAuth
     exchange/refresh plane, never through a caller's permission set, and
@@ -33,7 +36,7 @@ defmodule Sanctum.ProviderCredentials do
   """
   @spec put(Context.t(), String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
   def put(%Context{} = ctx, provider, client_id, client_secret \\ nil) do
-    with :ok <- Context.require_permission(ctx, :vault_write),
+    with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider),
          :ok <- validate_client_id(client_id) do
       athanor_id = athanor!(ctx)
@@ -54,7 +57,7 @@ defmodule Sanctum.ProviderCredentials do
   @doc "Delete a provider's client credentials for the caller's athanor."
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, provider) do
-    with :ok <- Context.require_permission(ctx, :vault_write),
+    with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider) do
       Arca.ProviderCredentialStorage.delete(athanor!(ctx), provider)
     end

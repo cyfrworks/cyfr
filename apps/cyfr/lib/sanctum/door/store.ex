@@ -68,7 +68,8 @@ defmodule Sanctum.Door.Store do
 
   @doc """
   Write a deny entry (or turn an existing allow / request into one). Refuses
-  an email listed in `CYFR_PLATFORM_ADMIN_EMAILS`.
+  an operator — named by an email in `CYFR_PLATFORM_ADMIN_EMAILS`, or by the
+  IdP subject of an identity that signed in with one.
   """
   @spec deny(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, Entry.t()} | {:error, :platform_admin | term()}
@@ -77,7 +78,7 @@ defmodule Sanctum.Door.Store do
       kind == "wildcard" ->
         {:error, :wildcard_cannot_be_denied}
 
-      kind == "email" and Sanctum.Door.platform_admin_email?(value) ->
+      names_platform_admin?(kind, value) ->
         {:error, :platform_admin}
 
       true ->
@@ -92,6 +93,22 @@ defmodule Sanctum.Door.Store do
         })
     end
   end
+
+  # An operator is named two ways. The email is the list's own vocabulary; the
+  # IdP subject is what a `user_id` entry carries, so it is resolved through
+  # the identity that signed in with it. An identity that has never signed in
+  # has no address to resolve and no session to lose — `Sanctum.Door.admit/3`
+  # is the backstop that keeps the env list winning whatever rows exist.
+  defp names_platform_admin?("email", value), do: Sanctum.Door.platform_admin_email?(value)
+
+  defp names_platform_admin?("user_id", value) do
+    case Sanctum.Tenancy.Users.get(value) do
+      {:ok, %{email: email}} -> Sanctum.Door.platform_admin_email?(email)
+      _ -> false
+    end
+  end
+
+  defp names_platform_admin?(_kind, _value), do: false
 
   @doc "Delete an entry by id."
   @spec remove(String.t()) :: :ok | {:error, :not_found}

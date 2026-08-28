@@ -124,12 +124,12 @@ defmodule Sanctum.ApiKey do
 
       iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "my-key", scope: ["execution"]})
-      iex> String.starts_with?(result.key, "cyfr_pk_")
+      iex> String.starts_with?(result.api_key, "cyfr_pk_")
       true
 
       iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "backend-key", type: :service})
-      iex> String.starts_with?(result.key, "cyfr_sk_")
+      iex> String.starts_with?(result.api_key, "cyfr_sk_")
       true
 
   """
@@ -351,11 +351,25 @@ defmodule Sanctum.ApiKey do
   end
 
   @doc """
-  Rotate a key - creates a new key with the same name and settings.
+  Rotate a key - issues a new secret for the same name and settings.
+
+  A capability-bearing key is refused: rotation is `permission: :admin` and
+  mints no capability of its own, so handing a fresh secret to a row that
+  already carries one would spend the interactive grant twice. Revoke it and
+  mint a new key instead — that path asks the consent plane again.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
     athanor_id = athanor!(ctx)
 
+    with {:ok, false} <- Arca.ApiKeyStorage.capability_bearing?(athanor_id, name) do
+      rotate_plain(ctx, athanor_id, name)
+    else
+      {:ok, true} -> {:error, :capability_key_immutable}
+      {:error, :database_error} -> {:error, :database_error}
+    end
+  end
+
+  defp rotate_plain(_ctx, athanor_id, name) do
     case Arca.ApiKeyStorage.get_key(athanor_id, name) do
       {:ok, row} ->
         case parse_key_type(row.type) do

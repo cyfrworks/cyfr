@@ -88,6 +88,47 @@ defmodule Sanctum.ProviderCredentialsTest do
     end
   end
 
+  describe "the consent class" do
+    # These are the athanor's OAuth *app* identity — the material
+    # `vault.authorize` then spends to obtain third-party tokens. They sit on
+    # the outbound side of the credential line with vault entries, not with
+    # the inbound keys CYFR mints for itself, so the writes are interactive
+    # and a key cannot make them however wide its permission set.
+    defp key_ctx do
+      Context.build(
+        user_id: "svc",
+        athanor_id: "ath_test",
+        scope: :athanor,
+        permissions: [:*],
+        auth_method: :api_key,
+        authenticated: true
+      )
+    end
+
+    test "an API-key caller cannot substitute the OAuth client" do
+      assert {:error, {:surface_not_permitted, :api_key}} =
+               ProviderCredentials.put(key_ctx(), "google", "attacker-id", "attacker-secret")
+    end
+
+    test "an API-key caller cannot delete the OAuth client" do
+      assert {:error, {:surface_not_permitted, :api_key}} =
+               ProviderCredentials.delete(key_ctx(), "google")
+    end
+
+    test "reads stay available to a key", %{ctx: ctx} do
+      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert ProviderCredentials.configured?(key_ctx(), "google")
+    end
+
+    test "both oauth mutations are annotated interactive" do
+      actions = Sanctum.MCP.OAuthTool.definition().annotations.actions
+
+      assert actions["set_client"][:consent] == :interactive
+      assert actions["delete_client"][:consent] == :interactive
+      assert actions["list"][:consent] == nil
+    end
+  end
+
   describe "delete/2" do
     test "removes stored credentials", %{ctx: ctx} do
       assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
@@ -118,17 +159,18 @@ defmodule Sanctum.ProviderCredentialsTest do
       assert {:error, _} = Sanctum.MCP.OAuthTool.handle(ctx, %{"action" => "set_client"})
     end
 
-    test "requires :vault_write" do
-      ctx = narrow_ctx([:execute])
-
+    test "requires the interactive class" do
       # The tool surface refuses at the dispatch chokepoint, where the
-      # action's permission annotation is enforced.
-      assert {:error, {:missing_permission, :vault_write}} =
-               Emissary.MCP.ToolRegistry.call_external("oauth", ctx, %{
-                 "action" => "set_client",
-                 "provider" => "google",
-                 "client_id" => "x"
-               })
+      # action's consent annotation is enforced. A permission set — however
+      # wide — does not open an outbound-credential write.
+      for ctx <- [narrow_ctx([:execute]), key_ctx()] do
+        assert {:error, {:consent_class_required, _}} =
+                 Emissary.MCP.ToolRegistry.call_external("oauth", ctx, %{
+                   "action" => "set_client",
+                   "provider" => "google",
+                   "client_id" => "x"
+                 })
+      end
     end
   end
 end
