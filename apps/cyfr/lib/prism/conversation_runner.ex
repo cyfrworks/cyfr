@@ -127,13 +127,19 @@ defmodule Prism.ConversationRunner do
   @doc """
   Whether a turn is running in this conversation right now — asked of the
   runner itself, so a viewer looking at another thread gets the truth about
-  this one. No runner means no turn.
+  this one. No runner means no turn. The caller's context scopes the
+  answer: another athanor's conversation reads as not running, never as an
+  existence oracle.
   """
-  @spec turn_running?(String.t()) :: boolean()
-  def turn_running?(conversation_id) do
+  @spec turn_running?(Context.t(), String.t()) :: boolean()
+  def turn_running?(%Context{athanor_id: athanor_id}, conversation_id) do
     case whereis(conversation_id) do
-      nil -> false
-      pid -> GenServer.call(pid, :state).running == true
+      nil ->
+        false
+
+      pid ->
+        answer = GenServer.call(pid, :state)
+        answer.running == true and answer.athanor_id == athanor_id
     end
   catch
     :exit, _ -> false
@@ -159,10 +165,10 @@ defmodule Prism.ConversationRunner do
   running, the text streamed so far, tool activity, token usage, the
   conversation grants and the orchestrator in use.
   """
-  @spec state(String.t(), String.t()) :: map()
+  @spec state(String.t(), String.t()) :: map() | {:error, term()}
   def state(conversation_id, athanor_id) do
     with {:ok, pid} <- ensure(conversation_id, athanor_id) do
-      GenServer.call(pid, :state)
+      safe_call(pid, :state)
     end
   end
 
@@ -181,6 +187,11 @@ defmodule Prism.ConversationRunner do
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           :ok | {:error, term()}
   def send_message(%Context{} = ctx, conversation_id, text, opts \\ []) do
+    # The orchestrator roster is an MCP call — resolved here, in the
+    # caller, never inside the runner's handle_call, where one slow
+    # resolve would block every member's sends. The runner refreshes its
+    # cache from this value only when the cache is stale.
+    opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> AquaTurn.orchestrators(ctx) end)
     call(ctx, conversation_id, {:send, ctx, text, opts})
   end
 
@@ -208,7 +219,7 @@ defmodule Prism.ConversationRunner do
   @doc "Stop auto-approving `{tool, action}` for the rest of this conversation."
   @spec revoke_grant(Context.t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def revoke_grant(%Context{} = ctx, conversation_id, tool, action) do
-    call(ctx, conversation_id, {:revoke_grant, tool, action})
+    call(ctx, conversation_id, {:revoke_grant, ctx, tool, action})
   end
 
   @doc """
@@ -227,8 +238,16 @@ defmodule Prism.ConversationRunner do
     with {:ok, conv} <- Conversations.get(ctx, conversation_id),
          :ok <- open?(conv.athanor_id),
          {:ok, pid} <- ensure(conv.id, conv.athanor_id) do
-      GenServer.call(pid, request, 30_000)
+      safe_call(pid, request)
     end
+  end
+
+  # A busy or just-died runner answers a refusal, never an exit that takes
+  # the calling LiveView down with it.
+  defp safe_call(pid, request, timeout \\ 30_000) do
+    GenServer.call(pid, request, timeout)
+  catch
+    :exit, _ -> {:error, :unavailable}
   end
 
   defp open?(athanor_id) do
@@ -346,7 +365,7 @@ defmodule Prism.ConversationRunner do
         {:reply, standing(ctx, state), state}
 
       true ->
-        state = refresh_orchestrators(state, ctx)
+        state = refresh_orchestrators(state, opts)
 
         case addressing(state, ctx, text, opts) do
           {:error, reason} ->
@@ -415,12 +434,26 @@ defmodule Prism.ConversationRunner do
     end
   end
 
-  def handle_call({:revoke_grant, tool, action}, _from, state) do
-    state = %{state | grants: MapSet.delete(state.grants, {tool, action})}
-    {:reply, :ok, broadcast(state, {:grants, state.grants})}
+  def handle_call({:revoke_grant, ctx, tool, action}, _from, state) do
+    case standing(ctx, state) do
+      :ok ->
+        state = %{state | grants: MapSet.delete(state.grants, {tool, action})}
+        {:reply, :ok, broadcast(state, {:grants, state.grants})}
+
+      refusal ->
+        {:reply, refusal, state}
+    end
   end
 
   def handle_call({:restart_for_consent, ctx, result}, _from, state) do
+    with :ok <- standing(ctx, state) do
+      handle_restart_for_consent(ctx, result, state)
+    else
+      refusal -> {:reply, refusal, state}
+    end
+  end
+
+  defp handle_restart_for_consent(ctx, result, state) do
     if state.running and state.execution_id do
       payload = %{
         profile_id: Map.get(result, :profile_id),
@@ -505,13 +538,13 @@ defmodule Prism.ConversationRunner do
   # an orchestrator. A person's athanor addresses AQUA with every message;
   # a group only when the text mentions an orchestrator, unless the group
   # answers everything.
-  defp addressing(state, ctx, text, opts) do
+  defp addressing(state, _ctx, text, opts) do
     {_message, mentioned} = AquaTurn.parse_mention(text, state.orchestrators)
 
     addressed? = state.kind == "person" or state.answer_mode == "all" or not is_nil(mentioned)
 
     if addressed? do
-      case pick_orchestrator(ctx, state, mentioned, opts) do
+      case pick_orchestrator(state, mentioned, opts) do
         {:ok, orchestrator} -> {:turn, orchestrator}
         {:error, reason} -> {:error, reason}
       end
@@ -580,7 +613,7 @@ defmodule Prism.ConversationRunner do
 
     Conversations.update(state.system_ctx, state.id, %{
       turn_seq: seq,
-      orchestrator: orchestrator["name"]
+      orchestrator: orchestrator_name(orchestrator)
     })
 
     ref = make_ref()
@@ -596,19 +629,26 @@ defmodule Prism.ConversationRunner do
 
       result =
         try do
-          attachments = Attachments.load(ctx, conv_id, turn_attachments)
+          # A name-only pick resolves its run-time detail here, in the
+          # task — the MCP call this costs must never run inside the
+          # runner's handle_call.
+          with %{} = orchestrator <- resolve_orchestrator(ctx, orchestrator) do
+            attachments = Attachments.load(ctx, conv_id, turn_attachments)
 
-          %{input: input, tool_policy: policy} =
-            AquaTurn.build_input(ctx, orchestrator, task,
-              history: history,
-              attachments: attachments,
-              model: entry.model,
-              group: group?
-            )
+            %{input: input, tool_policy: policy} =
+              AquaTurn.build_input(ctx, orchestrator, task,
+                history: history,
+                attachments: attachments,
+                model: entry.model,
+                group: group?
+              )
 
-          case turn.start(ctx, input) do
-            {:ok, eid} -> {:ok, eid, policy}
-            {:error, reason} -> {:error, reason}
+            case turn.start(ctx, input) do
+              {:ok, eid} -> {:ok, eid, policy, orchestrator}
+              {:error, reason} -> {:error, reason}
+            end
+          else
+            nil -> {:error, :no_orchestrator}
           end
         rescue
           e -> {:error, Exception.message(e)}
@@ -627,8 +667,8 @@ defmodule Prism.ConversationRunner do
         streaming_text: "",
         tool_activity: [],
         usage: %{input: 0, output: 0},
-        orchestrator: orchestrator,
-        tool_policy: orchestrator["tool_policy"] || %{},
+        orchestrator: resolved_or_previous(orchestrator, state.orchestrator),
+        tool_policy: pre_policy(orchestrator),
         turn_seq: seq,
         last_task: task
     }
@@ -689,8 +729,10 @@ defmodule Prism.ConversationRunner do
   end
 
   # `@name` in the text wins, then an explicit option, then the
-  # orchestrator of the previous turn, then the athanor's first.
-  defp pick_orchestrator(ctx, state, mentioned, opts) do
+  # orchestrator of the previous turn, then the athanor's first. Only the
+  # NAME is decided here (against the cached roster — no network in
+  # handle_call); the run-time detail resolves inside the turn-start task.
+  defp pick_orchestrator(state, mentioned, opts) do
     name =
       mentioned || Keyword.get(opts, :orchestrator) ||
         (state.orchestrator && state.orchestrator["name"]) ||
@@ -704,21 +746,37 @@ defmodule Prism.ConversationRunner do
           is_nil(Keyword.get(opts, :orchestrator)) ->
         {:ok, state.orchestrator}
 
+      Enum.any?(state.orchestrators, &(&1["name"] == name)) ->
+        {:ok, {:by_name, name}}
+
       true ->
-        case AquaTurn.orchestrator(ctx, name) do
-          nil -> {:error, :no_orchestrator}
-          orchestrator -> {:ok, orchestrator}
-        end
+        {:error, :no_orchestrator}
     end
   end
 
-  # The athanor's orchestrator names — an MCP call as the sender, so cached
-  # for a while; a change to the athanor invalidates the cache.
-  defp refresh_orchestrators(state, ctx) do
-    now = System.monotonic_time(:millisecond)
+  defp orchestrator_name({:by_name, name}), do: name
+  defp orchestrator_name(%{} = orchestrator), do: orchestrator["name"]
 
-    if state.orchestrators == [] or now - state.orchestrators_at > @orchestrators_ttl_ms do
-      %{state | orchestrators: AquaTurn.orchestrators(ctx), orchestrators_at: now}
+  defp resolve_orchestrator(_ctx, %{} = orchestrator), do: orchestrator
+  defp resolve_orchestrator(ctx, {:by_name, name}), do: AquaTurn.orchestrator(ctx, name)
+
+  # Until the task reports the resolved detail, the previous turn's
+  # orchestrator stands in for display; a full map replaces it at once.
+  defp resolved_or_previous(%{} = orchestrator, _previous), do: orchestrator
+  defp resolved_or_previous({:by_name, _}, previous), do: previous
+
+  defp pre_policy(%{} = orchestrator), do: orchestrator["tool_policy"] || %{}
+  defp pre_policy({:by_name, _}), do: %{}
+
+  # The athanor's orchestrator names, prefetched by the sender (an MCP
+  # call, kept out of this process); adopted only when the cache is stale.
+  defp refresh_orchestrators(state, opts) do
+    now = System.monotonic_time(:millisecond)
+    roster = Keyword.get(opts, :orchestrators)
+
+    if is_list(roster) and
+         (state.orchestrators == [] or now - state.orchestrators_at > @orchestrators_ttl_ms) do
+      %{state | orchestrators: roster, orchestrators_at: now}
     else
       state
     end
@@ -733,8 +791,8 @@ defmodule Prism.ConversationRunner do
     state = %{state | starting: nil}
 
     case result do
-      {:ok, eid, policy} ->
-        state = %{state | execution_id: eid, tool_policy: policy}
+      {:ok, eid, policy, orchestrator} ->
+        state = %{state | execution_id: eid, tool_policy: policy, orchestrator: orchestrator}
         Conversations.update(state.system_ctx, state.id, %{execution_id: eid})
 
         if state.cancel_requested do
@@ -940,17 +998,24 @@ defmodule Prism.ConversationRunner do
     %{text: text, approvals: approvals, intents: intents, tripwires: tripwires} =
       AquaTurn.parse_completion(state.streaming_text, state.tool_policy)
 
+    # No bang-matches on the appends: a store hiccup here must degrade to
+    # a broadcast error, never crash the runner mid-completion and drop
+    # the whole turn's bookkeeping.
     state =
       if text != "" do
-        {:ok, row} =
-          Conversations.append(ctx, state.id, %{
-            author: "aqua",
-            kind: "text",
-            content: text,
-            execution_id: state.execution_id
-          })
+        case Conversations.append(ctx, state.id, %{
+               author: "aqua",
+               kind: "text",
+               content: text,
+               execution_id: state.execution_id
+             }) do
+          {:ok, row} ->
+            broadcast(state, {:message, row})
 
-        broadcast(state, {:message, row})
+          {:error, reason} ->
+            Logger.error("[Prism.ConversationRunner] reply append failed: #{inspect(reason)}")
+            broadcast(state, {:error, "The reply could not be saved"})
+        end
       else
         state
       end
@@ -958,29 +1023,38 @@ defmodule Prism.ConversationRunner do
     orchestrator_name = state.orchestrator && state.orchestrator["name"]
 
     approval_rows =
-      Enum.map(approvals, fn intent ->
-        {:ok, row} =
-          Conversations.append(ctx, state.id, %{
-            id: intent.id,
-            author: "aqua",
-            kind: "approval",
-            content: intent.title,
-            status: "pending",
-            payload: %{"intent" => intent, "orchestrator" => orchestrator_name},
-            execution_id: state.execution_id
-          })
+      Enum.flat_map(approvals, fn intent ->
+        case Conversations.append(ctx, state.id, %{
+               id: intent.id,
+               author: "aqua",
+               kind: "approval",
+               content: intent.title,
+               status: "pending",
+               payload: %{"intent" => intent, "orchestrator" => orchestrator_name},
+               execution_id: state.execution_id
+             }) do
+          {:ok, row} ->
+            [row]
 
-        row
+          {:error, reason} ->
+            Logger.error("[Prism.ConversationRunner] approval append failed: #{inspect(reason)}")
+
+            []
+        end
       end)
 
     state = Enum.reduce(approval_rows, state, &broadcast(&2, {:message, &1}))
 
     state =
       Enum.reduce(tripwires, state, fn text, acc ->
-        {:ok, row} =
-          Conversations.append(ctx, acc.id, %{author: "system", kind: "error", content: text})
-
-        broadcast(acc, {:message, row})
+        case Conversations.append(ctx, acc.id, %{
+               author: "system",
+               kind: "error",
+               content: text
+             }) do
+          {:ok, row} -> broadcast(acc, {:message, row})
+          {:error, _} -> broadcast(acc, {:error, text})
+        end
       end)
 
     if approval_rows != [] do
@@ -1437,6 +1511,7 @@ defmodule Prism.ConversationRunner do
   defp public_state(state) do
     %{
       running: state.running,
+      athanor_id: state.athanor_id,
       execution_id: state.execution_id,
       streaming_text: state.streaming_text,
       tool_activity: state.tool_activity,

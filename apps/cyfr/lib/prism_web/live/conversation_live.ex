@@ -298,7 +298,7 @@ defmodule PrismWeb.ConversationLive do
 
     # The turn may be running in a thread this tab is not looking at: the
     # runner is the fact, not what this socket happens to be rendering.
-    if Prism.ConversationRunner.turn_running?(id) do
+    if Prism.ConversationRunner.turn_running?(ctx, id) do
       {:noreply, put_flash(socket, :error, "Stop the running turn before deleting.")}
     else
       case Conversations.delete(ctx, id) do
