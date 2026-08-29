@@ -82,12 +82,16 @@ defmodule Emissary.MCP.ToolError do
   `Opus.HostSurfaceTest` pins what opus may reach into, and a renderer is
   not a reason to widen that.
   """
-  @spec render(term()) :: String.t() | nil
-  def render(reason) when is_binary(reason), do: reason
+  @spec render(term(), atom() | nil) :: String.t() | nil
+  def render(reason, auth_method \\ nil)
 
-  def render(reason) do
+  def render(reason, _auth_method) when is_binary(reason), do: reason
+
+  def render(reason, auth_method) do
     cond do
-      Sanctum.Unauthorized.reason?(reason) -> Sanctum.Unauthorized.message(reason)
+      # The method rides along so the API-key remediation hint renders on
+      # every surface, not only the wire router's own refusal path.
+      Sanctum.Unauthorized.reason?(reason) -> Sanctum.Unauthorized.message(reason, auth_method)
       reason?(reason) -> message(reason)
       match?(%Compendium.OCI.Errors{}, reason) -> Compendium.MCP.Shared.to_error_string(reason)
       true -> nil

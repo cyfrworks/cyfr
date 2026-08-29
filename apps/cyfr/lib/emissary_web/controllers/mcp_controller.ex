@@ -117,10 +117,17 @@ defmodule EmissaryWeb.MCPController do
       # permissions were the problem.
       code = Sanctum.Unauthorized.code(e.reason)
 
+      # Re-rendered from the reason rather than `Exception.message/1`: the
+      # struct bakes its prose at raise time without the auth method, and
+      # only the vocabulary can add the API-key remediation hint.
       respond_error(
         conn,
         code,
-        Message.encode_error(params["id"], code, Exception.message(e))
+        Message.encode_error(
+          params["id"],
+          code,
+          Sanctum.Unauthorized.message(e.reason, conn.assigns.context.auth_method)
+        )
       )
   end
 
@@ -562,6 +569,10 @@ defmodule EmissaryWeb.MCPController do
   defp http_status_for(:auth_required), do: 401
   defp http_status_for(:insufficient_permissions), do: 403
   defp http_status_for(:rate_limited), do: 429
+  # A server fault is 5xx on the wire, not 400: intermediaries, retry
+  # policies and alerting read the status, not the JSON-RPC body, and a
+  # store outage disguised as Bad Request never trips a 5xx alarm.
+  defp http_status_for(:internal_error), do: 500
   defp http_status_for(_code), do: 400
 
   defp extract_tool(%{"method" => "tools/call", "params" => %{"name" => name}}), do: name

@@ -709,7 +709,7 @@ defmodule PrismWeb.ConversationLive do
     {:ok, files}
   rescue
     e ->
-      Logger.warning("[ConversationLive] consume uploads failed: #{inspect(e)}")
+      Logger.warning("[ConversationLive] consume uploads failed: #{Exception.message(e)}")
       {:error, :attachments_unreadable}
   end
 

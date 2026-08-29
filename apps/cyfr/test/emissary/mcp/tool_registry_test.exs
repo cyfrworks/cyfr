@@ -276,7 +276,11 @@ defmodule Emissary.MCP.ToolRegistryTest do
       assert {:error, {:crashed, message}} =
                ToolRegistry.call_external(@crash_tool, ctx, %{"action" => "raise"})
 
-      assert message =~ "boom from provider"
+      # The tuple names the tool, never the exception's own message — that
+      # text can carry a query, a path, or the offending bytes, and this
+      # tuple renders verbatim on the wire.
+      assert message == "Tool #{@crash_tool} crashed"
+      refute message =~ "boom from provider"
 
       # The whole point: Task.async would have propagated a link exit and killed
       # this process, so reaching the next line at all is the assertion.

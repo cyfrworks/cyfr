@@ -276,10 +276,24 @@ defmodule Opus.HttpHandler do
         emit_telemetry(component_ref, request, :timeout, duration_ms)
         encode_error(:timeout, "HTTP request timed out after #{request_timeout(limits)}ms")
 
-      {:error, exception} ->
+      {:error, %Req.TransportError{reason: reason}} when is_atom(reason) ->
+        # A transport failure names the network condition the guest needs
+        # (:econnrefused, :nxdomain) — an atom, never an internal term.
         duration_ms = System.monotonic_time(:millisecond) - start_time
         emit_telemetry(component_ref, request, :error, duration_ms)
-        encode_error(:http_error, "HTTP request failed: #{Exception.message(exception)}")
+        encode_error(:http_error, "HTTP request failed: #{reason}")
+
+      {:error, exception} ->
+        # The exception's own message can carry host internals; the guest
+        # gets a generic sentence and the detail stays in the host log.
+        duration_ms = System.monotonic_time(:millisecond) - start_time
+        emit_telemetry(component_ref, request, :error, duration_ms)
+
+        Logger.warning(
+          "[Opus.HttpHandler] request for #{component_ref} failed: #{Exception.message(exception)}"
+        )
+
+        encode_error(:http_error, "HTTP request failed")
     end
   end
 

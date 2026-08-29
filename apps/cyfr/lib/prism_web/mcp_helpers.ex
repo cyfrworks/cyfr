@@ -94,8 +94,6 @@ defmodule PrismWeb.MCPHelpers do
   def error_message(%Compendium.OCI.Errors{} = err),
     do: Compendium.MCP.Shared.to_error_string(err)
 
-  def error_message(%{message: msg}) when is_binary(msg), do: msg
-
   def error_message(reason) do
     # The same renderer the wire and the guest use
     # (`Emissary.MCP.ToolError.render/1`): this used to carry its own `cond`,

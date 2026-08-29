@@ -217,7 +217,7 @@ defmodule Emissary.MCP.RequestLog do
     end
   rescue
     e ->
-      Logger.error("[RequestLog] log_started raised for #{call_id}: #{inspect(e)}")
+      Logger.error("[RequestLog] log_started raised for #{call_id}: #{Exception.message(e)}")
       :ok
   end
 
@@ -229,7 +229,7 @@ defmodule Emissary.MCP.RequestLog do
     log_completed(ctx, call_id, data)
   rescue
     e ->
-      Logger.error("[RequestLog] log_completed raised for #{call_id}: #{inspect(e)}")
+      Logger.error("[RequestLog] log_completed raised for #{call_id}: #{Exception.message(e)}")
       :ok
   end
 
@@ -241,7 +241,7 @@ defmodule Emissary.MCP.RequestLog do
     log_failed(ctx, call_id, data)
   rescue
     e ->
-      Logger.error("[RequestLog] log_failed raised for #{call_id}: #{inspect(e)}")
+      Logger.error("[RequestLog] log_failed raised for #{call_id}: #{Exception.message(e)}")
       :ok
   end
 

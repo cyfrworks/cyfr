@@ -122,13 +122,13 @@ const backends = new Map();
 // duplicate would make `backends.set` silently replace an earlier entry,
 // leaking its child process.
 function validateBackendName(name) {
-  if (!name) throw new Error("name is required");
+  if (!name) throw new RpcRefusal("name is required");
   if (name.includes("__") || name.includes(":")) {
-    throw new Error("backend name cannot contain `__` or `:`");
+    throw new RpcRefusal("backend name cannot contain `__` or `:`");
   }
-  if (backends.has(name)) throw new Error(`backend '${name}' already exists`);
+  if (backends.has(name)) throw new RpcRefusal(`backend '${name}' already exists`);
   if (backends.size >= MAX_BACKENDS) {
-    throw new Error(`backend limit reached (${MAX_BACKENDS})`);
+    throw new RpcRefusal(`backend limit reached (${MAX_BACKENDS})`);
   }
 }
 
@@ -333,7 +333,7 @@ function notify(backend, method, params) {
 
 async function initializeBackend(name) {
   const backend = backends.get(name);
-  if (!backend) throw new Error(`backend '${name}' not found`);
+  if (!backend) throw new RpcRefusal(`backend '${name}' not found`);
   try {
     await rpc(
       backend,
@@ -468,14 +468,14 @@ async function dispatchToolCall(toolName, args) {
     const backendName = toolName.slice(0, sep);
     const remoteName = toolName.slice(sep + 2);
     const b = backends.get(backendName);
-    if (!b) throw new Error(`backend '${backendName}' not found`);
+    if (!b) throw new RpcRefusal(`backend '${backendName}' not found`);
     if (b.status !== "ready") {
-      throw new Error(`backend '${backendName}' not ready: ${b.error || b.status}`);
+      throw new RpcRefusal(`backend '${backendName}' not ready: ${b.error || b.status}`);
     }
     return await rpc(b, "tools/call", { name: remoteName, arguments: args || {} });
   }
 
-  throw new Error(`unknown tool: ${toolName}`);
+  throw new RpcRefusal(`unknown tool: ${toolName}`);
 }
 
 async function adminAddBackend(args) {
@@ -483,7 +483,7 @@ async function adminAddBackend(args) {
   const command = String(args?.command || "").trim();
   const env = args?.env && typeof args.env === "object" ? args.env : undefined;
 
-  if (!command) throw new Error("command is required");
+  if (!command) throw new RpcRefusal("command is required");
   validateBackendName(name);
 
   spawnBackend(name, command, env);
@@ -500,8 +500,8 @@ async function adminAddBackend(args) {
 
 async function adminRemoveBackend(args) {
   const name = String(args?.name || "").trim();
-  if (!name) throw new Error("name is required");
-  if (!backends.has(name)) throw new Error(`backend '${name}' not found`);
+  if (!name) throw new RpcRefusal("name is required");
+  if (!backends.has(name)) throw new RpcRefusal(`backend '${name}' not found`);
   stopBackend(name);
   backends.delete(name);
   await persist();
@@ -524,9 +524,9 @@ function adminListBackends() {
 
 async function adminRestartBackend(args) {
   const name = String(args?.name || "").trim();
-  if (!name) throw new Error("name is required");
+  if (!name) throw new RpcRefusal("name is required");
   const existing = backends.get(name);
-  if (!existing) throw new Error(`backend '${name}' not found`);
+  if (!existing) throw new RpcRefusal(`backend '${name}' not found`);
   const { command, env } = existing;
   stopBackend(name);
   backends.delete(name);
@@ -642,17 +642,26 @@ app.post("/mcp", async (req, res) => {
       // server missing one method from a legacy server missing the endpoint.
       return rpcError(res, 404, msg.id, -32601, err.message);
     }
+    if (err instanceof RpcRefusal) {
+      // A crafted refusal — the message is client-safe by construction
+      // (a backend name, a limit, a missing argument). Same wire shape as
+      // before the split, so existing callers keep parsing it.
+      return res.json({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: {
+          // -32603 (internal error) — the code cyfr's own fallback uses for
+          // the same condition; -32000 was a second spelling of it.
+          code: -32603,
+          message: err.message,
+        },
+      });
+    }
+    // Anything else is an internal fault: a child-process failure or a bug,
+    // whose message can carry paths, spawn arguments, or upstream stderr.
+    // The detail goes to the log; the wire gets a 500 and a generic sentence.
     console.error(`[mcp] request=${requestId} error:`, err);
-    return res.json({
-      jsonrpc: "2.0",
-      id: msg.id,
-      error: {
-        // -32603 (internal error) — the code cyfr's own fallback uses for
-        // the same condition; -32000 was a second spelling of it.
-        code: -32603,
-        message: err?.message || String(err),
-      },
-    });
+    return rpcError(res, 500, msg.id, -32603, "internal error");
   }
 });
 
@@ -671,10 +680,16 @@ app.use((err, req, res, next) => {
     return rpcError(res, 400, null, -32700, "Parse error: body is not valid JSON");
   }
   console.error("[mcp-bridge] request error:", err);
-  return rpcError(res, 500, null, -32603, err?.message || "internal error");
+  // Never the error's own message — at this layer it is an internal term.
+  return rpcError(res, 500, null, -32603, "internal error");
 });
 
 class UnknownMethod extends Error {}
+
+// A deliberate refusal whose message is written for the caller — the only
+// thrown errors whose text may reach the wire. Everything else is answered
+// with a generic sentence and logged.
+class RpcRefusal extends Error {}
 
 function rpcError(res, status, id, code, message, data) {
   return res.status(status).json({
@@ -793,7 +808,7 @@ async function handleRpc(msg) {
       return { tools: aggregatedTools(), ttlMs: TOOLS_TTL_MS, cacheScope: "private" };
     case "tools/call": {
       const { name, arguments: args } = msg.params || {};
-      if (!name) throw new Error("tools/call: missing 'name'");
+      if (!name) throw new RpcRefusal("tools/call: missing 'name'");
       try {
         return await dispatchToolCall(name, args || {});
       } catch (err) {

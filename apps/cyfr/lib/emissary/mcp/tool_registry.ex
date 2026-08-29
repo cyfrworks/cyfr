@@ -963,7 +963,10 @@ defmodule Emissary.MCP.ToolRegistry do
             "[ToolRegistry] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
           )
 
-          {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(exception)}"}}
+          # The tuple carries only the tool's name — the exception's own
+          # message can hold a query, a path, or the offending bytes, and
+          # this tuple renders verbatim on the wire (`ToolError.message/1`).
+          {:error, {:crashed, "Tool #{name} crashed"}}
 
         {:exit, :cancelled} ->
           {:error, {:exit, "Tool #{name} was cancelled"}}

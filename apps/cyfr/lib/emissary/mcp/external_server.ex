@@ -247,7 +247,15 @@ defmodule Emissary.MCP.ExternalServer do
                  try do
                    dispatch_upstream_call(snapshot, body, tool_name)
                  rescue
-                   e -> {:error, "External call failed: #{Exception.message(e)}"}
+                   e ->
+                     # The exception's message can carry the upstream URL or
+                     # a transport internal; the caller (a guest or the
+                     # console) gets the tool's name only, the log the rest.
+                     Logger.warning(
+                       "[ExternalServer] call to #{tool_name} raised: #{Exception.message(e)}"
+                     )
+
+                     {:error, "External call failed for #{tool_name}"}
                  end
 
                GenServer.reply(from, reply)
