@@ -102,7 +102,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:ok, %{webhooks: hooks, count: length(hooks)}}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to list webhooks: #{inspect(reason)}")
+        Logger.error("[WebhookTool] Failed to list webhooks: #{inspect(reason)}")
         {:error, "Failed to list webhooks"}
     end
   end
@@ -148,7 +148,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:error, reason}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to create webhook: #{inspect(reason)}")
+        Logger.error("[WebhookTool] Failed to create webhook: #{inspect(reason)}")
         {:error, "Failed to create webhook"}
     end
   end
@@ -182,7 +182,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:error, "input_template is invalid"}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to update webhook: #{inspect(reason)}")
+        Logger.error("[WebhookTool] Failed to update webhook: #{inspect(reason)}")
         {:error, "Failed to update webhook"}
     end
   end
@@ -201,7 +201,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:error, "Webhook not found: #{name}"}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to revoke webhook: #{inspect(reason)}")
+        Logger.error("[WebhookTool] Failed to revoke webhook: #{inspect(reason)}")
         {:error, "Failed to revoke webhook"}
     end
   end
@@ -220,7 +220,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:error, "Webhook not found: #{name}"}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to rotate webhook: #{inspect(reason)}")
+        Logger.error("[WebhookTool] Failed to rotate webhook: #{inspect(reason)}")
         {:error, "Failed to rotate webhook"}
     end
   end

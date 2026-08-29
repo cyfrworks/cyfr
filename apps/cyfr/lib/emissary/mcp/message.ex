@@ -9,7 +9,7 @@ defmodule Emissary.MCP.Message do
   - Requests (method call with id)
   - Notifications (method call without id)
   - Responses (result or error)
-  - Batches (array of any of the above)
+  - Batches are refused at the transport (one message per request)
 
   ## Examples
 

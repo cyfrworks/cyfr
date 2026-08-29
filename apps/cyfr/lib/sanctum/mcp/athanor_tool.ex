@@ -124,7 +124,7 @@ defmodule Sanctum.MCP.AthanorTool do
         {:error, "Limit reached: #{key} = #{cap}"}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] athanor.create failed: #{inspect(reason)}")
+        Logger.error("[AthanorTool] athanor.create failed: #{inspect(reason)}")
         {:error, "Failed to create the group"}
     end
   end
@@ -159,7 +159,7 @@ defmodule Sanctum.MCP.AthanorTool do
           {:error, "A person's own athanor is not archived here"}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] athanor.archive failed: #{inspect(reason)}")
+          Logger.error("[AthanorTool] athanor.archive failed: #{inspect(reason)}")
           {:error, "Failed to archive the athanor"}
       end
     end
@@ -181,7 +181,7 @@ defmodule Sanctum.MCP.AthanorTool do
            "That Home is archived for the record; the server has already started a new one"}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] athanor.unarchive failed: #{inspect(reason)}")
+          Logger.error("[AthanorTool] athanor.unarchive failed: #{inspect(reason)}")
           {:error, "Failed to restore the athanor"}
       end
     end
@@ -202,7 +202,7 @@ defmodule Sanctum.MCP.AthanorTool do
             {:error, "Only an archived athanor's storage can be purged — archive it first"}
 
           {:error, reason} ->
-            Logger.error("[Sanctum.MCP] athanor.purge failed: #{inspect(reason)}")
+            Logger.error("[AthanorTool] athanor.purge failed: #{inspect(reason)}")
             {:error, "Failed to purge the athanor's storage"}
         end
       end
@@ -219,7 +219,7 @@ defmodule Sanctum.MCP.AthanorTool do
           {:ok, render(updated)}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] athanor.settings failed: #{inspect(reason)}")
+          Logger.error("[AthanorTool] athanor.settings failed: #{inspect(reason)}")
           {:error, "Failed to update settings"}
       end
     end
@@ -238,7 +238,7 @@ defmodule Sanctum.MCP.AthanorTool do
           {:error, "Provisioning failed at #{step} — the error is recorded on the athanor"}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] athanor.provision failed: #{inspect(reason)}")
+          Logger.error("[AthanorTool] athanor.provision failed: #{inspect(reason)}")
           {:error, "Provisioning failed"}
       end
     end

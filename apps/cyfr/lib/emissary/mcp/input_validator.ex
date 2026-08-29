@@ -152,14 +152,17 @@ defmodule Emissary.MCP.InputValidator do
         {:error, "Field '#{key}' must be at most #{max} characters"}
 
       is_binary(prop_schema["pattern"]) ->
-        case Regex.compile(prop_schema["pattern"]) do
+        case compiled_pattern(prop_schema["pattern"]) do
           {:ok, regex} ->
             if Regex.match?(regex, value),
               do: :ok,
               else: {:error, "Field '#{key}' does not match the required pattern"}
 
-          _ ->
-            :ok
+          :error ->
+            # An uncompilable pattern used to PASS the field silently — a
+            # validation the schema declared and nothing ran. The schema
+            # author's defect refuses the call instead.
+            {:error, "Field '#{key}' has an invalid pattern in its schema"}
         end
 
       true ->
@@ -168,4 +171,27 @@ defmodule Emissary.MCP.InputValidator do
   end
 
   defp validate_string_constraints(_key, _value, _prop_schema), do: :ok
+
+  # Patterns come from server-authored schemas that change only on registry
+  # refresh — compiled once per source and memoized, not per request.
+  defp compiled_pattern(source) do
+    case :persistent_term.get({__MODULE__, source}, nil) do
+      %Regex{} = re ->
+        {:ok, re}
+
+      :invalid ->
+        :error
+
+      nil ->
+        case Regex.compile(source) do
+          {:ok, re} ->
+            :persistent_term.put({__MODULE__, source}, re)
+            {:ok, re}
+
+          _ ->
+            :persistent_term.put({__MODULE__, source}, :invalid)
+            :error
+        end
+    end
+  end
 end

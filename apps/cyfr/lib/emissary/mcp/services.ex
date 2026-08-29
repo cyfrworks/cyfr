@@ -23,15 +23,36 @@ defmodule Emissary.MCP.Services do
   """
   @spec service_name(module()) :: String.t()
   def service_name(module) do
+    case :persistent_term.get({__MODULE__, module}, nil) do
+      nil ->
+        case resolve_service_name(module) do
+          {:ok, name} ->
+            :persistent_term.put({__MODULE__, module}, name)
+            name
+
+          # The loud fallback is never pinned: a module that answers
+          # nothing NOW (a load-order gap) may answer on the next call.
+          {:fallback, name} ->
+            name
+        end
+
+      name ->
+        name
+    end
+  end
+
+  # Module introspection ran on the hot path for every tools/call; the
+  # provider set is fixed at boot, so the label is derived once.
+  defp resolve_service_name(module) do
     if Code.ensure_loaded?(module) and function_exported?(module, :service, 0) do
-      module.service()
+      {:ok, module.service()}
     else
       Logger.error(
         "[Emissary.MCP.Services] provider #{inspect(module)} exports no service/0 — " <>
           "labeling as \"emissary\"; declare `service/0` on the provider"
       )
 
-      "emissary"
+      {:fallback, "emissary"}
     end
   end
 

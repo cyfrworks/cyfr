@@ -144,9 +144,13 @@ defmodule Emissary.MCP.InputValidatorTest do
       assert msg =~ "pattern"
     end
 
-    test "an invalid pattern in the schema does not fail the request" do
+    test "an invalid pattern in the schema refuses instead of silently passing" do
+      # A pattern the schema declared and nothing ran: the old behavior
+      # passed the field, so a typo'd pattern quietly disabled the
+      # validation it claimed. The schema author's defect fails the call.
       schema = %{"properties" => %{"x" => %{"type" => "string", "pattern" => "["}}}
-      assert :ok = InputValidator.validate(%{"x" => "anything"}, schema)
+      assert {:error, message} = InputValidator.validate(%{"x" => "anything"}, schema)
+      assert message =~ "invalid pattern"
     end
   end
 

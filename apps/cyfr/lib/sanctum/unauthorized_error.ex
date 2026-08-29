@@ -6,7 +6,7 @@ defmodule Sanctum.UnauthorizedError do
   The raised form of a `Sanctum.Unauthorized` refusal.
 
   Two control-flow shapes, one vocabulary. Most gates refuse with
-  `{:error, reason}`; the `!` accessors (`Sanctum.Context.tenant!/1`,
+  `{:error, reason}`; the `!` accessors (`Sanctum.Context.require_tenant!/1`,
   `athanor!/1`) have no tuple to return and raise instead. What raised used
   to carry its own words — "Unauthorized for action: athanor_required" —
   so the same refusal read one way when returned and another when raised,

@@ -133,7 +133,7 @@ defmodule Sanctum.Provisioning do
          {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx),
          :ok <- all_minted(bootstrap) do
       Logger.info(
-        "[Sanctum.Provisioning] #{athanor_id} provisioned " <>
+        "[Provisioning] #{athanor_id} provisioned " <>
           "(pulled #{length(closure.pulled)}, minted #{length(bootstrap.minted)})"
       )
 
@@ -210,9 +210,7 @@ defmodule Sanctum.Provisioning do
         {:error, reason} ->
           # A retry the supervisor could not start is only a deferral: the
           # next sign-in (or a member's athanor.provision) tries again.
-          Logger.error(
-            "[Sanctum.Provisioning] background provisioning not started: #{inspect(reason)}"
-          )
+          Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
 
           :ok
       end
@@ -467,9 +465,7 @@ defmodule Sanctum.Provisioning do
   end
 
   defp record_failure(athanor, step, detail) do
-    Logger.warning(
-      "[Sanctum.Provisioning] #{athanor.id} not provisioned at #{step}: #{inspect(detail)}"
-    )
+    Logger.warning("[Provisioning] #{athanor.id} not provisioned at #{step}: #{inspect(detail)}")
 
     :telemetry.execute([:cyfr, :sanctum, :provisioning, :failed], %{count: 1}, %{
       athanor_id: athanor.id,

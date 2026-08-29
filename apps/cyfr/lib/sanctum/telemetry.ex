@@ -76,7 +76,9 @@ defmodule Sanctum.Telemetry do
   audited here — there was previously no record of who constructs the
   tenant-bypassing platform scope. `metadata.sanctioned` is `true` when built
   through the single sanctioned path (`Sanctum.Context.internal/1` /
-  `Sanctum.system_context/0`), `false` for a direct `Context.build`.
+  `Sanctum.system_context/0`). A `false` is emitted one line before
+  `Context.build/1` raises on the unsanctioned producer — observable by a
+  handler, never a supported steady state.
 
   Emits `[:cyfr, :sanctum, :platform_context]`.
   """

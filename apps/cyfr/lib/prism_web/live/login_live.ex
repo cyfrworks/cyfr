@@ -228,6 +228,9 @@ defmodule PrismWeb.LoginLive do
   end
 
   defp device_flow do
+    # A test seam, not an operator knob: suites stand in a fake flow.
+    # Deliberately undeclared in config — declaring it would publish a
+    # module-swap hook as a supported setting.
     Application.get_env(:cyfr, :device_flow, DeviceFlow)
   end
 

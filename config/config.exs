@@ -142,6 +142,31 @@ config :cyfr, :read_subtree_concurrency, 10
 # Decompression ceiling for published tincture archives (zip-bomb guard).
 config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
 
+# The shared-cache sweeper's budgets: raw binaries held (bytes) and
+# compiled components pinned (count) — how much a node may hold in the one
+# ETS table (`Arca.Cache.Sweeper`).
+config :cyfr, :cache_max_binary_bytes, 256 * 1024 * 1024
+config :cyfr, :cache_max_compiled_components, 32
+
+# External MCP server connections per athanor, and concurrent in-flight
+# calls one server process admits before refusing (`Emissary.MCP`).
+config :cyfr, :max_external_servers, 50
+config :cyfr, :external_server_max_in_flight, 8
+
+# How long a dispensed OAuth token stays tracked for output masking
+# (`Opus.OAuthTokenTracker`), how long a returning sign-in waits on the
+# cyfr.run probe before proceeding without it (`Sanctum.SignIn`), and the
+# retention sweep interval (`Cyfr.RetentionScheduler`).
+config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
+config :cyfr, :returning_probe_ms, 5_000
+config :cyfr, :retention_scheduler_interval, :timer.hours(6)
+
+# Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
+# its default from `Sanctum.Limits.default_max_request_size/0` (a literal
+# here would be a second spelling of a derived value), and
+# `:platform_ceiling` is a structured policy override
+# (`Sanctum.Policy.Ceiling`), not a scalar knob.
+
 # CORS Configuration — wildcard default for fresh installs. The boot guard in
 # Cyfr.Application requires an explicit allowlist once authentication is
 # configured. Override via CYFR_CORS_ALLOWED_ORIGINS.

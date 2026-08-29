@@ -51,7 +51,7 @@ defmodule Sanctum.Context do
   @type plane :: :external | :guest
 
   @type t :: %__MODULE__{
-          user_id: String.t(),
+          user_id: String.t() | nil,
           email: String.t() | nil,
           provider: String.t() | nil,
           namespace: String.t() | nil,

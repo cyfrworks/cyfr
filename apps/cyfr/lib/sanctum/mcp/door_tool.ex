@@ -103,7 +103,7 @@ defmodule Sanctum.MCP.DoorTool do
           {:ok, with_restore_note(render(entry), restored)}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] door.allow failed: #{inspect(reason)}")
+          Logger.error("[DoorTool] door.allow failed: #{inspect(reason)}")
           {:error, "Failed to write the entry"}
       end
     end
@@ -145,7 +145,7 @@ defmodule Sanctum.MCP.DoorTool do
           {:error, "Remove the * entry instead of denying it"}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] door.deny failed: #{inspect(reason)}")
+          Logger.error("[DoorTool] door.deny failed: #{inspect(reason)}")
           {:error, "Failed to write the entry"}
       end
     end
@@ -182,7 +182,7 @@ defmodule Sanctum.MCP.DoorTool do
         {:error, "Entry not found"}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] door.remove failed: #{inspect(reason)}")
+        Logger.error("[DoorTool] door.remove failed: #{inspect(reason)}")
         {:error, "Failed to remove the entry"}
     end
   end

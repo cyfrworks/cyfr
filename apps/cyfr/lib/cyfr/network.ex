@@ -296,6 +296,12 @@ defmodule Cyfr.Network do
   defp check_host(""), do: {:error, :invalid_url, "missing hostname"}
   defp check_host(_), do: :ok
 
+  # IPv4 first, IPv6 only when no A record resolves: a dual-stack host is
+  # always pinned to its v4 address, and its AAAA record is never resolved
+  # or policy-checked — which is safe precisely because the connection
+  # pins to the address checked here, so the unchecked family is also the
+  # unused one. If v6-first (or happy-eyeballs) ever lands, the policy
+  # check must move with the address actually dialed.
   defp resolve_typed(hostname) do
     charlist = String.to_charlist(hostname)
 

@@ -79,7 +79,7 @@ defmodule Sanctum.MCP.KeyTool do
         {:ok, %{keys: keys, count: length(keys)}}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to list keys: #{inspect(reason)}")
+        Logger.error("[KeyTool] Failed to list keys: #{inspect(reason)}")
         {:error, "Failed to list keys"}
     end
   end
@@ -157,7 +157,7 @@ defmodule Sanctum.MCP.KeyTool do
         {:error, reason}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to revoke key: #{inspect(reason)}")
+        Logger.error("[KeyTool] Failed to revoke key: #{inspect(reason)}")
         {:error, "Failed to revoke key"}
     end
   end
@@ -181,7 +181,7 @@ defmodule Sanctum.MCP.KeyTool do
            "revoke it and mint a new key, which asks for consent again"}
 
       {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to rotate key: #{inspect(reason)}")
+        Logger.error("[KeyTool] Failed to rotate key: #{inspect(reason)}")
         {:error, "Failed to rotate key"}
     end
   end

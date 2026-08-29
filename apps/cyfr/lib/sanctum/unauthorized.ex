@@ -28,6 +28,7 @@ defmodule Sanctum.Unauthorized do
           | {:tool_auth_required, String.t()}
           | {:malformed_resource, :execution | :tenant}
           | {:consent_class_required, term()}
+          | {:authorization_required, String.t()}
 
   @doc """
   Whether a term is a refusal from this vocabulary. Dispatchers use it to

@@ -462,11 +462,11 @@ defmodule Sanctum.Auth.DeviceFlow do
         end
 
       {:ok, %{"message" => message}} ->
-        Logger.warning("[DeviceFlow] Failed to fetch GitHub email: #{message}")
+        Logger.warning("[Auth.DeviceFlow] Failed to fetch GitHub email: #{message}")
         :none
 
       {:error, reason} ->
-        Logger.warning("[DeviceFlow] Failed to fetch GitHub email: #{inspect(reason)}")
+        Logger.warning("[Auth.DeviceFlow] Failed to fetch GitHub email: #{inspect(reason)}")
         :none
     end
   end
@@ -594,7 +594,7 @@ defmodule Sanctum.Auth.DeviceFlow do
             |> Map.merge(extras)
 
           {:error, reason} ->
-            Logger.error("[Sanctum.Auth.DeviceFlow] session create failed: #{inspect(reason)}")
+            Logger.error("[Auth.DeviceFlow] session create failed: #{inspect(reason)}")
 
             %{
               status: "error",

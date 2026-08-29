@@ -148,11 +148,10 @@ defmodule EmissaryWeb.Telemetry do
     ]
   end
 
+  # No custom measurements — the poller stays for :telemetry_poller's
+  # built-in VM series (vm.memory, run-queue lengths), which the vm.*
+  # metric definitions above consume.
   defp periodic_measurements do
-    [
-      # A module, function and arguments to be invoked periodically.
-      # This function must call :telemetry.execute/3 and a metric must be added above.
-      # {EmissaryWeb, :count_users, []}
-    ]
+    []
   end
 end

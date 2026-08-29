@@ -345,7 +345,12 @@ defmodule Arca.Storage do
   # state and never adapter-stored. Every root is a subdirectory of the one
   # seed tree (`:seed_path`), named after its logical root — the rows of
   # `@layout` whose seed column is set.
-  @seed_roots for {root, _class, _guest, seed} <- @layout, seed != nil, do: root
+  # Derived by the SAME filter as @overlay_roots below, deliberately: the
+  # seed column's whole domain is `:overlay | nil`, so "has a seed
+  # counterpart" and "is overlaid" are one fact — two filters (`!= nil` vs
+  # `== :overlay`) were the one place the derived rosters could silently
+  # diverge if the column ever grew a value.
+  @seed_roots for {root, _class, _guest, :overlay} <- @layout, do: root
 
   @doc """
   The seed-media roots: the logical `["seed", root | rest]` prefixes, each a

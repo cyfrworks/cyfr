@@ -127,7 +127,7 @@ defmodule Sanctum.MCP.MemberTool do
           {:error, "Limit reached: #{key} = #{cap}"}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] member.add failed: #{inspect(reason)}")
+          Logger.error("[MemberTool] member.add failed: #{inspect(reason)}")
           {:error, "Failed to add the member"}
       end
     end
@@ -147,7 +147,7 @@ defmodule Sanctum.MCP.MemberTool do
           {:error, "Not a member"}
 
         {:error, reason} ->
-          Logger.error("[Sanctum.MCP] member.remove failed: #{inspect(reason)}")
+          Logger.error("[MemberTool] member.remove failed: #{inspect(reason)}")
           {:error, "Failed to remove the member"}
       end
     end

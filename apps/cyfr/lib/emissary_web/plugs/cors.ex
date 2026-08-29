@@ -103,10 +103,18 @@ defmodule EmissaryWeb.Plugs.CORS do
     put_cors_headers(conn, opts)
   end
 
+  # The bare-opts fallback, derived ONCE at compile time — this ran
+  # init([])'s list-pipeline on every request, including preflights.
+  @default_allowed_methods @default_methods
+                           |> Enum.map(&String.upcase/1)
+                           |> Enum.concat(["OPTIONS"])
+                           |> Enum.uniq()
+                           |> Enum.join(", ")
+  @default_allowed_headers Enum.join(Enum.uniq(@default_headers), ", ")
+
   defp put_cors_headers(conn, opts) do
-    defaults = init([])
-    allowed_methods = Keyword.get(opts, :allowed_methods) || defaults[:allowed_methods]
-    allowed_headers = Keyword.get(opts, :allowed_headers) || defaults[:allowed_headers]
+    allowed_methods = Keyword.get(opts, :allowed_methods) || @default_allowed_methods
+    allowed_headers = Keyword.get(opts, :allowed_headers) || @default_allowed_headers
     origin = get_req_header(conn, "origin") |> List.first()
     allowed = allowed_origins()
 

@@ -157,7 +157,7 @@ defmodule Sanctum.Cipher.Rotation do
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[CryptoRotation] #{table} DB error: #{Exception.message(e)}")
+      Logger.error("[Cipher.Rotation] #{table} DB error: #{Exception.message(e)}")
       {:error, {table, :database_error, cursor}}
   end
 

@@ -149,7 +149,7 @@ defmodule Sanctum.Policy.Enforcement do
           # A raw changeset must not escape the audit plane — the caller
           # gets a typed reason; the detail goes to the log.
           Logger.warning(
-            "[Sanctum.Policy.Enforcement] denial record refused: " <>
+            "[Policy.Enforcement] denial record refused: " <>
               inspect(changeset.errors)
           )
 
@@ -189,9 +189,7 @@ defmodule Sanctum.Policy.Enforcement do
     # A raising telemetry handler must not fail the decision — but a
     # swallowed raise here would hide a broken audit pipeline entirely.
     e ->
-      Logger.warning(
-        "[Sanctum.Policy.Enforcement] decision telemetry raised: " <> Exception.message(e)
-      )
+      Logger.warning("[Policy.Enforcement] decision telemetry raised: " <> Exception.message(e))
 
       :ok
   end
@@ -214,7 +212,7 @@ defmodule Sanctum.Policy.Enforcement do
     # failure must at least reach the log.
     e ->
       Logger.warning(
-        "[Sanctum.Policy.Enforcement] audit-failure telemetry raised: " <> Exception.message(e)
+        "[Policy.Enforcement] audit-failure telemetry raised: " <> Exception.message(e)
       )
 
       :ok

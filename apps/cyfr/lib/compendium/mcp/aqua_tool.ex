@@ -19,17 +19,34 @@ defmodule Compendium.MCP.AquaTool do
   alias Compendium.AquaPath
   alias Sanctum.Context
 
-  # Repo root — used for compile-time doc embedding. Resolved by walking up from
-  # this file until the guide files are found, rather than hard-coding the number
-  # of parent hops (which silently breaks whenever this module is moved).
+  # Repo root — used for compile-time doc embedding. Resolved by walking up
+  # from this file until a mix.exs with a component-guide.md beside it is
+  # found: the old marker was the generically-named guide alone, so a
+  # same-named file anywhere above the checkout silently redirected the
+  # embed — and a missing guide walked to `/` and failed as an :enoent on
+  # /component-guide.md, a path naming nothing about the cause. A tree
+  # without the marker fails the COMPILE with the reason spelled out
+  # (`Compendium.WITSource` sets the precedent).
   # arca:bypass-ok=C — compile-time repo-root discovery.
-  @project_root Enum.reduce_while(1..10, Path.expand(__DIR__), fn _, dir ->
-                  if File.exists?(Path.join(dir, "component-guide.md")) do
-                    {:halt, dir}
-                  else
-                    {:cont, Path.expand(Path.join(dir, ".."))}
-                  end
-                end)
+  project_root_walk =
+    Enum.reduce_while(1..10, Path.expand(__DIR__), fn _, dir ->
+      if File.exists?(Path.join(dir, "mix.exs")) and
+           File.exists?(Path.join(dir, "component-guide.md")) do
+        {:halt, {:found, dir}}
+      else
+        {:cont, Path.expand(Path.join(dir, ".."))}
+      end
+    end)
+
+  @project_root (case project_root_walk do
+                   {:found, dir} ->
+                     dir
+
+                   _walked_off ->
+                     raise "Compendium.MCP.AquaTool: no repo root with " <>
+                             "component-guide.md found above #{Path.expand(__DIR__)} — " <>
+                             "are the guide files present in the build context?"
+                 end)
 
   # Documentation guides (arca:bypass-ok=C — compile-time embed; runtime never reads).
   @external_resource Path.join(@project_root, "component-guide.md")

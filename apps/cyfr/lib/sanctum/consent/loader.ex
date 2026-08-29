@@ -211,7 +211,12 @@ defmodule Sanctum.Consent.Loader do
       _ -> []
     end
   rescue
-    _ -> []
+    e ->
+      # Decorates an already-made refusal — a swallowed failure degrades
+      # the operator's diff display, never the decision. Said out loud all
+      # the same: this was the one rescue in Sanctum with no signal at all.
+      Logger.warning("[Consent.Loader] shape diff failed: #{Exception.message(e)}")
+      []
   end
 
   defp safe_diff(_), do: []

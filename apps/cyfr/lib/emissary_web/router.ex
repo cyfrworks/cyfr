@@ -4,6 +4,12 @@
 defmodule EmissaryWeb.Router do
   use EmissaryWeb, :router
 
+  # ==========================================================================
+  # Pipelines — every auth posture in one place, above the scopes that
+  # compose them. Reading a route's posture used to require scanning the
+  # whole file (`RouteAuthInventoryTest` exists because it did).
+  # ==========================================================================
+
   # The browser pipeline serves the Prism LiveViews and the auth pages. The
   # claim gate plug answers HTTP GETs; LiveView mounts are gated again in
   # `PrismWeb.LiveAuth`, because the LiveView socket is handled by the
@@ -70,22 +76,6 @@ defmodule EmissaryWeb.Router do
     plug EmissaryWeb.Plugs.Authenticate, errors: EmissaryWeb.ApiError
   end
 
-  # Auth API routes (logout, whoami) - must be defined before wildcard /:provider
-  scope "/auth", EmissaryWeb do
-    pipe_through [:api, :auth_api_throttle]
-
-    delete "/logout", AuthController, :logout
-    get "/whoami", AuthController, :whoami
-  end
-
-  # OAuth callback for catalyst OAuth providers (not user auth)
-  # Must be defined before the /:provider wildcard below
-  scope "/auth/oauth", EmissaryWeb do
-    pipe_through [:api, :oauth_callback_throttle]
-
-    get "/callback", OAuthCallbackController, :callback
-  end
-
   # OAuth kickoff gets a conservative per-IP throttle; callbacks get the
   # generous :oauth_callback_throttle above.
   pipeline :oauth_start_throttle do
@@ -136,6 +126,123 @@ defmodule EmissaryWeb.Router do
       bucket: :device_complete,
       max_requests: 30,
       window_ms: 60_000
+  end
+
+  # Tincture serving — auth via signed `?_t=` token or Authorization bearer.
+  # No session cookie auth: a tincture page is embeddable cross-origin (see
+  # the invoke pipeline below), and an ambient cookie credential on a
+  # cross-origin surface is exactly the CSRF/rebinding food the design
+  # refuses — there is one session store, and this surface ignores it.
+  # Tinctures set their own CSP (the controller); the closed set here only
+  # supplies what it does not touch (nosniff, referrer policy, HSTS) — the
+  # controller replaces the CSP and framing headers on what it serves.
+  pipeline :tincture do
+    plug :accepts, ["html", "json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
+
+    plug EmissaryWeb.Plugs.TinctureRateLimit,
+      bucket: :page,
+      max_requests: 60,
+      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
+  end
+
+  pipeline :tincture_invoke do
+    plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+    # Deliberately NO MCPOrigin here, unlike /mcp and /api: a public
+    # tincture is embeddable from any origin, so this surface is
+    # cross-origin BY DESIGN (the CORS plug below is its contract). The
+    # DNS-rebinding class MCPOrigin defends against needs an ambient
+    # credential to steal; invoke authenticates per request (Bearer or the
+    # short-lived ?_t= mint) and the public route is credential-less.
+    # POST for invoke, GET for the cross-origin `/t/access-token` mint.
+    plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
+    # Before the rate limiter so a 429 is scrubbed too — it is logged like any
+    # other response, and it never reaches the action that reads the credential.
+    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
+    # After CORS on purpose: OPTIONS preflights are halted with 204 above and
+    # must never be counted or answered 429 without CORS headers.
+    plug EmissaryWeb.Plugs.TinctureRateLimit,
+      bucket: :invoke,
+      max_requests: EmissaryWeb.Plugs.TinctureRateLimit.default_invoke_max(),
+      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
+  end
+
+  pipeline :tincture_asset do
+    # No :accepts — assets serve arbitrary content types.
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
+
+    plug EmissaryWeb.Plugs.TinctureRateLimit,
+      bucket: :asset,
+      max_requests: 300,
+      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
+  end
+
+  # Anonymous and internet-reachable behind the tls proxy, and /ready does
+  # real DB/storage work per uncached hit — metered per IP so it cannot be
+  # used to drive storage round-trips (billable PUTs on S3) at will.
+  pipeline :health_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :health,
+      max_requests: 60,
+      window_ms: 60_000
+  end
+
+  # Inbound webhook receiver. Rate-limited (per-slug + per-IP scan-evasion bucket)
+  # before signature verification so unverified spam is dropped early. Raw body
+  # is captured by `EmissaryWeb.Plugs.RawBodyReader` (registered as the
+  # `Plug.Parsers` body_reader on the endpoint) so HMAC verification sees the
+  # exact bytes the sender signed.
+  pipeline :webhook do
+    plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+    plug EmissaryWeb.Plugs.WebhookRateLimit
+    plug EmissaryWeb.Plugs.VerifyWebhookSignature
+    plug EmissaryWeb.Plugs.WebhookIdempotency
+  end
+
+  # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as
+  # `@<namespace>`, a group's by slug. Two tabs can be two athanors, and
+  # A chat attachment's bytes, for the member reading the thread on another
+  # device. Its own pipeline: no `:accepts` (a browser asks for an image or
+  # a PDF, not html), the session cookie for who, the URL's athanor for
+  # where — the controller focuses it exactly as a LiveView mount does.
+  pipeline :attachment do
+    # A headless node serves no page surface, and a chat attachment is one.
+    plug EmissaryWeb.Plugs.Headless
+    plug :fetch_session
+    # GET only, so this never verifies a token — but a pipeline that reads
+    # the session carries the same forgery guard as `:browser`.
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+  end
+
+  # A thread can legitimately render a handful of attachments at once;
+  # the budget is sized for pages, not loops.
+  pipeline :attachment_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :attachment,
+      max_requests: 120,
+      window_ms: 60_000
+  end
+
+  # Auth API routes (logout, whoami) - must be defined before wildcard /:provider
+  scope "/auth", EmissaryWeb do
+    pipe_through [:api, :auth_api_throttle]
+
+    delete "/logout", AuthController, :logout
+    get "/whoami", AuthController, :whoami
+  end
+
+  # OAuth callback for catalyst OAuth providers (not user auth)
+  # Must be defined before the /:provider wildcard below
+  scope "/auth/oauth", EmissaryWeb do
+    pipe_through [:api, :oauth_callback_throttle]
+
+    get "/callback", OAuthCallbackController, :callback
   end
 
   # OAuth/OIDC authentication routes. GitHub/Google browser sign-in is
@@ -204,58 +311,6 @@ defmodule EmissaryWeb.Router do
     delete "/", MCPController, :method_not_allowed
   end
 
-  # Tincture serving — auth via signed `?_t=` token or Authorization bearer.
-  # No session cookie auth: a tincture page is embeddable cross-origin (see
-  # the invoke pipeline below), and an ambient cookie credential on a
-  # cross-origin surface is exactly the CSRF/rebinding food the design
-  # refuses — there is one session store, and this surface ignores it.
-  # Tinctures set their own CSP (the controller); the closed set here only
-  # supplies what it does not touch (nosniff, referrer policy, HSTS) — the
-  # controller replaces the CSP and framing headers on what it serves.
-  pipeline :tincture do
-    plug :accepts, ["html", "json"]
-    plug EmissaryWeb.Plugs.ApiSecurityHeaders
-    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
-
-    plug EmissaryWeb.Plugs.TinctureRateLimit,
-      bucket: :page,
-      max_requests: 60,
-      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
-  end
-
-  pipeline :tincture_invoke do
-    plug :accepts, ["json"]
-    plug EmissaryWeb.Plugs.ApiSecurityHeaders
-    # Deliberately NO MCPOrigin here, unlike /mcp and /api: a public
-    # tincture is embeddable from any origin, so this surface is
-    # cross-origin BY DESIGN (the CORS plug below is its contract). The
-    # DNS-rebinding class MCPOrigin defends against needs an ambient
-    # credential to steal; invoke authenticates per request (Bearer or the
-    # short-lived ?_t= mint) and the public route is credential-less.
-    # POST for invoke, GET for the cross-origin `/t/access-token` mint.
-    plug EmissaryWeb.Plugs.CORS, methods: ~w(GET POST)
-    # Before the rate limiter so a 429 is scrubbed too — it is logged like any
-    # other response, and it never reaches the action that reads the credential.
-    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
-    # After CORS on purpose: OPTIONS preflights are halted with 204 above and
-    # must never be counted or answered 429 without CORS headers.
-    plug EmissaryWeb.Plugs.TinctureRateLimit,
-      bucket: :invoke,
-      max_requests: EmissaryWeb.Plugs.TinctureRateLimit.default_invoke_max(),
-      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
-  end
-
-  pipeline :tincture_asset do
-    # No :accepts — assets serve arbitrary content types.
-    plug EmissaryWeb.Plugs.ApiSecurityHeaders
-    plug EmissaryWeb.Plugs.ScrubTinctureCredentials
-
-    plug EmissaryWeb.Plugs.TinctureRateLimit,
-      bucket: :asset,
-      max_requests: 300,
-      window_ms: EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms()
-  end
-
   scope "/t", EmissaryWeb do
     pipe_through :tincture_invoke
     # Cross-origin token mint: session/Bearer header → short-lived ?_t=.
@@ -278,16 +333,6 @@ defmodule EmissaryWeb.Router do
     get "/:athanor/:publisher/:tincture_name/*path", TinctureController, :asset
   end
 
-  # Anonymous and internet-reachable behind the tls proxy, and /ready does
-  # real DB/storage work per uncached hit — metered per IP so it cannot be
-  # used to drive storage round-trips (billable PUTs on S3) at will.
-  pipeline :health_throttle do
-    plug EmissaryWeb.Plugs.AuthRateLimit,
-      bucket: :health,
-      max_requests: 60,
-      window_ms: 60_000
-  end
-
   # Health check endpoint
   scope "/api", EmissaryWeb do
     pipe_through [:api, :health_throttle]
@@ -302,19 +347,6 @@ defmodule EmissaryWeb.Router do
     pipe_through :authenticated_api
 
     get "/executions/:id/events", ExecutionEventsController, :stream
-  end
-
-  # Inbound webhook receiver. Rate-limited (per-slug + per-IP scan-evasion bucket)
-  # before signature verification so unverified spam is dropped early. Raw body
-  # is captured by `EmissaryWeb.Plugs.RawBodyReader` (registered as the
-  # `Plug.Parsers` body_reader on the endpoint) so HMAC verification sees the
-  # exact bytes the sender signed.
-  pipeline :webhook do
-    plug :accepts, ["json"]
-    plug EmissaryWeb.Plugs.ApiSecurityHeaders
-    plug EmissaryWeb.Plugs.WebhookRateLimit
-    plug EmissaryWeb.Plugs.VerifyWebhookSignature
-    plug EmissaryWeb.Plugs.WebhookIdempotency
   end
 
   scope "/hooks", EmissaryWeb do
@@ -336,32 +368,6 @@ defmodule EmissaryWeb.Router do
     # POST, never GET: signing someone out must not be one <img src> away
     # — the browser pipeline's CSRF token guards the state change.
     post "/auth/logout", SessionController, :logout
-  end
-
-  # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as
-  # `@<namespace>`, a group's by slug. Two tabs can be two athanors, and
-  # A chat attachment's bytes, for the member reading the thread on another
-  # device. Its own pipeline: no `:accepts` (a browser asks for an image or
-  # a PDF, not html), the session cookie for who, the URL's athanor for
-  # where — the controller focuses it exactly as a LiveView mount does.
-  pipeline :attachment do
-    # A headless node serves no page surface, and a chat attachment is one.
-    plug EmissaryWeb.Plugs.Headless
-    plug :fetch_session
-    # GET only, so this never verifies a token — but a pipeline that reads
-    # the session carries the same forgery guard as `:browser`.
-    plug :protect_from_forgery
-    plug :put_secure_browser_headers
-    plug EmissaryWeb.Plugs.ApiSecurityHeaders
-  end
-
-  # A thread can legitimately render a handful of attachments at once;
-  # the budget is sized for pages, not loops.
-  pipeline :attachment_throttle do
-    plug EmissaryWeb.Plugs.AuthRateLimit,
-      bucket: :attachment,
-      max_requests: 120,
-      window_ms: 60_000
   end
 
   scope "/a/:athanor", PrismWeb do
