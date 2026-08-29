@@ -2,7 +2,7 @@
 # (parser directive above must be the first line; needed for COPY --parents)
 
 # ---- Stage 1: Builder ----
-FROM hexpm/elixir:1.20.0-erlang-29.0.2-debian-bookworm-20260610 AS builder
+FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \

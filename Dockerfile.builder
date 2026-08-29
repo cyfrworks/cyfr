@@ -5,7 +5,7 @@
 # request, artifacts leave in the response.
 
 # ---- Stage 1: release build ----
-FROM hexpm/elixir:1.20.0-erlang-29.0.2-debian-bookworm-20260610 AS relbuilder
+FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
 
 RUN apt-get update && apt-get install -y \
     build-essential \

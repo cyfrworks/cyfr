@@ -200,7 +200,9 @@ defmodule Sanctum.Tenancy.Athanors do
   @spec home!() :: Athanor.t()
   def home! do
     case home() do
-      {:ok, athanor} -> athanor
+      {:ok, athanor} ->
+        athanor
+
       # A refusal, not a bare string: the seed being absent is an
       # authorization-shaped fact (there is no athanor to work in), and
       # `Sanctum.UnauthorizedError` is what every other surface renders for

@@ -616,7 +616,10 @@ defmodule Arca.Adapters.S3 do
     scrubbed =
       body
       |> to_string()
-      |> String.replace(~r/(X-Amz-(?:Credential|Signature|Security-Token))=[^&<"\s]*/i, "\\1=[REDACTED]")
+      |> String.replace(
+        ~r/(X-Amz-(?:Credential|Signature|Security-Token))=[^&<"\s]*/i,
+        "\\1=[REDACTED]"
+      )
       |> String.slice(0, 500)
 
     Logger.warning("[Arca.S3.#{op}] status=#{status} body=#{inspect(scrubbed)}")

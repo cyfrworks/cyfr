@@ -60,10 +60,11 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   test "a wrongly-typed argument is refused on the console path too", %{ctx: ctx} do
     # The schema says `id` is a string. Over `POST /mcp` this is a -32602;
     # through the console it used to reach the handler as an integer.
-    assert {:error, _} = ToolRegistry.call_external("ingress_probe", ctx, %{
-             "action" => "echo",
-             "id" => 12_345
-           })
+    assert {:error, _} =
+             ToolRegistry.call_external("ingress_probe", ctx, %{
+               "action" => "echo",
+               "id" => 12_345
+             })
 
     refute_receive {:reached_handler, _}, 200
   end

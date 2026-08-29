@@ -119,7 +119,9 @@ defmodule PrismWeb.ToolSeamTest do
         |> String.split(",")
         |> Enum.map(&String.trim/1)
         |> Enum.reject(&(&1 == ""))
-        |> Enum.map(fn name -> {name |> String.split(".") |> List.last(), prefix <> "." <> name} end)
+        |> Enum.map(fn name ->
+          {name |> String.split(".") |> List.last(), prefix <> "." <> name}
+        end)
       end)
       |> Map.new()
 

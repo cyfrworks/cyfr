@@ -32,7 +32,9 @@ defmodule PrismWeb.ActivitiesLiveTest do
   test "the time filter patches instead of crashing", %{view: view} do
     for window <- ["1h", "24h", "7d", ""] do
       render_change(view, "time_filter", %{"time" => window})
-      assert settled_render(view) =~ "Activities", "the #{inspect(window)} window crashed the view"
+
+      assert settled_render(view) =~ "Activities",
+             "the #{inspect(window)} window crashed the view"
     end
   end
 

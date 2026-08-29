@@ -61,7 +61,10 @@ defmodule PrismWeb.AuthenticatedMountTest do
     # ...and it still re-derives standing when a membership changes, which is
     # what it used to keep the token for.
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Re #{user.namespace}")
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: group.id)
+
+    {:ok, _} =
+      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: group.id)
+
     Sanctum.Tenancy.Members.broadcast_change(user.user_id, group.id, :joined)
 
     assert render(view) =~ "Settings"

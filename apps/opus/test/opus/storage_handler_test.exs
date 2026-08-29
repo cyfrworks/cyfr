@@ -1035,7 +1035,8 @@ defmodule Opus.StorageHandlerTest do
       # what one call could make the host `Jason.decode/1`, times the
       # concurrency cap. The envelope ceiling is deliberately generous: a
       # payload at the consented ceiling always fits.
-      huge = ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
+      huge =
+        ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
 
       decoded =
         Jason.decode!(StorageHandler.execute(huge, rw_edge(), small_limits(), ctx, ref))
@@ -1044,7 +1045,8 @@ defmodule Opus.StorageHandlerTest do
 
       # ...and a request that merely exceeds the PAYLOAD ceiling still gets
       # the payload-level refusal, measured after decoding.
-      modest = ~s({"action": "write", "path": "data/y.txt", "content": "#{Base.encode64(String.duplicate("z", 24))}"})
+      modest =
+        ~s({"action": "write", "path": "data/y.txt", "content": "#{Base.encode64(String.duplicate("z", 24))}"})
 
       assert Jason.decode!(StorageHandler.execute(modest, rw_edge(), small_limits(), ctx, ref))[
                "error"

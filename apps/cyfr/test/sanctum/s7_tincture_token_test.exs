@@ -143,7 +143,8 @@ defmodule Sanctum.S7TinctureTokenTest do
       # publisher and name, and this is the same kind of grant.
       token = token_for("acme", "dash")
 
-      assert {:ok, %Context{}} = TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "dash"))
+      assert {:ok, %Context{}} =
+               TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "dash"))
 
       assert TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "billing")) ==
                {:error, :wrong_tincture}

@@ -156,9 +156,7 @@ defmodule Emissary.Tincture.Invoke do
     # Sanitized BEFORE inspect, for the reason spelled out six lines down:
     # once flattened to a string the sanitizer cannot see the map it protects.
     # This log line was the one place in the function that skipped it.
-    Logger.warning(
-      "[Tincture.Invoke] error: #{inspect(Sanctum.Sanitizer.sanitize(reason))}"
-    )
+    Logger.warning("[Tincture.Invoke] error: #{inspect(Sanctum.Sanitizer.sanitize(reason))}")
 
     # Sanitize BEFORE inspect: once flattened to a string, the sanitizer's
     # sensitive-key redaction can no longer see the map it protects.

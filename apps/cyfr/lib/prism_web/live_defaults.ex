@@ -40,6 +40,7 @@ defmodule PrismWeb.LiveDefaults do
           "#{inspect(__MODULE__)}: unhandled event " <>
             inspect(String.slice(to_string(event), 0, 200))
         )
+
         {:noreply, socket}
       end
     end

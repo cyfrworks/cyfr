@@ -355,7 +355,11 @@ defmodule EmissaryWeb.TinctureController do
   # `.html` is first in the served-extension roster, so this is the ordinary
   # case, not an exotic one. Everything else keeps the locked-down header.
   defp page_csp(conn, tincture, segments) do
-    if segments |> List.last() |> to_string() |> String.downcase() |> String.ends_with?(".html") do
+    if segments
+       |> List.last()
+       |> to_string()
+       |> String.downcase()
+       |> String.ends_with?(".html") do
       conn
       |> put_resp_header("content-security-policy", build_csp(tincture.manifest))
       |> put_resp_header("x-frame-options", "SAMEORIGIN")

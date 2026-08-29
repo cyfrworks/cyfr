@@ -155,9 +155,7 @@ defmodule Opus.HttpStreamHandler do
       encode_error(:stream_error, "The streaming request could not be started.")
 
     :exit, reason ->
-      Logger.error(
-        "[Opus.HttpStreamHandler] #{component_ref} #{name} exited: #{inspect(reason)}"
-      )
+      Logger.error("[Opus.HttpStreamHandler] #{component_ref} #{name} exited: #{inspect(reason)}")
 
       encode_error(:stream_error, "The streaming request could not be served.")
   end
