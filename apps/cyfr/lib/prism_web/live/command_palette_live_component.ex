@@ -22,6 +22,8 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   use PrismWeb, :live_component
 
+  require Logger
+
   @max_recent 8
 
   @impl true
@@ -221,7 +223,15 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         }
       end)
     rescue
-      _ -> []
+      # An empty palette and a broken palette look identical to the person
+      # using it, so the exception at least reaches the log.
+      exception ->
+        Logger.warning(
+          "[CommandPalette] entries could not be built: " <>
+            Exception.format(:error, exception, __STACKTRACE__)
+        )
+
+        []
     end
   end
 

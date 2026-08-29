@@ -91,8 +91,19 @@ defmodule Emissary.MCP.ExternalProvider do
           ordered: false
         )
         |> Enum.flat_map(fn
-          {:ok, candidate} -> [candidate]
-          {:exit, _} -> []
+          {:ok, candidate} ->
+            [candidate]
+
+          # A server that crashed or timed out describing itself. Said out
+          # loud, like the structurally identical exit further down this
+          # module — a tool that silently vanishes from the roster is worse
+          # than one that errors.
+          {:exit, reason} ->
+            Logger.warning(
+              "[ExternalProvider] a server failed to describe itself: #{inspect(reason)}"
+            )
+
+            []
         end)
         |> Enum.sort_by(& &1.name)
 

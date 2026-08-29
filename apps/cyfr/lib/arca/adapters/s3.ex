@@ -607,12 +607,18 @@ defmodule Arca.Adapters.S3 do
   end
 
   defp log_and_error(op, status, body) do
-    # Truncated: an S3 error body is XML that can echo request parameters
-    # (a presigned URL's X-Amz-Credential among them) — 500 bytes carries
-    # the error code and message without the echo.
-    Logger.warning(
-      "[Arca.S3.#{op}] status=#{status} body=#{inspect(String.slice(to_string(body), 0, 500))}"
-    )
+    # An S3 error body is XML that can echo request parameters — a presigned
+    # URL's `X-Amz-Credential` among them. Truncation alone was the whole
+    # mitigation, and it is not one: those parameters appear EARLY in the
+    # echo, so they survive a 500-byte slice. Scrub them by name, then
+    # truncate to keep the code and message without the rest of the echo.
+    scrubbed =
+      body
+      |> to_string()
+      |> String.replace(~r/(X-Amz-(?:Credential|Signature|Security-Token))=[^&<"\s]*/i, "\\1=[REDACTED]")
+      |> String.slice(0, 500)
+
+    Logger.warning("[Arca.S3.#{op}] status=#{status} body=#{inspect(scrubbed)}")
 
     {:error, {:s3_error, status}}
   end

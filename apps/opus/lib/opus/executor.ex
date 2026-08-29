@@ -451,7 +451,14 @@ defmodule Opus.Executor do
             :telemetry.execute(
               [:cyfr, :opus, :audit_error],
               %{system_time: System.system_time()},
-              %{execution_id: completed_record.id, phase: :completed, reason: inspect(reason)}
+              # The reason travels as DATA, not as `inspect(reason)`.
+              # `Arca.AuditHandler` sanitizes this metadata by key on its way
+              # to the sinks, and key-based redaction cannot see inside a
+              # string — so flattening it here handed a credential-bearing
+              # reason to an operator's sink verbatim. The Console sink
+              # inspects what it renders, so nothing downstream needs it
+              # pre-flattened.
+              %{execution_id: completed_record.id, phase: :completed, reason: reason}
             )
 
             inspect(reason)

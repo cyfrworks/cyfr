@@ -106,7 +106,9 @@ defmodule Emissary.MCP.ExternalServerReconciler do
         :telemetry.execute(
           [:cyfr, :emissary, :external_server, :reconcile_failed],
           %{count: 1},
-          %{athanor_id: athanor_id, entry_id: entry_id, reason: inspect(reason)}
+          # As data: `Arca.AuditHandler` redacts this metadata by key, and
+          # key-based redaction cannot see inside a flattened string.
+          %{athanor_id: athanor_id, entry_id: entry_id, reason: reason}
         )
 
         if attempt_no < @max_fast_retries do

@@ -857,18 +857,16 @@ defmodule PrismWeb.ComponentsLive do
 
   defp comp_ref(c), do: c[:component_ref] || c["component_ref"] || c[:id] || c["id"] || "-"
 
-  # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude"
+  # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude".
+  #
+  # Through the grammar's own parser, not by hand: `Sanctum.ComponentRef`
+  # exists because the publisher/name split is the LAST dot, so a hand-rolled
+  # split gets `stripe.com.api` wrong — and display is where a
+  # multi-dot publisher is most likely to be seen.
   defp strip_type(ref) when is_binary(ref) do
-    case String.split(ref, ":", parts: 2) do
-      [_type, rest] ->
-        # Remove version if present
-        case String.split(rest, ":") do
-          [name_part | _] -> name_part
-          _ -> rest
-        end
-
-      _ ->
-        ref
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %{namespace: ns, name: name}} -> "#{ns}.#{name}"
+      {:error, _} -> ref
     end
   end
 
@@ -879,14 +877,13 @@ defmodule PrismWeb.ComponentsLive do
     )
   end
 
-  # Extract just the name (no namespace) from a ref: "catalyst:moonmoon69.supabase" -> "supabase"
+  # Extract just the name (no namespace) from a ref:
+  # "catalyst:moonmoon69.supabase" -> "supabase". Same reason as above: the
+  # grammar owns where the publisher ends.
   defp extract_name(ref) when is_binary(ref) do
-    stripped = strip_type(ref)
-
-    case String.split(stripped, ".") do
-      [_ns, name | _] -> name
-      [name] -> name
-      _ -> stripped
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %{name: name}} -> name
+      {:error, _} -> strip_type(ref)
     end
   end
 

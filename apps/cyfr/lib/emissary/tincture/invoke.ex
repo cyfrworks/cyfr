@@ -153,7 +153,12 @@ defmodule Emissary.Tincture.Invoke do
   end
 
   defp finish({:error, reason}, ctx, telemetry_meta, duration_ms, _route) do
-    Logger.warning("[Tincture.Invoke] error: #{inspect(reason)}")
+    # Sanitized BEFORE inspect, for the reason spelled out six lines down:
+    # once flattened to a string the sanitizer cannot see the map it protects.
+    # This log line was the one place in the function that skipped it.
+    Logger.warning(
+      "[Tincture.Invoke] error: #{inspect(Sanctum.Sanitizer.sanitize(reason))}"
+    )
 
     # Sanitize BEFORE inspect: once flattened to a string, the sanitizer's
     # sensitive-key redaction can no longer see the map it protects.

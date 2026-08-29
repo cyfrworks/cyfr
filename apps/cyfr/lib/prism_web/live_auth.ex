@@ -28,7 +28,13 @@ defmodule PrismWeb.LiveAuth do
       {:ok, ctx} ->
         slug = ctx.namespace
 
+        # The LiveView process is long-lived and never runs the Authenticate
+        # plug, which is where every other surface stamps `request_id` — so
+        # console log lines carried tenant and user but no correlator, and
+        # nothing tied a click to the MCP call rows it produced. The socket's
+        # own id is that correlator for the life of the mount.
         if connected?(socket) do
+          Cyfr.LoggerContext.set_request_id(socket.id)
           Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Session.topic())
           Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Tenancy.Members.topic(ctx.user_id))
         end

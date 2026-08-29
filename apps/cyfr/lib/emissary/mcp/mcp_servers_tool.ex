@@ -24,6 +24,8 @@ defmodule Emissary.MCP.McpServersTool do
 
   @behaviour Emissary.MCP.ToolProvider
 
+  require Logger
+
   @impl true
   def service, do: "emissary"
 
@@ -543,7 +545,14 @@ defmodule Emissary.MCP.McpServersTool do
             end)
 
           refreshed = for {name, :ok} <- results, do: name
-          failed = for {name, {:error, r}} <- results, do: %{name: name, error: inspect(r)}
+          # Client-visible, so it says what failed and not what the refusal
+          # was carrying — an OAuth refresh reason can quote the material it
+          # could not use.
+          failed =
+            for {name, {:error, r}} <- results do
+              Logger.warning("[MCP.Servers] refresh failed for #{name}: #{inspect(r)}")
+              %{name: name, error: Emissary.MCP.ToolError.render(r) || "refresh failed"}
+            end
 
           if refreshed != [], do: ExternalProvider.invalidate_external_tools_cache(ctx)
 

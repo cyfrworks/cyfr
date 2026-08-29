@@ -276,12 +276,11 @@ defmodule PrismWeb.ShellLive do
              |> put_flash(:info, "Report submitted. Thanks.")}
 
           {:error, reason} ->
-            msg =
-              case reason do
-                m when is_binary(m) -> m
-                %{message: m} when is_binary(m) -> m
-                other -> inspect(other)
-              end
+            # `error_message/1`, whose whole contract is that internal terms
+            # never reach the page — this hand-rolled formatter ended in
+            # `inspect/1`, which is exactly what it exists to prevent, and
+            # its sibling in `component_detail_live.ex` already gets it right.
+            msg = PrismWeb.MCPHelpers.error_message(reason)
 
             {:noreply,
              socket

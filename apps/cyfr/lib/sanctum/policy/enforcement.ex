@@ -203,7 +203,11 @@ defmodule Sanctum.Policy.Enforcement do
     :telemetry.execute(
       [:cyfr, :sanctum, :policy, :audit_failure],
       %{count: 1, system_time: System.system_time()},
-      %{reason: inspect(reason)}
+      # As DATA, not `inspect(reason)`: `Arca.AuditHandler` redacts this
+      # metadata by KEY on its way to the sinks, and key-based redaction
+      # cannot see inside a string — so a credential-bearing reason flattened
+      # here reached an operator's sink verbatim.
+      %{reason: reason}
     )
   rescue
     # This function exists to make dropped audit writes visible; its own

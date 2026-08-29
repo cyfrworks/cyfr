@@ -148,7 +148,11 @@ defmodule PrismWeb.SignInResponse do
   def put_flash_if_available(conn, kind, msg) do
     Phoenix.Controller.put_flash(conn, kind, msg)
   rescue
-    _ -> conn
+    # Narrowed to the one thing this is for — `put_flash/3` raises
+    # ArgumentError when no session was fetched. A bare `_` here caught
+    # genuine bugs too and returned the conn as if nothing had happened,
+    # three lines above a sibling that gets this right.
+    ArgumentError -> conn
   end
 
   @doc "Drop the Plug session; a no-op when none was fetched (API routes)."

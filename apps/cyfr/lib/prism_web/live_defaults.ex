@@ -32,7 +32,14 @@ defmodule PrismWeb.LiveDefaults do
       @impl true
       def handle_event(event, _params, socket) do
         require Logger
-        Logger.warning("#{inspect(__MODULE__)}: unhandled event #{inspect(event)}")
+        # The event name is client-supplied and reaches a structured log, so
+        # it is bounded — the same move `Emissary.MCP.Router` makes for an
+        # unvalidated `method`. Unbounded, one loop inflates log lines at
+        # will, and this clause is attached to every LiveView.
+        Logger.warning(
+          "#{inspect(__MODULE__)}: unhandled event " <>
+            inspect(String.slice(to_string(event), 0, 200))
+        )
         {:noreply, socket}
       end
     end
