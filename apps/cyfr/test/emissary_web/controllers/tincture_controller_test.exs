@@ -431,7 +431,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       # already names the tincture.
       stranger =
         Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
+          Sanctum.TinctureAuth.signing_secret(),
           "tincture_asset_v2",
           {"test", "local", "auth-dash", "github|https://github.com|stranger"}
         )
@@ -450,7 +450,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     test "a token scoped to a different tincture is refused as invalid", %{conn: conn} do
       token =
         Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
+          Sanctum.TinctureAuth.signing_secret(),
           "tincture_asset_v2",
           {"test", "local", "pub-dash", Sanctum.TestContext.local().user_id}
         )
@@ -463,7 +463,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     test "a token with the wrong publisher is refused as invalid", %{conn: conn} do
       token =
         Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
+          Sanctum.TinctureAuth.signing_secret(),
           "tincture_asset_v2",
           {"test", "evil", "auth-dash", Sanctum.TestContext.local().user_id}
         )
@@ -476,7 +476,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     test "a token whose athanor differs from the URL is refused as invalid", %{conn: conn} do
       token =
         Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
+          Sanctum.TinctureAuth.signing_secret(),
           "tincture_asset_v2",
           {"test", "local", "auth-dash", Sanctum.TestContext.local().user_id}
         )
@@ -489,7 +489,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     test "blocks data.db even with valid token", %{conn: conn} do
       token =
         Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
+          Sanctum.TinctureAuth.signing_secret(),
           "tincture_asset_v2",
           {"test", "local", "auth-dash", Sanctum.TestContext.local().user_id}
         )
@@ -501,7 +501,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   defp asset_token(reader) do
     Phoenix.Token.sign(
-      EmissaryWeb.Endpoint,
+      Sanctum.TinctureAuth.signing_secret(),
       "tincture_asset_v2",
       {"test", "local", "auth-dash", reader}
     )

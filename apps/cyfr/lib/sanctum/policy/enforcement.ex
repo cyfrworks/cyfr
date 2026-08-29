@@ -81,13 +81,17 @@ defmodule Sanctum.Policy.Enforcement do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Policy.Enforcement] record failed: #{inspect(reason)}")
+        # `:error`, like every other "a security record did not land" site
+        # (`Cyfr.RecordSink`, `Emissary.MCP.RequestLog`, `Arca.AuditHandler`).
+        # An operator alarming on level:error over the audit plane was getting
+        # an arbitrary subset while this one said :warning.
+        Logger.error("[Policy.Enforcement] record failed: #{inspect(reason)}")
         emit_audit_failure(reason)
         :ok
     end
   rescue
     e ->
-      Logger.warning("[Policy.Enforcement] record raised: #{Exception.message(e)}")
+      Logger.error("[Policy.Enforcement] record raised: #{Exception.message(e)}")
       emit_audit_failure(e)
       :ok
   end
@@ -216,7 +220,10 @@ defmodule Sanctum.Policy.Enforcement do
     Jason.encode!(map)
   rescue
     e ->
-      Logger.debug("[Policy.Enforcement] snapshot encode failed: #{Exception.message(e)}")
+      # The snapshot is a FIELD of the audit record, so losing it is a gap in
+      # the record — not a debug detail that disappears below the default
+      # level while everything else in this module speaks at :warning.
+      Logger.warning("[Policy.Enforcement] snapshot encode failed: #{Exception.message(e)}")
       nil
   end
 

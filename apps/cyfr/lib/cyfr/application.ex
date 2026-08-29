@@ -356,6 +356,28 @@ defmodule Cyfr.Application do
     end
 
     warn_if_origin_allowlists_diverge()
+    warn_if_public_origin_missing()
+  end
+
+  # `CYFR_PUBLIC_URL` is the address this instance is reachable at from
+  # outside, and it is the only place a SCHEME is configured — the endpoint's
+  # `:url` carries a host and a port and nothing sets `scheme`. Unset, an
+  # OAuth `redirect_uri` and a webhook URL are built as `http://<host>:<port>`,
+  # which behind the shipped TLS profile is neither what the provider has
+  # registered nor where a sender can reach us. It fails at the exchange, far
+  # from the cause, so say it at boot.
+  defp warn_if_public_origin_missing do
+    if is_nil(Cyfr.RuntimeConfig.public_url()) and
+         not is_nil(Application.get_env(:cyfr, :auth_provider)) do
+      Logger.warning(
+        "[Cyfr] CYFR_PUBLIC_URL is not set. OAuth redirect URIs and webhook URLs " <>
+          "will be built from CYFR_HOST/CYFR_PORT as http://…, which a TLS " <>
+          "deployment's provider will reject. Set it to this server's external " <>
+          "origin, scheme included (e.g. https://cyfr.example.com)."
+      )
+    end
+
+    :ok
   end
 
   # Two knobs answer "which origins may talk to this server": CORS (browser

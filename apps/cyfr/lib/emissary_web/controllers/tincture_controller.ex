@@ -141,7 +141,7 @@ defmodule EmissaryWeb.TinctureController do
           {:ok, entry} ->
             token =
               Phoenix.Token.sign(
-                EmissaryWeb.Endpoint,
+                Sanctum.TinctureAuth.signing_secret(),
                 @token_salt,
                 {athanor, publisher, tincture_name, ctx.user_id}
               )
@@ -263,7 +263,7 @@ defmodule EmissaryWeb.TinctureController do
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
     outcome =
       with {:ok, {^athanor, ^publisher, ^tincture_name, user_id}} <-
-             Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token,
+             Phoenix.Token.verify(Sanctum.TinctureAuth.signing_secret(), @token_salt, token,
                max_age: @token_max_age
              ),
            {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),

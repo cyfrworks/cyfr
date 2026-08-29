@@ -64,12 +64,21 @@ defmodule Sanctum.TinctureAuth do
   @spec access_token_max_age() :: pos_integer()
   def access_token_max_age, do: @access_token_max_age
 
-  # The signing key comes from config, not from the web endpoint's module:
-  # the auth domain must not reach into the web layer for key material.
-  # In every deployed env this is the same secret the endpoint signs with
-  # (runtime.exs and dev.exs set both from one value), read through the
-  # domain's own key.
-  defp signing_secret, do: Application.fetch_env!(:cyfr, :secret_key_base)
+  @doc """
+  The key both tincture tokens are signed with.
+
+  From config, not from the web endpoint's module: the auth domain must not
+  reach into the web layer for key material. In every deployed env this is
+  the same secret the endpoint signs with (runtime.exs and dev.exs set both
+  from one value), read through the domain's own key.
+
+  Public because the `/_s/` asset token in `EmissaryWeb.TinctureController` is
+  the sibling of the `?_t=` token minted here — same feature, same lifetime,
+  same tincture. They were drawing their key from two different places, which
+  is one change away from being two different keys.
+  """
+  @spec signing_secret() :: binary()
+  def signing_secret, do: Application.fetch_env!(:cyfr, :secret_key_base)
 
   @doc """
   Mint a short-lived access token for ONE tincture, from an authenticated

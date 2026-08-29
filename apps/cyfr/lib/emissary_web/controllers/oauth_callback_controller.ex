@@ -18,9 +18,11 @@ defmodule EmissaryWeb.OAuthCallbackController do
   use EmissaryWeb, :controller
 
   def callback(conn, %{"code" => code, "state" => state}) do
-    # The path has one owner: the grant's callback_path/0. The exchange
-    # fails if this redirect_uri differs from the one authorize sent.
-    redirect_uri = EmissaryWeb.Endpoint.url() <> Sanctum.Vault.OAuthGrant.callback_path()
+    # The whole URI has one owner now, not just the path: the exchange fails
+    # if this differs by so much as a scheme from the one `authorize` sent,
+    # and building it here from the endpoint while the grant built it from
+    # the public origin is exactly how that happens.
+    redirect_uri = Sanctum.Vault.OAuthGrant.redirect_uri()
 
     case Sanctum.Vault.OAuthGrant.complete(state, code, redirect_uri) do
       {:ok, result} ->

@@ -520,9 +520,28 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   # The HOST still comes from the endpoint's configured URL — the one
   # place the deployment's public origin is known; only the path is ours.
-  defp build_redirect_uri do
-    EmissaryWeb.Endpoint.url() <> callback_path()
+  @doc """
+  The `redirect_uri` this deployment registers with a provider.
+
+  The origin comes from `CYFR_PUBLIC_URL` — the address this instance is
+  reachable at from outside, scheme included. It used to come from
+  `EmissaryWeb.Endpoint.url()`, which is wrong twice over: the endpoint's
+  `:url` config carries a host and a port and no scheme, and nothing sets
+  one, so the URI was always `http://…` even on the shipped TLS profile,
+  where the provider's registered URI is `https://`; and it is the auth
+  domain reaching into the web layer for a deployment fact, which
+  `Sanctum.TinctureAuth` already refuses to do for key material.
+
+  With nothing configured — local, dev — the endpoint's own URL is exactly
+  right, so that stays the fallback.
+  """
+  @spec redirect_uri() :: String.t()
+  def redirect_uri do
+    origin = Cyfr.RuntimeConfig.public_url() || EmissaryWeb.Endpoint.url()
+    origin <> callback_path()
   end
+
+  defp build_redirect_uri, do: redirect_uri()
 
   defp decode_map(nil), do: %{}
 
