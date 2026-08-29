@@ -1151,13 +1151,13 @@ defmodule Opus.StorageHandlerTest do
                components_quota_write(
                  ctx,
                  ref,
-                 "components/catalysts/test/pkg/0.1.0/a.txt",
+                 "components/catalysts/local/pkg/0.1.0/a.txt",
                  60,
                  quota
                )
 
       decoded =
-        components_quota_write(ctx, ref, "components/catalysts/test/pkg/0.1.0/b.txt", 60, quota)
+        components_quota_write(ctx, ref, "components/catalysts/local/pkg/0.1.0/b.txt", 60, quota)
 
       assert decoded["error"]["type"] == "storage_quota_exceeded"
     end
@@ -1170,7 +1170,7 @@ defmodule Opus.StorageHandlerTest do
       quota = %{max_bytes: 100, max_files: 50}
 
       decoded =
-        components_quota_write(anon, ref, "components/catalysts/test/pkg/0.1.0/a.txt", 10, quota)
+        components_quota_write(anon, ref, "components/catalysts/local/pkg/0.1.0/a.txt", 10, quota)
 
       assert %{"error" => %{"type" => _}} = decoded
     end
@@ -1337,6 +1337,45 @@ defmodule Opus.StorageHandlerTest do
               "action" => "write",
               "path" => "data/junk.txt",
               "content" => Base.encode64("fine")
+            }),
+            edge,
+            nil,
+            ctx,
+            ref
+          )
+        )
+
+      assert ok["written"] == true
+    end
+
+    test "a guest write under a pulled publisher is refused; local/ is free", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
+      edge = EdgeFixtures.edge(paths: ["data/", "components/"], actions: ["read", "write"])
+
+      # Pulled components are fork-to-modify: the scanner would refuse the
+      # rewrite and the digest checks would refuse the bytes, so the write
+      # is refused at the boundary with the fork path named.
+      request =
+        Jason.encode!(%{
+          "action" => "write",
+          "path" => "components/catalysts/moonmoon69/x/1.0.0/catalyst.wasm",
+          "content" => Base.encode64("evil")
+        })
+
+      decoded = Jason.decode!(StorageHandler.execute(request, edge, nil, ctx, ref))
+      assert decoded["error"]["type"] == "storage_path_denied"
+      assert decoded["error"]["message"] =~ "fork into local/"
+
+      # The same write into local/ is the rebuild loop and stays open.
+      ok =
+        Jason.decode!(
+          StorageHandler.execute(
+            Jason.encode!(%{
+              "action" => "write",
+              "path" => "components/catalysts/local/mine/0.1.0/output.json",
+              "content" => Base.encode64(~s({"ok":true}))
             }),
             edge,
             nil,

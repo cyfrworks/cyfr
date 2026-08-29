@@ -48,6 +48,10 @@ defmodule Opus.HostSurfaceTest do
     "Compendium.Activation",
     "Compendium.Component",
     "Compendium.Manifest",
+    # The local-namespace trust policy: the storage boundary asks it before
+    # a guest write lands in components/ — pulled components are
+    # fork-to-modify, and the refusal sentence lives with the policy.
+    "Compendium.NamespacePolicy",
     "Compendium.Resolver",
     "Compendium.Source",
 

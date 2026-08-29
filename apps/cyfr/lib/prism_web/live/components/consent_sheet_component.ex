@@ -210,6 +210,11 @@ defmodule PrismWeb.ConsentSheetComponent do
             <li :if={egress(@plan) != []}>Talks to {Enum.join(egress(@plan), ", ")}</li>
             <li :if={tools(@plan) != []}>Uses {length(tools(@plan))} host tools</li>
             <li>Keeps its own private storage</li>
+            <li :if={component_writes?(@plan)}>
+              Can rewrite this athanor's own (local) components — a rewritten
+              component re-registers on the next scan and runs at the same
+              version
+            </li>
           </ul>
         </section>
 
@@ -262,5 +267,22 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp egress(plan), do: get_in(plan, [:caps, "egress", "domains"]) || []
   defp tools(plan), do: get_in(plan, [:caps, "tools"]) || []
+
+  # A components/ write grant is code-mutation power on the local
+  # namespace (pulled publishers are refused at the storage boundary) —
+  # said in the sheet, so the operator grants it knowingly.
+  defp component_writes?(plan) do
+    storage = get_in(plan, [:caps, "storage"]) || %{}
+    paths = storage["paths"] || []
+    actions = storage["actions"] || []
+
+    writes? = Enum.any?(actions, &(&1 in ["write", "append", "delete"]))
+
+    reaches_components? =
+      Enum.any?(paths, &(&1 == "*" or String.starts_with?(&1, "components")))
+
+    writes? and reaches_components?
+  end
+
   defp warnings(plan), do: plan[:warnings] || plan["warnings"] || []
 end

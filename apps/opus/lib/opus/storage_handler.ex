@@ -295,10 +295,30 @@ defmodule Opus.StorageHandler do
          "Component writes must land inside a version directory " <>
            "(components/{type}s/{publisher}/{name}/{version}/...). Got: '#{path}'"}
 
-      _unit_or_not_overlaid ->
+      {:file, unit} ->
+        validate_unit_publisher(unit)
+
+      {:dir, unit, _sentinel} ->
+        validate_unit_publisher(unit)
+
+      :not_overlaid ->
         :ok
     end
   end
+
+  # A component unit names its publisher in the path, and a guest may
+  # rewrite only `local/` — pulled components are fork-to-modify
+  # (`Compendium.NamespacePolicy.require_local_guest_write/1` owns the
+  # rule and its sentence). Other overlaid units (aqua agents, skills)
+  # carry no publisher and pass.
+  defp validate_unit_publisher(["components", _plural, publisher | _]) do
+    case Compendium.NamespacePolicy.require_local_guest_write(publisher) do
+      :ok -> :ok
+      {:error, message} -> {:error, :storage_path_denied, message}
+    end
+  end
+
+  defp validate_unit_publisher(_unit), do: :ok
 
   @writing_actions ~w(write append)
 
