@@ -61,10 +61,79 @@ defmodule PrismWeb.ToolSeamTest do
     # it mints and retires the person's OWN session, before any console
     # exists for them. Door placement is pinned by Sanctum.DoorPlacementTest.
     {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.create"},
-    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.destroy"}
+    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.destroy"},
+    # Signing out: the same act as above, from the browser's own form post.
+    # A person retiring their OWN session, with no agent equivalent.
+    {"apps/cyfr/lib/prism_web/controllers/session_controller.ex", "Sanctum.Session.destroy"},
+    # Recording the registry push token the claim flow just obtained. Part of
+    # minting the person's identity, before any athanor exists to run a tool
+    # in; `Compendium.MCP.Shared.namespace_bearer/2` reads it afterwards.
+    {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
+     "Compendium.Registry.CredentialStore.put_push_token"},
+    # The conversation is the console's own surface (docs/0.6.0.md §2.2 item
+    # 5): AQUA participates in a thread, it does not own the thread. There is
+    # deliberately no `conversation.*` tool — an agent posts by being
+    # addressed, not by creating threads on someone's behalf.
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.create"},
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.delete"},
+    # Withdrawing an approval the person was shown. The grant belongs to the
+    # click that made it; the runner is told, not asked.
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.ConversationRunner.revoke_grant"},
+    # Attachments a person drags into their own chat, and the same call
+    # undone when the message they belonged to is not sent. Storage-capped by
+    # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.Attachments.store"},
+    {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Aqua.Attachments.discard"}
   ]
 
-  @mutating_call ~r/\b((?:Arca|Sanctum|Compendium|Opus|Locus|Emissary)(?:\.[A-Z]\w+)*)\.(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|save\w*|destroy\w*|add_\w+)\b/
+  # The namespaces whose state the console must not change behind the tool
+  # surface. `Aqua` belongs here for the same reason as the rest — a
+  # conversation's blobs are an athanor's state, and an agent writes them
+  # through the same verbs.
+  @watched_roots ~w(Arca Sanctum Compendium Opus Locus Emissary Aqua)
+
+  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*)$/
+
+  # Any `Module.function(` call, whatever the module is called locally.
+  @any_call ~r/\b([A-Z]\w*(?:\.[A-Z]\w+)*)\.([a-z_]\w*[!?]?)\(/
+
+  # `alias A.B.C`, `alias A.B.C, as: D`, `alias A.{B, C}` — the local name a
+  # module goes by in this file. Without this the guard anchored on literal
+  # roots, so one `alias Arca.ConversationStorage, as: Conversations` hid
+  # every call through it, and the roster read as two entries when it was
+  # really more.
+  defp aliases(source) do
+    simple =
+      ~r/^\s*alias\s+([A-Z][\w.]*?)(?:,\s*as:\s*([A-Z]\w*))?\s*$/m
+      |> Regex.scan(source)
+      |> Map.new(fn
+        [_, full, as] -> {as, full}
+        [_, full] -> {full |> String.split(".") |> List.last(), full}
+      end)
+
+    grouped =
+      ~r/^\s*alias\s+([A-Z][\w.]*)\.\{([^}]+)\}/m
+      |> Regex.scan(source)
+      |> Enum.flat_map(fn [_, prefix, names] ->
+        names
+        |> String.split(",")
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.map(fn name -> {name |> String.split(".") |> List.last(), prefix <> "." <> name} end)
+      end)
+      |> Map.new()
+
+    Map.merge(simple, grouped)
+  end
+
+  defp expand(module, aliases) do
+    [head | rest] = String.split(module, ".")
+
+    case Map.fetch(aliases, head) do
+      {:ok, full} -> Enum.join([full | rest], ".")
+      :error -> module
+    end
+  end
 
   test "the console mutates other namespaces only where it owns the state" do
     allowed = MapSet.new(@console_owned)
@@ -74,16 +143,26 @@ defmodule PrismWeb.ToolSeamTest do
       |> Enum.flat_map(&Path.wildcard/1)
       |> Enum.flat_map(fn path ->
         rel = Path.relative_to(path, root())
+        source = File.read!(path)
+        aliases = aliases(source)
 
-        path
-        |> File.read!()
+        source
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.reject(fn {line, _n} -> String.match?(line, ~r/^\s*#/) end)
         |> Enum.flat_map(fn {line, n} ->
-          @mutating_call
+          @any_call
           |> Regex.scan(line)
-          |> Enum.map(fn [call | _] -> {rel, call, n} end)
+          |> Enum.flat_map(fn [_, module, fun] ->
+            full = expand(module, aliases)
+
+            if String.match?(fun, @mutating_verb) and
+                 hd(String.split(full, ".")) in @watched_roots do
+              [{rel, full <> "." <> fun, n}]
+            else
+              []
+            end
+          end)
         end)
       end)
 

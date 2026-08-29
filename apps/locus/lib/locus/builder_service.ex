@@ -108,8 +108,11 @@ defmodule Locus.BuilderService do
        })
        when is_map(sources) and is_binary(language) and is_binary(target_type) do
     with {:ok, language} <- known(language, ~w(rust javascript), "language"),
+         # The roster, not a copy of it: `Compendium.Scaffold.validate_type/1`
+         # reads the same source, and a hand-written list here would silently
+         # refuse a fifth component kind the rest of the system had accepted.
          {:ok, target_type} <-
-           known(target_type, ~w(reagent catalyst formula tincture), "target_type"),
+           known(target_type, Sanctum.ComponentRef.valid_types(), "target_type"),
          {:ok, decoded} <- decode_sources(sources) do
       {:ok, decoded, String.to_existing_atom(language), String.to_existing_atom(target_type)}
     end

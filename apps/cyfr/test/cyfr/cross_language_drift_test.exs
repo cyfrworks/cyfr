@@ -90,7 +90,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert elixir =~ "64"
     assert go =~ "nameMaxLen          = 64"
 
-    for type <- ~w(catalyst reagent formula tincture) do
+    # Derived, not spelled: a literal roster here goes green for a fifth
+    # component kind while checking nothing about it.
+    for type <- Sanctum.ComponentRef.valid_types() do
       assert elixir =~ ~s("#{type}"), "type #{type} missing from Elixir roster"
       assert go =~ ~s("#{type}":), "type #{type} missing from Go roster"
     end
@@ -172,7 +174,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"io.modelcontextprotocol/serverInfo", [protocol, mjs, go]},
       {"=?base64?", [protocol, mjs, go]},
       {"-32020", [message, mjs]},
-      {"-32022", [message, mjs]}
+      {"-32022", [message, mjs]},
+      # The auth sentinel: the Go CLI keys `errors.Is(err, ErrAuthRequired)`
+      # on this number and the bridge answers with it, but all three defined
+      # it independently and nothing held them together.
+      {"-33001", [message, mjs, go]}
     ]
 
     for {literal, sources} <- vocabulary,

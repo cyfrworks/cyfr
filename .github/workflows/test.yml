@@ -386,13 +386,27 @@ jobs:
             fi
           done
           # Positive assertions on the shape the patterns protect.
+          #
+          # EVERY migration, not just the baseline: the rule is about the
+          # column, and a later migration adding a nullable or defaulted
+          # athanor_id used to pass this job untouched. The two documented
+          # nullable fabrics (memberships, sessions) live in the baseline, so
+          # the allowance is counted there and every other file must be clean.
           m=apps/cyfr/priv/repo/migrations/20260815000000_baseline.exs
           nullable="$(grep -cE 'add :athanor_id' "$m")"
           notnull="$(grep -cE 'add :athanor_id.*null: false' "$m")"
           if [ "$((nullable - notnull))" -ne 2 ]; then
             echo "::error::exactly two nullable athanor_id columns are allowed (memberships, sessions); found $((nullable - notnull))"; fail=1
           fi
-          if grep -nE 'add :athanor_id.*default:' "$m"; then
+          for other in apps/cyfr/priv/repo/migrations/*.exs; do
+            [ "$other" = "$m" ] && continue
+            n="$(grep -cE 'add :athanor_id' "$other")"
+            nn="$(grep -cE 'add :athanor_id.*null: false' "$other")"
+            if [ "$n" -ne "$nn" ]; then
+              echo "::error file=$other::athanor_id must be null: false outside the baseline (the two nullable fabrics are baseline-only)"; fail=1
+            fi
+          done
+          if grep -nE 'add :athanor_id.*default:' apps/cyfr/priv/repo/migrations/*.exs; then
             echo "::error::athanor_id column with a default — a forgotten athanor must fail, not land in Home"; fail=1
           fi
           if [ "$(grep -c 'COALESCE(athanor_id' "$m")" -ne 1 ]; then
