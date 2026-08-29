@@ -474,8 +474,12 @@ defmodule Arca.IntegrationTest do
     test "get_json returns error for invalid JSON", %{ctx: ctx} do
       :ok = Arca.put(ctx, ["guest", "json_test", "invalid.json"], "not valid json {{{")
 
-      {:error, {:invalid_json, %Jason.DecodeError{}}} =
-        Arca.get_json(ctx, ["guest", "json_test", "invalid.json"])
+      # `Cyfr.Json`'s spelling — the repo's one answer for a corrupt stored
+      # value. It used to hand back Jason's own struct inside a tagged tuple,
+      # which is a bare library type in the facade's vocabulary and a second
+      # thing for callers to match on.
+      assert {:error, :invalid_json} =
+               Arca.get_json(ctx, ["guest", "json_test", "invalid.json"])
     end
   end
 end

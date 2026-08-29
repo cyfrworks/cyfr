@@ -97,16 +97,17 @@ defmodule PrismWeb.MCPHelpers do
   def error_message(%{message: msg}) when is_binary(msg), do: msg
 
   def error_message(reason) do
-    cond do
-      Sanctum.Unauthorized.reason?(reason) ->
-        Sanctum.Unauthorized.message(reason)
-
-      Emissary.MCP.ToolError.reason?(reason) ->
-        Emissary.MCP.ToolError.message(reason)
-
-      true ->
+    # The same renderer the wire and the guest use
+    # (`Emissary.MCP.ToolError.render/1`): this used to carry its own `cond`,
+    # which had drifted — it knew nothing of the crash/exit/timeout tuples and
+    # showed the generic sentence for all three, losing the distinction.
+    case Emissary.MCP.ToolError.render(reason) do
+      nil ->
         Logger.warning("[MCPHelpers] tool call failed: #{inspect(reason)}")
         "The request failed — try again."
+
+      message ->
+        message
     end
   end
 

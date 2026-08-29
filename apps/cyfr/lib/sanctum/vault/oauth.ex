@@ -89,8 +89,9 @@ defmodule Sanctum.Vault.OAuth do
 
         not is_binary(oauth["refresh_token"]) ->
           {:error,
-           "authorization_required: token expired and no refresh_token " <>
-             "for vault entry #{entry_id}"}
+           {:authorization_required,
+            "the token expired and this connection carries no refresh token " <>
+              "(entry #{entry_id})"}}
 
         true ->
           perform_refresh(entry, payload, oauth, provider)
@@ -141,8 +142,8 @@ defmodule Sanctum.Vault.OAuth do
           emit_telemetry(entry, entry.provider_hint, :error)
 
           {:error,
-           "authorization_required: refresh failed for vault entry " <>
-             "#{entry.id}: #{reason}"}
+           {:authorization_required,
+            "the refresh failed for entry #{entry.id}: #{reason}"}}
       end
     end
   end

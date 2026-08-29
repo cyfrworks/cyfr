@@ -53,6 +53,7 @@ defmodule Sanctum.Unauthorized do
   def reason?({:tool_auth_required, n}) when is_binary(n), do: true
   def reason?({:malformed_resource, tag}) when tag in [:execution, :tenant], do: true
   def reason?({:consent_class_required, _refusal}), do: true
+  def reason?({:authorization_required, detail}) when is_binary(detail), do: true
   def reason?(_), do: false
 
   @doc """
@@ -63,6 +64,9 @@ defmodule Sanctum.Unauthorized do
   @spec code(reason()) :: :auth_required | :insufficient_permissions
   def code(:unauthenticated), do: :auth_required
   def code({:tool_auth_required, _}), do: :auth_required
+  # The stored credential can no longer speak for its owner: the person has
+  # to re-authorize it, which is an identity answer, not a permission one.
+  def code({:authorization_required, _}), do: :auth_required
   def code(_reason), do: :insufficient_permissions
 
   @doc """
@@ -121,5 +125,14 @@ defmodule Sanctum.Unauthorized do
   # profile tool's domain arms there).
   def message({:consent_class_required, refusal}, _) do
     Sanctum.Consent.Authz.message(refusal)
+  end
+
+  # A stored OAuth credential that can no longer be refreshed. It used to
+  # travel as the string `"authorization_required: <detail>"` — a type
+  # encoded in a prefix that nothing anywhere parsed, which is the shape this
+  # module exists to end. `detail` is the crafted half; the sentence is one
+  # spelling of the half that matters, so a caller can act on it.
+  def message({:authorization_required, detail}, _) do
+    "Unauthorized: this connection must be re-authorized (#{detail})"
   end
 end

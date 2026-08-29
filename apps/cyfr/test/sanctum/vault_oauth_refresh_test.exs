@@ -126,8 +126,15 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       {_entry, resource} = mint_oauth_entry(ctx, no_rt)
       counter = attach_attempt_counter()
 
-      assert {:error, "authorization_required:" <> _} =
+      # A typed reason, not a string with a type spelled into its prefix:
+      # nothing anywhere parsed `"authorization_required: …"`, so the type was
+      # encoded where no consumer could branch on it.
+      assert {:error, {:authorization_required, detail} = reason} =
                VaultReader.oauth_token(ctx, resource, "google")
+
+      assert is_binary(detail)
+      assert Sanctum.Unauthorized.reason?(reason)
+      assert Sanctum.Unauthorized.code(reason) == :auth_required
 
       assert :counters.get(counter, 1) == 0
     end
@@ -147,8 +154,10 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       :ok = Sanctum.ProviderCredentials.put(ctx, "google", "cid", "csec")
 
-      assert {:error, "authorization_required: refresh failed" <> _} =
+      assert {:error, {:authorization_required, detail}} =
                VaultReader.oauth_token(ctx, resource, "google")
+
+      assert detail =~ "refresh failed"
 
       assert :counters.get(counter, 1) >= 1
     end

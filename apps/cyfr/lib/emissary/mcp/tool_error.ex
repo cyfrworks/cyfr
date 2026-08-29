@@ -32,12 +32,18 @@ defmodule Emissary.MCP.ToolError do
           {:not_found, resource :: String.t(), id :: String.t()}
           | {:invalid_argument, message :: String.t()}
           | {:unavailable, what :: String.t()}
+          | {:crashed, message :: String.t()}
+          | {:exit, message :: String.t()}
+          | {:timeout, message :: String.t()}
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
   def reason?({:not_found, resource, id}) when is_binary(resource) and is_binary(id), do: true
   def reason?({:invalid_argument, message}) when is_binary(message), do: true
   def reason?({:unavailable, what}) when is_binary(what), do: true
+  def reason?({:crashed, message}) when is_binary(message), do: true
+  def reason?({:exit, message}) when is_binary(message), do: true
+  def reason?({:timeout, message}) when is_binary(message), do: true
   def reason?(_), do: false
 
   @doc """
@@ -49,4 +55,42 @@ defmodule Emissary.MCP.ToolError do
   def message({:not_found, resource, id}), do: "#{resource} not found: #{id}"
   def message({:invalid_argument, message}), do: message
   def message({:unavailable, what}), do: "#{what} is unavailable — retry shortly"
+
+  # `Emissary.MCP.ToolRegistry` mints these three when a tool crashes, exits
+  # or overruns its deadline. Each already carries a crafted, client-safe
+  # sentence (the tool's name and what happened, never the exception's own
+  # message), so rendering is the identity — the point of naming them here is
+  # that all three surfaces recognise them. Only the router did: the console
+  # collapsed them into "The request failed — try again.", losing the
+  # timeout-vs-crash distinction, and the guest saw Elixir term syntax.
+  def message({:crashed, message}), do: message
+  def message({:exit, message}), do: message
+  def message({:timeout, message}), do: message
+
+  @doc """
+  The client-safe sentence for ANY refusal a tool can produce, or `nil` when
+  the term is internal and must not be reflected.
+
+  The three consumers named above each used to carry their own `cond` over
+  the same vocabularies, and they had drifted: the console knew nothing of
+  the crash tuples, and the guest view `inspect`ed whatever it did not
+  recognise. This is that decision, once — so a surface only has to decide
+  what to say when the answer is `nil` (log it, and offer its own generic
+  sentence), not what each vocabulary means.
+
+  Keeping it here also keeps `apps/opus` off the vocabularies' own modules:
+  `Opus.HostSurfaceTest` pins what opus may reach into, and a renderer is
+  not a reason to widen that.
+  """
+  @spec render(term()) :: String.t() | nil
+  def render(reason) when is_binary(reason), do: reason
+
+  def render(reason) do
+    cond do
+      Sanctum.Unauthorized.reason?(reason) -> Sanctum.Unauthorized.message(reason)
+      reason?(reason) -> message(reason)
+      match?(%Compendium.OCI.Errors{}, reason) -> Compendium.MCP.Shared.to_error_string(reason)
+      true -> nil
+    end
+  end
 end

@@ -337,22 +337,25 @@ defmodule Emissary.MCP.Router do
   # struct, a changeset — that belongs in the log rather than in a reply to
   # whoever called the tool. `inspect/1` on the catch-all made this the one
   # place in the module where they were reflected.
-  defp format_error_reason({:timeout, msg}) when is_binary(msg), do: msg
-  defp format_error_reason({:crashed, msg}) when is_binary(msg), do: msg
-  defp format_error_reason({:exit, msg}) when is_binary(msg), do: msg
+  # `{:timeout, _}`, `{:crashed, _}` and `{:exit, _}` used to be spelled out
+  # here; they are `Emissary.MCP.ToolError` reasons now, so the typed clause
+  # below renders them — and the console and the guest render them the same
+  # way, which they did not while this was the only site that knew them.
   defp format_error_reason(:action_missing), do: "Missing required argument: action"
   defp format_error_reason({:unknown_action, name_action}), do: "Unknown action: #{name_action}"
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do
-    # Typed tool refusals render through their vocabulary — the same move
-    # Sanctum.Unauthorized gets above; everything else stays an internal
-    # term that must not be reflected.
-    if Emissary.MCP.ToolError.reason?(reason) do
-      Emissary.MCP.ToolError.message(reason)
-    else
-      Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
-      "The tool call failed."
+    # One renderer for every typed vocabulary (`Emissary.MCP.ToolError.render/1`
+    # — Unauthorized, the tool reasons, OCI errors); `nil` means the term is
+    # internal and must not be reflected.
+    case Emissary.MCP.ToolError.render(reason) do
+      nil ->
+        Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
+        "The tool call failed."
+
+      message ->
+        message
     end
   end
 

@@ -171,7 +171,11 @@ defmodule Compendium.OCI.Errors do
   def connection_error(registry, reason) do
     %__MODULE__{
       reason: :registry_unavailable,
-      message: "Failed to connect to #{registry}: #{inspect(reason)}",
+      # `message` is the user-facing half and `detail` already holds the raw
+      # term, so the transport's own shape does not belong in both. It read
+      # `inspect(reason)` here, which put a Mint or File tuple in front of
+      # whoever ran the command; `to_log_string/1` still prints the detail.
+      message: "Failed to connect to #{registry}",
       registry: registry,
       status: nil,
       detail: reason

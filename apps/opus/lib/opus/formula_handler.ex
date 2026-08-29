@@ -1011,16 +1011,21 @@ defmodule Opus.FormulaHandler do
 
   defp normalize_keys(data), do: data
 
-  defp stringify_reason(reason) when is_binary(reason), do: reason
+  defp stringify_reason(reason), do: render_reason(reason)
 
-  defp stringify_reason(reason) do
-    # A typed tool refusal renders as its one client-safe sentence — the
-    # guest sees what the console and the wire see, never Elixir term
-    # syntax for the vocabulary's tuples.
-    if Emissary.MCP.ToolError.reason?(reason) do
-      Emissary.MCP.ToolError.message(reason)
-    else
-      inspect(reason)
-    end
+  @doc """
+  The guest's view of a refusal: the same sentence the wire and the console
+  render, and never an internal term.
+
+  The same `cond` `Emissary.MCP.Router.format_error_reason/1` applies, for the
+  same reason — a typed reason has one spelling wherever it surfaces. The
+  catch-all used to `inspect/1`, so a guest formula could read an Elixir map,
+  struct or exit tuple, with whatever the reason happened to be carrying.
+  """
+  @spec render_reason(term()) :: String.t()
+  def render_reason(reason) do
+    # `nil` means the term is internal — logged where it was produced, never
+    # handed to the guest.
+    Emissary.MCP.ToolError.render(reason) || "The call failed."
   end
 end

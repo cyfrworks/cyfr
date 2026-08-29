@@ -24,6 +24,8 @@ defmodule Sanctum.OAuth.RefreshLock do
   Keys are opaque terms so that migration only narrows the key.
   """
 
+  require Logger
+
   @registry Sanctum.OAuth.RefreshRegistry
   @task_supervisor Sanctum.OAuth.RefreshTaskSupervisor
 
@@ -44,7 +46,7 @@ defmodule Sanctum.OAuth.RefreshLock do
   end
 
   defp do_run(_key, _refresh_fun, _recheck_fun, _timeout_ms, 0) do
-    {:error, "authorization_required: token refresh contention did not settle"}
+    {:error, {:authorization_required, "token refresh contention did not settle"}}
   end
 
   defp do_run(key, refresh_fun, recheck_fun, timeout_ms, attempts) do
@@ -85,13 +87,15 @@ defmodule Sanctum.OAuth.RefreshLock do
         end
 
       {:ok, :follower_timeout} ->
-        {:error, "authorization_required: timed out waiting for a concurrent token refresh"}
+        {:error, {:authorization_required, "timed out waiting for a concurrent token refresh"}}
 
       {:exit, reason} ->
-        {:error, "authorization_required: token refresh failed: #{inspect(reason)}"}
+        # The exit reason is the host's to log, not the caller's to read.
+        Logger.warning("[Sanctum.OAuth.RefreshLock] refresh exited: #{inspect(reason)}")
+        {:error, {:authorization_required, "the token refresh failed"}}
 
       nil ->
-        {:error, "authorization_required: token refresh timed out"}
+        {:error, {:authorization_required, "the token refresh timed out"}}
     end
   end
 end

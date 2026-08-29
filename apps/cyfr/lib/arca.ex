@@ -65,7 +65,8 @@ defmodule Arca do
   `:storage_unverifiable` (any capped tenant create — the write gate
   checks by default, see `put/4`'s `cap:` option); plus the adapter
   vocabulary in `t:Arca.Storage.error/0`. `get_json/2` adds
-  `{:invalid_json, %Jason.DecodeError{}}`.
+  `:invalid_json` (`Cyfr.Json`'s spelling — the one this repo uses for a
+  corrupt stored value).
 
   Raises, reserved for programmer error: a malformed path (traversal or
   over-long segments — `ArgumentError` from `Cyfr.PathSafety`, at the
@@ -144,12 +145,12 @@ defmodule Arca do
   @spec get_json(Context.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
   def get_json(%Context{} = ctx, path) do
     with {:ok, content} <- get(ctx, path) do
-      case Jason.decode(content) do
-        {:ok, data} -> {:ok, data}
-        # Tagged, so the facade vocabulary stays atoms and tagged tuples —
-        # never a bare library struct.
-        {:error, decode_error} -> {:error, {:invalid_json, decode_error}}
-      end
+      # `Cyfr.Json.decode/1`, whose moduledoc names host-side storage as
+      # exactly its business. It used to tag Jason's own struct into the
+      # facade's vocabulary — a bare library struct inside a tagged tuple,
+      # and a second spelling of "that column is corrupt" for callers to
+      # match on.
+      Cyfr.Json.decode(content)
     end
   end
 
