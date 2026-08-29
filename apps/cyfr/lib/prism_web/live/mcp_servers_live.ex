@@ -97,11 +97,18 @@ defmodule PrismWeb.McpServersLive do
     end
   end
 
-  # Register the local mcp-bridge gateway with the preset entry.
+  # Register the local mcp-bridge gateway with the preset entry. The
+  # "console" flag is what lets this page call the bridge's admin tools
+  # (add/remove/restart backend) — proxied tools are in-chain-only unless
+  # the server row opts in.
   def handle_event("setup_bridge", _params, socket) do
     case call_tool(socket, "mcp_servers/create", %{
            "name" => @bridge_name,
-           "config" => %{"url" => @bridge_url, "headers" => @bridge_headers}
+           "config" => %{
+             "url" => @bridge_url,
+             "headers" => @bridge_headers,
+             "console" => true
+           }
          }) do
       {:ok, _} ->
         {:noreply,

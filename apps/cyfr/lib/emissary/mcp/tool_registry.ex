@@ -706,8 +706,14 @@ defmodule Emissary.MCP.ToolRegistry do
                 {:error, {:tool_auth_required, name}}
 
               true ->
+                # The caller's plane rides along: proxied tools are in-chain
+                # by declaration, and an external-plane call reaches one only
+                # when the server row opts in — enforced where the row is in
+                # hand, not left to the wiring.
+                plane = if Keyword.get(opts, :in_chain, false), do: :in_chain, else: :external
+
                 execute_tool_call(name, ctx, opts, fn ->
-                  Emissary.MCP.ExternalProvider.try_handle(name, ctx, args)
+                  Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane)
                 end)
             end
 

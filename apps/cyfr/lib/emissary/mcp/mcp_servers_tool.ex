@@ -104,6 +104,13 @@ defmodule Emissary.MCP.McpServersTool do
               "timeout_ms" => %{
                 "type" => "integer",
                 "description" => "Request timeout in milliseconds (default: 30000)"
+              },
+              "console" => %{
+                "type" => "boolean",
+                "description" =>
+                  "Allow this server's tools to be called from the console " <>
+                    "(external plane). Default false: proxied tools are " <>
+                    "reachable only from inside a chain."
               }
             },
             "description" => "Server configuration (required for create)"
@@ -253,6 +260,14 @@ defmodule Emissary.MCP.McpServersTool do
                 nil -> base
                 patterns -> Map.put(base, "tool_patterns", patterns)
               end
+            end)
+            |> then(fn base ->
+              # Console reachability is opt-in and stored only when set —
+              # absent means the in-chain default holds. Deliberately not
+              # part of the consent digest (`Sanctum.ToolServerDigest`).
+              if config["console"] == true,
+                do: Map.put(base, "console", true),
+                else: base
             end)
           )
       }

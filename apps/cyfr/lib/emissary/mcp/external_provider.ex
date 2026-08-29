@@ -61,14 +61,18 @@ defmodule Emissary.MCP.ExternalProvider do
 
   Upstream catalogues are unbounded and change without us, so no
   compile-time annotation is possible — the whole bucket takes one default
-  instead. `:in_chain` is not a policy choice but a description of the
-  wiring: the HTTP MCP router rejects any tool name it cannot find in the
-  registered-tool cache, and proxied `server:tool` names are never cached
-  there, so the only callers that reach them are in-process ones.
+  instead, and `try_handle/4` enforces it per call: an external-plane
+  caller is refused unless the server's config opts in with
+  `"console": true`. The wiring backstop still holds — the HTTP MCP
+  router rejects any tool name it cannot find in the registered-tool
+  cache, and proxied `server:tool` names are never cached there — but the
+  console's own dispatch path is in-process and needed the explicit gate,
+  or one dynamic tool name on a page would have reached `add_backend`.
 
-  If external tools ever become reachable from an external ingress, this
-  must gain `:external` — and the test asserting the router still rejects
-  them is what will notice.
+  The opt-in is per server, self-set by whoever may create the server
+  row: its job is stopping accidental or attacker-influenced dynamic
+  dispatch, not defending against the member's own deliberate
+  configuration.
   """
   @spec default_planes() :: [Emissary.MCP.ToolProvider.plane(), ...]
   def default_planes, do: [:in_chain]
@@ -254,10 +258,20 @@ defmodule Emissary.MCP.ExternalProvider do
   Parses `server_name:tool_name` format and dispatches to the appropriate
   external server. Returns `{:error, :not_external}` if the tool name
   doesn't match an external server.
+
+  `plane` is the caller's plane — `:in_chain` from a running chain,
+  `:external` from the console or any other direct caller. There is
+  deliberately no default: proxied tools are in-chain by declaration
+  (`default_planes/0`), and an external-plane call is refused unless the
+  server row opts in with `"console": true` in its config. The flag is
+  not part of the server's consent digest (`Sanctum.ToolServerDigest`
+  pins url/enabled/headers/patterns), so setting it never invalidates
+  existing grants.
   """
-  @spec try_handle(String.t(), Context.t(), map()) ::
+  @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external) ::
           {:ok, map()} | {:error, :not_external | String.t()}
-  def try_handle(tool_name, %Context{} = ctx, args) do
+  def try_handle(tool_name, %Context{} = ctx, args, plane)
+      when plane in [:in_chain, :external] do
     case String.split(tool_name, ":", parts: 2) do
       [server_name, remote_tool] ->
         case Arca.McpServerStorage.get(ctx, server_name) do
@@ -270,6 +284,12 @@ defmodule Emissary.MCP.ExternalProvider do
 
               not Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, remote_tool)) ->
                 {:error, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}
+
+              plane == :external and not console_reachable?(server) ->
+                {:error,
+                 "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
+                   "only from inside a chain — set \"console\": true in the " <>
+                   "server's config to call it from the console"}
 
               true ->
                 dispatch_external(server, server_name, remote_tool, ctx, args)
@@ -285,6 +305,13 @@ defmodule Emissary.MCP.ExternalProvider do
       _ ->
         {:error, :not_external}
     end
+  end
+
+  # Whether the server's tools may be called from the external plane (the
+  # console). Absent means no — the in-chain default holds unless the row
+  # says otherwise.
+  defp console_reachable?(server) do
+    Arca.McpServerStorage.config(server)["console"] == true
   end
 
   defp dispatch_external(server, server_name, remote_tool, ctx, args) do

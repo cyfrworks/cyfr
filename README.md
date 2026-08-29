@@ -366,7 +366,7 @@ CYFR can only register **HTTP** MCP servers. To use a stdio MCP server (anything
 
 Prism wires this up for you:
 
-1. Open **MCP Servers** in the sidebar, click **+ Setup MCP Bridge**. That registers the gateway with CYFR (one external MCP entry named `bridge`, URL `http://mcp-bridge:8001/mcp` resolved inside the compose network — the browser never connects to it directly).
+1. Open **MCP Servers** in the sidebar, click **+ Setup MCP Bridge**. That registers the gateway with CYFR (one external MCP entry named `bridge`, URL `http://mcp-bridge:8001/mcp` resolved inside the compose network — the browser never connects to it directly). The preset sets `"console": true` in the server's config, which is what lets this page call the bridge's admin tools: an external server's tools are otherwise reachable only from inside a running chain, so a manual registration that should be manageable from Prism needs the same flag.
 2. Below the server list, a **Bridge backends** section appears. Click **Add backend**, pick a name (e.g. `fs`) and a command (e.g. `npx -y @modelcontextprotocol/server-filesystem ./data`).
 3. The child boots, its tools surface as `bridge:fs__read_file`, `bridge:fs__write_file`, … on CYFR's tool list. AQUA agents can use them like any other external MCP tool.
 

@@ -217,12 +217,18 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
     end
 
     test "external tool names remain unreachable over HTTP" do
-      # The bucket default is a description of the wiring, not a policy
-      # choice: the router rejects any name the registered-tool cache does
-      # not hold, and proxied `server:tool` names are never cached.
+      # The wiring backstop still holds alongside the per-call gate: the
+      # router rejects any name the registered-tool cache does not hold,
+      # and proxied `server:tool` names are never cached.
       assert {:error, :not_found} = ToolRegistry.get_tool("someserver:sometool")
       refute Enum.any?(ToolRegistry.list_tools(), &String.contains?(&1["name"], ":"))
     end
+
+    # The bucket default is also enforced at dispatch, not left to the
+    # wiring: an external-plane call of a `server:tool` name is refused
+    # unless the server row opts in with "console": true. That needs DB
+    # rows, so it is pinned in `Emissary.MCP.ExternalProviderTest`
+    # ("call_external refuses a proxied name on the external plane").
   end
 
   # ============================================================================
