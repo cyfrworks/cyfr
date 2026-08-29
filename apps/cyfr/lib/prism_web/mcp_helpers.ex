@@ -33,7 +33,10 @@ defmodule PrismWeb.MCPHelpers do
   always. Only proxied `server:tool` calls carry decoded JSON with string
   keys. So a page calling built-in tools never defends against both key
   spellings; a page talking to an external server defends at that call
-  site alone.
+  site alone. The one handler that splices registry-decoded JSON into a
+  result (`component` search/discover) upholds the contract at its own
+  decode boundary (`Compendium.Registry.Client` atomizes known keys), so
+  the pages' `x[:k] || x["k"]` defenses are gone rather than load-bearing.
   """
 
   require Logger

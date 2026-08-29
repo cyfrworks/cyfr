@@ -124,10 +124,10 @@ defmodule PrismWeb.SettingsLive do
     case call_tool(socket, "mcp_log", %{"action" => "stats"}) do
       {:ok, stats} ->
         assign(socket, :log_stats, %{
-          total: stats[:total] || stats["total"] || 0,
-          errors: stats[:errors] || stats["errors"] || 0,
-          avg_duration_ms: stats[:avg_duration_ms] || stats["avg_duration_ms"] || 0,
-          error_rate: stats[:error_rate] || stats["error_rate"] || 0.0
+          total: stats[:total] || 0,
+          errors: stats[:errors] || 0,
+          avg_duration_ms: stats[:avg_duration_ms] || 0,
+          error_rate: stats[:error_rate] || 0.0
         })
 
       _ ->

@@ -330,9 +330,9 @@ defmodule PrismWeb.BuildsLive do
             :for={tc <- @toolchains}
             class="rounded-lg bg-gray-800 border border-gray-700 p-3"
           >
-            <p class="text-sm font-medium text-white">{tc[:name] || tc["name"] || tc}</p>
-            <p :if={tc[:description] || tc["description"]} class="text-xs text-gray-400 mt-1">
-              {tc[:description] || tc["description"]}
+            <p class="text-sm font-medium text-white">{tc[:name] || tc}</p>
+            <p :if={tc[:description]} class="text-xs text-gray-400 mt-1">
+              {tc[:description]}
             </p>
           </div>
         </div>

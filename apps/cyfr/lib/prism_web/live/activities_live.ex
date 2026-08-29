@@ -207,7 +207,7 @@ defmodule PrismWeb.ActivitiesLive do
   defp build_fan_outs(socket, logs) do
     ids =
       logs
-      |> Enum.map(fn log -> log[:id] || log["id"] end)
+      |> Enum.map(fn log -> log[:id] end)
       |> Enum.reject(&is_nil/1)
 
     case ids != [] &&

@@ -217,7 +217,7 @@ defmodule PrismWeb.SchedulesLive do
 
     refs =
       Enum.map(all, fn c ->
-        c[:component_ref] || c["component_ref"] || c[:id] || c["id"]
+        c[:component_ref] || c[:id]
       end)
       |> Enum.reject(&is_nil/1)
 

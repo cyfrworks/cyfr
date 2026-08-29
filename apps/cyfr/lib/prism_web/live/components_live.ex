@@ -379,8 +379,8 @@ defmodule PrismWeb.ComponentsLive do
       )
     end
 
-    total = result[:total] || result["total"] || 0
-    registered = result[:registered] || result["registered"] || 0
+    total = result[:total] || 0
+    registered = result[:registered] || 0
 
     {:noreply,
      socket
@@ -646,8 +646,8 @@ defmodule PrismWeb.ComponentsLive do
 
     case call_tool(socket, "component", args) do
       {:ok, result} ->
-        components = result[:components] || result["components"] || []
-        note = result[:note] || result["note"]
+        components = result[:components] || []
+        note = result[:note]
         grouped = group_search_results(components)
 
         socket
@@ -732,37 +732,48 @@ defmodule PrismWeb.ComponentsLive do
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
 
+      # Bounded fan-out instead of one sequential pass: a page over N
+      # groups used to serialize N full tool dispatches, so one slow
+      # setup_plan blocked every later one and the map arrived only after
+      # ALL completed. Order is irrelevant — the result is a map.
       readiness =
-        Enum.reduce(groups, %{}, fn group, acc ->
-          ref = comp_ref(group.latest)
+        groups
+        |> Task.async_stream(
+          fn group ->
+            ref = comp_ref(group.latest)
 
-          result =
-            try do
-              call_tool(ctx, "component/setup_plan", %{"reference" => ref})
-            rescue
-              e ->
-                Logger.warning(
-                  "[ComponentsLive] setup_plan crashed for #{ref}: #{Exception.message(e)}"
-                )
+            result =
+              try do
+                call_tool(ctx, "component/setup_plan", %{"reference" => ref})
+              rescue
+                e ->
+                  Logger.warning(
+                    "[ComponentsLive] setup_plan crashed for #{ref}: #{Exception.message(e)}"
+                  )
 
-                {:error, :crashed}
-            catch
-              :exit, reason ->
-                Logger.warning(
-                  "[ComponentsLive] setup_plan exited for #{ref}: #{inspect(reason)}"
-                )
+                  {:error, :crashed}
+              catch
+                :exit, reason ->
+                  Logger.warning(
+                    "[ComponentsLive] setup_plan exited for #{ref}: #{inspect(reason)}"
+                  )
 
-                {:error, :exit}
-            end
+                  {:error, :exit}
+              end
 
-          case result do
-            {:ok, plan} ->
-              ready = (plan[:ready] || plan["ready"]) == true
-              Map.put(acc, group.name_ref, ready)
+            {group.name_ref, result}
+          end,
+          max_concurrency: 4,
+          timeout: 30_000,
+          on_timeout: :kill_task,
+          ordered: false
+        )
+        |> Enum.reduce(%{}, fn
+          {:ok, {name_ref, {:ok, plan}}}, acc ->
+            Map.put(acc, name_ref, plan[:ready] == true)
 
-            _ ->
-              acc
-          end
+          _skipped_or_failed, acc ->
+            acc
         end)
 
       send(lv, {:readiness_loaded, readiness})
@@ -814,7 +825,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp build_search_ref(comp) do
-    ref = comp[:component_ref] || comp["component_ref"]
+    ref = comp[:component_ref]
     if ref, do: ref, else: build_ref_from_fields(comp)
   end
 
@@ -839,7 +850,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp plan_field(nil, _key), do: nil
-  defp plan_field(plan, key), do: plan[key] || plan[to_string(key)]
+  defp plan_field(plan, key), do: plan[key]
 
   # --- Display helpers ---
 
@@ -855,7 +866,7 @@ defmodule PrismWeb.ComponentsLive do
   defp type_badge_color("tincture"), do: "bg-amber-900 text-amber-300"
   defp type_badge_color(_), do: "bg-gray-800 text-gray-400"
 
-  defp comp_ref(c), do: c[:component_ref] || c["component_ref"] || c[:id] || c["id"] || "-"
+  defp comp_ref(c), do: c[:component_ref] || c[:id] || "-"
 
   # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude".
   #
@@ -897,7 +908,10 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  defp comp_field(c, key) when is_map(c), do: c[key] || c[to_string(key)]
+  # Built-in tool results are atom-keyed by contract (`PrismWeb.MCPHelpers`);
+  # the registry client atomizes remote search entries at its decode
+  # boundary, so the string fallback this helper carried is gone.
+  defp comp_field(c, key) when is_map(c), do: c[key]
   defp comp_field(_, _), do: nil
 
   # The version-row badge for a provenance label. "Yours" (user) is the

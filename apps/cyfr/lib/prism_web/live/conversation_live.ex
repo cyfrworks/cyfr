@@ -448,7 +448,7 @@ defmodule PrismWeb.ConversationLive do
   end
 
   def handle_info({:list_models_result, {:ok, result}}, socket) do
-    raw = result[:result] || result["result"] || result
+    raw = result[:result] || result
 
     decoded =
       cond do

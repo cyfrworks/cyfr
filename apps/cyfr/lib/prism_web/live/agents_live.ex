@@ -313,7 +313,7 @@ defmodule PrismWeb.AgentsLive do
 
   # list-models async result. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
   def handle_info({:list_models_result, {:ok, result}}, socket) do
-    raw = result[:result] || result["result"] || result
+    raw = result[:result] || result
 
     decoded =
       cond do

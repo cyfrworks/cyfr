@@ -42,7 +42,11 @@ defmodule Compendium.Registry.Client do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"components" => components} = data} ->
-            {:ok, %{components: components, total: data["total"] || length(components)}}
+            {:ok,
+             %{
+               components: normalize_components(components),
+               total: data["total"] || length(components)
+             }}
 
           {:ok, unexpected} ->
             {:error, Errors.parse_error("search", unexpected)}
@@ -77,7 +81,7 @@ defmodule Compendium.Registry.Client do
             {:ok,
              %{
                registry: Compendium.RegistryHost.canonical_host(),
-               components: components,
+               components: normalize_components(components),
                total: data["total"] || length(components)
              }}
 
@@ -726,4 +730,29 @@ defmodule Compendium.Registry.Client do
       "?" <> URI.encode_query(pairs)
     end
   end
+
+  # Decoded registry JSON is string-keyed; every in-process consumer of a
+  # tool result speaks atoms (`PrismWeb.MCPHelpers`' stated contract). The
+  # wire is unaffected — JSON encodes both spellings identically — so this
+  # decode boundary is where the two dialects meet: known keys become the
+  # atoms consumers read, unknown remote additions stay strings and are
+  # read by nothing. `to_existing_atom` only, so a remote answer can never
+  # mint atoms.
+  defp normalize_components(components) when is_list(components) do
+    Enum.map(components, fn
+      comp when is_map(comp) ->
+        Map.new(comp, fn {k, v} when is_binary(k) ->
+          try do
+            {String.to_existing_atom(k), v}
+          rescue
+            ArgumentError -> {k, v}
+          end
+        end)
+
+      other ->
+        other
+    end)
+  end
+
+  defp normalize_components(other), do: other
 end

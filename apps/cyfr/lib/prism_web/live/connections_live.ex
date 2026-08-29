@@ -193,7 +193,7 @@ defmodule PrismWeb.ConnectionsLive do
   def handle_event("revoke", %{"id" => id}, socket) do
     case call_tool(socket, "vault/revoke", %{"id" => id}) do
       {:ok, result} ->
-        affected = result[:affected] || result["affected"] || []
+        affected = result[:affected] || []
 
         message =
           case affected do
@@ -244,7 +244,7 @@ defmodule PrismWeb.ConnectionsLive do
   defp start_grant(socket, args) do
     case call_tool(socket, "vault/authorize", args) do
       {:ok, result} ->
-        url = result[:url] || result["url"]
+        url = result[:url]
 
         {:noreply,
          socket
@@ -274,8 +274,8 @@ defmodule PrismWeb.ConnectionsLive do
       case call_tool(socket, "mcp_servers/list", %{}) do
         {:ok, %{servers: servers}} when is_list(servers) ->
           Enum.reduce(servers, %{}, fn server, acc ->
-            Enum.reduce(server[:vault_refs] || server["vault_refs"] || [], acc, fn ref, acc ->
-              Map.update(acc, ref, [server[:name] || server["name"]], &[server[:name] | &1])
+            Enum.reduce(server[:vault_refs] || [], acc, fn ref, acc ->
+              Map.update(acc, ref, [server[:name]], &[server[:name] | &1])
             end)
           end)
 
@@ -591,15 +591,15 @@ defmodule PrismWeb.ConnectionsLive do
             class="flex items-center justify-between py-2 text-sm"
           >
             <span>
-              <span class="font-medium text-gray-200">{c[:provider] || c["provider"]}</span>
+              <span class="font-medium text-gray-200">{c[:provider]}</span>
               <span class="ml-2 text-xs text-gray-500">
-                set by {c[:created_by] || c["created_by"] || "-"}
+                set by {c[:created_by] || "-"}
               </span>
             </span>
             <.button
               variant="ghost"
               phx-click="delete_client"
-              phx-value-provider={c[:provider] || c["provider"]}
+              phx-value-provider={c[:provider]}
               data-confirm="Remove these client credentials? OAuth Connections for this provider cannot refresh until new ones are stored."
             >
               Remove

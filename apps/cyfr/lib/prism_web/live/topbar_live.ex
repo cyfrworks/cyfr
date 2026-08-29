@@ -306,10 +306,10 @@ defmodule PrismWeb.TopbarLive do
     case call_tool(socket, "mcp_log", %{"action" => "stats"}) do
       {:ok, stats} ->
         assign(socket, :log_stats, %{
-          total: stats[:total] || stats["total"] || 0,
-          errors: stats[:errors] || stats["errors"] || 0,
-          avg_duration_ms: stats[:avg_duration_ms] || stats["avg_duration_ms"] || 0,
-          error_rate: stats[:error_rate] || stats["error_rate"] || 0.0
+          total: stats[:total] || 0,
+          errors: stats[:errors] || 0,
+          avg_duration_ms: stats[:avg_duration_ms] || 0,
+          error_rate: stats[:error_rate] || 0.0
         })
 
       _ ->
@@ -395,12 +395,12 @@ defmodule PrismWeb.TopbarLive do
   defp status_field(s, k), do: s[k] || s[to_string(k)]
 
   defp schedule_active?(s) do
-    enabled = s[:enabled] || s["enabled"]
+    enabled = s[:enabled]
     is_nil(enabled) or enabled == true
   end
 
   defp next_run_sort_key(s) do
-    next = s[:next_run_at] || s["next_run_at"]
+    next = s[:next_run_at]
 
     cond do
       is_binary(next) -> next
