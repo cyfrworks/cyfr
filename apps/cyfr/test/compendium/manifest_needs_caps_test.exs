@@ -396,4 +396,44 @@ defmodule Compendium.ManifestNeedsCapsTest do
       end
     end
   end
+
+  describe "tincture and dependencies blocks refuse at the one validator" do
+    alias Compendium.Manifest
+
+    test "a non-map tincture block refuses instead of raising at the CSP builder" do
+      assert {:error, {:invalid_tincture, _}} = Manifest.validate(%{"tincture" => "oops"})
+    end
+
+    test "connect entries are held to the CSP domain grammar at publish" do
+      good = %{"tincture" => %{"connect" => ["api.example.com", "*.example.org"]}}
+      assert :ok = Manifest.validate(good)
+
+      for bad <- ["*", "https://x.com", "1.2.3.4", "x.com/path", "x.com:8080", "evil.com\n"] do
+        assert {:error, {:invalid_tincture, msg}} =
+                 Manifest.validate(%{"tincture" => %{"connect" => [bad]}}),
+               "#{inspect(bad)} must refuse"
+
+        assert msg =~ inspect(bad)
+      end
+    end
+
+    test "static deps must be ref strings or ref objects; dynamic stays a descriptor" do
+      assert :ok =
+               Manifest.validate(%{
+                 "dependencies" => %{
+                   "static" => ["catalyst:local.files", %{"ref" => "c:local.http"}],
+                   "dynamic" => %{"discovery" => "component.search"}
+                 }
+               })
+
+      assert {:error, {:invalid_dependencies, _}} =
+               Manifest.validate(%{"dependencies" => %{"static" => [%{"nope" => true}]}})
+
+      assert {:error, {:invalid_dependencies, _}} =
+               Manifest.validate(%{"dependencies" => %{"static" => "catalyst:local.files"}})
+
+      assert {:error, {:invalid_dependencies, _}} =
+               Manifest.validate(%{"dependencies" => ["catalyst:local.files"]})
+    end
+  end
 end

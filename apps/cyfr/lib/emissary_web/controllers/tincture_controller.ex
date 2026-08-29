@@ -355,7 +355,11 @@ defmodule EmissaryWeb.TinctureController do
   # `.html` is first in the served-extension roster, so this is the ordinary
   # case, not an exotic one. Everything else keeps the locked-down header.
   defp page_csp(conn, tincture, segments) do
-    if segments |> List.last() |> to_string() |> String.downcase() |> String.ends_with?(".html") do
+    if segments
+       |> List.last()
+       |> to_string()
+       |> String.downcase()
+       |> String.ends_with?(".html") do
       conn
       |> put_resp_header("content-security-policy", build_csp(tincture.manifest))
       |> put_resp_header("x-frame-options", "SAMEORIGIN")
@@ -383,25 +387,8 @@ defmodule EmissaryWeb.TinctureController do
   end
 
   # Validate connect domain entries: allow domain names and wildcard subdomains only.
-  # Reject bare wildcards, IP addresses, paths, ports, and schemes.
-  defp valid_connect_domain?(domain) when is_binary(domain) do
-    # Strip leading *. for validation
-    base = String.replace_prefix(domain, "*.", "")
-
-    cond do
-      domain == "*" -> false
-      String.contains?(domain, "/") -> false
-      String.contains?(domain, ":") -> false
-      String.contains?(domain, " ") -> false
-      # Must look like a domain name (letters+digits+hyphens, ends with TLD of
-      # 2+ chars). `\A…\z`, not `^…$`: in Elixir `$` also matches before a
-      # trailing newline, so "evil.com\n" passed here, was interpolated into
-      # the CSP, and `put_resp_header/3` raised on the control character —
-      # a manifest could 500 its own tincture's index for good.
-      not Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\z/, base) -> false
-      true -> true
-    end
-  end
-
-  defp valid_connect_domain?(_), do: false
+  # The grammar lives with the tincture policy (`Cyfr.TinctureHelpers`),
+  # where the manifest validator holds entries to it at publish; this
+  # filter stays as defense in depth for manifests that predate the gate.
+  defp valid_connect_domain?(domain), do: Cyfr.TinctureHelpers.valid_connect_domain?(domain)
 end

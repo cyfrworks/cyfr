@@ -907,7 +907,17 @@ defmodule Compendium.Registry do
           {:error, "Failed to decompress tincture archive"}
       end
     rescue
-      e -> {:error, "Failed to decompress tincture archive: #{Exception.message(e)}"}
+      # The block spans validation, the caller's before_store and the unit
+      # commit — a raise anywhere in it used to be reported as a
+      # decompression failure (the genuine decompression cases already
+      # have their typed arms above). Log the truth; answer generically.
+      e ->
+        Logger.error(
+          "[Compendium.Registry] tincture publish raised: " <>
+            Exception.format(:error, e, __STACKTRACE__)
+        )
+
+        {:error, "Tincture publish failed unexpectedly — see the server log"}
     after
       # arca:bypass-ok=D — clean up the tar-extract tmp dir.
       File.rm_rf!(tmp_dir)

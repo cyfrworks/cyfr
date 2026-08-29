@@ -23,8 +23,11 @@ defmodule Locus.BuilderService do
   use Plug.Router
 
   # Sources are validated (and bounded) again by Locus.Builder; this parser
-  # cap only has to admit a legal source map with base64 overhead.
-  @max_body_bytes 100_000_000
+  # cap only has to admit a legal source map with base64 overhead — the
+  # 1 MiB source ceiling at 4/3 encoding plus envelope headroom. It was
+  # 100 MB, which let an authenticated caller materialize ~75 MiB of
+  # decoded sources before the ceiling refused anything.
+  @max_body_bytes 8_000_000
 
   plug(:match)
   # BEFORE the parser: the token rides a header, so an unauthenticated caller
@@ -126,16 +129,29 @@ defmodule Locus.BuilderService do
   end
 
   defp decode_sources(sources) do
-    Enum.reduce_while(sources, {:ok, %{}}, fn
-      {path, b64}, {:ok, acc} when is_binary(path) and is_binary(b64) ->
-        case Base.decode64(b64) do
-          {:ok, content} -> {:cont, {:ok, Map.put(acc, path, content)}}
-          :error -> {:halt, {:error, "source #{path} is not valid base64"}}
-        end
+    # The ceiling runs on ENCODED sizes, before any byte is decoded —
+    # decode-then-check materialized the whole oversized map first.
+    # Encoded base64 is 4/3 the decoded size; checking 4/3 × the ceiling
+    # here admits everything the compile's exact decoded check will.
+    encoded_total = sources |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
+    ceiling = div(Locus.Builder.max_source_bytes() * 4, 3) + 1024
 
-      {path, _}, _acc ->
-        {:halt, {:error, "source #{inspect(path)} is malformed"}}
-    end)
+    if encoded_total > ceiling do
+      {:error,
+       "sources exceed the #{Locus.Builder.max_source_bytes()} byte total ceiling " <>
+         "(#{encoded_total} bytes encoded)"}
+    else
+      Enum.reduce_while(sources, {:ok, %{}}, fn
+        {path, b64}, {:ok, acc} when is_binary(path) and is_binary(b64) ->
+          case Base.decode64(b64) do
+            {:ok, content} -> {:cont, {:ok, Map.put(acc, path, content)}}
+            :error -> {:halt, {:error, "source #{path} is not valid base64"}}
+          end
+
+        {path, _}, _acc ->
+          {:halt, {:error, "source #{inspect(path)} is malformed"}}
+      end)
+    end
   end
 
   # The service has no tenant identity — the client side already applied

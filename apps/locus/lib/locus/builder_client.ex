@@ -34,6 +34,20 @@ defmodule Locus.BuilderClient do
     target_type = Keyword.fetch!(opts, :target_type)
     on_progress = Keyword.get(opts, :on_progress, fn _stage, _msg -> :ok end)
 
+    # The same total-source ceiling the in-process path enforces — checked
+    # BEFORE encoding and shipping, so an oversized tree refuses here
+    # instead of riding a base64 round-trip to be refused in the container.
+    total = source_files |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
+    ceiling = Locus.Builder.max_source_bytes()
+
+    if total > ceiling do
+      {:error, {:source_too_large, total, ceiling}}
+    else
+      do_compile_remote(source_files, language, target_type, on_progress)
+    end
+  end
+
+  defp do_compile_remote(source_files, language, target_type, on_progress) do
     body = %{
       "source_files" =>
         Map.new(source_files, fn {path, content} -> {path, Base.encode64(content)} end),
@@ -131,12 +145,26 @@ defmodule Locus.BuilderClient do
 
   def decode_result(%{"output_files" => files} = built) when is_map(files) do
     with {:ok, decoded} <- decode_output_files(files) do
+      # Derived from what was actually decoded — never the builder's claim,
+      # for the same reason the wasm branch re-validates. This is a content
+      # hash of the returned file set; the digest a tincture is REGISTERED
+      # under is derived again at registration from the stored bytes
+      # (`Compendium.TinctureValidator`).
+      digest =
+        decoded
+        |> Enum.sort()
+        |> Enum.map(fn {path, bytes} -> [path, 0, bytes] end)
+        |> IO.iodata_to_binary()
+        |> Cyfr.Digest.sha256()
+
+      size = decoded |> Map.values() |> Enum.map(&byte_size/1) |> Enum.sum()
+
       {:ok,
        %{
          output_files: decoded,
-         digest: built["digest"],
-         size: built["size"],
-         exports: built["exports"] || [],
+         digest: digest,
+         size: size,
+         exports: [],
          language: built["language"],
          target_type: built["target_type"]
        }}
@@ -160,7 +188,6 @@ defmodule Locus.BuilderClient do
   defp safe_path(path) when is_binary(path) do
     case Cyfr.PathSafety.validate_relative_path(path) do
       :ok -> :ok
-      {:ok, _} -> :ok
       {:error, reason} -> {:error, {:builder_unsafe_path, path, reason}}
     end
   end

@@ -83,14 +83,18 @@ defmodule Compendium.Manifest do
   validator, called by every ingress (directory registration,
   `publish_bytes`, tincture publish; OCI store lands through those).
 
-  Three refusals, in order:
+  The refusals, in order:
 
     * a retired `setup`/`oauth`/`wasi` block — the frozen model has no arm
       that could honor it, so accepting one would register a component
       whose declared ask silently never applies;
     * an unknown top-level key — a typo'd `nedes` block must refuse, not
       register as "no needs";
-    * a malformed `needs`/`caps` block, refused by its owning validator.
+    * a malformed `needs`/`caps` block, refused by its owning validator;
+    * a malformed `tincture` or `dependencies` block — both feed
+      security-relevant readers (the CSP builder and the activation
+      graph/release digest) that used to shape-check lazily, per caller,
+      or drop bad entries silently.
 
   "Is this manifest valid?" used to depend on which of five call paths
   you asked.
@@ -99,12 +103,109 @@ defmodule Compendium.Manifest do
   def validate(manifest) when is_map(manifest) do
     with :ok <- reject_legacy_blocks(manifest),
          :ok <- reject_unknown_keys(manifest),
-         :ok <- Compendium.Manifest.Needs.validate(manifest) do
-      Compendium.Manifest.Caps.validate(manifest)
+         :ok <- Compendium.Manifest.Needs.validate(manifest),
+         :ok <- Compendium.Manifest.Caps.validate(manifest),
+         :ok <- validate_tincture_block(manifest) do
+      validate_dependencies_block(manifest)
     end
   end
 
   def validate(_), do: :ok
+
+  # The tincture block is presentation metadata plus one capability grant:
+  # `connect` feeds the served page's CSP connect-src. Shapes are enforced
+  # for the keys the system reads (unknown extras stay open — the block is
+  # descriptive); connect entries are held to the same domain grammar the
+  # CSP builder applies, so a bad entry refuses at publish instead of
+  # being dropped silently at serve time.
+  defp validate_tincture_block(%{"tincture" => tincture}) when is_map(tincture) do
+    connect = tincture["connect"]
+
+    cond do
+      not (is_nil(tincture["entry"]) or is_binary(tincture["entry"])) ->
+        {:error, {:invalid_tincture, "tincture.entry must be a string"}}
+
+      not (is_nil(connect) or is_list(connect)) ->
+        {:error, {:invalid_tincture, "tincture.connect must be a list of domains"}}
+
+      is_list(connect) and
+          Enum.reject(connect, &Cyfr.TinctureHelpers.valid_connect_domain?/1) != [] ->
+        bad = Enum.reject(connect, &Cyfr.TinctureHelpers.valid_connect_domain?/1)
+
+        {:error,
+         {:invalid_tincture,
+          "tincture.connect entries must be bare domains (no scheme, port, " <>
+            "path, IP, or bare wildcard), got: #{inspect(bad)}"}}
+
+      not (is_nil(tincture["media"]) or is_map(tincture["media"])) ->
+        {:error, {:invalid_tincture, "tincture.media must be an object"}}
+
+      not (is_nil(tincture["window"]) or is_map(tincture["window"])) ->
+        {:error, {:invalid_tincture, "tincture.window must be an object"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_tincture_block(%{"tincture" => other}) do
+    {:error, {:invalid_tincture, "tincture must be an object, got: #{inspect(other)}"}}
+  end
+
+  defp validate_tincture_block(_), do: :ok
+
+  # Dependencies drive the activation graph and are one of the three
+  # release-digest blocks — a malformed value must refuse at the one
+  # validator, not surface later as a per-caller parse error. `static` is
+  # the resolvable list; `dynamic` is a free-form discovery descriptor
+  # (`DependencyResolver.has_dynamic_deps?/1` only presence-checks it), so
+  # only its container shape is held.
+  defp validate_dependencies_block(%{"dependencies" => deps}) when is_map(deps) do
+    with :ok <- validate_static_deps(deps["static"]) do
+      case deps["dynamic"] do
+        nil ->
+          :ok
+
+        dynamic when is_map(dynamic) or is_list(dynamic) ->
+          :ok
+
+        other ->
+          {:error,
+           {:invalid_dependencies,
+            "dependencies.dynamic must be an object or list, got: #{inspect(other)}"}}
+      end
+    end
+  end
+
+  defp validate_dependencies_block(%{"dependencies" => other}) do
+    {:error, {:invalid_dependencies, "dependencies must be an object, got: #{inspect(other)}"}}
+  end
+
+  defp validate_dependencies_block(_), do: :ok
+
+  defp validate_static_deps(nil), do: :ok
+
+  defp validate_static_deps(list) when is_list(list) do
+    case Enum.reject(list, &valid_dependency_entry?/1) do
+      [] ->
+        :ok
+
+      bad ->
+        {:error,
+         {:invalid_dependencies,
+          "dependencies.static entries must be ref strings or " <>
+            "{\"ref\": ...} objects, got: #{inspect(bad)}"}}
+    end
+  end
+
+  defp validate_static_deps(other) do
+    {:error,
+     {:invalid_dependencies, "dependencies.static must be a list, got: #{inspect(other)}"}}
+  end
+
+  defp valid_dependency_entry?(entry) when is_binary(entry), do: true
+  defp valid_dependency_entry?(%{"ref" => ref}) when is_binary(ref), do: true
+  defp valid_dependency_entry?(_), do: false
 
   defp reject_legacy_blocks(manifest) do
     case Enum.filter(@legacy_blocks, &Map.has_key?(manifest, &1)) do

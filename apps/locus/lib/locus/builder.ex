@@ -72,6 +72,14 @@ defmodule Locus.Builder do
   def languages, do: [:rust, :javascript]
 
   @doc """
+  The total-source ceiling one compile may carry — the one bound the
+  service's pre-decode check and the client's pre-ship check both derive
+  from, so neither can admit what the compile itself will refuse.
+  """
+  @spec max_source_bytes() :: pos_integer()
+  def max_source_bytes, do: @max_source_size
+
+  @doc """
   Compile source code using the appropriate toolchain.
 
   ## Parameters

@@ -99,6 +99,32 @@ defmodule Cyfr.TinctureHelpers do
     [".svg" | @blocked_raster_extensions] |> Enum.filter(&(&1 in @allowed_extensions))
   end
 
+  @doc """
+  Whether a `tincture.connect` entry is a bare (optionally `*.`-prefixed)
+  domain — the grammar the served page's CSP builder applies, and the one
+  the manifest validator holds entries to at publish. Rejects bare
+  wildcards, IP addresses, paths, ports, and schemes. `\\A…\\z`, not
+  `^…$`: in Elixir `$` also matches before a trailing newline, so
+  "evil.com\\n" once passed, was interpolated into the CSP, and
+  `put_resp_header/3` raised on the control character — a manifest could
+  500 its own tincture's index for good.
+  """
+  @spec valid_connect_domain?(term()) :: boolean()
+  def valid_connect_domain?(domain) when is_binary(domain) do
+    base = String.replace_prefix(domain, "*.", "")
+
+    cond do
+      domain == "*" -> false
+      String.contains?(domain, "/") -> false
+      String.contains?(domain, ":") -> false
+      String.contains?(domain, " ") -> false
+      not Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\z/, base) -> false
+      true -> true
+    end
+  end
+
+  def valid_connect_domain?(_), do: false
+
   # Tincture media convention: fixed paths only, no globbing. We probe the
   # known slots via `Arca.exists?` so the same logic works against Local FS
   # and S3 (which has no real directories). This module is the convention's
