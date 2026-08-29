@@ -31,6 +31,16 @@ defmodule PrismWeb.BuildsLive do
   def handle_event("compile", %{"reference" => reference}, socket) do
     build_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
+    # One build's topic at a time: every click used to add a subscription the
+    # socket kept for its whole life, all fanning into a handle_info that
+    # distinguishes messages by tag rather than by build id.
+    if previous = socket.assigns[:build_id] do
+      Phoenix.PubSub.unsubscribe(
+        Emissary.PubSub,
+        Cyfr.Topics.build(previous, socket.assigns[:context])
+      )
+    end
+
     Phoenix.PubSub.subscribe(
       Emissary.PubSub,
       Cyfr.Topics.build(build_id, socket.assigns[:context])

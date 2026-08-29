@@ -48,7 +48,6 @@ defmodule PrismWeb.ShellLive do
       |> assign(:active_nav, "tinctures")
       |> assign(:active_tincture, nil)
       |> assign(:opened_tinctures, [])
-      |> assign(:viewport, %{width: 1280, height: 800})
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
@@ -208,9 +207,10 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  def handle_event("viewport_changed", %{"width" => w, "height" => h}, socket) do
-    {:noreply, assign(socket, :viewport, %{width: w, height: h})}
-  end
+  # The viewport is reported by the client and read by nobody — the assign
+  # existed, the template never used it, and the values were stored
+  # unvalidated. Acknowledged and dropped.
+  def handle_event("viewport_changed", _params, socket), do: {:noreply, socket}
 
   def handle_event("open_report", %{"tincture" => tincture_id}, socket) do
     {:noreply,
@@ -239,7 +239,10 @@ defmodule PrismWeb.ShellLive do
          |> assign(:report_tincture_id, nil)
          |> put_flash(:error, "Tincture not found; refresh and try again.")}
 
-      category == "" ->
+      # The allowlist is enforced, not just rendered: `category` is a client
+      # value forwarded to the registry, and `@report_categories` was used
+      # only to draw the select.
+      category not in Enum.map(@report_categories, &elem(&1, 0)) ->
         {:noreply, assign(socket, :report_error, "Pick a category.")}
 
       details == "" ->

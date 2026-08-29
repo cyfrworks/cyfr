@@ -117,7 +117,8 @@ defmodule PrismWeb.ComponentDetailLive do
     category = String.trim(category || "")
 
     cond do
-      category == "" ->
+      # Enforced, not just rendered — see `PrismWeb.ShellLive`.
+      category not in Enum.map(@report_categories, &elem(&1, 0)) ->
         {:noreply, assign(socket, :report_error, "Pick a category.")}
 
       details == "" ->
