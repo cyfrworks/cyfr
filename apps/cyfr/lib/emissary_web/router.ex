@@ -126,6 +126,18 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
+  # A device ticket is 32 random bytes and browser-bound, so guessing one is
+  # not a takeover path — but `apply_device_ticket` CONSUMES the ticket it
+  # looks up, so an unmetered guesser can burn other people's pending
+  # tickets, and this was the one pre-session auth route with no budget at
+  # all while every sibling had one.
+  pipeline :device_complete_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :device_complete,
+      max_requests: 30,
+      window_ms: 60_000
+  end
+
   # OAuth/OIDC authentication routes. GitHub/Google browser sign-in is
   # device flow on `/login`; `/auth/:provider` is the OIDC kickoff (and
   # leftover web OAuth if a client secret is configured). Static paths
@@ -134,7 +146,12 @@ defmodule EmissaryWeb.Router do
     pipe_through :browser
 
     get "/post-legal-accept", AuthController, :post_legal_accept
-    get "/device/complete/:ticket", AuthController, :device_complete
+
+    scope "/" do
+      pipe_through :device_complete_throttle
+
+      get "/device/complete/:ticket", AuthController, :device_complete
+    end
 
     scope "/" do
       pipe_through :oauth_start_throttle

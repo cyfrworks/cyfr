@@ -337,6 +337,32 @@ defmodule EmissaryWeb.TinctureControllerTest do
       refute csp =~ "\n"
     end
 
+    test "a second HTML page gets the tincture's CSP, not the asset lockdown",
+         %{conn: conn, public_dir: public_dir} do
+      # A multi-page tincture links from its entry to another page. That page
+      # is served by the ASSET route, whose pipeline sets
+      # `default-src 'none'; frame-ancestors 'none'` — right for a script,
+      # fatal for a document: nothing on the page could load and the iframe
+      # could not frame it.
+      File.write!(Path.join(public_dir, "page2.html"), "<html><body>Two</body></html>")
+
+      conn = get(conn, "/t/test/local/pub-dash/page2.html")
+
+      assert conn.status == 200
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "default-src 'self'"
+      assert csp =~ "frame-ancestors 'self'"
+      refute csp =~ "default-src 'none'"
+    end
+
+    test "a non-HTML asset keeps the locked-down header", %{conn: conn} do
+      conn = get(conn, "/t/test/local/pub-dash/style.css")
+
+      assert conn.status == 200
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp =~ "default-src 'none'"
+    end
+
     test "injects plain base tag (no token) for public tincture", %{conn: conn} do
       conn = get(conn, "/t/test/local/pub-dash")
       assert conn.resp_body =~ ~s(<base href="/t/test/local/pub-dash/">)

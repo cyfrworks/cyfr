@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Optimistic active-class swap + main-panel spinner for sidebar nav links.
 //
 // On click, immediately move the active CSS classes to the clicked link

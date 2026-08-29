@@ -69,8 +69,8 @@ defmodule Opus.ExecutionSemaphore do
   Entries decay after #{div(10 * 60 * 1000, 60_000)} minutes — there is no
   completion signal to decrement on (the thread's JoinHandle is dropped), so
   decay is what keeps a run of benign timeouts from locking a tenant out
-  forever. A real preemption fix is upstream (wasmex epoch support) or the
-  Stage-1.5 `CYFR_ROLE=worker` recycle story in `docs/0.6.0.md`.
+  forever. A real preemption fix is upstream (wasmex epoch support), or
+  recycling the process that holds the wedged native thread.
   """
 
   use GenServer

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Conversation page hook — keyboard shortcuts and server-pushed intents.
 //
 // Mounted on the chat page's root element. Cmd+. (Ctrl+. elsewhere) halts

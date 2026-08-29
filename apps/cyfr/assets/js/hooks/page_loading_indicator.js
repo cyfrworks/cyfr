@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Centered "Loading…" overlay for live navigations.
 //
 // Listens for Phoenix's built-in phx:page-loading-start / phx:page-loading-stop

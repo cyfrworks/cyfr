@@ -46,8 +46,10 @@ defmodule Emissary.MCP.ToolProvider do
       ]
 
   Providers are in-process by design — remote workers are a protocol
-  project, not an `:rpc.call` on this behaviour (`Opus.HostSurfaceTest`
-  and docs/0.6.0.md Stage 2 say why the earlier claim here was wrong).
+  project, not an `:rpc.call` on this behaviour. `Opus.HostSurfaceTest`
+  is where the size of that project is written down: the engine names some
+  forty cyfr modules, so a worker needs a client for each, not a routing
+  patch.
   """
 
   alias Sanctum.Context

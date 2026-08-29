@@ -250,9 +250,13 @@ defmodule PrismWeb.AgentsLive do
           })
 
         {:model, provider, model} ->
+          # No hardcoded publisher fallback. A ref built from a personal
+          # namespace resolves to nothing on any other deployment, so the
+          # model choice failed silently there; the refs the page loaded are
+          # the only ones that exist.
           catalyst_ref =
             case socket.assigns[:catalyst_refs][provider] do
-              nil -> Sanctum.ComponentRef.build("catalyst", "moonmoon69", provider)
+              nil -> nil
               ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
             end
 

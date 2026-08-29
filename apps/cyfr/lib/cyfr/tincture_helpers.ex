@@ -301,7 +301,11 @@ defmodule Cyfr.TinctureHelpers do
         conn
         |> put_resp_header("content-security-policy", csp)
         |> put_resp_header("x-content-type-options", "nosniff")
-        |> put_resp_content_type("text/html; charset=utf-8")
+        # A bare MIME: `put_resp_content_type/2` appends `; charset=utf-8`
+        # itself, so spelling it here served every tincture index as
+        # `text/html; charset=utf-8; charset=utf-8`. The asset path next door
+        # passes a bare type correctly.
+        |> put_resp_content_type("text/html")
         |> send_resp(200, content)
 
       {:error, _} ->

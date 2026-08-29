@@ -6,9 +6,9 @@ defmodule Arca.Schemas.Component do
   Ecto schema for the `components` table (backs `Arca.ComponentStorage`).
 
   `inserted_at`/`updated_at` are declared `:utc_datetime_usec` so reads are
-  uniformly `%DateTime{}` even though the migration created the columns with
-  default (naive) precision; the Postgres columns are widened to microsecond by
-  the `align_timestamp_precision` migration.
+  uniformly `%DateTime{}` on both adapters. (This used to cite an
+  `align_timestamp_precision` migration; there is no such file — the
+  baseline collapse absorbed it.)
   """
 
   use Ecto.Schema

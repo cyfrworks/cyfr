@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 // Command palette hook — Cmd+Shift+K (or Ctrl+Shift+K) opens, Escape closes.
 //
 // The palette itself is a Phoenix LiveComponent that listens for "open" /

@@ -31,8 +31,12 @@ jobs:
       # tests; everything else (including the tenancy migrations under
       # priv/repo/migrations) is Apache-2.0. This one gate covers every tracked
       # .ex/.exs in the repo — root mix.exs, config/, priv/, and all apps —
-      # plus the Go CLI (apps/codex), the mcp-bridge server, and the WIT ABI
-      # definitions under wit/, all of which sit outside the moat.
+      # plus the Go CLI (apps/codex), the mcp-bridge server, the WIT ABI
+      # definitions under wit/, and the console's own JavaScript
+      # (apps/cyfr/assets/js) — all of which sit outside the moat. The JS was
+      # the last first-party source in the repo carrying no licence marking
+      # at all. Seed components stay out: they are replaceable example
+      # content, not this repo's code.
       - name: Assert SPDX license boundary
         run: |
           set -uo pipefail
@@ -67,7 +71,7 @@ jobs:
                 fail=1
               fi
             fi
-          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/server.mjs' 'wit/*.wit')
+          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/server.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

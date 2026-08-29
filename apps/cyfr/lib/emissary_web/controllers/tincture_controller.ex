@@ -241,12 +241,14 @@ defmodule EmissaryWeb.TinctureController do
       _ ->
         case resolve_tincture(conn, athanor, publisher, tincture_name) do
           {:ok, tincture, :public, ctx} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments, public: true)
+            conn
+            |> page_csp(tincture, segments)
+            |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: true)
 
           {:ok, tincture, :private, ctx} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
-              public: false
-            )
+            conn
+            |> page_csp(tincture, segments)
+            |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: false)
 
           {:error, :not_found} ->
             EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
@@ -274,7 +276,9 @@ defmodule EmissaryWeb.TinctureController do
 
     case outcome do
       {:serve, public_ctx, tincture} ->
-        Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,
+        conn
+        |> page_csp(tincture, segments)
+        |> Cyfr.TinctureHelpers.serve_asset(public_ctx, tincture.segments, segments,
           public: false
         )
 
@@ -347,6 +351,22 @@ defmodule EmissaryWeb.TinctureController do
               {:error, :not_found}
           end
       end
+    end
+  end
+
+  # An `.html` asset is a PAGE of a multi-page tincture, not a static file:
+  # the `:tincture_asset` pipeline's `default-src 'none'; frame-ancestors
+  # 'none'` is right for a script or an image and wrong for a document, so a
+  # link from the entry to page2.html loaded nothing and could not be framed.
+  # `.html` is first in the served-extension roster, so this is the ordinary
+  # case, not an exotic one. Everything else keeps the locked-down header.
+  defp page_csp(conn, tincture, segments) do
+    if segments |> List.last() |> to_string() |> String.downcase() |> String.ends_with?(".html") do
+      conn
+      |> put_resp_header("content-security-policy", build_csp(tincture.manifest))
+      |> put_resp_header("x-frame-options", "SAMEORIGIN")
+    else
+      conn
     end
   end
 

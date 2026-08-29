@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
 /**
  * IframeBridge hook — bridges postMessage between sandboxed iframe apps
  * and the LiveView shell via pushEvent / handleEvent.

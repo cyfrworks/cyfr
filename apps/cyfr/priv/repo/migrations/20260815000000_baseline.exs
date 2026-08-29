@@ -8,9 +8,13 @@ defmodule Arca.Repo.Migrations.Baseline do
   Every tenant-owned row carries an `athanor_id` — the athanor (a person's or
   a group's furnace) that owns it. The column is `NOT NULL` with no default:
   a row that forgets its athanor must fail, never land in the seeded Home.
-  It carries no foreign key on purpose — an athanor is archived, never
-  deleted, so nothing needs the constraint and every fixture is spared a
-  parent row.
+  It carries no foreign key TO `athanors` on purpose — an athanor is
+  archived, never deleted, so nothing needs the constraint and every fixture
+  is spared a parent row. Two tables do name it inside a COMPOSITE key, which
+  is a different thing: `consents.profile_id` and
+  `consent_vault_refs.vault_entry_id` are `references(…, with: [athanor_id:
+  :athanor_id])`, so a consent cannot point at another athanor's profile or
+  vault entry. Those constrain the pair, never the athanor itself.
 
   There is deliberately no `down/0`. A baseline's inverse is an empty
   database, which `mix ecto.drop` already expresses.

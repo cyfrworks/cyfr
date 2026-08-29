@@ -34,8 +34,8 @@ defmodule Emissary.MCP.ToolRegistry do
   This registry is single-node by design. An earlier note here promised
   :pg/Horde routing across workers; `Opus.HostSurfaceTest` records why
   that framing was wrong by two orders of magnitude — the engine names
-  ~40 cyfr modules, so a remote worker is a protocol project
-  (docs/0.6.0.md Stage 2), not a routing patch on this table.
+  ~40 cyfr modules, so a remote worker is a protocol project, not a
+  routing patch on this table.
   """
 
   use GenServer

@@ -78,7 +78,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 # A release tag must never point at a red commit: run the full suite and
-# credo before touching versions. Skip with --skip-tests only when the same
+# credo before touching versions. Skip with SKIP_TESTS=1 only when the same
 # tree already passed locally moments ago.
 if [ "${SKIP_TESTS:-}" != "1" ]; then
   echo "Running full test suite (set SKIP_TESTS=1 to skip)..."

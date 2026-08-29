@@ -166,9 +166,11 @@ defmodule Sanctum.Auth.DeviceFlow do
                {:ok, user, ctx} <- admit(user_info, provider) do
             {:ok, complete(user, ctx, user_info, provider, tokens.access_token)}
           else
-            {:error, :user_not_allowed} ->
-              {:ok, %{status: "denied"}}
-
+            # `Sanctum.Door.admit_identity/2` answers `{:error, {:door, reason}}`;
+            # nothing produces a bare `:user_not_allowed`, so the arm that
+            # matched it never ran. The door refusal falls through to `error`
+            # and `Sanctum.MCP.SessionTool` renders it uniformly, which is
+            # what a poller is meant to see.
             error ->
               error
           end
