@@ -224,6 +224,70 @@ defmodule Opus.ExecutorCascadeTest do
     end
   end
 
+  describe "a normal completion is not a cascade" do
+    test "only the abnormal endings cascade" do
+      # `run_child_stream/5` returns an execution id and a stream URL so the
+      # child can outlive the call that started it. Cascading on the parent's
+      # SUCCESS marked that live child failed without stopping it, so the
+      # child then wrote its real result over a row an SSE subscriber had
+      # already been shown as failed. Failure and cancel still cascade — the
+      # parent's chain is gone there — and a genuinely abandoned child is
+      # reaped by Opus.ExecutionSweeper on its lease.
+      source =
+        [__DIR__, "../../lib/opus/executor.ex"]
+        |> Path.join()
+        |> Path.expand()
+        |> File.read!()
+
+      callers =
+        source
+        |> String.split("\n")
+        |> Enum.filter(&(String.trim(&1) =~ ~r/^cascade_children_failure(_by_id)?\(/))
+        |> Enum.map(&String.trim/1)
+
+      assert length(callers) == 2,
+             "expected exactly the failure and cancel cascades, got: #{inspect(callers)}"
+
+      # ...and the success path returns without one.
+      [_before, finalize] = String.split(source, "defp finalize_execution", parts: 2)
+      [finalize_body | _] = String.split(finalize, "\n  defp ", parts: 2)
+      refute finalize_body =~ "cascade_children_failure"
+    end
+
+    test "a completed parent leaves a running child alone" do
+      parent_id = "exec_ok_parent_#{System.unique_integer([:positive])}"
+      child_id = "exec_ok_child_#{System.unique_integer([:positive])}"
+      started_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+      create_execution(%{
+        id: parent_id,
+        reference: "formula:local.agent:0.9.0",
+        component_type: "formula",
+        started_at: started_at
+      })
+
+      create_execution(%{
+        id: child_id,
+        component_type: "catalyst",
+        parent_execution_id: parent_id,
+        started_at: started_at
+      })
+
+      # The parent finishes normally.
+      {:ok, _} =
+        Execution.record_complete(Sanctum.TestContext.local(), parent_id, %{
+          status: "completed",
+          completed_at: DateTime.utc_now(),
+          duration_ms: 5_000,
+          output: ~s({"ok":true})
+        })
+
+      # Nothing swept the child with it; it is still the streaming child's own
+      # to finish.
+      assert [%{id: ^child_id, status: "running"}] = Execution.list_running_children(parent_id)
+    end
+  end
+
   describe "cancel/2 tenant isolation" do
     test "a foreign tenant cannot cancel another tenant's running execution" do
       exec_id = "exec_cancel_xtenant_#{System.unique_integer([:positive])}"

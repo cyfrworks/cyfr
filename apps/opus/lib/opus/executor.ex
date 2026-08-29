@@ -503,8 +503,15 @@ defmodule Opus.Executor do
       result =
         if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
 
-      cascade_children_failure(completed_record)
-
+      # No cascade here. A formula that finished normally did not terminate
+      # anything: `Opus.Chain.run_child_stream/5` hands the guest an
+      # execution id and a stream URL precisely so the child outlives the
+      # call that started it, and the cascade never killed it — it only
+      # marked the row, so the child went on to write its real result over a
+      # row an SSE subscriber had already been shown as failed. The abnormal
+      # endings (`handle_failure/2`, `cancel/3`) still cascade: there the
+      # parent's chain is gone. A child genuinely abandoned is reaped by
+      # `Opus.ExecutionSweeper` when its lease lapses.
       {:ok, result}
     end
   end
@@ -843,30 +850,7 @@ defmodule Opus.Executor do
         registered? = register_execution(exec_opts)
 
         try do
-          runtime_opts =
-            exec_opts
-            |> Keyword.merge(opts)
-            |> Keyword.take([
-              :component_type,
-              :max_memory_bytes,
-              :preloaded_fields,
-              :component_ref,
-              :edge,
-              :limits,
-              :ctx,
-              :execution_id,
-              :root_execution_id,
-              :reference,
-              :digest,
-              # Dropping :authority here would silently strip a chain's granted
-              # capabilities and run the guest on ambient permissions; the
-              # runtime re-checks :authority_required so a partial drop still
-              # fails closed.
-              :authority,
-              :authority_required,
-              :declared_needs,
-              :activation_digest
-            ])
+          runtime_opts = runtime_opts(exec_opts, opts)
 
           # The plane flips exactly at the WASM boundary: pipeline stages ran
           # with the caller's external-plane context, but a context captured
@@ -905,6 +889,71 @@ defmodule Opus.Executor do
   # is a no-op here and they keep owning their entry); this covers the paths
   # that previously never registered — synchronous execution.run and every
   # formula child, which cancel could mark in the DB but not terminate.
+  # What `enforce_authority/3` derived from the consented blob. These are the
+  # capability itself — the node's limits, the edge's resources, the memory
+  # ceiling and the component type they were computed for — so a caller's
+  # opts must not reach past them. `timeout_ms` is settled the same way a few
+  # lines above, explicitly; this is the rest of the same rule.
+  @authority_derived [:component_type, :max_memory_bytes, :edge, :limits]
+
+  @runtime_opt_keys [
+    :component_type,
+    :max_memory_bytes,
+    :preloaded_fields,
+    :component_ref,
+    :edge,
+    :limits,
+    :ctx,
+    :execution_id,
+    :root_execution_id,
+    :reference,
+    :digest,
+    # Dropping :authority here would silently strip a chain's granted
+    # capabilities and run the guest on ambient permissions; the runtime
+    # re-checks :authority_required so a partial drop still fails closed.
+    :authority,
+    :authority_required,
+    :declared_needs,
+    :activation_digest
+  ]
+
+  @doc false
+  # The options the runtime runs on. Caller opts fill in what the pipeline did
+  # not settle; they never overwrite what consent did. A plain
+  # `Keyword.merge(exec_opts, opts)` gave the caller the last word on every
+  # key, including the four above — so `run/4`'s own documented
+  # `:max_memory_bytes` option silently outranked the blob's, and the comment
+  # on `enforce_authority/3` ("nothing is re-resolved at execution time")
+  # held only because no live caller happened to pass one.
+  @spec runtime_opts(keyword(), keyword()) :: keyword()
+  def runtime_opts(exec_opts, opts) do
+    exec_opts
+    |> Keyword.merge(Keyword.drop(opts, authority_derived_present(exec_opts)))
+    |> Keyword.take(@runtime_opt_keys)
+  end
+
+  defp authority_derived_present(exec_opts),
+    do: Enum.filter(@authority_derived, &Keyword.has_key?(exec_opts, &1))
+
+  # Merge into the registry value for this execution, whatever shape it is
+  # in. The entry starts as the `:running` atom (`register_execution/1`) and
+  # becomes a map as the run's pids become known; a run with no entry — a
+  # child, or one whose owner already unregistered — is a no-op.
+  defp update_registry_meta(runtime_opts, fun) do
+    case Keyword.get(runtime_opts, :execution_id) do
+      nil ->
+        :ok
+
+      execution_id ->
+        Registry.update_value(Opus.ExecutionRegistry, execution_id, fn
+          meta when is_map(meta) -> fun.(meta)
+          _atom -> fun.(%{status: :running})
+        end)
+
+        :ok
+    end
+  end
+
   defp register_execution(exec_opts) do
     case execution_id(exec_opts) do
       nil ->
@@ -976,6 +1025,17 @@ defmodule Opus.Executor do
         send(caller, {ref, result})
       end)
 
+    # Name the runner in the registry the moment it exists, so `cancel/3` can
+    # reach the process actually running the component. Killing the registered
+    # process does not: the runner traps exits (just above, so a Wasmex crash
+    # is a message rather than a death), and a link-propagated exit is
+    # trappable whatever its reason — `:killed` included. Only the direct
+    # `Process.exit(runner, :kill)` in `kill_running_process/1` is untrappable.
+    # Without this the guest kept running after a cancel: still fetching,
+    # still writing, still being handed OAuth tokens, with its slot released
+    # and its row already reading cancelled.
+    update_registry_meta(runtime_opts, &Map.put(&1, :runner_pid, pid))
+
     # Collect cleanup_refs sent by Runtime early in setup (before WASM execution starts).
     # Use the full timeout — if setup itself takes this long, we should timeout anyway.
     # A failure BEFORE Runtime sends the handshake (an authority guard, a bad
@@ -1000,13 +1060,10 @@ defmodule Opus.Executor do
     # Store tracker PID in ExecutionRegistry so cancel can clean up AsyncTracker.
     # Without this, cancelling a formula leaves child catalyst tasks running.
     if cleanup_refs[:formula_tracker_pid] do
-      execution_id = Keyword.get(runtime_opts, :execution_id)
-
-      if execution_id do
-        Registry.update_value(Opus.ExecutionRegistry, execution_id, fn _ ->
-          %{status: :running, tracker_pid: cleanup_refs.formula_tracker_pid}
-        end)
-      end
+      update_registry_meta(
+        runtime_opts,
+        &Map.put(&1, :tracker_pid, cleanup_refs.formula_tracker_pid)
+      )
     end
 
     remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
@@ -1073,8 +1130,13 @@ defmodule Opus.Executor do
           if cleanup_refs[:formula_tracker_pid],
             do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
 
-          Opus.OAuthHandler.collect_dispensed(cleanup_refs[:execution_id])
-
+          # The dispensed OAuth tokens are NOT drained here. This error
+          # travels to `handle_failure/2`, which masks it with
+          # `ExecutionPipeline.secrets/1` — and that drains the tracker.
+          # Collecting first threw the tokens away (collect is
+          # collect-and-delete) and left the masker with an empty set for
+          # the rest of the execution. Undrained rows are swept on TTL, so
+          # the only thing a bare call bought was the disarming.
           {:error, "Execution timeout after #{timeout_ms}ms"}
         end
     end
@@ -1177,9 +1239,14 @@ defmodule Opus.Executor do
   @doc """
   Cancel a running execution by killing its process.
 
-  Looks up the task PID in the ExecutionRegistry and kills it. The kill cascades
-  to the inner WASM process (via spawn_link) and AsyncTracker (via OTP links).
+  Looks up the execution's entry in the ExecutionRegistry and kills what it
+  names: the runner that is actually inside the component call, then the
+  process driving it, then its AsyncTracker so spawned child tasks die too.
   The semaphore auto-releases via its :DOWN monitor.
+
+  The runner is killed BY NAME rather than left to the link: it traps exits
+  (so a Wasmex crash is a message, not a death), and a link-propagated exit
+  is trappable however it is spelled. Only a direct kill stops it.
   """
   @spec cancel(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def cancel(ctx, execution_id, opts \\ [])
@@ -1248,6 +1315,14 @@ defmodule Opus.Executor do
       [{pid, meta}] ->
         # Extract tracker PID before killing — needed to stop child tasks.
         tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
+        runner_pid = if is_map(meta), do: meta[:runner_pid], else: nil
+
+        # The runner FIRST, and by name. It traps exits, so the kill of its
+        # parent below reaches it as an ordinary message and it would keep
+        # running the component — a direct `:kill` is the only untrappable
+        # one. Killing it before the parent also stops it from sending a
+        # result nobody is waiting for any more.
+        if is_pid(runner_pid), do: Process.exit(runner_pid, :kill)
 
         Process.exit(pid, :kill)
 
@@ -1304,6 +1379,9 @@ defmodule Opus.Executor do
   # When a formula execution ends (success, failure, or cancel), mark any
   # children still stuck at "running" as failed. This handles the case where
   # :kill signals bypass the child's try/rescue, leaving orphaned DB records.
+  # Only for a parent that ended ABNORMALLY — `handle_failure/2` and
+  # `cancel/3`. A normal completion leaves its children alone; see
+  # `finalize_execution/3`.
   defp cascade_children_failure(%ExecutionRecord{component_type: :formula} = record) do
     do_cascade_children(record.id)
   end

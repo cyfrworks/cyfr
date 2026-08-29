@@ -221,6 +221,26 @@ defmodule Opus.FormulaHandler do
     e in [ArgumentError, RuntimeError] ->
       Logger.warning("[FormulaHandler] cleanup_registry failed: #{inspect(e)}")
       :ok
+  catch
+    # `GenServer.stop/2` EXITS for a dead pid (`:noproc`) — it does not raise,
+    # so the rescue above never saw the commonest case. Every caller gets here
+    # after a check-then-act window, and the cancel path has just killed the
+    # process this tracker is linked to, so the tracker is routinely gone
+    # already. Letting that exit through unwound the caller mid-teardown:
+    # cancel skipped its terminal event, its telemetry and its child cascade
+    # (leaving SSE subscribers with no final frame and children `running`),
+    # the timeout path skipped writing the failed record, and a successful
+    # formula run turned into an error from its own `after`. The tracker being
+    # gone is the outcome this function wanted; it is not a failure.
+    :exit, {reason, _} when reason in [:noproc, :normal, :shutdown] ->
+      :ok
+
+    :exit, :noproc ->
+      :ok
+
+    :exit, reason ->
+      Logger.warning("[FormulaHandler] cleanup_registry exited: #{inspect(reason)}")
+      :ok
   end
 
   def cleanup_registry(_), do: :ok

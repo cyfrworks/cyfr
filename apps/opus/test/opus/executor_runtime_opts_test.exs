@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Opus.ExecutorRuntimeOptsTest do
+  @moduledoc """
+  Who gets the last word on the options the runtime runs under.
+
+  `enforce_authority/3` derives the node's limits, the edge's resources and
+  the memory ceiling from the consented blob and says "nothing is re-resolved
+  at execution time". The merge that built the runtime options said otherwise:
+  caller opts were merged over the pipeline's, so `run/4`'s own documented
+  `:max_memory_bytes` option — and `:limits` and `:edge` with it — outranked
+  what was consented.
+  """
+  use ExUnit.Case, async: true
+
+  alias Opus.Executor
+
+  # What enforce_authority/3 produces.
+  defp consented do
+    [
+      component_type: :reagent,
+      timeout_ms: 60_000,
+      max_memory_bytes: 64 * 1024 * 1024,
+      edge: %{storage: %{paths: ["data/"], actions: ["read"]}},
+      limits: %{max_concurrent_tasks: 1},
+      ctx: :a_context,
+      execution_id: "exec_1"
+    ]
+  end
+
+  test "consent wins over caller opts for everything it settled" do
+    caller = [
+      max_memory_bytes: 4 * 1024 * 1024 * 1024,
+      limits: %{max_concurrent_tasks: 9_999},
+      edge: %{storage: %{paths: ["*"], actions: ["read", "write", "delete"]}},
+      component_type: :formula
+    ]
+
+    out = Executor.runtime_opts(consented(), caller)
+
+    assert out[:max_memory_bytes] == 64 * 1024 * 1024
+    assert out[:limits] == %{max_concurrent_tasks: 1}
+    assert out[:edge] == %{storage: %{paths: ["data/"], actions: ["read"]}}
+    assert out[:component_type] == :reagent
+  end
+
+  test "caller opts still fill in what consent did not settle" do
+    caller = [
+      preloaded_fields: %{"token" => "t"},
+      root_execution_id: "exec_root",
+      declared_needs: ["dest"],
+      authority: :an_authority
+    ]
+
+    out = Executor.runtime_opts(consented(), caller)
+
+    assert out[:preloaded_fields] == %{"token" => "t"}
+    assert out[:root_execution_id] == "exec_root"
+    assert out[:declared_needs] == ["dest"]
+    assert out[:authority] == :an_authority
+    # ...and what consent did settle is still there.
+    assert out[:limits] == %{max_concurrent_tasks: 1}
+  end
+
+  test "with no authority-derived value, the caller's is used" do
+    # A pipeline that never reached enforce_authority has nothing to protect,
+    # so the guard must not turn into "the caller may never say".
+    out = Executor.runtime_opts([ctx: :a_context], max_memory_bytes: 123, limits: %{a: 1})
+
+    assert out[:max_memory_bytes] == 123
+    assert out[:limits] == %{a: 1}
+  end
+
+  test "only the runtime's own keys survive" do
+    out = Executor.runtime_opts(consented(), some_unrelated_key: :dropped)
+
+    refute Keyword.has_key?(out, :some_unrelated_key)
+    # `timeout_ms` is passed to the runtime separately, not through here.
+    refute Keyword.has_key?(out, :timeout_ms)
+  end
+end

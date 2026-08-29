@@ -693,13 +693,21 @@ defmodule Opus.ExecutionSemaphore do
     end
   end
 
-  # The first background waiter whose athanor is under its cap; the ones at
-  # cap stay queued in order.
+  # The first background waiter whose athanor is under its BACKGROUND cap;
+  # the ones at cap stay queued in order.
+  #
+  # The same ceiling admission uses, not the athanor's full cap. Handing a
+  # freed slot to a waiter past the half-cap walked an athanor's schedules up
+  # to `tenant_max` one release at a time — including on slots released by
+  # other athanors — and the member's next turn met `:tenant_limit` anyway,
+  # which is exactly what the half exists to prevent.
   defp next_background(state) do
     if state.count - 1 < state.max - state.child_reserve do
       list = :queue.to_list(state.waiters.background)
 
-      case Enum.split_while(list, fn {_f, _m, _c, tenant} -> tenant_at_cap?(state, tenant) end) do
+      case Enum.split_while(list, fn {_f, _m, _c, tenant} ->
+             tenant_at_background_cap?(state, tenant)
+           end) do
         {_blocked, []} ->
           :none
 

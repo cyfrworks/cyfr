@@ -786,6 +786,27 @@ defmodule Opus.FormulaHandlerTest do
       assert :ok == FormulaHandler.cleanup_registry(nil)
       assert :ok == FormulaHandler.cleanup_registry("some_string")
     end
+
+    test "a tracker that is already gone is not an error" do
+      # Every caller reaches this after a check-then-act window — the cancel
+      # path has just killed the process the tracker is linked to — so the
+      # tracker is routinely dead by the time we ask it to stop.
+      # `GenServer.stop/2` EXITS with :noproc for a dead pid; it does not
+      # raise, so rescuing ArgumentError/RuntimeError never caught it and the
+      # exit unwound the caller instead: cancel skipped its terminal event and
+      # its child cascade, and the timeout path skipped writing the failed
+      # record.
+      {:ok, pid} = Opus.AsyncTracker.start_link([])
+      # Unlink before killing: the tracker is linked to whoever started it,
+      # which here is the test process.
+      Process.unlink(pid)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}
+      refute Process.alive?(pid)
+
+      assert FormulaHandler.cleanup_registry(pid) == :ok
+    end
   end
 
   # ============================================================================

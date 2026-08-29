@@ -99,4 +99,92 @@ defmodule Opus.ExecutorRegistrationTest do
 
     send(owner, :stop)
   end
+
+  describe "cancelling reaches the process running the component" do
+    test "a linked child that traps exits survives its parent's kill" do
+      # The shape the executor uses: the runner is spawn_link'd from the
+      # process that registers, and it sets trap_exit so a Wasmex crash
+      # becomes a message instead of killing it. A link-propagated exit is
+      # trappable whatever its reason — :killed included — so killing the
+      # registered process does NOT stop the runner. Only a direct
+      # `Process.exit(runner, :kill)` is untrappable. This is why cancel has
+      # to name the runner rather than its parent.
+      parent_of_all = self()
+
+      registered =
+        spawn(fn ->
+          runner =
+            spawn_link(fn ->
+              Process.flag(:trap_exit, true)
+              send(parent_of_all, {:runner, self()})
+              # Keep working, exactly as a component call would.
+              Process.sleep(:infinity)
+            end)
+
+          send(parent_of_all, {:registered, self(), runner})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:registered, ^registered, runner}, 5_000
+      assert_receive {:runner, ^runner}, 5_000
+
+      ref = Process.monitor(runner)
+      Process.exit(registered, :kill)
+
+      refute_receive {:DOWN, ^ref, :process, ^runner, _}, 300
+      assert Process.alive?(runner), "the trapping runner outlived the kill of its parent"
+
+      # ...and the direct kill the fix uses does stop it.
+      Process.exit(runner, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^runner, _}, 5_000
+    end
+
+    test "cancel kills the runner the entry names, not only its parent" do
+      # Staged rather than driven through a real component: the repo ships no
+      # Component Model fixture (math.wasm is a core module and fails at
+      # compile), so this builds the exact registry shape `execute_with_timeout`
+      # publishes and asserts what `cancel/3` does with it.
+      admin = Sanctum.TestContext.local()
+
+      record =
+        Opus.ExecutionRecord.new(admin, "reagent:local.cancel-me:0.1.0", %{},
+          component_type: :reagent
+        )
+
+      :ok = Opus.ExecutionRecord.write_started(record)
+
+      parent = self()
+
+      runner =
+        spawn(fn ->
+          Process.flag(:trap_exit, true)
+          send(parent, {:runner_up, self()})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:runner_up, ^runner}, 5_000
+      ref = Process.monitor(runner)
+
+      owner =
+        spawn(fn ->
+          {:ok, _} =
+            Registry.register(Opus.ExecutionRegistry, record.id, %{
+              status: :running,
+              runner_pid: runner
+            })
+
+          send(parent, :registered)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :registered, 5_000
+
+      assert {:ok, %{cancelled: true}} = Opus.Executor.cancel(admin, record.id)
+
+      # The runner traps exits, so the link from its parent could never stop
+      # it — cancel has to name it.
+      assert_receive {:DOWN, ^ref, :process, ^runner, :killed}, 5_000
+      refute Process.alive?(owner)
+    end
+  end
 end

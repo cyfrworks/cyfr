@@ -296,6 +296,52 @@ defmodule Opus.ExecutionSemaphoreTest do
       GenServer.stop(pid)
     end
 
+    test "the half-cap holds when someone else's freed slot is handed to a schedule" do
+      # Admission stopped background at half the athanor's cap, but the
+      # hand-off picked the next background waiter under the FULL cap. So a
+      # slot released by ANOTHER athanor was handed to a queue of schedules
+      # already sitting at their ceiling, walking them up to `tenant_max` one
+      # release at a time — and the member's next turn met :tenant_limit
+      # anyway, which is the outcome the half-cap exists to prevent.
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {64, 4}, name: :test_handoff_sem)
+      parent = self()
+
+      bg = fn tenant, i ->
+        spawn(fn ->
+          result = GenServer.call(:test_handoff_sem, {:acquire, :background, tenant}, 5_000)
+          send(parent, {:bg, tenant, i, result})
+
+          receive do
+            :release -> GenServer.cast(:test_handoff_sem, {:release, self()})
+          end
+        end)
+      end
+
+      # ath_h fills its half (2 of 4) and queues two more behind it.
+      mine = for i <- 1..4, do: bg.("ath_h", i)
+      for _ <- 1..2, do: assert_receive({:bg, "ath_h", _, :ok}, 2_000)
+      refute_receive {:bg, "ath_h", _, _}, 300
+
+      # A different athanor takes a slot, then gives it back.
+      other = bg.("ath_other", 1)
+      assert_receive {:bg, "ath_other", 1, :ok}, 2_000
+      send(other, :release)
+
+      # Whatever the hand-off does with that slot, ath_h must not pass its
+      # ceiling on the strength of someone else's release.
+      Process.sleep(100)
+      status = GenServer.call(:test_handoff_sem, :status)
+
+      assert status.tenants["ath_h"] <= 2,
+             "background walked past its half-cap: #{inspect(status.tenants)}"
+
+      # ...and a member's turn still finds room.
+      assert :ok = GenServer.call(:test_handoff_sem, {:acquire, :root, "ath_h"}, 2_000)
+
+      Enum.each(mine, &send(&1, :release))
+      GenServer.stop(pid)
+    end
+
     test "more than the athanor's cap of same-minute schedules all run, none lost" do
       # 24 schedules of one athanor fire at once under a cap of 16: as
       # background work they wait for a slot rather than being refused (a
