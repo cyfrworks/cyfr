@@ -146,7 +146,7 @@ defmodule Opus.CronScheduler do
             Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
           end
 
-        if reason != :normal do
+        if failed_run?(reason) do
           Logger.warning(
             "[CronScheduler] schedule #{schedule_id} execution failed: #{inspect(reason)}"
           )
@@ -321,6 +321,12 @@ defmodule Opus.CronScheduler do
                 "[CronScheduler] failed to record_error for #{schedule_id}: #{inspect(err)}"
               )
           end
+
+          # Announced like the other two pre-execution skips (unresolved
+          # reference, invalid input). This event is what reaches the
+          # athanor's tray, so without it a schedule simply stopped firing
+          # after an archive with nothing anywhere to say so.
+          emit_schedule_failed(schedule_id, ctx, "athanor_or_creator_inactive")
 
           schedule_timer(schedule_id, state)
         else
@@ -641,6 +647,24 @@ defmodule Opus.CronScheduler do
   # A schedule that could not run, or ran and failed: one event the tray
   # bridges into the athanor's badges (`Prism.TelemetryBridge`), beside the
   # scheduler-internal `fire_failed`. The athanor is always known here.
+  @doc false
+  # Whether a task's exit reason means the run failed.
+  #
+  # `:noproc` does not: the task is monitored a moment AFTER it is spawned, so
+  # one that finished inside that window makes the monitor fire immediately
+  # with `:noproc` — the run succeeded and was simply over first. Reading any
+  # non-`:normal` reason as a failure wrote `record_error(":noproc")` onto
+  # rows whose run had just completed, and fast-failing schedules (a bad
+  # reference, a denied consent — the ones that return quickest) collected a
+  # phantom second error every time. `:shutdown` is the scheduler's own
+  # teardown, not the schedule's.
+  @spec failed_run?(term()) :: boolean()
+  def failed_run?(:normal), do: false
+  def failed_run?(:noproc), do: false
+  def failed_run?(:shutdown), do: false
+  def failed_run?({:shutdown, _}), do: false
+  def failed_run?(_reason), do: true
+
   defp emit_schedule_failed(schedule_id, ctx, reason, execution_id \\ nil) do
     :telemetry.execute([:cyfr, :opus, :schedule, :failed], %{count: 1}, %{
       schedule_id: schedule_id,

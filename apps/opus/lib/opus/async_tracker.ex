@@ -149,7 +149,12 @@ defmodule Opus.AsyncTracker do
     # awaiting (or polling then awaiting) what it spawned.
     active_count = map_size(state.tasks) + map_size(state.results)
 
-    if state.max_tasks > 0 and active_count >= state.max_tasks do
+    # `>= state.max_tasks`, with no `> 0` escape: the cap comes from the
+    # consented `max_concurrent_tasks`, where 0 is how "this component may not
+    # spawn" is spelled — `Sanctum.Authority` reads it that way for the invoke
+    # budget. Treating 0 as "unlimited" turned the tightest possible grant
+    # into the loosest.
+    if active_count >= state.max_tasks do
       {:reply, {:error, :max_tasks_exceeded}, state}
     else
       task_id = "task_#{state.next_id}"

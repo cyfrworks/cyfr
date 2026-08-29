@@ -125,4 +125,25 @@ defmodule Opus.CronSchedulerTest do
       assert updated.error_count == 1
     end
   end
+
+  describe "which task exits mean the run failed" do
+    test "a task that finished before its monitor is not a failure" do
+      # `Process.monitor/1` runs just AFTER `Task.Supervisor.start_child/2`,
+      # so a task that completed inside that window makes the monitor fire at
+      # once with `:noproc`. Reading every non-`:normal` reason as a failure
+      # wrote `record_error(":noproc")` onto rows whose run had just
+      # succeeded — and the schedules that return quickest (a bad reference, a
+      # denied consent) collected that phantom error every single time.
+      refute Opus.CronScheduler.failed_run?(:noproc)
+      refute Opus.CronScheduler.failed_run?(:normal)
+
+      # The scheduler's own teardown is not the schedule's failure either.
+      refute Opus.CronScheduler.failed_run?(:shutdown)
+      refute Opus.CronScheduler.failed_run?({:shutdown, :whatever})
+
+      # A real crash still is one.
+      assert Opus.CronScheduler.failed_run?(:killed)
+      assert Opus.CronScheduler.failed_run?({%RuntimeError{message: "boom"}, []})
+    end
+  end
 end

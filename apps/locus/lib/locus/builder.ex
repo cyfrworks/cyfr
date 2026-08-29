@@ -499,12 +499,32 @@ defmodule Locus.Builder do
     end
   end
 
+  # The walk out of `dist/` refuses symlinks, the way `Arca.Adapters.Local`
+  # refuses them on the way in. `File.dir?/1` and `File.read/1` both FOLLOW
+  # them, and this output is written into the athanor's version directory —
+  # so a `dist/` entry pointing anywhere on the box would have been read and
+  # persisted as build output. Sources are already held to `Cyfr.PathSafety`
+  # on the way in; this is the same boundary on the way out.
   defp list_files_recursive(dir) do
     case File.ls(dir) do
       {:ok, entries} ->
         Enum.flat_map(entries, fn entry ->
           full = Path.join(dir, entry)
-          if File.dir?(full), do: list_files_recursive(full), else: [full]
+
+          case File.lstat(full) do
+            {:ok, %File.Stat{type: :directory}} ->
+              list_files_recursive(full)
+
+            {:ok, %File.Stat{type: :regular}} ->
+              [full]
+
+            {:ok, %File.Stat{type: other}} ->
+              Logger.warning("[Locus.Builder] skipping #{other} in build output: #{full}")
+              []
+
+            {:error, _} ->
+              []
+          end
         end)
 
       {:error, _} ->
@@ -523,8 +543,15 @@ defmodule Locus.Builder do
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
     logger_metadata = Cyfr.LoggerContext.capture()
 
+    # `async_nolink`, not `async`: a linked task that exits abnormally — a
+    # `Port.open/2` that cannot spawn because the executable vanished between
+    # `toolchain_available?/1` and here, or because the node is out of ports
+    # or fds — took its caller down with it, so `do_compile/5`'s
+    # `after File.rm_rf(tmp_dir)` never ran and the whole build tree was left
+    # behind. Nothing here needs the link; the timeout path already reaps the
+    # OS process group itself.
     task =
-      Task.async(fn ->
+      Task.Supervisor.async_nolink(Locus.TaskSupervisor, fn ->
         Cyfr.LoggerContext.restore(logger_metadata)
         executable = System.find_executable(command) || command
 
@@ -573,6 +600,15 @@ defmodule Locus.Builder do
         Task.shutdown(task, :brutal_kill)
         kill_os_process(os_pid)
         {:error, :compilation_timeout}
+
+      # `Task.yield/2` also answers `{:exit, reason}` — the task died rather
+      # than returning — which had no clause and became a CaseClauseError.
+      # With `async_nolink` above, that is now the ordinary way a failed
+      # `Port.open/2` arrives, and it is a failed compile, not a crash.
+      {:exit, reason} ->
+        Logger.error("[Locus.Builder] #{command} task exited: #{inspect(reason)}")
+        kill_os_process(get_task_os_pid(task))
+        {:error, {:compilation_failed, :task_exited}}
     end
   end
 

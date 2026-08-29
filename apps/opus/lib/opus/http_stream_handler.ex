@@ -76,17 +76,23 @@ defmodule Opus.HttpStreamHandler do
         "request" =>
           {:fn,
            fn json_req ->
-             stream_request(json_req, edge, limits, ctx, component_ref, exec_ref)
+             guarded(component_ref, "request", fn ->
+               stream_request(json_req, edge, limits, ctx, component_ref, exec_ref)
+             end)
            end},
         "read" =>
           {:fn,
            fn handle_id ->
-             stream_read(handle_id, exec_ref, limits)
+             guarded(component_ref, "read", fn ->
+               stream_read(handle_id, exec_ref, limits)
+             end)
            end},
         "close" =>
           {:fn,
            fn handle_id ->
-             stream_close(handle_id, exec_ref)
+             guarded(component_ref, "close", fn ->
+               stream_close(handle_id, exec_ref)
+             end)
            end}
       }
     }
@@ -115,6 +121,45 @@ defmodule Opus.HttpStreamHandler do
 
   defp create_registry do
     Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+  end
+
+  # The boundary promise every host function keeps: never raise into WASM.
+  # `Opus.HttpHandler.execute/5` and `Opus.StorageHandler.dispatch_caught/6`
+  # both do this; these three did not, and two of them matched hard on
+  # `Agent.start_link/1` and `Task.Supervisor.start_child/2` — both of which
+  # ANSWER `{:error, …}` rather than raising. Under memory pressure, or with
+  # `Opus.TaskSupervisor` mid-restart, that MatchError killed the Wasmex
+  # process and failed the whole execution where a `stream_error` the guest
+  # could act on was available. The message stays generic; the exception goes
+  # to the host log.
+  defp guarded(component_ref, name, fun) do
+    fun.()
+  rescue
+    exception ->
+      Logger.error(
+        "[Opus.HttpStreamHandler] #{component_ref} #{name} raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      encode_error(:stream_error, "The streaming request could not be served.")
+  catch
+    # A refusal `start_stream/4` could not answer in place — the buffer or the
+    # supervised task would not start. Thrown rather than raised so the reason
+    # reaches the log intact.
+    {:stream_start_failed, what, reason} ->
+      Logger.error(
+        "[Opus.HttpStreamHandler] #{component_ref} could not start a stream " <>
+          "(#{what}): #{inspect(reason)}"
+      )
+
+      encode_error(:stream_error, "The streaming request could not be started.")
+
+    :exit, reason ->
+      Logger.error(
+        "[Opus.HttpStreamHandler] #{component_ref} #{name} exited: #{inspect(reason)}"
+      )
+
+      encode_error(:stream_error, "The streaming request could not be served.")
   end
 
   defp stream_request(json_request, edge, limits, ctx, component_ref, exec_ref) do
@@ -190,8 +235,13 @@ defmodule Opus.HttpStreamHandler do
     # streaming task below — because the link is what reaps the buffer when
     # the executor brutal-kills the runtime at timeout; an Agent exits only
     # abnormally if its own anonymous fn raises, which none here can.
-    {:ok, buffer} =
-      Agent.start_link(fn -> %{chunks: :queue.new(), done: false, total_bytes: 0, error: nil} end)
+    buffer =
+      case Agent.start_link(fn ->
+             %{chunks: :queue.new(), done: false, total_bytes: 0, error: nil}
+           end) do
+        {:ok, pid} -> pid
+        {:error, reason} -> throw({:stream_start_failed, :buffer, reason})
+      end
 
     # Start an unlinked but SUPERVISED process for the streaming request:
     # Task.Supervisor.start_child links the task to the supervisor, not to
@@ -199,7 +249,7 @@ defmodule Opus.HttpStreamHandler do
     # Task.async completion message nor a spawn_link EXIT signal (both
     # unhandled by Wasmex), and a bare spawn left the request outside every
     # tree at shutdown.
-    {:ok, pid} =
+    start =
       Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
         try do
           perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size)
@@ -218,6 +268,20 @@ defmodule Opus.HttpStreamHandler do
           end
         end
       end)
+
+    # `start_child/2` ANSWERS `{:error, …}` — a supervisor mid-restart, or at
+    # its child ceiling — so the refusal is read, not matched. The buffer this
+    # stream already opened goes with it; nothing else will reap it, since the
+    # link that would have is to a task that never started.
+    pid =
+      case start do
+        {:ok, pid} ->
+          pid
+
+        {:error, reason} ->
+          Agent.stop(buffer, :normal)
+          throw({:stream_start_failed, :task, reason})
+      end
 
     stream_state = %{
       task_pid: pid,

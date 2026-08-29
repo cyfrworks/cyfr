@@ -133,6 +133,44 @@ defmodule Opus.StorageHandler do
   def execute(json_request, edge, limits, %Context{} = ctx, component_ref, opts \\ []) do
     start_time = System.monotonic_time(:millisecond)
 
+    case bounded_request(json_request, limits) do
+      {:error, :request_too_large} ->
+        emit_telemetry(component_ref, "unknown", :error, start_time)
+
+        encode_error(
+          :request_too_large,
+          "Request exceeds the consented max_request_size for this component."
+        )
+
+      :ok ->
+        parse_bounded_request(json_request, edge, limits, ctx, component_ref, opts, start_time)
+    end
+  end
+
+  # The ENVELOPE ceiling, checked before `Jason.decode/1` sees the string.
+  #
+  # Distinct from `max_request_size`, which bounds the DECODED payload and is
+  # checked after parsing (deliberately — a base64 body is measured as the
+  # bytes it becomes, not the characters it arrives as). Nothing bounded the
+  # raw string, so the guest's linear memory — 64 MiB by default — was the
+  # only limit on what one call could make the host parse, times the
+  # concurrency cap. `emit` is the one import that already had this.
+  #
+  # Generous on purpose: a payload at the consented ceiling must always fit,
+  # base64 overhead (4/3), JSON escaping and the scaffolding included. This
+  # refuses the blob, not the legitimate request.
+  @envelope_overhead 4096
+
+  defp bounded_request(json_request, %Limits{max_request_size: max})
+       when is_binary(json_request) and is_integer(max) and max > 0 do
+    if byte_size(json_request) <= max * 2 + @envelope_overhead,
+      do: :ok,
+      else: {:error, :request_too_large}
+  end
+
+  defp bounded_request(_json_request, _limits), do: :ok
+
+  defp parse_bounded_request(json_request, edge, limits, ctx, component_ref, opts, start_time) do
     result =
       case parse_request(json_request) do
         {:ok, %{action: action} = request} ->
@@ -535,7 +573,7 @@ defmodule Opus.StorageHandler do
     {:ok, %{"path" => "", "exists" => true}}
   end
 
-  defp dispatch("list", %{path: path}, _limits, ctx) do
+  defp dispatch("list", %{path: path}, limits, ctx) do
     segments = normalize_path(path, ctx)
 
     case Arca.list_typed(ctx, segments) do
@@ -549,11 +587,22 @@ defmodule Opus.StorageHandler do
             {name, :file} -> name
           end)
 
-        {:ok,
-         %{
-           "path" => path,
-           "files" => files
-         }}
+        # A listing is a read, and the moduledoc says reads are bounded by
+        # `max_response_size` — but only `read` checked. A scope may hold up
+        # to `@max_scope_files` entries, and this import carries no rate
+        # limit, so an unbounded listing was a cheap way to build a very large
+        # response in host memory and hand it across the WIT boundary.
+        case check_read_size(limits, Enum.join(files, "\n")) do
+          :ok ->
+            {:ok,
+             %{
+               "path" => path,
+               "files" => files
+             }}
+
+          {:error, :response_too_large, message} ->
+            {:error, :response_too_large, message}
+        end
 
       {:error, reason} ->
         {:error, :storage_error, "Failed to list path: #{inspect(reason)}"}

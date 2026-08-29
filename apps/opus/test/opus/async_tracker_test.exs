@@ -109,20 +109,16 @@ defmodule Opus.AsyncTrackerTest do
       GenServer.stop(tracker)
     end
 
-    test "max_tasks=0 means unlimited" do
+    test "max_tasks=0 denies every spawn" do
+      # It used to mean "unlimited": the guard read `max_tasks > 0 and …`, so
+      # zero skipped the check. But the cap is the consented
+      # `max_concurrent_tasks`, and `Sanctum.Authority` reads 0 there as "no
+      # invokes" — the tightest grant a person can write turned into the
+      # loosest the runtime can give.
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 0)
 
-      for i <- 1..20 do
-        {:ok, _} =
-          AsyncTracker.spawn_task(
-            tracker,
-            fn ->
-              Process.sleep(500)
-              i
-            end,
-            "ref#{i}"
-          )
-      end
+      assert {:error, :max_tasks_exceeded} =
+               AsyncTracker.spawn_task(tracker, fn -> :ok end, "ref1")
 
       GenServer.stop(tracker)
     end

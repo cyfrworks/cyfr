@@ -27,6 +27,12 @@ defmodule Locus.BuilderService do
   @max_body_bytes 100_000_000
 
   plug(:match)
+  # BEFORE the parser: the token rides a header, so an unauthenticated caller
+  # is refused without the container reading — let alone JSON-parsing — up to
+  # @max_body_bytes on their say-so. The build slot is taken later still, so
+  # until this ran first the concurrency cap bounded toolchain processes but
+  # not memory, on a port that binds 0.0.0.0.
+  plug(:authenticate)
   plug(Plug.Parsers, parsers: [:json], json_decoder: Jason, length: @max_body_bytes)
   plug(:dispatch)
 
@@ -34,9 +40,24 @@ defmodule Locus.BuilderService do
     send_json(conn, 200, %{ok: true, toolchains: Locus.Builder.available_toolchains()})
   end
 
+  # `/health` is the one route that answers without a token — it names the
+  # toolchains and nothing else. Everything else must present one.
+  defp authenticate(%Plug.Conn{request_path: "/health"} = conn, _opts), do: conn
+
+  defp authenticate(conn, _opts) do
+    case check_token(conn) do
+      :ok ->
+        conn
+
+      {:error, :unauthorized} ->
+        conn
+        |> send_json(401, %{ok: false, error: "unauthorized"})
+        |> halt()
+    end
+  end
+
   post "/build" do
-    with :ok <- check_token(conn),
-         {:ok, source_files, language, target_type} <- decode_request(conn.body_params),
+    with {:ok, source_files, language, target_type} <- decode_request(conn.body_params),
          # The cap is enforced on THIS side of the wire too: the client-side
          # limiter governs one app node, but two app nodes (or anything else
          # holding the token) could otherwise run unbounded concurrent

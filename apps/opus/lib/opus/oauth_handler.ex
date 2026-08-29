@@ -71,10 +71,17 @@ defmodule Opus.OAuthHandler do
   # Internal
   # ============================================================================
 
+  # The WIT declares `result<string, string>`, so both arms must be strings
+  # and neither may raise: a fault here takes the Wasmex process and the guest
+  # gets an opaque failure instead of the `err(…)` it was promised. The
+  # resolver answers in the vault reader's typed vocabulary (atoms and
+  # tuples), so it is rendered here — by shape, never by `inspect`, which
+  # would put the payload it refused into guest hands.
   defp get_access_token(provider, resolver, component_ref, execution_id) do
+    provider = bound_provider(provider)
     start_time = System.monotonic_time(:millisecond)
 
-    case resolver.(provider) do
+    case safe_resolve(resolver, provider) do
       {:ok, token} ->
         Opus.OAuthTokenTracker.put(execution_id, token)
 
@@ -98,11 +105,54 @@ defmodule Opus.OAuthHandler do
             component_ref: component_ref,
             provider: provider,
             status: :error,
-            reason: String.slice(to_string(reason), 0, 100)
+            reason: String.slice(refusal_message(reason), 0, 100)
           }
         )
 
-        {:error, reason}
+        {:error, refusal_message(reason)}
     end
   end
+
+  # Guest input, and it reaches a telemetry tag and a log line. A provider
+  # name is a short identifier; nothing bounded it.
+  @provider_max 128
+
+  defp bound_provider(provider) when is_binary(provider),
+    do: binary_part(provider, 0, min(byte_size(provider), @provider_max))
+
+  defp bound_provider(other), do: other |> to_string() |> bound_provider()
+
+  defp safe_resolve(resolver, provider) do
+    resolver.(provider)
+  rescue
+    e -> {:error, {:resolver_raised, Exception.message(e)}}
+  catch
+    :exit, _reason -> {:error, :resolver_unavailable}
+    _kind, _value -> {:error, :resolver_unavailable}
+  end
+
+  # One sentence per shape. The vault reader's reasons name what went wrong
+  # and sometimes quote the material that did — `{:invalid_payload, payload}`
+  # carries the payload itself — so the guest is told the shape of the
+  # failure and never its contents.
+  defp refusal_message(reason) when is_binary(reason), do: reason
+  defp refusal_message(:anonymous_denied), do: "anonymous callers may not dispense tokens"
+  defp refusal_message(:binding_mismatch), do: "the credential no longer matches its consent"
+  defp refusal_message(:unseal_failed), do: "the credential could not be unsealed"
+  defp refusal_message(:no_oauth_material), do: "this credential carries no OAuth material"
+  defp refusal_message(:resolver_unavailable), do: "the credential store is unavailable"
+  defp refusal_message({:resolver_raised, _}), do: "the credential store is unavailable"
+  defp refusal_message({:entry_unavailable, status}), do: "the credential is #{status}"
+
+  defp refusal_message({:provider_mismatch, provider}),
+    do: "this credential is not for #{bound_provider(provider)}"
+
+  defp refusal_message({:scope_projection_unsatisfiable, _scopes}),
+    do: "the granted scopes do not cover this request"
+
+  defp refusal_message(reason) when is_atom(reason),
+    do: reason |> Atom.to_string() |> String.replace("_", " ")
+
+  defp refusal_message({tag, _detail}) when is_atom(tag), do: refusal_message(tag)
+  defp refusal_message(_other), do: "the token could not be dispensed"
 end

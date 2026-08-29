@@ -1027,6 +1027,29 @@ defmodule Opus.StorageHandlerTest do
 
       assert decoded["error"]["type"] == "response_too_large"
     end
+
+    test "the raw envelope is bounded before it is parsed", %{ctx: ctx, component_ref: ref} do
+      # `max_request_size` bounds the DECODED payload and is checked after
+      # parsing, which is right — but nothing bounded the string itself, so
+      # the guest's linear memory (64 MiB by default) was the only limit on
+      # what one call could make the host `Jason.decode/1`, times the
+      # concurrency cap. The envelope ceiling is deliberately generous: a
+      # payload at the consented ceiling always fits.
+      huge = ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})
+
+      decoded =
+        Jason.decode!(StorageHandler.execute(huge, rw_edge(), small_limits(), ctx, ref))
+
+      assert decoded["error"]["type"] == "request_too_large"
+
+      # ...and a request that merely exceeds the PAYLOAD ceiling still gets
+      # the payload-level refusal, measured after decoding.
+      modest = ~s({"action": "write", "path": "data/y.txt", "content": "#{Base.encode64(String.duplicate("z", 24))}"})
+
+      assert Jason.decode!(StorageHandler.execute(modest, rw_edge(), small_limits(), ctx, ref))[
+               "error"
+             ]["type"] == "request_too_large"
+    end
   end
 
   describe "public quota counts what the guest actually stores" do

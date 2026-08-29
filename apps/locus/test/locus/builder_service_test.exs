@@ -52,6 +52,29 @@ defmodule Locus.BuilderServiceTest do
     assert conn.status == 401
   end
 
+  test "an unauthenticated caller is refused before the body is read" do
+    # The parser admitted 100 MB before the route body ever checked the
+    # token, so anyone who could reach the port could make the container
+    # buffer and JSON-parse that much per request, and the concurrency cap —
+    # taken later still — bounded toolchain processes, not memory. The
+    # endpoint binds 0.0.0.0.
+    big = %{
+      "source_files" => %{"src/lib.rs" => Base.encode64(:binary.copy("x", 4_000_000))},
+      "language" => "rust",
+      "target_type" => "reagent"
+    }
+
+    conn =
+      :post
+      |> Plug.Test.conn("/build", Jason.encode!(big))
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Locus.BuilderService.call(@opts)
+
+    assert conn.status == 401
+    # Nothing was parsed on the way to that answer.
+    assert conn.body_params == %Plug.Conn.Unfetched{aspect: :body_params}
+  end
+
   test "an unconfigured builder refuses every token" do
     # No token configured is a refusal too: an unauthenticated builder is
     # a remote code executor.
