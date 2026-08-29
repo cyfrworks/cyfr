@@ -59,4 +59,58 @@ defmodule Compendium.WITSource do
   @spec files(atom() | String.t()) :: [{[String.t()], binary()}]
   def files(type) when is_atom(type), do: files(Atom.to_string(type))
   def files(type) when is_binary(type), do: Map.get(@wit_files, type, [])
+
+  # The fully-qualified export names each type's world demands, derived at
+  # compile time from the embedded world.wit — `package cyfr:<type>@<ver>`
+  # plus each `export <iface>;` line becomes `cyfr:<type>/<iface>@<ver>`.
+  # Deriving (not hand-listing) means a WIT edit moves this with it; the
+  # runtime's addressing of the same names is pinned by
+  # `Cyfr.WasmConventionDriftTest`.
+  @expected_exports Map.new(@wit_files, fn {type, files} ->
+                      world =
+                        case List.keyfind(files, ["world.wit"], 0) do
+                          {_, content} ->
+                            content
+
+                          nil ->
+                            raise "Compendium.WITSource: wit/#{type}/world.wit is missing — " <>
+                                    "every executable type declares its world there"
+                        end
+
+                      [_, ns, pkg, ver] =
+                        Regex.run(~r/^package\s+([a-z0-9-]+):([a-z0-9-]+)@([0-9.]+);/m, world) ||
+                          raise("Compendium.WITSource: wit/#{type}/world.wit has no package line")
+
+                      exports =
+                        ~r/^\s*export\s+([a-z0-9-]+);/m
+                        |> Regex.scan(world, capture: :all_but_first)
+                        |> Enum.map(fn [iface] -> "#{ns}:#{pkg}/#{iface}@#{ver}" end)
+
+                      if exports == [] do
+                        raise "Compendium.WITSource: wit/#{type}/world.wit exports nothing — " <>
+                                "a world with no export is not executable"
+                      end
+
+                      {type, exports}
+                    end)
+
+  @doc """
+  The export names a conforming component of `type` must carry — what the
+  type's world declares. `[]` for an unknown or non-executable type.
+  """
+  @spec expected_exports(atom() | String.t()) :: [String.t()]
+  def expected_exports(type) when is_atom(type), do: expected_exports(Atom.to_string(type))
+  def expected_exports(type) when is_binary(type), do: Map.get(@expected_exports, type, [])
+
+  @doc """
+  The executable type whose world demands this export name, or `nil` —
+  the reverse lookup an artifact's parsed exports answer type questions
+  with.
+  """
+  @spec type_for_export(String.t()) :: String.t() | nil
+  def type_for_export(export_name) when is_binary(export_name) do
+    Enum.find_value(@expected_exports, fn {type, exports} ->
+      if export_name in exports, do: type
+    end)
+  end
 end

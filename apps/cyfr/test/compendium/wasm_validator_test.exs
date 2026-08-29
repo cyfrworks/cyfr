@@ -13,6 +13,16 @@ defmodule Compendium.WasmValidatorTest do
   # Valid Component Model binary (magic + component preamble)
   @valid_component <<0x00, 0x61, 0x73, 0x6D, 0x0D, 0x00, 0x01, 0x00>>
 
+  # Tracked cargo-component output — the realest component fixtures there are.
+  @seed_formula Path.expand(
+                  "../../../../seed/components/formulas/local/aqua/1.0.5/formula.wasm",
+                  __DIR__
+                )
+  @seed_catalyst Path.expand(
+                   "../../../../seed/components/catalysts/local/http/1.1.0/catalyst.wasm",
+                   __DIR__
+                 )
+
   # Valid WASM with export section
   # This is a minimal WASM module that exports a function named "run"
   # magic + version
@@ -45,7 +55,24 @@ defmodule Compendium.WasmValidatorTest do
       assert String.starts_with?(result.digest, "sha256:")
       assert result.format == :component
       assert result.exports == []
+      assert result.exports_complete == true
       assert result.suggested_type == :reagent
+    end
+
+    test "parses a real component's world exports and suggests its type" do
+      # The seed binaries are tracked source and the realest fixtures there
+      # are: cargo-component output, one world export each.
+      for {path, export, type} <- [
+            {@seed_formula, "cyfr:formula/run@0.1.0", :formula},
+            {@seed_catalyst, "cyfr:catalyst/run@0.1.0", :catalyst}
+          ] do
+        {:ok, result} = WasmValidator.validate(File.read!(path))
+
+        assert result.format == :component
+        assert result.exports == [export]
+        assert result.exports_complete == true
+        assert result.suggested_type == type
+      end
     end
 
     test "validates WASM with exports" do
@@ -181,6 +208,64 @@ defmodule Compendium.WasmValidatorTest do
           <<0x07, 0x20>>
 
       {:error, {:section_truncated, 7, 32, 0}} = WasmValidator.extract_exports(truncated)
+    end
+  end
+
+  describe "validate/2 — the declared type's world" do
+    test "accepts a component that exports its declared world" do
+      assert {:ok, _} = WasmValidator.validate(File.read!(@seed_catalyst), "catalyst")
+      assert {:ok, _} = WasmValidator.validate(File.read!(@seed_formula), "formula")
+    end
+
+    test "refuses a component declared as a type whose world it does not export" do
+      # The whole point: a mistyped artifact must be refused at
+      # registration, before the executor resolves vault material and
+      # builds a catalyst host surface around it.
+      assert {:error, {:wrong_world, message}} =
+               WasmValidator.validate(File.read!(@seed_formula), "catalyst")
+
+      assert message =~ "cyfr:catalyst/run@0.1.0"
+      assert message =~ "cyfr:formula/run@0.1.0"
+
+      assert {:error, {:wrong_world, _}} =
+               WasmValidator.validate(File.read!(@seed_catalyst), "reagent")
+    end
+
+    test "a component exporting nothing is refused for every executable type" do
+      for type <- ~w(catalyst reagent formula) do
+        assert {:error, {:wrong_world, message}} =
+                 WasmValidator.validate(@valid_component, type)
+
+        assert message =~ "exports nothing"
+      end
+    end
+
+    test "an export section the parser cannot walk refuses, fail-closed" do
+      # A component whose export section carries an ascribed extern type
+      # (option byte 0x01) — this parser does not walk externdesc, so the
+      # world cannot be verified and registration must refuse rather than
+      # trust a partial answer.
+      name = "cyfr:catalyst/run@0.1.0"
+
+      # vec count 1, tag 0x00, name, sort instance (0x05), idx 0, opt 0x01
+      export_section_body =
+        <<1, 0x00, byte_size(name), name::binary, 0x05, 0, 0x01, 0xFF>>
+
+      binary =
+        @valid_component <>
+          <<11, byte_size(export_section_body), export_section_body::binary>>
+
+      {:ok, result} = WasmValidator.validate(binary)
+      refute result.exports_complete
+
+      assert {:error, {:unverifiable_exports, message}} =
+               WasmValidator.validate(binary, "catalyst")
+
+      assert message =~ "could not be fully parsed"
+    end
+
+    test "core modules pass untouched — the runtime refuses them anyway" do
+      assert {:ok, %{format: :core_module}} = WasmValidator.validate(@valid_wasm, "catalyst")
     end
   end
 end

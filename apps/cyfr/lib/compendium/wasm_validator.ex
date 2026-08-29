@@ -17,7 +17,11 @@ defmodule Compendium.WasmValidator do
 
   ## Component Type Detection
 
-  Based on exports, the validator can suggest a component type:
+  For component-model binaries the suggested type is read from the world
+  the binary actually exports (`Compendium.WITSource.type_for_export/1`) —
+  and `validate/2` asserts the declared type's world outright. For core
+  modules (which `Opus.Runtime` refuses to execute) a best-effort export
+  heuristic remains:
   - `catalyst` - Has I/O-related exports (http, socket capabilities)
   - `reagent` - Pure compute, no I/O
   - `formula` - Has `execute` export (workflow orchestration)
@@ -109,21 +113,95 @@ defmodule Compendium.WasmValidator do
           end
 
         :component ->
+          # The component's top-level export names — parsed from the
+          # component-model export sections, so the answer is the world the
+          # binary actually implements, not a guess.
+          {exports, complete?} = extract_component_exports(bytes)
+
           {:ok,
            %{
              valid: true,
              digest: digest,
              size: byte_size(bytes),
-             exports: [],
-             suggested_type: :reagent,
+             exports: exports,
+             suggested_type: component_suggested_type(exports),
              version: 1,
-             format: :component
+             format: :component,
+             exports_complete: complete?
            }}
       end
     end
   end
 
   def validate(_), do: {:error, :not_binary}
+
+  @doc """
+  `validate/1`, then assert the binary implements the world its declared
+  type demands.
+
+  Only component-model binaries are asserted — a core module cannot
+  execute at all (`Opus.Runtime` refuses it), so its registration stays a
+  parse-and-store. The point of asserting here, at registration, is
+  ordering: the executor resolves vault material and builds the full host
+  import surface BEFORE the missing export would surface as a generic
+  call failure, so a mistyped or hostile-typed artifact must be refused
+  before it ever reaches that pipeline.
+
+  Fail-closed on an export section this parser cannot walk: refusing a
+  novel encoding with an honest sentence beats registering an artifact
+  whose world nothing verified.
+  """
+  @spec validate(binary(), String.t() | atom()) :: {:ok, map()} | {:error, term()}
+  def validate(bytes, expected_type) do
+    type = to_string(expected_type)
+
+    with {:ok, validation} <- validate(bytes) do
+      check_declared_world(validation, type)
+    end
+  end
+
+  defp check_declared_world(%{format: :core_module} = validation, _type), do: {:ok, validation}
+
+  defp check_declared_world(%{format: :component} = validation, type) do
+    case Compendium.WITSource.expected_exports(type) do
+      [] ->
+        # Not an executable type (or unknown): nothing to demand.
+        {:ok, validation}
+
+      expected ->
+        cond do
+          not validation.exports_complete ->
+            {:error,
+             {:unverifiable_exports,
+              "the component's export section could not be fully parsed, so the " <>
+                "#{type} world (#{Enum.join(expected, ", ")}) cannot be verified"}}
+
+          Enum.all?(expected, &(&1 in validation.exports)) ->
+            {:ok, validation}
+
+          true ->
+            {:error,
+             {:wrong_world,
+              "declared type #{type} demands #{Enum.join(expected, ", ")} but the " <>
+                "binary exports #{format_exports(validation.exports)}"}}
+        end
+    end
+  end
+
+  defp format_exports([]), do: "nothing"
+  defp format_exports(exports), do: Enum.join(exports, ", ")
+
+  # The type whose world the parsed exports satisfy — an honest suggestion
+  # now that component exports are read, where this used to hardcode
+  # :reagent for every component binary.
+  defp component_suggested_type(exports) do
+    exports
+    |> Enum.find_value(&Compendium.WITSource.type_for_export/1)
+    |> case do
+      nil -> :reagent
+      type -> String.to_existing_atom(type)
+    end
+  end
 
   @doc """
   Quick validation check - only verifies magic bytes and size.
@@ -147,10 +225,11 @@ defmodule Compendium.WasmValidator do
   @doc """
   Suggest component type based on exported functions.
 
-  Best-effort heuristic for core modules only. Component Model binaries
-  always get `:reagent` as the suggested type (see `validate/1`). The
-  caller should treat this as a hint — the definitive type is set by the
-  user via the `target_type` parameter at compile/publish time.
+  Best-effort heuristic for CORE MODULES only — component-model binaries
+  answer from the world they export (see `validate/1`), which is a fact,
+  not a guess. The caller should treat this as a hint — the definitive
+  type is set by the user via the `target_type` parameter at
+  compile/publish time, and `validate/2` holds a component to it.
   """
   def suggest_type(exports) when is_list(exports) do
     cond do
@@ -312,6 +391,87 @@ defmodule Compendium.WasmValidator do
       _ -> {:error, :invalid_export_entry}
     end
   end
+
+  # ============================================================================
+  # Component-Model Export Extraction
+  # ============================================================================
+
+  # Component-model export section id (component sections are their own
+  # id space — 11 is `export`, unrelated to the core module's 7).
+  @component_section_export 11
+
+  # Walk the component's top-level sections and collect the export names
+  # from every export section. Returns `{names, complete?}` — `complete?`
+  # is false when any record used an encoding this parser does not walk
+  # (an ascribed extern type, an unknown tag), so a caller asserting a
+  # world can fail closed instead of trusting a partial answer.
+  #
+  # Grammar (confirmed against cargo-component output):
+  #   export  ::= tag:byte(0x00|0x01) len:leb name:bytes sort idx:leb opt:byte
+  #   sort    ::= 0x00 core-sort:byte | 0x01..0x05
+  #   opt     ::= 0x00 (no ascribed type) | 0x01 externdesc (not walked)
+  defp extract_component_exports(<<_header::binary-size(8), sections::binary>>) do
+    walk_component_sections(sections, [], true)
+  end
+
+  defp walk_component_sections(<<>>, names, complete?), do: {Enum.reverse(names), complete?}
+
+  defp walk_component_sections(<<id::8, rest::binary>>, names, complete?) do
+    case parse_leb128_u32(rest) do
+      {:ok, size, remaining} when byte_size(remaining) >= size ->
+        <<content::binary-size(^size), next::binary>> = remaining
+
+        {names, complete?} =
+          if id == @component_section_export do
+            parse_component_export_section(content, names, complete?)
+          else
+            {names, complete?}
+          end
+
+        walk_component_sections(next, names, complete?)
+
+      _truncated_or_bad_leb ->
+        {Enum.reverse(names), false}
+    end
+  end
+
+  defp walk_component_sections(_invalid, names, _complete?), do: {Enum.reverse(names), false}
+
+  defp parse_component_export_section(content, names, complete?) do
+    case parse_leb128_u32(content) do
+      {:ok, count, rest} -> parse_component_exports_vec(rest, count, names, complete?)
+      {:error, _} -> {names, false}
+    end
+  end
+
+  defp parse_component_exports_vec(_rest, 0, names, complete?), do: {names, complete?}
+
+  defp parse_component_exports_vec(<<tag::8, rest::binary>>, count, names, complete?)
+       when tag in [0x00, 0x01] do
+    with {:ok, len, rest} <- parse_leb128_u32(rest),
+         true <- byte_size(rest) >= len,
+         <<name::binary-size(^len), rest::binary>> <- rest,
+         {:ok, rest} <- skip_component_sortidx(rest),
+         <<0x00, rest::binary>> <- rest do
+      parse_component_exports_vec(rest, count - 1, [name | names], complete?)
+    else
+      # An ascribed externdesc (opt byte 0x01) or any shape surprise: keep
+      # what parsed, mark incomplete — later records cannot be trusted.
+      _ -> {names, false}
+    end
+  end
+
+  defp parse_component_exports_vec(_rest, _count, names, _complete?), do: {names, false}
+
+  defp skip_component_sortidx(<<0x00, _core_sort::8, rest::binary>>) do
+    with {:ok, _idx, rest} <- parse_leb128_u32(rest), do: {:ok, rest}
+  end
+
+  defp skip_component_sortidx(<<sort::8, rest::binary>>) when sort in 0x01..0x05 do
+    with {:ok, _idx, rest} <- parse_leb128_u32(rest), do: {:ok, rest}
+  end
+
+  defp skip_component_sortidx(_), do: {:error, :unknown_sort}
 
   # Parse unsigned LEB128 encoded 32-bit integer
   defp parse_leb128_u32(binary, result \\ 0, shift \\ 0)

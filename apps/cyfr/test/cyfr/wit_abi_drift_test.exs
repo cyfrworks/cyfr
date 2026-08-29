@@ -120,4 +120,28 @@ defmodule Cyfr.WitAbiDriftTest do
            A component built against that world will fail to instantiate.
            """
   end
+
+  # The registration gate (`Compendium.WasmValidator.validate/2`) demands
+  # the exports `Compendium.WITSource.expected_exports/1` derives from the
+  # world files; the engine calls a component through the same names
+  # (`Opus.Runtime.execute_with_convention/3`). If the two drift, either
+  # registration refuses components the engine could run, or the engine
+  # calls an export registration never verified — both wrong.
+  test "the worlds registration demands are the ones the engine calls" do
+    runtime = File.read!(Path.join(@opus_lib, "opus/runtime.ex"))
+
+    for type <- Sanctum.ComponentRef.executable_types() do
+      expected = Compendium.WITSource.expected_exports(type)
+
+      assert expected != [],
+             "WITSource derives no expected exports for #{type} — " <>
+               "the world.wit parse has drifted"
+
+      for name <- expected do
+        assert String.contains?(runtime, ~s("#{name}")),
+               "registration demands #{name} for #{type}, but Opus.Runtime " <>
+                 "never addresses it — the call convention and the gate have drifted"
+      end
+    end
+  end
 end

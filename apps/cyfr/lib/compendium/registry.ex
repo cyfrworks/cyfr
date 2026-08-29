@@ -97,7 +97,10 @@ defmodule Compendium.Registry do
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          :ok <- reject_tincture_publish_bytes(component_type),
-         {:ok, validation} <- Validator.validate(wasm_bytes),
+         # Asserts the binary implements its declared type's world — the
+         # executor resolves vault material before a missing export would
+         # otherwise surface, so the mismatch must refuse here.
+         {:ok, validation} <- Validator.validate(wasm_bytes, component_type),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
          :ok <- validate_publish_origin(publisher, Keyword.get(opts, :origin)),
@@ -1367,8 +1370,11 @@ defmodule Compendium.Registry do
   end
 
   defp validate_artifact_arca(ctx, segments, component_type) do
+    # The scan ingress asserts the declared world too — same reasoning as
+    # publish_bytes: refuse a mistyped artifact before the executor builds
+    # a host surface around resolved credentials for it.
     with {:ok, wasm_bytes} <- read_wasm_binary_arca(ctx, segments, component_type),
-         {:ok, validation} <- Validator.validate(wasm_bytes) do
+         {:ok, validation} <- Validator.validate(wasm_bytes, component_type) do
       {:ok, validation}
     end
   end
