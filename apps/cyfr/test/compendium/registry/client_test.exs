@@ -153,7 +153,7 @@ defmodule Compendium.Registry.ClientTest do
             "registry" => "ghcr.io"
           })
 
-        assert msg =~ "only supports registry.cyfr.run"
+        assert err_msg(msg) =~ "only supports registry.cyfr.run"
       end
     end
 
@@ -169,8 +169,8 @@ defmodule Compendium.Registry.ClientTest do
         # OCI protocol instead.
         case result do
           {:error, msg} ->
-            refute msg =~ "cyfr.run discover failed"
-            refute msg =~ "cyfr.run search failed"
+            refute err_msg(msg) =~ "cyfr.run discover failed"
+            refute err_msg(msg) =~ "cyfr.run search failed"
 
           {:ok, _} ->
             :ok
@@ -187,7 +187,7 @@ defmodule Compendium.Registry.ClientTest do
           })
 
         case result do
-          {:error, msg} -> refute msg =~ "single-user"
+          {:error, msg} -> refute err_msg(msg) =~ "single-user"
           {:ok, _} -> :ok
         end
       end
@@ -870,7 +870,7 @@ defmodule Compendium.Registry.ClientTest do
           "reference" => "c:alice.widget:1.0.0"
         })
 
-      assert msg =~ "reason"
+      assert err_msg(msg) =~ "reason"
     end
 
     test "rejects empty reason", %{ctx: ctx} do
@@ -881,7 +881,7 @@ defmodule Compendium.Registry.ClientTest do
           "reason" => ""
         })
 
-      assert msg =~ "reason"
+      assert err_msg(msg) =~ "reason"
     end
 
     test "rejects unpinned ref (no version)", %{ctx: ctx} do
@@ -892,7 +892,7 @@ defmodule Compendium.Registry.ClientTest do
           "reason" => "use v2"
         })
 
-      assert msg =~ "pinned version"
+      assert err_msg(msg) =~ "pinned version"
     end
   end
 
@@ -915,7 +915,7 @@ defmodule Compendium.Registry.ClientTest do
           "details" => "d"
         })
 
-      assert msg =~ "category"
+      assert err_msg(msg) =~ "category"
     end
 
     test "rejects missing target", %{ctx: ctx} do
@@ -926,7 +926,7 @@ defmodule Compendium.Registry.ClientTest do
           "details" => "d"
         })
 
-      assert msg =~ "target"
+      assert err_msg(msg) =~ "target"
     end
 
     test "rejects missing details", %{ctx: ctx} do
@@ -937,14 +937,14 @@ defmodule Compendium.Registry.ClientTest do
           "target_namespace" => "alice"
         })
 
-      assert msg =~ "details"
+      assert err_msg(msg) =~ "details"
     end
   end
 
   describe "MCP component.yank" do
     test "rejects missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "yank"})
-      assert msg =~ "reference"
+      assert err_msg(msg) =~ "reference"
     end
 
     test "rejects unpinned ref", %{ctx: ctx} do
@@ -954,7 +954,7 @@ defmodule Compendium.Registry.ClientTest do
           "reference" => "c:alice.widget"
         })
 
-      assert msg =~ "pinned version"
+      assert err_msg(msg) =~ "pinned version"
     end
   end
 
@@ -986,5 +986,13 @@ defmodule Compendium.Registry.ClientTest do
         assert {:error, _} = result
       end
     end
+  end
+
+  # Providers answer typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

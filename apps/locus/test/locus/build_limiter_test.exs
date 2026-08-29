@@ -165,10 +165,8 @@ defmodule Locus.BuildLimiterTest do
 
     ctx = Sanctum.TestContext.local()
 
-    assert {:error, message} =
+    assert {:error, {:not_found, "Build", "build_nope"}} =
              Locus.MCP.handle("build", ctx, %{"action" => "status", "build_id" => "build_nope"})
-
-    assert message =~ "Unknown build"
   end
 
   test "the sweep reclaims only dead holders; a live wedged holder keeps its slot" do

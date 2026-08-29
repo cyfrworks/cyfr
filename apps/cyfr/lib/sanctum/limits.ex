@@ -171,7 +171,9 @@ defmodule Sanctum.Limits do
   end
 
   def new(other) do
-    {:error, {:invalid_limit, :input, "expected a map, got: #{inspect(other)}"}}
+    {:error,
+     {:invalid_limit, :input,
+      "expected a map, got: #{inspect(Sanctum.Sanitizer.sanitize(other))}"}}
   end
 
   @doc """
@@ -343,7 +345,9 @@ defmodule Sanctum.Limits do
 
     cond do
       map_size(value) != 2 ->
-        {:error, "must have exactly requests and window, got: #{inspect(value)}"}
+        {:error,
+         "must have exactly requests and window, got: " <>
+           inspect(Sanctum.Sanitizer.sanitize(value))}
 
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}

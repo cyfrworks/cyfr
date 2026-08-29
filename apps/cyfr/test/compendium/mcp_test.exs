@@ -194,7 +194,7 @@ defmodule Compendium.MCPTest do
 
     test "returns error for non-existent component", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "compendium://components/r:local.nonexistent:1.0.0")
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "refuses anonymous reads before tenant resolution", %{ctx: ctx} do
@@ -222,7 +222,7 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} =
                MCP.read(anon, "compendium://components/r:local.anon-read:1.0.0")
 
-      assert msg =~ "Authentication required"
+      assert err_msg(msg) =~ "Authentication required"
 
       assert {:error, _} =
                MCP.read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
@@ -254,7 +254,7 @@ defmodule Compendium.MCPTest do
 
     test "returns error for non-existent asset", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.nocomp:1.0.0/missing.txt")
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "a hostile asset path is a typed refusal, never a raise", %{ctx: ctx} do
@@ -275,17 +275,17 @@ defmodule Compendium.MCPTest do
         assert {:error, msg} =
                  MCP.read(ctx, "compendium://assets/r:local.asset-guard:1.0.0/#{hostile}")
 
-        assert msg =~ "Invalid asset path"
+        assert err_msg(msg) =~ "Invalid asset path"
       end
 
       # A path of only empty segments refuses as empty, not as a read.
       assert {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.asset-guard:1.0.0///")
-      assert msg =~ "Invalid asset path"
+      assert err_msg(msg) =~ "Invalid asset path"
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "compendium://unknown")
-      assert msg =~ "Unknown resource"
+      assert err_msg(msg) =~ "Unknown resource"
     end
   end
 
@@ -421,7 +421,7 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.example-tool:1.0.0"
         })
 
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "inspect returns not-found without cyfr.run fallback", %{ctx: ctx} do
@@ -431,13 +431,13 @@ defmodule Compendium.MCPTest do
           "reference" => "r:cyfr.data-processor:1.0.0"
         })
 
-      assert msg =~ "not found"
-      refute msg =~ "cyfr.run"
+      assert err_msg(msg) =~ "not found"
+      refute err_msg(msg) =~ "cyfr.run"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "inspect"})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
 
     test "inspect with version-less ref to nonexistent component returns error", %{ctx: ctx} do
@@ -447,7 +447,7 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.nonexistent-component"
         })
 
-      assert msg =~ "nonexistent-component"
+      assert err_msg(msg) =~ "nonexistent-component"
     end
 
     test "inspect with pinned ref to nonexistent component falls through to not-found", %{
@@ -459,7 +459,7 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.nonexistent-component:1.0.0"
         })
 
-      assert msg =~ "not found" or msg =~ "Component not found"
+      assert err_msg(msg) =~ "not found" or err_msg(msg) =~ "Component not found"
     end
 
     test "inspect with latest reference resolves to semantic version", %{ctx: ctx} do
@@ -496,13 +496,13 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.example-tool:1.0.0"
         })
 
-      assert msg =~ "Cannot pull local components"
-      assert msg =~ "cyfr register"
+      assert err_msg(msg) =~ "Cannot pull local components"
+      assert err_msg(msg) =~ "cyfr register"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "pull"})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
 
     test "rejects an OCI pull from a non-configured registry host", %{ctx: ctx} do
@@ -512,8 +512,8 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
         })
 
-      assert msg =~ "only supports registry.cyfr.run"
-      assert msg =~ "ghcr.io"
+      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "ghcr.io"
     end
 
     test "single-user pull failure returns a binary error with the reference", %{ctx: ctx} do
@@ -544,8 +544,8 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
         })
 
-      assert msg =~ "only supports registry.cyfr.run"
-      assert msg =~ "ghcr.io"
+      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "ghcr.io"
     end
 
     test "rejects discover against a non-configured registry host", %{ctx: ctx} do
@@ -555,8 +555,8 @@ defmodule Compendium.MCPTest do
           "registry" => "ghcr.io"
         })
 
-      assert msg =~ "only supports registry.cyfr.run"
-      assert msg =~ "ghcr.io"
+      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "ghcr.io"
     end
 
     test "discover with no registry argument uses the configured registry", %{ctx: ctx} do
@@ -566,7 +566,7 @@ defmodule Compendium.MCPTest do
         })
 
       case result do
-        {:error, msg} -> refute msg =~ "Missing required argument: registry"
+        {:error, msg} -> refute err_msg(msg) =~ "Missing required argument: registry"
         {:ok, _} -> :ok
       end
     end
@@ -579,7 +579,7 @@ defmodule Compendium.MCPTest do
           "reference" => "ghcr.io/"
         })
 
-      assert msg =~ "Invalid OCI reference"
+      assert err_msg(msg) =~ "Invalid OCI reference"
     end
   end
 
@@ -595,8 +595,8 @@ defmodule Compendium.MCPTest do
           "reference" => "c:stripe.stripe:1.0.0"
         })
 
-      assert msg =~ "Only components in the local namespace"
-      assert msg =~ "namespace 'stripe'"
+      assert err_msg(msg) =~ "Only components in the local namespace"
+      assert err_msg(msg) =~ "namespace 'stripe'"
     end
 
     test "returns error when the version is missing", %{ctx: ctx} do
@@ -606,7 +606,7 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.my-tool"
         })
 
-      assert msg =~ "Version is required"
+      assert err_msg(msg) =~ "Version is required"
     end
 
     test "push of a local component without a claimed namespace asks the user to claim one",
@@ -621,9 +621,9 @@ defmodule Compendium.MCPTest do
       # namespace, not the literal "local". With no namespace claimed the error
       # must guide the user to claim one — never the old, misleading
       # "No push token for namespace 'local'".
-      refute msg =~ "No push token for namespace 'local'"
-      assert msg =~ "personal namespace"
-      assert msg =~ "cyfr login"
+      refute err_msg(msg) =~ "No push token for namespace 'local'"
+      assert err_msg(msg) =~ "personal namespace"
+      assert err_msg(msg) =~ "cyfr login"
     end
 
     test "push of a local component resolves the caller's claimed personal namespace",
@@ -659,9 +659,9 @@ defmodule Compendium.MCPTest do
 
       # Resolution succeeded (no claim/credential error); the push then fails only
       # because the local component itself was never built in this test.
-      refute msg =~ "personal namespace"
-      refute msg =~ "No push token"
-      assert msg =~ "Component not found locally"
+      refute err_msg(msg) =~ "personal namespace"
+      refute err_msg(msg) =~ "No push token"
+      assert err_msg(msg) =~ "Component not found locally"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
@@ -670,7 +670,7 @@ defmodule Compendium.MCPTest do
           "action" => "push"
         })
 
-      assert msg =~ "Missing required" and msg =~ "reference"
+      assert err_msg(msg) =~ "Missing required" and err_msg(msg) =~ "reference"
     end
 
     test "rejects a push to a non-cyfr.run registry", %{ctx: ctx} do
@@ -681,8 +681,8 @@ defmodule Compendium.MCPTest do
           "registry" => "ghcr.io"
         })
 
-      assert msg =~ "only supports registry.cyfr.run"
-      assert msg =~ "ghcr.io"
+      assert err_msg(msg) =~ "only supports registry.cyfr.run"
+      assert err_msg(msg) =~ "ghcr.io"
     end
   end
 
@@ -902,12 +902,12 @@ defmodule Compendium.MCPTest do
           "digest" => "sha256:nonexistent"
         })
 
-      assert msg =~ "not found" or msg =~ "Blob"
+      assert err_msg(msg) =~ "not found" or err_msg(msg) =~ "Blob"
     end
 
     test "returns error for missing digest", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "get_blob"})
-      assert msg =~ "Missing required" or msg =~ "digest"
+      assert err_msg(msg) =~ "Missing required" or err_msg(msg) =~ "digest"
     end
 
     test "has digest property in tool schema" do
@@ -1071,7 +1071,7 @@ defmodule Compendium.MCPTest do
 
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "setup_plan"})
-      assert msg =~ "Missing required argument: reference"
+      assert err_msg(msg) =~ "Missing required argument: reference"
     end
 
     test "returns error for nonexistent component", %{ctx: ctx} do
@@ -1081,7 +1081,7 @@ defmodule Compendium.MCPTest do
           "reference" => "catalyst:local.nonexistent:99.0.0"
         })
 
-      assert msg =~ "not found" or msg =~ "Component"
+      assert err_msg(msg) =~ "not found" or err_msg(msg) =~ "Component"
     end
   end
 
@@ -1214,7 +1214,7 @@ defmodule Compendium.MCPTest do
           "reference" => "r:local.remove-test:1.0.0"
         })
 
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "removes a filesystem component", %{ctx: ctx} do
@@ -1250,12 +1250,12 @@ defmodule Compendium.MCPTest do
           "reference" => "r:local.nonexistent-remove:1.0.0"
         })
 
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "delete"})
-      assert msg =~ "Missing required argument: reference"
+      assert err_msg(msg) =~ "Missing required argument: reference"
     end
 
     test "returns error for invalid reference", %{ctx: ctx} do
@@ -1265,7 +1265,7 @@ defmodule Compendium.MCPTest do
           "reference" => "!!invalid!!"
         })
 
-      assert msg =~ "not found" or msg =~ "Invalid reference"
+      assert err_msg(msg) =~ "not found" or err_msg(msg) =~ "Invalid reference"
     end
   end
 
@@ -1276,12 +1276,12 @@ defmodule Compendium.MCPTest do
   describe "component tool - invalid action" do
     test "returns error for invalid action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid component action"
+      assert err_msg(msg) =~ "Invalid component action"
     end
 
     test "returns error for missing action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -1416,7 +1416,7 @@ defmodule Compendium.MCPTest do
                  "tool_policy" => %{"files.delete" => "block"}
                })
 
-      assert msg =~ ~s{use "ask" or "auto"}
+      assert err_msg(msg) =~ ~s{use "ask" or "auto"}
     end
 
     test "update rejects malformed tool_policy keys", %{ctx: ctx} do
@@ -1427,7 +1427,7 @@ defmodule Compendium.MCPTest do
                  "tool_policy" => %{"no-dot-here" => "auto"}
                })
 
-      assert msg =~ "Invalid tool_policy key"
+      assert err_msg(msg) =~ "Invalid tool_policy key"
     end
 
     test "update accepts ask/auto and the bare native_search key", %{ctx: ctx} do
@@ -1486,13 +1486,13 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "nonexistent"})
 
-      assert msg =~ "Unknown agent or guide"
-      assert msg =~ "nonexistent"
+      assert err_msg(msg) =~ "Unknown agent or guide"
+      assert err_msg(msg) =~ "nonexistent"
     end
 
     test "get without name returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "get"})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -1659,8 +1659,8 @@ defmodule Compendium.MCPTest do
 
       # Now unmaterialized and shipped: delete refuses, disable is the verb.
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "delete", "name" => "aqua_web"})
-      assert msg =~ "cannot be deleted"
-      assert msg =~ "disabled=true"
+      assert err_msg(msg) =~ "cannot be deleted"
+      assert err_msg(msg) =~ "disabled=true"
 
       {:ok, _} =
         MCP.handle("aqua", ctx, %{"action" => "update", "name" => "aqua_web", "disabled" => true})
@@ -1688,19 +1688,19 @@ defmodule Compendium.MCPTest do
       refute Map.has_key?(result, :restored)
 
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "my_agent"})
-      assert msg =~ "Unknown agent"
+      assert err_msg(msg) =~ "Unknown agent"
     end
   end
 
   describe "aqua tool - invalid action" do
     test "returns error for invalid action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid aqua action"
+      assert err_msg(msg) =~ "Invalid aqua action"
     end
 
     test "returns error for missing action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("aqua", ctx, %{})
-      assert msg =~ "Invalid aqua action" or msg =~ "Missing required"
+      assert err_msg(msg) =~ "Invalid aqua action" or err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -1790,7 +1790,7 @@ defmodule Compendium.MCPTest do
           "reference" => "formula:local.test-formula:0.1.0"
         })
 
-      assert msg =~ "Cannot pull local components"
+      assert err_msg(msg) =~ "Cannot pull local components"
     end
   end
 
@@ -1847,7 +1847,7 @@ defmodule Compendium.MCPTest do
           "reference" => "reagent:local.test:0.1.0"
         })
 
-      assert msg =~ "person's act"
+      assert err_msg(msg) =~ "person's act"
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
@@ -1873,7 +1873,7 @@ defmodule Compendium.MCPTest do
   describe "unknown tool" do
     test "returns error for unknown tool", %{ctx: ctx} do
       {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
-      assert msg =~ "Unknown tool"
+      assert err_msg(msg) =~ "Unknown tool"
     end
   end
 
@@ -1953,11 +1953,11 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} = MCP.handle("registry", ctx, %{"action" => "legal_version"})
       assert is_binary(msg)
       # Must NOT be an inspected struct dump.
-      refute msg =~ "%Compendium.OCI.Errors{"
+      refute err_msg(msg) =~ "%Compendium.OCI.Errors{"
       # Must include the canonical "(HTTP 503, registry_unavailable)" suffix
       # produced by Errors.to_string/1.
-      assert msg =~ "503"
-      assert msg =~ "registry_unavailable"
+      assert err_msg(msg) =~ "503"
+      assert err_msg(msg) =~ "registry_unavailable"
     end
 
     test "registry.probe returns structured needs_policy_acceptance map on 412",
@@ -2002,8 +2002,16 @@ defmodule Compendium.MCPTest do
                })
 
       assert is_binary(msg)
-      refute msg =~ "%Compendium.OCI.Errors{"
-      assert msg =~ "403"
+      refute err_msg(msg) =~ "%Compendium.OCI.Errors{"
+      assert err_msg(msg) =~ "403"
     end
+  end
+
+  # Providers answer typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

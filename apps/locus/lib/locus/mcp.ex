@@ -105,7 +105,8 @@ defmodule Locus.MCP do
       when is_binary(wasm_base64) do
     if byte_size(wasm_base64) > @max_base64_size do
       {:error,
-       "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}
+       {:invalid_argument,
+        "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}}
     else
       case Base.decode64(wasm_base64) do
         {:ok, bytes} ->
@@ -125,13 +126,13 @@ defmodule Locus.MCP do
           end
 
         :error ->
-          {:error, "Invalid base64 encoding"}
+          {:error, {:invalid_argument, "Invalid base64 encoding"}}
       end
     end
   end
 
   def handle("build", _ctx, %{"action" => "validate"}) do
-    {:error, "Missing required argument: wasm_base64"}
+    {:error, {:invalid_argument, "Missing required argument: wasm_base64"}}
   end
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
@@ -149,24 +150,26 @@ defmodule Locus.MCP do
       when is_binary(build_id) do
     case Cyfr.BuildRecords.get(ctx, build_id) do
       {:ok, record} -> {:ok, record}
-      _ -> {:error, "Unknown build: #{build_id}"}
+      _ -> {:error, {:not_found, "Build", build_id}}
     end
   end
 
   def handle("build", _ctx, %{"action" => "status"}) do
-    {:error, "Missing required argument: build_id"}
+    {:error, {:invalid_argument, "Missing required argument: build_id"}}
   end
 
   def handle("build", _ctx, %{"action" => "compile"}) do
-    {:error, "Missing required argument: reference"}
+    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   def handle("build", _ctx, %{"action" => action}) do
-    {:error, "Invalid build action: #{action}. Use: compile, validate, toolchains, or status"}
+    {:error,
+     {:invalid_argument,
+      "Invalid build action: #{action}. Use: compile, validate, toolchains, or status"}}
   end
 
   def handle("build", _ctx, _args) do
-    {:error, "Missing required argument: action"}
+    {:error, {:invalid_argument, "Missing required argument: action"}}
   end
 
   def handle(tool, _ctx, _args) do
@@ -329,7 +332,8 @@ defmodule Locus.MCP do
              }}
 
           {:error, reason} ->
-            {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
+            Logger.error("[Locus.MCP] compiled artifact save failed: #{inspect(reason)}")
+            {:error, {:unavailable, "The build store"}}
         end
       end
 
@@ -371,7 +375,7 @@ defmodule Locus.MCP do
         end
 
       {:error, reason} ->
-        {:error, "Invalid reference: #{reason}"}
+        {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
     end
   end
 
@@ -475,7 +479,7 @@ defmodule Locus.MCP do
         {:error, "Compilation failed (exit #{exit_code}): #{output}"}
 
       {:error, :compilation_timeout} ->
-        {:error, "Compilation timed out"}
+        {:error, {:timeout, "Compilation timed out"}}
 
       {:error, {:toolchain_not_found, lang}} ->
         {:error,
@@ -485,7 +489,11 @@ defmodule Locus.MCP do
         {:error, "Builder: #{message}"}
 
       {:error, :builder_unreachable} ->
-        {:error, "The builder service is unreachable — check CYFR_BUILDER_URL and the container"}
+        Logger.warning(
+          "[Locus.MCP] builder unreachable — check CYFR_BUILDER_URL and the container"
+        )
+
+        {:error, {:unavailable, "The builder service"}}
 
       {:error, :builder_unauthorized} ->
         {:error,
@@ -495,7 +503,8 @@ defmodule Locus.MCP do
         {:error, "The builder's response exceeded the size ceiling — the build was aborted"}
 
       {:error, reason} ->
-        {:error, "Compilation error: #{inspect(reason)}"}
+        Logger.error("[Locus.MCP] compilation failed unexpectedly: #{inspect(reason)}")
+        {:error, "Compilation failed for an unexpected reason — see the server log"}
     end
   end
 

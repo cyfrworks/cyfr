@@ -109,7 +109,7 @@ defmodule Sanctum.MCPTest do
 
     test "returns error for unknown resource", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "sanctum://unknown")
-      assert msg =~ "Unknown resource"
+      assert err_msg(msg) =~ "Unknown resource"
     end
   end
 
@@ -138,7 +138,7 @@ defmodule Sanctum.MCPTest do
     test "whoami returns error when not authenticated" do
       ctx = %Context{authenticated: false, permissions: MapSet.new()}
       {:error, msg} = MCP.handle("session", ctx, %{"action" => "whoami"})
-      assert msg =~ "Not authenticated"
+      assert err_msg(msg) =~ "Not authenticated"
     end
 
     test "whoami surfaces :email from Context when present" do
@@ -193,12 +193,12 @@ defmodule Sanctum.MCPTest do
 
     test "logout refuses when an API key authenticated the call", %{ctx: ctx} do
       {:error, msg} = MCP.handle("session", ctx, %{"action" => "logout"})
-      assert msg =~ "No session to log out"
+      assert err_msg(msg) =~ "No session to log out"
     end
 
     test "invalid action returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("session", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid session action"
+      assert err_msg(msg) =~ "Invalid session action"
     end
   end
 
@@ -211,7 +211,7 @@ defmodule Sanctum.MCPTest do
   describe "secret tool retired" do
     test "the secret tool is no longer routable", %{ctx: ctx} do
       {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list"})
-      assert msg =~ "Unknown tool"
+      assert err_msg(msg) =~ "Unknown tool"
     end
   end
 
@@ -245,7 +245,7 @@ defmodule Sanctum.MCPTest do
       MCP.handle("key", ctx, %{"action" => "create", "name" => "dup-key"})
 
       {:error, msg} = MCP.handle("key", ctx, %{"action" => "create", "name" => "dup-key"})
-      assert msg =~ "already exists"
+      assert err_msg(msg) =~ "already exists"
     end
 
     test "revoke a key", %{ctx: ctx} do
@@ -271,12 +271,12 @@ defmodule Sanctum.MCPTest do
 
     test "get missing key returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("key", ctx, %{"action" => "get", "name" => "missing"})
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "invalid action returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("key", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid key action"
+      assert err_msg(msg) =~ "Invalid key action"
     end
 
     test "rejects invalid key type", %{ctx: ctx} do
@@ -287,9 +287,9 @@ defmodule Sanctum.MCPTest do
           "type" => "INVALID"
         })
 
-      assert msg =~ "Invalid key type"
-      assert msg =~ "INVALID"
-      assert msg =~ "application, service, or admin"
+      assert err_msg(msg) =~ "Invalid key type"
+      assert err_msg(msg) =~ "INVALID"
+      assert err_msg(msg) =~ "application, service, or admin"
     end
 
     test "accepts valid key types", %{ctx: ctx} do
@@ -370,7 +370,7 @@ defmodule Sanctum.MCPTest do
           "public" => true
         })
 
-      assert msg =~ "Invalid tincture_visibility action"
+      assert err_msg(msg) =~ "Invalid tincture_visibility action"
     end
   end
 
@@ -432,7 +432,7 @@ defmodule Sanctum.MCPTest do
       {:error, msg} =
         MCP.handle("tincture_visibility", ctx, %{"action" => "delete"})
 
-      assert msg =~ "Invalid tincture_visibility action"
+      assert err_msg(msg) =~ "Invalid tincture_visibility action"
     end
   end
 
@@ -443,7 +443,7 @@ defmodule Sanctum.MCPTest do
   describe "unknown tool" do
     test "returns error for unknown tool", %{ctx: ctx} do
       {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
-      assert msg =~ "Unknown tool"
+      assert err_msg(msg) =~ "Unknown tool"
     end
   end
 
@@ -465,8 +465,8 @@ defmodule Sanctum.MCPTest do
 
         case result do
           {:error, msg} ->
-            refute msg =~ "requires the GitHub/Google OAuth provider"
-            assert msg =~ "client ID" or msg =~ "Failed to initialize"
+            refute err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
+            assert err_msg(msg) =~ "client ID" or err_msg(msg) =~ "Failed to initialize"
 
           {:ok, _} ->
             :ok
@@ -485,8 +485,8 @@ defmodule Sanctum.MCPTest do
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
-        assert msg =~ "requires the GitHub/Google OAuth provider"
-        assert msg =~ "/auth/"
+        assert err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
+        assert err_msg(msg) =~ "/auth/"
       after
         restore_env(:auth_provider, previous)
       end
@@ -505,7 +505,7 @@ defmodule Sanctum.MCPTest do
                    "provider" => "github"
                  })
 
-        assert msg =~ "requires the GitHub/Google OAuth provider"
+        assert err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
       after
         restore_env(:auth_provider, previous)
       end
@@ -520,7 +520,7 @@ defmodule Sanctum.MCPTest do
         result = MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
         case result do
-          {:error, msg} -> refute msg =~ "requires the GitHub/Google OAuth provider"
+          {:error, msg} -> refute err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
           {:ok, _} -> :ok
         end
       after
@@ -587,4 +587,12 @@ defmodule Sanctum.MCPTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:cyfr, key)
   defp restore_env(key, value), do: Application.put_env(:cyfr, key, value)
+
+  # Providers answer typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
+  end
 end

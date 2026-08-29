@@ -111,7 +111,9 @@ defmodule Sanctum.Authority.Blob do
         parse(decoded)
 
       {:ok, other} ->
-        {:error, {:invalid_structure, "", "must be an object, got: #{inspect(other)}"}}
+        {:error,
+         {:invalid_structure, "",
+          "must be an object, got: #{inspect(Sanctum.Sanitizer.sanitize(other))}"}}
 
       {:error, err} ->
         {:error, {:invalid_json, err}}
@@ -448,7 +450,8 @@ defmodule Sanctum.Authority.Blob do
     end
   end
 
-  defp validate_resource(_kind, raw), do: {:error, "unexpected shape: #{inspect(raw)}"}
+  defp validate_resource(_kind, raw),
+    do: {:error, "unexpected shape: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
 
   # `server_name` exists so a digest mismatch is distinguishable from
   # never-granted (drift explanation, §4.6 display, and the D8 baseline
@@ -479,7 +482,8 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_tool_server(raw),
-    do: {:error, "tool server must be an object, got: #{inspect(raw)}"}
+    do:
+      {:error, "tool server must be an object, got: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
 
   defp validate_tool_patterns(patterns) do
     case Enum.reject(patterns, &Sanctum.ToolPattern.valid?/1) do
@@ -499,7 +503,7 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_projection(raw),
-    do: {:error, "projection must be an object, got: #{inspect(raw)}"}
+    do: {:error, "projection must be an object, got: #{inspect(Sanctum.Sanitizer.sanitize(raw))}"}
 
   defp string_list_resource(raw, keys) do
     with :ok <- keys_or_reason(raw, Enum.map(keys, &elem(&1, 0))) do

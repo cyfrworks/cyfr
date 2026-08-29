@@ -303,7 +303,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   def handle(_ctx, %{"action" => "inspect"}) do
-    {:error, "Missing required argument: reference"}
+    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   # Pull action - pull component from registry (local or OCI)
@@ -312,7 +312,7 @@ defmodule Compendium.MCP.ComponentTool do
 
     case args["reference"] do
       nil ->
-        {:error, "Missing required argument: reference"}
+        {:error, {:invalid_argument, "Missing required argument: reference"}}
 
       reference ->
         with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
@@ -367,12 +367,14 @@ defmodule Compendium.MCP.ComponentTool do
 
     cond do
       is_nil(reference) ->
-        {:error, "Missing required argument: reference (format: name:version)"}
+        {:error,
+         {:invalid_argument, "Missing required argument: reference (format: name:version)"}}
 
       true ->
         case Sanctum.ComponentRef.parse(reference) do
           {:ok, %{version: nil}} ->
-            {:error, "Version is required for pushing. Example: c:local.name:1.0.0"}
+            {:error,
+             {:invalid_argument, "Version is required for pushing. Example: c:local.name:1.0.0"}}
 
           {:ok, cref} ->
             with :ok <- refuse_non_local_push(cref),
@@ -409,7 +411,7 @@ defmodule Compendium.MCP.ComponentTool do
             end
 
           {:error, reason} ->
-            {:error, "Invalid reference: #{reason}"}
+            {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
         end
     end
   end
@@ -448,7 +450,8 @@ defmodule Compendium.MCP.ComponentTool do
 
       {:error, {:discovery_failed, reason}} ->
         broadcast_register_progress(ctx, register_id, :error, "Component scan failed")
-        {:error, "Component scan failed — storage unreachable: #{inspect(reason)}"}
+        Logger.error("[Compendium.MCP] component scan failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Component storage"}}
     end
   end
 
@@ -487,8 +490,12 @@ defmodule Compendium.MCP.ComponentTool do
       {:ok, %{version: nil} = cref} ->
         # Check if name is even valid before giving version error
         case Sanctum.ComponentRef.validate_name(cref.name) do
-          :ok -> {:error, "Version is required for deletion. Example: c:local.name:1.0.0"}
-          {:error, reason} -> {:error, "Invalid reference: #{reason}"}
+          :ok ->
+            {:error,
+             {:invalid_argument, "Version is required for deletion. Example: c:local.name:1.0.0"}}
+
+          {:error, reason} ->
+            {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
         end
 
       {:ok, cref} ->
@@ -504,7 +511,7 @@ defmodule Compendium.MCP.ComponentTool do
             {:ok, %{status: "deleted", reference: reference, restored: "shipped"}}
 
           {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
+            {:error, {:not_found, "Component", reference}}
 
           {:error, :bundled} ->
             {:error,
@@ -522,12 +529,12 @@ defmodule Compendium.MCP.ComponentTool do
         end
 
       {:error, reason} ->
-        {:error, "Invalid reference: #{reason}"}
+        {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
     end
   end
 
   def handle(_ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: reference"}
+    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   # Reset action — revert a bundled component's local edits to exactly what
@@ -544,7 +551,7 @@ defmodule Compendium.MCP.ComponentTool do
           {:ok, %{status: "already_pristine", reference: reference}}
 
         {:error, :not_found} ->
-          {:error, "Component not found: #{reference}"}
+          {:error, {:not_found, "Component", reference}}
 
         {:error, :not_bundled} ->
           {:error, "#{reference} is not a bundled component — nothing shipped to revert to"}
@@ -555,15 +562,16 @@ defmodule Compendium.MCP.ComponentTool do
       end
     else
       {:ok, %{version: nil}} ->
-        {:error, "Version is required for reset. Example: c:local.name:1.0.0"}
+        {:error,
+         {:invalid_argument, "Version is required for reset. Example: c:local.name:1.0.0"}}
 
       {:error, reason} ->
-        {:error, "Invalid reference: #{reason}"}
+        {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
     end
   end
 
   def handle(_ctx, %{"action" => "reset"}) do
-    {:error, "Missing required argument: reference"}
+    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   # Status action — provenance and drift for one component: whose bytes
@@ -606,13 +614,14 @@ defmodule Compendium.MCP.ComponentTool do
        |> Map.merge(lineage)}
     else
       {:ok, %{version: nil}} ->
-        {:error, "Version is required for status. Example: c:local.name:1.0.0"}
+        {:error,
+         {:invalid_argument, "Version is required for status. Example: c:local.name:1.0.0"}}
 
       {:error, :not_found} ->
-        {:error, "Component not found: #{reference}"}
+        {:error, {:not_found, "Component", reference}}
 
       {:error, reason} when is_binary(reason) ->
-        {:error, "Invalid reference: #{reason}"}
+        {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
 
       {:error, reason} ->
         Logger.error("[Compendium.MCP] component.status failed: #{inspect(reason)}")
@@ -626,7 +635,8 @@ defmodule Compendium.MCP.ComponentTool do
   def handle(%Context{} = ctx, %{"action" => "status"}) do
     case Compendium.Provenance.overview(ctx) do
       {:error, reason} ->
-        {:error, "Failed to read status: #{inspect(reason)}"}
+        Logger.error("[Compendium.MCP] status overview read failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Component status"}}
 
       {:ok, overview} ->
         components =
@@ -677,7 +687,7 @@ defmodule Compendium.MCP.ComponentTool do
         {:ok, %{bytes: Base.encode64(bytes), digest: digest}}
 
       {:error, :blob_not_found} ->
-        {:error, "Blob not found for digest: #{digest}"}
+        {:error, {:not_found, "Blob for digest", digest}}
 
       {:error, reason} ->
         Logger.error("[Compendium.MCP] Failed to get blob: #{inspect(reason)}")
@@ -686,7 +696,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   def handle(_ctx, %{"action" => "get_blob"}) do
-    {:error, "Missing required argument: digest"}
+    {:error, {:invalid_argument, "Missing required argument: digest"}}
   end
 
   # Discover action - list components on the configured registry (cyfr.run
@@ -722,7 +732,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   def handle(_ctx, %{"action" => "setup_plan"}) do
-    {:error, "Missing required argument: reference"}
+    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   # Fork action - fork a published component to local namespace
@@ -732,7 +742,8 @@ defmodule Compendium.MCP.ComponentTool do
       ) do
     case Sanctum.ComponentRef.parse(reference) do
       {:ok, %{version: nil}} ->
-        {:error, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}
+        {:error,
+         {:invalid_argument, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}}
 
       # A local source is refused inside Compendium.Fork — one guard, one
       # message, whether the call comes through this tool or directly.
@@ -752,12 +763,12 @@ defmodule Compendium.MCP.ComponentTool do
         end
 
       {:error, reason} ->
-        {:error, "Invalid reference: #{reason}"}
+        {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
     end
   end
 
   def handle(_ctx, %{"action" => "fork"}) do
-    {:error, "Missing required argument: reference"}
+    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   def handle(
@@ -767,7 +778,7 @@ defmodule Compendium.MCP.ComponentTool do
     reason = Map.get(args, "reason", "")
 
     if String.trim(reason) == "" do
-      {:error, "component.deprecate requires a non-empty 'reason'"}
+      {:error, {:invalid_argument, "component.deprecate requires a non-empty 'reason'"}}
     else
       with {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
            :ok <- Shared.ensure_fully_qualified(ref),
@@ -789,7 +800,7 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   def handle(_ctx, %{"action" => "deprecate"}) do
-    {:error, "component.deprecate requires 'reference' and 'reason'"}
+    {:error, {:invalid_argument, "component.deprecate requires 'reference' and 'reason'"}}
   end
 
   # Yank action — reason optional (deprecate requires one; yank does not).
@@ -818,17 +829,17 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   def handle(_ctx, %{"action" => "yank"}) do
-    {:error, "component.yank requires 'reference'"}
+    {:error, {:invalid_argument, "component.yank requires 'reference'"}}
   end
 
   # Invalid action
   def handle(_ctx, %{"action" => action}) do
-    {:error, "Invalid component action: #{action}"}
+    {:error, {:invalid_argument, "Invalid component action: #{action}"}}
   end
 
   # Missing action
   def handle(_ctx, _args) do
-    {:error, "Missing required argument: action"}
+    {:error, {:invalid_argument, "Missing required argument: action"}}
   end
 
   defp finish_register(ctx, register_id, result) do
@@ -1292,7 +1303,7 @@ defmodule Compendium.MCP.ComponentTool do
         end
 
       {:error, reason} ->
-        {:error, "Invalid OCI reference: #{reason}"}
+        {:error, {:invalid_argument, "Invalid OCI reference: #{reason}"}}
     end
   end
 

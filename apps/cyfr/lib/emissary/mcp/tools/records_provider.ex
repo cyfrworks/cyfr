@@ -113,7 +113,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
 
         {:error, :not_found} ->
-          {:error, "File not found: #{path}"}
+          {:error, {:not_found, "File", path}}
 
         {:error, :forbidden} ->
           {:error, "Forbidden path: #{path}"}
@@ -140,7 +140,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   defp validate_segments(segments) do
     case Cyfr.PathSafety.validate_segments(segments) do
       :ok -> :ok
-      {:error, {_reason, message}} -> {:error, "Invalid path: #{message}"}
+      {:error, {_reason, message}} -> {:error, {:invalid_argument, "Invalid path: #{message}"}}
     end
   end
 
@@ -330,7 +330,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     with :ok <- tenant_gate(ctx) do
       case Arca.Execution.get_tenant(ctx, id) do
         nil ->
-          {:error, "Execution not found: #{id}"}
+          {:error, {:not_found, "Execution", id}}
 
         record ->
           # Members are interchangeable: get_tenant already scoped to the
@@ -341,7 +341,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("record", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: id"}
+    {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
   def handle("record", ctx, %{"action" => "list"} = args) do
@@ -374,7 +374,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     with :ok <- tenant_gate(ctx) do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
-          {:error, "MCP log not found: #{id}"}
+          {:error, {:not_found, "MCP log", id}}
 
         record ->
           {:ok, mcp_log_to_map(record)}
@@ -383,7 +383,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: id"}
+    {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
@@ -402,7 +402,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
            {:ok, records} <- Arca.McpLog.list(opts) do
         {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
       else
-        {:error, :database_error} -> {:error, "Storage unavailable — try again shortly"}
+        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
         {:error, _} = err -> err
       end
     end
@@ -445,7 +445,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", _ctx, %{"action" => "correlate"}) do
-    {:error, "Missing required argument: request_id"}
+    {:error, {:invalid_argument, "Missing required argument: request_id"}}
   end
 
   # Batched fan-out counts: for each request_id, how many executions were
@@ -464,7 +464,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("mcp_log", _ctx, %{"action" => "fan_outs"}) do
-    {:error, "Missing or invalid argument: request_ids (must be a list of strings)"}
+    {:error,
+     {:invalid_argument, "Missing or invalid argument: request_ids (must be a list of strings)"}}
   end
 
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
@@ -491,7 +492,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
            }}
 
         {:error, :database_error} ->
-          {:error, "Storage unavailable — try again shortly"}
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -511,7 +512,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
       case record do
         nil ->
-          {:error, "Policy log not found: #{id}"}
+          {:error, {:not_found, "Policy log", id}}
 
         record ->
           {:ok, policy_log_to_map(record)}
@@ -520,7 +521,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: id"}
+    {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
@@ -537,7 +538,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
       case Arca.PolicyLog.list(opts) do
         {:ok, records} -> {:ok, %{logs: Enum.map(records, &policy_log_to_map/1)}}
-        {:error, :database_error} -> {:error, "Storage unavailable — try again shortly"}
+        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -565,7 +566,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("policy_log", _ctx, %{"action" => "correlate"}) do
-    {:error, "Missing required argument: request_id"}
+    {:error, {:invalid_argument, "Missing required argument: request_id"}}
   end
 
   def handle("policy_log", _ctx, _args) do
@@ -581,8 +582,12 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
          {:ok, settings} <- Cyfr.Retention.get_settings(ctx) do
       {:ok, %{action: "get", settings: settings}}
     else
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, "Failed to read retention settings: #{inspect(reason)}"}
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        Logger.error("[RecordsProvider] retention settings read failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Retention settings"}}
     end
   end
 
@@ -595,10 +600,12 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, {:unknown_setting, key}} ->
-          {:error, "Unknown retention setting: #{key}"}
+          {:error, {:invalid_argument, "Unknown retention setting: #{key}"}}
 
         {:error, {:invalid_setting, key}} ->
-          {:error, "Invalid value for retention setting #{key} — use a positive integer"}
+          {:error,
+           {:invalid_argument,
+            "Invalid value for retention setting #{key} — use a positive integer"}}
 
         {:error, reason} ->
           Logger.error(
@@ -625,7 +632,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
 
         {:error, {:unknown_kind, _}} ->
-          {:error, "Unknown cleanup_type: #{cleanup_type}"}
+          {:error, {:invalid_argument, "Unknown cleanup_type: #{cleanup_type}"}}
 
         {:error, reason} ->
           Logger.error("[Emissary.MCP.Tools.RecordsProvider] Cleanup failed: #{inspect(reason)}")
@@ -640,7 +647,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def handle("retention", _ctx, %{"action" => "set"}) do
-    {:error, "Missing required parameter: settings (must be a JSON object)"}
+    {:error, {:invalid_argument, "Missing required parameter: settings (must be a JSON object)"}}
   end
 
   def handle("retention", _ctx, _args) do
@@ -732,7 +739,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   defp parse_since_opt(opts, since_str) do
     case DateTime.from_iso8601(since_str) do
       {:ok, dt, _} -> {:ok, Keyword.put(opts, :since, dt)}
-      _ -> {:error, "Invalid ISO8601 timestamp for 'since': #{since_str}"}
+      _ -> {:error, {:invalid_argument, "Invalid ISO8601 timestamp for 'since': #{since_str}"}}
     end
   end
 

@@ -5,16 +5,21 @@ defmodule Emissary.MCP.ToolError do
   @moduledoc """
   Typed tool-refusal vocabulary: reasons stay data until a renderer.
 
-  Providers largely return `{:error, "English sentence"}` today — ~280
-  literals across 17 providers — and several translate a typed reason
-  they RECEIVED (`:not_found` from a record module, `:builder_unreachable`
-  from the build client) into prose on the way out, discarding the type
-  one layer before the boundary. `Sanctum.Unauthorized` and
-  `Compendium.OCI.Errors` already prove the better shape end-to-end:
-  data until the wire, prose at one renderer.
+  The heavy-traffic providers produce this vocabulary now — `component`,
+  `mcp_servers`, `vault`, the records provider, `build` (Locus) and the
+  execution tool's validation arms — with `{:invalid_argument, msg}`
+  chosen where the wire sentence had to stay byte-identical, and
+  `{:not_found, …}` / `{:unavailable, …}` where the typed sentence is the
+  better one. Crafted operator sentences that fit no member (compiler
+  output, remediation hints) deliberately stay strings, as do the
+  registry's "Unknown tool" spelling and the consent-tag wire forms.
+  Remaining string-heavy surfaces: `athanor`/`member`/`door`/`session`
+  tools, `registry_tool`, `aqua_tool`, and `Sanctum.ComponentRef`'s parse
+  prose (pinned by exact-string tests; convert with its own renderer when
+  a caller needs to branch). `Sanctum.Unauthorized` and
+  `Compendium.OCI.Errors` prove the same shape end-to-end.
 
-  This module is that shape for ordinary tool refusals. Adoption is
-  deliberately incremental — a provider converts an action by returning
+  Adoption stays incremental — a provider converts an action by returning
   one of these tuples instead of a sentence; unconverted strings keep
   flowing through the renderers' binary clauses unchanged. The three
   consumers of a provider's error all render it:

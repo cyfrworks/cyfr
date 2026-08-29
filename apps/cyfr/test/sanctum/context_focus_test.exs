@@ -116,7 +116,7 @@ defmodule Sanctum.ContextFocusTest do
                "id" => b_exec
              })
 
-    assert msg =~ "not found"
+    assert err_msg(msg) =~ "not found"
 
     assert {:ok, %{executions: listed}} =
              Emissary.MCP.ToolRegistry.call_external("record", focused, %{"action" => "list"})
@@ -124,7 +124,7 @@ defmodule Sanctum.ContextFocusTest do
     refute Enum.any?(listed, &(&1.id == b_exec))
 
     # and so is B's storage: a URI is rooted in the focused athanor, never another
-    assert {:error, "File not found" <> _} =
+    assert {:error, {:not_found, "File", _}} =
              Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/guest/secret.txt")
 
     assert {:ok, %{content: content}} =
@@ -162,5 +162,13 @@ defmodule Sanctum.ContextFocusTest do
     :ok = Members.remove_member(a, user_id: alice)
     out = Sanctum.Tenancy.revalidate(c)
     assert out.athanor_id == nil
+  end
+
+  # Providers answer typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

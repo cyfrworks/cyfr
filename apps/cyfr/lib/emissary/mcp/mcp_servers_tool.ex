@@ -141,11 +141,11 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   def handle(_ctx, %{"action" => action}) do
-    {:error, "Unknown action: #{action}"}
+    {:error, {:invalid_argument, "Unknown action: #{action}"}}
   end
 
   def handle(_ctx, _args) do
-    {:error, "Missing required parameter: action"}
+    {:error, {:invalid_argument, "Missing required parameter: action"}}
   end
 
   defp dispatch_admin("create", ctx, args), do: handle_create(ctx, args)
@@ -164,13 +164,14 @@ defmodule Emissary.MCP.McpServersTool do
 
     cond do
       is_nil(name) or name == "" ->
-        {:error, "Missing required parameter: name"}
+        {:error, {:invalid_argument, "Missing required parameter: name"}}
 
       String.contains?(to_string(name), ":") ->
-        {:error, "Server name cannot contain ':' (reserved for tool namespacing)"}
+        {:error,
+         {:invalid_argument, "Server name cannot contain ':' (reserved for tool namespacing)"}}
 
       is_nil(config["url"]) or config["url"] == "" ->
-        {:error, "Missing required parameter: config.url"}
+        {:error, {:invalid_argument, "Missing required parameter: config.url"}}
 
       true ->
         with :ok <- validate_header_credentials(config["headers"]),
@@ -183,7 +184,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp validate_create_url(url) do
     case Cyfr.Network.validate_redirect_url(url, allow_private: :policy) do
       :ok -> :ok
-      {:error, reason} -> {:error, "Invalid URL: #{reason}"}
+      {:error, reason} -> {:error, {:invalid_argument, "Invalid URL: #{reason}"}}
     end
   end
 
@@ -238,7 +239,8 @@ defmodule Emissary.MCP.McpServersTool do
     end
   end
 
-  defp validate_tool_patterns(_), do: {:error, "tool_patterns must be a list of strings"}
+  defp validate_tool_patterns(_),
+    do: {:error, {:invalid_argument, "tool_patterns must be a list of strings"}}
 
   defp handle_create_validated(ctx, name, config) do
     max = Application.get_env(:cyfr, :max_external_servers, 50)
@@ -317,7 +319,8 @@ defmodule Emissary.MCP.McpServersTool do
           {:ok, result}
 
         {:error, reason} ->
-          {:error, "Failed to save server config: #{inspect(reason)}"}
+          Logger.warning("[MCP.Servers] failed to save server config: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
       end
     else
       {:error, reason} when is_atom(reason) -> {:error, "Storage error: #{reason}"}
@@ -329,7 +332,7 @@ defmodule Emissary.MCP.McpServersTool do
     name = args["name"]
 
     if is_nil(name) or name == "" do
-      {:error, "Missing required parameter: name"}
+      {:error, {:invalid_argument, "Missing required parameter: name"}}
     else
       # Stop the running server process
       Emissary.MCP.ExternalServerSupervisor.stop(
@@ -344,7 +347,8 @@ defmodule Emissary.MCP.McpServersTool do
           {:ok, %{deleted: name}}
 
         {:error, reason} ->
-          {:error, "Failed to delete server: #{inspect(reason)}"}
+          Logger.warning("[MCP.Servers] failed to delete server: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
       end
     end
   end
@@ -379,7 +383,8 @@ defmodule Emissary.MCP.McpServersTool do
         {:ok, %{servers: server_list, count: length(server_list)}}
 
       {:error, reason} ->
-        {:error, "Failed to list servers: #{inspect(reason)}"}
+        Logger.warning("[MCP.Servers] failed to list servers: #{inspect(reason)}")
+        {:error, {:unavailable, "The server store"}}
     end
   end
 
@@ -387,7 +392,7 @@ defmodule Emissary.MCP.McpServersTool do
     name = args["name"]
 
     if is_nil(name) or name == "" do
-      {:error, "Missing required parameter: name"}
+      {:error, {:invalid_argument, "Missing required parameter: name"}}
     else
       case Arca.McpServerStorage.get(ctx, name) do
         {:ok, server} ->
@@ -430,10 +435,11 @@ defmodule Emissary.MCP.McpServersTool do
            }}
 
         {:error, :not_found} ->
-          {:error, "Server '#{name}' not found"}
+          {:error, {:not_found, "Server", name}}
 
         {:error, reason} ->
-          {:error, "Failed to get server: #{inspect(reason)}"}
+          Logger.warning("[MCP.Servers] failed to get server: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
       end
     end
   end
@@ -442,7 +448,7 @@ defmodule Emissary.MCP.McpServersTool do
     name = args["name"]
 
     if is_nil(name) or name == "" do
-      {:error, "Missing required parameter: name"}
+      {:error, {:invalid_argument, "Missing required parameter: name"}}
     else
       case Arca.McpServerStorage.get(ctx, name) do
         {:ok, server} ->
@@ -483,10 +489,11 @@ defmodule Emissary.MCP.McpServersTool do
           end
 
         {:error, :not_found} ->
-          {:error, "Server '#{name}' not found"}
+          {:error, {:not_found, "Server", name}}
 
         {:error, reason} ->
-          {:error, "Failed to get server: #{inspect(reason)}"}
+          Logger.warning("[MCP.Servers] failed to get server: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
       end
     end
   end
@@ -519,10 +526,11 @@ defmodule Emissary.MCP.McpServersTool do
           end
 
         {:error, :not_found} ->
-          {:error, "Server '#{name}' not found"}
+          {:error, {:not_found, "Server", name}}
 
         {:error, reason} ->
-          {:error, "Failed to get server: #{inspect(reason)}"}
+          Logger.warning("[MCP.Servers] failed to get server: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
       end
     else
       # Refresh all servers — parallel with concurrency limit
@@ -574,7 +582,8 @@ defmodule Emissary.MCP.McpServersTool do
           {:ok, %{refreshed: refreshed, failed: failed}}
 
         {:error, reason} ->
-          {:error, "Failed to list servers: #{inspect(reason)}"}
+          Logger.warning("[MCP.Servers] failed to list servers: #{inspect(reason)}")
+          {:error, {:unavailable, "The server store"}}
       end
     end
   end
@@ -584,7 +593,7 @@ defmodule Emissary.MCP.McpServersTool do
     action_name = if enabled, do: "enable", else: "disable"
 
     if is_nil(name) or name == "" do
-      {:error, "Missing required parameter: name"}
+      {:error, {:invalid_argument, "Missing required parameter: name"}}
     else
       case Arca.McpServerStorage.update(ctx, name, %{enabled: enabled}) do
         {:ok, server} ->
@@ -602,7 +611,7 @@ defmodule Emissary.MCP.McpServersTool do
           {:ok, %{name: server.name, enabled: server.enabled, action: "#{action_name}d"}}
 
         {:error, :not_found} ->
-          {:error, "Server '#{name}' not found"}
+          {:error, {:not_found, "Server", name}}
 
         {:error, reason} ->
           {:error, "Failed to #{action_name} server: #{inspect(reason)}"}

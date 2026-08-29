@@ -107,12 +107,12 @@ defmodule Locus.MCPTest do
                  "wasm_base64" => "!!!notbase64!!!"
                })
 
-      assert msg =~ "base64"
+      assert err_msg(msg) =~ "base64"
     end
 
     test "returns error when wasm_base64 missing" do
       assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "validate"})
-      assert msg =~ "wasm_base64"
+      assert err_msg(msg) =~ "wasm_base64"
     end
   end
 
@@ -123,7 +123,7 @@ defmodule Locus.MCPTest do
   describe "handle build.compile" do
     test "returns error when reference is missing" do
       assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile"})
-      assert msg =~ "reference"
+      assert err_msg(msg) =~ "reference"
     end
 
     test "returns error for invalid reference format" do
@@ -133,7 +133,7 @@ defmodule Locus.MCPTest do
                  "reference" => "not-a-ref"
                })
 
-      assert msg =~ "Invalid" or msg =~ "Source not found"
+      assert err_msg(msg) =~ "Invalid" or err_msg(msg) =~ "Source not found"
     end
 
     test "returns error when source file doesn't exist" do
@@ -143,7 +143,7 @@ defmodule Locus.MCPTest do
                  "reference" => "reagent:local.nonexistent:0.1.0"
                })
 
-      assert msg =~ "Source not found" or msg =~ "lib.rs"
+      assert err_msg(msg) =~ "Source not found" or err_msg(msg) =~ "lib.rs"
     end
 
     test "returns error for tincture without package.json" do
@@ -153,7 +153,7 @@ defmodule Locus.MCPTest do
                  "reference" => "tincture:local.nonexistent:0.1.0"
                })
 
-      assert msg =~ "package.json" or msg =~ "Vanilla tinctures"
+      assert err_msg(msg) =~ "package.json" or err_msg(msg) =~ "Vanilla tinctures"
     end
 
     test "refuses a non-local namespace instead of renamespacing it" do
@@ -165,8 +165,8 @@ defmodule Locus.MCPTest do
                  "reference" => "catalyst:acme.foo:1.0.0"
                })
 
-      assert msg =~ "local namespace"
-      assert msg =~ "acme"
+      assert err_msg(msg) =~ "local namespace"
+      assert err_msg(msg) =~ "acme"
     end
 
     test "accepts tincture type in reference" do
@@ -177,7 +177,7 @@ defmodule Locus.MCPTest do
                  "reference" => "tincture:local.test:0.1.0"
                })
 
-      refute msg =~ "Invalid component type"
+      refute err_msg(msg) =~ "Invalid component type"
     end
   end
 
@@ -188,17 +188,26 @@ defmodule Locus.MCPTest do
   describe "handle - invalid action" do
     test "returns error for unknown action" do
       assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "destroy"})
-      assert msg =~ "Invalid build action"
+      assert err_msg(msg) =~ "Invalid build action"
     end
 
     test "returns error for missing action" do
       assert {:error, msg} = MCP.handle("build", local_ctx(), %{})
-      assert msg =~ "action"
+      assert err_msg(msg) =~ "action"
     end
 
     test "returns error for unknown tool" do
       assert {:error, msg} = MCP.handle("unknown", local_ctx(), %{"action" => "list"})
-      assert msg =~ "Unknown tool"
+      assert err_msg(msg) =~ "Unknown tool"
     end
+  end
+
+  # Providers answer typed reasons now where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so tests assert through
+  # it — a reason it cannot render is itself a failure. Plain strings pass
+  # through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

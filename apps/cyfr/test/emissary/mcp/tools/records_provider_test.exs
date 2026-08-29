@@ -112,23 +112,23 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "returns error for missing file", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "arca://files/guest/missing.txt")
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "arca://unknown/path")
-      assert msg =~ "Unknown resource"
+      assert err_msg(msg) =~ "Unknown resource"
     end
 
     # The path is caller input — the boundary answers, it never raises.
     test "a traversal path answers a typed error, never raises", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "arca://files/guest/../aqua/agent.json")
-      assert msg =~ "Invalid path"
+      assert err_msg(msg) =~ "Invalid path"
     end
 
     test "an unknown root answers a typed error", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "arca://files/nope/x")
-      assert msg =~ "Forbidden path"
+      assert err_msg(msg) =~ "Forbidden path"
     end
 
     test "a platform context without an athanor answers a typed error, never raises" do
@@ -234,7 +234,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "returns error for invalid action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("retention", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid retention action"
+      assert err_msg(msg) =~ "Invalid retention action"
     end
   end
 
@@ -276,12 +276,12 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           "id" => "nonexistent_id"
         })
 
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
     end
 
     test "returns error without id", %{ctx: ctx} do
       {:error, msg} = MCP.handle("record", ctx, %{"action" => "get"})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -318,7 +318,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "invalid action returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("record", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid record action"
+      assert err_msg(msg) =~ "Invalid record action"
     end
   end
 
@@ -329,7 +329,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "error handling" do
     test "returns error for unknown tool", %{ctx: ctx} do
       {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
-      assert msg =~ "Unknown tool"
+      assert err_msg(msg) =~ "Unknown tool"
     end
   end
 
@@ -485,7 +485,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           "id" => exec_id
         })
 
-      assert msg =~ "not found"
+      assert err_msg(msg) =~ "not found"
 
       # Original tenant can still get it
       {:ok, result} =
@@ -537,7 +537,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           "cleanup_type" => "unknown_type"
         })
 
-      assert msg =~ "Cleanup failed" or msg =~ "Unknown cleanup_type"
+      assert err_msg(msg) =~ "Cleanup failed" or err_msg(msg) =~ "Unknown cleanup_type"
     end
 
     test "defaults cleanup_type to executions", %{ctx: ctx} do
@@ -771,5 +771,13 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         end
       end
     end
+  end
+
+  # The provider answers typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

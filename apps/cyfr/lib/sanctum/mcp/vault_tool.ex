@@ -129,7 +129,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, %{"action" => "create"}) do
-    {:error, "create requires name and kind (api_key | oauth | bundle)"}
+    {:error, {:invalid_argument, "create requires name and kind (api_key | oauth | bundle)"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "rename", "id" => id, "name" => name}) do
@@ -140,7 +140,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, %{"action" => "rename"}) do
-    {:error, "rename requires id and name"}
+    {:error, {:invalid_argument, "rename requires id and name"}}
   end
 
   def handle(%Context{} = ctx, %{
@@ -157,7 +157,8 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, %{"action" => "rotate"}) do
-    {:error, "rotate requires id, fields and expected_payload_rev (the CAS token)"}
+    {:error,
+     {:invalid_argument, "rotate requires id, fields and expected_payload_rev (the CAS token)"}}
   end
 
   # Start a browser OAuth grant for a Connection: `id` re-authorizes an
@@ -186,7 +187,9 @@ defmodule Sanctum.MCP.VaultTool do
       {:ok, %{url: result.url, state: result.state}}
     else
       :invalid ->
-        {:error, "authorize requires id (re-auth) or name + provider_hint (new connection)"}
+        {:error,
+         {:invalid_argument,
+          "authorize requires id (re-auth) or name + provider_hint (new connection)"}}
 
       {:error, reason} ->
         {:error, fmt(reason)}
@@ -207,7 +210,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, %{"action" => "rebind"}) do
-    {:error, "rebind requires id and at least one binding field"}
+    {:error, {:invalid_argument, "rebind requires id and at least one binding field"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "id" => id}) do
@@ -218,7 +221,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, %{"action" => "revoke"}) do
-    {:error, "revoke requires id"}
+    {:error, {:invalid_argument, "revoke requires id"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "delete", "id" => id}) do
@@ -229,7 +232,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, %{"action" => "delete"}) do
-    {:error, "delete requires id"}
+    {:error, {:invalid_argument, "delete requires id"}}
   end
 
   def handle(_ctx, _args) do

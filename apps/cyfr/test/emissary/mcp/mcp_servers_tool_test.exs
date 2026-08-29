@@ -36,7 +36,7 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - create" do
     test "requires name", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: name"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "create",
                  "config" => %{"url" => "https://example.com/mcp"}
@@ -44,7 +44,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "requires config.url", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: config.url"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: config.url"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "create",
                  "name" => "test",
@@ -53,7 +53,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "validates url format", %{ctx: ctx} do
-      assert {:error, "Invalid URL:" <> _} =
+      assert {:error, {:invalid_argument, "Invalid URL:" <> _}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "create",
                  "name" => "test",
@@ -62,7 +62,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "rejects name containing colon", %{ctx: ctx} do
-      assert {:error, "Server name cannot contain ':'" <> _} =
+      assert {:error, {:invalid_argument, "Server name cannot contain ':'" <> _}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "create",
                  "name" => "foo:bar",
@@ -79,7 +79,7 @@ defmodule Emissary.MCP.McpServersToolTest do
           "config" => %{"url" => "http://169.254.169.254/latest/meta-data/"}
         })
 
-      assert {:error, "Invalid URL:" <> _} = result
+      assert {:error, {:invalid_argument, "Invalid URL:" <> _}} = result
     end
 
     test "enforces server count limit", %{ctx: ctx} do
@@ -136,7 +136,7 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - delete" do
     test "requires name", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: name"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "delete"})
     end
 
@@ -253,17 +253,17 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - get" do
     test "requires name", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: name"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "get"})
     end
 
     test "requires non-empty name", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: name"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "get", "name" => ""})
     end
 
     test "returns error for non-existent server", %{ctx: ctx} do
-      assert {:error, "Server 'nonexistent' not found"} =
+      assert {:error, {:not_found, "Server", "nonexistent"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "get",
                  "name" => "nonexistent"
@@ -283,17 +283,17 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - test" do
     test "requires name", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: name"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "test"})
     end
 
     test "requires non-empty name", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: name"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "test", "name" => ""})
     end
 
     test "returns error for non-existent server", %{ctx: ctx} do
-      assert {:error, "Server 'nonexistent' not found"} =
+      assert {:error, {:not_found, "Server", "nonexistent"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "test",
                  "name" => "nonexistent"
@@ -314,7 +314,7 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - refresh" do
     test "returns error for non-existent named server", %{ctx: ctx} do
-      assert {:error, "Server 'nonexistent' not found"} =
+      assert {:error, {:not_found, "Server", "nonexistent"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
                  "action" => "refresh",
                  "name" => "nonexistent"
@@ -363,12 +363,12 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - unknown" do
     test "returns error for unknown action", %{ctx: ctx} do
-      assert {:error, "Unknown action: " <> _} =
+      assert {:error, {:invalid_argument, "Unknown action: " <> _}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "bogus"})
     end
 
     test "returns error for missing action", %{ctx: ctx} do
-      assert {:error, "Missing required parameter: action"} =
+      assert {:error, {:invalid_argument, "Missing required parameter: action"}} =
                McpServersTool.handle("mcp_servers", ctx, %{})
     end
 
@@ -376,5 +376,13 @@ defmodule Emissary.MCP.McpServersToolTest do
       assert {:error, "Unknown tool: other"} =
                McpServersTool.handle("other", ctx, %{"action" => "list"})
     end
+  end
+
+  # Providers answer typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings pass through unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

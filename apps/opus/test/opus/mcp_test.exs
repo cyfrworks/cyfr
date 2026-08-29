@@ -168,7 +168,7 @@ defmodule Opus.MCPTest do
           "input" => %{}
         })
 
-      assert msg =~ "cannot be empty"
+      assert err_msg(msg) =~ "cannot be empty"
     end
 
     test "returns error for unregistered component", %{ctx: ctx} do
@@ -181,7 +181,7 @@ defmodule Opus.MCPTest do
           "input" => %{"a" => 1, "b" => 2}
         })
 
-      assert msg =~ "consent_required: "
+      assert err_msg(msg) =~ "consent_required: "
     end
 
     test "respects component type parameter", %{ctx: ctx, ref: ref} do
@@ -320,7 +320,7 @@ defmodule Opus.MCPTest do
 
     test "returns error for missing execution_id", %{ctx: ctx} do
       {:error, msg} = MCP.handle("execution", ctx, %{"action" => "logs"})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do
@@ -343,7 +343,7 @@ defmodule Opus.MCPTest do
   describe "execution tool - cancel action" do
     test "returns error for missing execution_id", %{ctx: ctx} do
       {:error, msg} = MCP.handle("execution", ctx, %{"action" => "cancel"})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
 
     test "returns error for non-existent execution", %{ctx: ctx} do
@@ -378,7 +378,8 @@ defmodule Opus.MCPTest do
           "execution_id" => execution_id
         })
 
-      assert msg =~ "already completed" or msg =~ "already failed" or msg =~ "not cancellable" or
+      assert err_msg(msg) =~ "already completed" or err_msg(msg) =~ "already failed" or
+               err_msg(msg) =~ "not cancellable" or
                msg =~ "cancelled"
     end
   end
@@ -390,12 +391,12 @@ defmodule Opus.MCPTest do
   describe "execution tool - invalid action" do
     test "returns error for invalid action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("execution", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid execution action"
+      assert err_msg(msg) =~ "Invalid execution action"
     end
 
     test "returns error for missing action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("execution", ctx, %{})
-      assert msg =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -523,7 +524,7 @@ defmodule Opus.MCPTest do
   describe "unknown tool" do
     test "returns error for unknown tool", %{ctx: ctx} do
       {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
-      assert msg =~ "Unknown tool"
+      assert err_msg(msg) =~ "Unknown tool"
     end
   end
 
@@ -561,8 +562,8 @@ defmodule Opus.MCPTest do
           }
         })
 
-      assert msg =~ "Component compilation failed"
-      refute msg =~ "Signature verification failed"
+      assert err_msg(msg) =~ "Component compilation failed"
+      refute err_msg(msg) =~ "Signature verification failed"
     end
 
     test "verify block is optional", %{ctx: ctx, ref: ref} do
@@ -574,7 +575,7 @@ defmodule Opus.MCPTest do
           "input" => %{"a" => 3, "b" => 7}
         })
 
-      assert msg =~ "Component compilation failed"
+      assert err_msg(msg) =~ "Component compilation failed"
     end
   end
 
@@ -662,7 +663,7 @@ defmodule Opus.MCPTest do
 
       assert {:error, msg} = result
       assert is_binary(msg)
-      assert msg =~ "consent_required: "
+      assert err_msg(msg) =~ "consent_required: "
     end
 
     test "handles empty reference gracefully", %{ctx: ctx} do
@@ -673,7 +674,7 @@ defmodule Opus.MCPTest do
           "input" => %{}
         })
 
-      assert msg =~ "cannot be empty"
+      assert err_msg(msg) =~ "cannot be empty"
     end
   end
 
@@ -941,13 +942,22 @@ defmodule Opus.MCPTest do
   describe "read/2 - unknown URIs" do
     test "returns error for unknown URI scheme", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "unknown://resource")
-      assert msg =~ "Unknown resource URI"
+      assert err_msg(msg) =~ "Unknown resource URI"
     end
 
     test "returns error for invalid execution URI format", %{ctx: ctx} do
       # Empty execution ID
       {:error, msg} = MCP.read(ctx, "opus://executions/")
-      assert msg =~ "Invalid" or msg =~ "not found"
+      assert err_msg(msg) =~ "Invalid" or err_msg(msg) =~ "not found"
     end
+  end
+
+  # The provider answers typed reasons where the class is clear; the shared
+  # renderer is the one spelling of every sentence, so assert through it.
+  # Plain strings (the consent-tag wire forms included) pass through
+  # unchanged.
+  defp err_msg(reason) do
+    Emissary.MCP.ToolError.render(reason) ||
+      flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

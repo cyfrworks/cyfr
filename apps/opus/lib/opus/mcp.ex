@@ -508,7 +508,7 @@ defmodule Opus.MCP do
   end
 
   def handle("execution", _ctx, %{"action" => "logs"}) do
-    {:error, "Missing required argument: execution_id"}
+    {:error, {:invalid_argument, "Missing required argument: execution_id"}}
   end
 
   # Cancel action - cancel a running execution (kills process + updates record)
@@ -545,7 +545,7 @@ defmodule Opus.MCP do
   end
 
   def handle("execution", _ctx, %{"action" => "cancel"}) do
-    {:error, "Missing required argument: execution_id"}
+    {:error, {:invalid_argument, "Missing required argument: execution_id"}}
   end
 
   # Status action - execution semaphore diagnostics
@@ -577,12 +577,12 @@ defmodule Opus.MCP do
 
   # Invalid action
   def handle("execution", _ctx, %{"action" => action}) do
-    {:error, "Invalid execution action: #{action}"}
+    {:error, {:invalid_argument, "Invalid execution action: #{action}"}}
   end
 
   # Missing action
   def handle("execution", _ctx, _args) do
-    {:error, "Missing required argument: action"}
+    {:error, {:invalid_argument, "Missing required argument: action"}}
   end
 
   def handle(tool, _ctx, _args) do
