@@ -71,6 +71,34 @@ defmodule Cyfr.TinctureHelpers do
   @denylist ["data.db", Compendium.ComponentPath.manifest_name(), "schema.sql"]
   @allowed_extensions ~w(.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map)
 
+  # The raster set the CSAM launch constraint blocks in the two DISCOVERY
+  # slots (icon/preview): a tincture whose discovered media names one of
+  # these is dropped from the listing until hash matching (PhotoDNA)
+  # ships. Deliberately narrower than the serve gate above — a directly
+  # referenced raster asset inside an operator-installed app still serves;
+  # the constraint is on what the registry SURFACES, not on what an
+  # installed page may contain. `.webp` is blocked here and absent from
+  # the serve gate, so it can neither be discovered nor served.
+  @blocked_raster_extensions ~w(.png .jpg .jpeg .gif .webp)
+
+  @doc "Extensions the asset serve gate honors — the one spelling."
+  @spec allowed_extensions() :: [String.t()]
+  def allowed_extensions, do: @allowed_extensions
+
+  @doc "The raster set the listing's CSAM launch constraint blocks."
+  @spec blocked_raster_extensions() :: [String.t()]
+  def blocked_raster_extensions, do: @blocked_raster_extensions
+
+  @doc """
+  Image extensions a console page may build an asset URL for: vector plus
+  every servable raster — derived from the serve gate, so the client-side
+  fast reject and the server-side gate cannot drift.
+  """
+  @spec image_extensions() :: [String.t()]
+  def image_extensions do
+    [".svg" | @blocked_raster_extensions] |> Enum.filter(&(&1 in @allowed_extensions))
+  end
+
   # Tincture media convention: fixed paths only, no globbing. We probe the
   # known slots via `Arca.exists?` so the same logic works against Local FS
   # and S3 (which has no real directories). This module is the convention's

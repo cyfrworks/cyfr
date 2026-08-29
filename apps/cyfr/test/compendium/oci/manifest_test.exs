@@ -379,4 +379,24 @@ defmodule Compendium.OCI.ManifestTest do
       assert source_layer["size"] == byte_size(source)
     end
   end
+
+  describe "the kind roster" do
+    test "covers every component type, derived from the one roster" do
+      # The media-type table derives from Sanctum.ComponentRef.valid_types/0
+      # — a new kind gets a media type by construction, and this pins the
+      # spellings so a derivation change is a loud diff.
+      for type <- Sanctum.ComponentRef.valid_types() do
+        assert is_binary(Manifest.wasm_media_type(type))
+      end
+
+      assert Manifest.wasm_media_type("catalyst") == "application/vnd.cyfr.catalyst.v1+wasm"
+      assert Manifest.wasm_media_type("reagent") == "application/vnd.cyfr.reagent.v1+wasm"
+      assert Manifest.wasm_media_type("formula") == "application/vnd.cyfr.formula.v1+wasm"
+      assert Manifest.wasm_media_type("tincture") == "application/vnd.cyfr.tincture.v1.tar+gzip"
+    end
+
+    test "an unknown kind raises instead of silently tagging as a reagent" do
+      assert_raise KeyError, fn -> Manifest.wasm_media_type("gadget") end
+    end
+  end
 end

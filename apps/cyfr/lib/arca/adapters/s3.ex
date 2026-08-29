@@ -75,7 +75,8 @@ defmodule Arca.Adapters.S3 do
   # O(size) each. The ceiling is the default node `max_response_size` — the size
   # past which the guest `read` action already declines to return the object —
   # so refusing here takes away nothing a caller could otherwise read back.
-  @max_append_bytes Sanctum.Limits.default_max_response_size()
+  # Read at call time like the Local adapter reads it: a compile-time copy
+  # here would silently diverge the moment that function turns config-driven.
 
   @impl true
   def get(%Context{} = ctx, segments) do
@@ -105,7 +106,7 @@ defmodule Arca.Adapters.S3 do
     with {:ok, existing} <- read_for_append(ctx, segments) do
       merged = existing <> content
 
-      if byte_size(merged) > @max_append_bytes do
+      if byte_size(merged) > Sanctum.Limits.default_max_response_size() do
         {:error, :object_too_large}
       else
         put(ctx, segments, merged)
@@ -615,7 +616,10 @@ defmodule Arca.Adapters.S3 do
     scrubbed =
       body
       |> to_string()
-      |> String.replace(~r/(X-Amz-(?:Credential|Signature|Security-Token))=[^&<"\s]*/i, "\\1=[REDACTED]")
+      |> String.replace(
+        ~r/(X-Amz-(?:Credential|Signature|Security-Token))=[^&<"\s]*/i,
+        "\\1=[REDACTED]"
+      )
       |> String.slice(0, 500)
 
     Logger.warning("[Arca.S3.#{op}] status=#{status} body=#{inspect(scrubbed)}")

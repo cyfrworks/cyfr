@@ -433,13 +433,14 @@ defmodule Locus.MCP do
   end
 
   # Collect all source files under src_base as a map of relative paths to
-  # contents — one subtree read, no per-entry probing. Excludes anything
-  # under target/ and keeps only .rs/.wit files and Cargo.toml.
+  # contents — one subtree read, no per-entry probing. Excludes the shared
+  # build droppings (target/, node_modules/, .git/ — the same predicate
+  # every tree copy applies) and keeps only .rs/.wit files and Cargo.toml.
   defp collect_source_files(ctx, src_base) do
     case Arca.read_subtree(ctx, src_base) do
       {:ok, pairs} ->
         for {rel, content} <- pairs,
-            "target" not in rel,
+            not Arca.Storage.build_dropping?(rel),
             name = List.last(rel),
             String.ends_with?(name, ".rs") or String.ends_with?(name, ".wit") or
               name == "Cargo.toml",
@@ -508,12 +509,18 @@ defmodule Locus.MCP do
     end
   end
 
-  @tincture_excluded ~w(node_modules dist .git data.db)
+  # Tincture-specific exclusions ON TOP of the shared droppings predicate:
+  # dist/ is the build's own output and data.db a runtime artifact — both
+  # tincture facts, not general ones. target/ rode in here through the
+  # shared predicate now; a tincture that once saw `cargo build` used to
+  # ship its whole Rust target tree into the build request.
+  @tincture_excluded ~w(dist data.db)
 
   defp collect_tincture_source(ctx, base) do
     case Arca.read_subtree(ctx, base) do
       {:ok, pairs} ->
         for {rel, content} <- pairs,
+            not Arca.Storage.build_dropping?(rel),
             not Enum.any?(rel, &(&1 in @tincture_excluded)),
             into: %{} do
           {Path.join(rel), content}

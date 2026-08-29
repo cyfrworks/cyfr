@@ -344,7 +344,21 @@ defmodule Aqua.AgentConfig do
     date_str = Calendar.strftime(now, "%Y-%m-%d")
     time_str = Calendar.strftime(now, "%H:%M UTC")
 
-    "Current date: #{date_str}, #{day_name}, #{time_str}\n" <>
-      "File paths: data/ for user storage, components/ for installed components"
+    "Current date: #{date_str}, #{day_name}, #{time_str}\n" <> guest_scope_line()
+  end
+
+  # Derived from the layout SSOT (`Arca.Storage.guest_scopes/0`), so a
+  # renamed or added guest scope moves the prompt with it instead of the
+  # model describing scopes the runtime refuses. The descriptions stay
+  # prose per scope; an undescribed new scope still appears, generically.
+  defp guest_scope_line do
+    descriptions = %{"data" => "user storage", "components" => "installed components"}
+
+    scopes = Arca.Storage.guest_scopes() |> Map.keys() |> Enum.sort(:desc)
+
+    "File paths: " <>
+      Enum.map_join(scopes, ", ", fn scope ->
+        "#{scope}/ for #{Map.get(descriptions, scope, "guest storage")}"
+      end)
   end
 end

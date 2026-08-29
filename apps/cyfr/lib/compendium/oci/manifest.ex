@@ -22,12 +22,14 @@ defmodule Compendium.OCI.Manifest do
   @readme_media_type "application/vnd.cyfr.readme.v1+markdown"
   @source_media_type "application/vnd.cyfr.source.v1.tar+gzip"
 
-  @type_media_types %{
-    "catalyst" => "application/vnd.cyfr.catalyst.v1+wasm",
-    "reagent" => "application/vnd.cyfr.reagent.v1+wasm",
-    "formula" => "application/vnd.cyfr.formula.v1+wasm",
-    "tincture" => "application/vnd.cyfr.tincture.v1.tar+gzip"
-  }
+  # Derived from the one type roster (`Sanctum.ComponentRef.valid_types/0`)
+  # rather than hand-listed — this was the only kind roster in the tree
+  # spelled independently, and a fifth type would have pushed to the
+  # registry tagged as a reagent through the old silent fallback.
+  @type_media_types Map.new(Sanctum.ComponentRef.valid_types(), fn
+                      "tincture" -> {"tincture", "application/vnd.cyfr.tincture.v1.tar+gzip"}
+                      type -> {type, "application/vnd.cyfr.#{type}.v1+wasm"}
+                    end)
 
   @doc "OCI Image Manifest media type."
   def manifest_media_type, do: @manifest_media_type
@@ -41,10 +43,16 @@ defmodule Compendium.OCI.Manifest do
   @doc "CYFR source tarball layer media type."
   def source_media_type, do: @source_media_type
 
-  @doc "Get the WASM layer media type for a component type."
+  @doc """
+  Get the content layer media type for a component type.
+
+  An unknown type raises — every sibling roster fails closed on an
+  unknown value, and the old silent reagent fallback would have pushed a
+  new kind to the registry under the wrong tag.
+  """
   @spec wasm_media_type(String.t()) :: String.t()
   def wasm_media_type(component_type) do
-    Map.get(@type_media_types, component_type, "application/vnd.cyfr.reagent.v1+wasm")
+    Map.fetch!(@type_media_types, component_type)
   end
 
   @doc """

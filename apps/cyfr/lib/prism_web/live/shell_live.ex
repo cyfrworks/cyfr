@@ -450,7 +450,9 @@ defmodule PrismWeb.ShellLive do
   # paths or non-image extensions — server-side validators in
   # `Cyfr.TinctureHelpers.serve_asset/4` re-check everything; this is a fast
   # client-side reject so we don't emit obviously broken URLs.
-  @image_extensions ~w(.png .jpg .jpeg .svg .gif)
+  # Derived from the serve gate: the fast client-side reject and the
+  # server-side validators answer from one roster.
+  @image_extensions Cyfr.TinctureHelpers.image_extensions()
 
   defp build_asset_url(_socket, _tincture, nil), do: nil
   defp build_asset_url(_socket, _tincture, ""), do: nil

@@ -149,7 +149,7 @@ defmodule Compendium.Registry do
   # cap sees the whole incoming unit, not just the artifact.
   defp commit_component_unit(ctx, type, publisher, name, version, wasm_bytes, manifest, extras) do
     version_dir = ComponentPath.version_dir(type, publisher, name, version)
-    wasm_rel = [List.last(ComponentPath.wasm_path(type, publisher, name, version))]
+    wasm_rel = [ComponentPath.wasm_name(type)]
 
     total =
       byte_size(wasm_bytes) + Enum.sum(for {_rel, bytes} <- extras, do: byte_size(bytes))
@@ -1350,12 +1350,16 @@ defmodule Compendium.Registry do
   end
 
   defp read_wasm_binary_arca(ctx, segments, component_type) do
-    case Arca.get(ctx, segments ++ ["#{component_type}.wasm"]) do
+    # The artifact filename comes from the path vocabulary, not an inline
+    # interpolation — the same derivation the publish path uses.
+    wasm_name = ComponentPath.wasm_name(component_type)
+
+    case Arca.get(ctx, segments ++ [wasm_name]) do
       {:ok, bytes} ->
         {:ok, bytes}
 
       {:error, :not_found} ->
-        {:error, {:missing_wasm, "#{component_type}.wasm not found"}}
+        {:error, {:missing_wasm, "#{wasm_name} not found"}}
 
       {:error, reason} ->
         {:error, {:wasm_read_error, reason}}

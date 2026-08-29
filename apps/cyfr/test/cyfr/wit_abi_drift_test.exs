@@ -121,6 +121,30 @@ defmodule Cyfr.WitAbiDriftTest do
            """
   end
 
+  # `Compendium.Scaffold` hand-writes the catalyst WIT dependency table
+  # into a generated Cargo.toml; the build sandbox materializes whatever
+  # sits under `wit/catalyst/deps/`. A new dep directory that the scaffold
+  # never declares fails a build with a message about the world, not
+  # about the missing declaration — this binds the two.
+  test "the scaffold's Cargo.toml declares exactly the catalyst WIT deps" do
+    declared =
+      ~r/"(cyfr:[a-z-]+)" = \{ path = "wit\/deps\/(cyfr-[a-z-]+)" \}/
+      |> Regex.scan(Compendium.Scaffold.cargo_toml_for(:catalyst, include_oauth_wit: true))
+      |> Enum.map(fn [_, _pkg, dir] -> dir end)
+      |> Enum.sort()
+
+    on_disk =
+      @wit_root
+      |> Path.join("catalyst/deps/*")
+      |> Path.wildcard()
+      |> Enum.map(&Path.basename/1)
+      |> Enum.sort()
+
+    assert declared == on_disk,
+           "scaffold declares #{inspect(declared)} but wit/catalyst/deps holds " <>
+             inspect(on_disk)
+  end
+
   # The registration gate (`Compendium.WasmValidator.validate/2`) demands
   # the exports `Compendium.WITSource.expected_exports/1` derives from the
   # world files; the engine calls a component through the same names

@@ -254,10 +254,14 @@ defmodule Compendium.ComponentPath do
     base_prefix() ++ [type_plural(type), normalize_publisher(publisher), name, version]
   end
 
+  @doc "The artifact filename a component type's binary carries."
+  @spec wasm_name(String.t()) :: String.t()
+  def wasm_name(type), do: "#{type}.wasm"
+
   @doc "Path segments to the WASM binary for a component."
   @spec wasm_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
   def wasm_path(type, publisher, name, version) do
-    version_dir(type, publisher, name, version) ++ ["#{type}.wasm"]
+    version_dir(type, publisher, name, version) ++ [wasm_name(type)]
   end
 
   @doc "Path segments to an arbitrary file in a component version directory."

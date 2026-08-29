@@ -325,9 +325,11 @@ defmodule Prism.TinctureRegistry do
     do:
       match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.ComponentPath.parse(segs))
 
-  # Launch constraint: tinctures can't carry raster image assets until
-  # CSAM hash matching (PhotoDNA) is live. Vector (.svg) is allowed.
-  @blocked_image_extensions ~w(.png .jpg .jpeg .gif .webp)
+  # Launch constraint: tinctures can't SURFACE raster image assets in the
+  # discovery slots until CSAM hash matching (PhotoDNA) is live. Vector
+  # (.svg) is allowed. The roster lives with the serve-gate policy
+  # (`Cyfr.TinctureHelpers`) so the two cannot drift.
+  @blocked_image_extensions Cyfr.TinctureHelpers.blocked_raster_extensions()
 
   defp parse_manifest(ctx, manifest_segs, raw, athanor_id) do
     with {:ok, manifest} <- Jason.decode(raw),

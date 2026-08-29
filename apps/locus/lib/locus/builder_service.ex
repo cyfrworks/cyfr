@@ -107,7 +107,8 @@ defmodule Locus.BuilderService do
          "target_type" => target_type
        })
        when is_map(sources) and is_binary(language) and is_binary(target_type) do
-    with {:ok, language} <- known(language, ~w(rust javascript), "language"),
+    with {:ok, language} <-
+           known(language, Enum.map(Locus.Builder.languages(), &Atom.to_string/1), "language"),
          # The roster, not a copy of it: `Compendium.Scaffold.validate_type/1`
          # reads the same source, and a hand-written list here would silently
          # refuse a fifth component kind the rest of the system had accepted.

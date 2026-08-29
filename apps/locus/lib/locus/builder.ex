@@ -64,6 +64,14 @@ defmodule Locus.Builder do
   @default_timeout_ms 270_000
 
   @doc """
+  The toolchain languages this builder speaks — the roster, where the
+  implementation lives. `Locus.BuilderService` validates request input
+  against it rather than hand-copying the list.
+  """
+  @spec languages() :: [atom()]
+  def languages, do: [:rust, :javascript]
+
+  @doc """
   Compile source code using the appropriate toolchain.
 
   ## Parameters

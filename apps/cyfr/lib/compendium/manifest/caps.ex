@@ -32,9 +32,17 @@ defmodule Compendium.Manifest.Caps do
 
   @egress_keys ~w(domains methods schemes private_ips)
   @storage_keys ~w(paths actions)
+  # String-keyed spellings of `Sanctum.Limits.fields/0` — the manifest is
+  # JSON and this module is Apache while Limits is FSL, so the copy stays,
+  # but a pin test (`manifest_needs_caps_test.exs`) binds the two: a new
+  # clamped limit that this roster does not admit would be refused at
+  # publish while downstream accepts it.
   @limit_int_keys ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
   @limit_duration_keys ~w(timeout batch_timeout)
-  @duration_re ~r/^\d+(ms|s|m|h)$/
+  # One grammar with `Sanctum.Limits.parse_duration/1`: unit-suffixed or
+  # bare integer seconds — publish used to refuse "30" that every
+  # downstream reader accepted. \A..\z, not ^..$: "30s\n" must not match.
+  @duration_re ~r/\A\d+(ms|s|m|h)?\z/
 
   @type error :: {:invalid_caps, term()}
 

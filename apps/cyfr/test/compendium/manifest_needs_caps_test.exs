@@ -350,4 +350,50 @@ defmodule Compendium.ManifestNeedsCapsTest do
       assert is_binary(component.release_digest)
     end
   end
+
+  describe "the limits roster stays bound to Sanctum.Limits" do
+    test "Caps admits exactly the fields Limits clamps" do
+      # Caps holds a string-keyed copy (the manifest is JSON; Caps is
+      # Apache, Limits is FSL) — this pin is what makes the copy safe. A
+      # new clamped limit must be admitted at publish, or manifests
+      # declaring it are refused while every downstream reader accepts it.
+      caps_roster =
+        Enum.sort(~w(max_memory_bytes max_request_size max_response_size
+                     max_concurrent_tasks timeout batch_timeout rate_limit))
+
+      limits_roster = Sanctum.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+
+      assert caps_roster == limits_roster
+    end
+
+    test "one duration grammar: unit-suffixed and bare integer seconds both parse" do
+      # `Sanctum.Limits.parse_duration/1` accepts both; publish used to
+      # refuse the bare form. The two must agree, including the
+      # trailing-newline refusal (\A..\z, not ^..$).
+      for {value, ok?} <- [
+            {"30s", true},
+            {"500ms", true},
+            {"5m", true},
+            {"1h", true},
+            {"30", true},
+            {"30s\n", false},
+            {"", false},
+            {"abc", false}
+          ] do
+        manifest = %{
+          "caps" => %{"limits" => %{"timeout" => value}}
+        }
+
+        result = Caps.validate(manifest)
+
+        limits_ok? = match?({:ok, _}, Sanctum.Limits.parse_duration(value))
+
+        assert result == :ok == ok?,
+               "Caps disagrees on #{inspect(value)}: got #{inspect(result)}"
+
+        assert limits_ok? == ok?,
+               "Limits disagrees on #{inspect(value)}: parse_duration says #{limits_ok?}"
+      end
+    end
+  end
 end
