@@ -303,7 +303,25 @@ defmodule Sanctum.Tenancy do
 
   defp creator_not_denied?(_), do: true
 
-  defp platform_admin?(memberships) do
+  @doc """
+  Whether this person holds the operator capability — an ACTIVE platform
+  membership row.
+
+  The one derivation: callers used to re-spell it (dropping the status
+  check, which only held because `Members.list_by_user/1` happens to
+  filter active) and each copy could silently widen the moment that query
+  changed. A failed read answers `false` — a capability check fails
+  closed.
+  """
+  @spec platform_admin?(String.t() | [map()]) :: boolean()
+  def platform_admin?(user_id) when is_binary(user_id) do
+    case Members.list_by_user(user_id) do
+      {:ok, rows} -> platform_admin?(rows)
+      {:error, _} -> false
+    end
+  end
+
+  def platform_admin?(memberships) when is_list(memberships) do
     Enum.any?(memberships, &(&1.scope == "platform" and &1.status == "active"))
   end
 end

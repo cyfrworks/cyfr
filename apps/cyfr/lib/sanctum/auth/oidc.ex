@@ -81,16 +81,22 @@ defmodule Sanctum.Auth.OIDC do
             email: email,
             provider: to_string(provider),
             namespace: Sanctum.Namespace.lookup(user_id),
-            # Start athanor-less; resolve_into/2 fills the athanor from memberships.
+            # Start athanor-less; resolve_status/2 fills the athanor from
+            # memberships — a failed read refuses as :unavailable instead of
+            # leaving the context athanor-less to 403 downstream.
             athanor_id: nil,
             permissions: default_permissions()
           )
 
-        # Resolve the caller's scope/athanor from their memberships.
-        ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
+        case Sanctum.Tenancy.resolve_status(ctx, force: true) do
+          {:ok, ctx} ->
+            Sanctum.Telemetry.auth_event(provider, :success)
+            {:ok, ctx}
 
-        Sanctum.Telemetry.auth_event(provider, :success)
-        {:ok, ctx}
+          {:error, :unavailable} = err ->
+            Sanctum.Telemetry.auth_event(provider, :failure, %{reason: :unavailable})
+            err
+        end
 
       {:error, reason} = err ->
         Sanctum.Telemetry.auth_event(provider, :failure, %{reason: reason})

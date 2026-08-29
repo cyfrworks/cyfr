@@ -135,6 +135,14 @@ defmodule PrismWeb.SignInResponse do
        "Ask the operator to sort it out."}
   end
 
+  def unavailable_copy(:membership_read) do
+    # A local read failed, not the registry: the catch-all's cyfr.run copy
+    # would send the person chasing an outage that is not there.
+    {"Temporarily unavailable",
+     "The server could not read memberships just now — a transient fault, " <>
+       "not a refusal. Try again in a moment."}
+  end
+
   def unavailable_copy(_registry_unreachable) do
     {"cyfr.run could not be reached",
      "Your namespace on cyfr.run is your identity on every server, and this server " <>

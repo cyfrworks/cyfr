@@ -42,21 +42,24 @@ defmodule Sanctum.Auth.OAuth do
 
   @impl true
   def authenticate(%{provider: provider} = params) when provider in @supported_providers do
+    ctx_attrs = fn user_info ->
+      [
+        user_id: Identity.builtin_user_id(provider, user_info.id),
+        email: user_info.email,
+        provider: to_string(provider),
+        # Start athanor-less; resolve_status/2 fills the athanor from
+        # memberships — and distinguishes a read that FAILED from a person
+        # who belongs nowhere, so a DB blip refuses as :unavailable instead
+        # of a permanent-sounding 403.
+        athanor_id: nil,
+        permissions: [:*]
+      ]
+    end
+
     with :ok <- check_provider_configured(provider),
-         {:ok, user_info} <- extract_user_info(params) do
-      ctx =
-        Context.build(
-          user_id: Identity.builtin_user_id(provider, user_info.id),
-          email: user_info.email,
-          provider: to_string(provider),
-          # Start athanor-less; resolve_into/2 fills the athanor from memberships.
-          athanor_id: nil,
-          permissions: [:*]
-        )
-
-      # Resolve the caller's scope/athanor from their memberships.
-      ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
-
+         {:ok, user_info} <- extract_user_info(params),
+         {:ok, ctx} <-
+           Sanctum.Tenancy.resolve_status(Context.build(ctx_attrs.(user_info)), force: true) do
       Telemetry.auth_event(provider, :success, %{email: user_info.email})
       {:ok, ctx}
     else

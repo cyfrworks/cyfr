@@ -403,12 +403,7 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  defp platform_admin?(user_id) do
-    case Members.list_by_user(user_id) do
-      {:ok, rows} -> Enum.any?(rows, &(&1.scope == "platform"))
-      {:error, _} -> false
-    end
-  end
+  defdelegate platform_admin?(user_id), to: Sanctum.Tenancy
 
   # The widest grant in the system, and its only input is an email address —
   # under a generic OIDC issuer `email_verified` may legitimately be absent,

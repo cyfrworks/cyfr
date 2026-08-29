@@ -197,4 +197,48 @@ defmodule Sanctum.Auth.OAuthTest do
       assert Sanctum.Auth in behaviours
     end
   end
+
+  describe "authenticate/1 when the membership read fails" do
+    setup do
+      original = Application.get_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
+
+      Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth,
+        client_id: "test_github_id",
+        client_secret: "test_github_secret"
+      )
+
+      original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
+      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth, original)
+        else
+          Application.delete_env(:ueberauth, Ueberauth.Strategy.Github.OAuth)
+        end
+
+        if original_resolver do
+          Application.put_env(:cyfr, :tenancy_resolver_override, original_resolver)
+        else
+          Application.delete_env(:cyfr, :tenancy_resolver_override)
+        end
+      end)
+
+      :ok
+    end
+
+    test "refuses :unavailable instead of an athanor-less context" do
+      # A DB blip at sign-in used to hand back the unresolved context, which
+      # the tenant gate downstream 403'd as "you belong nowhere" — a
+      # permanent-sounding answer to a transient fault. The refusal is typed
+      # now, and the controller renders it as a retryable 503.
+      params = %{
+        provider: :github,
+        uid: "12345",
+        info: %{email: "alice@example.com"}
+      }
+
+      assert {:error, :unavailable} = OAuth.authenticate(params)
+    end
+  end
 end

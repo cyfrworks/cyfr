@@ -144,6 +144,18 @@ defmodule Sanctum.TenancyTest do
     end
   end
 
+  describe "platform_admin?/1" do
+    test "requires an ACTIVE platform row, not merely a platform row" do
+      # The predicate's one derivation. Callers used to re-spell it without
+      # the status check, which only held because list_by_user/1 happens to
+      # filter active — each copy could silently widen if that query changed.
+      assert Tenancy.platform_admin?([%{scope: "platform", status: "active"}])
+      refute Tenancy.platform_admin?([%{scope: "platform", status: "invited"}])
+      refute Tenancy.platform_admin?([%{scope: "athanor", status: "active"}])
+      refute Tenancy.platform_admin?([])
+    end
+  end
+
   describe "revalidate/1" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

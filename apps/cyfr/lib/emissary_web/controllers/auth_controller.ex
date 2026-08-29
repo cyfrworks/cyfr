@@ -154,9 +154,18 @@ defmodule EmissaryWeb.AuthController do
       case Sanctum.SignIn.complete(user, provider, access_token) do
         {:proceed, user, report} ->
           # The athanor may have been minted a moment ago: resolve again so
-          # the session names it.
-          ctx = Sanctum.Tenancy.resolve_into(%{ctx | namespace: user.namespace}, force: true)
-          SignInResponse.respond(conn, {:proceed, report}, session: {:mint, ctx})
+          # the session names it. A failed read here answers 503 with no
+          # session — not a session whose tenant gate 403s every request.
+          case Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true) do
+            {:ok, ctx} ->
+              SignInResponse.respond(conn, {:proceed, report}, session: {:mint, ctx})
+
+            {:error, :unavailable} ->
+              SignInResponse.respond(conn, {:unavailable, :membership_read},
+                session: {:mint, ctx},
+                retry_path: "/login"
+              )
+          end
 
         outcome ->
           # The IdP token travels for the claim or the policy acceptance
@@ -176,6 +185,18 @@ defmodule EmissaryWeb.AuthController do
           403,
           "Not allowed on this server",
           "<p>#{PrismWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+        )
+
+      {:error, :unavailable} ->
+        # A transient membership read during authenticate — a 503, never a
+        # 401: the person's credentials were fine and retrying fixes it.
+        PrismWeb.MinimalPage.send_page(
+          conn,
+          503,
+          "Temporarily unavailable",
+          "<p>The server could not read memberships just now. " <>
+            "This is a transient fault, not a refusal.</p>" <>
+            "<p><a href=\"/login\">Try again</a></p>"
         )
 
       {:error, reason} ->

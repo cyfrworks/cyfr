@@ -585,17 +585,33 @@ defmodule Sanctum.Auth.DeviceFlow do
   def wire(result), do: result
 
   defp with_session(base, ctx, extras) do
-    ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
+    case Sanctum.Tenancy.resolve_status(ctx, force: true) do
+      {:ok, ctx} ->
+        case Session.create(ctx) do
+          {:ok, session} ->
+            base
+            |> Map.put(:session_token, session.token)
+            |> Map.merge(extras)
 
-    case Session.create(ctx) do
-      {:ok, session} ->
-        base
-        |> Map.put(:session_token, session.token)
-        |> Map.merge(extras)
+          {:error, reason} ->
+            Logger.error("[Sanctum.Auth.DeviceFlow] session create failed: #{inspect(reason)}")
 
-      {:error, reason} ->
-        Logger.error("[Sanctum.Auth.DeviceFlow] session create failed: #{inspect(reason)}")
-        %{status: "error", message: "The session could not be created. Run `cyfr login` again."}
+            %{
+              status: "error",
+              message: "The session could not be created. Run `cyfr login` again."
+            }
+        end
+
+      {:error, :unavailable} ->
+        # A transient membership read, not a refusal: no session was minted,
+        # and the person is told to retry rather than that they belong
+        # nowhere. The CLI treats "error" as terminal-with-message.
+        %{
+          status: "error",
+          message:
+            "The server could not read memberships just now. " <>
+              "Run `cyfr login` again in a moment."
+        }
     end
   end
 

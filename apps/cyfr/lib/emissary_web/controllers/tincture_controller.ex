@@ -308,19 +308,13 @@ defmodule EmissaryWeb.TinctureController do
   # its own. The bytes are then served through the public context (path
   # resolution only) exactly as before.
   defp asset_reader_standing(user_id, athanor_id) when is_binary(user_id) do
-    if Sanctum.Tenancy.Members.member?(user_id, athanor_id) or platform_admin?(user_id),
-      do: :ok,
-      else: {:error, :not_member}
+    if Sanctum.Tenancy.Members.member?(user_id, athanor_id) or
+         Sanctum.Tenancy.platform_admin?(user_id),
+       do: :ok,
+       else: {:error, :not_member}
   end
 
   defp asset_reader_standing(_user_id, _athanor_id), do: {:error, :no_user}
-
-  defp platform_admin?(user_id) do
-    case Sanctum.Tenancy.Members.list_by_user(user_id) do
-      {:ok, rows} -> Enum.any?(rows, &(&1.scope == "platform"))
-      {:error, _} -> false
-    end
-  end
 
   # -------------------------------------------------------------------
   # Private helpers
