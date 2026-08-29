@@ -189,6 +189,28 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
+  @doc """
+  The deployment's origin: `public_url/0` when the operator set one, else
+  a dev default derived from the endpoint's CONFIG — the `:url` host and
+  the `:http` port, as data. Deriving here (rather than the auth domain
+  calling `EmissaryWeb.Endpoint.url()`) keeps the deployment fact behind
+  this module and fixes what that call got wrong: the endpoint `:url`
+  carries no scheme, so it answered `http://…` even on the TLS profile.
+  The dev default is honestly `http` — a TLS deployment sets
+  CYFR_PUBLIC_URL, and `Cyfr.Application` warns at boot when it is unset.
+  """
+  @spec origin() :: String.t()
+  def origin do
+    public_url() || dev_origin()
+  end
+
+  defp dev_origin do
+    endpoint = Application.get_env(:cyfr, EmissaryWeb.Endpoint, [])
+    host = get_in(endpoint, [:url, :host]) || "localhost"
+    port = get_in(endpoint, [:http, :port]) || 4000
+    "http://#{host}:#{port}"
+  end
+
   # DNS-rebinding guard: unset means localhost-only.
   @mcp_default_origins [
     "http://localhost",

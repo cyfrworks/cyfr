@@ -265,7 +265,7 @@ defmodule Sanctum.Tenancy do
   Channels are athanor-owned: a creator who merely leaves the group leaves
   the channel running for the members who remain. `created_by` may be nil or
   a synthetic principal (`webhook:<slug>`, `_seed`, `system`) — those are
-  never denied. On a transient read error the check fails safe (active),
+  never denied. On a transient read error the check FAILS OPEN (active),
   matching `revalidate/1`'s posture — a DB blip must not silently kill every
   schedule; the read is retried on the next firing.
   """

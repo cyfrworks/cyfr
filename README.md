@@ -372,6 +372,12 @@ Prism wires this up for you:
 
 Backends persist to `./data/mcp-bridge/backends.json` so they survive container restarts. Remove or restart them from the same page.
 
+### Operator notes for shared and open-door servers
+
+- **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening the door if that posture is too generous for your deployment.
+- **Audit sinks receive identity fields, email included.** The door's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Sanctum.Sanitizer` deliberately does not redact identity fields on the audit plane. Point `config :cyfr, :audit_sinks` at a SIEM only if it may hold PII.
+- **A first sign-in needs cyfr.run reachable once** (to find or claim the person's namespace) and pulls the AQUA formula's provider catalysts from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds.
+
 ### Reaching Prism on the server
 
 Prism is served by the same endpoint as everything else: `https://<your-domain>/` in TLS mode. In direct mode the endpoint is loopback-only; forward it over SSH:

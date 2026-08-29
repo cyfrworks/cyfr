@@ -9,7 +9,11 @@
 # General application configuration
 import Config
 
-# Register SSE MIME type for MCP server-sent events
+# Register SSE MIME type for MCP server-sent events. COMPILE-TIME for the
+# :mime dep: it bakes this table into its own build, so changing it (or
+# building against a stale _build) needs `mix deps.clean mime --build` —
+# the :mcp and :authenticated_api pipelines' `accepts ["json",
+# "event-stream"]` silently stop negotiating SSE otherwise.
 config :mime, :types, %{
   "text/event-stream" => ["event-stream"]
 }

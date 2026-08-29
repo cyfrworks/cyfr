@@ -1285,5 +1285,13 @@ defmodule Arca.Overlay do
   defp seed_read_subtree(path),
     do: Arca.Storage.read_subtree_via(Arca.Adapters.Local, seed_ctx(), seed(path))
 
+  # The context the overlay's DIRECT `Arca.Adapters.Local` seed reads run
+  # under — the one read path that does not pass through the `Arca` facade.
+  # Its safety rests on three facts stated in three modules, gathered here:
+  # the facade's `authorize_path/2` would admit a system context anyway
+  # (`Arca.Storage`), the adapter itself refuses seed WRITES
+  # (`Arca.Adapters.Local.refuse_seed_write!/1`), and the seed tree is
+  # tracked source, never tenant data. If any of the three moves, this
+  # bypass must move with it.
   defp seed_ctx, do: Sanctum.system_context()
 end

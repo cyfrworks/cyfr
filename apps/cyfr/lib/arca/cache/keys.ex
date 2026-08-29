@@ -28,7 +28,11 @@ defmodule Arca.Cache.Keys do
   @doc """
   Raw WASM bytes for a digest — the fetch cache one step before
   `compiled_component/1`, equally content-addressed and shared across
-  athanors.
+  athanors. What makes the sharing safe is the verification on both ends
+  of a hit: the executor compares the served digest against the
+  REQUESTING tenant's own row (`Opus.Executor.verify_integrity/3`), and
+  `Compendium.Registry.get_blob/2` re-hashes what it reads — a poisoned
+  entry fails the requester's check, never runs under their consent.
   """
   def wasm_bytes(digest), do: {:wasm_bytes, digest}
 
