@@ -46,6 +46,17 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   @doc "The default per-window invoke budget (both ingress surfaces)."
   def default_invoke_max, do: @default_invoke_max
 
+  @doc """
+  The effective invoke budget: the operator's override if set, else the
+  default above.
+
+  One reader for the override. `PrismWeb.ShellLive` spelled the same
+  `Application.get_env(:cyfr, :tincture_rate_limit_max) || …` itself, so the
+  key had two readers and the two could disagree about what "unset" means.
+  """
+  @spec invoke_max() :: pos_integer()
+  def invoke_max, do: Application.get_env(:cyfr, :tincture_rate_limit_max) || @default_invoke_max
+
   # The window both surfaces share, for the same no-drift reason as the
   # budget: the console shell keys the same capability by person and used
   # to re-spell this literal.

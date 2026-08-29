@@ -44,9 +44,24 @@ defmodule Sanctum.Consent.BlobBuilder do
     end)
   end
 
-  @doc "Assemble and JCS-encode the final blob from built nodes."
+  @doc """
+  Assemble and JCS-encode the final blob from built nodes.
+
+  A dep edge whose key names no node in the graph answers
+  `{:error, {:dangling_dep, key}}` — the shape every caller here already
+  handles. It used to be a `nil.resources` UndefinedFunctionError, which
+  `Consent.Bootstrap.run_components/2` does not catch (it takes typed skips
+  and refusals), so provisioning crashed instead of recording a skip and
+  `Commit.build_blob/2` answered a 500 rather than a refusal.
+  """
   @spec encode(map()) :: {:ok, binary()} | {:error, term()}
   def encode(nodes) do
+    do_encode(nodes)
+  catch
+    {:dangling_dep, key} -> {:error, {:dangling_dep, key}}
+  end
+
+  defp do_encode(nodes) do
     encoded_nodes =
       Map.new(nodes, fn {node_key, node} ->
         edges =
@@ -55,7 +70,15 @@ defmodule Sanctum.Consent.BlobBuilder do
               {"@ingress", finalize_edge(resources)}
 
             {dep_key, %{"__dep__" => dep_key}} ->
-              {dep_key, finalize_edge(nodes[dep_key].resources)}
+              # A dep key the activation graph does not carry is a
+              # construction bug, not a `nil.resources` UndefinedFunctionError
+              # raised out of `Consent.Bootstrap` — whose `run_components/2`
+              # catches only typed skips and refusals, so provisioning
+              # crashed the whole supervised task instead of recording one.
+              case nodes[dep_key] do
+                nil -> throw({:dangling_dep, dep_key})
+                dep -> {dep_key, finalize_edge(dep.resources)}
+              end
           end)
 
         {node_key, %{"limits" => node.limits, "edges" => edges}}

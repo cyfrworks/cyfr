@@ -112,6 +112,68 @@ defmodule Cyfr.NamespaceDirectionTest do
            """
   end
 
+  # Inside cyfr, the domain namespaces may name the web layer — but only
+  # where someone decided they should. This is the same shape as the engine
+  # rule above, one level in: a NEW domain→web reach fails here until it is
+  # argued, rather than accruing quietly the way these two did.
+  @domain_dirs ["apps/cyfr/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
+
+  @domain_web_calls [
+    # The local fallback for the OAuth redirect origin. `CYFR_PUBLIC_URL` is
+    # the configured answer (and the only one carrying a scheme); this is what
+    # a dev box with nothing set uses.
+    {"apps/cyfr/lib/sanctum/vault/oauth_grant.ex", "EmissaryWeb.Endpoint"},
+    # `Aqua.Actions` validates an agent's navigation intents against the
+    # console's real route table, so a link it emits cannot 404.
+    {"apps/cyfr/lib/aqua/actions.ex", "EmissaryWeb.Router"}
+  ]
+
+  # Code only — a moduledoc that NAMES the controller it serves is describing
+  # the dependency, not taking one. Same filter the surface tests use.
+  defp code_lines(source) do
+    source
+    |> String.split("\n")
+    |> Enum.with_index(1)
+    |> Enum.reduce({[], false}, fn {line, n}, {kept, in_heredoc?} ->
+      toggles =
+        line
+        |> String.graphemes()
+        |> Enum.chunk_every(3, 1, :discard)
+        |> Enum.count(&(&1 == ["\"", "\"", "\""]))
+
+      now_inside? = if rem(toggles, 2) == 1, do: not in_heredoc?, else: in_heredoc?
+
+      keep? = not in_heredoc? and not now_inside? and not String.match?(line, ~r/^\s*#/)
+      {if(keep?, do: [{line, n} | kept], else: kept), now_inside?}
+    end)
+    |> elem(0)
+  end
+
+  test "the domain namespaces reach the web layer only where it is written down" do
+    allowed = MapSet.new(@domain_web_calls)
+
+    found =
+      for dir <- @domain_dirs,
+          path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
+          rel = Path.relative_to(path, root()),
+          {line, n} <- path |> File.read!() |> code_lines(),
+          [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),
+          not MapSet.member?(allowed, {rel, module}),
+          do: "#{rel}:#{n}: #{module}"
+
+    assert found == [],
+           """
+           A domain namespace names the web layer somewhere this list does
+           not cover:
+
+           #{Enum.map_join(found, "\n", &"  #{&1}")}
+
+           The auth domain reads key material and the public origin from
+           CONFIG, not from the endpoint (`Sanctum.TinctureAuth` says why).
+           If a new reach is right, add it above with a line saying so.
+           """
+  end
+
   test "the shared primitives live in the glue namespace" do
     assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/topics.ex"))
     assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/uuid7.ex"))

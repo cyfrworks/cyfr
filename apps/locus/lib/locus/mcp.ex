@@ -196,24 +196,44 @@ defmodule Locus.MCP do
       :ok ->
         logger_metadata = Cyfr.LoggerContext.capture()
 
-        Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
+        start =
+          Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
+            Cyfr.LoggerContext.restore(logger_metadata)
 
-          case run_compile(ctx, reference, build_id) do
-            {:ok, result} ->
-              Cyfr.BuildRecords.record_finished(ctx, build_id, "compiled", result)
+            case run_compile(ctx, reference, build_id) do
+              {:ok, result} ->
+                Cyfr.BuildRecords.record_finished(ctx, build_id, "compiled", result)
 
-            {:error, reason} ->
-              Cyfr.BuildRecords.record_finished(
-                ctx,
-                build_id,
-                "failed",
-                format_async_error(reason)
-              )
-          end
-        end)
+              {:error, reason} ->
+                Cyfr.BuildRecords.record_finished(
+                  ctx,
+                  build_id,
+                  "failed",
+                  format_async_error(reason)
+                )
+            end
+          end)
 
-        {:ok, %{status: "started", build_id: build_id, reference: reference}}
+        # Whether the task STARTED is the difference between "started" and a
+        # row that reads "started" forever: the result was discarded, so a
+        # supervisor at its ceiling left the caller polling a build nothing
+        # was running. Every sibling call site handles this.
+        case start do
+          {:ok, _pid} ->
+            {:ok, %{status: "started", build_id: build_id, reference: reference}}
+
+          {:error, reason} ->
+            Logger.error("[Locus.MCP] could not start build #{build_id}: #{inspect(reason)}")
+
+            Cyfr.BuildRecords.record_finished(
+              ctx,
+              build_id,
+              "failed",
+              "the build could not be started"
+            )
+
+            {:error, "Could not start build #{build_id} — retry shortly"}
+        end
 
       {:error, _} ->
         {:error, "Could not record build start for #{build_id}"}

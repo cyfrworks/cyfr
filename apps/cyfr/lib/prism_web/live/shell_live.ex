@@ -605,9 +605,7 @@ defmodule PrismWeb.ShellLive do
   # limiter table, same bucket vocabulary, same config override, and the
   # default number comes from the plug so the two cannot drift.
   defp invoke_throttled?(ctx, tincture) do
-    max =
-      Application.get_env(:cyfr, :tincture_rate_limit_max) ||
-        EmissaryWeb.Plugs.TinctureRateLimit.default_invoke_max()
+    max = EmissaryWeb.Plugs.TinctureRateLimit.invoke_max()
 
     key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}
 

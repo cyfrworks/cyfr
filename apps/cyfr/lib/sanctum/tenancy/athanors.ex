@@ -201,7 +201,15 @@ defmodule Sanctum.Tenancy.Athanors do
   def home! do
     case home() do
       {:ok, athanor} -> athanor
-      {:error, reason} -> raise "[Sanctum.Tenancy.Athanors] no Home athanor (#{inspect(reason)})"
+      # A refusal, not a bare string: the seed being absent is an
+      # authorization-shaped fact (there is no athanor to work in), and
+      # `Sanctum.UnauthorizedError` is what every other surface renders for
+      # that — a `RuntimeError` here rendered as a 500 with the internal
+      # reason inspected into the message.
+      {:error, reason} ->
+        require Logger
+        Logger.error("[Sanctum.Tenancy.Athanors] no Home athanor: #{inspect(reason)}")
+        raise Sanctum.UnauthorizedError, reason: :missing_tenant
     end
   end
 
