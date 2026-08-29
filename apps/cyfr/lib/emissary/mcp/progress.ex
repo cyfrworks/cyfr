@@ -32,6 +32,14 @@ defmodule Emissary.MCP.Progress do
 
   @registry __MODULE__.Registry
 
+  # How many undelivered messages the listening connection may hold before
+  # progress is dropped instead of queued. The conn process writes each
+  # notification with a blocking chunk/2, so against a stalled socket a
+  # chatty tool would otherwise grow its mailbox for the life of the
+  # request — the one unbounded queue on this path. Progress is idempotent
+  # display state; dropping under pressure is the honest policy, counted.
+  @max_pending_messages 100
+
   @doc "Child spec for the registry that maps a request to its listening connection."
   def child_spec(_opts) do
     Registry.child_spec(keys: :unique, name: @registry)
@@ -69,9 +77,32 @@ defmodule Emissary.MCP.Progress do
       when is_binary(request_id) and is_map(payload) do
     case Registry.lookup(@registry, request_id) do
       [{pid, progress_token}] ->
-        params = Map.put(payload, "progressToken", progress_token)
-        send(pid, {:mcp_progress, Message.encode_notification("notifications/progress", params)})
-        :ok
+        case Process.info(pid, :message_queue_len) do
+          {:message_queue_len, len} when len < @max_pending_messages ->
+            params = Map.put(payload, "progressToken", progress_token)
+
+            send(
+              pid,
+              {:mcp_progress, Message.encode_notification("notifications/progress", params)}
+            )
+
+            :ok
+
+          {:message_queue_len, _backed_up} ->
+            # The connection cannot keep up (a stalled socket blocks its
+            # chunk/2). Dropped, counted — never queued without bound.
+            :telemetry.execute(
+              [:cyfr, :mcp, :progress, :dropped],
+              %{count: 1},
+              %{request_id: request_id}
+            )
+
+            :ok
+
+          nil ->
+            # The listener died between lookup and send — same as no stream.
+            :ok
+        end
 
       [] ->
         # No stream for this request: either the client did not ask for progress,

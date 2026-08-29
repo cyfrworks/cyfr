@@ -37,4 +37,34 @@ defmodule EmissaryWeb.MetricsPlugTest do
 
     assert MetricsPlug.call(conn, []) == conn
   end
+
+  test "a configured token gates the scrape with a bearer" do
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [], name: :cyfr_prometheus})
+
+    previous = Application.get_env(:cyfr, :prometheus_metrics_enabled, false)
+    Application.put_env(:cyfr, :prometheus_metrics_enabled, true)
+    Application.put_env(:cyfr, :metrics_token, "scrape-secret")
+
+    on_exit(fn ->
+      Application.put_env(:cyfr, :prometheus_metrics_enabled, previous)
+      Application.delete_env(:cyfr, :metrics_token)
+    end)
+
+    # No bearer, wrong bearer: 401. The right one scrapes.
+    assert (conn(:get, "/metrics") |> MetricsPlug.call([])).status == 401
+
+    wrong =
+      conn(:get, "/metrics")
+      |> Plug.Conn.put_req_header("authorization", "Bearer nope")
+      |> MetricsPlug.call([])
+
+    assert wrong.status == 401
+
+    right =
+      conn(:get, "/metrics")
+      |> Plug.Conn.put_req_header("authorization", "Bearer scrape-secret")
+      |> MetricsPlug.call([])
+
+    assert right.status == 200
+  end
 end

@@ -213,6 +213,13 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :locus, :build, :start] => %{consumers: [:bridge]},
     [:cyfr, :locus, :build, :progress] => %{consumers: [:bridge]},
     [:cyfr, :locus, :build, :stop] => %{consumers: [:bridge]},
+    [:cyfr, :mcp, :progress, :dropped] => %{
+      consumers: [:operator],
+      note:
+        "a progress notification dropped because the listening connection's " <>
+          "mailbox is backed up (a stalled socket) — the bound that keeps a " <>
+          "chatty tool from growing the conn process without limit"
+    },
 
     # ——— agents ———
     [:cyfr, :aqua, :approval] => %{

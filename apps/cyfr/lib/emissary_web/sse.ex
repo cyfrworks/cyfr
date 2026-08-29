@@ -69,10 +69,14 @@ defmodule EmissaryWeb.SSE do
   @doc """
   Claim a stream slot for the caller under `tag`, bounded by the
   `limit_key` app-config budget (default #{@default_max_concurrent}).
+
+  The key carries the credential, not only the person: API-key callers
+  share a nil `user_id`, so without it every integration in an athanor
+  drew on one budget and a single chatty one starved the rest.
   """
   @spec claim_slot(atom(), Sanctum.Context.t(), atom()) :: :ok | {:error, :stream_limit}
   def claim_slot(tag, %Sanctum.Context{} = ctx, limit_key) when is_atom(tag) do
-    key = {tag, ctx.athanor_id, ctx.user_id}
+    key = {tag, ctx.athanor_id, ctx.user_id, ctx.api_key_id || ctx.session_token_hash}
     limit = Application.get_env(:cyfr, limit_key, @default_max_concurrent)
 
     if length(Registry.lookup(Emissary.MCP.SubscriptionRegistry, key)) >= limit do

@@ -155,6 +155,39 @@ if config_env() != :test do
       config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
     end
 
+    # The :api bucket's own budget (GET /api/executions/:id/events — SSE
+    # reconnects). Unset, it shares the MCP values above; the counters were
+    # always separate, the budgets silently were not.
+    if v = env_int.("CYFR_API_RATE_LIMIT_MAX", nil) do
+      config :cyfr, :api_rate_limit_max, v
+    end
+
+    if v = env_int.("CYFR_API_RATE_LIMIT_WINDOW_MS", nil) do
+      config :cyfr, :api_rate_limit_window_ms, v
+    end
+
+    # SSE budgets, per caller (athanor + credential): how many concurrent
+    # streams each surface admits, and how long one may live before the
+    # client must reconnect. Defaults: 8 streams, 30 minutes. These were
+    # code defaults with no lever — an operator facing socket exhaustion,
+    # or one wanting longer-lived execution streams, had no answer short
+    # of a code change.
+    if v = env_int.("CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", nil) do
+      config :cyfr, :mcp_subscription_max_concurrent, v
+    end
+
+    if v = env_int.("CYFR_MCP_SUBSCRIPTION_MAX_MS", nil) do
+      config :cyfr, :mcp_subscription_max_ms, v
+    end
+
+    if v = env_int.("CYFR_EXECUTION_EVENTS_MAX_CONCURRENT", nil) do
+      config :cyfr, :execution_events_max_concurrent, v
+    end
+
+    if v = env_int.("CYFR_EXECUTION_EVENTS_MAX_MS", nil) do
+      config :cyfr, :execution_events_max_ms, v
+    end
+
     # Webhook replay window (default 300s). A delivery whose `timestamp_header`
     # is further than this from now is refused. Senders differ in how well they
     # keep a clock; the value was a constant nothing could set, so operators
@@ -602,6 +635,13 @@ if config_env() != :test do
     # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
     if env_str.("CYFR_PROMETHEUS_METRICS", nil) == "true" do
       config :cyfr, :prometheus_metrics_enabled, true
+    end
+
+    # Bearer token for the /metrics scrape. Unset means the operator chose
+    # network-level protection (private bind / proxy allowlist) — the
+    # endpoint's original posture.
+    if metrics_token = env_str.("CYFR_METRICS_TOKEN", nil) do
+      config :cyfr, :metrics_token, metrics_token
     end
 
     # OpenTelemetry Configuration

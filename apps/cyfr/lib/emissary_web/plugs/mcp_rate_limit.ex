@@ -17,7 +17,10 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
 
   - `:bucket` — the counter namespace, defaulting to `:mcp`. Routes with
     different traffic shapes get their own: a page reconnecting to an event
-    stream should not spend the budget its MCP calls need.
+    stream should not spend the budget its MCP calls need. A bucket's own
+    budget keys (`:<bucket>_rate_limit_max` / `:<bucket>_rate_limit_window_ms`)
+    win when set; otherwise the shared `:mcp_rate_limit_*` values govern —
+    the doc used to promise per-bucket budgets the code did not read.
   - `:errors` — the module that renders a rejection, defaulting to
     `EmissaryWeb.MCPError`. Use `EmissaryWeb.ApiError` on a route that does not
     speak JSON-RPC.
@@ -28,7 +31,8 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
       config :cyfr, :mcp_rate_limit_max, 120
       config :cyfr, :mcp_rate_limit_window_ms, 60_000
 
-  or `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS`.
+  or `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS`; the `:api`
+  bucket answers to `CYFR_API_RATE_LIMIT_MAX` / `CYFR_API_RATE_LIMIT_WINDOW_MS`.
 
   Counters live in `Cyfr.RateLimiter` (ETS) — single-node only, same caveat as
   `EmissaryWeb.Plugs.AuthRateLimit`.
@@ -41,17 +45,30 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
   @default_bucket :mcp
 
   def init(opts) do
+    bucket = Keyword.get(opts, :bucket, @default_bucket)
+
     opts
     |> Keyword.put_new(:errors, @default_errors)
-    |> Keyword.put_new(:bucket, @default_bucket)
+    |> Keyword.put(:bucket, bucket)
+    # Derived once at init (compile time in a router pipeline), so call/2
+    # never builds atoms per request.
+    |> Keyword.put(:max_key, bucket_key(bucket, "_rate_limit_max"))
+    |> Keyword.put(:window_key, bucket_key(bucket, "_rate_limit_window_ms"))
   end
 
   def call(conn, opts) do
-    max_requests = Application.get_env(:cyfr, :mcp_rate_limit_max, @default_max)
-    window_ms = Application.get_env(:cyfr, :mcp_rate_limit_window_ms, @default_window_ms)
+    bucket = Keyword.get(opts, :bucket, @default_bucket)
+
+    max_requests =
+      bucket_env(opts[:max_key]) ||
+        Application.get_env(:cyfr, :mcp_rate_limit_max, @default_max)
+
+    window_ms =
+      bucket_env(opts[:window_key]) ||
+        Application.get_env(:cyfr, :mcp_rate_limit_window_ms, @default_window_ms)
 
     ip = Sanctum.ClientIp.resolve(conn)
-    key = {:rate_limit, Keyword.get(opts, :bucket, @default_bucket), ip}
+    key = {:rate_limit, bucket, ip}
 
     case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
       :ok ->
@@ -65,4 +82,12 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
         )
     end
   end
+
+  # The default bucket reads the shared keys directly — no second spelling
+  # of the same knob for it.
+  defp bucket_key(@default_bucket, _suffix), do: nil
+  defp bucket_key(bucket, suffix), do: String.to_atom("#{bucket}#{suffix}")
+
+  defp bucket_env(nil), do: nil
+  defp bucket_env(key), do: Application.get_env(:cyfr, key)
 end
