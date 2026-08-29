@@ -172,8 +172,17 @@ defmodule PrismWeb.EnforcementsLive do
       |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
 
     case params do
-      [] -> PrismWeb.Focus.path(socket.assigns.athanor_route, "/enforcements")
-      p -> PrismWeb.Focus.path(socket.assigns.athanor_route, "/enforcements?#{p}")
+      [] ->
+        PrismWeb.Focus.path(socket.assigns.athanor_route, "/enforcements")
+
+      p ->
+        # `URI.encode_query/1`, not interpolation: a list of tuples has no
+        # String.Chars implementation, so `"?#{p}"` raised and took the
+        # LiveView down on every filter that was not "all".
+        PrismWeb.Focus.path(
+          socket.assigns.athanor_route,
+          "/enforcements?" <> URI.encode_query(p)
+        )
     end
   end
 

@@ -49,6 +49,14 @@ defmodule EmissaryWeb.ExecutionEventsController do
           {:exec, nil} ->
             EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
 
+          # The lookup is `with_db_rescue`-wrapped, so a store that cannot
+          # answer arrives here rather than raising. It is neither "no such
+          # execution" nor "not yours" — saying 404 would tell a caller their
+          # execution is gone during a blip — so it answers the same 503 the
+          # engine-unavailable branch above does.
+          {:exec, {:error, :database_error}} ->
+            EmissaryWeb.ApiError.send(conn, 503, :unavailable, "Try again shortly")
+
           {:error, :forbidden} ->
             EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
 

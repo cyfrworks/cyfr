@@ -511,6 +511,14 @@ defmodule PrismWeb.ShellLive do
   # ============================================================================
 
   defp handle_iframe_message(socket, window_id, %{"type" => "cyfr:request"} = msg) do
+    # `payload` is whatever the sandboxed frame's own scripts wrote —
+    # `iframe_bridge.js` forwards any `cyfr:`-prefixed object verbatim — so it
+    # is normalized to a map once, here, before anything indexes into it.
+    # `Access.get/3` has no clause for a binary or a number, so a payload of
+    # `"x"` used to raise out of the handler and kill this LiveView, taking
+    # every open tincture window's state with it, on demand and in a loop.
+    msg = Map.put(msg, "payload", payload_map(msg["payload"]))
+
     tincture = Enum.find(socket.assigns.tinctures, &(&1.id == window_id))
 
     if tincture do
@@ -584,6 +592,12 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
+
+  # A payload that is not an object carries no keys, so it reads as the empty
+  # one — the handlers then take their own "missing field" paths (keep the
+  # current title, refuse an invoke with no reference) instead of raising.
+  defp payload_map(%{} = payload), do: payload
+  defp payload_map(_other), do: %{}
 
   # The HTTP invoke route carries TinctureRateLimit keyed by IP; this is the
   # same capability reached from a LiveView socket, keyed by person instead.

@@ -379,8 +379,12 @@ defmodule EmissaryWeb.TinctureController do
       String.contains?(domain, "/") -> false
       String.contains?(domain, ":") -> false
       String.contains?(domain, " ") -> false
-      # Must look like a domain name (letters+digits+hyphens, ends with TLD of 2+ chars)
-      not Regex.match?(~r/^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, base) -> false
+      # Must look like a domain name (letters+digits+hyphens, ends with TLD of
+      # 2+ chars). `\A…\z`, not `^…$`: in Elixir `$` also matches before a
+      # trailing newline, so "evil.com\n" passed here, was interpolated into
+      # the CSP, and `put_resp_header/3` raised on the control character —
+      # a manifest could 500 its own tincture's index for good.
+      not Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\z/, base) -> false
       true -> true
     end
   end

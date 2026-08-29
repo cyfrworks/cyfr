@@ -81,6 +81,15 @@ defmodule PrismWeb.WebhooksLive do
   # ============================================================================
 
   @impl true
+  # The revealed secret is plaintext in the socket's assigns, which
+  # `Phoenix.LiveView.Socket` prints in a crash report and the DOM holds until
+  # the page changes. Only the unrelated "edit" event happened to clear it, so
+  # a person who created a webhook and did nothing else kept it there for the
+  # session.
+  def handle_event("dismiss_secret", _params, socket) do
+    {:noreply, assign(socket, :new_secret, nil)}
+  end
+
   def handle_event("toggle_create", _params, socket) do
     {:noreply, reset_form(socket, !socket.assigns.show_form, nil)}
   end
@@ -377,6 +386,9 @@ defmodule PrismWeb.WebhooksLive do
               phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_secret[:secret] || ""})}
             >
               Copy
+            </.button>
+            <.button variant="secondary" size="sm" phx-click="dismiss_secret">
+              Done
             </.button>
           </div>
         </div>

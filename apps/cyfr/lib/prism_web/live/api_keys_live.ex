@@ -46,6 +46,14 @@ defmodule PrismWeb.ApiKeysLive do
   end
 
   @impl true
+  # The minted key is plaintext in the socket's assigns, which
+  # `Phoenix.LiveView.Socket` prints in a crash report and the DOM holds until
+  # the page changes. Once it has been copied there is no reason to keep it,
+  # and nothing else cleared it for the rest of the session.
+  def handle_event("dismiss_key", _params, socket) do
+    {:noreply, assign(socket, :new_key, nil)}
+  end
+
   def handle_event("toggle_create", _params, socket) do
     {:noreply,
      socket
@@ -214,6 +222,9 @@ defmodule PrismWeb.ApiKeysLive do
               phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_key[:api_key] || ""})}
             >
               Copy
+            </.button>
+            <.button variant="secondary" size="sm" phx-click="dismiss_key">
+              Done
             </.button>
           </div>
         </div>

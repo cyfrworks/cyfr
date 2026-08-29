@@ -35,6 +35,24 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       assert json_response(conn, 404)["error"] =~ "not found"
     end
 
+    test "a store that cannot answer is a 503, not a crash", %{conn: conn} do
+      # `Arca.Execution.get_tenant/2` is wrapped in `with_db_rescue/2`, so an
+      # adapter fault arrives as `{:error, :database_error}` — which bound to
+      # `{:exec, {:error, :database_error}}` and matched none of the `with`'s
+      # else clauses. The caller got a WithClauseError and a 500 stacktrace
+      # where the neighbouring engine-unavailable branch answers 503.
+      #
+      # Dropping the table inside the sandbox transaction is deterministic and
+      # rolls back with the test; `sessions` is untouched, so the request still
+      # authenticates on its way in.
+      Arca.Repo.query!("DROP TABLE executions")
+
+      conn = get(conn, "/api/executions/exec_anything/events")
+
+      assert conn.status == 503
+      assert json_response(conn, 503)["code"] == "unavailable"
+    end
+
     # Note: TestAuthProvider grants the test conn `[:*]` (wildcard), so a
     # cross-user 404 test would always succeed via the admin override.
     # The 403→404 collapse is verified by code review of the `with` chain

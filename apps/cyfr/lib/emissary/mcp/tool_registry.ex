@@ -554,6 +554,47 @@ defmodule Emissary.MCP.ToolRegistry do
     end
   end
 
+  # The tool's declared `inputSchema`, applied on every path into a handler.
+  #
+  # `Emissary.MCP.Router` validates before dispatch, so `POST /mcp` was already
+  # held to it; the console (`PrismWeb.MCPHelpers` → `call_external/4`) and the
+  # other in-process callers were not, and LiveView event params are as
+  # client-controlled as a request body. A handler should not have to defend
+  # twice, and the two ingresses should not disagree about what is a valid
+  # call. A tool that declares no schema is unconstrained here, exactly as it
+  # is over HTTP.
+  defp validate_against_schema(meta, args) do
+    case Map.get(meta, :input_schema) do
+      schema when is_map(schema) and map_size(schema) > 0 ->
+        case Emissary.MCP.InputValidator.validate(args, without_action_rules(schema)) do
+          :ok -> :ok
+          {:error, message} -> {:error, {:invalid_argument, message}}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  # `action` belongs to the annotation layer, whole. It answers a missing one
+  # as `:action_missing` and an unannotated one as `{:unknown_action, …}`,
+  # and `ToolVisibility` prunes the enum per caller — so letting the schema
+  # answer first would give one condition two vocabularies, which is the drift
+  # `Emissary.MCP.ToolError` exists to end. Neither case was the gap either:
+  # both were already refused before dispatch. What was NOT checked is every
+  # other field, and that is what this validates.
+  defp without_action_rules(schema) do
+    schema
+    |> update_in_if(["properties", "action"], &Map.delete(&1, "enum"))
+    |> Map.replace_lazy("required", fn required ->
+      if is_list(required), do: required -- ["action"], else: required
+    end)
+  end
+
+  defp update_in_if(schema, path, fun) do
+    if get_in(schema, path), do: update_in(schema, path, fun), else: schema
+  end
+
   # `scope: :platform` is the operator capability, not a widened tenant scope:
   # the caller still works inside one athanor and only the membership fact
   # (`platform_admin`) admits them.
@@ -643,12 +684,11 @@ defmodule Emissary.MCP.ToolRegistry do
       case lookup(name) do
         {:ok, {module, meta}} ->
           result =
-            case authorize_annotated_action(name, meta, ctx, args) do
-              :ok ->
-                execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
-
-              {:error, _} = refusal ->
-                refusal
+            with :ok <- validate_against_schema(meta, args),
+                 :ok <- authorize_annotated_action(name, meta, ctx, args) do
+              execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+            else
+              {:error, _} = refusal -> refusal
             end
 
           {result, %{routed_to: inspect(module)}}

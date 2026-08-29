@@ -82,10 +82,23 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     rl_manifest = %{public_manifest | "name" => "rl-dash"}
 
+    # A manifest whose connect list carries a control character: the domain
+    # check has to reject it before it reaches a response header.
+    nl_manifest =
+      public_manifest
+      |> Map.put("name", "nl-dash")
+      |> put_in(["tincture", "connect"], ["evil.com\n", "ok.example.com"])
+
+    nl_dir = tincture_dir("nl-dash")
+    File.mkdir_p!(nl_dir)
+    File.write!(Path.join(nl_dir, "cyfr-manifest.json"), Jason.encode!(nl_manifest))
+    File.write!(Path.join(nl_dir, "index.html"), "<html><head></head><body>NL</body></html>")
+
     for {name, manifest} <- [
           {"auth-dash", private_manifest},
           {"pub-dash", public_manifest},
-          {"rl-dash", rl_manifest}
+          {"rl-dash", rl_manifest},
+          {"nl-dash", nl_manifest}
         ] do
       {:ok, _} =
         Arca.ComponentStorage.put_component(ctx, %{
@@ -124,7 +137,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     original_source = Application.get_env(:cyfr, :consent_source)
     Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
-    for name <- ["pub-dash", "rl-dash"] do
+    for name <- ["pub-dash", "rl-dash", "nl-dash"] do
       {:ok, _} =
         Arca.ProfileStorage.put(%{
           id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
@@ -306,6 +319,22 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn = get(conn, "/t/test/local/pub-dash")
       [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "connect-src 'self' https://*.supabase.co"
+    end
+
+    test "a connect domain with a trailing newline is rejected, not put in a header",
+         %{conn: conn} do
+      # `~r/^…$/` matches before a trailing newline in Elixir, so "evil.com\n"
+      # passed the domain check, reached the CSP string, and
+      # `put_resp_header/3` raised on the control character — a manifest could
+      # 500 its own tincture's index for good, with nothing pointing at the
+      # field. `\A…\z` is the anchor that means what this check meant.
+      conn = get(conn, "/t/test/local/nl-dash")
+
+      assert conn.status == 200
+      [csp] = get_resp_header(conn, "content-security-policy")
+      refute csp =~ "evil.com"
+      assert csp =~ "https://ok.example.com"
+      refute csp =~ "\n"
     end
 
     test "injects plain base tag (no token) for public tincture", %{conn: conn} do
