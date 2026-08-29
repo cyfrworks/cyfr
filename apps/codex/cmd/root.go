@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/cyfr/codex/internal/config"
@@ -22,6 +23,7 @@ var (
 	flagURL           string
 	flagContext       string
 	flagNoInteractive bool
+	flagToken         string
 	flagVersions      bool
 
 	// activeClient tracks the MCP client for session cleanup on exit.
@@ -36,7 +38,10 @@ where AI agents execute WASM tools and serve tincture frontends via MCP.
 Use cyfr to manage components, connections, consents, and executions
 from the terminal or scripts.`,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
-		// MCP spec: clients SHOULD send DELETE to terminate sessions on exit.
+		// This transport has no server-side session to terminate — the
+		// credential authenticates each request on its own (client.Close
+		// only clears client-side state). Kept so a future transport with
+		// a teardown has its hook already wired.
 		if activeClient != nil {
 			_ = activeClient.Close()
 		}
@@ -52,6 +57,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagURL, "url", "", "Override server URL")
 	rootCmd.PersistentFlags().StringVar(&flagContext, "context", "", "Use specific context")
 	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
+	rootCmd.PersistentFlags().StringVar(&flagToken, "token", "",
+		"Bearer credential for this invocation (a cyfr_ API key or session token); "+
+			"overrides the stored one. CYFR_TOKEN works too — the non-interactive path for CI.")
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "server", Title: "Server:"},
@@ -98,11 +106,19 @@ func newClient() *mcp.Client {
 	client := mcp.NewClient(url)
 	activeClient = client
 
-	// The stored credential authenticates every request; there is nothing to
-	// establish up front. Without one, commands that need auth will say so.
-	ctx := cfg.Current()
-	if ctx != nil && ctx.SessionID != "" {
-		client.SessionID = ctx.SessionID
+	// The credential authenticates every request; there is nothing to
+	// establish up front. Precedence: --token, then CYFR_TOKEN (the CI
+	// path — no config file to hand-write), then the stored context.
+	// Without one, commands that need auth will say so.
+	switch {
+	case flagToken != "":
+		client.SessionID = flagToken
+	case os.Getenv("CYFR_TOKEN") != "":
+		client.SessionID = os.Getenv("CYFR_TOKEN")
+	default:
+		if ctx := cfg.Current(); ctx != nil {
+			client.SessionID = ctx.Credential()
+		}
 	}
 
 	return client

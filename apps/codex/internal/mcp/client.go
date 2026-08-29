@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -413,9 +414,9 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
-	// The server logs and answers under this id (it mints one otherwise);
-	// sending our own means a failure here and the server-side log line
-	// share a key — the server advertises the header for exactly that.
+	// The server mints its own id and echoes it in the response header; ours
+	// only labels a failure that never reached it. Correlation comes from
+	// preferring the echoed id below.
 	requestID := newRequestID()
 	httpReq.Header.Set("X-Request-Id", requestID)
 	routingHeaders(httpReq, req.Method, req.Params)
@@ -427,17 +428,18 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 	}
 	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
 	// Prefer the id the server actually filed under, when it echoes one.
+	// Headers arrive before the body, so this holds for streams too.
 	if serverID := httpResp.Header.Get("X-Request-Id"); serverID != "" {
 		requestID = serverID
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
+		respBody, err := io.ReadAll(httpResp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
 		// A 404 used to be read as "the session expired" — that was the previous
 		// transport, where the server forgot a session and answered 404. This
 		// revision has no sessions and gives 404 a different meaning entirely:
@@ -454,8 +456,18 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 	// The server answers a progress-opted request with an SSE stream: the
 	// notifications it produced while working, then the response. Both shapes are
 	// valid for the same request, so the content type decides how to read it.
+	// The stream is read INCREMENTALLY — the server moved the work into a task
+	// specifically so notifications would not arrive in one burst, and
+	// buffering the whole body here used to replay every progress line after
+	// the work had already finished (while holding an unbounded buffer against
+	// a stream the server may keep open for its full window).
 	if strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream") {
-		return parseStreamedResponse(respBody, onProgress)
+		return streamResponse(httpResp.Body, onProgress)
+	}
+
+	respBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	var resp JSONRPCResponse
@@ -466,51 +478,72 @@ func (c *Client) doRequestOnce(ctx context.Context, req JSONRPCRequest, progress
 	return &resp, nil
 }
 
-// parseStreamedResponse walks the SSE frames of a response stream, handing each
-// notification to onProgress and returning the response that terminates it.
-func parseStreamedResponse(body []byte, onProgress ProgressFunc) (*JSONRPCResponse, error) {
+// streamResponse walks the SSE frames of a response stream as they arrive,
+// handing each notification to onProgress and returning the response that
+// terminates the stream.
+func streamResponse(body io.Reader, onProgress ProgressFunc) (*JSONRPCResponse, error) {
 	var last *JSONRPCResponse
 
-	for _, frame := range strings.Split(string(body), "\n\n") {
-		var payload []byte
-		for _, line := range strings.Split(frame, "\n") {
-			if data, ok := strings.CutPrefix(line, "data: "); ok {
-				payload = append(payload, data...)
-			}
-		}
+	scanner := bufio.NewScanner(body)
+	// A response frame carries the whole result as one data: line — size the
+	// scanner for large tool results rather than the 64 KB default.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
+	var payload []byte
+	flush := func() {
 		if len(payload) == 0 {
+			return
+		}
+		handleFrame(payload, onProgress, &last)
+		payload = nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			// Blank line terminates the frame.
+			flush()
 			continue
 		}
-
-		// A notification has a method and no id; the response has an id.
-		var probe struct {
-			Method string `json:"method"`
-			ID     any    `json:"id"`
-		}
-		if json.Unmarshal(payload, &probe) != nil {
-			continue
-		}
-
-		if probe.ID == nil && probe.Method != "" {
-			if onProgress != nil && probe.Method == "notifications/progress" {
-				var notif struct {
-					Params map[string]any `json:"params"`
-				}
-				if json.Unmarshal(payload, &notif) == nil {
-					onProgress(notif.Params)
-				}
-			}
-			continue
-		}
-
-		var resp JSONRPCResponse
-		if json.Unmarshal(payload, &resp) == nil {
-			last = &resp
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			payload = append(payload, data...)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read response stream: %w", err)
+	}
+	flush()
 
 	if last == nil {
 		return nil, fmt.Errorf("response stream ended without a response")
 	}
 	return last, nil
+}
+
+func handleFrame(payload []byte, onProgress ProgressFunc, last **JSONRPCResponse) {
+	// A notification has a method and no id; the response has an id.
+	var probe struct {
+		Method string `json:"method"`
+		ID     any    `json:"id"`
+	}
+	if json.Unmarshal(payload, &probe) != nil {
+		return
+	}
+
+	if probe.ID == nil && probe.Method != "" {
+		if onProgress != nil && probe.Method == "notifications/progress" {
+			var notif struct {
+				Params map[string]any `json:"params"`
+			}
+			if json.Unmarshal(payload, &notif) == nil {
+				onProgress(notif.Params)
+			}
+		}
+		return
+	}
+
+	var resp JSONRPCResponse
+	if json.Unmarshal(payload, &resp) == nil {
+		*last = &resp
+	}
 }

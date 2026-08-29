@@ -17,9 +17,27 @@ type Config struct {
 }
 
 // Context is a named server connection.
+//
+// The credential is a live bearer token (a session token from `cyfr login`,
+// or a `cyfr_` API key). `token` is its name; `session_id` is the legacy
+// spelling the login flow wrote for years — read as a fallback so existing
+// config files keep working, never written anew.
 type Context struct {
 	URL       string `json:"url"`
+	Token     string `json:"token,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+}
+
+// Credential returns the context's bearer credential, preferring the modern
+// `token` field over the legacy `session_id` spelling.
+func (c *Context) Credential() string {
+	if c == nil {
+		return ""
+	}
+	if c.Token != "" {
+		return c.Token
+	}
+	return c.SessionID
 }
 
 // DefaultConfigDir returns ~/.cyfr.

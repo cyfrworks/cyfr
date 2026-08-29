@@ -688,6 +688,12 @@ Commands marked `[i]` support interactive selection — run them without argumen
 
 Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive prompts (useful for scripts and CI).
 
+### Non-interactive credentials (CI)
+
+`cyfr` normally reads its credential from `~/.cyfr/config.json` (written by `cyfr login`). A CI job or container passes one directly instead: `--token <cyfr_...>` on any command, or `CYFR_TOKEN` in the environment — a `cyfr_` API key minted with `cyfr key create`, or a session token. The flag wins over the environment, which wins over the stored config.
+
+CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs), `CYFR_DEBUG=1` (verbose request/response detail on stderr).
+
 ## Documentation
 
 | Document | Description |
