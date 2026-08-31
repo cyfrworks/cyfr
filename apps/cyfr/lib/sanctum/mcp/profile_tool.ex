@@ -278,15 +278,37 @@ defmodule Sanctum.MCP.ProfileTool do
 
   defp decode_tool_servers(_), do: {:error, "tool_servers must be a list"}
 
+  # `put_present` for the projection keys, as `decode_tool_servers/1` above
+  # already does. Writing `fields: []` unconditionally meant
+  # `Consent.Commit`'s `Map.get(raw, :fields, default_fields(need))` could
+  # never fire its default: an omitted key arrived as `[]`, which is the
+  # same value "no narrowing declared" carries, so the manifest's declared
+  # subset was overwritten with "all fields" — an empty projection is
+  # dropped from the blob and `Sanctum.VaultReader` reads its absence as
+  # `:all`. An absent key now means "the manifest decides".
+  #
+  # This was the WIRE path only. A caller building decisions in Elixir
+  # (`Consent.Commit` directly, and every fixture that walks it) already
+  # omitted the key and always got the manifest's list — which is why
+  # `flow_test`'s "defaulted to the need's declared fields" passed
+  # throughout. Only MCP clients were widened.
+  #
+  # `[]` still reads as "no narrowing", here and everywhere else: a
+  # manifest need that omits `fields` decodes to `[]`
+  # (`Compendium.Manifest.Needs`), and `render_summary/1` prints `[]` as
+  # "all fields". There is deliberately no way to spell "narrow to
+  # nothing" — a binding that grants no field is a binding with no
+  # purpose, and reading `[]` as "none" here would silently empty every
+  # need whose manifest omits the key.
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
         %{
           need: Map.get(binding, "need", Sanctum.Authority.Blob.ingress_key()),
-          entry_id: binding["entry_id"],
-          fields: Map.get(binding, "fields", []),
-          scopes: Map.get(binding, "scopes", [])
+          entry_id: binding["entry_id"]
         }
+        |> Cyfr.MapUtil.put_present(:fields, binding["fields"])
+        |> Cyfr.MapUtil.put_present(:scopes, binding["scopes"])
       end)
 
     {:ok, decoded}

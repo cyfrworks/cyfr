@@ -9,6 +9,7 @@ defmodule Sanctum.Consent.FlowTest do
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
   alias Sanctum.Consent.Source
+  alias Sanctum.MCP.ProfileTool
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
@@ -420,6 +421,94 @@ defmodule Sanctum.Consent.FlowTest do
       assert public.id == public_id
     end
 
+    test "a widened decision cannot ride an approved digest", %{ctx: ctx} do
+      # Storage caps are the point: `durable_storage` decides whether the
+      # published edge keeps them whole or is filtered to read-only, so a
+      # manifest that asks for none would make the flag a no-op and the
+      # test vacuous.
+      publish!(ctx, "flow-pub-widen", "1.0.0", %{
+        manifest:
+          Jason.encode!(%{
+            "name" => "flow-pub-widen",
+            "version" => "1.0.0",
+            "type" => "reagent",
+            "caps" => %{
+              "storage" => %{"paths" => ["data/"], "actions" => ["read", "write", "delete"]}
+            }
+          })
+      })
+
+      {:ok, %{profile_id: owner_id}} = walk!(ctx, "reagent:local.flow-pub-widen", %{})
+
+      # Approve a read-only publish. `durable_storage: false` is what makes
+      # `publish_edge/4` filter every edge's storage actions down to
+      # read/list/exists.
+      {:ok, staged} =
+        Commit.stage_publish(ctx, %{profile_id: owner_id, need_ids: [], durable_storage: false})
+
+      {:ok, preview} = Commit.preview(ctx, staged.decisions)
+
+      # Now commit the SAME plan token, proof and commit digest with the
+      # flag flipped. Nothing else moves: the shape is manifest-derived,
+      # bindings are empty, tool servers are empty, the target profile and
+      # its expected revision are identical. Before `blob_digest`, the
+      # recomputed digest was therefore identical too — every check passed
+      # and the public profile shipped `write` and `delete` on every
+      # storage path to anonymous callers.
+      widened = Map.put(staged.decisions, :durable_storage, true)
+
+      # `check_presented_digest/2` is the gate: the recomputed digest no
+      # longer matches what the operator approved, because the blob it now
+      # covers is a different blob.
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               Commit.commit(ctx, %{
+                 decisions: widened,
+                 plan_token: staged.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: staged.expected_consent_revision
+               })
+
+      # And the honest walk still works, so the refusal is about the
+      # widening rather than the publish path being broken. It needs a
+      # fresh stage: `consume_plan_token/3` runs before the digest check
+      # and takes the token either way — single-use is take-before-compare,
+      # so a refused commit still spends it.
+      {:ok, restaged} =
+        Commit.stage_publish(ctx, %{profile_id: owner_id, need_ids: [], durable_storage: false})
+
+      assert {:ok, %{revision: 1}} = publish_walk!(ctx, restaged)
+
+      # The approved read-only grant is what actually landed.
+      {:ok, profiles} = Source.DB.profiles(ctx, "reagent:local.flow-pub-widen")
+      public = Enum.find(profiles, &(&1.kind == :public))
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, public.id)
+
+      actions =
+        Jason.decode!(head.resolved_policy)["nodes"]["reagent:local.flow-pub-widen"]["edges"][
+          "@ingress"
+        ]["storage"]["actions"]
+
+      # An intersection with the read-only set, not a replacement: the
+      # manifest asked for read/write/delete, so `read` is all that
+      # survives — it never asked for `list` or `exists`.
+      assert actions == ["read"]
+      refute "write" in actions
+      refute "delete" in actions
+    end
+
+    test "the stored policy is verifiable against its own digest", %{ctx: ctx} do
+      publish!(ctx, "flow-pub-digest")
+
+      {:ok, %{profile_id: owner_id}} =
+        walk!(ctx, "reagent:local.flow-pub-digest", %{})
+
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, owner_id)
+
+      assert head.blob_digest == Sanctum.JCS.hash_binary(head.resolved_policy),
+             "a consent row must carry the hash of the policy it stores"
+    end
+
     test "publishing without need_ids exposes no credentials", %{ctx: ctx} do
       publish!(ctx, "flow-pub-bare")
       entry = entry!(ctx)
@@ -503,6 +592,45 @@ defmodule Sanctum.Consent.FlowTest do
       assert plan.caps["egress"]["domains"] == ["api.anthropic.com"]
       # No api_key entry exists yet — the plan says so up front.
       assert Enum.any?(plan.warnings, &(&1 =~ "api_key"))
+    end
+
+    # The direct-Elixir walk above omits `:fields` and always got the
+    # manifest's list. The MCP wire did not: `decode_bindings/1` wrote
+    # `fields: []` whether the client sent the key or not, and `[]` is the
+    # same value "no narrowing declared" carries — so the declared subset
+    # was overwritten with "all fields" for every MCP-minted consent. This
+    # walks the tool, not `Commit`, because that is where the widening was.
+    test "an MCP binding that omits fields still gets the manifest's subset",
+         %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-wire")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-wire", "OTHER" => "x"}})
+      ref = "reagent:local.flow-needs-wire"
+
+      decisions = %{"bindings" => [%{"need" => "api_key", "entry_id" => entry.id}], "ref" => ref}
+
+      {:ok, plan} = ProfileTool.handle(ctx, %{"action" => "plan", "ref" => ref})
+      {:ok, preview} = ProfileTool.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+
+      {:ok, _} =
+        ProfileTool.handle(ctx, %{
+          "action" => "commit",
+          "decisions" => decisions,
+          "plan_token" => plan.plan_token,
+          "proof" => preview.proof,
+          "commit_digest" => preview.commit_digest,
+          "expected_consent_revision" => plan.expected_consent_revision
+        })
+
+      {:ok, [profile]} = Source.DB.profiles(ctx, ref)
+
+      {:ok, component} =
+        Compendium.Registry.get_latest(ctx, "flow-needs-wire", "local", "reagent")
+
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+      {:ok, auth, _} = Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+
+      # The manifest's declared subset, NOT every field of the entry.
+      assert auth.resources.vault.projection.fields == ["ANTHROPIC_API_KEY"]
     end
 
     test "binding the declared need mints a loadable revision with the projection",

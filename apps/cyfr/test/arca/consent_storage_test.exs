@@ -52,11 +52,28 @@ defmodule Arca.ConsentStorageTest do
       invoke_mode: "open_inert",
       shape_digest: "sha256:shape",
       commit_digest: "sha256:commit",
+      blob_digest: Sanctum.JCS.hash_binary("{}"),
       resolved_policy: "{}",
       activation: "{}",
       granted_by: "test",
       granted_via: "bootstrap"
     }
+  end
+
+  describe "the blob digest is not optional" do
+    test "a revision written without one raises rather than storing", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_no_digest")
+      attrs = consent_attrs(athanor, profile.id, 1) |> Map.delete(:blob_digest)
+
+      # The column is nullable at the database level — SQLite cannot ALTER
+      # a column to NOT NULL, and this repo ships both backends from one
+      # migration set. So the writer is the gate: a revision with no
+      # `blob_digest` is unverifiable forever after, and `Consent.Loader`
+      # would refuse to load it. Fail at the write, loudly.
+      assert_raise KeyError, fn ->
+        ConsentStorage.insert_revision(attrs, [], nil)
+      end
+    end
   end
 
   describe "insert_revision/4" do

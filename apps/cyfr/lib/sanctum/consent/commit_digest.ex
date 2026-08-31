@@ -19,6 +19,39 @@ defmodule Sanctum.Consent.CommitDigest do
   Vault bindings carry both the entry id and its binding digest. The entry
   id alone would let a rebinding — the same entry pointed at a different
   account or different endpoints — inherit an existing consent silently.
+
+  ## `blob_digest` is what makes this closed
+
+  Every other field here is a decision *re-expressed*. `blob_digest` is the
+  hash of the resolved policy blob itself — the exact bytes
+  `Sanctum.Authority` will enforce — so the digest is a promise about what
+  runs **by construction** rather than by keeping this list in step with
+  the blob builder.
+
+  It is required, and this list is `only_keys`-closed, because the failure
+  it prevents happened twice in opposite directions. `limits` was once
+  threaded in from the decisions and never reached the blob, so a tightened
+  number was signed and then ignored. `durable_storage` was the mirror
+  image: never in this list, but read at `Commit.publish_edge/4` to decide
+  whether every edge's storage actions are filtered to read-only — so the
+  same plan token, proof and commit digest could be replayed with the flag
+  flipped and ship `write`/`delete` on a **public** profile to anonymous
+  callers. Neither is possible while the bytes themselves are hashed here.
+
+  ## `label` is here because the blob cannot carry it
+
+  `blob_digest` covers what a consent *grants*; `label` decides which
+  profile the grant lands on — `(athanor_id, source_ref, label, kind)` is
+  the profiles' active identity index. Two owner profiles on one
+  `source_ref` under different labels whose blobs are byte-identical
+  therefore produced the same digest, and on a first consent
+  `Plan.locate_profile/4` answers `{:ok, nil, 0}` for both, so the proof's
+  `profile_id` and `expected_revision` bindings matched too. A proof minted
+  for `"prod"` could be spent on `"staging"`. Capability-identical, so
+  nothing widened — but the operator's profile was not where they left it.
+
+  `scope` needs no entry: `ShapeDigest` carries it, and `shape_digest` is
+  the first field here.
   """
 
   alias Sanctum.Consent.Normalize
@@ -40,13 +73,13 @@ defmodule Sanctum.Consent.CommitDigest do
 
   @type commit :: %{
           required(:shape_digest) => String.t(),
+          required(:blob_digest) => String.t(),
+          required(:label) => String.t(),
           required(:kind) => :owner | :public,
           required(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [binding()],
-          optional(:slot_bindings) => %{String.t() => String.t()},
           optional(:tool_servers) => [tool_server_grant()],
-          optional(:override) => boolean(),
-          optional(:limits) => map()
+          optional(:override) => boolean()
         }
 
   @type error :: {:invalid_commit, atom(), String.t()} | {:invalid_digest_input, JCS.error()}
@@ -58,6 +91,8 @@ defmodule Sanctum.Consent.CommitDigest do
 
       iex> {:ok, digest} = Sanctum.Consent.CommitDigest.compute(%{
       ...>   shape_digest: "sha256:abc",
+      ...>   blob_digest: "sha256:def",
+      ...>   label: "default",
       ...>   kind: :owner,
       ...>   invoke_mode: :open_inert
       ...> })
@@ -88,29 +123,29 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              commit,
-             ~w(shape_digest kind invoke_mode bindings slot_bindings tool_servers override limits)a,
+             ~w(shape_digest blob_digest label kind invoke_mode bindings tool_servers override)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
+         {:ok, blob_digest} <- Normalize.required_string(commit, :blob_digest, tag),
+         {:ok, label} <- Normalize.required_string(commit, :label, tag),
          {:ok, kind} <- Normalize.enum(commit, :kind, [:owner, :public], tag),
          {:ok, invoke_mode} <-
            Normalize.enum(commit, :invoke_mode, [:open_inert, :edge_only], tag),
          :ok <- check_public_is_contained(kind, invoke_mode),
          {:ok, bindings} <- bindings(commit),
-         {:ok, slot_bindings} <- slot_bindings(commit),
          {:ok, tool_servers} <- tool_servers(commit),
-         {:ok, override} <- override(commit),
-         {:ok, limits} <- Normalize.caps(commit, :limits, tag) do
+         {:ok, override} <- override(commit) do
       {:ok,
        %{
          "shape_digest" => shape_digest,
+         "blob_digest" => blob_digest,
+         "label" => label,
          "kind" => Atom.to_string(kind),
          "invoke_mode" => Atom.to_string(invoke_mode),
          "bindings" => bindings,
-         "slot_bindings" => slot_bindings,
          "tool_servers" => tool_servers,
-         "override" => override,
-         "limits" => limits
+         "override" => override
        }}
     end
   end
@@ -231,22 +266,6 @@ defmodule Sanctum.Consent.CommitDigest do
       {:ok, sorted}
     else
       {:error, {:invalid_commit, :tool_servers, "each server may be granted exactly once"}}
-    end
-  end
-
-  defp slot_bindings(commit) do
-    tag = :invalid_commit
-
-    case Map.get(commit, :slot_bindings, %{}) do
-      map when is_map(map) ->
-        if Enum.all?(map, fn {k, v} -> is_binary(k) and k != "" and is_binary(v) and v != "" end) do
-          {:ok, Map.new(map)}
-        else
-          {:error, {tag, :slot_bindings, "must map non-empty strings to non-empty strings"}}
-        end
-
-      other ->
-        {:error, {tag, :slot_bindings, "must be a map, got: #{inspect(other)}"}}
     end
   end
 

@@ -109,10 +109,9 @@ defmodule Sanctum.Consent.Commit do
          :ok <- consume_plan_token(ctx, params, prep),
          :ok <- check_presented_digest(params, prep),
          :ok <- consume_commit_proof(ctx, params, prep),
-         {:ok, blob_json, refs} <- build_blob(ctx, prep),
          {:ok, activation_json} <- JCS.encode(prep.activation.graph),
          {:ok, consent} <-
-           persist(ctx, prep, blob_json, refs, activation_json, granted_via) do
+           persist(ctx, prep, prep.blob_json, prep.blob_refs, activation_json, granted_via) do
       reactivate_profile(ctx, prep)
 
       {:ok,
@@ -217,8 +216,31 @@ defmodule Sanctum.Consent.Commit do
          declared = declared_needs(component),
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared),
          {:ok, tool_servers} <- resolve_tool_servers(ctx, decisions),
+         # The blob is built HERE, not at commit. The digest has to cover
+         # the bytes, and `commit/3` checks the presented digest two steps
+         # before it used to build them — so a blob hashed at persist time
+         # would be hashed after every check that could have refused it.
+         # Preview needs the same bytes anyway, to render the grants.
+         blob_inputs = %{
+           source_ref: source_ref,
+           activation: activation,
+           bindings: bindings,
+           tool_servers: tool_servers,
+           publish_nodes: published && published.nodes
+         },
+         {:ok, blob_json, blob_refs} <- build_blob(ctx, blob_inputs),
+         blob_digest = JCS.hash_binary(blob_json),
          {:ok, commit_input} <-
-           commit_input(shape_digest, kind, invoke_mode, bindings, tool_servers, decisions),
+           commit_input(
+             shape_digest,
+             blob_digest,
+             label,
+             kind,
+             invoke_mode,
+             bindings,
+             tool_servers,
+             decisions
+           ),
          {:ok, commit_digest} <- CommitDigest.compute(commit_input) do
       {:ok,
        %{
@@ -232,6 +254,9 @@ defmodule Sanctum.Consent.Commit do
          shape_digest: shape_digest,
          commit_digest: commit_digest,
          commit_input: commit_input,
+         blob_json: blob_json,
+         blob_digest: blob_digest,
+         blob_refs: blob_refs,
          bindings: bindings,
          entries: entries,
          tool_servers: tool_servers,
@@ -242,6 +267,57 @@ defmodule Sanctum.Consent.Commit do
        }}
     end
   end
+
+  # The caller's requested patterns, narrowed to what the server's own
+  # config permits. Nothing is taken verbatim.
+  #
+  # Narrowed at the PATTERN level, not by expanding against the live tool
+  # catalogue: `ExternalProvider.describe_candidate/2` reports
+  # `tool_names: []` for a server it could not reach, so expanding would
+  # silently collapse a legitimate grant to nothing whenever the upstream
+  # is down.
+  #
+  # A requested `"*"` means "whatever this server exposes", so it resolves
+  # to the config itself rather than being stored as `"*"` — the operator
+  # then sees the actual patterns on the consent sheet instead of a
+  # wildcard that reads far wider than the grant it can produce.
+  defp narrow_tool_patterns(nil, config), do: {:ok, config}
+
+  defp narrow_tool_patterns(requested, config) when is_list(requested) do
+    if "*" in requested do
+      {:ok, config}
+    else
+      {:ok,
+       requested
+       |> Enum.filter(fn pattern ->
+         is_binary(pattern) and Sanctum.ToolPattern.valid?(pattern) and
+           covered_by_config?(pattern, config)
+       end)
+       |> Enum.uniq()
+       |> Enum.sort()}
+    end
+  end
+
+  # Anything that is not a list is refused rather than ignored. It used to
+  # return `config` — the same answer an ABSENT key gets — so a wire value
+  # of `"storage.*"` (a bare string, the obvious typo) silently failed to
+  # narrow and the operator was shown the server's full set. Nothing
+  # widened past the ceiling, but a caller who asked to narrow was told
+  # they had, and were not.
+  defp narrow_tool_patterns(_not_a_list, _config), do: :error
+
+  defp covered_by_config?(pattern, config) do
+    Enum.any?(config, fn allowed ->
+      cond do
+        allowed == "*" -> true
+        allowed == pattern -> true
+        String.ends_with?(allowed, ".*") -> String.starts_with?(pattern, dot_prefix(allowed))
+        true -> false
+      end
+    end)
+  end
+
+  defp dot_prefix(pattern), do: String.trim_trailing(pattern, "*")
 
   # A tool-server decision names the server; the digest is ALWAYS resolved
   # live at prepare — like binding digests, a caller-supplied one could pin
@@ -255,14 +331,26 @@ defmodule Sanctum.Consent.Commit do
 
       case Emissary.MCP.ExternalProvider.consent_candidate(ctx, name || "") do
         {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
-          grant = %{
-            server_name: candidate.name,
-            server_digest: digest,
-            tool_patterns: Map.get(raw, :tool_patterns, candidate.tool_patterns),
-            descriptions_digest: candidate.descriptions_digest
-          }
+          # Intersected with the server's own configured patterns, never
+          # taken verbatim. `ExternalProvider.try_handle/4` re-checks the
+          # live config at dispatch, so an over-broad pattern granted no
+          # extra reach — but it was recorded, digested and shown to the
+          # operator as a wider grant than the one they could actually
+          # give. Narrowing here makes the consent say what it means.
+          case narrow_tool_patterns(Map.get(raw, :tool_patterns), candidate.tool_patterns) do
+            {:ok, patterns} ->
+              grant = %{
+                server_name: candidate.name,
+                server_digest: digest,
+                tool_patterns: patterns,
+                descriptions_digest: candidate.descriptions_digest
+              }
 
-          {:cont, {:ok, [grant | acc]}}
+              {:cont, {:ok, [grant | acc]}}
+
+            :error ->
+              {:halt, {:error, {:invalid_tool_patterns, name}}}
+          end
 
         {:ok, _undigestable} ->
           {:halt, {:error, {:tool_server_unavailable, name}}}
@@ -511,14 +599,38 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # Every field here must be one the blob actually carries: the digest is a
-  # promise about what will run. `limits` used to be threaded in from the
-  # decisions and never reached `build_blob/2`, so a tightened number was
-  # signed and then ignored. The manifest's limits ride `shape_digest`.
-  defp commit_input(shape_digest, kind, invoke_mode, bindings, tool_servers, decisions) do
+  # `blob_digest` is the hash of the bytes `build_blob/2` just produced, so
+  # the digest is a promise about what will run BY CONSTRUCTION — no field
+  # here can drift out of step with the blob, and no new decision can
+  # escape it by being forgotten.
+  #
+  # It had to: `limits` was once threaded in from the decisions and never
+  # reached the blob, so a tightened number was signed and ignored. And
+  # `durable_storage` was the mirror image — absent here, but read at
+  # `publish_edge/4`, so the same plan token, proof and commit digest
+  # replayed with the flag flipped shipped `write`/`delete` on a public
+  # profile. The remaining fields stay because they are what the operator
+  # is shown and what a proof binds; the blob hash is what makes the set
+  # closed rather than merely current.
+  defp commit_input(
+         shape_digest,
+         blob_digest,
+         label,
+         kind,
+         invoke_mode,
+         bindings,
+         tool_servers,
+         decisions
+       ) do
     {:ok,
      %{
        shape_digest: shape_digest,
+       blob_digest: blob_digest,
+       # Which profile the grant lands on, which the blob cannot say —
+       # `(source_ref, label, kind)` is the profiles' identity index, and
+       # on a first consent both labels answer `{:ok, nil, 0}`, so the
+       # proof bound nothing that told them apart.
+       label: label,
        kind: kind,
        invoke_mode: invoke_mode,
        bindings: bindings,
@@ -707,6 +819,11 @@ defmodule Sanctum.Consent.Commit do
       invoke_mode: Atom.to_string(prep.invoke_mode),
       shape_digest: prep.shape_digest,
       commit_digest: prep.commit_digest,
+      # Stored beside the bytes it covers so `Consent.Loader` can refuse a
+      # `resolved_policy` altered in place — nothing else on the row
+      # detects that: `check_blob_refs_equality/2` compares vault-ref pairs
+      # only, and `commit_digest` covers this column, not the blob.
+      blob_digest: prep.blob_digest,
       resolved_policy: blob_json,
       activation: activation_json,
       granted_by: ctx.user_id,
@@ -810,6 +927,15 @@ defmodule Sanctum.Consent.Commit do
   # Rendering + helpers
   # ---------------------------------------------------------------------------
 
+  # What the operator is shown immediately before approving.
+  #
+  # This used to be a header plus one "Uses <entry>" line per vault
+  # binding — so a publish with `need_ids: []` rendered a SINGLE line as
+  # the whole consent sheet, while the blob behind it granted egress,
+  # storage, tools and the manifest caps of every node in the activation
+  # closure. Approving what you cannot see is not consent, so the grants
+  # are read back out of the blob the digest now covers: whatever is
+  # rendered here is exactly what will run.
   defp render_summary(prep) do
     header =
       "Grant #{prep.source_ref} — #{prep.kind}, #{prep.scope}, revision #{prep.expected_revision + 1}"
@@ -824,8 +950,75 @@ defmodule Sanctum.Consent.Commit do
         "Uses #{entry.name} (#{projected})"
       end)
 
-    [header | bindings]
+    [header | bindings] ++ render_grants(prep)
   end
+
+  defp render_grants(prep) do
+    case Sanctum.Authority.Blob.parse(prep.blob_json) do
+      {:ok, blob} ->
+        blob.nodes
+        |> Enum.sort_by(fn {ref, _node} -> ref end)
+        |> Enum.flat_map(&render_node/1)
+
+      # The blob was just built from this prep, so a parse failure is a
+      # construction bug — say so rather than rendering a shorter, quieter
+      # sheet that reads like a narrower grant.
+      {:error, reason} ->
+        ["Grants could not be rendered (#{inspect(reason)}) — do not approve"]
+    end
+  end
+
+  defp render_node({ref, node}) do
+    grants =
+      node.edges
+      |> Enum.sort_by(fn {key, _edge} -> key end)
+      |> Enum.flat_map(fn {_key, edge} -> render_edge(edge) end)
+      |> Enum.uniq()
+
+    case grants do
+      [] -> ["#{ref}: no capabilities"]
+      lines -> Enum.map(lines, fn line -> "#{ref}: #{line}" end)
+    end
+  end
+
+  defp render_edge(edge) do
+    Enum.concat([
+      render_egress(edge.egress),
+      render_storage(edge.storage),
+      render_tools(edge.tools),
+      render_tool_servers(edge.tool_servers)
+    ])
+  end
+
+  defp render_egress(nil), do: []
+
+  defp render_egress(%{domains: []}), do: []
+
+  defp render_egress(%{domains: domains} = egress) do
+    methods = egress |> Map.get(:methods, []) |> render_list("any method")
+    ["network #{Enum.join(domains, ", ")} (#{methods})"]
+  end
+
+  defp render_storage(nil), do: []
+  defp render_storage(%{paths: []}), do: []
+
+  defp render_storage(%{paths: paths, actions: actions}) do
+    ["storage #{Enum.join(paths, ", ")} (#{render_list(actions, "no actions")})"]
+  end
+
+  defp render_tools([]), do: []
+  defp render_tools(tools), do: ["tools #{Enum.join(Enum.sort(tools), ", ")}"]
+
+  defp render_tool_servers([]), do: []
+
+  defp render_tool_servers(servers) do
+    Enum.map(servers, fn server ->
+      "tool server #{server.server_name} (#{render_list(server.tool_patterns, "no tools")})"
+    end)
+  end
+
+  defp render_list([], empty), do: empty
+  defp render_list(values, _empty), do: values |> Enum.sort() |> Enum.join(", ")
 
   defp conflict(cause, expected, actual) do
     {:error,

@@ -22,6 +22,10 @@ defmodule Arca.Schemas.Consent do
     field :invoke_mode, :string, default: "open_inert"
     field :shape_digest, :string
     field :commit_digest, :string
+    # The hash of `resolved_policy`. `commit_digest` covers this column,
+    # not the blob, so without it nothing on the row detects a policy
+    # altered in place after the fact.
+    field :blob_digest, :string
     field :resolved_policy, :binary
     field :activation, :binary
     field :granted_by, :string

@@ -43,6 +43,7 @@ defmodule Sanctum.Consent.Loader do
           | {:no_head_consent, String.t()}
           | {:invalid_consent, atom()}
           | {:invalid_blob, Blob.error()}
+          | {:blob_digest_mismatch, String.t()}
           | {:blob_refs_mismatch, %{blob_only: [tuple()], refs_only: [tuple()]}}
           | {:integrity_alarm, [String.t()]}
           | {:invalid_profile, atom()}
@@ -71,6 +72,7 @@ defmodule Sanctum.Consent.Loader do
     with :ok <- check_profile_status(profile),
          {:ok, consent} <- fetch_head(source, ctx, profile),
          :ok <- check_consent_validity(consent),
+         :ok <- check_blob_digest(consent),
          {:ok, blob} <- parse_blob(consent),
          :ok <- check_blob_refs_equality(blob, consent),
          {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
@@ -108,6 +110,29 @@ defmodule Sanctum.Consent.Loader do
         :ok
     end
   end
+
+  # The blob is the only thing on the row that says what may run, and until
+  # this check existed nothing verified it. `commit_digest` covers the
+  # decisions that produced the blob, not the blob; `check_blob_refs_equality/2`
+  # below covers vault refs alone. So caps, egress domains, storage actions
+  # and node limits could all be edited in place — by a hand edit, a
+  # restored backup, or any write path that reaches the column — and the
+  # loader would build an Authority from them.
+  #
+  # Runs BEFORE `parse_blob/1` deliberately: a tampered blob should be
+  # refused as tampered, not reported as whatever parse error the edit
+  # happened to produce.
+  defp check_blob_digest(%{blob_digest: stored, resolved_policy: policy})
+       when is_binary(stored) and is_binary(policy) do
+    if Plug.Crypto.secure_compare(JCS.hash_binary(policy), stored) do
+      :ok
+    else
+      {:error, {:blob_digest_mismatch, stored}}
+    end
+  end
+
+  defp check_blob_digest(%{blob_digest: nil}), do: {:error, {:invalid_consent, :blob_digest}}
+  defp check_blob_digest(_), do: {:error, {:invalid_consent, :blob_digest}}
 
   defp parse_blob(consent) do
     case Blob.parse(consent.resolved_policy) do

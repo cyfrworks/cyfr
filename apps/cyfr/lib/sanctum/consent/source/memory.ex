@@ -28,8 +28,24 @@ defmodule Sanctum.Consent.Source.Memory do
   @doc "Seed the head consent for a profile id."
   @spec put_head_consent(Context.t(), String.t(), Sanctum.Consent.Source.consent()) :: :ok
   def put_head_consent(%Context{} = ctx, profile_id, consent) do
-    GenServer.call(__MODULE__, {:put_head, tenant(ctx), profile_id, consent})
+    GenServer.call(__MODULE__, {:put_head, tenant(ctx), profile_id, stamp_blob_digest(consent)})
   end
+
+  # A stored row always carries the hash of its own policy: the DB path
+  # cannot write one without it (`Arca.ConsentStorage.revision_row/2`
+  # fetches the key), and `Consent.Loader` refuses a row whose digest and
+  # bytes disagree. Deriving it here keeps this stand-in honest to that —
+  # a fixture that spells the policy should not have to restate its hash,
+  # and one that omitted it would otherwise fail the loader for a reason
+  # the test is not about.
+  #
+  # `put_new_lazy`, so a test that IS about the mismatch — or about a row
+  # with no digest at all — sets the key explicitly and keeps it.
+  defp stamp_blob_digest(%{resolved_policy: policy} = consent) when is_binary(policy) do
+    Map.put_new_lazy(consent, :blob_digest, fn -> Sanctum.JCS.hash_binary(policy) end)
+  end
+
+  defp stamp_blob_digest(consent), do: consent
 
   @doc "Drop everything — test isolation between cases sharing the server."
   @spec reset() :: :ok

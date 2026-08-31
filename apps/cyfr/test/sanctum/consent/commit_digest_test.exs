@@ -7,7 +7,13 @@ defmodule Sanctum.Consent.CommitDigestTest do
 
   doctest Sanctum.Consent.CommitDigest
 
-  @base %{shape_digest: "sha256:shape", kind: :owner, invoke_mode: :open_inert}
+  @base %{
+    shape_digest: "sha256:shape",
+    blob_digest: "sha256:blob",
+    label: "default",
+    kind: :owner,
+    invoke_mode: :open_inert
+  }
 
   @binding %{
     need: "source",
@@ -25,12 +31,20 @@ defmodule Sanctum.Consent.CommitDigestTest do
     test "every decision changes the digest" do
       variants = [
         %{shape_digest: "sha256:other-shape"},
+        # The blob hash is the field that makes this list closed: any
+        # decision that reaches the resolved policy moves it, whether or
+        # not it is also spelled out above.
+        %{blob_digest: "sha256:other-blob"},
         %{kind: :public, invoke_mode: :edge_only},
         %{invoke_mode: :edge_only},
         %{bindings: [@binding]},
-        %{slot_bindings: %{"source" => "vault-1"}},
-        %{override: true},
-        %{limits: %{"timeout" => "30s"}}
+        # Which profile the grant lands on. Two owner profiles on one
+        # source_ref under different labels can produce byte-identical
+        # blobs, and on a first consent the proof binds no profile_id and
+        # revision 0 for either — so without this a proof minted for one
+        # label was spendable on the other.
+        %{label: "staging"},
+        %{override: true}
       ]
 
       for variant <- variants do
@@ -108,22 +122,34 @@ defmodule Sanctum.Consent.CommitDigestTest do
       assert {:error, {:invalid_commit, :shape_digest, _}} =
                CommitDigest.compute(Map.delete(@base, :shape_digest))
 
+      # Required, not optional. A digest computed without the blob hash is
+      # the shape `durable_storage` escaped through: approved under one
+      # policy, committed under another.
+      assert {:error, {:invalid_commit, :blob_digest, _}} =
+               CommitDigest.compute(Map.delete(@base, :blob_digest))
+
       assert {:error, {:invalid_commit, :kind, _}} =
                CommitDigest.compute(%{@base | kind: :admin})
 
       assert {:error, {:invalid_commit, :override, _}} =
                CommitDigest.compute(Map.put(@base, :override, "yes"))
 
-      assert {:error, {:invalid_commit, :slot_bindings, _}} =
-               CommitDigest.compute(Map.put(@base, :slot_bindings, %{"source" => nil}))
+      assert {:error, {:invalid_commit, :label, _}} =
+               CommitDigest.compute(Map.delete(@base, :label))
     end
 
-    test "rejects loose durations and floats in resolved limits" do
-      assert {:error, {:invalid_commit, :caps, _}} =
-               CommitDigest.compute(Map.put(@base, :limits, %{"timeout" => "5mm"}))
+    # `slot_bindings` and `limits` were in `only_keys` with no producer:
+    # `commit_input/7` and `Consent.Bootstrap` are the only two callers and
+    # neither ever supplied them, so each contributed a constant to every
+    # digest. `limits` was a fossil of the bug the moduledoc describes —
+    # threaded in once, never reaching the blob. The blob hash covers what
+    # they were reaching for.
+    test "keys no producer supplies are refused rather than silently accepted" do
+      assert {:error, {:invalid_commit, :unknown_field, ":slot_bindings"}} =
+               CommitDigest.compute(Map.put(@base, :slot_bindings, %{"source" => "vault-1"}))
 
-      assert {:error, {:invalid_commit, :caps, _}} =
-               CommitDigest.compute(Map.put(@base, :limits, %{"max_memory_bytes" => 1.5}))
+      assert {:error, {:invalid_commit, :unknown_field, ":limits"}} =
+               CommitDigest.compute(Map.put(@base, :limits, %{"timeout" => "30s"}))
     end
   end
 

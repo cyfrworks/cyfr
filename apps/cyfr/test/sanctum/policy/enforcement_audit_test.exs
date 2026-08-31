@@ -38,6 +38,7 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
+          blob_digest: Sanctum.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
           granted_by: "operator@example",

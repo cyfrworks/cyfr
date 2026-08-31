@@ -66,6 +66,7 @@ defmodule Sanctum.Consent.Source.DB do
          invoke_mode: invoke_mode,
          shape_digest: consent.shape_digest,
          commit_digest: consent.commit_digest,
+         blob_digest: consent.blob_digest,
          resolved_policy: consent.resolved_policy,
          activation: activation,
          vault_refs:

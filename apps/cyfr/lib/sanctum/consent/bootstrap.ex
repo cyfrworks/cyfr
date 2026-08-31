@@ -107,7 +107,7 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, nodes} <- BlobBuilder.build(ctx, activation.graph, source_ref, vault_fn),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
-         {:ok, digests} <- compute_digests(ctx, source_ref),
+         {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
       insert(ctx, source_ref, blob_json, digests, activation_json, BlobBuilder.vault_refs(nodes))
     end
@@ -132,19 +132,35 @@ defmodule Sanctum.Consent.Bootstrap do
   # Digests + insert
   # ---------------------------------------------------------------------------
 
-  defp compute_digests(ctx, source_ref) do
+  defp compute_digests(ctx, source_ref, blob_digest) do
     # The stored shape and the loader's live shape must be one computation
     # (ShapeDerivation), or a freshly minted consent would flip straight to
     # needs_consent on its first load.
+    #
+    # A machine mint carries `blob_digest` for the same reason an operator's
+    # does: it is what lets `Consent.Loader` refuse a `resolved_policy`
+    # altered in place, and this path writes a policy over the whole
+    # activation closure. This module inserts through its own `insert/6`
+    # and never reaches `Commit.persist/6`, so hashing there would have
+    # left every provisioning mint undigested.
     with {:ok, input} <- Sanctum.Consent.ShapeDerivation.shape_input(ctx, source_ref),
          {:ok, shape_digest} <- ShapeDigest.compute(input),
          {:ok, commit_digest} <-
            CommitDigest.compute(%{
              shape_digest: shape_digest,
+             blob_digest: blob_digest,
+             # The label `insert/6` below mints under, spelled once here
+             # so the digest describes the profile it actually creates.
+             label: "default",
              kind: :owner,
              invoke_mode: :open_inert
            }) do
-      {:ok, %{shape_digest: shape_digest, commit_digest: commit_digest}}
+      {:ok,
+       %{
+         shape_digest: shape_digest,
+         commit_digest: commit_digest,
+         blob_digest: blob_digest
+       }}
     end
   end
 
@@ -177,6 +193,7 @@ defmodule Sanctum.Consent.Bootstrap do
                invoke_mode: "open_inert",
                shape_digest: digests.shape_digest,
                commit_digest: digests.commit_digest,
+               blob_digest: digests.blob_digest,
                resolved_policy: blob_json,
                activation: activation_json,
                granted_by: granted_by(ctx),

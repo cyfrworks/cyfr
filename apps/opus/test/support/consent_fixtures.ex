@@ -52,6 +52,10 @@ defmodule Opus.Test.ConsentFixtures do
         invoke_mode: :open_inert,
         shape_digest: "sha256:shape-#{profile_id}",
         commit_digest: "sha256:commit-#{profile_id}",
+        # Derived, never a literal: `Consent.Loader` refuses a row whose
+        # stored digest does not match its policy bytes, so a fixture that
+        # hardcoded one would drift the moment the policy changed.
+        blob_digest: Sanctum.JCS.hash_binary("{}"),
         resolved_policy: "{}",
         activation: %{name_ref => "sha256:act"},
         vault_refs: []

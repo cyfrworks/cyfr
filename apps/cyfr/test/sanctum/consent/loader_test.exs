@@ -39,24 +39,33 @@ defmodule Sanctum.Consent.LoaderTest do
   defp consent(overrides \\ %{}) do
     {:ok, policy_json} = Jason.encode(Fixtures.graph_map())
 
-    Map.merge(
-      %{
-        id: "consent-1",
-        revision: 1,
-        scope: :versionless,
-        pinned_version: "",
-        invoke_mode: :open_inert,
-        shape_digest: "sha256:shape-1",
-        commit_digest: "sha256:commit-1",
-        resolved_policy: policy_json,
-        activation: Fixtures.activation(),
-        vault_refs: [
-          %{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"},
-          %{vault_entry_id: "vault-dest", binding_digest: "sha256:bind-dest"}
-        ]
-      },
-      overrides
-    )
+    merged =
+      Map.merge(
+        %{
+          id: "consent-1",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-1",
+          commit_digest: "sha256:commit-1",
+          resolved_policy: policy_json,
+          activation: Fixtures.activation(),
+          vault_refs: [
+            %{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"},
+            %{vault_entry_id: "vault-dest", binding_digest: "sha256:bind-dest"}
+          ]
+        },
+        overrides
+      )
+
+    # Stamped AFTER the merge, from whatever policy the override left, so a
+    # test that swaps the blob still describes a self-consistent row — the
+    # loader refuses a mismatch, and every case below is about some other
+    # failure. A test that wants the mismatch itself passes `:blob_digest`.
+    Map.put_new_lazy(merged, :blob_digest, fn ->
+      Sanctum.JCS.hash_binary(merged.resolved_policy)
+    end)
   end
 
   defp live_for(activation) do
@@ -121,6 +130,44 @@ defmodule Sanctum.Consent.LoaderTest do
     seed(ctx, profile, consent(%{scope: :versionless, pinned_version: "1.0.0"}))
 
     assert {:error, {:invalid_consent, :pinned_version}} =
+             Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
+  end
+
+  test "a policy edited in place after the fact fails closed", %{ctx: ctx} do
+    profile = profile_summary()
+
+    # Widen the stored blob without touching any digest — a hand edit, a
+    # restored backup, or any write path that reaches the column. Before
+    # `blob_digest` existed nothing on the row detected this:
+    # `commit_digest` covers the decisions, not the bytes, and
+    # `check_blob_refs_equality/2` compares vault refs alone. So the loader
+    # built an Authority from whatever caps the edit left behind.
+    honest = consent()
+    tampered = Jason.decode!(honest.resolved_policy)
+
+    widened =
+      update_in(tampered, ["nodes"], fn nodes ->
+        Map.new(nodes, fn {ref, node} ->
+          {ref,
+           update_in(node, ["edges"], fn edges ->
+             Map.new(edges, fn {key, edge} ->
+               {key, Map.put(edge, "egress", %{"domains" => ["*"], "methods" => ["GET"]})}
+             end)
+           end)}
+        end)
+      end)
+
+    seed(ctx, profile, %{honest | resolved_policy: Jason.encode!(widened)})
+
+    assert {:error, {:blob_digest_mismatch, _}} =
+             Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
+  end
+
+  test "a consent with no blob digest at all fails closed", %{ctx: ctx} do
+    profile = profile_summary()
+    seed(ctx, profile, consent(%{blob_digest: nil}))
+
+    assert {:error, {:invalid_consent, :blob_digest}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
   end
 
