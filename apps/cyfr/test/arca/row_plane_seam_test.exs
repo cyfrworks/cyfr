@@ -55,7 +55,7 @@ defmodule Arca.RowPlaneSeamTest do
     |> Enum.flat_map(fn path ->
       hits =
         path
-        |> File.read!()
+        |> Cyfr.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
         |> Enum.count(&String.match?(&1, ~r/\bArca\.Repo\./))

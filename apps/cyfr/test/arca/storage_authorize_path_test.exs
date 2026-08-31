@@ -90,7 +90,7 @@ defmodule Arca.StorageAuthorizePathTest do
     snapshot = fn ->
       Path.wildcard(Path.join(seed_root, "**"))
       |> Enum.sort()
-      |> Enum.map(&{&1, File.dir?(&1) || File.read!(&1)})
+      |> Enum.map(&{&1, File.dir?(&1) || Cyfr.Test.SourceTree.read(&1)})
     end
 
     before = snapshot.()

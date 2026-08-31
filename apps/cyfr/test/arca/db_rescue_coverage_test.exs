@@ -67,7 +67,7 @@ defmodule Arca.DbRescueCoverageTest do
   test "every public row-plane entry that touches the repo is rescued or says why" do
     offenders =
       for path <- sources(),
-          source = File.read!(path),
+          source = Cyfr.Test.SourceTree.read(path),
           {line, body} <- functions(String.split(source, "\n")),
           public?(body),
           body =~ @repo_call,

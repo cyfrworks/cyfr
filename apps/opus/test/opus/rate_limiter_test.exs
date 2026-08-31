@@ -4,7 +4,7 @@
 defmodule Opus.RateLimiterTest do
   use ExUnit.Case, async: false
 
-  import Opus.TestWait
+  import Cyfr.Test.Wait
 
   alias Opus.RateLimiter
 

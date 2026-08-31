@@ -573,8 +573,12 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      # Should handle deeply nested data without crashing
-      assert conn.status in [200, 400]
+      # 50 levels of nesting is data, not a request the parser has to
+      # understand: it rides through as one unknown `nested` argument and
+      # `system/status` ignores it. Accepting 400 as well left the test
+      # unable to say whether the depth had been handled or rejected.
+      assert conn.status == 200
+      assert json_response(conn, 200)["id"] == 4
     end
 
     test "handles very long method name", %{conn: conn} do
@@ -673,8 +677,12 @@ defmodule EmissaryWeb.MCPControllerTest do
           "method" => "server/discover"
         })
 
-      # Float IDs are technically valid but unusual
-      assert conn.status in [200, 400]
+      # JSON-RPC ids may be numbers, and 3.14 is a number: the request is
+      # served and the id comes back unchanged, not coerced to 3 and not
+      # rejected. That round trip is the whole contract here, and
+      # `status in [200, 400]` asserted neither end of it.
+      assert conn.status == 200
+      assert json_response(conn, 200)["id"] == 3.14
     end
 
     test "handles special characters in string id", %{conn: conn} do
@@ -690,8 +698,10 @@ defmodule EmissaryWeb.MCPControllerTest do
           "method" => "server/discover"
         })
 
-      # Should handle special characters
-      assert conn.status in [200, 400]
+      # A string id is opaque: a NUL, a newline and a tab inside it are
+      # carried, not interpreted, and come back byte-for-byte.
+      assert conn.status == 200
+      assert json_response(conn, 200)["id"] == special_id
     end
 
     test "handles unicode in params", %{conn: conn} do
@@ -907,8 +917,12 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      # Should handle large payloads without crashing
-      assert conn.status in [200, 400, 413]
+      # 100KB is under the body limit, so it is served rather than
+      # refused — the argument is unknown to `system/status` and dropped.
+      # Admitting 400 and 413 too meant the test passed whether the limit
+      # sat above this size or below it.
+      assert conn.status == 200
+      assert json_response(conn, 200)["id"] == 2
     end
 
     test "handles large response from tool", %{conn: conn} do

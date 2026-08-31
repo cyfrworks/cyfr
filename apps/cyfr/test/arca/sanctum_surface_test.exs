@@ -46,7 +46,7 @@ defmodule Arca.SanctumSurfaceTest do
 
   defp reached do
     for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/arca/**/*.ex")),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+        line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")

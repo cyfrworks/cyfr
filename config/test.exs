@@ -34,6 +34,18 @@ config :cyfr, :tincture_rate_limit_max, 1_000_000
 # in a suite. Surfaces render its "unknown" answer.
 config :cyfr, :registry_health_probe, false
 
+# And the same for the REST host: the discard port refuses immediately, so
+# a surface that reads cyfr.run takes its error path deterministically
+# instead of depending on what this machine's DNS does with a real name —
+# a captive portal that answers everything and a laptop with no network
+# gave different results before. Two suites already set this by hand for
+# their own pages; the default belonged here.
+#
+# `:oci_registry_url` deliberately stays at its shipped default: the
+# registry-host allowlist is what `Compendium.OCI.Client` and the component
+# tool enforce, and their suites pin the refusal against the real host.
+config :cyfr, :registry_url, "127.0.0.1:19"
+
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must
 # match (SQLite-only keys break a Postgres connect, and Postgres needs a URL
@@ -62,7 +74,14 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       queue_target: 500,
       queue_interval: 5_000,
       journal_mode: :wal,
-      busy_timeout: 5_000
+      # WAL gives concurrent readers but still one writer, and the suite runs
+      # up to 20 async cases against one file — so a fixture doing a wide
+      # upsert can genuinely queue behind others for a while. At 5s that
+      # surfaced as an occasional `Database busy` in whichever test lost the
+      # race, which reads exactly like a real failure and is not one. The
+      # wait only happens when contended, so a green run pays nothing for
+      # the larger budget.
+      busy_timeout: 20_000
 
   :postgres ->
     config :cyfr, Arca.Repo,

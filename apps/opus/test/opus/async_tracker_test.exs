@@ -4,7 +4,7 @@
 defmodule Opus.AsyncTrackerTest do
   use ExUnit.Case, async: true
 
-  import Opus.TestWait
+  import Cyfr.Test.Wait
 
   alias Opus.AsyncTracker
 

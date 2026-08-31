@@ -4,6 +4,8 @@
 defmodule Sanctum.Authority.BudgetGuardTest do
   use ExUnit.Case, async: false
 
+  import Cyfr.Test.Wait
+
   alias Sanctum.Authority.Budget
   alias Sanctum.Authority.BudgetGuard
 
@@ -12,36 +14,34 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     {:ok, budget: Budget.new(2)}
   end
 
-  defp wait_until(fun, tries \\ 50) do
-    cond do
-      fun.() -> :ok
-      tries == 0 -> flunk("condition never became true")
-      true -> Process.sleep(10) && wait_until(fun, tries - 1)
-    end
-  end
-
   test "a brutally killed holder's slot is released by the :DOWN compensation", %{budget: budget} do
     :ok = Budget.try_acquire(budget)
+    test_pid = self()
 
     holder =
       spawn(fn ->
+        # A synchronous call: when it returns the registration is recorded,
+        # so the signal below is proof, not a guess. Sleeping "long enough"
+        # for it instead is what made this test's ordering a coin flip.
         BudgetGuard.guard(budget)
+        send(test_pid, :guarded)
 
         receive do
           :never -> :ok
         end
       end)
 
-    wait_until(fn -> Process.alive?(holder) end)
-    # Let the guard register (a call from the holder, so once it is alive
-    # and has run its first line the registration is in flight).
-    Process.sleep(20)
+    assert_receive :guarded, 1_000
 
     # The untrappable kill — the exact signal `Task.shutdown(:brutal_kill)`
     # sends, which skips every `after` in the holder.
     Process.exit(holder, :kill)
 
-    wait_until(fn -> Budget.snapshot(budget).in_flight == 0 end)
+    wait_until(
+      fn -> Budget.snapshot(budget).in_flight == 0 end,
+      2_000,
+      "the killed holder's slot to come back"
+    )
   end
 
   test "an explicit release removes the guard — the death cannot release twice", %{budget: budget} do
@@ -66,8 +66,16 @@ defmodule Sanctum.Authority.BudgetGuardTest do
 
     # The holder dies AFTER its explicit release; the demonitored guard
     # must not release the second (still legitimately held) slot.
+    ref = Process.monitor(holder)
     Process.exit(holder, :kill)
-    Process.sleep(50)
+    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 1_000
+
+    # Both monitors were notified when the holder terminated, so the guard's
+    # own `:DOWN` is already in its mailbox; a synchronous call drains past
+    # it. Asserting after a fixed sleep proved nothing — a sleep too short
+    # for the compensation to run reads exactly like a compensation that
+    # correctly did not fire.
+    :sys.get_state(BudgetGuard)
     assert Budget.snapshot(budget).in_flight == 1
 
     :ok = Budget.release(budget)

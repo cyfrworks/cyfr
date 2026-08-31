@@ -82,7 +82,7 @@ defmodule Cyfr.SanctumSurfacesTest do
 
   defp reached(ns) do
     for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/#{ns}/**/*.ex")),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+        line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
@@ -140,7 +140,7 @@ defmodule Cyfr.SanctumSurfacesTest do
   test "lib/compendium touches only the allowed Sanctum.Consent submodules" do
     deep =
       for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/compendium/**/*.ex")),
-          line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+          line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
           [module] <- Regex.scan(~r/\bSanctum\.Consent\.[A-Z]\w+/, line, capture: :first),
           into: MapSet.new(),
           do: module

@@ -91,7 +91,7 @@ defmodule Cyfr.GenServerCatchallTest do
 
       adopters =
         for path <- Path.wildcard(Path.join(root, "apps/cyfr/lib/**/*.ex")),
-            source = File.read!(path),
+            source = Cyfr.Test.SourceTree.read(path),
             String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
             String.contains?(source, "name: __MODULE__"),
             [_, mod] <-

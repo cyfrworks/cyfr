@@ -65,7 +65,7 @@ defmodule Cyfr.NamespaceDirectionTest do
     end)
     |> Enum.flat_map(fn path ->
       path
-      |> File.read!()
+      |> Cyfr.Test.SourceTree.read()
       # Doc prose is not a dependency: blank out heredoc bodies (module
       # and function docs), preserving line numbers for the report.
       |> String.replace(~r/"""[\s\S]*?"""/, fn block ->
@@ -135,7 +135,7 @@ defmodule Cyfr.NamespaceDirectionTest do
       for dir <- @domain_dirs,
           path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
           rel = Path.relative_to(path, root()),
-          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
+          {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
           [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),
           not MapSet.member?(allowed, {rel, module}),
           do: "#{rel}:#{n}: #{module}"
@@ -165,7 +165,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   end
 
   test "cyfr does not depend on the engine apps at compile time" do
-    mix_exs = File.read!(Path.join(root(), "apps/cyfr/mix.exs"))
+    mix_exs = Cyfr.Test.SourceTree.read(Path.join(root(), "apps/cyfr/mix.exs"))
 
     refute mix_exs =~ ":opus",
            "cyfr must not declare a dependency on opus — Cyfr.Execution is the seam"

@@ -125,7 +125,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp offenders(path) do
     ast =
       path
-      |> File.read!()
+      |> Cyfr.Test.SourceTree.read()
       |> Code.string_to_quoted!(columns: true)
 
     {_, found} =

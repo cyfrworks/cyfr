@@ -35,7 +35,7 @@ defmodule Cyfr.IdMintingSeamTest do
     found =
       for dir <- ~w(apps/cyfr/lib apps/opus/lib apps/locus/lib),
           file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
-          count = length(Regex.scan(@bare_pattern, File.read!(file))),
+          count = length(Regex.scan(@bare_pattern, Cyfr.Test.SourceTree.read(file))),
           count > 0,
           into: %{} do
         {Path.relative_to(file, @root), count}

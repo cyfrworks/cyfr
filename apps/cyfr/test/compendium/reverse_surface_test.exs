@@ -61,7 +61,7 @@ defmodule Compendium.ReverseSurfaceTest do
 
   defp reached(glob) do
     for path <- Path.wildcard(Path.join(root(), glob)),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+        line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")

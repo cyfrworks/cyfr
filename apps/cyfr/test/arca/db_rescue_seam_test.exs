@@ -58,7 +58,7 @@ defmodule Arca.DbRescueSeamTest do
     found =
       for dir <- ["apps/cyfr/lib", "apps/opus/lib", "apps/locus/lib"],
           file <- Path.wildcard(Path.join([@root, dir, "**/*.ex"])),
-          count = length(Regex.scan(@rescue_pattern, File.read!(file))),
+          count = length(Regex.scan(@rescue_pattern, Cyfr.Test.SourceTree.read(file))),
           count > 0,
           into: %{} do
         {Path.relative_to(file, @root), count}

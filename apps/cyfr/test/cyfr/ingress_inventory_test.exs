@@ -57,7 +57,7 @@ defmodule Cyfr.IngressInventoryTest do
     found =
       Path.wildcard(Path.join(root, "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
-        source = File.read!(path)
+        source = Cyfr.Test.SourceTree.read(path)
         Enum.any?(@patterns, &String.contains?(source, &1))
       end)
       |> Enum.map(&Path.relative_to(&1, root))
@@ -114,7 +114,7 @@ defmodule Cyfr.IngressInventoryTest do
       Enum.filter(@ingress_files, fn file ->
         root
         |> Path.join(file)
-        |> File.read!()
+        |> Cyfr.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
         |> Enum.any?(&String.match?(&1, ~r/\bOpus\.(run_root|run_root_edge|run_child)\(/))

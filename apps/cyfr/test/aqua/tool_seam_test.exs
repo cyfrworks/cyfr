@@ -31,7 +31,7 @@ defmodule Aqua.ToolSeamTest do
       for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/aqua/**/*.ex")),
           rel = Path.relative_to(path, root()),
           rel != @seam,
-          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
+          {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
           String.contains?(line, "Emissary.MCP."),
           do: "#{rel}:#{n}: #{String.trim(line)}"
 

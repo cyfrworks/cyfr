@@ -60,7 +60,7 @@ defmodule Cyfr.EgressInventoryTest do
       |> Enum.filter(fn path ->
         source =
           path
-          |> File.read!()
+          |> Cyfr.Test.SourceTree.read()
           |> String.replace(~r/"""[\s\S]*?"""/, "")
           |> String.split("\n")
           |> Enum.reject(&String.match?(&1, ~r/^\s*#/))

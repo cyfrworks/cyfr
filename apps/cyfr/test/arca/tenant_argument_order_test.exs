@@ -50,7 +50,7 @@ defmodule Arca.TenantArgumentOrderTest do
       exempt = Map.get(@exempt, file, [])
 
       path
-      |> File.read!()
+      |> Cyfr.Test.SourceTree.read()
       |> String.split("\n")
       |> Enum.with_index(1)
       |> Enum.filter(fn {line, _n} -> String.match?(line, ~r/^  def [a-z_]+[!?]?\(/) end)
@@ -88,9 +88,13 @@ defmodule Arca.TenantArgumentOrderTest do
   end
 
   test "the two modules that disagreed now agree" do
-    api_key = File.read!(Path.join(root(), "apps/cyfr/lib/arca/api_key_storage.ex"))
-    webhook = File.read!(Path.join(root(), "apps/cyfr/lib/arca/webhook_storage.ex"))
-    vault = File.read!(Path.join(root(), "apps/cyfr/lib/arca/vault_storage.ex"))
+    api_key =
+      Cyfr.Test.SourceTree.read(Path.join(root(), "apps/cyfr/lib/arca/api_key_storage.ex"))
+
+    webhook =
+      Cyfr.Test.SourceTree.read(Path.join(root(), "apps/cyfr/lib/arca/webhook_storage.ex"))
+
+    vault = Cyfr.Test.SourceTree.read(Path.join(root(), "apps/cyfr/lib/arca/vault_storage.ex"))
 
     assert api_key =~ "def get_key(athanor_id, name)"
     assert api_key =~ "def get_key_by_id(athanor_id, id)"

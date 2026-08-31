@@ -26,7 +26,7 @@ defmodule Cyfr.TelemetryCatalogTest do
     |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
     |> Enum.flat_map(fn path ->
       # Collapse formatting so a list wrapped across lines still matches.
-      source = path |> File.read!() |> String.replace(~r/\n\s*/, " ")
+      source = path |> Cyfr.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
 
       Regex.scan(@event_re, source)
       |> Enum.map(fn [match] ->

@@ -30,7 +30,7 @@ defmodule Cyfr.DigestSSOTTest do
   test ~s(the "sha256:" spelling is constructed only in Cyfr.Digest) do
     offenders =
       Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
-      |> Enum.filter(fn path -> Regex.match?(@construction, File.read!(path)) end)
+      |> Enum.filter(fn path -> Regex.match?(@construction, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
 
@@ -41,7 +41,7 @@ defmodule Cyfr.DigestSSOTTest do
   test "the bare-hex spelling is constructed only in Cyfr.Digest" do
     offenders =
       Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
-      |> Enum.filter(fn path -> Regex.match?(@bare_hex, File.read!(path)) end)
+      |> Enum.filter(fn path -> Regex.match?(@bare_hex, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
 

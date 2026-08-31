@@ -64,6 +64,28 @@ if config_env() != :test do
   # secret, CYFR_BUILDER_TOKEN.
   release_name = env_str.("RELEASE_NAME", nil)
 
+  # Elixir's Logger defaults to :debug, and no file set a level outside
+  # `test.exs` — so a release formatted and emitted every debug line every
+  # dependency writes, through the metadata formatter, forever. Redaction
+  # does not help there: `:filter_parameters` covers inbound params and
+  # `Sanctum.Sanitizer` covers what the code hands it, neither covers an
+  # arbitrary debug line. `:info` is the floor; the knob is for an operator
+  # debugging their own box, and an unknown value keeps the floor rather
+  # than crashing the release on a typo.
+  # `:debug` stays the dev default — this file runs there too, and a
+  # developer's own box is exactly where the noise is wanted.
+  log_level =
+    case env_str.("CYFR_LOG_LEVEL", if(config_env() == :prod, do: "info", else: "debug")) do
+      level when level in ~w(emergency alert critical error warning notice info debug) ->
+        String.to_existing_atom(level)
+
+      other ->
+        IO.warn("CYFR_LOG_LEVEL=#{inspect(other)} is not a Logger level — using :info")
+        :info
+    end
+
+  config :logger, level: log_level
+
   # JSON log format for structured logging (Datadog, Splunk, ELK, Loki)
   if env_str.("CYFR_LOG_FORMAT", nil) == "json" do
     # Only the format changes. `Config` deep-merges keyword values, so the

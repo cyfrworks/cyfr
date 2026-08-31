@@ -32,6 +32,11 @@ excludes =
 
 ExUnit.configure(exclude: excludes)
 
+# Owned by the test-runner process so it outlives every test and no two
+# tests race to create it. `Cyfr.Test.SourceTree` fills it lazily; see that
+# module for why the architecture tests need to stop re-reading the tree.
+:ets.new(Cyfr.Test.SourceTree.table(), [:named_table, :public, :set, read_concurrency: true])
+
 # The tmp storage roots configured in config/test.exs: the tenant root, and
 # the seed tree with an empty bundle plus a copy of the shipped AQUA
 # template (template reads stay real without the suite touching the repo's

@@ -26,7 +26,7 @@ defmodule PrismWeb.ToolSeamTest do
       |> Enum.reject(&String.ends_with?(&1, "mcp_helpers.ex"))
       |> Enum.flat_map(fn path ->
         path
-        |> File.read!()
+        |> Cyfr.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.filter(fn {line, _n} ->
@@ -154,7 +154,7 @@ defmodule PrismWeb.ToolSeamTest do
       |> Enum.flat_map(&Path.wildcard/1)
       |> Enum.flat_map(fn path ->
         rel = Path.relative_to(path, root())
-        source = File.read!(path)
+        source = Cyfr.Test.SourceTree.read(path)
         aliases = aliases(source)
 
         source

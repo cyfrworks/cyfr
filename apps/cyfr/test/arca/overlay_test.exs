@@ -70,8 +70,21 @@ defmodule Arca.OverlayTest do
 
   use ExUnit.Case, async: false
 
+  import Cyfr.Test.Wait
+
   @version_dir ["components", "catalysts", "local", "bundled", "1.0.0"]
   @sentinel "cyfr-manifest.json"
+
+  # Whether anyone is queued behind the holder of a unit lock. The lock's
+  # state is `key => {holder, monitor_ref, waiters}`, so a non-empty queue
+  # is the observable fact that one commit is being made to wait for
+  # another — the thing the serialization tests need to happen before they
+  # step the interleaving forward.
+  defp queued_on_unit_lock? do
+    Arca.Overlay.UnitLock
+    |> :sys.get_state()
+    |> Enum.any?(fn {_key, {_holder, _ref, waiters}} -> not :queue.is_empty(waiters) end)
+  end
 
   setup do
     base = Path.join(System.tmp_dir!(), "overlay_#{System.unique_integer([:positive])}")
@@ -696,10 +709,21 @@ defmodule Arca.OverlayTest do
       # Writer A now runs to completion and is told its write landed.
       a = Task.async(fn -> Arca.put(ctx, @version_dir ++ ["from_a.txt"], "a") end)
 
-      # With the unit lock, A waits on B — so release B and let both finish.
-      # Without it, A completes here while B is still parked, and B's
-      # clean_slate then deletes A's file.
-      Process.sleep(200)
+      # With the unit lock, A queues behind B — so wait for the queue entry,
+      # then release B and let both finish. Without the lock A runs to
+      # completion while B is still parked, and B's clean_slate then deletes
+      # A's file; that is the interleaving this test has to produce.
+      #
+      # The wait is on the lock's own bookkeeping rather than a fixed sleep:
+      # a sleep decides the interleaving by timing, so one that ends a
+      # moment early makes the test pass without ever reaching the window
+      # the bug lives in.
+      wait_until(
+        fn -> queued_on_unit_lock?() or not Process.alive?(a.pid) end,
+        5_000,
+        "writer A to queue behind B on the unit lock, or finish without taking it"
+      )
+
       send(b_pid, :proceed)
 
       assert Task.await(b, 30_000) == :ok

@@ -54,7 +54,7 @@ defmodule Sanctum.ComponentRefGrammarTest do
       |> Enum.reject(&String.ends_with?(&1, "component_ref.ex"))
       |> Enum.flat_map(fn path ->
         path
-        |> File.read!()
+        |> Cyfr.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.reject(fn {line, _n} -> String.match?(line, ~r/^\s*#/) end)

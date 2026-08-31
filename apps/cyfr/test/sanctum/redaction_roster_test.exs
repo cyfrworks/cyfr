@@ -88,7 +88,7 @@ defmodule Sanctum.RedactionRosterTest do
   test "no module outside the Sanitizer declares a sensitive-key roster" do
     offenders =
       Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
-      |> Enum.filter(fn path -> File.read!(path) =~ "@sensitive_keys" end)
+      |> Enum.filter(fn path -> Cyfr.Test.SourceTree.read(path) =~ "@sensitive_keys" end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/sanctum/sanitizer.ex"))
 

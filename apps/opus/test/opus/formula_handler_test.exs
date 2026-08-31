@@ -4,6 +4,8 @@
 defmodule Opus.FormulaHandlerTest do
   use ExUnit.Case, async: false
 
+  import Cyfr.Test.Wait
+
   alias Opus.FormulaHandler
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
@@ -593,7 +595,7 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "poll integration" do
-    test "poll returns pending for running task, then completed", %{ctx: ctx, ref: ref} do
+    test "poll reports the spawned task's own terminal status", %{ctx: ctx, ref: ref} do
       auth = authority(edges: %{@test_node => %{}})
       {imports, tracker_pid} = fork_imports(ctx, auth, "exec_poll")
 
@@ -601,17 +603,25 @@ defmodule Opus.FormulaHandlerTest do
       spawn_fn = elem(invoke_ns["spawn"], 1)
       poll_fn = elem(invoke_ns["poll"], 1)
 
-      # Spawn a task
       spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
       task_id = Jason.decode!(spawn_result)["task_id"]
 
-      # Wait for task to complete
-      Process.sleep(2000)
+      # Poll until the task leaves `pending` rather than sleeping past it.
+      # `completed` or `error` — math.wasm is a core module, so which one is
+      # not this test's business; that poll STOPS saying pending, and says
+      # so about the right task, is. Admitting "pending" in the assertion
+      # too made it a list of the whole status vocabulary, which no
+      # behaviour could fail.
+      wait_until(
+        fn -> Jason.decode!(poll_fn.(task_id))["status"] != "pending" end,
+        5_000,
+        "the spawned task to leave 'pending'"
+      )
 
-      # Poll should now return result
-      poll_result = poll_fn.(task_id)
-      parsed = Jason.decode!(poll_result)
-      assert parsed["status"] in ["completed", "error", "pending"]
+      parsed = Jason.decode!(poll_fn.(task_id))
+
+      assert parsed["task_id"] == task_id
+      assert parsed["status"] in ["completed", "error"]
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end

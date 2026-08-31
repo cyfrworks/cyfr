@@ -78,8 +78,11 @@ defmodule Emissary.SecurityTest do
           })
         )
 
-      # Should handle gracefully (either reject or parse)
-      assert wrong_ct_conn.status in [200, 400, 415]
+      # Refused at the parser: the endpoint reads JSON bodies and a
+      # `text/plain` one is not that, whatever it happens to contain.
+      # Accepting 200 here as well left the test unable to notice the day
+      # this started executing bodies nobody declared as JSON.
+      assert wrong_ct_conn.status == 400
     end
 
     test "multiple session ID headers uses first", %{conn: conn} do
@@ -156,8 +159,17 @@ defmodule Emissary.SecurityTest do
             }
           })
 
-        # Should not crash or expose file system
-        assert response_conn.status in [200, 400]
+        # `system/status` declares no `path`, so the argument is dropped:
+        # the call succeeds and answers about the server, never about a
+        # file. Both halves are the contract, and `status in [200, 400]`
+        # asserted neither — a 200 that had opened the path and a 400 that
+        # had rejected the whole call would both have passed.
+        body = json_response(response_conn, 200)
+        assert body["id"] == 2
+        assert is_map(body["result"]), "the tool refused instead of ignoring #{inspect(payload)}"
+
+        refute Jason.encode!(body) =~ payload,
+               "the response echoed the traversal payload back"
       end
     end
 
@@ -185,8 +197,15 @@ defmodule Emissary.SecurityTest do
             }
           })
 
-        # Should not execute commands
-        assert response_conn.status in [200, 400]
+        # Same contract as the traversal payloads above: an undeclared
+        # `cmd` argument is dropped, so there is nothing to interpret and
+        # nothing to echo.
+        body = json_response(response_conn, 200)
+        assert body["id"] == 2
+        assert is_map(body["result"]), "the tool refused instead of ignoring #{inspect(payload)}"
+
+        refute Jason.encode!(body) =~ payload,
+               "the response echoed the injection payload back"
       end
     end
   end
@@ -206,9 +225,14 @@ defmodule Emissary.SecurityTest do
           })
         end
 
-      # All should complete (even if some are rate limited)
-      for result <- results do
-        assert result.status in [200, 429, 503]
+      # All 100 complete, and each answer carries back its own id. The
+      # limiter does not gate `server/discover`, so admitting 429/503 here
+      # made the assertion true whether the endpoint served the burst or
+      # shed it — and it could not have caught a response handed to the
+      # wrong request either.
+      for {result, i} <- Enum.with_index(results, 1) do
+        assert result.status == 200
+        assert json_response(result, 200)["id"] == i
       end
     end
   end

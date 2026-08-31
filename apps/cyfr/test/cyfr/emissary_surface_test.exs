@@ -46,7 +46,7 @@ defmodule Cyfr.EmissarySurfaceTest do
 
   defp reached do
     for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/sanctum/**/*.ex")),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+        line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new() do
       case String.split(module, ".") do

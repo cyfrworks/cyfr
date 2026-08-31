@@ -804,18 +804,24 @@ defmodule Opus.MCPTest do
       assert exception_meta.outcome == :failure
     end
 
-    test "emits telemetry events on unregistered component failure", %{ctx: ctx} do
-      # Unregistered component — should fail at resolve step
-      _result =
-        MCP.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => "reagent:local.unregistered-telemetry:0.1.0",
-          "input" => %{}
-        })
+    test "a component that never resolves opens no execution span", %{ctx: ctx} do
+      # The gate comes first: an unregistered reference has no consent
+      # profile, so the call is refused before the executor is reached.
+      assert {:error, {:consent_required, %{"ref" => ref}}} =
+               MCP.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => "reagent:local.unregistered-telemetry:0.1.0",
+                 "input" => %{}
+               })
 
-      # The telemetry events may or may not be emitted depending on where the failure occurs
-      # If write_started succeeds, we should see at least the start event
-      # This is a best-effort test
+      assert ref == "reagent:local.unregistered-telemetry:0.1.0"
+
+      # And no span is opened for it. A `:start` with no `:stop` or
+      # `:exception` is an execution that leaks — every consumer counting
+      # in-flight runs off this event would be permanently one high — so
+      # "which one of start/stop/exception fired" is exactly what must not
+      # be left as a best-effort maybe.
+      refute_receive {:telemetry, [:cyfr, :opus, :execute, _], _, _}, 100
     end
   end
 
