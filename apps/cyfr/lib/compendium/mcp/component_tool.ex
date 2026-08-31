@@ -45,10 +45,29 @@ defmodule Compendium.MCP.ComponentTool do
             permission: :component_manage
           },
           "push" => %{kind: :write, planes: [:external], permission: :component_manage},
+          # `register` is a SCANNER run over the athanor's overlay
+          # `components/` tree, not a bytes upload: it indexes whatever
+          # arrived there by any means. A catalyst holding a storage write
+          # grant over that root can put bytes there, and
+          # `Compendium.Source` cannot tell them from the operator's seed —
+          # both stamp `"filesystem"`.
+          #
+          # The two changes are independent, and the second is not implied
+          # by the first. `consent: :staging` admits `:oidc` and `:api_key`
+          # and refuses `Context.plane: :guest`, which stops a WASM formula
+          # — but AQUA is not a guest: it runs host-side with the person's
+          # own `:external` context, so an approved proposal would still
+          # have registered. Dropping `:in_chain` is what closes that, at
+          # the cost of AQUA no longer being able to offer the action at
+          # all (`Aqua.Actions.proposable?/1` derives from this list, so
+          # the approval card disappears rather than failing on the click).
+          # Registering stays a console or CLI act. Note `planes:` here and
+          # `Context.plane` are different axes despite the shared word.
           "register" => %{
             kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage
+            planes: [:external],
+            permission: :component_manage,
+            consent: :staging
           },
           "categories" => %{kind: :read, planes: [:external, :in_chain]},
           "get_blob" => %{
@@ -897,11 +916,15 @@ defmodule Compendium.MCP.ComponentTool do
 
     broadcast_components_changed(ctx)
 
-    # A freshly registered local component gets its baseline consent at
-    # once — provisioning mints for the seed bundle, this mints for what a
-    # person registers later — so it is invocable without a manual step.
-    minted = bootstrap_registered(ctx, result.components)
-
+    # Registration does NOT mint consent. It used to, "so it is invocable
+    # without a manual step" — but this is a scanner over the athanor's
+    # own `components/` tree, so it consented to whatever arrived there,
+    # and a catalyst with a storage write grant over that root can arrive
+    # there. `Sanctum.Consent.Bootstrap` still mints for the seed bundle
+    # at provisioning, where the bytes are operator-shipped, immutable per
+    # the `seed-guards` CI job and auditable once at build time. What a
+    # person registers gets a consent walk, like anything else they were
+    # not handed by the operator.
     dep_fields =
       case dep_info do
         {:error, {:dependency_check_failed, reason}} ->
@@ -933,8 +956,7 @@ defmodule Compendium.MCP.ComponentTool do
          errors: result.errors,
          total: result.total,
          elapsed_ms: result.elapsed_ms,
-         scanned_dirs: result.scanned_dirs,
-         bootstrapped: minted
+         scanned_dirs: result.scanned_dirs
        },
        dep_fields
      )}
@@ -1356,30 +1378,6 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
-
-  defp bootstrap_registered(ctx, components) do
-    refs =
-      for comp <- components,
-          (comp[:status] || comp["status"]) == "registered",
-          type = comp[:type] || comp["type"] || comp[:component_type] || comp["component_type"],
-          name = comp[:name] || comp["name"],
-          is_binary(type) and is_binary(name),
-          do:
-            Sanctum.ComponentRef.build(
-              type,
-              Compendium.ComponentPath.default_publisher(),
-              name
-            )
-
-    case refs do
-      [] ->
-        []
-
-      _ ->
-        {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run_for(ctx, refs)
-        minted
-    end
-  end
 
   # ============================================================================
   # Component Resolution

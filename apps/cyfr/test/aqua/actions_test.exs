@@ -373,7 +373,6 @@ defmodule Aqua.ActionsTest do
 
       assert prelude =~ "## Actions that need approval"
       assert prelude =~ "component.pull"
-      assert prelude =~ "component.register"
       assert prelude =~ "execution.run"
       assert prelude =~ "execution.cancel"
       assert prelude =~ "registry.report"
@@ -382,6 +381,17 @@ defmodule Aqua.ActionsTest do
       # an action the chain cannot reach is not offered: the card would be
       # refused at the call, so the agent is not told to propose it
       refute AquaActions.system_prelude(%{"key.create" => "ask"}) =~ "key.create"
+
+      # `component.register` is the deliberate instance of that rule.
+      # It indexes whatever is sitting on the athanor's `components/` tree,
+      # which a catalyst with a storage write grant can write to, so it
+      # dropped `:in_chain` — and an approved proposal executes in-chain.
+      # `consent: :staging` alone would NOT have closed this: it refuses
+      # `Context.plane: :guest`, and AQUA runs host-side with the person's
+      # own external context.
+      refute AquaActions.system_prelude(%{"component.register" => "ask"}) =~
+               "component.register"
+
       # 'auto' actions are directly callable — they don't appear here
       refute prelude =~ "files.read"
       refute prelude =~ "files.write"
@@ -398,10 +408,10 @@ defmodule Aqua.ActionsTest do
 
     test "approval list is sorted (deterministic for prompt cache)" do
       prelude = AquaActions.system_prelude(@policy)
-      # component.pull should appear before component.register alphabetically
+      # component.pull should appear before execution.cancel alphabetically
       pos_pull = :binary.match(prelude, "component.pull") |> elem(0)
-      pos_register = :binary.match(prelude, "component.register") |> elem(0)
-      assert pos_pull < pos_register
+      pos_cancel = :binary.match(prelude, "execution.cancel") |> elem(0)
+      assert pos_pull < pos_cancel
     end
   end
 

@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.Bootstrap do
   @moduledoc """
-  Mint first consents for components that have none.
+  Mint first consents for the **seed bundle** — the operator's own code.
 
   For every executable local component without a profile, mints an owner
   profile and a revision-1 consent whose blob grants each closure node its
@@ -12,6 +12,27 @@ defmodule Sanctum.Consent.Bootstrap do
 
   Idempotent: a source ref that already has an owner profile is skipped.
   Machine-minted revisions record `granted_via: "bootstrap"`.
+
+  ## Why provisioning is the only caller
+
+  This mints a consent nobody was asked for, which `Sanctum.Consent.Authz`
+  otherwise forbids — so what it mints over has to be code the operator
+  already vouched for. At provisioning that holds: the bundle ships in the
+  image, the `seed-guards` CI job makes shipped version directories
+  immutable, and its caps are auditable once at build time rather than per
+  athanor.
+
+  `component.register` used to call this too, for "what a person registers
+  later". That did not hold. `register` is a scanner over the athanor's own
+  overlay `components/` tree, so it consented to whatever had arrived
+  there — and a catalyst holding a storage write grant over that root can
+  arrive there, under a `"filesystem"` source stamp that
+  `Compendium.Source` cannot tell from the seed's. A registered component
+  now gets a consent walk like anything else.
+
+  There is deliberately no `run_for/2`: a function that mints owner
+  consent for caller-named refs is the shape that hole had, and the next
+  caller would reopen it.
   """
 
   require Logger
@@ -34,20 +55,6 @@ defmodule Sanctum.Consent.Bootstrap do
   @spec run(Context.t()) :: {:ok, result()}
   def run(%Context{} = ctx) do
     run_components(ctx, executable_local_components(ctx))
-  end
-
-  @doc """
-  Bootstrap only the named source refs (`"formula:local.aqua"`, …) — what
-  `component.register` does for the component it just registered.
-  """
-  @spec run_for(Context.t(), [String.t()]) :: {:ok, result()}
-  def run_for(%Context{} = ctx, source_refs) when is_list(source_refs) do
-    components =
-      ctx
-      |> executable_local_components()
-      |> Enum.filter(&(Compendium.Activation.node_key(&1) in source_refs))
-
-    run_components(ctx, components)
   end
 
   defp run_components(ctx, components) do

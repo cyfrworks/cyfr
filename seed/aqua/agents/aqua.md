@@ -25,7 +25,6 @@ tool_policy:
   component.inspect: auto
   component.list: auto
   component.pull: ask
-  component.register: ask
   component.search: auto
   component.setup_plan: auto
   component.yank: ask

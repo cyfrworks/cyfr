@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Compendium.RegisterMintsNothingTest do
+  @moduledoc """
+  `component.register` grants no consent, and cannot be reached in-chain.
+
+  It used to mint an owner consent for every ref it registered — "so it is
+  invocable without a manual step". `Sanctum.Consent.Bootstrap` mints over
+  the **seed bundle**, which is operator-shipped, immutable per the
+  `seed-guards` CI job and auditable once at build time. Register is a
+  different act with the same name: a scanner over the athanor's own
+  overlay `components/` tree, so it consented to whatever had arrived
+  there — and per `Compendium.Source`, `"filesystem"` covers *"bundled
+  seed **or** the athanor's own overlay"*, so the stamp cannot tell the two
+  apart. A catalyst holding a storage write grant over `components/`
+  (`Compendium.NamespacePolicy.require_local_guest_write/1` permits
+  `local/` deliberately) could therefore stage bytes and have them come
+  back pre-consented.
+
+  Both halves are pinned here because neither implies the other:
+  `consent: :staging` refuses `Context.plane: :guest`, which stops a WASM
+  formula but not AQUA, which runs host-side with the person's own
+  external context.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Emissary.MCP.ToolRegistry
+
+  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+
+  setup do
+    Arca.Cache.init()
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    test_path = Path.join(System.tmp_dir!(), "register_no_mint_#{:rand.uniform(1_000_000)}")
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_path)
+
+    on_exit(fn ->
+      File.rm_rf!(test_path)
+
+      if original_base_path,
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
+    end)
+
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  describe "the register action's reach" do
+    test "is refused in-chain, so an approved AQUA proposal cannot run it" do
+      assert ToolRegistry.in_chain_refused?("component", "register"),
+             """
+             `component.register` is reachable in-chain again.
+
+             An approved AQUA proposal executes inside the chain, so this
+             re-opens the path where a catalyst stages bytes under
+             `components/local/` and the agent is talked into indexing
+             them. `consent: :staging` does NOT cover this: it refuses
+             `Context.plane: :guest`, and AQUA is not a guest.
+             """
+    end
+
+    test "still reachable from the external plane, so console and CLI keep working" do
+      refute ToolRegistry.in_chain_refused?("component", "list"),
+             "sanity: a plainly in-chain action must not read as refused"
+
+      {:ok, {_module, definition}} = ToolRegistry.lookup("component")
+      register = Map.fetch!(definition.annotations.actions, "register")
+
+      assert :external in register.planes
+      refute :in_chain in register.planes
+
+      # `:staging` admits :oidc AND :api_key (`Sanctum.Consent.Authz`), so
+      # scripted registration from `codex` survives; `:interactive` would
+      # have taken it away.
+      assert register.consent == :staging
+    end
+  end
+
+  describe "registering a component" do
+    test "mints no profile and no consent — it stays uninvocable until a walk", %{ctx: ctx} do
+      {:ok, _component} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "no-mint-please",
+          version: "1.0.0",
+          type: "reagent",
+          description: "register must not consent to this"
+        })
+
+      ref = "reagent:local.no-mint-please"
+
+      # Nothing has consented yet — the component exists, and is inert.
+      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref)
+
+      # Now run the action itself. This is the whole point: the scanner
+      # sees a local component with no profile and must leave it that way.
+      {:ok, result} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
+      assert result.status == "scanned"
+
+      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref),
+             "component.register must not mint an owner profile"
+
+      # The response no longer advertises a mint either — `bootstrapped`
+      # was the wire field carrying the refs it consented to.
+      refute Map.has_key?(result, :bootstrapped),
+             "the register response still reports minted consents"
+    end
+
+    test "provisioning's seed mint is untouched — that path still consents", %{ctx: ctx} do
+      # The counterpart: `Bootstrap.run/1` is what provisioning calls, and
+      # it must still mint, or a fresh athanor arrives with nothing usable.
+      {:ok, _component} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "seedish",
+          version: "1.0.0",
+          type: "reagent",
+          description: "stands in for a bundle component"
+        })
+
+      assert {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
+      assert "reagent:local.seedish" in minted
+    end
+  end
+
+  test "Bootstrap exposes no ref-targeted mint" do
+    # `run_for/2` took caller-named refs and minted owner consent for them.
+    # That is the shape the hole had; a new caller would reopen it.
+    refute function_exported?(Sanctum.Consent.Bootstrap, :run_for, 2),
+           "Sanctum.Consent.Bootstrap.run_for/2 is back — see this module's doc"
+  end
+end

@@ -437,9 +437,12 @@ defmodule Aqua.ConversationRunnerTest do
   } do
     {_eid, runner, _} = start_turn(alice, conv, "do things")
 
+    # `component.pull` rather than `component.register`: register dropped
+    # `:in_chain`, and an approved proposal executes in-chain, so it is no
+    # longer proposable at all (see `Aqua.ActionsTest`).
     block = """
     ```aqua-actions
-    [{"kind":"ui.request_approval","title":"Register it","summary":"s","action_description":"component.register","risk":"low","proposal":{"tool":"component","action":"register","args":{}}},
+    [{"kind":"ui.request_approval","title":"Pull it","summary":"s","action_description":"component.pull","risk":"low","proposal":{"tool":"component","action":"pull","args":{}}},
      {"kind":"ui.request_approval","title":"Wipe","summary":"s","action_description":"x","risk":"high","proposal":{"tool":"nonexistent","action":"wipe","args":{}}}]
     ```
     """
@@ -447,8 +450,7 @@ defmodule Aqua.ConversationRunnerTest do
     emit(runner, "text_delta", %{"content" => block})
     complete(runner)
 
-    assert_receive {:conversation, _,
-                    {:message, %{kind: "approval", content: "Register it"} = apr}},
+    assert_receive {:conversation, _, {:message, %{kind: "approval", content: "Pull it"} = apr}},
                    5_000
 
     assert_receive {:conversation, _, {:message, %{kind: "error", content: tripwire}}}, 5_000

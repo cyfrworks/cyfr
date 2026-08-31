@@ -139,8 +139,11 @@ defmodule Cyfr.SanctumSurfacesTest do
   # rest, and the `Sanctum.Consent` submodules it may touch are exactly the
   # read-side trio below — the consent WRITE plane (Commit, Plan, Authz)
   # must never be reachable from the Apache registry domain.
+  # `Sanctum.Consent.Bootstrap` was here for `component.register`'s mint.
+  # That call is gone — registering now earns a consent walk like anything
+  # else — so the entry goes with it. This assertion only checks the
+  # `extra` direction, so a survivor would have sat here unnoticed.
   @compendium_consent_allowed ~w(
-    Sanctum.Consent.Bootstrap
     Sanctum.Consent.ShapeDerivation
     Sanctum.Consent.Source
   )
