@@ -4,7 +4,7 @@
 
 # Prompts aren't permissions
 
-Users can send prompts can tell a model what not to do, but can only HOPE the model is following the prompts. CYFR controls what models can actually reach.
+A prompt can tell a model what not to do, but you can only hope it obeys. CYFR controls what a model can actually reach.
 
 # What is CYFR
 

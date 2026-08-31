@@ -260,9 +260,9 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     Enum.filter(items, fn item -> String.contains?(item.keywords, needle) end)
   end
 
+  # See `ExecutionsLive.short/1`: one truncation, in one unit.
   defp short(nil), do: ""
-  defp short(s) when is_binary(s) and byte_size(s) > 16, do: String.slice(s, 0, 16) <> "…"
-  defp short(s), do: to_string(s)
+  defp short(s), do: truncate(s, 16)
 
   defp kind_label(:nav), do: "Page"
   defp kind_label(:action), do: "Action"

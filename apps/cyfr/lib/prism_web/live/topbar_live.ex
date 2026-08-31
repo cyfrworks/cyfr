@@ -465,9 +465,9 @@ defmodule PrismWeb.TopbarLive do
     end
   end
 
+  # See `ExecutionsLive.short/1`: one truncation, in one unit.
   defp short(nil), do: ""
-  defp short(s) when is_binary(s) and byte_size(s) > 24, do: String.slice(s, 0, 24) <> "…"
-  defp short(s), do: to_string(s)
+  defp short(s), do: truncate(s, 24)
 
   defp source_class("tincture"), do: "bg-pink-900/30 text-pink-300"
   defp source_class("schedule"), do: "bg-amber-900/30 text-amber-300"

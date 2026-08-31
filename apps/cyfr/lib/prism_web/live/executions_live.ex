@@ -367,8 +367,11 @@ defmodule PrismWeb.ExecutionsLive do
   defp type_class("formula"), do: "bg-emerald-900/30 text-emerald-300"
   defp type_class(_), do: "bg-gray-800 text-gray-400"
 
-  defp short(s) when is_binary(s) and byte_size(s) > 14, do: String.slice(s, 0, 14) <> "…"
-  defp short(s), do: to_string(s)
+  # `DisplayHelpers.truncate/2`, not a fourth hand-rolled copy: guarding on
+  # `byte_size` and slicing with `String.slice` mixes units, so multibyte
+  # text got through longer than the cap. The one call site defaults a
+  # missing id to "-" before calling, so there is no nil to answer for.
+  defp short(s), do: truncate(s, 14)
 
   defp running_count(executions) do
     Enum.count(executions, &(f(&1, :status) == "running"))

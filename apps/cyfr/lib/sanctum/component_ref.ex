@@ -25,7 +25,13 @@ defmodule Sanctum.ComponentRef do
   per vocabulary, converted at the boundary. The bridge is
   `Compendium.ComponentPath.normalize_publisher/1` /
   `default_publisher/0` (which also collapse an absent value to `local`);
-  no rename is planned — ~20 call sites would churn for zero behavior.
+  no rename is planned. The "~20 call sites" this note used to claim was off
+  by an order of magnitude: `publisher` appears on 426 lines across 53
+  modules in `lib/` alone, 627 counting the suites, plus 58 in the Go CLI
+  and the browser assets — and it is a column name, a path segment and a
+  wire field, so a rename is a migration and a protocol change, not an
+  edit. The understatement mattered because it invited exactly the
+  "shouldn't these just be one word?" review the real number answers.
 
   ## Namespace shapes
 

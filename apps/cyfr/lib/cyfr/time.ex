@@ -24,13 +24,13 @@ defmodule Cyfr.Time do
   def iso8601(%NaiveDateTime{} = ndt),
     do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
 
+  # A full date-and-time with no offset — the one shape the "Z" belongs on.
+  # Appending it to whatever arrived instead turned a bare date into the
+  # invalid "2026-01-01Z" and any non-timestamp string into nonsense; the
+  # branch exists to REPAIR an offset-less datetime, not to decorate.
+  @offsetless_datetime ~r/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$/
+
   def iso8601(value) when is_binary(value) do
-    # Defensive: a datetime that arrives as an offset-less string gains a
-    # "Z" so the output stays valid ISO 8601.
-    if String.ends_with?(value, "Z") or Regex.match?(~r/[+-]\d{2}:\d{2}$/, value) do
-      value
-    else
-      value <> "Z"
-    end
+    if Regex.match?(@offsetless_datetime, value), do: value <> "Z", else: value
   end
 end

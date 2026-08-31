@@ -90,7 +90,13 @@ defmodule Locus.Builder do
   - `language` - `:rust` or `:javascript`
   - `opts` - Keyword options:
     - `:target_type` - Component type (`:reagent`, `:catalyst`, `:formula`, `:tincture`)
-    - `:timeout_ms` - Compilation timeout (default: 300s)
+    - `:timeout_ms` - Compilation timeout, in milliseconds. Defaults to
+      `#{@default_timeout_ms}` — 30s under the MCP tool layer's five-minute
+      brutal kill, so an over-budget build ends here as
+      `{:error, :compilation_timeout}` with its slot released rather than
+      losing the race to the caller's kill. Raising it past that deadline
+      gives back the graceful failure. (This line said "300s", which is the
+      deadline itself.)
 
   ## Returns
 
