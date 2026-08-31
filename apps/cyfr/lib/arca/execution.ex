@@ -162,7 +162,8 @@ defmodule Arca.Execution do
 
         # get_tenant is itself db-rescued: an outage answers a tuple here,
         # and binding it as the row would raise a non-DB error straight
-        # through this rescue — crashing the RecordSink's whole batch.
+        # through this rescue, reaching the caller as a crash rather than
+        # the storage refusal every sibling answers.
         {:error, _} = err ->
           err
 

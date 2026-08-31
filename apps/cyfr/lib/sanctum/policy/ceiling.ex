@@ -160,6 +160,13 @@ defmodule Sanctum.Policy.Ceiling do
   defp clamp_rate_limit(limits, ceiling) do
     with %{requests: req, window: window} = rl <- limits.rate_limit,
          max_req when is_number(max_req) <- Map.get(ceiling, :rate_limit_requests) do
+      # `div/2` is integer-only while `lower_of/3` admits a float ceiling,
+      # so an operator override of `%{rate_limit_requests: 5_000.0}` raised
+      # ArithmeticError here. A float ceiling means the whole requests
+      # below it. (`requests` itself is integer-validated by
+      # `Sanctum.Limits`, so only the ceiling can arrive as a float.)
+      max_req = trunc(max_req)
+
       case Sanctum.Limits.parse_duration(window) do
         {:ok, window_ms} when window_ms > 0 ->
           max_for_window = min(max_req, div(max_req * window_ms, 60_000))

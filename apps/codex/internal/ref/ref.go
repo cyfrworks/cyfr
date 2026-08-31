@@ -99,20 +99,6 @@ func ExpandType(s string) string {
 	return s
 }
 
-// StripVersion returns the ref string without its version segment:
-// "catalyst:local.claude:0.1.0" → "catalyst:local.claude". The version is
-// what follows the LAST ':' (matching ParseRef's split), and only when it is
-// strict semver — a ref with no version, or with a segment the grammar does
-// not recognise as one, is returned unchanged. It replaces a first-char-digit
-// heuristic that also stripped garbage "versions".
-func StripVersion(s string) string {
-	idx := strings.LastIndex(s, ":")
-	if idx < 0 || !versionRegex.MatchString(s[idx+1:]) {
-		return s
-	}
-	return s[:idx]
-}
-
 // ParsedRef holds the decomposed parts of a component reference string.
 type ParsedRef struct {
 	Type       string

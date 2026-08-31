@@ -200,8 +200,14 @@ defmodule Cyfr.RecordSink do
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.RecordSink] batch write failed: #{Exception.message(e)}")
 
-      # One bad row must not take the batch with it: write the rest singly.
-      if length(items) > 1, do: Enum.each(items, &write_single/1)
+      # One bad row must not take the batch with it: write the rest
+      # singly. A lone row that raised is already its own retry, so it is
+      # shed — counted, like the rollback path, rather than dropped
+      # silently.
+      if length(items) > 1,
+        do: Enum.each(items, &write_single/1),
+        else: Enum.each(items, &shed/1)
+
       :ok
   end
 

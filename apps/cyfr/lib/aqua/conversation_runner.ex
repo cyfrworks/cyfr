@@ -1141,7 +1141,14 @@ defmodule Aqua.ConversationRunner do
   # turn ran (an approval outcome) ride along, not under it.
   defp handle_emit(state, "conversation_complete", data) do
     history = (data["messages"] || data[:messages] || []) ++ state.notes_in_flight
-    %{state | history: history, notes_in_flight: []}
+
+    # `last_task` goes with the notes. This list is the model's own, and it
+    # already contains this turn's user message — so the fold that
+    # `fail_turn`/`cancel_turn` apply for turns that ended BEFORE the model
+    # spoke would add it a second time, and every later turn would read it
+    # twice. Cleared here because those two fold before `finish_turn/1`
+    # ever runs.
+    %{state | history: history, notes_in_flight: [], last_task: nil}
   end
 
   defp handle_emit(state, _kind, _data), do: state
@@ -1392,7 +1399,14 @@ defmodule Aqua.ConversationRunner do
         # already being part of `history`, so every later turn's merge
         # appended it again — the same "[System: …]" line accreting once per
         # turn for the rest of the conversation.
-        notes_in_flight: []
+        notes_in_flight: [],
+        # Same reason, for the task itself. `conversation_complete` REPLACES
+        # history with the model's own list, which already contains this
+        # turn's user message; a later `fail_turn`/`cancel_turn` fold would
+        # then append it a second time and every subsequent turn would read
+        # it twice. The fold is for turns that ended before the model
+        # spoke, so the task is consumed once the turn is over.
+        last_task: nil
     }
     |> broadcast({:turn_finished})
     |> touch()

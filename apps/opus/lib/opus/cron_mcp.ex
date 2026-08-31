@@ -78,7 +78,7 @@ defmodule Opus.CronMCP do
             "profile_id" => %{
               "type" => "string",
               "description" =>
-                "Profile the schedule fires under; its consent authorizes the binding (create, required; update/re_resolve)"
+                "Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument."
             },
             "input" => %{
               "type" => "object",

@@ -335,6 +335,16 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         nil ->
           {:error, {:not_found, "Execution", id}}
 
+        # get_tenant is db-rescued and answers a tuple on an outage;
+        # binding it as the row sends a 2-tuple into execution_to_map/1,
+        # whose `is_struct or is_map` guard raises — so `get` answered
+        # "the tool crashed" where `list` answers the storage refusal.
+        {:error, :database_error} ->
+          {:error, {:unavailable, "Storage"}}
+
+        {:error, _} = err ->
+          err
+
         record ->
           # Members are interchangeable: get_tenant already scoped to the
           # athanor, so any member of the athanor may read the record.
@@ -383,6 +393,13 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
           {:error, {:not_found, "MCP log", id}}
+
+        # Same outage shape as the execution arm above.
+        {:error, :database_error} ->
+          {:error, {:unavailable, "Storage"}}
+
+        {:error, _} = err ->
+          err
 
         record ->
           {:ok, mcp_log_to_map(record)}

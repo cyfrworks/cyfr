@@ -282,11 +282,35 @@ defmodule Cyfr.RetentionTest do
     test "a build still running is never pruned", %{ctx: ctx} do
       # A "started" build past the keep window used to be deleted; its
       # record_finished/record_registration then answered :not_found.
+      # Timestamps are relative so the row is BOTH outside the keep window
+      # (four newer builds rank above it) and inside the grace window, which
+      # is the only combination that exercises the status guard.
+      now = DateTime.utc_now()
       :ok = Cyfr.BuildRecords.record_started(ctx, "build_live", "reagent:local.test:0.1.0")
+      pin_started_at("build_live", DateTime.add(now, -5, :minute))
+
+      for i <- 1..4 do
+        create_build_with_timestamp(ctx, "build_#{i}", "2025-01-01T10:00:00Z")
+        pin_started_at("build_#{i}", DateTime.add(now, -i, :minute))
+      end
+
+      assert {:ok, 1} = Retention.cleanup(ctx, "builds", value: 3)
+
+      ids = build_ids(ctx)
+      assert "build_live" in ids, "retention pruned a build still running"
+      refute "build_4" in ids
+    end
+
+    test "a build orphaned at 'started' is collected once it cannot be running", %{ctx: ctx} do
+      # Build records have no sweeper and no lease — nothing ever moves an
+      # abandoned row off "started" (a node restart mid-build, or the
+      # dropped async task Locus.MCP documents). Excluding the status
+      # outright made those rows immortal and `keep` stopped being a cap.
+      :ok = Cyfr.BuildRecords.record_started(ctx, "build_orphan", "reagent:local.test:0.1.0")
 
       {1, _} =
         Arca.Repo.update_all(
-          from(b in Arca.Schemas.BuildRecord, where: b.id == "build_live"),
+          from(b in Arca.Schemas.BuildRecord, where: b.id == "build_orphan"),
           set: [started_at: ~U[2025-01-01 09:00:00.000000Z]]
         )
 
@@ -294,10 +318,13 @@ defmodule Cyfr.RetentionTest do
         create_build_with_timestamp(ctx, "build_#{i}", "2025-01-0#{i}T10:00:00Z")
       end
 
-      assert {:ok, 1} = Retention.cleanup(ctx, "builds", value: 3)
+      assert {:ok, 2} = Retention.cleanup(ctx, "builds", value: 3)
 
       ids = build_ids(ctx)
-      assert "build_live" in ids, "retention pruned a build still running"
+
+      refute "build_orphan" in ids,
+             "an orphaned 'started' build is immortal — `keep` is no longer a cap"
+
       refute "build_2" in ids
     end
   end
@@ -416,6 +443,19 @@ defmodule Cyfr.RetentionTest do
       Arca.Repo.update_all(
         from(b in Arca.Schemas.BuildRecord, where: b.id == ^id),
         set: [started_at: pinned, status: "compiled"]
+      )
+
+    :ok
+  end
+
+  # Retention ranks builds by `started_at` and, for "started" rows, also
+  # asks their age — so a test that needs a row at a specific point on
+  # both axes sets the column directly.
+  defp pin_started_at(id, %DateTime{} = at) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(b in Arca.Schemas.BuildRecord, where: b.id == ^id),
+        set: [started_at: DateTime.truncate(at, :microsecond)]
       )
 
     :ok

@@ -762,6 +762,38 @@ defmodule Aqua.ConversationRunnerTest do
     refute input2["task"] =~ "remember this ask"
   end
 
+  test "a turn that completed its conversation then failed keeps one copy of the task", %{
+    alice: alice,
+    conv: conv
+  } do
+    # `conversation_complete` REPLACES history with the model's own list,
+    # which already contains this turn's user message. `fail_turn` then
+    # folded the task in again, so the person's message was read twice by
+    # every later turn. The task is consumed once the turn is over.
+    {eid, runner, _input} = start_turn(alice, conv, "only once please")
+
+    emit(runner, "conversation_complete", %{
+      "messages" => [
+        %{"role" => "user", "content" => "only once please"},
+        %{"role" => "assistant", "content" => "on it"}
+      ]
+    })
+
+    send(runner, {:execution_event, %{execution_id: eid, type: "error", data: %{error: "boom"}}})
+
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+
+    {:ok, row} = Conversations.get(alice, conv.id)
+
+    user_turns =
+      row
+      |> Conversations.history()
+      |> Enum.filter(&(&1["role"] == "user" and &1["content"] =~ "only once please"))
+
+    assert length(user_turns) == 1,
+           "the failed turn re-folded a task the model had already recorded"
+  end
+
   test "an exit inside turn start fails the turn instead of wedging the runner", %{
     alice: alice,
     conv: conv

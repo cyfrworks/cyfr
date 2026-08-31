@@ -342,30 +342,3 @@ func TestParsedRef_WithVersion(t *testing.T) {
 		}
 	}
 }
-
-func TestStripVersion(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"catalyst:local.claude:0.1.0", "catalyst:local.claude"},
-		{"c:local.claude:1.2.3-rc.1", "c:local.claude"},
-		{"c:local.claude:1.2.3+build.5", "c:local.claude"},
-		{"local.claude:0.1.0", "local.claude"},
-		// No version — unchanged.
-		{"catalyst:local.claude", "catalyst:local.claude"},
-		{"local.claude", "local.claude"},
-		{"claude", "claude"},
-		// Not strict semver — unchanged (the old first-char-digit
-		// heuristic would have stripped "01.0" and "1").
-		{"catalyst:local.claude:01.0", "catalyst:local.claude:01.0"},
-		{"catalyst:local.claude:1", "catalyst:local.claude:1"},
-		{"catalyst:local.claude:latest", "catalyst:local.claude:latest"},
-		{"", ""},
-	}
-	for _, tt := range tests {
-		if got := StripVersion(tt.in); got != tt.want {
-			t.Errorf("StripVersion(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}

@@ -339,6 +339,13 @@ defmodule Opus.ExecutionRecord do
       nil ->
         {:error, :not_found}
 
+      # get_tenant is db-rescued and answers a tuple on an outage. Bound as
+      # the row it reaches execution_to_map/1, whose `is_struct or is_map`
+      # guard raises — an outage read as a crash. Passed through, the
+      # caller sees the storage refusal its siblings already answer.
+      {:error, _} = err ->
+        err
+
       record ->
         result = execution_to_map(record)
 

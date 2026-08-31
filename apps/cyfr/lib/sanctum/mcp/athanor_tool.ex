@@ -217,6 +217,14 @@ defmodule Sanctum.MCP.AthanorTool do
     else
       # The same refusal the dispatcher mints for a `scope: :platform` action,
       # so the operator gate reads identically wherever it is applied.
+      #
+      # Note this is a different WIRE shape from the sentence it replaced:
+      # `Sanctum.Unauthorized` recognises the reason, so the router answers
+      # a JSON-RPC error (`insufficient_permissions`) rather than an
+      # `isError` content result. A client that branches on `result.isError`
+      # sees the refusal on the transport instead — which is the correct
+      # place for an authorization failure, and is why the gate was moved
+      # onto the shared vocabulary.
       {:error, :platform_admin_required}
     end
   end

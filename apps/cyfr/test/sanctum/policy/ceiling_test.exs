@@ -132,6 +132,17 @@ defmodule Sanctum.Policy.CeilingTest do
       assert clamped.batch_timeout == "30m"
     end
 
+    test "a float ceiling clamps instead of raising" do
+      # `lower_of/3` admits a float, but `div/2` is integer-only — an
+      # operator override of `%{rate_limit_requests: 5_000.0}` raised
+      # ArithmeticError where the pre-clamp code simply worked.
+      limits = limits(rate_limit: %{requests: 50_000, window: "1m"})
+
+      clamped = Ceiling.clamp(limits, %{rate_limit_requests: 5_000.0})
+
+      assert clamped.rate_limit == %{requests: 5_000, window: "1m"}
+    end
+
     test "clamps rate_limit.requests" do
       limits = limits(rate_limit: %{requests: 50_000, window: "1m"})
       ceiling = %{rate_limit_requests: 10_000}

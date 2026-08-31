@@ -104,7 +104,7 @@ defmodule Sanctum.MCP.SessionTool do
   def handle(%Context{} = ctx, %{"action" => "use", "athanor" => athanor})
       when is_binary(athanor) do
     with {:ok, resolved} <- resolve_athanor(athanor),
-         {:ok, focused} <- Sanctum.Session.use_athanor(ctx, resolved.id) do
+         {:ok, focused} <- focus_session(ctx, resolved.id) do
       {:ok, %{athanor: Sanctum.MCP.AthanorTool.render(resolved), scope: focused.scope}}
     else
       {:error, :not_member} ->
@@ -113,6 +113,10 @@ defmodule Sanctum.MCP.SessionTool do
       {:error, :archived} ->
         {:error, {:invalid_argument, "That athanor is archived"}}
 
+      # Only `resolve_athanor/1` can still answer this: `focus_session/2`
+      # re-tags the session row's own :not_found, so the refusal names
+      # what is actually missing instead of blaming the athanor that
+      # resolved a line above.
       {:error, :not_found} ->
         {:error, {:not_found, "Athanor", athanor}}
 
@@ -294,6 +298,17 @@ defmodule Sanctum.MCP.SessionTool do
   # ============================================================================
   # Auth-provider-gated helpers (shared across session handlers)
   # ============================================================================
+
+  # `Sanctum.Session.use_athanor/2` answers `:not_found` when the SESSION
+  # row is gone — the athanor resolved a line earlier. Two sources for one
+  # tag made the refusal a structured falsehood a client could branch on;
+  # this names the one that is actually missing.
+  defp focus_session(ctx, athanor_id) do
+    case Sanctum.Session.use_athanor(ctx, athanor_id) do
+      {:error, :not_found} -> {:error, :no_session}
+      other -> other
+    end
+  end
 
   defp resolve_athanor(segment) do
     if Sanctum.Tenancy.Athanors.athanor_id?(segment) do

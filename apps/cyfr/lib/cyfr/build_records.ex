@@ -21,6 +21,15 @@ defmodule Cyfr.BuildRecords do
   alias Arca.Schemas.BuildRecord
   alias Sanctum.Context
 
+  # How long a row may read "started" before retention treats it as
+  # orphaned rather than in flight. Far beyond any live build: the
+  # compile deadline is 270 s under the MCP layer's 5-minute brutal kill,
+  # so an hour can only mean the writer went away (node restart, dropped
+  # task) and no `record_finished/4` is coming. Spelled here rather than
+  # taken from `Locus.Builder` because locus depends on cyfr, not the
+  # other way around.
+  @started_grace_ms :timer.hours(1)
+
   @doc """
   Record a build as started. Overwrites the caller's own stale row with the
   same id; a row belonging to another athanor is `{:error, :not_found}`.
@@ -189,8 +198,18 @@ defmodule Cyfr.BuildRecords do
     Arca.Repo.Errors.with_db_rescue("Cyfr.BuildRecords.prune", fn ->
       # SQLite has no bare OFFSET, so the survivors are the subquery: the
       # newest `keep` rows stay, everything else in the tenant goes — except
-      # a build still "started": deleting it mid-flight makes its
-      # record_finished/record_registration a :not_found.
+      # a build still "started", whose row its own
+      # record_finished/record_registration is about to look up.
+      #
+      # "Still started" has to be bounded by age, not by status alone.
+      # Executions can be excluded on status because `Opus.ExecutionSweeper`
+      # marks a lease-lapsed row failed and retention collects it next
+      # cycle; build records have no sweeper and no lease, and a dropped
+      # async task leaves "a row that reads `started` forever"
+      # (`Locus.MCP`). On status alone those rows became immortal and
+      # `keep` stopped being a cap.
+      stale_cutoff = DateTime.add(DateTime.utc_now(), -@started_grace_ms, :millisecond)
+
       keepers =
         BuildRecord
         |> QueryHelpers.where_tenant(ctx)
@@ -202,7 +221,7 @@ defmodule Cyfr.BuildRecords do
         BuildRecord
         |> QueryHelpers.where_tenant(ctx)
         |> where([b], b.id not in subquery(keepers))
-        |> where([b], b.status != "started")
+        |> where([b], b.status != "started" or b.started_at < ^stale_cutoff)
 
       if Keyword.get(opts, :dry_run, false) do
         {:ok, Arca.Repo.aggregate(doomed_query, :count)}

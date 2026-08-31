@@ -773,6 +773,28 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
   end
 
+  describe "a storage outage is a refusal, never a crash" do
+    # `get_tenant/2` is db-rescued, so an outage answers
+    # `{:error, :database_error}`. Bound as the row it reaches
+    # `execution_to_map/1`, whose `is_struct or is_map` guard raises —
+    # and `list` answered the storage refusal while `get` answered "the
+    # tool crashed". Dropping the table inside the sandbox transaction is
+    # the outage: it rolls back with the test, on both adapters.
+    test "record.get", %{ctx: ctx} do
+      Arca.Repo.query!("DROP TABLE executions")
+
+      assert {:error, reason} = MCP.handle("record", ctx, %{"action" => "get", "id" => "exec_x"})
+      assert err_msg(reason) =~ "unavailable"
+    end
+
+    test "mcp_log.get", %{ctx: ctx} do
+      Arca.Repo.query!("DROP TABLE mcp_logs")
+
+      assert {:error, reason} = MCP.handle("mcp_log", ctx, %{"action" => "get", "id" => "req_x"})
+      assert err_msg(reason) =~ "unavailable"
+    end
+  end
+
   # The provider answers typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
