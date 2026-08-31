@@ -87,7 +87,20 @@ defmodule Sanctum.Consent.BlobBuilder do
     JCS.encode(%{"canonical" => "jcs-1", "nodes" => encoded_nodes})
   end
 
-  @doc "The derived vault references for `consent_vault_refs`, deduplicated."
+  @doc """
+  The derived vault references for `consent_vault_refs`, deduplicated.
+
+  `uniq: true` is over the whole `{entry_id, binding_digest}` pair, while
+  the table's unique index is `(consent_id, vault_entry_id)` — narrower.
+  Those agree only because a consent carries **at most one** vault
+  resource: `Sanctum.Consent.Commit` attaches it to the source node alone,
+  having already refused a second binding, so there is never a second row
+  to collide with. If a `vault_fn` ever binds more than one node, that
+  invariant goes and two nodes sharing an entry under different digests
+  would survive this `uniq` only to violate the index — a data-shape bug
+  reaching the operator as a generic `:database_error`. Dedup on
+  `vault_entry_id` then, and decide which digest wins.
+  """
   @spec vault_refs(map()) :: [%{vault_entry_id: String.t(), binding_digest: String.t()}]
   def vault_refs(nodes) do
     for {_key, node} <- nodes,
