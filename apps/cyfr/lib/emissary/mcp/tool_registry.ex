@@ -489,10 +489,47 @@ defmodule Emissary.MCP.ToolRegistry do
 
       :ok
     else
-      _ -> :ok
+      # No baseline to compare against — this grant predates description
+      # pinning, or names no tool server. Nothing to check.
+      nil ->
+        :ok
+
+      %{} ->
+        :ok
+
+      # The upstream could not be reached, or its tool list would not digest.
+      # That is a check that did not happen, and the whole point of the
+      # `rescue` below is that a check which never runs must not read like
+      # "no drift" — the same is true when the failure arrives as a value.
+      {:error, reason} ->
+        Logger.warning("[ToolRegistry] description-drift check could not run: #{inspect(reason)}")
+
+        :telemetry.execute(
+          [:cyfr, :sanctum, :tool_server, :description_drift_check_failed],
+          %{count: 1},
+          %{}
+        )
+
+        :ok
     end
   rescue
-    _ -> :ok
+    # Best-effort, but never mute: this is a supply-chain check (upstream
+    # servers rewriting tool descriptions fed to a model holding profile
+    # authority), and a bare `rescue _ -> :ok` made a permanently broken
+    # check indistinguishable from "no drift".
+    e ->
+      Logger.warning(
+        "[ToolRegistry] description-drift check failed: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      :telemetry.execute(
+        [:cyfr, :sanctum, :tool_server, :description_drift_check_failed],
+        %{count: 1},
+        %{}
+      )
+
+      :ok
   end
 
   defp warn_on_description_drift(_ctx, _authority, _resource), do: :ok
@@ -915,7 +952,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -986,7 +1023,7 @@ defmodule Emissary.MCP.ToolRegistry do
           {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
-    if trackable?, do: Emissary.MCP.RunningTasks.unregister(request_id)
+    if trackable?, do: Emissary.MCP.RunningTasks.unregister(request_id, task)
     result
   end
 

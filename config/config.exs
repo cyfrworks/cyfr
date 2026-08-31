@@ -60,10 +60,12 @@ config :cyfr, EmissaryWeb.Endpoint,
   pubsub_server: Emissary.PubSub,
   live_view: [signing_salt: "cyfrLVdev"]
 
-# Configures Elixir's Logger
+# Configures Elixir's Logger. `:module` rides on every event from the
+# runtime itself, so filtering by emitter needs no hand-typed "[Prefix]"
+# in the message — 287 of those had grown 119 spellings.
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id, :user_id, :athanor_id, :auth_method, :execution_id]
+  metadata: [:module, :request_id, :user_id, :athanor_id, :auth_method, :execution_id]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
@@ -164,6 +166,23 @@ config :cyfr, :external_server_max_in_flight, 8
 config :cyfr, :oauth_token_ttl_ms, :timer.hours(1)
 config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
+
+# What each retention sweep keeps. These were read by the five
+# `Cyfr.Retention.*` modules and declared nowhere, so the only way to learn
+# an athanor's conversations are pruned at a year was to read the source —
+# the "invisible knob" this file's own standard exists to prevent. The
+# readers still fall back to exactly these values.
+config :cyfr, Cyfr.Retention,
+  # Newest N executions kept per athanor.
+  executions: 10_000,
+  # Newest N build records kept per athanor.
+  builds: 100,
+  # Days of policy-enforcement log kept.
+  policy_log_days: 30,
+  # Days of MCP request log kept.
+  mcp_log_days: 30,
+  # Days of conversation messages kept.
+  messages_days: 365
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
 # its default from `Sanctum.Limits.default_max_request_size/0` (a literal

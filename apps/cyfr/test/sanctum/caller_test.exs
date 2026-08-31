@@ -227,5 +227,23 @@ defmodule Sanctum.CallerTest do
       assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
       assert Arca.Cache.match({:established, :_, :_, :_}) == []
     end
+
+    test "a plain member removal drops the memo like the door's revocations do" do
+      # Removal was the one revocation in the set that skipped the memo: a
+      # removed member kept their cached, athanor-focused context on the
+      # stateless surfaces for the TTL — and the test env pins the TTL to
+      # zero, so only a warm-memo test can see it.
+      {user, home} = new_user() |> claim!() |> member!()
+      user = Map.put(user, :namespace, user.slug)
+      session = session_for(user)
+
+      assert {:ok, _ctx} = Caller.establish(session.token)
+      refute Arca.Cache.match({:established, :_, :_, :_}) == []
+
+      :ok = Sanctum.Tenancy.Members.remove_member(home, user_id: user.user_id)
+
+      assert Arca.Cache.match({:established, :_, :_, :_}) == [],
+             "the removed member's cached context survived the removal"
+    end
   end
 end

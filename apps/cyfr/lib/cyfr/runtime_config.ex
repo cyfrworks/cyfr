@@ -162,6 +162,15 @@ defmodule Cyfr.RuntimeConfig do
     do: Application.get_env(:cyfr, :prometheus_metrics_enabled, false)
 
   @doc """
+  Whether unsigned OCI components are refused. Read at both ends of a
+  component's life — `Compendium.OCI.Client` refuses the pull, and
+  `Opus.Executor` refuses to execute a row that carries no verified
+  signature (a component pulled before the knob was set).
+  """
+  @spec require_signed_pulls?() :: boolean()
+  def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
+
+  @doc """
   The resolved crypto keyring. Raises when read before boot resolution —
   a sealed row must never be touched with a guessed key.
   """
@@ -224,11 +233,16 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   MCP Origin-header allowlist (DNS-rebinding guard). Unset means the
   localhost-only default — single source, read by the Origin plug and the
-  boot-time divergence warning.
+  boot-time divergence warning. The `CYFR_MCP_ALLOWED_ORIGINS` extras
+  (`:mcp_extra_origins`, set in every env) are appended rather than baked
+  into the base list, so setting them in dev EXTENDS the localhost default
+  instead of replacing it.
   """
   @spec mcp_allowed_origins() :: [String.t()]
-  def mcp_allowed_origins,
-    do: Application.get_env(:cyfr, :mcp_allowed_origins, @mcp_default_origins)
+  def mcp_allowed_origins do
+    Application.get_env(:cyfr, :mcp_allowed_origins, @mcp_default_origins) ++
+      Application.get_env(:cyfr, :mcp_extra_origins, [])
+  end
 
   @doc """
   SQLite busy timeout, used both as the Repo connection option and in the
@@ -236,6 +250,25 @@ defmodule Cyfr.RuntimeConfig do
   """
   @spec sqlite_busy_timeout_ms() :: pos_integer()
   def sqlite_busy_timeout_ms, do: 5_000
+
+  @doc """
+  The default per-window tincture invoke budget. Two ingress surfaces share
+  it — the HTTP pipeline keys it by IP (EmissaryWeb.Plugs.TinctureRateLimit),
+  the console shell keys it by person — deliberately separate buckets, one
+  number, in glue both may name (the console naming the transport's plug
+  was the one console→transport back-edge).
+  """
+  @spec tincture_default_invoke_max() :: pos_integer()
+  def tincture_default_invoke_max, do: 120
+
+  @doc "The effective invoke budget: the operator's override if set, else the default."
+  @spec tincture_invoke_max() :: pos_integer()
+  def tincture_invoke_max,
+    do: Application.get_env(:cyfr, :tincture_rate_limit_max) || tincture_default_invoke_max()
+
+  @doc "The rate window (ms) both tincture ingress surfaces share."
+  @spec tincture_rate_window_ms() :: pos_integer()
+  def tincture_rate_window_ms, do: 60_000
 
   @doc """
   Resolve the filesystem roots from the environment (release runtime):

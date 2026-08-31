@@ -36,7 +36,7 @@ var contextListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
-			return fmt.Errorf("Failed to load config: %v", err)
+			return fmt.Errorf("Failed to load config: %w", err)
 		}
 
 		if flagJSON {
@@ -66,7 +66,7 @@ var contextSetCmd = &cobra.Command{
 
 		cfg, err := config.Load()
 		if err != nil {
-			return fmt.Errorf("Failed to load config: %v", err)
+			return fmt.Errorf("Failed to load config: %w", err)
 		}
 
 		if _, ok := cfg.Contexts[name]; !ok {
@@ -75,7 +75,7 @@ var contextSetCmd = &cobra.Command{
 
 		cfg.CurrentContext = name
 		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("Failed to save config: %v", err)
+			return fmt.Errorf("Failed to save config: %w", err)
 		}
 
 		fmt.Printf("Switched to context '%s' (%s)\n", name, cfg.Contexts[name].URL)
@@ -96,17 +96,17 @@ var contextAddCmd = &cobra.Command{
 		url := args[1]
 
 		if err := validateContextURL(url); err != nil {
-			return fmt.Errorf("Invalid server URL: %v", err)
+			return fmt.Errorf("Invalid server URL: %w", err)
 		}
 
 		cfg, err := config.Load()
 		if err != nil {
-			return fmt.Errorf("Failed to load config: %v", err)
+			return fmt.Errorf("Failed to load config: %w", err)
 		}
 
 		cfg.Contexts[name] = &config.Context{URL: url}
 		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("Failed to save config: %v", err)
+			return fmt.Errorf("Failed to save config: %w", err)
 		}
 
 		fmt.Printf("Added context '%s' (%s)\n", name, url)

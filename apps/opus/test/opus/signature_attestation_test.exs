@@ -6,6 +6,43 @@ defmodule Opus.SignatureAttestationTest do
 
   alias Opus.SignatureAttestation
 
+  describe "attestation/1" do
+    # `Opus.Executor` reads this instead of `verify/3` alone because only one
+    # of the four answers is the operator's call. Before it existed the whole
+    # check hung on the caller's `:verify` argument, whose one producer is a
+    # client's own MCP tool call — so children, schedules and tincture
+    # ingress executed unsigned OCI code without reading the row at all.
+    test "filesystem and published are trusted by ownership" do
+      assert :trusted = SignatureAttestation.attestation(%{source: "filesystem"})
+      assert :trusted = SignatureAttestation.attestation(%{source: "published"})
+    end
+
+    test "a verified OCI pull is signed" do
+      assert :signed =
+               SignatureAttestation.attestation(%{source: "oci", signature_verified: true})
+    end
+
+    test "an OCI pull that did not verify is unsigned, whatever the row says elsewhere" do
+      assert :unsigned =
+               SignatureAttestation.attestation(%{source: "oci", signature_verified: false})
+
+      assert :unsigned = SignatureAttestation.attestation(%{source: "oci"})
+    end
+
+    test "anything else is unclassified, and the caller must fail closed on it" do
+      assert {:unknown_source, nil} = SignatureAttestation.attestation(%{source: nil})
+      assert {:unknown_source, "hg"} = SignatureAttestation.attestation(%{source: "hg"})
+    end
+
+    test "reads string and atom keys alike — rows arrive both ways" do
+      assert :signed =
+               SignatureAttestation.attestation(%{
+                 "source" => "oci",
+                 "signature_verified" => true
+               })
+    end
+  end
+
   describe "verify/3 with local/filesystem components" do
     test "allows filesystem source without any verification" do
       component = %{source: "filesystem", signature_verified: false}

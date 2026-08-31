@@ -77,17 +77,26 @@ defmodule Emissary.MCP.Message do
     execution_failed: -33100
   }
 
-  # Registry/Compendium errors: -33200 to -33299
-  @cyfr_registry_codes %{
-    component_not_found: -33200,
-    registry_unavailable: -33202
+  # Consent signals: -33500 to -33599 — the §4.3 remediation vocabulary
+  # (Emissary.MCP.ConsentSignal). Protocol-level so clients branch on the
+  # code and read the payload from `error.data`, instead of parsing
+  # "tag: {json}" back out of isError prose. (-333xx is the transport band
+  # above; integration-guide's error table also names -333xx/-334xx rows.)
+  @cyfr_consent_codes %{
+    setup_required: -33501,
+    consent_required: -33502,
+    consent_conflict: -33503,
+    restart_required: -33504
   }
 
-  # Combined CYFR error codes for lookup
+  # Combined CYFR error codes for lookup. (A -33200..-33299 registry band
+  # once lived here — component_not_found / registry_unavailable — with no
+  # producer anywhere: registry failures travel as %Compendium.OCI.Errors{}
+  # rendered to isError text. Deleted rather than kept decorative.)
   @cyfr_error_codes @cyfr_transport_codes
                     |> Map.merge(@cyfr_auth_codes)
                     |> Map.merge(@cyfr_execution_codes)
-                    |> Map.merge(@cyfr_registry_codes)
+                    |> Map.merge(@cyfr_consent_codes)
 
   @doc """
   Decode a JSON-RPC message from a map (already parsed from JSON).

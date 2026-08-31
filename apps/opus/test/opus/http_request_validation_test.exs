@@ -104,7 +104,42 @@ defmodule Opus.HttpRequestValidationTest do
       assert {:error, :request_too_large, msg} =
                validate(request, edge, limits)
 
-      assert msg == "Request body (100 bytes) exceeds limit (16 bytes)"
+      # 100 body bytes plus the URL: the ceiling counts what the host holds
+      # and puts on the wire, not the body alone.
+      assert msg =~ ~r/^Request \(\d+ bytes incl\. URL and headers\) exceeds limit \(16 bytes\)$/
+    end
+
+    test "headers count toward max_request_size, not just the body" do
+      # Measuring the body alone let a guest move megabytes through header
+      # values — into host memory and out to the upstream — while the
+      # consented ceiling read as enforced.
+      edge = EdgeFixtures.edge(domains: ["*"], methods: ["POST"])
+      limits = EdgeFixtures.limits(max_request_size: 512)
+
+      request =
+        encode(%{
+          "method" => "POST",
+          "url" => "https://example.com/x",
+          "body" => "",
+          "headers" => %{"x-padding" => String.duplicate("h", 4096)}
+        })
+
+      assert {:error, :request_too_large, msg} = validate(request, edge, limits)
+      assert msg =~ "exceeds limit (512 bytes)"
+    end
+
+    test "an oversized envelope is refused before it is parsed" do
+      # The decoded-payload ceiling cannot bound what it costs to produce the
+      # decoded payload; only the guest's 64 MiB linear memory did.
+      edge = EdgeFixtures.edge(domains: ["*"], methods: ["POST"])
+      limits = EdgeFixtures.limits(max_request_size: 16)
+
+      # Well past `max_request_size * 2 + envelope_overhead`, and deliberately
+      # not valid JSON — a parse error would prove the bound ran too late.
+      assert {:error, :request_too_large, msg} =
+               validate(String.duplicate("{", 32_768), edge, limits)
+
+      assert msg =~ "consented max_request_size"
     end
 
     test "blocks private IPs through the shared resolve path" do

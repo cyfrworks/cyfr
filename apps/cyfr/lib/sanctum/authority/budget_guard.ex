@@ -21,17 +21,21 @@ defmodule Sanctum.Authority.BudgetGuard do
   to the budget.
 
   A release with no guard registered (a spawner's error arm, before the
-  task existed) releases directly. If this process is unavailable, both
-  verbs degrade to the old behaviour — the explicit release still runs,
-  only the death compensation is lost — so the guard can never make the
-  budget stricter than the charge, only tighter against leaks.
+  task existed) releases directly. If this process is *gone*, both verbs
+  degrade to the old behaviour — the explicit release still runs, only the
+  death compensation is lost — so the guard can never make the budget
+  stricter than the charge, only tighter against leaks. A call that merely
+  *times out* is a different case and is handled as such: see `release/2`.
   """
 
   use GenServer
 
-  require Logger
-
   alias Sanctum.Authority.Budget
+
+  # Explicit rather than inherited: every charge and release in the system
+  # funnels through this one process, so its call timeout is a parameter of
+  # the spawn hot path and belongs in view.
+  @call_timeout_ms 5_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -44,7 +48,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   """
   @spec guard(Budget.t(), pid()) :: :ok
   def guard(%Budget{} = budget, pid \\ self()) do
-    GenServer.call(__MODULE__, {:guard, budget, pid})
+    GenServer.call(__MODULE__, {:guard, budget, pid}, @call_timeout_ms)
   catch
     :exit, _ -> :ok
   end
@@ -56,10 +60,29 @@ defmodule Sanctum.Authority.BudgetGuard do
   """
   @spec release(Budget.t(), pid()) :: :ok
   def release(%Budget{} = budget, pid \\ self()) do
-    GenServer.call(__MODULE__, {:release, budget, pid})
+    GenServer.call(__MODULE__, {:release, budget, pid}, @call_timeout_ms)
   catch
-    :exit, _ -> Budget.release(budget)
+    :exit, reason -> release_after_exit(budget, reason)
   end
+
+  @doc """
+  What a failed `release/2` call means for the slot — the pure half, so the
+  distinction is testable without staging a real timeout.
+
+  A timeout is **not** a failed release: `GenServer.call` gives up on the
+  reply, but the message is already in the guard's mailbox and `handle_call`
+  will release the slot. Releasing again here decremented the counter twice
+  for one charge — freeing a concurrent sibling's slot and letting the root
+  exceed the invoke cap it consented to. Under load is exactly when this
+  call times out and exactly when the over-release matters.
+
+  Any other exit means the call never landed (no such process, or the guard
+  died before handling it), so the slot is released directly as the
+  pre-guard code did and is never lost.
+  """
+  @spec release_after_exit(Budget.t(), term()) :: :ok
+  def release_after_exit(%Budget{}, {:timeout, _}), do: :ok
+  def release_after_exit(%Budget{} = budget, _reason), do: Budget.release(budget)
 
   @impl true
   def init(_opts) do
@@ -122,7 +145,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   end
 
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 end

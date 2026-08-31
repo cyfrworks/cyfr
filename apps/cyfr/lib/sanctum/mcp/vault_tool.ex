@@ -12,6 +12,8 @@ defmodule Sanctum.MCP.VaultTool do
   """
 
   alias Sanctum.Context
+
+  require Logger
   alias Sanctum.Vault
 
   @doc false
@@ -20,9 +22,9 @@ defmodule Sanctum.MCP.VaultTool do
   def definition do
     %{
       name: "vault",
-      title: "Vault Connections",
+      title: "Vault",
       description:
-        "Manage vault entries (Connections) — the operator's credentials, shared across " <>
+        "Manage vault entries — the operator's credentials, shared across " <>
           "profiles through consent edges. Material is sealed at rest and never read back; " <>
           "rotate replaces material without re-consent, rebind changes what the credential " <>
           "talks to and blocks affected profiles until re-consented.",
@@ -63,7 +65,7 @@ defmodule Sanctum.MCP.VaultTool do
           "id" => %{"type" => "string", "description" => "Vault entry id (vlt_…)"},
           "name" => %{
             "type" => "string",
-            "description" => "Connection label — unique among living entries in the tenant"
+            "description" => "Entry label — unique among living entries in the tenant"
           },
           "kind" => %{
             "type" => "string",
@@ -161,7 +163,7 @@ defmodule Sanctum.MCP.VaultTool do
      {:invalid_argument, "rotate requires id, fields and expected_payload_rev (the CAS token)"}}
   end
 
-  # Start a browser OAuth grant for a Connection: `id` re-authorizes an
+  # Start a browser OAuth grant for a vault entry: `id` re-authorizes an
   # existing oauth entry; `name` + `provider_hint` (+ optional
   # `oauth_scopes` / `oauth_endpoints`) mints a new one on completion.
   def handle(%Context{} = ctx, %{"action" => "authorize"} = args) do
@@ -260,7 +262,25 @@ defmodule Sanctum.MCP.VaultTool do
     do: "oauth_pointer_requires_reauth: re-authorize the provider to convert this entry"
 
   defp fmt(:not_found), do: "not_found"
-  defp fmt(reason), do: inspect(reason)
 
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+  # An unknown term is internal — logged, never inspected to the client
+  # (the rule every renderer in the tree applies).
+  defp fmt(reason) do
+    case Emissary.MCP.ToolError.render(reason) do
+      nil ->
+        # Sanitized and bounded: an internal reason on the VAULT surface
+        # can carry credential material a bare inspect would spell out.
+        Logger.warning(
+          "[VaultTool] unrenderable reason: " <>
+            inspect(Sanctum.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+        )
+
+        "the request failed"
+
+      msg ->
+        msg
+    end
+  end
+
+  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
 end

@@ -10,8 +10,11 @@ defmodule PrismWeb.ActivitiesLive do
   calls `mcp_log/correlate` to fetch the full causal tree (executions +
   policy logs).
 
-  Replaces the older ExecutionsLive (`/executions`) and LogsLive (`/logs`)
-  surfaces, which sliced the same data along two different axes.
+  Complements ExecutionsLive (`/executions`): that page groups by
+  execution for operating on runs (expand, correlate); this one is the
+  flat causal feed. (An earlier note here claimed this page replaced it —
+  the two are deliberately distinct, as ExecutionsLive's own moduledoc
+  says.)
   """
 
   use PrismWeb, :live_view
@@ -165,7 +168,7 @@ defmodule PrismWeb.ActivitiesLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ActivitiesLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

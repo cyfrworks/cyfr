@@ -18,6 +18,7 @@ defmodule PrismWeb.BuildsLive do
       |> assign(:build_log, [])
       |> assign(:build_id, nil)
       |> assign(:building, false)
+      |> assign(:build_timeout, nil)
       |> assign(:loading, true)
 
     {:ok, socket}
@@ -29,7 +30,7 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_event("compile", %{"reference" => reference}, socket) do
-    build_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    build_id = Cyfr.Hex.short()
 
     # One build's topic at a time: every click used to add a subscription the
     # socket kept for its whole life, all fanning into a handle_info that
@@ -68,8 +69,11 @@ defmodule PrismWeb.BuildsLive do
            send(lv, {:build_complete, result})
          end) do
       {:ok, _pid} ->
-        Process.send_after(self(), {:task_timeout, :build}, 120_000)
-        {:noreply, socket}
+        # A generation token, so a stale deadline (an earlier build that
+        # already completed) cannot wipe a LATER build's state.
+        token = make_ref()
+        Process.send_after(self(), {:task_timeout, :build, token}, 120_000)
+        {:noreply, assign(socket, :build_timeout, token)}
 
       {:error, reason} ->
         Logger.error("[BuildsLive] Failed to start build task: #{inspect(reason)}")
@@ -141,6 +145,8 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_info({:build_complete, {:ok, result}}, socket) do
+    socket = assign(socket, :build_timeout, nil)
+
     if socket.assigns.build_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
@@ -167,6 +173,8 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_info({:build_complete, {:error, reason}}, socket) do
+    socket = assign(socket, :build_timeout, nil)
+
     if socket.assigns.build_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
@@ -182,8 +190,8 @@ defmodule PrismWeb.BuildsLive do
      |> put_flash(:error, "Build failed: #{error_message(reason)}")}
   end
 
-  def handle_info({:task_timeout, :build}, socket) do
-    if socket.assigns.building do
+  def handle_info({:task_timeout, :build, token}, socket) do
+    if socket.assigns.building and socket.assigns.build_timeout == token do
       Logger.warning("[BuildsLive] Build task timed out after 120s")
 
       {:noreply,
@@ -197,7 +205,7 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[BuildsLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

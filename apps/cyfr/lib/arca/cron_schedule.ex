@@ -330,7 +330,11 @@ defmodule Arca.CronSchedule do
     end)
   end
 
-  @doc "Counts the athanor's active schedules."
+  @doc """
+  Counts the athanor's schedules that occupy a cap slot — everything not
+  deleted. A paused schedule keeps its seat, which is why `resume` needs
+  no cap check of its own.
+  """
   @spec count_active(Context.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def count_active(%Context{} = ctx) do
     Errors.with_db_rescue("CronSchedule.count_active", fn ->

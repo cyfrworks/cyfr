@@ -34,7 +34,7 @@ defmodule Opus.ComponentType do
 
   Only Catalysts can read secrets via the `cyfr:vault/read` WASI import. The
   value comes from a Vault entry that a consent edge binds to the running node —
-  the operator maps the catalyst's named need to one of their Connections at
+  the operator maps the catalyst's named need to one of their vault entries at
   consent time; there is no per-secret grant API and no athanor-wide secret
   namespace.
 
@@ -124,7 +124,7 @@ defmodule Opus.ComponentType do
   - `:reagent` - WASI with logging, clocks, random; NO HTTP
   - `:formula` - Same as Reagent (composition at Opus level)
 
-  All types get stdout/stderr for logging. Catalyst HTTP goes through `cyfr:http/fetch`
+  No type gets the host's stdio. Catalyst HTTP goes through `cyfr:http/fetch`
   host function (not `wasi:http/outgoing-handler`) for full policy enforcement.
 
   ## Examples
@@ -134,7 +134,7 @@ defmodule Opus.ComponentType do
       false
 
       iex> opts = Opus.ComponentType.wasi_options(:reagent)
-      iex> opts.allow_http
+      iex> opts.inherit_stdout
       false
 
   """
@@ -148,13 +148,22 @@ defmodule Opus.ComponentType do
   # putting host environment variables inside the sandbox, with no caller
   # and no test, sitting on the module whose job is to say what the sandbox
   # allows.
+  #
+  # Nor does it get the host's stdout/stderr. Inheriting them handed every
+  # guest — reagents included, whose whole definition is compute with no I/O —
+  # an unbounded write straight into the operator's console and log
+  # aggregation: no `Opus.SecretMasker`, no emit rate limit, no emit size cap,
+  # and a trivial way to fill a disk. `wasmex`'s WASI options are inherit-or-
+  # nothing (there is no capture pipe to point somewhere safe), so this is
+  # `false`. A component that wants to say something says it through `emit`,
+  # which is bounded, masked, sequenced and attributable.
   @spec wasi_options(t()) :: WasiP2Options.t() | nil
   def wasi_options(type) when type in @valid_types do
     %WasiP2Options{
       allow_http: false,
       inherit_stdin: false,
-      inherit_stdout: true,
-      inherit_stderr: true,
+      inherit_stdout: false,
+      inherit_stderr: false,
       args: [],
       env: %{}
     }

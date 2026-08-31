@@ -7,10 +7,11 @@
 // "close" events. This hook is a thin keyboard listener that pushes those
 // events to the LiveView. No DOM mutation here.
 //
-// Cmd+K alone is reserved for the AQUA overlay (see agent_overlay.js).
-// Cmd+Shift+K is the palette so both can coexist without conflict.
+// The palette binds Cmd+Shift+K, not plain Cmd+K: nothing in the app claims
+// plain Cmd+K, and the shifted chord stays clear of the browsers' own
+// Cmd+K bindings (address-bar search and the like).
 
-const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+import {isMac} from "../platform"
 
 function isPaletteShortcut(event) {
   const modifier = isMac ? event.metaKey : event.ctrlKey

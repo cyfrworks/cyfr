@@ -91,14 +91,31 @@ func versionCheckPath() (string, error) {
 }
 
 // writeVersionCache persists the lookup result, ignoring errors — a missing or
-// unwritable cache only means the next invocation checks again.
+// unwritable cache only means the next invocation checks again. Write-then-
+// rename like internal/config's SaveTo: a crash mid-write must not leave a
+// truncated file that every later invocation fails to parse.
 func writeVersionCache(path string, vc versionCheck) {
 	data, err := json.Marshal(vc)
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0600)
+	tmp, err := os.CreateTemp(dir, ".version-check-*.json")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tmpName, path)
 }

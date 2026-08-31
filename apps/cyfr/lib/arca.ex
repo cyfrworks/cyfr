@@ -199,9 +199,12 @@ defmodule Arca do
   """
   @spec put_json(Context.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
   def put_json(%Context{} = ctx, path, data, opts \\ []) do
-    case Jason.encode(data) do
+    # `Cyfr.Json` on both sides of the round-trip: `get_json/2` speaks its
+    # `:invalid_json`, so the write side speaks its `:unencodable` too —
+    # not a `%Jason.EncodeError{}` escaping into the caller's error tuple.
+    case Cyfr.Json.encode(data) do
       {:ok, json} -> put(ctx, path, json, opts)
-      {:error, _} = error -> error
+      {:error, :unencodable} -> {:error, :unencodable}
     end
   end
 

@@ -51,7 +51,7 @@ defmodule Cyfr.RetentionScheduler do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -60,6 +60,10 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   defp run_cleanup do
+    # Settle the write-behind first so a sweep sees every completion that
+    # was queued before it — a row about to be pruned should not have a
+    # pending update racing the delete.
+    run_step("record sink flush", fn -> Cyfr.RecordSink.flush() end)
     run_step("retention cleanup", &run_retention/0)
 
     for {label, fun} <- sweeps(), do: run_step(label, fun)
@@ -69,11 +73,30 @@ defmodule Cyfr.RetentionScheduler do
   # retention policy: each is a `{label, fun}` the crash barrier runs.
   defp sweeps do
     [
+      {"expired session sweep", &sweep_expired_sessions/0},
       {"webhook delivery sweep", &sweep_webhook_deliveries/0},
       {"stale tmp sweep", &sweep_stale_tmp_files/0},
       {"conversation blob orphan sweep", &sweep_conversation_blob_orphans/0},
       {"health probe sweep", &sweep_health_probe_dir/0}
     ]
+  end
+
+  # `Sanctum.Session.cleanup/0` existed with no caller outside its own tests,
+  # so expired rows accumulated for the life of the deployment. Nothing was
+  # *unsafe* about that — every read filters on `expires_at > now`, so an
+  # expired row never authenticated anyone — but the table only grew, and the
+  # sweep it needed had no index until the one added alongside this.
+  defp sweep_expired_sessions do
+    case Sanctum.Session.cleanup() do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Removed #{count} expired session(s)")
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Expired-session sweep failed: #{inspect(reason)}")
+    end
   end
 
   # One crash barrier for every step: retention must never take the
@@ -120,10 +143,10 @@ defmodule Cyfr.RetentionScheduler do
   # The storage readiness probe overwrites one fixed key and cleans up
   # after itself; this belt reclaims anything a failed delete (or the old
   # per-probe naming scheme) stranded. A racing probe's in-flight key may
-  # go with it — the probe treats that delete race as success. The writer
-  # owns the spelling of where it writes.
+  # go with it — the probe treats that delete race as success. The
+  # spelling is `Cyfr.HealthProbe.dir/0`, shared with the writer.
   defp sweep_health_probe_dir do
-    case Arca.delete_tree(Sanctum.system_context(), EmissaryWeb.HealthController.probe_dir()) do
+    case Arca.delete_tree(Sanctum.system_context(), Cyfr.HealthProbe.dir()) do
       :ok ->
         :ok
 

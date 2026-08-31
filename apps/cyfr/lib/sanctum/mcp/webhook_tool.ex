@@ -113,7 +113,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:ok, hook}
 
       {:error, :not_found} ->
-        {:error, "Webhook not found: #{name}"}
+        {:error, {:not_found, "Webhook", name}}
     end
   end
 
@@ -166,7 +166,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:ok, result}
 
       {:error, :not_found} ->
-        {:error, "Webhook not found: #{name}"}
+        {:error, {:not_found, "Webhook", name}}
 
       {:error, :no_fields} ->
         {:error,
@@ -198,7 +198,7 @@ defmodule Sanctum.MCP.WebhookTool do
         {:ok, %{revoked: true, name: name}}
 
       {:error, :not_found} ->
-        {:error, "Webhook not found: #{name}"}
+        {:error, {:not_found, "Webhook", name}}
 
       {:error, reason} ->
         Logger.error("[WebhookTool] Failed to revoke webhook: #{inspect(reason)}")
@@ -217,7 +217,12 @@ defmodule Sanctum.MCP.WebhookTool do
         {:ok, result}
 
       {:error, :not_found} ->
-        {:error, "Webhook not found: #{name}"}
+        {:error, {:not_found, "Webhook", name}}
+
+      # Another rotation of this webhook landed first; retrying is safe and
+      # is what keeps the loser from erasing the winner's grace secret.
+      {:error, :conflict} ->
+        {:error, "Another rotation of this webhook is in flight — try again"}
 
       {:error, reason} ->
         Logger.error("[WebhookTool] Failed to rotate webhook: #{inspect(reason)}")
@@ -265,5 +270,5 @@ defmodule Sanctum.MCP.WebhookTool do
     )
   end
 
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
 end

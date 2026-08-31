@@ -16,13 +16,11 @@ defmodule PrismWeb.McpServersLive do
   `http://mcp-bridge:8001/mcp` resolves inside the compose network; the
   browser never connects to it directly. The bridge boots closed behind
   `MCP_BRIDGE_TOKEN`; the preset sends it as `Authorization:
-  vault:mcp_bridge_token` — a Connection named `mcp_bridge_token` holding
+  vault:mcp_bridge_token` — a vault entry named `mcp_bridge_token` holding
   the same value.
   """
 
   use PrismWeb, :live_view
-
-  require Logger
 
   @bridge_name "bridge"
   @bridge_url "http://mcp-bridge:8001/mcp"
@@ -116,7 +114,7 @@ defmodule PrismWeb.McpServersLive do
          |> refresh_servers()
          |> put_flash(
            :info,
-           "MCP Bridge registered. Store the bridge token as a Connection named " <>
+           "MCP Bridge registered. Store the bridge token as a vault entry named " <>
              "mcp_bridge_token, then add backends below."
          )}
 
@@ -290,7 +288,7 @@ defmodule PrismWeb.McpServersLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[McpServersLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -425,9 +423,9 @@ defmodule PrismWeb.McpServersLive do
               class="font-mono"
             />
             <p class="text-xs text-gray-600 mt-1">
-              Use <code class="text-gray-500">vault:CONNECTION</code>
-              in header values to reference a stored Connection
-              (create one on the Connections page).
+              Use <code class="text-gray-500">vault:ENTRY</code>
+              in header values to reference a stored vault entry
+              (create one on the Vault page).
             </p>
           </div>
           <div :if={@json_error} class="text-sm text-red-400">{@json_error}</div>
@@ -567,7 +565,7 @@ defmodule PrismWeb.McpServersLive do
           The bridge is registered but not answering yet — check the
           <span class="font-mono">mcp-bridge</span>
           container and the <span class="font-mono">mcp_bridge_token</span>
-          Connection,
+          vault entry,
           then Test the server above.
         </p>
 

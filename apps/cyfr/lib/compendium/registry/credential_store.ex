@@ -80,17 +80,18 @@ defmodule Compendium.Registry.CredentialStore do
   @spec put(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
   def put(user_id, registry, namespace_slug, credential)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    value = encode_credential(credential)
-    aad = CipherAAD.registry_token(user_id, registry, namespace_slug)
-    {:ok, ciphertext} = Sanctum.Cipher.encrypt(value, aad)
+    with {:ok, value} <- encode_credential(credential) do
+      aad = CipherAAD.registry_token(user_id, registry, namespace_slug)
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt(value, aad)
 
-    RegistryTokenStorage.put(%{
-      user_id: user_id,
-      registry: registry,
-      namespace_slug: namespace_slug,
-      credential_ciphertext: ciphertext,
-      issued_at: credential_issued_at(credential)
-    })
+      RegistryTokenStorage.put(%{
+        user_id: user_id,
+        registry: registry,
+        namespace_slug: namespace_slug,
+        credential_ciphertext: ciphertext,
+        issued_at: credential_issued_at(credential)
+      })
+    end
   end
 
   @doc """
@@ -148,8 +149,18 @@ defmodule Compendium.Registry.CredentialStore do
   def get(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
     case RegistryTokenStorage.get(user_id, registry, namespace_slug) do
-      {:ok, row} -> unseal(row)
-      {:error, _} -> :not_found
+      {:ok, row} ->
+        unseal(row)
+
+      {:error, :not_found} ->
+        :not_found
+
+      {:error, reason} ->
+        # The callers' contract stays two-valued, but a database outage must
+        # not be silently indistinguishable from "you have no credential" —
+        # the user-facing symptom is a spurious "run `cyfr login`".
+        Logger.warning("[CredentialStore] get unavailable: #{inspect(reason)}")
+        :not_found
     end
   end
 
@@ -183,21 +194,21 @@ defmodule Compendium.Registry.CredentialStore do
           end
         end)
 
-      {:error, _} ->
+      {:error, reason} ->
+        Logger.warning("[CredentialStore] list unavailable: #{inspect(reason)}")
         []
     end
   end
 
   @doc """
   Delete a credential for a user, registry, and namespace.
+
+  A failed delete is a failed REVOCATION — it surfaces, never reports `:ok`.
   """
-  @spec delete(String.t(), String.t(), String.t()) :: :ok
+  @spec delete(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def delete(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    case RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
-      :ok -> :ok
-      {:error, _} -> :ok
-    end
+    RegistryTokenStorage.delete(user_id, registry, namespace_slug)
   end
 
   # ============================================================================
@@ -243,8 +254,14 @@ defmodule Compendium.Registry.CredentialStore do
       |> Map.new()
 
     case Jason.encode(normalized) do
-      {:ok, json} -> json
-      {:error, _} -> "{}"
+      {:ok, json} ->
+        {:ok, json}
+
+      {:error, reason} ->
+        # Sealing "{}" here used to report :ok while destroying the token
+        # at rest — the next push decoded a credential with no token field.
+        Logger.warning("[CredentialStore] unencodable credential: #{inspect(reason)}")
+        {:error, :unencodable_credential}
     end
   end
 

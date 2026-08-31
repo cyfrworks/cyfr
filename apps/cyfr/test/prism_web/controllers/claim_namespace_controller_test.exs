@@ -38,7 +38,13 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       body = response(conn, 200)
       assert body =~ "Claim your cyfr.run namespace"
       assert body =~ "name=\"_csrf_token\""
-      assert body =~ "pattern=\"^[a-z0-9]+(-[a-z0-9]+)*$\""
+
+      # Unanchored on purpose: the HTML `pattern` attribute anchors
+      # implicitly, and cannot parse the `\A`/`\z` the server-side regex
+      # now uses (PCRE's `$` matches before a trailing newline, so the
+      # validator had to stop spelling it `^..$`). Same source either way —
+      # `Sanctum.ComponentRefTest` pins the two to one string.
+      assert body =~ "pattern=\"[a-z0-9]+(-[a-z0-9]+)*\""
     end
 
     test "pre-fills the username input from :claim_suggested_username in session",

@@ -99,6 +99,20 @@ func ExpandType(s string) string {
 	return s
 }
 
+// StripVersion returns the ref string without its version segment:
+// "catalyst:local.claude:0.1.0" → "catalyst:local.claude". The version is
+// what follows the LAST ':' (matching ParseRef's split), and only when it is
+// strict semver — a ref with no version, or with a segment the grammar does
+// not recognise as one, is returned unchanged. It replaces a first-char-digit
+// heuristic that also stripped garbage "versions".
+func StripVersion(s string) string {
+	idx := strings.LastIndex(s, ":")
+	if idx < 0 || !versionRegex.MatchString(s[idx+1:]) {
+		return s
+	}
+	return s[:idx]
+}
+
 // ParsedRef holds the decomposed parts of a component reference string.
 type ParsedRef struct {
 	Type       string
@@ -322,13 +336,21 @@ func validateName(name string) error {
 // alphanumeric ones, and build metadata is ignored. The old dot-split
 // with a byte-compare fallback ranked "1.0.0-rc1" above "1.0.0" — the
 // opposite of the server's Compendium.Semver — so interactive version
-// resolution could pick a prerelease the server never would. Inputs that
-// fail the semver grammar fall back to a byte compare of the raw
-// strings, matching the server's own fallback.
+// resolution could pick a prerelease the server never would. The fallback
+// matches the server's exactly (Compendium.Semver.compare/2, pinned by the
+// shared version_ordering fixture): when exactly ONE side parses, the
+// parsable side ranks higher; only when BOTH fail does it fall back to a
+// byte compare of the raw strings. The old any-side-fails byte compare
+// disagreed with the server on every mixed pair.
 func CompareVersions(a, b string) int {
 	av, aok := parseSemver(a)
 	bv, bok := parseSemver(b)
-	if !aok || !bok {
+	switch {
+	case aok && !bok:
+		return 1
+	case !aok && bok:
+		return -1
+	case !aok && !bok:
 		return strings.Compare(a, b)
 	}
 	for i := 0; i < 3; i++ {

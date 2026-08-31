@@ -3,12 +3,10 @@
 
 defmodule Cyfr.MapUtil do
   @moduledoc """
-  Small map-building helpers shared across the umbrella.
+  Small map- and keyword-building helpers shared across the umbrella.
 
-  The map twin of `Arca.QueryHelpers.maybe_put/3` (which builds keyword
-  lists): one spelling of "add the entry only when there is a value", so
-  the copies that used to live beside every wire-map builder collapse
-  into one.
+  One spelling of "add the entry only when there is a value", so the copies
+  that used to live beside every wire-map builder collapse into one.
   """
 
   @doc """
@@ -21,4 +19,20 @@ defmodule Cyfr.MapUtil do
   def put_present(map, _key, nil), do: map
   def put_present(map, _key, ""), do: map
   def put_present(map, key, value), do: Map.put(map, key, value)
+
+  @doc """
+  The keyword twin: append `key` only when `value` is not `nil`.
+
+  Lives here rather than in `Arca.QueryHelpers` because the callers building
+  option lists are not building queries. `Cyfr.Network` — the SSOT for
+  outbound HTTP — imported it from the row plane's fail-closed tenant-scoping
+  helpers to assemble Req options, which gave the network seam a compile-time
+  edge into storage for three lines of `Keyword.put`.
+
+  Unlike `put_present/3`, `""` is kept: a keyword option list is not a wire
+  shape, and an empty string can be a deliberate value there.
+  """
+  @spec put_unless_nil(keyword(), atom(), term()) :: keyword()
+  def put_unless_nil(opts, _key, nil), do: opts
+  def put_unless_nil(opts, key, value), do: Keyword.put(opts, key, value)
 end

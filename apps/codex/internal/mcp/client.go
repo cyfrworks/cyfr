@@ -257,7 +257,7 @@ func (c *Client) CallToolWithProgress(ctx context.Context, name string, args map
 		// Try as raw map
 		var raw map[string]any
 		if err2 := json.Unmarshal(resultBytes, &raw); err2 != nil {
-			return nil, fmt.Errorf("unmarshal result: %w", err)
+			return nil, fmt.Errorf("unmarshal result: %w", err2)
 		}
 		return raw, nil
 	}
@@ -318,50 +318,42 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	return toolsResult.Tools, nil
 }
 
-// sendNotification sends a JSON-RPC notification (no id, no response expected).
-func (c *Client) sendNotification(ctx context.Context, method string, params any) error {
-	notif := JSONRPCNotification{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	}
-
-	body, err := json.Marshal(notif)
-	if err != nil {
-		return fmt.Errorf("marshal notification: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/mcp", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create notification request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json, text/event-stream")
-	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
-	httpReq.Header.Set("X-Request-Id", newRequestID())
-	c.setCredential(httpReq)
-
-	httpResp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("send notification: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	// Notifications expect 200 or 202
-	if httpResp.StatusCode != http.StatusOK && httpResp.StatusCode != http.StatusAccepted {
-		respBody, _ := io.ReadAll(httpResp.Body)
-		return fmt.Errorf("notification HTTP %d: %s", httpResp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
 func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse, error) {
 	// No retry-on-expiry: the credential authenticates each request on its own,
 	// so a rejected one will be rejected again. A revoked or expired token needs
 	// `cyfr login`, not a re-handshake.
 	return c.doRequestOnce(ctx, req, "", nil)
+}
+
+// ConsentError is a §4.3 consent signal from the server — a protocol-level
+// error in the -33501..-33504 band whose remediation payload rides in
+// error.data as {"tag": ..., "payload": {...}}. Commands recover it with
+// errors.As and render it via formatConsentError; the payload used to be
+// JSON smuggled inside the message text and grepped back out.
+type ConsentError struct {
+	Tag     string
+	Message string
+	Payload map[string]any
+}
+
+func (e *ConsentError) Error() string { return e.Message }
+
+var consentTagByCode = map[int]string{
+	-33501: "setup_required",
+	-33502: "consent_required",
+	-33503: "consent_conflict",
+	-33504: "restart_required",
+}
+
+func consentError(e *JSONRPCError) *ConsentError {
+	data, _ := e.Data.(map[string]any)
+	tag, _ := data["tag"].(string)
+	payload, _ := data["payload"].(map[string]any)
+	if tag == "" {
+		// The code names the tag even when a proxy stripped error.data.
+		tag = consentTagByCode[e.Code]
+	}
+	return &ConsentError{Tag: tag, Message: e.Message, Payload: payload}
 }
 
 // rpcError maps a JSON-RPC error object to a Go error, preserving the
@@ -372,6 +364,9 @@ func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCRes
 func rpcError(e *JSONRPCError) error {
 	if e.Code == -33001 {
 		return fmt.Errorf("%w: %s", ErrAuthRequired, e.Message)
+	}
+	if _, ok := consentTagByCode[e.Code]; ok {
+		return consentError(e)
 	}
 	return fmt.Errorf("%s", e.Message)
 }

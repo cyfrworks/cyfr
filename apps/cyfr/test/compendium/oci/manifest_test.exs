@@ -68,35 +68,68 @@ defmodule Compendium.OCI.ManifestTest do
   end
 
   describe "parse/1" do
-    test "parses a valid manifest" do
-      manifest =
-        Jason.encode!(%{
-          "schemaVersion" => 2,
-          "mediaType" => "application/vnd.oci.image.manifest.v1+json",
-          "artifactType" => "application/vnd.cyfr.component.v1",
-          "config" => %{
-            "mediaType" => "application/vnd.cyfr.manifest.v1+json",
-            "size" => 42,
-            "digest" => "sha256:abc"
-          },
-          "layers" => [
-            %{
-              "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
-              "size" => 1024,
-              "digest" => "sha256:def"
-            }
-          ],
-          "annotations" => %{
-            "org.opencontainers.image.title" => "test"
-          }
-        })
+    # A digest is a path segment — it lands in `/v2/…/blobs/<digest>` and in
+    # cache filenames — so the parser holds descriptors to the same grammar a
+    # reference's own digest has always been held to.
+    defp digest(seed),
+      do: "sha256:" <> (:crypto.hash(:sha256, seed) |> Base.encode16(case: :lower))
 
-      assert {:ok, parsed} = Manifest.parse(manifest)
-      assert parsed.config["digest"] == "sha256:abc"
+    defp manifest_json(config_digest, layer_digest) do
+      Jason.encode!(%{
+        "schemaVersion" => 2,
+        "mediaType" => "application/vnd.oci.image.manifest.v1+json",
+        "artifactType" => "application/vnd.cyfr.component.v1",
+        "config" => %{
+          "mediaType" => "application/vnd.cyfr.manifest.v1+json",
+          "size" => 42,
+          "digest" => config_digest
+        },
+        "layers" => [
+          %{
+            "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
+            "size" => 1024,
+            "digest" => layer_digest
+          }
+        ],
+        "annotations" => %{
+          "org.opencontainers.image.title" => "test"
+        }
+      })
+    end
+
+    test "parses a valid manifest" do
+      config_digest = digest("config")
+      layer_digest = digest("layer")
+
+      assert {:ok, parsed} = Manifest.parse(manifest_json(config_digest, layer_digest))
+      assert parsed.config["digest"] == config_digest
       assert length(parsed.layers) == 1
-      assert hd(parsed.layers)["digest"] == "sha256:def"
+      assert hd(parsed.layers)["digest"] == layer_digest
       assert parsed.annotations["org.opencontainers.image.title"] == "test"
       assert parsed.artifact_type == "application/vnd.cyfr.component.v1"
+    end
+
+    test "refuses a layer digest that is not a digest" do
+      # A hostile or compromised registry could otherwise steer the blob GET
+      # to an arbitrary path on its own host; the post-download hash check
+      # only rejects the bytes, and only after the request has been made.
+      for hostile <- [
+            "sha256:../../etc/passwd",
+            "sha256:abc",
+            "sha256:" <> String.duplicate("A", 64),
+            "../evil",
+            "sha512:" <> String.duplicate("a", 64)
+          ] do
+        assert {:error, msg} = Manifest.parse(manifest_json(digest("ok"), hostile)),
+               "expected #{inspect(hostile)} to be refused"
+
+        assert msg =~ "descriptor digest must be sha256:<64 hex chars>"
+      end
+    end
+
+    test "refuses a config digest that is not a digest" do
+      assert {:error, msg} = Manifest.parse(manifest_json("sha256:nope", digest("ok")))
+      assert msg =~ "descriptor digest must be sha256:<64 hex chars>"
     end
 
     test "returns error for invalid JSON" do

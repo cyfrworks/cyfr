@@ -20,10 +20,19 @@ defmodule Compendium.OCI.Blob do
   @chunked_threshold 10 * 1024 * 1024
 
   # The wire ceiling for a blob download, enforced while the body streams
-  # in. A compressed archive cannot legitimately exceed its own decompressed
-  # cap, and the tincture cap is the largest blob any pull may carry (WASM
-  # is bounded lower again, by Compendium.WasmValidator, after download).
-  defp max_blob_bytes, do: Compendium.Registry.tincture_max_decompressed_bytes()
+  # in. Its DEFAULT is the tincture decompressed cap — a compressed archive
+  # cannot legitimately exceed its own decompressed cap, and that cap is
+  # the largest blob any pull may carry (WASM is bounded lower again, by
+  # Compendium.WasmValidator, after download) — but it is its own knob:
+  # an operator lowering the tincture cap for memory reasons must not
+  # silently cap the WASM components they can pull.
+  defp max_blob_bytes do
+    Application.get_env(
+      :cyfr,
+      :oci_max_blob_bytes,
+      Compendium.Registry.tincture_max_decompressed_bytes()
+    )
+  end
 
   @doc """
   Check if a blob exists in the registry.

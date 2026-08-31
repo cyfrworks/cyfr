@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -18,7 +19,7 @@ import (
 // inline error without a round-trip. Mirrors Sanctum.ComponentRef.validate_namespace/1.
 func validateTincturePublisher(slug string) error {
 	if err := ref.ValidateNamespace(slug); err != nil {
-		return fmt.Errorf("Invalid publisher %q: %v", slug, err)
+		return fmt.Errorf("Invalid publisher %q: %w", slug, err)
 	}
 	return nil
 }
@@ -64,12 +65,10 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 		// Visibility is not a policy bit anymore: public-ness IS an active
 		// public profile. Point old muscle memory at the consent walk
 		// instead of round-tripping to a server verb that no longer exists.
-		fmt.Fprintln(os.Stderr, "Publishing is a consent decision, not a toggle.")
 		fmt.Fprintln(os.Stderr, "  To publish:   run profile.publish on the tincture's owner profile (plan -> preview -> commit)")
 		fmt.Fprintln(os.Stderr, "  To unpublish: run profile.revoke on the tincture's public profile")
 		fmt.Fprintln(os.Stderr, "  To check:     cyfr tincture visibility get <publisher> <name>")
-		os.Exit(1)
-		return nil
+		return errors.New("Publishing is a consent decision, not a toggle.")
 	},
 }
 

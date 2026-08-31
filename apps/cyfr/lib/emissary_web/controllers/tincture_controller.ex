@@ -97,7 +97,12 @@ defmodule EmissaryWeb.TinctureController do
 
       :unauthenticated ->
         # ApiError attaches the RFC 9110 §15.5.2 challenge on every 401.
-        EmissaryWeb.ApiError.send(conn, 401, :unauthenticated, "Authentication required")
+        EmissaryWeb.ApiError.send(
+          conn,
+          401,
+          :unauthenticated,
+          Sanctum.Unauthorized.message(:unauthenticated)
+        )
 
       {:error, :unavailable} ->
         EmissaryWeb.ApiError.send(conn, 503, :unavailable, "Try again shortly")

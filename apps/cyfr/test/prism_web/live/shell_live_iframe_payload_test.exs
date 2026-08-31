@@ -47,6 +47,11 @@ defmodule PrismWeb.ShellLiveIframePayloadTest do
 
     File.write!(Path.join(dir, "index.html"), "<html><body>payload</body></html>")
 
+    # The shell no longer force-rescans on mount (the registry follows the
+    # tinctures topic in production); files planted directly on disk need
+    # the reload the AutoIndexer broadcast would otherwise trigger.
+    Prism.TinctureRegistry.reload_athanor(home.id)
+
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, original_path)
       File.rm_rf(base)

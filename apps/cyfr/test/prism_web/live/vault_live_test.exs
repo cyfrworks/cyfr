@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.ConnectionsLiveTest do
+defmodule PrismWeb.VaultLiveTest do
   @moduledoc """
-  The Connections page: gated behind sign-in; each Connection says which
+  The Vault page: gated behind sign-in; each vault entry says which
   MCP servers draw on it (so revoking is done knowing what it breaks); the
   operator's OAuth client credentials are stored, listed by provider and
   removed from here — the `lite` sheet's client-credentials arm.
@@ -12,13 +12,13 @@ defmodule PrismWeb.ConnectionsLiveTest do
 
   alias Emissary.MCP.ToolRegistry
 
-  describe "GET /connections (unauthenticated)" do
+  describe "GET /vault (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/connections"))
+      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, athanor_path("/vault"))
     end
   end
 
-  test "a Connection shows the MCP servers that read it through vault: headers", %{conn: conn} do
+  test "a vault entry shows the MCP servers that read it through vault: headers", %{conn: conn} do
     user = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Wired #{user.namespace}")
 
@@ -51,7 +51,7 @@ defmodule PrismWeb.ConnectionsLiveTest do
       })
 
     conn = log_in_user(conn, user, athanor_id: group.id)
-    {_view, html} = mount_athanor(conn, "/connections", group)
+    {_view, html} = mount_athanor(conn, "/vault", group)
     assert html =~ "bridge-token"
     assert html =~ "used by MCP server bridge"
 
@@ -66,7 +66,7 @@ defmodule PrismWeb.ConnectionsLiveTest do
   test "OAuth client credentials are stored, listed by provider only, and removed", %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    {view, html} = mount_athanor(conn, "/connections")
+    {view, html} = mount_athanor(conn, "/vault")
     assert html =~ "OAuth client credentials"
     assert html =~ "No client credentials stored"
 

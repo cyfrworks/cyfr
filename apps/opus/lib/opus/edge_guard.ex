@@ -180,31 +180,53 @@ defmodule Opus.EdgeGuard do
   # ============================================================================
 
   @doc """
-  Check an HTTP request's body (or multipart parts) against the node's
-  `max_request_size`. Returns `:ok` or `{:error, :request_too_large, message}`.
+  The ENVELOPE ceiling for a host-function call: the bound on the raw JSON
+  string, checked before `Jason.decode/1` ever sees it.
+
+  Distinct from `max_request_size`, which bounds the DECODED payload and is
+  checked after parsing (deliberately — a base64 body is measured as the bytes
+  it becomes, not the characters it arrives as). Without this, the guest's
+  linear memory — 64 MiB by default — was the only limit on what one call
+  could make the host parse, times the concurrency cap.
+
+  Generous on purpose: a payload at the consented ceiling must always fit,
+  base64 overhead (4/3), JSON escaping and the scaffolding included. This
+  refuses the blob, not the legitimate request.
+  """
+  @spec check_envelope_size(Limits.t(), binary()) :: :ok | {:error, :request_too_large}
+  def check_envelope_size(%Limits{max_request_size: max}, json)
+      when is_binary(json) and is_integer(max) and max > 0 do
+    if byte_size(json) <= max * 2 + envelope_overhead(),
+      do: :ok,
+      else: {:error, :request_too_large}
+  end
+
+  def check_envelope_size(_limits, _json), do: :ok
+
+  @doc "Slack allowed above the consented payload ceiling for framing."
+  @spec envelope_overhead() :: pos_integer()
+  def envelope_overhead, do: 4096
+
+  @doc """
+  Check an HTTP request against the node's `max_request_size`. Returns `:ok`
+  or `{:error, :request_too_large, message}`.
+
+  Counts what the host will actually hold and put on the wire: the body (or
+  the multipart parts) **plus the URL and headers**. Measuring the body alone
+  meant a guest could move megabytes into header values — into host memory and
+  out to the upstream — while the consented ceiling read as enforced.
   """
   @spec check_request_size(Limits.t(), map()) ::
           :ok | {:error, :request_too_large, String.t()}
-  def check_request_size(%Limits{} = limits, %{multipart: parts}) when is_list(parts) do
-    size = Enum.reduce(parts, 0, fn part, acc -> acc + multipart_part_size(part) end)
+  def check_request_size(%Limits{} = limits, %{multipart: parts} = request)
+      when is_list(parts) do
+    payload = Enum.reduce(parts, 0, fn part, acc -> acc + multipart_part_size(part) end)
 
-    if size > limits.max_request_size do
-      {:error, :request_too_large,
-       "Multipart body (#{size} bytes) exceeds limit (#{limits.max_request_size} bytes)"}
-    else
-      :ok
-    end
+    refuse_over(limits, payload + metadata_size(request), "Multipart request")
   end
 
-  def check_request_size(%Limits{} = limits, %{body: body}) do
-    size = byte_size(body || "")
-
-    if size > limits.max_request_size do
-      {:error, :request_too_large,
-       "Request body (#{size} bytes) exceeds limit (#{limits.max_request_size} bytes)"}
-    else
-      :ok
-    end
+  def check_request_size(%Limits{} = limits, %{body: body} = request) do
+    refuse_over(limits, byte_size(body || "") + metadata_size(request), "Request")
   end
 
   @doc """
@@ -271,6 +293,38 @@ defmodule Opus.EdgeGuard do
       entry == ip_string
     end
   end
+
+  defp refuse_over(%Limits{} = limits, size, what) do
+    if size > limits.max_request_size do
+      {:error, :request_too_large,
+       "#{what} (#{size} bytes incl. URL and headers) exceeds limit " <>
+         "(#{limits.max_request_size} bytes)"}
+    else
+      :ok
+    end
+  end
+
+  # The URL and headers travel with the body and are held in host memory the
+  # same way, so they count against the same ceiling. Header framing (`: ` and
+  # CRLF) is not modelled — this is a resource bound, not a wire-length
+  # computation.
+  defp metadata_size(request) do
+    url_size = byte_size(Map.get(request, :url) || "")
+
+    header_size =
+      request
+      |> Map.get(:headers)
+      |> List.wrap()
+      |> Enum.reduce(0, fn
+        {k, v}, acc -> acc + string_size(k) + string_size(v)
+        _, acc -> acc
+      end)
+
+    url_size + header_size
+  end
+
+  defp string_size(s) when is_binary(s), do: byte_size(s)
+  defp string_size(s), do: s |> to_string() |> byte_size()
 
   defp multipart_part_size(%{data: data}) when is_binary(data), do: byte_size(data)
   defp multipart_part_size(%{value: value}) when is_binary(value), do: byte_size(value)

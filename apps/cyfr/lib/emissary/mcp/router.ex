@@ -176,7 +176,9 @@ defmodule Emissary.MCP.Router do
               action = arguments["action"]
 
               if not ToolVisibility.admits_action?(name, action, ctx) do
-                {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
+                # One prose (the CLI adds its own `cyfr login` hint off the
+                # :auth_required code, so the sentence needn't carry it).
+                {:error, :auth_required, Sanctum.Unauthorized.message(:unauthenticated)}
               else
                 has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
@@ -220,20 +222,32 @@ defmodule Emissary.MCP.Router do
                   # it arrives as the `Sanctum.Unauthorized` vocabulary and
                   # is rendered here — the wire boundary.
                   {:error, reason} ->
-                    if Sanctum.Unauthorized.reason?(reason) do
-                      {:error, Sanctum.Unauthorized.code(reason),
-                       Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-                    else
-                      {:ok,
-                       %{
-                         "content" => [
-                           %{
-                             "type" => "text",
-                             "text" => format_error_reason(reason)
-                           }
-                         ],
-                         "isError" => true
-                       }}
+                    cond do
+                      Sanctum.Unauthorized.reason?(reason) ->
+                        {:error, Sanctum.Unauthorized.code(reason),
+                         Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+
+                      # A §4.3 consent signal is a protocol-level error a
+                      # client BRANCHES on: its own -335xx code and the
+                      # payload in error.data — never JSON smuggled through
+                      # isError prose for the CLI to grep back out.
+                      Emissary.MCP.ConsentSignal.signal?(reason) ->
+                        {tag, _} = reason
+
+                        {:error, tag, Emissary.MCP.ConsentSignal.message(reason),
+                         Emissary.MCP.ConsentSignal.data(reason)}
+
+                      true ->
+                        {:ok,
+                         %{
+                           "content" => [
+                             %{
+                               "type" => "text",
+                               "text" => format_error_reason(reason)
+                             }
+                           ],
+                           "isError" => true
+                         }}
                     end
                 end
               end
@@ -341,8 +355,6 @@ defmodule Emissary.MCP.Router do
   # here; they are `Emissary.MCP.ToolError` reasons now, so the typed clause
   # below renders them — and the console and the guest render them the same
   # way, which they did not while this was the only site that knew them.
-  defp format_error_reason(:action_missing), do: "Missing required argument: action"
-  defp format_error_reason({:unknown_action, name_action}), do: "Unknown action: #{name_action}"
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do

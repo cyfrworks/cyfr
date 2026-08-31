@@ -360,6 +360,15 @@ defmodule Sanctum.Authority.Transition do
 
   # D2: keyed on activation identity, never on ref equality — the same ref
   # at a different activation is a different node and gets no inheritance.
+  #
+  # The converse is accepted deliberately: a DIFFERENT reference whose
+  # activation digest matches is treated as self too. The digest
+  # (Compendium.ReleaseDigest) covers the artifact bytes AND the
+  # dependencies/needs/caps blocks, so a colliding "twin" republished under
+  # another name is the same code declaring the same capability — it can
+  # inherit nothing the current node was not already consented to run.
+  # What the twin costs is bookkeeping (its record names the other
+  # reference), not authority.
   defp self_invocation?(auth, node, %{activation_digest: digest}) do
     is_binary(digest) and Map.get(auth.activation, node) == digest
   end

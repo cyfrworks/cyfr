@@ -17,7 +17,7 @@ defmodule Compendium.ReleaseDigest do
   | Block | Why it is in |
   |---|---|
   | `dependencies` | which components this one may reach |
-  | `needs` | named roles the operator satisfies with Connections |
+  | `needs` | named roles the operator satisfies with vault entries |
   | `caps` | the declared capability ask the operator consents to |
 
   The retired `setup`/`oauth`/`wasi` blocks are rejected at registration,

@@ -175,33 +175,97 @@ defmodule Opus.Executor do
 
     Cyfr.LoggerContext.set_execution_id(record.id)
 
+    # Each stage answers `{:error, p, reason}` so the else arm binds the
+    # pipeline that failed rather than the outer one — `with` does not export
+    # its bindings to `else`, and the arm that read the outer `p` masked with
+    # `preloaded_fields: %{}` and spilled this execution's vault material into
+    # the row, the terminal event and the caller's error. `rescue` has the
+    # same blind spot and cannot be given a pattern, so the stages that run
+    # with unsealed material in hand carry their own.
     try do
       with {:ok, p} <- stage_enforce_policy(p, input),
            {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),
            {:ok, p} <- stage_record_start(p),
-           {:ok, p} <- stage_resolve_vault_fields(p),
-           {:ok, p, output, exec_metadata} <- stage_execute(p, wasm_bytes, input) do
-        finalize_execution(p, output, exec_metadata)
+           {:ok, p} <- stage_resolve_vault_fields(p) do
+        try do
+          case stage_execute(p, wasm_bytes, input) do
+            {:ok, p, output, exec_metadata} -> finalize_execution(p, output, exec_metadata)
+            {:error, p, reason} -> dispatch_failure(p, reason)
+          end
+        rescue
+          e -> handle_raise(p, e, __STACKTRACE__)
+        end
       else
-        {:error, reason} when is_binary(reason) ->
-          maybe_emit_setup_event(ctx, reason, opts)
-          handle_failure(p, reason)
-
-        {:error, {tag, payload} = typed}
-        when tag in [:setup_required, :consent_required] and is_map(payload) ->
-          # Record and stream the readable message, but return the typed
-          # term — the error envelope needs the structural payload, and
-          # callers already receive these tuples from consent loading.
-          maybe_emit_setup_event(ctx, typed, opts)
-          _ = handle_failure(p, failure_message(typed))
-          {:error, typed}
-
-        {:error, reason} ->
-          handle_failure(p, "Execution failed: #{inspect(reason)}")
+        {:error, p, reason} -> dispatch_failure(p, reason)
       end
     rescue
-      e ->
-        handle_failure(p, "Execution error: #{Exception.message(e)}")
+      e -> handle_raise(p, e, __STACKTRACE__)
+    end
+  end
+
+  # The one failure vocabulary for every stage: a crafted sentence, a typed
+  # setup/consent refusal that must reach the caller whole, or an internal
+  # term that gets rendered here and logged. `p` is always the pipeline the
+  # failing stage reached, so `handle_failure/2` masks with every credential
+  # dispensed so far.
+  defp dispatch_failure(%ExecutionPipeline{} = p, reason) when is_binary(reason) do
+    maybe_emit_setup_event(p.ctx, reason, p.opts)
+    handle_failure(p, reason)
+  end
+
+  defp dispatch_failure(%ExecutionPipeline{} = p, {tag, payload} = typed)
+       when tag in [:setup_required, :consent_required] and is_map(payload) do
+    # Record and stream the readable message, but return the typed term — the
+    # error envelope needs the structural payload, and callers already receive
+    # these tuples from consent loading.
+    maybe_emit_setup_event(p.ctx, typed, p.opts)
+    _ = handle_failure(p, failure_message(typed))
+    {:error, typed}
+  end
+
+  defp dispatch_failure(%ExecutionPipeline{} = p, reason) do
+    handle_failure(p, "Execution failed: #{client_reason(reason)}")
+  end
+
+  # A crafted raise (`raise "…"`) speaks for itself; any other exception's
+  # message can embed the very term that failed to match. The detail goes
+  # whole to the log; the caller gets a sentence — this string is persisted
+  # on the row, streamed as the terminal event, and handed back to MCP
+  # clients and parent formulas.
+  defp handle_raise(%ExecutionPipeline{} = p, e, stacktrace) do
+    msg =
+      case e do
+        # RuntimeError/ArgumentError messages are authored at the raise site
+        # (the house rule for host-side programmer error) — safe.
+        %RuntimeError{message: m} ->
+          m
+
+        %ArgumentError{message: m} ->
+          m
+
+        _ ->
+          Logger.error(
+            "[Opus.Executor] execution raised: " <> Exception.format(:error, e, stacktrace)
+          )
+
+          "the engine raised an internal error"
+      end
+
+    handle_failure(p, "Execution error: #{msg}")
+  end
+
+  # The render seam for failure reasons: a typed refusal gets its one
+  # sentence (`Emissary.MCP.ToolError.render/1` — Unauthorized, the tool
+  # reasons, OCI errors, crafted binaries); an internal term goes to the
+  # log and never into a message that outlives this call.
+  defp client_reason(reason) do
+    case Emissary.MCP.ToolError.render(reason) do
+      nil ->
+        Logger.warning("[Opus.Executor] unrenderable failure reason: #{inspect(reason)}")
+        "internal error"
+
+      msg ->
+        msg
     end
   end
 
@@ -254,13 +318,26 @@ defmodule Opus.Executor do
       record
   end
 
+  # Every stage answers with the pipeline it reached — failures included.
+  # `with` does not export its bindings to `else`, so a failure arm that
+  # named the outer pipeline masked with `preloaded_fields: %{}` and spilled
+  # this execution's vault material. Binding the pipeline in the else
+  # *pattern* is what makes that structural instead of a thing each new stage
+  # has to remember.
+  defp staged(%ExecutionPipeline{} = p, result) do
+    case result do
+      {:error, reason} -> {:error, p, reason}
+      ok -> ok
+    end
+  end
+
   # Stage 1: capability enforcement. Every execution roots under an
   # authority — a missing one is a caller bug, and the raise names it
   # rather than running with ambient permissions.
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
     case p.opts[:authority] do
       %Sanctum.Authority{} = authority ->
-        enforce_authority(p, authority, input)
+        staged(p, enforce_authority(p, authority, input))
 
       other ->
         raise ArgumentError,
@@ -342,7 +419,7 @@ defmodule Opus.Executor do
   defp cursor_state(_), do: nil
 
   defp value_source(%Sanctum.Authority.Blob.Edge{vault: %{entry_id: entry_id}}),
-    do: "vault:" <> entry_id
+    do: Emissary.MCP.VaultRef.build(entry_id)
 
   defp value_source(_resources), do: nil
 
@@ -350,23 +427,29 @@ defmodule Opus.Executor do
   # way into the cache — a warm entry needs no second hash), then verify
   # the signature.
   defp stage_fetch_and_verify(%ExecutionPipeline{} = p) do
-    with {:ok, wasm_bytes, component_digest} <-
-           fetch_component_bytes(p.ctx, p.component, p.reference),
-         host_policy = build_host_policy_snapshot(p.exec_opts),
-         record = %{p.record | component_digest: component_digest, host_policy: host_policy},
-         :ok <- maybe_verify_signature(p.reference, p.opts[:verify], p.component) do
-      {:ok, %{p | record: record, component_digest: component_digest, host_policy: host_policy},
-       wasm_bytes}
-    end
+    staged(
+      p,
+      with {:ok, wasm_bytes, component_digest} <-
+             fetch_component_bytes(p.ctx, p.component, p.reference),
+           host_policy = build_host_policy_snapshot(p.exec_opts),
+           record = %{p.record | component_digest: component_digest, host_policy: host_policy},
+           :ok <- verify_attestation(p) do
+        {:ok, %{p | record: record, component_digest: component_digest, host_policy: host_policy},
+         wasm_bytes}
+      end
+    )
   end
 
   # Stage 3: Write execution record and emit telemetry
   defp stage_record_start(%ExecutionPipeline{} = p) do
-    with :ok <- Opus.Host.record_start(p.record) do
-      :atomics.put(p.started_written, 1, 1)
-      Opus.Telemetry.execute_start(p.record)
-      {:ok, p}
-    end
+    staged(
+      p,
+      with :ok <- Opus.Host.record_start(p.record) do
+        :atomics.put(p.started_written, 1, 1)
+        Opus.Telemetry.execute_start(p.record)
+        {:ok, p}
+      end
+    )
   end
 
   # Stage 4: resolve credentials. The callee-keyed grant plane is never
@@ -374,6 +457,10 @@ defmodule Opus.Executor do
   # resource, projected by the vault reader. No vault edge means no
   # secrets — an ungranted read denies exactly as an empty resolution.
   defp stage_resolve_vault_fields(%ExecutionPipeline{} = p) do
+    staged(p, resolve_vault_fields(p))
+  end
+
+  defp resolve_vault_fields(%ExecutionPipeline{} = p) do
     case p.opts[:authority] do
       %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} = authority ->
         case Opus.Host.unseal(p.ctx, vault) do
@@ -420,10 +507,13 @@ defmodule Opus.Executor do
         activation_digest: p.opts[:activation_digest] || p.record.activation_digest
       )
 
-    with {:ok, {output, exec_metadata}} <-
-           execute_wasm(wasm_bytes, input, exec_opts_final, p.opts) do
-      {:ok, p, output, exec_metadata}
-    end
+    staged(
+      p,
+      with {:ok, {output, exec_metadata}} <-
+             execute_wasm(wasm_bytes, input, exec_opts_final, p.opts) do
+        {:ok, p, output, exec_metadata}
+      end
+    )
   end
 
   # ===========================================================================
@@ -436,10 +526,16 @@ defmodule Opus.Executor do
     with :ok <- check_application_error(p, masked_output),
          :ok <- check_response_size(p, masked_output) do
       completed_record = ExecutionRecord.complete(p.record, masked_output)
+      write_result = Opus.Host.record_complete(completed_record)
 
       audit_error =
-        case Opus.Host.record_complete(completed_record) do
+        case write_result do
           :ok ->
+            nil
+
+          {:error, :not_running} ->
+            # A cancel won the race for the row: not an audit fault, and
+            # handled below.
             nil
 
           {:error, reason} ->
@@ -466,13 +562,25 @@ defmodule Opus.Executor do
 
       Opus.Telemetry.execute_stop(completed_record, exec_metadata)
 
-      Opus.ExecutionEventBuffer.push_terminal(
-        completed_record.id,
-        "complete",
-        %{status: "completed", duration_ms: completed_record.duration_ms},
-        999_999_999,
-        completed_record
-      )
+      case write_result do
+        {:error, :not_running} ->
+          # The row already reads `cancelled` and its terminal event is on
+          # the wire; a `complete` pushed here would follow it and resurrect
+          # the turn for every subscriber.
+          Logger.info(
+            "[Opus.Executor] execution #{completed_record.id} finished after cancel; " <>
+              "the cancelled row stands"
+          )
+
+        _ ->
+          Opus.ExecutionEventBuffer.push_terminal(
+            completed_record.id,
+            "complete",
+            %{status: "completed", duration_ms: completed_record.duration_ms},
+            999_999_999,
+            completed_record
+          )
+      end
 
       metadata = %{
         execution_id: completed_record.id,
@@ -802,16 +910,72 @@ defmodule Opus.Executor do
     Cyfr.Digest.sha256(wasm_bytes)
   end
 
-  defp maybe_verify_signature(_reference, nil, _component), do: :ok
+  # The recorded attestation is read on EVERY execution, not only when a
+  # caller asked to pin a signer. `:verify` has exactly one producer —
+  # `Opus.MCP`, from a client's own tool argument — so gating the check on it
+  # meant children (`Opus.Chain`), schedules (`Opus.CronScheduler`) and
+  # tincture ingress (`run_root_edge`) never checked anything, and
+  # `Compendium.OCI.Client` was storing unsigned pulls on the stated grounds
+  # that this check would catch them.
+  #
+  # Only the unsigned-OCI arm is the operator's call. A pinned signer that
+  # does not match, and a source this verifier cannot classify, refuse
+  # whatever the knob says.
+  defp verify_attestation(%ExecutionPipeline{} = p) do
+    {identity, issuer} = pinned_signer(p.opts[:verify])
 
-  defp maybe_verify_signature(_reference, verify, component) when is_map(verify) do
-    identity = verify["identity"] || verify[:identity]
-    issuer = verify["issuer"] || verify[:issuer]
+    case Opus.SignatureAttestation.attestation(p.component) do
+      :unsigned when not is_nil(identity) or not is_nil(issuer) ->
+        {:error,
+         "Signature verification failed: a signer was pinned for #{p.reference}, but the " <>
+           "component was pulled without signature verification"}
 
-    case Opus.SignatureAttestation.verify(component, identity, issuer) do
-      :ok -> :ok
-      {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
+      :unsigned ->
+        if Cyfr.RuntimeConfig.require_signed_pulls?() do
+          {:error,
+           "Signature verification failed: #{p.reference} was pulled without signature " <>
+             "verification and this server requires signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"}
+        else
+          note_unsigned_execution(p)
+          :ok
+        end
+
+      attested when attested in [:trusted, :signed] ->
+        case Opus.SignatureAttestation.verify(p.component, identity, issuer) do
+          :ok -> :ok
+          {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
+        end
+
+      {:unknown_source, _} ->
+        case Opus.SignatureAttestation.verify(p.component, identity, issuer) do
+          :ok -> :ok
+          {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
+        end
     end
+  end
+
+  defp pinned_signer(verify) when is_map(verify) do
+    {verify["identity"] || verify[:identity], verify["issuer"] || verify[:issuer]}
+  end
+
+  defp pinned_signer(_), do: {nil, nil}
+
+  # Running unsigned code is a posture, not a non-event: the operator chose
+  # it, and the choice should be visible in the same places a refusal would
+  # have been.
+  defp note_unsigned_execution(%ExecutionPipeline{} = p) do
+    Logger.warning(
+      "[Opus.Executor] executing #{p.reference} with no verified signature " <>
+        "(CYFR_REQUIRE_SIGNED_PULLS is off)"
+    )
+
+    :telemetry.execute(
+      [:cyfr, :opus, :execution, :unsigned],
+      %{count: 1},
+      %{reference: p.reference, athanor_id: p.ctx.athanor_id}
+    )
+
+    :ok
   end
 
   defp execute_wasm(wasm_bytes, input, exec_opts, opts) do
@@ -896,13 +1060,6 @@ defmodule Opus.Executor do
   # is a no-op here and they keep owning their entry); this covers the paths
   # that previously never registered — synchronous execution.run and every
   # formula child, which cancel could mark in the DB but not terminate.
-  # What `enforce_authority/3` derived from the consented blob. These are the
-  # capability itself — the node's limits, the edge's resources, the memory
-  # ceiling and the component type they were computed for — so a caller's
-  # opts must not reach past them. `timeout_ms` is settled the same way a few
-  # lines above, explicitly; this is the rest of the same rule.
-  @authority_derived [:component_type, :max_memory_bytes, :edge, :limits]
-
   @runtime_opt_keys [
     :component_type,
     :max_memory_bytes,
@@ -926,21 +1083,20 @@ defmodule Opus.Executor do
 
   @doc false
   # The options the runtime runs on. Caller opts fill in what the pipeline did
-  # not settle; they never overwrite what consent did. A plain
-  # `Keyword.merge(exec_opts, opts)` gave the caller the last word on every
-  # key, including the four above — so `run/4`'s own documented
-  # `:max_memory_bytes` option silently outranked the blob's, and the comment
-  # on `enforce_authority/3` ("nothing is re-resolved at execution time")
-  # held only because no live caller happened to pass one.
+  # not settle; they never overwrite what it did — for ANY key. An earlier
+  # version protected only the four authority-derived keys, which left
+  # `:ctx` (the tenant every host import scopes on), `:preloaded_fields`
+  # (the unsealed vault map) and `:digest` (the compiled-component cache
+  # key) caller-overridable; no live caller did, but the comment on
+  # `enforce_authority/3` ("nothing is re-resolved at execution time") held
+  # only by that accident.
   @spec runtime_opts(keyword(), keyword()) :: keyword()
   def runtime_opts(exec_opts, opts) do
-    exec_opts
-    |> Keyword.merge(Keyword.drop(opts, authority_derived_present(exec_opts)))
+    opts
+    |> Keyword.take(@runtime_opt_keys)
+    |> Keyword.merge(exec_opts)
     |> Keyword.take(@runtime_opt_keys)
   end
-
-  defp authority_derived_present(exec_opts),
-    do: Enum.filter(@authority_derived, &Keyword.has_key?(exec_opts, &1))
 
   # Merge into the registry value for this execution, whatever shape it is
   # in. The entry starts as the `:running` atom (`register_execution/1`) and
@@ -1073,6 +1229,18 @@ defmodule Opus.Executor do
       )
     end
 
+    # And the streaming ref, for the same reason. The timeout path cleans this
+    # up; cancel could not, because it only ever saw what the registry held —
+    # so a cancelled execution's in-flight streaming task kept fetching from
+    # the guest's allowed domain until its own receive timeout, after the row
+    # had already been stamped cancelled.
+    if cleanup_refs[:stream_exec_ref] do
+      update_registry_meta(
+        runtime_opts,
+        &Map.put(&1, :stream_exec_ref, cleanup_refs.stream_exec_ref)
+      )
+    end
+
     remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
 
     with {:early, result} <- handshake do
@@ -1179,9 +1347,9 @@ defmodule Opus.Executor do
   end
 
   defp failure_message({:setup_required, %{node_ref: node_ref, reason: reason}}),
-    do: "Setup required for #{node_ref}: #{inspect(reason)}"
+    do: "Setup required for #{node_ref}: #{vault_setup_reason(reason)}"
 
-  defp failure_message(reason), do: "Execution failed: #{inspect(reason)}"
+  defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
 
   # The typed payload crosses the JSON error envelope, so its reason must
   # be JSON-encodable — vault loader tuples are flattened here.
@@ -1216,8 +1384,15 @@ defmodule Opus.Executor do
       Opus.Telemetry.execute_start(record)
     end
 
-    case Opus.Host.record_failed(failed_record) do
+    write_result = Opus.Host.record_failed(failed_record)
+
+    case write_result do
       :ok ->
+        :ok
+
+      {:error, :not_running} ->
+        # A cancel won the race: the row reads `cancelled` and its terminal
+        # event is on the wire — handled below.
         :ok
 
       {:error, reason} ->
@@ -1229,14 +1404,22 @@ defmodule Opus.Executor do
 
     Opus.Telemetry.execute_exception(failed_record, error_msg)
 
-    # Push terminal error event so SSE/LiveView subscribers know execution failed
-    Opus.ExecutionEventBuffer.push_terminal(
-      record.id,
-      "error",
-      %{error: error_msg},
-      999_999_999,
-      record
-    )
+    case write_result do
+      {:error, :not_running} ->
+        Logger.info(
+          "[Opus.Executor] execution #{record.id} failed after cancel; the cancelled row stands"
+        )
+
+      _ ->
+        # Push terminal error event so SSE/LiveView subscribers know execution failed
+        Opus.ExecutionEventBuffer.push_terminal(
+          record.id,
+          "error",
+          %{error: error_msg},
+          999_999_999,
+          record
+        )
+    end
 
     cascade_children_failure(record)
 
@@ -1323,6 +1506,7 @@ defmodule Opus.Executor do
         # Extract tracker PID before killing — needed to stop child tasks.
         tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
         runner_pid = if is_map(meta), do: meta[:runner_pid], else: nil
+        stream_exec_ref = if is_map(meta), do: meta[:stream_exec_ref], else: nil
 
         # The runner FIRST, and by name. It traps exits, so the kill of its
         # parent below reaches it as an ordinary message and it would keep
@@ -1339,6 +1523,18 @@ defmodule Opus.Executor do
         if is_pid(tracker_pid) and Process.alive?(tracker_pid) do
           Opus.FormulaHandler.cleanup_registry(tracker_pid)
         end
+
+        # Same for an in-flight streaming fetch: the streaming task is
+        # unlinked from the Wasmex process, so killing the runner does not
+        # stop it. The timeout path has always done this; cancel is the same
+        # kill and owes the same cleanup.
+        if stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(stream_exec_ref)
+
+        # A cancel kills the component call exactly as a timeout does, and
+        # leaves the same unreapable native thread behind (no epoch
+        # interruption). Counting only timeouts let a tenant cycle cancels to
+        # accumulate spinning cores without ever tripping the penalty box.
+        Opus.ExecutionSemaphore.note_unreaped()
 
         :ok
 

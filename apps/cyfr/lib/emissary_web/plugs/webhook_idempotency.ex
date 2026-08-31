@@ -29,9 +29,26 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
   We *succeeded* — the original delivery already ran. Returning 4xx/5xx on
   duplicate would prompt the sender to keep retrying, defeating the purpose.
+
+  ## Why the claim is released on failure
+
+  The row goes in *before* the controller runs, because that is what makes two
+  concurrent deliveries of one key resolve to a single execution. But a claim
+  staked ahead of the work is a claim that can outlive work which never
+  happened: if the controller then answered 4xx/5xx — target component
+  missing, execution refused, an internal error — the row stood, and the
+  sender's retry, which is the entire reason it sent an idempotency key, got
+  `{"status": "duplicate"}` while the target had never run once.
+
+  So a non-2xx response gives the claim back on the way out, and the retry is
+  a fresh delivery. A hard crash still leaves the row, which the TTL sweep
+  clears; that is the same exposure as before, now bounded to the case where
+  nothing could have run a `before_send` anyway.
   """
 
   import Plug.Conn
+
+  require Logger
 
   def init(opts), do: opts
 
@@ -76,7 +93,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
   defp handle_lookup(conn, webhook_id, key) do
     case Arca.WebhookDeliveryStorage.record(webhook_id, key) do
       :fresh ->
-        conn
+        release_claim_unless_delivered(conn, webhook_id, key)
 
       {:duplicate, first_seen_at} ->
         body =
@@ -104,5 +121,38 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
         conn
     end
+  end
+
+  # Registered on the fresh path only: a duplicate never staked a claim in
+  # this request, and must not release the one the original delivery holds.
+  defp release_claim_unless_delivered(conn, webhook_id, key) do
+    register_before_send(conn, fn sent ->
+      if sent.status in 200..299 do
+        sent
+      else
+        case Arca.WebhookDeliveryStorage.release(webhook_id, key) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            # The claim outlives a delivery that did not happen, so the
+            # sender's retry will read as a duplicate. Say so where an
+            # operator can alarm on it, the way the dedup-unavailable
+            # fail-open above does.
+            Logger.error(
+              "[Webhook] could not release idempotency claim for #{webhook_id}: " <>
+                "#{inspect(reason)} — a retry of this delivery will read as a duplicate"
+            )
+
+            :telemetry.execute(
+              [:cyfr, :emissary, :webhook, :dedup_release_failed],
+              %{count: 1},
+              %{webhook_id: webhook_id}
+            )
+        end
+
+        sent
+      end
+    end)
   end
 end

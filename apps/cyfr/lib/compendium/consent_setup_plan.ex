@@ -91,7 +91,7 @@ defmodule Compendium.ConsentSetupPlan do
     end)
   end
 
-  # A consent with no bound connection used to read vacuously ready. The
+  # A consent with no bound vault entry used to read vacuously ready. The
   # declared needs are the missing half of the join: a required need with
   # nothing bound is unsatisfied, per need, by name. With a binding
   # present it necessarily names a declared need (commit refused anything
@@ -104,7 +104,7 @@ defmodule Compendium.ConsentSetupPlan do
         %{
           need: need.name,
           satisfied: false,
-          detail: "no connection bound for '#{need.name}' — grant one to continue"
+          detail: "no vault entry bound for '#{need.name}' — grant one to continue"
         }
       end
     else
@@ -113,25 +113,21 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   defp check_ref(ctx, ref) do
-    case Arca.VaultStorage.get(ctx.athanor_id, ref.vault_entry_id) do
-      {:ok, %{status: "active"} = entry} ->
-        case VaultReader.binding_digest(entry) do
-          {:ok, digest} ->
-            if Plug.Crypto.secure_compare(digest, ref.binding_digest) do
-              {true, "bound to #{entry.name}"}
-            else
-              {false, "#{entry.name} was rebound since this consent — re-approve to continue"}
-            end
+    # One owner for "would this entry resolve?" — this module used to carry
+    # its own status+binding copy, and a change to what "usable" means had
+    # to land in two files across the license boundary.
+    case VaultReader.usable(ctx.athanor_id, ref.vault_entry_id, ref.binding_digest) do
+      {:ok, entry} ->
+        {true, "bound to #{entry.name}"}
 
-          _ ->
-            {false, "the connection's binding could not be derived"}
-        end
+      {:error, {:binding_mismatch, name}} ->
+        {false, "#{name} was rebound since this consent — re-approve to continue"}
 
-      {:ok, %{status: status, name: name}} ->
+      {:error, {:entry_unavailable, name, status}} ->
         {false, "#{name} is #{status}"}
 
-      _ ->
-        {false, "the bound connection no longer exists"}
+      {:error, :not_found} ->
+        {false, "the bound vault entry no longer exists"}
     end
   end
 end

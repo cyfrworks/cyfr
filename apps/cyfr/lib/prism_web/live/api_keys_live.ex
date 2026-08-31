@@ -190,7 +190,7 @@ defmodule PrismWeb.ApiKeysLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ApiKeysLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

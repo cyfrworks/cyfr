@@ -4,99 +4,29 @@
 import "phoenix_html"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
-import ShellViewport from "./hooks/window_manager"
 import IframeBridge from "./hooks/iframe_bridge"
 import CommandPalette from "./hooks/command_palette"
 import PageLoadingIndicator from "./hooks/page_loading_indicator"
 import OptimisticNav from "./hooks/optimistic_nav"
 import Conversation from "./hooks/conversation"
 import AquaChat from "./hooks/aqua_chat"
-import {marked} from "../vendor/marked.esm.js"
-import DOMPurify from "../vendor/purify.es.mjs"
-import hljs from "../vendor/highlight.min.js"
+import MarkdownContent from "./hooks/markdown_content"
 
-let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-
-// Clipboard copy for tincture public URLs (triggered via push_event from LiveView)
-window.addEventListener("phx:cyfr:copy-to-clipboard", (e) => {
-  const text = e.detail && e.detail.text
-  if (text && navigator.clipboard) {
-    navigator.clipboard.writeText(text)
-  }
-})
+// Optional-chained: this runs at module top level, so a page rendered without
+// the root layout (an error page, a minimal page) would otherwise throw here
+// and take the whole bundle with it — including the parts that page does use.
+// A missing token means no LiveView socket to authenticate, which the socket
+// setup below handles on its own.
+let csrfToken = document.querySelector("meta[name='csrf-token']")?.getAttribute("content")
 
 let Hooks = {}
-Hooks.ShellViewport = ShellViewport
 Hooks.IframeBridge = IframeBridge
 Hooks.CommandPalette = CommandPalette
 Hooks.PageLoadingIndicator = PageLoadingIndicator
 Hooks.OptimisticNav = OptimisticNav
 Hooks.Conversation = Conversation
 Hooks.AquaChat = AquaChat
-
-// ---------------------------------------------------------------------------
-// Markdown rendering utilities
-// ---------------------------------------------------------------------------
-
-// Configure marked renderer once (v15 API: marked.use, not new Renderer)
-let markedConfigured = false
-function ensureMarkedConfig() {
-  if (markedConfigured) return
-  markedConfigured = true
-  marked.use({
-    breaks: true,
-    renderer: {
-      code({ text, lang }) {
-        let highlighted
-        if (lang && hljs.getLanguage(lang)) {
-          highlighted = hljs.highlight(text, { language: lang }).value
-        } else {
-          highlighted = hljs.highlightAuto(text).value
-        }
-        return `<pre><code class="hljs${lang ? ` language-${lang}` : ""}">${highlighted}</code></pre>`
-      },
-      link({ href, title, tokens }) {
-        const text = this.parser.parseInline(tokens)
-        const titleAttr = title ? ` title="${title}"` : ""
-        return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
-      }
-    }
-  })
-}
-
-function renderMarkdownToHTML(raw) {
-  ensureMarkedConfig()
-  const html = marked.parse(raw)
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: [
-      "h1","h2","h3","h4","h5","h6","p","br","hr","blockquote",
-      "ul","ol","li","a","strong","em","del","code","pre",
-      "table","thead","tbody","tr","th","td",
-      "div","span","img","sup","sub","details","summary"
-    ],
-    ALLOWED_ATTR: ["href","src","alt","title","class","target","rel","open"],
-    FORBID_TAGS: ["script","style","iframe","form","input","button","textarea"],
-    FORBID_ATTR: ["onclick","onerror","onload","onmouseover"]
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
-
-Hooks.MarkdownContent = {
-  mounted() { this._render() },
-  updated() { this._render() },
-  _render() {
-    const raw = this.el.getAttribute("data-raw-content")
-    if (!raw) return
-    try {
-      this.el.innerHTML = renderMarkdownToHTML(raw)
-    } catch (e) {
-      console.error('[MarkdownContent] render failed:', e)
-    }
-  }
-}
+Hooks.MarkdownContent = MarkdownContent
 
 Hooks.FlashAutoHide = {
   mounted() {
@@ -164,7 +94,16 @@ function showConfirmDialog(message) {
     overlay.appendChild(panel)
     document.body.appendChild(overlay)
 
+    // The document-level listener is removed by cleanup itself, not only by
+    // the Escape branch that installed the removal: clicking Cancel, Confirm
+    // or the overlay used to leave it attached, so every dialog the page ever
+    // opened kept a live handler closed over its removed DOM.
+    function onKeydown(e) {
+      if (e.key === "Escape") cleanup(false)
+    }
+
     function cleanup(result) {
+      document.removeEventListener("keydown", onKeydown)
       overlay.remove()
       resolve(result)
     }
@@ -174,12 +113,7 @@ function showConfirmDialog(message) {
     overlay.addEventListener("click", function(e) {
       if (e.target === overlay) cleanup(false)
     })
-    document.addEventListener("keydown", function handler(e) {
-      if (e.key === "Escape") {
-        document.removeEventListener("keydown", handler)
-        cleanup(false)
-      }
-    })
+    document.addEventListener("keydown", onKeydown)
 
     confirm.focus()
   })
@@ -220,8 +154,16 @@ if ("serviceWorker" in navigator) {
 
 window.liveSocket = liveSocket
 
+// The one clipboard-copy listener. Both producer paths land here:
+// JS.dispatch("phx:clipboard", ...) fires the window event directly, and
+// push_event("clipboard", ...) from a LiveView arrives as the same
+// "phx:clipboard" window event (the client prefixes server-pushed events
+// with "phx:"). The navigator.clipboard check guards non-secure contexts
+// and older WebViews, where the async clipboard API is undefined and the
+// bare call would throw.
 window.addEventListener("phx:clipboard", (e) => {
-  if (e.detail && e.detail.text) {
-    navigator.clipboard.writeText(e.detail.text)
+  const text = e.detail && e.detail.text
+  if (text && navigator.clipboard) {
+    navigator.clipboard.writeText(text)
   }
 })

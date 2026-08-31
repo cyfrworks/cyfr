@@ -9,10 +9,6 @@ defmodule PrismWeb.ComponentsLive.Editor do
   plain data only — they never touch the socket, assigns, or rendered markup.
   """
 
-  defdelegate build_ref_from_parts(type, publisher, name, version),
-    to: Compendium.Catalogue,
-    as: :build_ref
-
   def format_push_error(reason) when is_binary(reason), do: "Push failed: #{reason}"
 
   def format_push_error({:error, msg}) when is_binary(msg),

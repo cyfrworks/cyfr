@@ -214,7 +214,12 @@ defmodule Compendium.AutoIndexer do
       errors: results.errors,
       total: total,
       elapsed_ms: elapsed,
-      scanned_dirs: [%{path: "components/", via: "Arca.list_recursive"}]
+      scanned_dirs: [
+        %{
+          path: Enum.join(Compendium.ComponentPath.base_prefix(), "/") <> "/",
+          via: "Arca.list_recursive"
+        }
+      ]
     }
 
     if prune_error, do: Map.put(summary, :prune_error, inspect(prune_error)), else: summary

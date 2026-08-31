@@ -101,7 +101,7 @@ defmodule Sanctum.MCPVaultProfileTest do
     assert reloaded.status == "revoked"
   end
 
-  test "conflicts cross the boundary in the tag: json convention", %{ctx: ctx} do
+  test "conflicts cross the boundary as a typed §4.3 signal", %{ctx: ctx} do
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, @wasm, %{
         name: "mcp-conflict",
@@ -120,7 +120,9 @@ defmodule Sanctum.MCPVaultProfileTest do
     {:ok, preview} =
       Sanctum.MCP.handle("profile", ctx, %{"action" => "preview", "decisions" => decisions})
 
-    assert {:error, "consent_conflict: " <> json} =
+    # Typed to the boundary: the wire router promotes this to a protocol
+    # error (-33503 + error.data via Emissary.MCP.ConsentSignal).
+    assert {:error, {:consent_conflict, payload}} =
              Sanctum.MCP.handle("profile", ctx, %{
                "action" => "commit",
                "decisions" => decisions,
@@ -130,7 +132,8 @@ defmodule Sanctum.MCPVaultProfileTest do
                "expected_consent_revision" => 7
              })
 
-    assert %{"cause" => "stale_plan", "actual_revision" => 0} = Jason.decode!(json)
+    assert %{cause: :stale_plan, actual_revision: 0} = payload
+    assert Emissary.MCP.ConsentSignal.signal?({:consent_conflict, payload})
   end
 
   test "the tincture session surface is named in the refusal", %{ctx: ctx} do

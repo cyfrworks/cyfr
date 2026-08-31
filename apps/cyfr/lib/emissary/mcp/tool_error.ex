@@ -6,15 +6,17 @@ defmodule Emissary.MCP.ToolError do
   Typed tool-refusal vocabulary: reasons stay data until a renderer.
 
   The heavy-traffic providers produce this vocabulary now — `component`,
-  `mcp_servers`, `vault`, the records provider, `build` (Locus) and the
-  execution tool's validation arms — with `{:invalid_argument, msg}`
-  chosen where the wire sentence had to stay byte-identical, and
-  `{:not_found, …}` / `{:unavailable, …}` where the typed sentence is the
-  better one. Crafted operator sentences that fit no member (compiler
-  output, remediation hints) deliberately stay strings, as do the
-  registry's "Unknown tool" spelling and the consent-tag wire forms.
-  Remaining string-heavy surfaces: `athanor`/`member`/`door`/`session`
-  tools, `registry_tool`, `aqua_tool`, and `Sanctum.ComponentRef`'s parse
+  `mcp_servers`, `vault`, the records provider, `build` (Locus), the
+  execution tool's validation arms, and the tenancy and registry surfaces
+  (`athanor`, `member`, `door`, `session`, `registry`, `aqua`) — with
+  `{:invalid_argument, msg}` chosen where the wire sentence had to stay
+  byte-identical, and `{:not_found, …}` / `{:unavailable, …}` where the
+  typed sentence is the better one. Crafted operator sentences that fit no
+  member (compiler output, remediation hints, an upstream provider's own
+  error code, a partial-failure count) deliberately stay strings, as does
+  the registry's "Unknown tool" spelling.
+  Remaining string-heavy surfaces: `Opus.MCP` (out of scope while the
+  engine's host surface is pinned) and `Sanctum.ComponentRef`'s parse
   prose (pinned by exact-string tests; convert with its own renderer when
   a caller needs to branch). `Sanctum.Unauthorized` and
   `Compendium.OCI.Errors` prove the same shape end-to-end.
@@ -28,9 +30,11 @@ defmodule Emissary.MCP.ToolError do
     * `PrismWeb.MCPHelpers.error_message/1` (the console)
     * `Opus.FormulaHandler.stringify_reason/1` (the in-chain guest view)
 
-  Do NOT reshape the consent-tag wire form (`"tag: {json}"` strings from
-  `Opus.MCP`) into this vocabulary: `Cyfr.CrossLanguageDriftTest` pins
-  those literals against the Go CLI's parser.
+  The §4.3 consent signals are their own vocabulary
+  (`Emissary.MCP.ConsentSignal`): protocol-level errors with a -335xx code
+  and the payload in `error.data`. `render/2` gives them their sentence for
+  the console and the guest; the wire router promotes them past isError
+  entirely.
   """
 
   @type t ::
@@ -40,6 +44,8 @@ defmodule Emissary.MCP.ToolError do
           | {:crashed, message :: String.t()}
           | {:exit, message :: String.t()}
           | {:timeout, message :: String.t()}
+          | :action_missing
+          | {:unknown_action, name_action :: String.t()}
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
@@ -49,6 +55,8 @@ defmodule Emissary.MCP.ToolError do
   def reason?({:crashed, message}) when is_binary(message), do: true
   def reason?({:exit, message}) when is_binary(message), do: true
   def reason?({:timeout, message}) when is_binary(message), do: true
+  def reason?(:action_missing), do: true
+  def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
   def reason?(_), do: false
 
   @doc """
@@ -72,14 +80,21 @@ defmodule Emissary.MCP.ToolError do
   def message({:exit, message}), do: message
   def message({:timeout, message}), do: message
 
+  # The registry's own dispatch refusals. They used to be rendered by the
+  # wire router alone, so the console and the guest showed a generic
+  # sentence where the wire named the missing/unknown action.
+  def message(:action_missing), do: "Missing required argument: action"
+  def message({:unknown_action, name_action}), do: "Unknown action: #{name_action}"
+
   @doc """
   The client-safe sentence for ANY refusal a tool can produce, or `nil` when
   the term is internal and must not be reflected.
 
-  The three consumers named above each used to carry their own `cond` over
-  the same vocabularies, and they had drifted: the console knew nothing of
-  the crash tuples, and the guest view `inspect`ed whatever it did not
-  recognise. This is that decision, once — so a surface only has to decide
+  The rendering surfaces named above each used to carry their own `cond`
+  over the same vocabularies, and they had drifted: the console knew
+  nothing of the crash tuples, and the guest view `inspect`ed whatever it
+  did not recognise. (Many more modules call this today — every consumer
+  renders through those surfaces' rule.) This is that decision, once — so a surface only has to decide
   what to say when the answer is `nil` (log it, and offer its own generic
   sentence), not what each vocabulary means.
 
@@ -99,6 +114,7 @@ defmodule Emissary.MCP.ToolError do
       Sanctum.Unauthorized.reason?(reason) -> Sanctum.Unauthorized.message(reason, auth_method)
       reason?(reason) -> message(reason)
       match?(%Compendium.OCI.Errors{}, reason) -> Compendium.MCP.Shared.to_error_string(reason)
+      Emissary.MCP.ConsentSignal.signal?(reason) -> Emissary.MCP.ConsentSignal.message(reason)
       true -> nil
     end
   end

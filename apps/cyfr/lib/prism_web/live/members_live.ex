@@ -10,8 +10,6 @@ defmodule PrismWeb.MembersLive do
 
   use PrismWeb, :live_view
 
-  require Logger
-
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -136,7 +134,7 @@ defmodule PrismWeb.MembersLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[MembersLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

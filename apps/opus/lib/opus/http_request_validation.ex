@@ -77,7 +77,8 @@ defmodule Opus.HttpRequestValidation do
         component_ref,
         opts \\ []
       ) do
-    with {:ok, request} <- parse_request(json_request),
+    with :ok <- envelope_bound(limits, json_request),
+         {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(edge, request.method),
          :ok <- validate_scheme(edge, request.url),
          :ok <- validate_domain(edge, request.url),
@@ -179,6 +180,19 @@ defmodule Opus.HttpRequestValidation do
   # ============================================================================
   # Private: Request Parsing
   # ============================================================================
+
+  # Before `Jason.decode/1` sees the string, not after: the decoded-payload
+  # ceiling cannot bound what it costs to produce the decoded payload.
+  defp envelope_bound(limits, json_request) do
+    case EdgeGuard.check_envelope_size(limits, json_request) do
+      :ok ->
+        :ok
+
+      {:error, :request_too_large} ->
+        {:error, :request_too_large,
+         "Request exceeds the consented max_request_size for this component."}
+    end
+  end
 
   defp parse_request(json_string) do
     case Jason.decode(json_string) do

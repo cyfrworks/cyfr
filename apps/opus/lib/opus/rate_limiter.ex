@@ -161,6 +161,12 @@ defmodule Opus.RateLimiter do
         nil ->
           {:ok, :unlimited}
 
+        :invalid ->
+          # `check/3` denies on an unparseable consented window; status is
+          # the diagnostics path and must report that state, not crash on
+          # it (this was the one arm the case did not cover).
+          {:ok, 0, 0, 0}
+
         {max_requests, window_ms} ->
           key = make_key(athanor_id, component_ref)
           now = System.system_time(:millisecond)
@@ -214,7 +220,7 @@ defmodule Opus.RateLimiter do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 

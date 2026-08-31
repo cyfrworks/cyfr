@@ -4,10 +4,10 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -104,12 +104,7 @@ Run without arguments for interactive selection.`,
 			if err != nil {
 				return handleToolError(err)
 			}
-			if flagJSON {
-				output.JSON(result)
-			} else {
-				output.KeyValue(result)
-			}
-			return nil
+			return renderResult(result)
 		}
 
 		if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
@@ -120,12 +115,7 @@ Run without arguments for interactive selection.`,
 			if err != nil {
 				return handleToolError(err)
 			}
-			if flagJSON {
-				output.JSON(result)
-			} else {
-				output.KeyValue(result)
-			}
-			return nil
+			return renderResult(result)
 		}
 
 		if cancelID, _ := cmd.Flags().GetString("cancel"); cancelID != "" {
@@ -144,72 +134,61 @@ Run without arguments for interactive selection.`,
 			return nil
 		}
 
-		var refString string
+		// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
+		args = joinTypeShorthand(args)
+		compType, _ := cmd.Flags().GetString("type")
+		refString, err := pickTarget(cmd.Context(), args, selector{
+			Title: "Select a component to run",
+			Empty: "No components found. Register one first.",
+			Usage: "Usage: cyfr run <reference>",
+			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+				return prompt.FetchComponents(ctx, client)
+			},
+			Normalize: func(ctx context.Context, arg string) (string, error) {
+				// Inject --type, then resolve a missing version for
+				// registry refs.
+				withType, err := parseReference(arg, compType)
+				if err != nil {
+					return "", err
+				}
+				return resolveComponentRef(ctx, client, withType)
+			},
+		})
+		if err != nil {
+			return err
+		}
+
 		var execInput map[string]any
-
-		switch {
-		case len(args) >= 1:
-			// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
-			args = joinTypeShorthand(args)
-			compType, _ := cmd.Flags().GetString("type")
-			rawRef := args[0]
-			var err error
-			refString, err = parseReference(rawRef, compType)
-			if err != nil {
-				return err
-			}
-
-			// Resolve missing version for registry refs
-			refString, err = resolveComponentRef(cmd.Context(), client, refString)
-			if err != nil {
-				return err
-			}
-
+		if len(args) >= 1 {
 			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
 				if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-					return fmt.Errorf("Invalid JSON input: %v", err)
+					return fmt.Errorf("Invalid JSON input: %w", err)
 				}
 			}
-		case prompt.IsInteractive(flagNoInteractive):
-			compOpts, err := prompt.FetchComponents(cmd.Context(), client)
-			if err != nil {
-				return handleToolError(err)
-			}
-			if len(compOpts) == 0 {
-				return errors.New("No components found. Register one first.")
-			}
-			selected, err := prompt.SelectOne("Select a component to run", compOpts)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			refString = selected
-
+		} else {
+			// The ref came from the picker — offer to collect input the
+			// same way.
 			supplyInput, err := prompt.Confirm("Supply JSON input?")
 			if err != nil {
 				if prompt.IsAborted(err) {
-					os.Exit(130)
+					return prompt.ErrAborted
 				}
-				return fmt.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %w", err)
 			}
 			if supplyInput {
 				inputStr, err := prompt.InputText("JSON input", `{"key":"value"}`)
 				if err != nil {
 					if prompt.IsAborted(err) {
-						os.Exit(130)
+						return prompt.ErrAborted
 					}
-					return fmt.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %w", err)
 				}
 				if inputStr != "" {
 					if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
-						return fmt.Errorf("Invalid JSON input: %v", err)
+						return fmt.Errorf("Invalid JSON input: %w", err)
 					}
 				}
 			}
-		default:
-			return errors.New("Usage: cyfr run <reference>")
 		}
 
 		toolArgs := map[string]any{
@@ -225,16 +204,10 @@ Run without arguments for interactive selection.`,
 			toolArgs["profile"] = profile
 		}
 
-		result, err2 := client.CallTool(cmd.Context(), "execution", toolArgs)
-		if err2 != nil {
-			return handleToolError(err2)
+		result, err := client.CallTool(cmd.Context(), "execution", toolArgs)
+		if err != nil {
+			return handleToolError(err)
 		}
-
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }

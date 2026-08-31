@@ -90,34 +90,49 @@ func TestCurrent_NilWhenMissing(t *testing.T) {
 	}
 }
 
-func TestSetSessionID_Persists(t *testing.T) {
+func TestSetToken_Persists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
 	cfg := &Config{
 		CurrentContext: "local",
 		Contexts: map[string]*Context{
-			"local": {URL: "http://127.0.0.1:4000"},
+			// A legacy config: the credential lives under session_id. A
+			// token write must land on `token` AND clear the legacy field,
+			// so the file converges on the modern shape.
+			"local": {URL: "http://127.0.0.1:4000", SessionID: "legacy-session"},
 		},
 	}
 	if err := cfg.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo failed: %v", err)
 	}
 
-	// SetSessionID uses Save() which writes to ~/.cyfr, so we test
-	// the session assignment + SaveTo manually to avoid touching home dir.
+	// SetToken uses Save() which writes to ~/.cyfr, so we test the
+	// assignment + SaveTo manually to avoid touching the home dir.
 	ctx := cfg.Current()
-	ctx.SessionID = "test-session-123"
+	ctx.Token = "test-token-123"
+	ctx.SessionID = ""
 	if err := cfg.SaveTo(path); err != nil {
-		t.Fatalf("SaveTo after session set failed: %v", err)
+		t.Fatalf("SaveTo after token set failed: %v", err)
+	}
+
+	// The rewrite must also leave the file private and whole — SaveTo
+	// writes a fresh 0600 temp file and renames it into place.
+	if info, err := os.Stat(path); err != nil {
+		t.Fatalf("stat config: %v", err)
+	} else if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("config perm = %o, want 0600", perm)
 	}
 
 	loaded, err := LoadFrom(path)
 	if err != nil {
 		t.Fatalf("LoadFrom failed: %v", err)
 	}
-	if loaded.Contexts["local"].SessionID != "test-session-123" {
-		t.Errorf("expected session ID 'test-session-123', got %q", loaded.Contexts["local"].SessionID)
+	if loaded.Contexts["local"].SessionID != "" {
+		t.Errorf("legacy session_id survived the token write: %q", loaded.Contexts["local"].SessionID)
+	}
+	if loaded.Contexts["local"].Credential() != "test-token-123" {
+		t.Errorf("expected credential 'test-token-123', got %q", loaded.Contexts["local"].Credential())
 	}
 }
 

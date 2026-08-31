@@ -207,8 +207,17 @@ defmodule Opus.ExecutionRecord do
     }
 
     case write_failed(cancelled_record) do
-      :ok -> {:ok, cancelled_record}
-      error -> error
+      :ok ->
+        {:ok, cancelled_record}
+
+      {:error, :not_running} ->
+        # The run finished between the `:running` read above and this write
+        # — the row's conditional guard refused the stamp, so the completed
+        # result stands and nothing gets killed.
+        {:error, :not_cancellable}
+
+      error ->
+        error
     end
   end
 

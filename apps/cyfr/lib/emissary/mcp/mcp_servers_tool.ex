@@ -7,7 +7,7 @@ defmodule Emissary.MCP.McpServersTool do
   create, delete, list, get, test, refresh, enable, disable.
 
   Connection config is shared infrastructure: a URL, a header map that may
-  name vault Connections, and the tool patterns the server is allowed to
+  name vault entries, and the tool patterns the server is allowed to
   offer at all. Reads are open to any authenticated caller; every mutation
   is `permission: :admin`, because it changes where this server sends
   requests and which stored credential rides along.
@@ -99,7 +99,7 @@ defmodule Emissary.MCP.McpServersTool do
               "headers" => %{
                 "type" => "object",
                 "description" =>
-                  "HTTP headers. Use 'vault:CONNECTION' to reference a single-field Connection."
+                  "HTTP headers. Use 'vault:ENTRY' to reference a single-field vault entry."
               },
               "timeout_ms" => %{
                 "type" => "integer",
@@ -198,16 +198,16 @@ defmodule Emissary.MCP.McpServersTool do
         # A retired-scheme reference in ANY header would otherwise be
         # persisted and only fail at server boot ("Failed to resolve
         # header") — refuse it here where the message can explain.
-        is_binary(value) and String.starts_with?(value, "secret:") ->
+        Emissary.MCP.VaultRef.retired_ref?(value) ->
           {:error,
            "Header '#{key}' uses the retired \"secret:\" reference — " <>
-             "use \"vault:CONNECTION\" (a single-field vault entry)"}
+             "use \"vault:ENTRY\" (a single-field vault entry)"}
 
-        is_binary(value) and not String.starts_with?(value, "vault:") and
+        is_binary(value) and not Emissary.MCP.VaultRef.vault_ref?(value) and
             credential_shaped_header_name?(key) ->
           {:error,
-           "Header '#{key}' looks like a credential and must reference a Connection — " <>
-             "use \"vault:CONNECTION\" (a single-field vault entry)"}
+           "Header '#{key}' looks like a credential and must reference a vault entry — " <>
+             "use \"vault:ENTRY\" (a single-field vault entry)"}
 
         true ->
           nil
@@ -373,8 +373,8 @@ defmodule Emissary.MCP.McpServersTool do
               enabled: server.enabled,
               status: format_status(status),
               tool_count: format_tool_count(status),
-              # The Connections this server's headers draw on, by name only
-              # (`vault:<entry>` values) — so a Connection can show who
+              # The vault entries this server's headers draw on, by name only
+              # (`vault:<entry>` values) — so an entry can show who
               # consumes it before someone revokes it out from under a server.
               vault_refs: vault_refs(server)
             }
@@ -638,7 +638,7 @@ defmodule Emissary.MCP.McpServersTool do
     end
   end
 
-  # A `vault:` reference names a Connection, which is the binding an
+  # A `vault:` reference names a vault entry, which is the binding an
   # operator needs to see; anything else is a literal and only its presence
   # is reported.
   defp redact_header({name, "vault:" <> _ = reference}), do: {name, reference}

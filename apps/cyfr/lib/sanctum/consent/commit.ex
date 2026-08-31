@@ -439,7 +439,7 @@ defmodule Sanctum.Consent.Commit do
     decisions
     |> Map.get(:bindings, [])
     |> Enum.reduce_while({:ok, [], %{}}, fn raw, {:ok, acc, entries} ->
-      need = Map.get(raw, :need, "@ingress")
+      need = Map.get(raw, :need, Sanctum.Authority.Blob.ingress_key())
 
       with {:ok, declared_need} <- check_known_need(need, declared),
            {:ok, entry} <- fetch_active_entry(ctx, Map.get(raw, :entry_id)),

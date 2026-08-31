@@ -6,7 +6,7 @@ defmodule PrismWeb.Nav do
   The pages of an athanor, once: what the sidebar (dev), the drawer (both
   modes) and the command palette list, and in which mode.
 
-  `lite` is the chat and a drawer off it — apps, members, Connections,
+  `lite` is the chat and a drawer off it — apps, members, the Vault,
   Agents, schedules, webhooks, MCP servers, settings, legal. `dev` adds the
   ops surfaces, sectioned. Keys are the pages' `active_nav` values; the
   DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
@@ -95,9 +95,9 @@ defmodule PrismWeb.Nav do
       modes: @dev
     },
     %{
-      key: "connections",
-      label: "Connections",
-      path: "/connections",
+      key: "vault",
+      label: "Vault",
+      path: "/vault",
       icon: "key",
       section: :configuration,
       modes: @both
@@ -160,7 +160,7 @@ defmodule PrismWeb.Nav do
     }
   ]
 
-  @lite_order ~w(chat agents tinctures members connections schedules webhooks mcp_servers settings legal)
+  @lite_order ~w(chat agents tinctures members vault schedules webhooks mcp_servers settings legal)
 
   @sections [
     {:top, nil},

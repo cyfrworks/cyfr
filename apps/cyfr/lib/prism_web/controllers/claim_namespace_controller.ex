@@ -11,7 +11,7 @@ defmodule PrismWeb.ClaimNamespaceController do
     (`PrismWeb.PendingProbe`), invokes
     `Compendium.Registry.Client.claim_personal_namespace/4`,
     stores the issued push token, and redirects to the configured post-login
-    landing target via `EmissaryWeb.SafeRedirect`.
+    landing target via `PrismWeb.SafeRedirect`.
 
   Accepted cross-layer coupling — this controller is part of the auth
   sliver in spirit but calls Compendium for the post-claim token storage.
@@ -35,11 +35,16 @@ defmodule PrismWeb.ClaimNamespaceController do
     # with a confusing 400 INVALID_USERNAME otherwise.
     username = String.trim(raw_username)
 
-    with {:ok, conn, access_token} <- PendingProbe.pop(conn),
-         {:ok, user_id} <- current_user_id(conn),
-         {:ok, provider} <- current_provider(conn, params),
+    # `popped` rather than rebinding `conn`: `with` does not export its
+    # bindings to `else`, so every arm below answers on the conn this
+    # function was called with. Naming them apart keeps that a decision
+    # instead of a surprise the day a clause above starts assigning.
+    with {:ok, popped, access_token} <- PendingProbe.pop(conn),
+         {:ok, user_id} <- current_user_id(popped),
+         {:ok, provider} <- current_provider(popped, params),
          {:ok, body} <-
            Client.claim_personal_namespace(username, provider, access_token) do
+      conn = popped
       slug = body["slug"] || username
 
       # The claim is the person's identity from here on: it lands on the
@@ -77,7 +82,7 @@ defmodule PrismWeb.ClaimNamespaceController do
           conn
           |> PendingProbe.clear()
           |> delete_session(:claim_suggested_username)
-          |> EmissaryWeb.SafeRedirect.post_login()
+          |> PrismWeb.SafeRedirect.post_login()
 
         {:error, reason} ->
           Logger.error(
@@ -151,18 +156,21 @@ defmodule PrismWeb.ClaimNamespaceController do
       suggested: suggested,
       error: error,
       csrf_token: Plug.CSRFProtection.get_csrf_token(),
-      pattern: Regex.source(Sanctum.ComponentRef.personal_slug_regex())
+      pattern: Sanctum.ComponentRef.personal_slug_html_pattern()
     )
   end
 
-  defp claim_error_message(%Compendium.OCI.Errors{} = err),
-    do: Compendium.MCP.Shared.to_error_string(err)
-
-  defp claim_error_message(msg) when is_binary(msg), do: msg
-
   defp claim_error_message(other) do
-    Logger.error("[ClaimNamespaceController] claim failed: #{inspect(other)}")
-    "The claim failed — try again."
+    # One renderer (ToolError.render covers the OCI struct and crafted
+    # binaries too); nil means internal — logged, never reflected.
+    case Emissary.MCP.ToolError.render(other) do
+      nil ->
+        Logger.error("[ClaimNamespaceController] claim failed: #{inspect(other)}")
+        "The claim failed — try again."
+
+      msg ->
+        msg
+    end
   end
 
   defp current_user_id(conn) do

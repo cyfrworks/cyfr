@@ -180,12 +180,11 @@ defmodule Compendium.MCP.ComponentTool do
             "type" => "boolean",
             "description" => "Include README.md content in inspect result (default false)"
           },
-          # pull action params
-          "verify" => %{
-            "type" => "boolean",
-            "default" => true,
-            "description" => "Verify signature before pulling (pull action)"
-          },
+          # No "verify" knob: signature policy is the server's
+          # (`Cyfr.RuntimeConfig.require_signed_pulls?/0`, re-checked at
+          # execute), never a per-call argument. It was advertised here and
+          # read by nothing, so a caller passing `verify: false` was told
+          # it had turned verification off.
           "digest" => %{
             "type" => "string",
             "description" => "Component digest (get_blob action)"

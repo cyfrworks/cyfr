@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/cyfr/codex/cmd"
+	"github.com/cyfr/codex/internal/prompt"
 )
 
 func main() {
@@ -20,6 +22,12 @@ func main() {
 	defer stop()
 
 	if err := cmd.Execute(ctx); err != nil {
+		// A prompt abort is the user's own Ctrl-C: report it in the exit
+		// code the shell convention reserves for it (128+SIGINT), with no
+		// error output — Execute already skipped printing it.
+		if errors.Is(err, prompt.ErrAborted) {
+			os.Exit(130)
+		}
 		os.Exit(1)
 	}
 }

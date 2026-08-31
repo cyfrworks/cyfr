@@ -58,38 +58,40 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   end
 
   @impl GenServer
-  def handle_info({:vault_entry_changed_global, athanor_id, entry_id, verb}, state)
+  def handle_info({:vault_entry_changed_global, athanor_id, entry_id, verb, meta}, state)
       when verb in @relevant_verbs do
-    {:noreply, attempt(state, {athanor_id, entry_id}, 0)}
+    {:noreply, attempt(state, {athanor_id, entry_id}, meta, 0)}
   end
 
   # A vault change with a verb we don't reconcile (e.g. :create) — expected;
   # ignore without the catch-all's warning.
-  def handle_info({:vault_entry_changed_global, _athanor, _entry, _verb}, state) do
+  def handle_info({:vault_entry_changed_global, _athanor, _entry, _verb, _meta}, state) do
     {:noreply, state}
   end
 
-  def handle_info({:retry, key, attempt_no}, state) do
-    {:noreply, attempt(state, key, attempt_no)}
+  def handle_info({:retry, key, meta, attempt_no}, state) do
+    {:noreply, attempt(state, key, meta, attempt_no)}
   end
 
   def handle_info(:sweep, state) do
     # Re-run every reconcile still pending (received but not yet succeeded), on
     # the slow cadence, so a persistent failure eventually resolves.
     state =
-      Enum.reduce(Map.keys(state.pending), state, fn key, acc -> attempt(acc, key, 0) end)
+      Enum.reduce(state.pending, state, fn {key, %{meta: meta}}, acc ->
+        attempt(acc, key, meta, 0)
+      end)
 
     schedule_sweep()
     {:noreply, state}
   end
 
   def handle_info(message, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(message)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, message)
     {:noreply, state}
   end
 
-  defp attempt(state, {athanor_id, entry_id} = key, attempt_no) do
-    case reconcile(athanor_id, entry_id) do
+  defp attempt(state, {athanor_id, entry_id} = key, meta, attempt_no) do
+    case reconcile(athanor_id, entry_id, meta) do
       :ok ->
         %{state | pending: Map.delete(state.pending, key)}
 
@@ -112,7 +114,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
         )
 
         if attempt_no < @max_fast_retries do
-          Process.send_after(self(), {:retry, key, attempt_no + 1}, @retry_backoff_ms)
+          Process.send_after(self(), {:retry, key, meta, attempt_no + 1}, @retry_backoff_ms)
         else
           Logger.warning(
             "[ExternalServerReconciler] reconcile of #{entry_id} still failing after " <>
@@ -120,18 +122,18 @@ defmodule Emissary.MCP.ExternalServerReconciler do
           )
         end
 
-        %{state | pending: Map.put(state.pending, key, attempt_no + 1)}
+        %{state | pending: Map.put(state.pending, key, %{attempts: attempt_no + 1, meta: meta})}
     end
   end
 
-  @spec reconcile(String.t(), String.t()) :: :ok | {:error, :unresolvable | term()}
-  defp reconcile(athanor_id, entry_id) do
+  @spec reconcile(String.t(), String.t(), map()) :: :ok | {:error, :unresolvable | term()}
+  defp reconcile(athanor_id, entry_id, meta) do
     ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
     case Arca.VaultStorage.get(athanor_id, entry_id) do
       {:ok, entry} ->
         with {:ok, servers} <- Arca.McpServerStorage.list(ctx) do
-          stop_affected(servers, entry, athanor_id, entry_id, ctx)
+          stop_affected(servers, entry, meta, athanor_id, entry_id, ctx)
           :ok
         end
 
@@ -148,9 +150,18 @@ defmodule Emissary.MCP.ExternalServerReconciler do
       {:error, Exception.message(error)}
   end
 
-  defp stop_affected(servers, entry, athanor_id, entry_id, ctx) do
-    ref = "vault:#{entry.name}"
-    affected = Enum.filter(servers, &references?(&1, ref))
+  defp stop_affected(servers, entry, meta, athanor_id, entry_id, ctx) do
+    # A rename breaks the servers still spelling the OLD name — the row can
+    # only ever show the new one, so the vacated name rides in on the
+    # signal. Matching only the current name reconciled the name-GAINING
+    # side and left the name-losing servers dispensing a cached credential
+    # until an unrelated restart.
+    refs =
+      [entry.name | List.wrap(meta[:old_name])]
+      |> Enum.uniq()
+      |> Enum.map(&Emissary.MCP.VaultRef.build/1)
+
+    affected = Enum.filter(servers, fn server -> Enum.any?(refs, &references?(server, &1)) end)
 
     if affected != [] do
       Enum.each(affected, fn server ->

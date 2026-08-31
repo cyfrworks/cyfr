@@ -9,14 +9,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// groupCommandOrder defines the display order of commands within each group.
-// Commands not listed here fall back to alphabetical order.
+// groupCommandOrder defines the display order of commands within each group,
+// mirroring the README's workflow ordering. Every registered command must be
+// listed for its group — an unlisted one silently sorts last, which is how
+// this map drifted before TestGroupCommandOrderCoversEveryCommand pinned it.
 var groupCommandOrder = map[string][]string{
-	"server":    {"init", "up", "down", "upgrade", "update"},
-	"identity":  {"login", "logout", "whoami", "status"},
-	"component": {"search", "list", "inspect", "pull", "register", "run", "remove", "push"},
-	"security":  {"key", "profile"},
-	"admin":     {"log", "aqua", "registry", "context", "call", "notify"},
+	"server":   {"init", "up", "down", "upgrade", "update"},
+	"identity": {"login", "logout", "whoami", "status", "athanor", "member"},
+	"component": {
+		"new", "build", "search", "list", "inspect", "pull", "register",
+		"run", "fork", "remove", "push", "deprecate", "yank", "schedule",
+		"tincture",
+	},
+	"security": {"key", "profile", "webhook"},
+	"admin": {
+		"admin", "log", "retention", "aqua", "mcp", "registry", "report",
+		"notify", "context", "call",
+	},
 }
 
 // customUsage renders the help output with commands ordered by workflow

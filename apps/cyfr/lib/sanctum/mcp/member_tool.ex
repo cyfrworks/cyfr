@@ -80,7 +80,8 @@ defmodule Sanctum.MCP.MemberTool do
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_only do
-    {:error, "member.#{action} is a person's act — sign in; an API key cannot do it"}
+    {:error,
+     {:invalid_argument, "member.#{action} is a person's act — sign in; an API key cannot do it"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
@@ -92,7 +93,7 @@ defmodule Sanctum.MCP.MemberTool do
            ) do
       {:ok, %{athanor: athanor.id, members: Enum.map(members, &render/1), count: length(members)}}
     else
-      {:error, :database_error} -> {:error, "member list unavailable — try again"}
+      {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
       other -> other
     end
   end
@@ -107,28 +108,33 @@ defmodule Sanctum.MCP.MemberTool do
           {:ok, %{athanor: athanor.id, member: shown(target), state: "added"}}
 
         {:error, :invalid_email} ->
-          {:error, "That is not an email address"}
+          {:error, {:invalid_argument, "That is not an email address"}}
 
         {:error, :person_athanor} ->
-          {:error, "A person's own athanor has one member — its owner; add people to a group"}
+          {:error,
+           {:invalid_argument,
+            "A person's own athanor has one member — its owner; add people to a group"}}
 
         {:error, :ambiguous_email} ->
-          {:error, "More than one person here signs in with that email — add them by user id"}
+          {:error,
+           {:invalid_argument,
+            "More than one person here signs in with that email — add them by user id"}}
 
         {:error, :email_unverified} ->
           {:error,
-           "That address can't be seated by email — their sign-in provider has not verified it; " <>
-             "add them by user id"}
+           {:invalid_argument,
+            "That address can't be seated by email — their sign-in provider has not verified it; " <>
+              "add them by user id"}}
 
         {:error, :athanor_archived} ->
-          {:error, "That athanor is archived"}
+          {:error, {:invalid_argument, "That athanor is archived"}}
 
         {:error, {:limit_reached, key, cap}} ->
-          {:error, "Limit reached: #{key} = #{cap}"}
+          {:error, {:invalid_argument, "Limit reached: #{key} = #{cap}"}}
 
         {:error, reason} ->
           Logger.error("[MemberTool] member.add failed: #{inspect(reason)}")
-          {:error, "Failed to add the member"}
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -141,14 +147,14 @@ defmodule Sanctum.MCP.MemberTool do
           {:ok, %{athanor: athanor.id, member: shown(target), state: "removed"}}
 
         {:error, :person_athanor} ->
-          {:error, "You cannot remove the owner of a person's athanor"}
+          {:error, {:invalid_argument, "You cannot remove the owner of a person's athanor"}}
 
         {:error, :not_found} ->
-          {:error, "Not a member"}
+          {:error, {:not_found, "Member", named(target)}}
 
         {:error, reason} ->
           Logger.error("[MemberTool] member.remove failed: #{inspect(reason)}")
-          {:error, "Failed to remove the member"}
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -157,20 +163,20 @@ defmodule Sanctum.MCP.MemberTool do
     with {:ok, athanor, _focused} <- AthanorTool.resolve(ctx, args) do
       cond do
         athanor.kind == "person" ->
-          {:error, "You cannot leave your own athanor"}
+          {:error, {:invalid_argument, "You cannot leave your own athanor"}}
 
         true ->
           case Members.remove_member(athanor, user_id: ctx.user_id) do
             :ok -> {:ok, %{athanor: athanor.id, state: "left"}}
-            {:error, :not_found} -> {:error, "Not a member"}
-            {:error, _} -> {:error, "Failed to leave"}
+            {:error, :not_found} -> {:error, {:invalid_argument, "Not a member"}}
+            {:error, _} -> {:error, {:unavailable, "Storage"}}
           end
       end
     end
   end
 
-  def handle(_ctx, %{"action" => action}), do: {:error, "Invalid member action: #{action}"}
-  def handle(_ctx, _args), do: {:error, "Missing required argument: action"}
+  def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "member.#{action}"}}
+  def handle(_ctx, _args), do: {:error, :action_missing}
 
   defp target(%{"email" => email}) when is_binary(email) and email != "",
     do: {:ok, [email: email]}
@@ -178,10 +184,16 @@ defmodule Sanctum.MCP.MemberTool do
   defp target(%{"user_id" => user_id}) when is_binary(user_id) and user_id != "",
     do: {:ok, [user_id: user_id]}
 
-  defp target(_), do: {:error, "Missing required argument: email or user_id"}
+  defp target(_),
+    do: {:error, {:invalid_argument, "Missing required argument: email or user_id"}}
 
   defp shown(email: email), do: %{email: String.downcase(email)}
   defp shown(user_id: user_id), do: %{user_id: user_id}
+
+  # The person the caller named, for a refusal that has to say which one.
+  # Only ever what the caller already sent back to them.
+  defp named(email: email), do: String.downcase(email)
+  defp named(user_id: user_id), do: user_id
 
   defp int_arg(args, key, default) do
     case Map.get(args, key) do

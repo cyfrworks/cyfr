@@ -79,11 +79,6 @@ var notifyCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }

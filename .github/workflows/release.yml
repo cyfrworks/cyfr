@@ -12,7 +12,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Same reason as docker.yml: tags do not match the Test workflow's push
+  # filter, so a release could be cut from a commit no CI run had gone green
+  # on. The artifacts this job signs are the ones people install.
+  verify:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/test.yml
+
   release:
+    needs: verify
     if: github.repository == 'cyfrworks/cyfr'
     runs-on: ubuntu-latest
     outputs:

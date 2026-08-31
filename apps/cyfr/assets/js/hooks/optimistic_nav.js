@@ -1,33 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Optimistic active-class swap + main-panel spinner for sidebar nav links.
+// Optimistic active-class swap for sidebar nav links.
 //
 // On click, immediately move the active CSS classes to the clicked link
-// before the server round-trip completes, and replace #page-content with a
-// centered spinner so the main panel shows visible progress (the previous
-// page would otherwise sit there until the new LiveView mounts).
+// before the server round-trip completes. LiveView's diff reconciles the
+// swap invisibly because the server's eventual class string matches what
+// we applied (both read from data-active-class / data-inactive-class on
+// the element).
 //
-// LiveView's diff reconciles the class swap invisibly because the server's
-// eventual class string matches what we applied (both read from
-// data-active-class / data-inactive-class on the element). Morphdom matches
-// #page-content by id and patches its children, so the new server-rendered
-// LiveView content replaces the spinner as soon as it arrives.
+// Loading feedback is deliberately NOT this hook's job. PageLoadingIndicator
+// (mounted on #page-loading in the app layout) already listens for LiveView's
+// phx:page-loading-start/stop and overlays the content area on every live
+// navigation, sidebar clicks included. This hook used to also inject its own
+// spinner into #page-content, so a slow sidebar navigation stacked two
+// "Loading…" affordances; the spinner and its phx:page-loading-stop failsafe
+// were removed so each transition has exactly one — the overlay, whose grace
+// timer and guaranteed stop-event cleanup this hook couldn't match.
 //
 // We listen on the capture phase so the handler runs before LiveView's own
 // click handler kicks off the navigation. We do NOT preventDefault —
 // <.link navigate> proceeds normally.
 
-const SPINNER_HTML = `
-  <div data-optimistic-spinner class="flex h-full items-center justify-center gap-2 py-8 text-sm text-gray-500">
-    <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400" aria-hidden="true"></span>
-    <span>Loading…</span>
-  </div>
-`
-
 const OptimisticNav = {
   mounted() {
-    this._onClick = (event) => {
+    this._onClick = () => {
       const group = this.el.dataset.navGroup
       if (!group) return
 
@@ -37,39 +34,6 @@ const OptimisticNav = {
         applyClasses(el, false)
       })
       applyClasses(this.el, true)
-
-      // Skip the spinner if the user clicked the link they're already on —
-      // Phoenix re-mounts the LiveView even on same-URL navigates, but a
-      // 50–100ms flash of empty state is worse UX than no transition.
-      let targetPath = null
-      try {
-        targetPath = new URL(this.el.href).pathname
-      } catch (_e) {
-        return
-      }
-      if (targetPath === window.location.pathname) return
-
-      // Modifier-clicks open in a new tab/window, so the current page stays
-      // put — don't blank it.
-      if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button === 1)) return
-
-      const pageContent = document.getElementById("page-content")
-      if (!pageContent) return
-
-      pageContent.innerHTML = SPINNER_HTML
-
-      // Failsafe: if navigation fails (network error, server error) the
-      // morphdom patch never lands, so the spinner would stay forever.
-      // page-loading-stop fires in both success and failure paths; on
-      // success the spinner is already gone, so the cleanup is a no-op.
-      window.addEventListener(
-        "phx:page-loading-stop",
-        () => {
-          const stuck = pageContent.querySelector("[data-optimistic-spinner]")
-          if (stuck) stuck.remove()
-        },
-        { once: true }
-      )
     }
 
     this.el.addEventListener("click", this._onClick, true)

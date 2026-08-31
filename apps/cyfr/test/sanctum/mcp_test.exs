@@ -198,7 +198,7 @@ defmodule Sanctum.MCPTest do
 
     test "invalid action returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("session", ctx, %{"action" => "invalid"})
-      assert err_msg(msg) =~ "Invalid session action"
+      assert err_msg(msg) =~ "Unknown action: session.invalid"
     end
   end
 

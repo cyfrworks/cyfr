@@ -128,9 +128,8 @@ defmodule Opus.MCPCutoverTest do
 
   test "no profile refuses with consent guidance — nothing runs", %{ctx: ctx} do
     attach_witness()
-    assert {:error, message} = run(ctx, %{})
-    assert message =~ "consent_required: "
-    assert %{"detail" => detail} = decode_payload(message)
+    assert {:error, {:consent_required, payload}} = run(ctx, %{})
+    assert %{"detail" => detail} = payload
     assert detail =~ "profile.plan"
     refute_receive {:authority_entered, _}, 200
   end
@@ -179,9 +178,8 @@ defmodule Opus.MCPCutoverTest do
   test "consent drift surfaces the consent_required payload", %{ctx: ctx, component: component} do
     seed_profile(ctx, component, digest: "sha256:stale-grant")
 
-    assert {:error, message} = run(ctx, %{})
-    assert message =~ "consent_required: "
-    assert %{"profile_id" => "prof-cutover", "current_revision" => 1} = decode_payload(message)
+    assert {:error, {:consent_required, payload}} = run(ctx, %{})
+    assert %{profile_id: "prof-cutover", current_revision: 1} = payload
   end
 
   test "run_stream roots under the profile too", %{ctx: ctx, component: component} do
@@ -197,10 +195,5 @@ defmodule Opus.MCPCutoverTest do
 
     assert_receive {:authority_entered, metadata}, 30_000
     assert metadata.authority.profile_id == "prof-cutover"
-  end
-
-  defp decode_payload(message) do
-    [_tag, json] = String.split(message, ": ", parts: 2)
-    Jason.decode!(json)
   end
 end

@@ -99,4 +99,36 @@ defmodule Cyfr.BootstrapTest do
     assert successor.slug == "home"
     assert {:ok, %{status: "archived", home: true}} = Athanors.get(home.id)
   end
+
+  describe "the boot child gates the web tier" do
+    # It is the last child of the infra tier under a `:rest_for_one` root, so
+    # this child returning is what holds `EmissaryWeb.Endpoint` back. As a
+    # `Task` it returned the instant the process spawned, and the endpoint
+    # began answering while Home was still being seeded and before a
+    # de-listed operator's sessions had been revoked.
+
+    test "start_link does its work before returning, and leaves nothing behind" do
+      me = self()
+
+      Application.put_env(:cyfr, :platform_admin_emails, [])
+
+      # `:ignore` is the one-shot answer: the work already happened inside
+      # `init/1`, so there is no process for the supervisor to hold.
+      assert :ignore = Cyfr.Bootstrap.start_link([])
+
+      # Nothing was left linked to this process — a lingering child would mean
+      # the work had been handed off rather than completed.
+      {:links, links} = Process.info(me, :links)
+      assert Enum.all?(links, &Process.alive?/1)
+    end
+
+    test "a raise inside the boot work does not take the server down with it" do
+      # The old temporary Task crashed loudly and the app kept serving. Now
+      # that this runs inside a supervisor's start, a bug must not turn
+      # "Home was not seeded" into "the server does not boot".
+      Application.put_env(:cyfr, :platform_admin_emails, :not_a_list)
+
+      assert :ignore = Cyfr.Bootstrap.start_link([])
+    end
+  end
 end

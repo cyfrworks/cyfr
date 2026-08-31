@@ -92,7 +92,13 @@ defmodule PrismWeb.ToolSeamTest do
   # through the same verbs.
   @watched_roots ~w(Arca Sanctum Compendium Opus Locus Emissary Aqua)
 
-  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*)$/
+  # `scan` writes registry rows (Compendium.AutoIndexer walks the tree and
+  # registers what it finds) — it slipped past the roster as a
+  # read-sounding verb. Reads (list_*, get_*, catalogue peeks) stay
+  # deliberately outside this seam: the gate exists for STATE CHANGES; a
+  # read needs no consent walk and wrapping every one in MCPHelpers would
+  # be indirection without a gate behind it.
+  @mutating_verb ~r/^(create\w*|update\w*|delete\w*|put_\w+|set_\w+|insert\w*|revoke\w*|rotate\w*|archive\w*|remove\w*|reindex\w*|scan\w*|save\w*|destroy\w*|add_\w+|store\w*|discard\w*)$/
 
   # Any `Module.function(` call, whatever the module is called locally.
   @any_call ~r/\b([A-Z]\w*(?:\.[A-Z]\w+)*)\.([a-z_]\w*[!?]?)\(/

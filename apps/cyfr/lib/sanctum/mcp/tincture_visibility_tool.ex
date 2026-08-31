@@ -126,5 +126,5 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     Context.tenant_ok(ctx)
   end
 
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
 end

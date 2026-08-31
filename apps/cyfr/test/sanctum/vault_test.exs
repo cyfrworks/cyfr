@@ -285,10 +285,15 @@ defmodule Sanctum.VaultTest do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Topics.vault_changed_global())
 
       view = create!(ctx)
-      assert_receive {:vault_entry_changed_global, _, _, :create}
+      assert_receive {:vault_entry_changed_global, _, _, :create, %{}}
 
+      original_name = view.name
       :ok = Vault.rename(ctx, view.id, "moved")
-      assert_receive {:vault_entry_changed_global, _, _, :rename}
+
+      # The signal carries the VACATED name: a server's header template
+      # still spells it, and the row can only ever show the new one — the
+      # reconciler cannot find the name-losing servers without it.
+      assert_receive {:vault_entry_changed_global, _, _, :rename, %{old_name: ^original_name}}
 
       assert :rename in Emissary.MCP.ExternalServerReconciler.relevant_verbs()
     end

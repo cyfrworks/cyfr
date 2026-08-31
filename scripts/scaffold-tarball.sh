@@ -14,8 +14,12 @@ ITEMS=(
   # self-hosted stack (cyfr + mcp-bridge, plus caddy in TLS mode).
   # They are the single source of truth — the codex binary no longer embeds
   # its own copies. Dockerfile.node builds the mcp-bridge image;
-  # apps/mcp-bridge/ is the Node source for the bridge.
+  # apps/mcp-bridge/ is the Node source for the bridge. Dockerfile.builder and
+  # .env.builder.example back the compose file's `builder` profile — shipping
+  # the compose file without them broke `docker compose --profile builder up`
+  # in scaffolded projects.
   docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/
+  Dockerfile.builder .env.builder.example
 )
 FOUND=()
 for item in "${ITEMS[@]}"; do

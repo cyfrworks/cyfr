@@ -180,7 +180,7 @@ defmodule Prism.TelemetryBridge do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 

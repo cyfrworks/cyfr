@@ -181,7 +181,8 @@ defmodule Opus.MCPTest do
           "input" => %{"a" => 1, "b" => 2}
         })
 
-      assert err_msg(msg) =~ "consent_required: "
+      assert {:consent_required, %{}} = msg
+      assert err_msg(msg) =~ "Consent required"
     end
 
     test "respects component type parameter", %{ctx: ctx, ref: ref} do
@@ -662,8 +663,8 @@ defmodule Opus.MCPTest do
         })
 
       assert {:error, msg} = result
-      assert is_binary(msg)
-      assert err_msg(msg) =~ "consent_required: "
+      assert {:consent_required, %{}} = msg
+      assert err_msg(msg) =~ "Consent required"
     end
 
     test "handles empty reference gracefully", %{ctx: ctx} do

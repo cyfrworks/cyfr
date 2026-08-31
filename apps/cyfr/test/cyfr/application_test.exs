@@ -76,4 +76,68 @@ defmodule Cyfr.ApplicationTest do
       refute Arca.Repo in ids
     end
   end
+
+  describe "parse_keyring_env!/1" do
+    defp keyring_json(keys, primary) do
+      Jason.encode!(%{
+        "primary" => primary,
+        "keys" => Map.new(keys, fn {label, bytes} -> {label, Base.encode64(bytes)} end)
+      })
+    end
+
+    defp material(seed), do: :crypto.hash(:sha256, seed)
+
+    test "accepts a well-formed keyring" do
+      json = keyring_json(%{"k1" => material("a"), "k2" => material("b")}, "k2")
+
+      assert %{primary: "k2", keys: keys} = Cyfr.Application.parse_keyring_env!(json)
+      assert map_size(keys) == 2
+    end
+
+    test "refuses the same material under two labels — a rotation that is not one" do
+      # The derived key is a function of the material and the purpose, never
+      # the label, so these two labels are one key with two names.
+      # Re-encrypting onto "new" would leave every row under the key it
+      # already had while the rotation audit reported success.
+      shared = material("same")
+      json = keyring_json(%{"old" => shared, "new" => shared}, "new")
+
+      assert_raise RuntimeError, ~r/reuses the same key material/, fn ->
+        Cyfr.Application.parse_keyring_env!(json)
+      end
+    end
+
+    test "refuses a label the envelope's one length byte cannot describe" do
+      json = keyring_json(%{String.duplicate("x", 256) => material("a")}, "k")
+
+      assert_raise RuntimeError, ~r/labels must be 1\.\.255 bytes/, fn ->
+        Cyfr.Application.parse_keyring_env!(json)
+      end
+    end
+
+    test "refuses an empty label — it decrypts but reads as unknown to the rotation audit" do
+      # `primary` being empty is caught by the outer shape guard; this is the
+      # case that got past it — a valid primary alongside an empty-labelled
+      # key, which `Sanctum.Cipher.envelope/1` (llen > 0) cannot classify.
+      json = keyring_json(%{"k" => material("a"), "" => material("b")}, "k")
+
+      assert_raise RuntimeError, ~r/empty key label/, fn ->
+        Cyfr.Application.parse_keyring_env!(json)
+      end
+    end
+
+    test "still refuses short material and a primary that names no key" do
+      short = Jason.encode!(%{"primary" => "k", "keys" => %{"k" => Base.encode64("tooshort")}})
+
+      assert_raise RuntimeError, ~r/not >= 32 bytes/, fn ->
+        Cyfr.Application.parse_keyring_env!(short)
+      end
+
+      orphan = keyring_json(%{"k" => material("a")}, "absent")
+
+      assert_raise RuntimeError, ~r/is not in :keys/, fn ->
+        Cyfr.Application.parse_keyring_env!(orphan)
+      end
+    end
+  end
 end

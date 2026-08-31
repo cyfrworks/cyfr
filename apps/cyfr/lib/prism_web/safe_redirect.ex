@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.SafeRedirect do
+defmodule PrismWeb.SafeRedirect do
   @moduledoc """
   Single source of truth for the post-login landing redirect.
 
   The landing target is the console root — never user input — and every
   gate that finishes the login flow issues it through this helper so the
-  flows can't drift.
+  flows can't drift. It lives with the console (its only callers): a
+  prism_web module naming EmissaryWeb was the transport's one back-edge
+  from the console, and Cyfr.WebDirectionTest holds that direction closed.
   """
 
   import Phoenix.Controller, only: [redirect: 2]

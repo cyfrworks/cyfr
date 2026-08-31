@@ -147,26 +147,11 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  # The ENVELOPE ceiling, checked before `Jason.decode/1` sees the string.
-  #
-  # Distinct from `max_request_size`, which bounds the DECODED payload and is
-  # checked after parsing (deliberately — a base64 body is measured as the
-  # bytes it becomes, not the characters it arrives as). Nothing bounded the
-  # raw string, so the guest's linear memory — 64 MiB by default — was the
-  # only limit on what one call could make the host parse, times the
-  # concurrency cap. `emit` is the one import that already had this.
-  #
-  # Generous on purpose: a payload at the consented ceiling must always fit,
-  # base64 overhead (4/3), JSON escaping and the scaffolding included. This
-  # refuses the blob, not the legitimate request.
-  @envelope_overhead 4096
-
-  defp bounded_request(json_request, %Limits{max_request_size: max})
-       when is_binary(json_request) and is_integer(max) and max > 0 do
-    if byte_size(json_request) <= max * 2 + @envelope_overhead,
-      do: :ok,
-      else: {:error, :request_too_large}
-  end
+  # The envelope ceiling now lives in `Opus.EdgeGuard` — every host import
+  # that decodes a guest string checks the same bound, rather than this one
+  # having it and `cyfr:http`, `cyfr:formula` and the await pair not.
+  defp bounded_request(json_request, %Limits{} = limits),
+    do: Opus.EdgeGuard.check_envelope_size(limits, json_request)
 
   defp bounded_request(_json_request, _limits), do: :ok
 

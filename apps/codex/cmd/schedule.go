@@ -4,10 +4,10 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -73,9 +73,9 @@ var scheduleCreateCmd = &cobra.Command{
 				name, err = prompt.InputText("Schedule name", "my-schedule")
 				if err != nil {
 					if prompt.IsAborted(err) {
-						os.Exit(130)
+						return prompt.ErrAborted
 					}
-					return fmt.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %w", err)
 				}
 			}
 
@@ -84,26 +84,24 @@ var scheduleCreateCmd = &cobra.Command{
 				cron, err = prompt.InputText("Cron expression", "*/5 * * * *")
 				if err != nil {
 					if prompt.IsAborted(err) {
-						os.Exit(130)
+						return prompt.ErrAborted
 					}
-					return fmt.Errorf("Prompt failed: %v", err)
+					return fmt.Errorf("Prompt failed: %w", err)
 				}
 			}
 
 			if refStr == "" {
-				compOpts, err := prompt.FetchComponents(cmd.Context(), client)
+				var err error
+				refStr, err = pickTarget(cmd.Context(), nil, selector{
+					Title: "Select a component",
+					Empty: "No components found. Register one first.",
+					Usage: "Usage: cyfr schedule create --name <name> --cron '<expr>' --ref <reference>",
+					Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+						return prompt.FetchComponents(ctx, client)
+					},
+				})
 				if err != nil {
-					return handleToolError(err)
-				}
-				if len(compOpts) == 0 {
-					return errors.New("No components found. Register one first.")
-				}
-				refStr, err = prompt.SelectOne("Select a component", compOpts)
-				if err != nil {
-					if prompt.IsAborted(err) {
-						os.Exit(130)
-					}
-					return fmt.Errorf("Prompt failed: %v", err)
+					return err
 				}
 			}
 		}
@@ -118,7 +116,7 @@ var scheduleCreateCmd = &cobra.Command{
 		if inputStr != "" {
 			var inputMap map[string]any
 			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
-				return fmt.Errorf("Invalid JSON input: %v", err)
+				return fmt.Errorf("Invalid JSON input: %w", err)
 			}
 			toolArgs["input"] = inputMap
 		}
@@ -150,13 +148,7 @@ var scheduleListCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -176,13 +168,7 @@ var scheduleGetCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -218,7 +204,7 @@ var scheduleUpdateCmd = &cobra.Command{
 			inputStr, _ := cmd.Flags().GetString("input")
 			var inputMap map[string]any
 			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
-				return fmt.Errorf("Invalid JSON input: %v", err)
+				return fmt.Errorf("Invalid JSON input: %w", err)
 			}
 			toolArgs["input"] = inputMap
 		}

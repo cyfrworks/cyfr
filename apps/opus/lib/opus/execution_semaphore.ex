@@ -37,9 +37,17 @@ defmodule Opus.ExecutionSemaphore do
   backlog interleave with everyone's queue. Background work counts against
   the same cap but stops at **half** of it: it waits rather than being
   refused, so a flock of same-minute schedules can never turn the next
-  message in the chat into a refusal. This bounds the blast radius
-  of one athanor submitting many long-running (or non-preemptable
-  tight-loop) executions: it can exhaust its own slots, never the node's.
+  message in the chat into a refusal.
+
+  What this bounds, precisely, is an athanor's **roots**. Children are exempt
+  from the per-tenant count on purpose — a chain that could not get a child
+  slot would wait while holding its own root slot, which is a deadlock rather
+  than a limit — so an athanor's real footprint reaches `per_tenant ×
+  depth_cap` (`max_tenant_footprint/1`). With the shipped 128 / 16 / 8 that is
+  128: the whole node. The claim this section used to make — "it can exhaust
+  its own slots, never the node's" — was false for a tenant running deep
+  chains. `init/1` warns when the configured ratio allows it; the lever is to
+  lower `per_tenant` or raise the global pool, never to cap children.
 
   ## Configuration
 
@@ -108,6 +116,41 @@ defmodule Opus.ExecutionSemaphore do
   @spec child_reserve(pos_integer()) :: non_neg_integer()
   def child_reserve(max) when is_integer(max), do: div(max, 4)
 
+  @doc """
+  The most slots one athanor can hold at once: each of its root slots may
+  carry a chain down to the authority depth cap, and children are deliberately
+  exempt from the per-tenant count (a chain must be able to finish, or it
+  would block holding its own root slot).
+
+  This is what the per-tenant cap actually bounds. With the shipped defaults —
+  128 slots, 16 per tenant, depth cap 8 — it comes to 128, which is the whole
+  node, so the per-tenant cap bounds a tenant's *roots* and not its footprint.
+  """
+  @spec max_tenant_footprint(pos_integer()) :: pos_integer()
+  def max_tenant_footprint(tenant_max) when is_integer(tenant_max),
+    do: tenant_max * Sanctum.Authority.depth_cap()
+
+  # Said once, at boot, where an operator can act on it. Capping children per
+  # tenant is not the fix: a chain that cannot get a child slot waits while
+  # holding its root slot, which is a deadlock, not a limit. The lever is the
+  # ratio — lower `per_tenant`, or raise the global pool.
+  defp warn_if_one_tenant_can_fill_the_node(max, tenant_max) do
+    footprint = max_tenant_footprint(tenant_max)
+
+    if footprint >= max do
+      Logger.warning(
+        "[Opus.ExecutionSemaphore] one athanor can hold every slot on this node: " <>
+          "#{tenant_max} roots x depth #{Sanctum.Authority.depth_cap()} = #{footprint} >= " <>
+          "#{max} slots. Children are exempt from the per-tenant cap by design (a chain " <>
+          "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
+          "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT or raise " <>
+          "CYFR_MAX_CONCURRENT_EXECUTIONS to keep one tenant off the whole pool."
+      )
+    end
+
+    :ok
+  end
+
   def start_link(opts) do
     max = Keyword.get(opts, :max, @default_slots)
 
@@ -118,7 +161,13 @@ defmodule Opus.ExecutionSemaphore do
         Application.get_env(:cyfr, :max_concurrent_executions_per_tenant, @default_tenant_slots)
       )
 
-    GenServer.start_link(__MODULE__, {max, tenant_max}, name: __MODULE__)
+    # The ratio warning is about what an operator configured, so it is raised
+    # only for the deployment's own semaphore. Tests start instances with
+    # deliberately tiny pools where the condition is trivially true and the
+    # advice is meaningless.
+    configured? = not Keyword.has_key?(opts, :max)
+
+    GenServer.start_link(__MODULE__, {max, tenant_max, configured?}, name: __MODULE__)
   end
 
   @doc """
@@ -240,8 +289,13 @@ defmodule Opus.ExecutionSemaphore do
   # GenServer Callbacks
   # ============================================================================
 
+  # A caller that names its own pool — `GenServer.start_link(__MODULE__,
+  # {max, tenant_max})` — is stating the sizes deliberately, so the
+  # operator-facing ratio warning does not apply to it.
   @impl true
-  def init({max, tenant_max})
+  def init({max, tenant_max}), do: init({max, tenant_max, false})
+
+  def init({max, tenant_max, configured?})
       when is_integer(max) and max > 0 and is_integer(tenant_max) and tenant_max > 0 do
     Process.flag(:trap_exit, true)
 
@@ -249,6 +303,8 @@ defmodule Opus.ExecutionSemaphore do
       "[Opus.ExecutionSemaphore] Started with max_concurrent_executions=#{max}, " <>
         "per_tenant=#{tenant_max}, child_reserve=#{child_reserve(max)}"
     )
+
+    if configured?, do: warn_if_one_tenant_can_fill_the_node(max, tenant_max)
 
     schedule_sweep()
 
@@ -468,7 +524,7 @@ defmodule Opus.ExecutionSemaphore do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 

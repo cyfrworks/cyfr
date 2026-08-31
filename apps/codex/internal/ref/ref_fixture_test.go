@@ -70,3 +70,41 @@ func TestSharedFixtureVerdicts(t *testing.T) {
 		}
 	}
 }
+
+// TestVersionOrderingFixture is the ordering half of the binding — the
+// Elixir twin lives in cross_language_drift_test.exs. The verdict cases
+// cover parsing; this covers CompareVersions against Compendium.Semver,
+// including the mixed pair where exactly one side fails the grammar (the
+// parsable side ranks higher; only both-fail byte-compares).
+func TestVersionOrderingFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "component_refs.json"))
+	if err != nil {
+		t.Fatalf("read shared fixture: %v", err)
+	}
+
+	var fixture struct {
+		VersionOrdering []struct {
+			A      string `json:"a"`
+			B      string `json:"b"`
+			Expect string `json:"expect"`
+		} `json:"version_ordering"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("decode shared fixture: %v", err)
+	}
+	if len(fixture.VersionOrdering) == 0 {
+		t.Fatal("shared fixture has no version_ordering cases")
+	}
+
+	want := map[string]int{"lt": -1, "eq": 0, "gt": 1}
+
+	for _, c := range fixture.VersionOrdering {
+		expect, ok := want[c.Expect]
+		if !ok {
+			t.Fatalf("compare(%s, %s): unknown expect %q", c.A, c.B, c.Expect)
+		}
+		if got := CompareVersions(c.A, c.B); got != expect {
+			t.Errorf("CompareVersions(%q, %q) = %d, fixture says %s", c.A, c.B, got, c.Expect)
+		}
+	}
+}

@@ -12,6 +12,7 @@ defmodule Cyfr.MixProject do
       deps: deps(),
       aliases: aliases(),
       releases: releases(),
+      dialyzer: dialyzer(),
       listeners: [Phoenix.CodeReloader]
     ]
   end
@@ -20,7 +21,24 @@ defmodule Cyfr.MixProject do
     [
       {:dotenvy, "~> 0.9"},
       {:mix_audit, "~> 2.1", only: :dev, runtime: false},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  # The tree carries ~1,000 `@spec`s that nothing had ever checked, so a
+  # wrong one misled the reader with the authority of a type. The PLT is
+  # cached under `_build` so CI builds it once per OTP/Elixir/deps change.
+  #
+  # `:underspecs` and friends are deliberately off: the goal is to catch
+  # specs that contradict the code, not to argue about ones that are merely
+  # wider than it.
+  defp dialyzer do
+    [
+      plt_local_path: "_build/plts",
+      plt_core_path: "_build/plts",
+      plt_add_apps: [:mix, :ex_unit, :eex],
+      flags: [:error_handling, :extra_return, :missing_return]
     ]
   end
 

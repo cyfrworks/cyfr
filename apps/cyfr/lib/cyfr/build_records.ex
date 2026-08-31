@@ -15,6 +15,8 @@ defmodule Cyfr.BuildRecords do
 
   import Ecto.Query
 
+  require Logger
+
   alias Arca.QueryHelpers
   alias Arca.Schemas.BuildRecord
   alias Sanctum.Context
@@ -142,18 +144,30 @@ defmodule Cyfr.BuildRecords do
         :ok
 
       %{status: "compiled", result: result} when is_binary(result) ->
-        patched =
-          result
-          |> Jason.decode!()
-          |> Map.put("registration", outcome)
-          |> Jason.encode!()
+        # A stored column, so a bang decode here turns one corrupt row into a
+        # crash in whatever process is recording a registration.
+        case Cyfr.Json.decode(result) do
+          {:ok, decoded} when is_map(decoded) ->
+            patched =
+              decoded
+              |> Map.put("registration", outcome)
+              |> Cyfr.Json.safe_encode()
 
-        BuildRecord
-        |> where([b], b.id == ^build_id)
-        |> QueryHelpers.where_tenant(ctx)
-        |> Arca.Repo.update_all(set: [result: patched])
+            BuildRecord
+            |> where([b], b.id == ^build_id)
+            |> QueryHelpers.where_tenant(ctx)
+            |> Arca.Repo.update_all(set: [result: patched])
 
-        :ok
+            :ok
+
+          _ ->
+            Logger.warning(
+              "[Cyfr.BuildRecords] build #{build_id} has an unreadable result column; " <>
+                "the registration outcome was not recorded"
+            )
+
+            :ok
+        end
 
       _still_running ->
         Process.sleep(400)
@@ -174,7 +188,9 @@ defmodule Cyfr.BuildRecords do
   def prune(%Context{} = ctx, keep, opts \\ []) when is_integer(keep) and keep >= 0 do
     Arca.Repo.Errors.with_db_rescue("Cyfr.BuildRecords.prune", fn ->
       # SQLite has no bare OFFSET, so the survivors are the subquery: the
-      # newest `keep` rows stay, everything else in the tenant goes.
+      # newest `keep` rows stay, everything else in the tenant goes — except
+      # a build still "started": deleting it mid-flight makes its
+      # record_finished/record_registration a :not_found.
       keepers =
         BuildRecord
         |> QueryHelpers.where_tenant(ctx)
@@ -186,6 +202,7 @@ defmodule Cyfr.BuildRecords do
         BuildRecord
         |> QueryHelpers.where_tenant(ctx)
         |> where([b], b.id not in subquery(keepers))
+        |> where([b], b.status != "started")
 
       if Keyword.get(opts, :dry_run, false) do
         {:ok, Arca.Repo.aggregate(doomed_query, :count)}
@@ -208,6 +225,18 @@ defmodule Cyfr.BuildRecords do
       r.finished_at && DateTime.to_iso8601(r.finished_at)
     )
     |> Cyfr.MapUtil.put_present("error", r.error)
-    |> Cyfr.MapUtil.put_present("result", r.result && Jason.decode!(r.result))
+    |> Cyfr.MapUtil.put_present("result", decoded_result(r.result))
+  end
+
+  # Serializing a row must not crash on a corrupt column: the listing that
+  # would have shown the operator every other build is more useful than a
+  # raise about one of them.
+  defp decoded_result(nil), do: nil
+
+  defp decoded_result(result) when is_binary(result) do
+    case Cyfr.Json.decode(result) do
+      {:ok, decoded} -> decoded
+      {:error, _} -> %{"_unreadable" => true}
+    end
   end
 end

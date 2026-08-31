@@ -14,7 +14,16 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # A tag does not match the Test workflow's own push filter (branches:
+  # [main]), so nothing required this commit to be green before it was
+  # published to ghcr as `latest`. Calling the suite here makes the tag the
+  # thing that is verified, not the branch it was cut from.
+  verify:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/test.yml
+
   build:
+    needs: verify
     if: github.repository == 'cyfrworks/cyfr'
     strategy:
       matrix:

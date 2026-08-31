@@ -56,6 +56,29 @@ defmodule Arca.WebhookDeliveryStorage do
   end
 
   @doc """
+  Drop the claim `record/2` staked, so the sender's retry is not treated as a
+  duplicate of a delivery that never happened.
+
+  The row is written *before* the target runs — that is what makes two
+  concurrent deliveries of the same key resolve to one execution. It therefore
+  has to be given back when the delivery turns out to have failed, or the
+  first failed attempt would permanently answer every retry with
+  `{"status": "duplicate"}` and the target would never run at all.
+  """
+  @spec release(String.t(), String.t()) :: :ok | {:error, term()}
+  def release(webhook_id, idempotency_key)
+      when is_binary(webhook_id) and is_binary(idempotency_key) do
+    Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.release", fn ->
+      query =
+        from d in WebhookDelivery,
+          where: d.webhook_id == ^webhook_id and d.idempotency_key == ^idempotency_key
+
+      Arca.Repo.delete_all(query)
+      :ok
+    end)
+  end
+
+  @doc """
   Delete delivery rows older than `older_than` (a `DateTime`). Returns the
   number of rows deleted, or `{:error, reason}` on failure.
   """

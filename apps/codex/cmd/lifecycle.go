@@ -104,7 +104,7 @@ database_path: ./data/cyfr.db
 		configCreated := false
 		if !fileExists("cyfr.yaml") {
 			if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
-				return fmt.Errorf("Failed to write cyfr.yaml: %v", err)
+				return fmt.Errorf("Failed to write cyfr.yaml: %w", err)
 			}
 			configCreated = true
 		}
@@ -119,15 +119,15 @@ database_path: ./data/cyfr.db
 		if envExampleExists && !fileExists(".env") {
 			tmpl, err := os.ReadFile(".env.example")
 			if err != nil {
-				return fmt.Errorf("Failed to read .env.example: %v", err)
+				return fmt.Errorf("Failed to read .env.example: %w", err)
 			}
 			secretKey, err := generateSecretKey()
 			if err != nil {
-				return fmt.Errorf("Failed to generate secret key: %v", err)
+				return fmt.Errorf("Failed to generate secret key: %w", err)
 			}
 			bridgeToken, err := generateSecretKey()
 			if err != nil {
-				return fmt.Errorf("Failed to generate mcp-bridge token: %v", err)
+				return fmt.Errorf("Failed to generate mcp-bridge token: %w", err)
 			}
 
 			host := "localhost"
@@ -152,7 +152,7 @@ database_path: ./data/cyfr.db
 			adminEmailConfigured = adminEmail != ""
 
 			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, bridgeToken, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
-				return fmt.Errorf("Failed to write .env: %v", err)
+				return fmt.Errorf("Failed to write .env: %w", err)
 			}
 			envCreated = true
 		}
@@ -172,7 +172,7 @@ database_path: ./data/cyfr.db
 `
 		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
 			if err := os.WriteFile(".gitignore", []byte(gitignoreContent), 0644); err != nil {
-				return fmt.Errorf("Failed to write .gitignore: %v", err)
+				return fmt.Errorf("Failed to write .gitignore: %w", err)
 			}
 			gitignoreCreated = true
 		}
@@ -366,16 +366,18 @@ When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fro
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
-			return fmt.Errorf("Failed to start: %v", err)
+			return fmt.Errorf("Failed to start: %w", err)
 		}
 		fmt.Println("CYFR server started.")
 
-		// Health check wait
+		// Health check wait. Readiness, not liveness: /api/health answers 200
+		// the moment the endpoint is up, long before the DB, cache and
+		// registries are — the same distinction the Docker HEALTHCHECK draws.
 		cfg, err := config.Load()
 		if err != nil {
 			cfg = config.DefaultForLocal()
 		}
-		healthURL := cfg.CurrentURL() + "/api/health"
+		healthURL := cfg.CurrentURL() + "/api/health/ready"
 
 		fmt.Printf("Waiting for server at %s ...\n", cfg.CurrentURL())
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -426,7 +428,7 @@ var downCmd = &cobra.Command{
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
-			return fmt.Errorf("Failed to stop: %v", err)
+			return fmt.Errorf("Failed to stop: %w", err)
 		}
 
 		fmt.Println("CYFR server stopped.")

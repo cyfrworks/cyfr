@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/ref"
@@ -25,29 +24,6 @@ func FetchComponents(ctx context.Context, client *mcp.Client) ([]Option, error) 
 		return nil, fmt.Errorf("fetch components: %w", err)
 	}
 	return extractComponents(result)
-}
-
-// StripVersion removes the version segment from a component ref string.
-// "catalyst:local.claude:0.1.0" → "catalyst:local.claude"
-// If the ref has no version (already a base ref), returns it unchanged.
-func StripVersion(ref string) string {
-	// Typed ref: type:rest — find last colon in rest
-	firstColon := strings.IndexByte(ref, ':')
-	if firstColon < 0 {
-		return ref
-	}
-	rest := ref[firstColon+1:]
-	// rest is either "namespace.name:version" or "namespace.name"
-	lastColon := strings.LastIndexByte(rest, ':')
-	if lastColon < 0 {
-		return ref // already a base ref
-	}
-	// Check if the part after the last colon looks like a version (starts with digit)
-	candidate := rest[lastColon+1:]
-	if len(candidate) > 0 && candidate[0] >= '0' && candidate[0] <= '9' {
-		return ref[:firstColon+1+lastColon]
-	}
-	return ref
 }
 
 // extractComponents builds options from the component search response.

@@ -22,8 +22,8 @@ defmodule Opus.WasiCapabilitiesTest do
       assert %WasiP2Options{} = opts
       # Catalysts use cyfr:http/fetch host function, not wasi:http/outgoing-handler
       assert opts.allow_http == false, "Catalyst uses cyfr:http/fetch, not native WASI HTTP"
-      assert opts.inherit_stdout == true, "Catalyst must have stdout for logging"
-      assert opts.inherit_stderr == true, "Catalyst must have stderr for logging"
+      assert opts.inherit_stdout == false, "Catalyst must not inherit host stdout"
+      assert opts.inherit_stderr == false, "Catalyst must not inherit host stderr"
     end
 
     test "reagent gets WASI but NO HTTP" do
@@ -31,8 +31,8 @@ defmodule Opus.WasiCapabilitiesTest do
 
       assert %WasiP2Options{} = opts, "Reagent must get WasiP2Options (not nil)"
       assert opts.allow_http == false, "Reagent must NOT have HTTP access"
-      assert opts.inherit_stdout == true, "Reagent must have stdout for logging"
-      assert opts.inherit_stderr == true, "Reagent must have stderr for logging"
+      assert opts.inherit_stdout == false, "Reagent must not inherit host stdout"
+      assert opts.inherit_stderr == false, "Reagent must not inherit host stderr"
     end
 
     test "formula gets WASI but NO HTTP (same as reagent)" do
@@ -40,8 +40,8 @@ defmodule Opus.WasiCapabilitiesTest do
 
       assert %WasiP2Options{} = opts, "Formula must get WasiP2Options (not nil)"
       assert opts.allow_http == false, "Formula must NOT have HTTP access"
-      assert opts.inherit_stdout == true, "Formula must have stdout for logging"
-      assert opts.inherit_stderr == true, "Formula must have stderr for logging"
+      assert opts.inherit_stdout == false, "Formula must not inherit host stdout"
+      assert opts.inherit_stderr == false, "Formula must not inherit host stderr"
     end
 
     test "reagent and formula have identical WASI options" do
@@ -68,16 +68,24 @@ defmodule Opus.WasiCapabilitiesTest do
     end
   end
 
-  describe "logging capability" do
-    test "all component types can log via stdout/stderr" do
+  describe "stdio isolation" do
+    test "no component type inherits the host's stdout/stderr" do
+      # These were `true` on the reading that a guest needs somewhere to log.
+      # What it bought was an unbounded, unmasked, un-rate-limited write from
+      # every guest — reagents included, whose definition is compute with no
+      # I/O — straight into the operator's console and log aggregation,
+      # around `Opus.SecretMasker`, the emit rate limit and the emit size cap,
+      # and a trivial way to fill a disk. `wasmex` offers no capture pipe, so
+      # the choice is inherit-or-nothing; `emit` is the channel that carries
+      # the bounds.
       for type <- [:catalyst, :reagent, :formula] do
         opts = ComponentType.wasi_options(type)
 
-        assert opts.inherit_stdout == true,
-               "#{type} must have stdout enabled for logging"
+        assert opts.inherit_stdout == false,
+               "#{type} must not inherit the host's stdout"
 
-        assert opts.inherit_stderr == true,
-               "#{type} must have stderr enabled for logging"
+        assert opts.inherit_stderr == false,
+               "#{type} must not inherit the host's stderr"
       end
     end
   end

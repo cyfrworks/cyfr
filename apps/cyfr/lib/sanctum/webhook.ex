@@ -110,6 +110,10 @@ defmodule Sanctum.Webhook do
          secret: secret,
          url: build_url(slug),
          target_ref: target_ref,
+         # A round-trip of the JSON `encode_input_template/1` just produced,
+         # not a read of a stored column: it normalizes the atom keys a direct
+         # Elixir caller may pass into the string keys every reader sees. The
+         # bang is safe precisely because the value was encoded two lines up.
          input_template: Jason.decode!(input_template_json),
          signature_header: attrs.signature_header,
          replay_protection: replay_protection(attrs),

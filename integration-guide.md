@@ -17,7 +17,7 @@ POST /mcp  ──────────────────>  Authenticate
   Authorization: Bearer            │
   cyfr_sk_...                      ├── Resolve component reference
                                    ├── Load the granted capability (domains, rate limits)
-                                   ├── Resolve bound Connections (credentials)
+                                   ├── Resolve bound vault entries (credentials)
                                    │
                                    └── Execute WASM ──────────>  [Component]
                                                                     │
@@ -44,8 +44,8 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 
 | Type | Prefix | Use Case | Security Considerations |
 |------|--------|----------|------------------------|
-| **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot access secrets or admin operations by default. |
-| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read/write secrets. |
+| **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
+| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read the vault. |
 | **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Full access to all operations including key management. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
@@ -81,14 +81,14 @@ CI/CD and infrastructure. See **API Key Lifecycle** below.
 ### Create
 
 ```bash
-# Application key (frontend) — defaults to execute, component_read, policy_read, storage_read
+# Application key (frontend) — defaults to execute, component_read, storage_read
 cyfr key create --name "react-app" --type application
 
-# Service key (backend) — defaults to execute, secrets_read, component_read, policy_read, storage_read/write
+# Service key (backend) — defaults to execute, vault_read, component_read, storage_read/write
 cyfr key create --name "node-backend" --type service
 
 # Service key with extra scope
-cyfr key create --name "node-backend-rw" --type service --scope "secrets_read,secrets_write"
+cyfr key create --name "node-backend-rw" --type service --scope "vault_read,vault_write"
 
 # Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
 cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
@@ -117,7 +117,7 @@ Response (the raw key is shown **only once**):
   "key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
   "name": "react-app",
   "type": "application",
-  "scope": ["execute", "component_read", "policy_read", "storage_read"],
+  "scope": ["execute", "component_read", "storage_read"],
   "created_at": "2025-02-13T..."
 }
 ```
@@ -129,14 +129,10 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | Scope | What It Allows |
 |-------|----------------|
 | `execute` | Run components, manage schedules, compile builds |
-| `secrets_read` | Read stored credential metadata (Connections; material never leaves the vault) |
-| `secrets_write` | Store/replace provider credentials (e.g. `oauth set_client`) |
+| `vault_read` | Read stored credential metadata (vault entries; material never leaves the vault) |
+| `vault_write` | Store/replace provider credentials (e.g. `oauth set_client`) |
 | `component_read` | Get component blobs, discover components |
 | `component_manage` | Pull, push, register, remove, scaffold components |
-| `policy_read` | View limit ceilings and type defaults |
-| `policy_manage` | Manage limit ceilings and type defaults |
-| `users_read` | View permissions |
-| `users_manage` | Set permissions |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies |
 | `execution_write` | Service-level execution management |
@@ -149,9 +145,9 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 
 | Type | Default Scopes | Allowed Scopes (Ceiling) |
 |------|---------------|--------------------------|
-| **Application** | `["execute", "component_read", "policy_read", "storage_read"]` | `["execute", "secrets_read", "component_read", "policy_read", "storage_read"]` |
-| **Service** | `["execute", "secrets_read", "component_read", "policy_read", "storage_read", "storage_write"]` | `["execute", "secrets_read", "secrets_write", "component_read", "component_manage", "policy_read", "policy_manage", "users_read", "storage_read", "storage_write", "execution_write"]` |
-| **Admin** | `["*"]` (all) | `["secrets_read", "secrets_write", "users_manage", "admin", "*"]` |
+| **Application** | `["execute", "component_read", "storage_read"]` | `["execute", "vault_read", "component_read", "storage_read"]` |
+| **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "vault_write", "component_read", "component_manage", "storage_read", "storage_write", "execution_write"]` |
+| **Admin** | `["*"]` (all) | `["vault_read", "vault_write", "admin", "*"]` |
 
 ### Rate Limiting
 
@@ -197,17 +193,17 @@ Lists all keys with their name, type, scope, and creation date. Raw key values a
 
 ---
 
-## API Keys vs Connections
+## API Keys vs the Vault
 
-Two different credential types serve two different purposes: API keys authenticate your **app** to **CYFR**; **Connections** (vault entries) hold the credentials **components** use to reach third-party APIs. A Connection is bound to a component through a consent revision — the component names a *role* (a manifest `need`), the operator picks which Connection satisfies it, and the component only ever sees the projected fields, never the entry itself.
+Two different credential types serve two different purposes: API keys authenticate your **app** to **CYFR**; **vault entries** hold the credentials **components** use to reach third-party APIs. A vault entry is bound to a component through a consent revision — the component names a *role* (a manifest `need`), the operator picks which entry satisfies it, and the component only ever sees the projected fields, never the entry itself.
 
-| | API Keys | Connections (`api_key` / `bundle`) | Connections (`oauth`) |
+| | API Keys | Vault entries (`api_key` / `bundle`) | Vault entries (`oauth`) |
 |---|----------|-----------------------------------|----------------------|
 | **Purpose** | Authenticate your **app** to **CYFR** | Authenticate **components** to **service APIs** | Authenticate **components** to **user-scoped APIs** |
 | **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack grants |
 | **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:vault/read`) | WASM components (via `cyfr:oauth/token`) |
 | **Stored where** | Your app's environment | CYFR's vault (sealed, encrypted at rest) | CYFR's vault (sealed, encrypted at rest) |
-| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Connections page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
+| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Vault page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
 | **Lifecycle** | Static — set once | Static — rotate without re-consent | Dynamic — host auto-refreshes |
 
 **Example flow:**
@@ -220,7 +216,7 @@ POST /mcp
   cyfr_sk_abc123...              (authenticates your app)
   Body: run stripe catalyst  ──>
                                  Resolves STRIPE_API_KEY from
-                                 the Connection bound to the
+                                 the vault entry bound to the
                                  component's need at consent
                                                           ──> GET /v1/charges
                                                               Authorization: Bearer
@@ -722,17 +718,17 @@ The endpoint supports `Last-Event-ID` for reconnection and sends keep-alive comm
 
 **Setup required events (during streaming):**
 
-When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live Connection bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
+When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live vault entry bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
 
 ```
 id: 5
 event: emit
-data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","profile_id":"prf_...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a connection for \"api_key\""}
+data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","profile_id":"prf_...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a vault entry for \"api_key\""}
 ```
 
 Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons; `setup_command` provides the CLI alternative. A drifted consent surfaces the same way with issue type `consent_required` ("permissions changed since you approved them"). The formula still fails — the event is informational so consumers can act on it.
 
-**Checking readiness up front** — `component.setup_plan` answers "can this run?" from the consent. Its `consent` section carries the profile (`profile_id`, `revision`, `scope`) and one row per need — `satisfied` plus a human-readable `detail` ("bound to my-anthropic-key", "no connection bound for 'api_key' — grant one to continue", "was rebound since this consent — re-approve to continue"). Top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching Connection.
+**Checking readiness up front** — `component.setup_plan` answers "can this run?" from the consent. Its `consent` section carries the profile (`profile_id`, `revision`, `scope`) and one row per need — `satisfied` plus a human-readable `detail` ("bound to my-anthropic-key", "no vault entry bound for 'api_key' — grant one to continue", "was rebound since this consent — re-approve to continue"). Top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
 ### Scheduling Recurring Executions
 
@@ -802,11 +798,11 @@ Handles all database operations via Supabase's REST API.
 # Create the catalyst project (if starting fresh)
 cyfr new catalyst supabase --version 0.2.0
 
-# Grant it: pick a Connection for each need, approve the capability ask
+# Grant it: pick a vault entry for each need, approve the capability ask
 cyfr profile grant c:local.supabase
 ```
 
-Create the Connection first (console Connections page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`). If you own the Supabase project, you can skip the Connection entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
+Create the vault entry first (console Vault page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`). If you own the Supabase project, you can skip the vault entry entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
 
 **Input/output contract:**
 
@@ -878,22 +874,22 @@ CYFR has two kinds of storage — don't confuse them:
 
 | Storage | What Goes There | Managed By |
 |---------|-----------------|------------|
-| **CYFR-managed** | Connections, consents, audit logs, API keys, sessions | CYFR |
+| **CYFR-managed** | Vault entries, consents, audit logs, API keys, sessions | CYFR |
 | **Your external DB** (Supabase, Neon, PlanetScale, …) | Users, orders, products — your domain data | Your Catalysts |
 
 Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. If you stop using CYFR tomorrow, your data is still in your database where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
 ---
 
-## Granting Components: Connections & Consent
+## Granting Components: Vault Entries & Consent
 
-Before a component can run, an operator grants it: which **Connections** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive paths are `cyfr profile grant <ref>` and the console's Connections page; everything below is the same flow over MCP.
+Before a component can run, an operator grants it: which **vault entries** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive paths are `cyfr profile grant <ref>` and the console's Vault page; everything below is the same flow over MCP.
 
 `cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Grant each component afterwards — a catalyst with nothing granted is rejected with a `POLICY_REQUIRED` / `setup_required` error. Reagents need no grant.
 
-### Connections (`vault` tool)
+### The vault (`vault` tool)
 
-A Connection is a vault entry holding credential material — sealed at rest, never returned by any API. Material flows one way: `create` and `rotate` accept field values; nothing ever returns them.
+A vault entry holds credential material — sealed at rest, never returned by any API. Material flows one way: `create` and `rotate` accept field values; nothing ever returns them.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
@@ -907,7 +903,7 @@ A Connection is a vault entry holding credential material — sealed at rest, ne
 
 Vault mutations require an interactive session — components and guest-plane callers can never reach these verbs.
 
-**OAuth is Connection-keyed, not component-keyed.** Provider endpoints live on the Connection (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component only declares a need of type `oauth:<provider>` with the scopes it requires; at runtime it calls `get_access_token("<provider>")` and receives short-lived, auto-refreshed tokens.
+**OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component only declares a need of type `oauth:<provider>` with the scopes it requires; at runtime it calls `get_access_token("<provider>")` and receives short-lived, auto-refreshed tokens.
 
 ### The consent walk (`profile` tool)
 
@@ -915,7 +911,7 @@ Granting is a three-step walk — nothing is granted outside it:
 
 ```
 plan     {ref}                            → the component's needs + caps ask,
-                                            candidate connections, a plan_token
+                                            candidate vault entries, a plan_token
 preview  {decisions, plan_token}          → the exact rendered grant + commit_digest
 commit   {decisions, plan_token, proof,
           commit_digest,
@@ -926,7 +922,7 @@ commit   {decisions, plan_token, proof,
 
 | Action | Key args | Returns |
 |--------|----------|---------|
-| `plan` | `ref` | needs, caps ask, candidate connections, `plan_token` |
+| `plan` | `ref` | needs, caps ask, candidate vault entries, `plan_token` |
 | `preview` | `decisions` | rendered summary, `commit_digest` |
 | `commit` | `decisions`, `plan_token`, `proof`, `commit_digest`, `expected_consent_revision` | the new consent revision |
 | `list` | `ref` | profiles + head revisions |
@@ -936,16 +932,18 @@ Interactive sessions and consent-capable API keys may commit; a key's consent ca
 
 ### Readiness and typed errors
 
-`component.setup_plan` answers "can this run?" before you invoke: its `consent` section lists the profile and one row per need (`satisfied` + a human-readable `detail`), and top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching Connection.
+`component.setup_plan` answers "can this run?" before you invoke: its `consent` section lists the profile and one row per need (`satisfied` + a human-readable `detail`), and top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
 Four typed errors cross every surface (MCP, CLI, consoles) with normative payloads:
 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
-| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a Connection for it (`profile.plan` / `cyfr profile grant <ref>`) |
+| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
 | `consent_required` | `{profile_id, current_revision, shape_diff}` | The component's ask changed since approval — the shape diff shows exactly what; review and re-approve |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
+
+On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. Branch on the code (or `data.tag`); the payload is the table above.
 
 ### What a grant enforces
 

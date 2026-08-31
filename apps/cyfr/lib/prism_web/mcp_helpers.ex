@@ -24,19 +24,27 @@ defmodule PrismWeb.MCPHelpers do
 
   The rule, then: **if an agent should be able to do it, it is a tool call.
   If it exists only for the person at the keyboard, the console owns it
-  directly.** `PrismWeb.ToolSeamTest` pins the second list, which is two
-  calls long — the ones that grow it are worth an argument.
+  directly.** `PrismWeb.ToolSeamTest` pins the second list — the calls
+  that grow it are worth an argument. (The list itself lives in the test:
+  a count here drifted the moment it grew.)
 
   ## Result keys
 
-  Built-in tools return their handler's Elixir terms verbatim — atom keys,
-  always. Only proxied `server:tool` calls carry decoded JSON with string
-  keys. So a page calling built-in tools never defends against both key
-  spellings; a page talking to an external server defends at that call
-  site alone. The one handler that splices registry-decoded JSON into a
-  result (`component` search/discover) upholds the contract at its own
-  decode boundary (`Compendium.Registry.Client` atomizes known keys), so
-  the pages' `x[:k] || x["k"]` defenses are gone rather than load-bearing.
+  Two normalizations exist, and a page must know which it is on:
+
+    * `call_tool/3` (this module) returns built-in handlers' Elixir terms
+      VERBATIM — atom keys at the top level, but a field decoded from a
+      stored JSON column keeps its string keys. Proxied `server:tool`
+      calls carry decoded JSON throughout.
+    * `Aqua.AgentConfig.call_aqua/2` deep-stringifies on the way out, so
+      its consumers read string keys only.
+
+  An earlier version of this note claimed the pages' `x[:k] || x["k"]`
+  defenses were gone; they are not (a shared `f/2` helper is copy-pasted
+  across the feed pages), and some guard genuinely mixed shapes
+  (JSON-decoded columns inside atom-keyed rows). Removing one is safe only
+  after verifying that field's producer — do not delete them wholesale on
+  the strength of this paragraph.
   """
 
   require Logger
@@ -93,9 +101,6 @@ defmodule PrismWeb.MCPHelpers do
   def error_message(reason)
   def error_message(message) when is_binary(message), do: message
   def error_message(:no_context), do: "Not signed in."
-
-  def error_message(%Compendium.OCI.Errors{} = err),
-    do: Compendium.MCP.Shared.to_error_string(err)
 
   def error_message(reason) do
     # The same renderer the wire and the guest use

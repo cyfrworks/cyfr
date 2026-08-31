@@ -90,7 +90,7 @@ defmodule Sanctum.MCP.KeyTool do
         {:ok, key_info}
 
       {:error, :not_found} ->
-        {:error, "Key not found: #{name}"}
+        {:error, {:not_found, "Key", name}}
     end
   end
 
@@ -151,7 +151,7 @@ defmodule Sanctum.MCP.KeyTool do
       {:ok, %{revoked: true, name: name}}
     else
       {:error, :not_found} ->
-        {:error, "Key not found: #{name}"}
+        {:error, {:not_found, "Key", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -173,7 +173,7 @@ defmodule Sanctum.MCP.KeyTool do
         {:ok, result}
 
       {:error, :not_found} ->
-        {:error, "Key not found: #{name}"}
+        {:error, {:not_found, "Key", name}}
 
       {:error, :capability_key_immutable} ->
         {:error,
@@ -208,5 +208,5 @@ defmodule Sanctum.MCP.KeyTool do
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
   end
 
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
 end

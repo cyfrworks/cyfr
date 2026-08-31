@@ -77,9 +77,13 @@ defmodule Cyfr.Execution do
 
   @spec events_since(String.t(), non_neg_integer(), String.t()) :: [map()]
   def events_since(execution_id, last_sequence, athanor_id) do
-    case call(:events_since, [execution_id, last_sequence, athanor_id]) do
-      {:error, :execution_unavailable} -> []
-      events -> events
+    # Dispatched on the impl directly, not through call/2: the callback
+    # answers a bare list, and a `case` that matched one error tuple and
+    # fell everything else through would hand a future impl's `{:error, _}`
+    # to callers typed `[map()]` as if it were the events.
+    case impl() do
+      nil -> []
+      mod -> mod.events_since(execution_id, last_sequence, athanor_id)
     end
   end
 

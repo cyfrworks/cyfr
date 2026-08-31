@@ -43,11 +43,10 @@ defmodule Sanctum.MCPDispatchContractTest do
   }
 
   @invalid_action_errors %{
-    "session" =>
-      "Invalid session action. Use: login, logout, whoami, device_init, device_poll, or use",
-    "athanor" => "Invalid athanor action: ___no_such_action___",
-    "member" => "Invalid member action: ___no_such_action___",
-    "door" => "Invalid door action: ___no_such_action___",
+    "session" => "Unknown action: session.___no_such_action___",
+    "athanor" => "Unknown action: athanor.___no_such_action___",
+    "member" => "Unknown action: member.___no_such_action___",
+    "door" => "Unknown action: door.___no_such_action___",
     "oauth" => "Invalid oauth action. Use: set_client, list, or delete_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
@@ -144,10 +143,11 @@ defmodule Sanctum.MCPDispatchContractTest do
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 
-    test "each tool's invalid-action terminal string is frozen", %{ctx: ctx} do
+    test "each tool's invalid-action terminal sentence is frozen", %{ctx: ctx} do
       for {tool, expected} <- @invalid_action_errors do
-        assert MCP.handle(tool, ctx, %{"action" => "___no_such_action___"}) ==
-                 {:error, expected},
+        assert {:error, reason} = MCP.handle(tool, ctx, %{"action" => "___no_such_action___"})
+
+        assert Emissary.MCP.ToolError.render(reason) == expected,
                "invalid-action message drift for tool #{tool}"
       end
     end

@@ -330,6 +330,24 @@ defmodule Sanctum.Session do
   def use_athanor(%Context{}, _athanor_id), do: {:error, :no_session}
 
   @doc """
+  Drop the established-context memo for every session the user holds,
+  without revoking any of them.
+
+  For mutations that narrow what a LIVE session may reach — a plain
+  membership removal, not a door action: the next request re-derives
+  through `Sanctum.Tenancy.revalidate/1` instead of serving the cached
+  athanor for the memo TTL. The door's revocations go through
+  `revoke_all_for_user/1`, which drops the memo as a side effect of
+  deleting the rows.
+  """
+  @spec invalidate_memo_for_user(String.t()) :: :ok
+  def invalidate_memo_for_user(user_id) when is_binary(user_id) do
+    user_id
+    |> Arca.SessionStorage.hashes_by_user()
+    |> Enum.each(&Sanctum.Caller.invalidate_hash/1)
+  end
+
+  @doc """
   Revoke every session of a person (server-denied, or removed as an
   operator). Broadcasts `{:sessions_revoked, user_id}` on
   `"sanctum:sessions"` so mounted LiveViews let go.
@@ -489,7 +507,7 @@ defmodule Sanctum.Session do
   # One decoder for both readers, so the same corruption is observed the
   # same way whichever surface reads the row first.
   defp decode_permissions(row) do
-    case Jason.decode(row.permissions || "[]") do
+    case Cyfr.Json.decode(row.permissions || "[]") do
       {:ok, list} when is_list(list) ->
         list
 

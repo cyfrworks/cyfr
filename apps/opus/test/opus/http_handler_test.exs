@@ -658,7 +658,7 @@ defmodule Opus.HttpHandlerTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "request_too_large"
-      assert decoded["error"]["message"] =~ "Multipart body"
+      assert decoded["error"]["message"] =~ "Multipart request"
     end
 
     test "rejects multipart part without name", %{

@@ -11,13 +11,6 @@ type JSONRPCRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
-// JSONRPCNotification is a JSON-RPC 2.0 notification (no id field).
-type JSONRPCNotification struct {
-	JSONRPC string `json:"jsonrpc"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
-}
-
 // JSONRPCResponse is a JSON-RPC 2.0 response.
 // ID is typed as any to accept both integer and string IDs per JSON-RPC 2.0 spec.
 type JSONRPCResponse struct {

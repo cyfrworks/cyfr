@@ -137,11 +137,6 @@ var buildValidateCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err, "Validate failed")
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }

@@ -231,7 +231,9 @@ defmodule Compendium.MCP.RegistryTool do
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_only do
-    {:error, "registry.#{action} is a person's act — sign in; an API key cannot do it"}
+    {:error,
+     {:invalid_argument,
+      "registry.#{action} is a person's act — sign in; an API key cannot do it"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => action} = args)
@@ -278,7 +280,7 @@ defmodule Compendium.MCP.RegistryTool do
   end
 
   def handle(_ctx, %{"action" => "probe"}) do
-    {:error, "registry.probe requires 'provider' and 'access_token'"}
+    {:error, {:invalid_argument, "registry.probe requires 'provider' and 'access_token'"}}
   end
 
   def handle(
@@ -314,18 +316,20 @@ defmodule Compendium.MCP.RegistryTool do
   end
 
   def handle(_ctx, %{"action" => "claim_personal"}) do
-    {:error, "registry.claim_personal requires 'username', 'provider', and 'access_token'"}
+    {:error,
+     {:invalid_argument,
+      "registry.claim_personal requires 'username', 'provider', and 'access_token'"}}
   end
 
   def handle(_ctx, %{"action" => "get_namespace", "slug" => slug}) do
     case Compendium.Registry.Client.get_namespace(slug) do
       {:ok, body} -> {:ok, body}
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   def handle(_ctx, %{"action" => "get_namespace"}) do
-    {:error, "registry.get_namespace requires 'slug'"}
+    {:error, {:invalid_argument, "registry.get_namespace requires 'slug'"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "tokens_list", "slug" => slug}) do
@@ -333,25 +337,12 @@ defmodule Compendium.MCP.RegistryTool do
          {:ok, body} <- Compendium.Registry.Client.list_tokens(slug, bearer) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   def handle(_ctx, %{"action" => "tokens_list"}) do
-    {:error, "registry.tokens_list requires 'slug'"}
-  end
-
-  def handle(%Context{} = ctx, %{
-        "action" => "tokens_revoke",
-        "slug" => slug,
-        "token_id" => token_id
-      }) do
-    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
-         :ok <- Compendium.Registry.Client.revoke_token(slug, token_id, bearer) do
-      {:ok, %{revoked: token_id}}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
+    {:error, {:invalid_argument, "registry.tokens_list requires 'slug'"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "members_list", "slug" => slug}) do
@@ -359,53 +350,12 @@ defmodule Compendium.MCP.RegistryTool do
          {:ok, body} <- Compendium.Registry.Client.list_members(slug, bearer) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   def handle(_ctx, %{"action" => "members_list"}) do
-    {:error, "registry.members_list requires 'slug'"}
-  end
-
-  def handle(%Context{} = ctx, %{
-        "action" => "members_add",
-        "slug" => slug,
-        "target_personal_slug" => target,
-        "role" => role
-      }) do
-    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
-         {:ok, body} <- Compendium.Registry.Client.add_member(slug, target, role, bearer) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{
-        "action" => "members_update",
-        "slug" => slug,
-        "target_personal_slug" => target,
-        "role" => role
-      }) do
-    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
-         {:ok, body} <- Compendium.Registry.Client.update_member(slug, target, role, bearer) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
-  end
-
-  def handle(%Context{} = ctx, %{
-        "action" => "members_remove",
-        "slug" => slug,
-        "target_personal_slug" => target
-      }) do
-    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
-         :ok <- Compendium.Registry.Client.remove_member(slug, target, bearer) do
-      {:ok, %{removed: target}}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
+    {:error, {:invalid_argument, "registry.members_list requires 'slug'"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "report"} = args) do
@@ -429,7 +379,7 @@ defmodule Compendium.MCP.RegistryTool do
            ) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
@@ -446,7 +396,7 @@ defmodule Compendium.MCP.RegistryTool do
          {:ok, body} <- Compendium.Registry.Client.list_my_reports(bearer, opts) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
@@ -454,19 +404,20 @@ defmodule Compendium.MCP.RegistryTool do
       when is_binary(name) and name != "" do
     case Compendium.Registry.Client.get_legal_page(name) do
       {:ok, body} -> {:ok, body}
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   def handle(_ctx, %{"action" => "legal_page"}) do
     {:error,
-     "name (one of: terms, privacy, aup, content-policy, dmca, cookies, transparency) is required"}
+     {:invalid_argument,
+      "name (one of: terms, privacy, aup, content-policy, dmca, cookies, transparency) is required"}}
   end
 
   def handle(_ctx, %{"action" => "legal_version"}) do
     case Compendium.Registry.Client.get_legal_version() do
       {:ok, body} -> {:ok, body}
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
@@ -488,7 +439,7 @@ defmodule Compendium.MCP.RegistryTool do
            ) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
@@ -516,21 +467,30 @@ defmodule Compendium.MCP.RegistryTool do
            ) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   def handle(_ctx, %{"action" => action}) do
-    {:error, "Unknown registry action: #{action}"}
+    {:error, {:unknown_action, "registry.#{action}"}}
   end
 
   def handle(_ctx, _args) do
-    {:error, "registry action is required"}
+    {:error, :action_missing}
   end
 
   # ============================================================================
   # Private helpers
   # ============================================================================
+
+  # Every registry call answers through one seam. A refusal this module
+  # already typed is the caller's answer as-is; everything else — an
+  # `OCI.Errors` struct above all — keeps the shared registry sentence.
+  defp refuse(reason) do
+    if Emissary.MCP.ToolError.reason?(reason),
+      do: {:error, reason},
+      else: {:error, Shared.to_error_string(reason)}
+  end
 
   defp put_if_int(kw, key, n) when is_integer(n) and n >= 0, do: Keyword.put(kw, key, n)
 
@@ -552,15 +512,18 @@ defmodule Compendium.MCP.RegistryTool do
       [%{type: :push_token, token: token, namespace: slug} | _] when is_binary(token) ->
         if String.contains?(slug, "."),
           do:
-            {:error, "no personal-namespace bearer found — claim your personal namespace first"},
+            {:error,
+             {:invalid_argument,
+              "no personal-namespace bearer found — claim your personal namespace first"}},
           else: {:ok, token}
 
       _ ->
-        {:error, "no push token available — run `cyfr login` to authenticate"}
+        {:error,
+         {:invalid_argument, "no push token available — run `cyfr login` to authenticate"}}
     end
   end
 
-  defp personal_bearer(_), do: {:error, "authentication required"}
+  defp personal_bearer(_), do: {:error, {:invalid_argument, "authentication required"}}
 
   # A claim made by a signed-in person is their identity from here on: it
   # lands on their users row (`Sanctum.SignIn.record_namespace/2`) and the
@@ -626,23 +589,25 @@ defmodule Compendium.MCP.RegistryTool do
   # ============================================================================
 
   defp ensure_present(value, _field) when is_binary(value) and value != "", do: :ok
-  defp ensure_present(_, field), do: {:error, "'#{field}' is required"}
+  defp ensure_present(_, field), do: {:error, {:invalid_argument, "'#{field}' is required"}}
 
   # Closed-platform appeals: provider determines which token field carries
   # the credential. github/google use access_token; oidcc uses id_token.
   defp ensure_appeal_token("oidcc", _access, id) when is_binary(id) and id != "", do: :ok
 
   defp ensure_appeal_token("oidcc", _access, _id),
-    do: {:error, "'id_token' is required for oidcc"}
+    do: {:error, {:invalid_argument, "'id_token' is required for oidcc"}}
 
   defp ensure_appeal_token(_provider, access, _id) when is_binary(access) and access != "",
     do: :ok
 
   defp ensure_appeal_token(_provider, _access, _id),
-    do: {:error, "'access_token' is required"}
+    do: {:error, {:invalid_argument, "'access_token' is required"}}
 
   defp ensure_target(nil, nil),
-    do: {:error, "at least one of target_namespace or target_component_ref required"}
+    do:
+      {:error,
+       {:invalid_argument, "at least one of target_namespace or target_component_ref required"}}
 
   defp ensure_target("", ""), do: ensure_target(nil, nil)
   defp ensure_target(nil, ""), do: ensure_target(nil, nil)
@@ -677,12 +642,16 @@ defmodule Compendium.MCP.RegistryTool do
     registry = Compendium.RegistryHost.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
-      [%{type: :push_token, token: token} | _] when is_binary(token) -> {:ok, token}
-      _ -> {:error, "no push token available — run `cyfr login` to authenticate"}
+      [%{type: :push_token, token: token} | _] when is_binary(token) ->
+        {:ok, token}
+
+      _ ->
+        {:error,
+         {:invalid_argument, "no push token available — run `cyfr login` to authenticate"}}
     end
   end
 
-  defp any_push_token(_), do: {:error, "authentication required"}
+  defp any_push_token(_), do: {:error, {:invalid_argument, "authentication required"}}
   # ============================================================================
   # Gated identity mutations (dispatched from the @identity_mutations head)
   # ============================================================================
@@ -692,12 +661,12 @@ defmodule Compendium.MCP.RegistryTool do
          {:ok, body} <- Compendium.Registry.Client.claim_publisher_namespace(slug, bearer) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   defp handle_gated(_ctx, %{"action" => "claim_publisher"}) do
-    {:error, "registry.claim_publisher requires 'slug'"}
+    {:error, {:invalid_argument, "registry.claim_publisher requires 'slug'"}}
   end
 
   defp handle_gated(%Context{} = ctx, %{"action" => "verify_publisher", "slug" => slug}) do
@@ -705,12 +674,12 @@ defmodule Compendium.MCP.RegistryTool do
          {:ok, body} <- Compendium.Registry.Client.verify_publisher_namespace(slug, bearer) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   defp handle_gated(_ctx, %{"action" => "verify_publisher"}) do
-    {:error, "registry.verify_publisher requires 'slug'"}
+    {:error, {:invalid_argument, "registry.verify_publisher requires 'slug'"}}
   end
 
   defp handle_gated(%Context{} = ctx, %{"action" => "tokens_issue", "slug" => slug} = args) do
@@ -720,28 +689,87 @@ defmodule Compendium.MCP.RegistryTool do
          {:ok, body} <- Compendium.Registry.Client.issue_additional_token(slug, bearer, label) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> refuse(err)
     end
   end
 
   defp handle_gated(_ctx, %{"action" => "tokens_issue"}) do
-    {:error, "registry.tokens_issue requires 'slug'"}
+    {:error, {:invalid_argument, "registry.tokens_issue requires 'slug'"}}
+  end
+
+  defp handle_gated(%Context{} = ctx, %{
+         "action" => "tokens_revoke",
+         "slug" => slug,
+         "token_id" => token_id
+       }) do
+    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
+         :ok <- Compendium.Registry.Client.revoke_token(slug, token_id, bearer) do
+      {:ok, %{revoked: token_id}}
+    else
+      {:error, err} -> refuse(err)
+    end
   end
 
   defp handle_gated(_ctx, %{"action" => "tokens_revoke"}) do
-    {:error, "registry.tokens_revoke requires 'slug' and 'token_id'"}
+    {:error, {:invalid_argument, "registry.tokens_revoke requires 'slug' and 'token_id'"}}
+  end
+
+  defp handle_gated(%Context{} = ctx, %{
+         "action" => "members_add",
+         "slug" => slug,
+         "target_personal_slug" => target,
+         "role" => role
+       }) do
+    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.add_member(slug, target, role, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> refuse(err)
+    end
   end
 
   defp handle_gated(_ctx, %{"action" => "members_add"}) do
-    {:error, "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}
+    {:error,
+     {:invalid_argument,
+      "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}}
+  end
+
+  defp handle_gated(%Context{} = ctx, %{
+         "action" => "members_update",
+         "slug" => slug,
+         "target_personal_slug" => target,
+         "role" => role
+       }) do
+    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.update_member(slug, target, role, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> refuse(err)
+    end
   end
 
   defp handle_gated(_ctx, %{"action" => "members_update"}) do
-    {:error, "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}
+    {:error,
+     {:invalid_argument,
+      "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}}
+  end
+
+  defp handle_gated(%Context{} = ctx, %{
+         "action" => "members_remove",
+         "slug" => slug,
+         "target_personal_slug" => target
+       }) do
+    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
+         :ok <- Compendium.Registry.Client.remove_member(slug, target, bearer) do
+      {:ok, %{removed: target}}
+    else
+      {:error, err} -> refuse(err)
+    end
   end
 
   defp handle_gated(_ctx, %{"action" => "members_remove"}) do
-    {:error, "registry.members_remove requires 'slug' and 'target_personal_slug'"}
+    {:error,
+     {:invalid_argument, "registry.members_remove requires 'slug' and 'target_personal_slug'"}}
   end
 
   # User-side abuse report submission. Auth: any push token belonging to the

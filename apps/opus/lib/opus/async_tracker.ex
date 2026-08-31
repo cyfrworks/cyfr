@@ -199,6 +199,11 @@ defmodule Opus.AsyncTracker do
 
   @impl true
   def handle_call({:await_all, task_ids, timeout_ms}, _from, state) do
+    # Duplicate ids stall the batch: `Task.yield_many` consumes the reply
+    # for the first copy, the second copy then waits out the full timeout,
+    # and the per-id `Map.put` overwrites the real result with
+    # `{:error, :timeout}`. One answer per distinct id.
+    task_ids = Enum.uniq(task_ids)
     {immediate_results, pending_ids} = split_completed(task_ids, state)
 
     if pending_ids == [] do
@@ -258,6 +263,10 @@ defmodule Opus.AsyncTracker do
 
   @impl true
   def handle_call({:await_any, task_ids, timeout_ms}, _from, state) do
+    # Same duplicate-id hazard as await_all; also keeps the returned
+    # pending list one entry per task.
+    task_ids = Enum.uniq(task_ids)
+
     # Check if any already completed
     case find_first_completed(task_ids, state) do
       {:ok, task_id, result} ->
@@ -379,7 +388,7 @@ defmodule Opus.AsyncTracker do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -522,8 +531,24 @@ defmodule Opus.AsyncTracker do
     %{state | results: Map.drop(state.results, task_ids)}
   end
 
+  # These strings reach the guest: `store_result/3` puts them where
+  # `Opus.FormulaHandler.format_task_result/2` picks them up, and because
+  # they arrive already-stringified they pass through `stringify_reason/1`
+  # and `ToolError.render/1` unchanged — the renderers' binary clause is the
+  # identity. `inspect/1` on an exit reason carries the exception struct, the
+  # term that failed to match and a stack trace, so it handed Elixir internals
+  # to a component. The detail goes to the log, where the operator can read
+  # it; the guest gets the kind of failure, which is what it can act on.
   defp format_crash_reason(:normal), do: "task exited normally"
   defp format_crash_reason(:killed), do: "task was killed"
-  defp format_crash_reason({:shutdown, reason}), do: "task shutdown: #{inspect(reason)}"
-  defp format_crash_reason(reason), do: "task crashed: #{inspect(reason)}"
+
+  defp format_crash_reason({:shutdown, reason}) do
+    Logger.warning("[Opus.AsyncTracker] task shutdown: #{inspect(reason)}")
+    "task shutdown"
+  end
+
+  defp format_crash_reason(reason) do
+    Logger.warning("[Opus.AsyncTracker] task crashed: #{inspect(reason)}")
+    "task crashed"
+  end
 end

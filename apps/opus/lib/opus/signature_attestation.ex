@@ -43,38 +43,64 @@ defmodule Opus.SignatureAttestation do
   """
   @spec verify(map(), String.t() | nil, String.t() | nil) :: :ok | {:error, String.t()}
   def verify(component, identity, issuer) when is_map(component) do
-    source = component["source"] || component[:source]
-    verified = component["signature_verified"] || component[:signature_verified]
     stored_identity = component["signer_identity"] || component[:signer_identity]
     stored_issuer = component["signer_issuer"] || component[:signer_issuer]
 
-    cond do
-      # Local/filesystem components are trusted by ownership. `nil` is NOT
-      # in this list: a missing source is an unclassified value, and the
-      # closed-vocabulary arm below refuses it (the column is NOT NULL with
-      # a default, so a nil here is a malformed caller, not a real row).
-      source in [Compendium.Source.filesystem(), Compendium.Source.published()] ->
+    case attestation(component) do
+      :trusted ->
         :ok
 
-      # OCI component with verification — check identity/issuer match if requested
-      source == Compendium.Source.oci() and verified == true ->
+      :signed ->
         check_identity_match(identity, issuer, stored_identity, stored_issuer)
 
-      # OCI component without verification — reject
-      source == Compendium.Source.oci() ->
+      :unsigned ->
         {:error,
          "Component pulled from OCI registry without signature verification. Re-pull to verify."}
 
-      # Unknown source — a verifier fails CLOSED. The source vocabulary is
-      # closed (oci/filesystem/published); a new value must be classified
-      # here before its components may execute.
-      true ->
+      {:unknown_source, source} ->
         {:error, "Unknown component source #{inspect(source)} — signature policy undefined"}
     end
   end
 
   def verify(_component, _identity, _issuer) do
     {:error, "Invalid component data for signature verification"}
+  end
+
+  @doc """
+  What the row records about this component's provenance, independent of any
+  signer the caller asked to pin:
+
+    * `:trusted` — filesystem or published; trusted by ownership.
+    * `:signed` — an OCI pull whose cosign signature verified.
+    * `:unsigned` — an OCI pull whose signature did not verify.
+    * `{:unknown_source, s}` — anything else; a verifier fails CLOSED, so a
+      new source value must be classified here before its components run.
+
+  `Opus.Executor` needs the three-way answer because only `:unsigned` is the
+  operator's call (`CYFR_REQUIRE_SIGNED_PULLS`); a pinned-signer mismatch and
+  an unclassified source refuse regardless.
+  """
+  @spec attestation(map()) :: :trusted | :signed | :unsigned | {:unknown_source, term()}
+  def attestation(component) when is_map(component) do
+    source = component["source"] || component[:source]
+    verified = component["signature_verified"] || component[:signature_verified]
+
+    cond do
+      # `nil` is NOT in this list: a missing source is an unclassified value,
+      # and the closed-vocabulary arm below refuses it (the column is NOT NULL
+      # with a default, so a nil here is a malformed caller, not a real row).
+      source in [Compendium.Source.filesystem(), Compendium.Source.published()] ->
+        :trusted
+
+      source == Compendium.Source.oci() and verified == true ->
+        :signed
+
+      source == Compendium.Source.oci() ->
+        :unsigned
+
+      true ->
+        {:unknown_source, source}
+    end
   end
 
   defp check_identity_match(nil, nil, _stored_identity, _stored_issuer), do: :ok

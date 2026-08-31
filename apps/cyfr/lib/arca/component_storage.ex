@@ -274,12 +274,23 @@ defmodule Arca.ComponentStorage do
       if search = Keyword.get(opts, :query) do
         # Case-insensitive on both adapters: SQLite LIKE folds ASCII case but
         # Postgres LIKE does not, so lower() both sides rather than rely on LIKE.
-        pattern = "%#{String.downcase(search)}%"
+        # LIKE metacharacters in the QUERY are literals: the search box is
+        # a search box, not a pattern language, and `%` alone used to match
+        # every component. (Parameterized throughout — this is about what
+        # the wildcards mean, never injection.)
+        escaped =
+          search
+          |> String.downcase()
+          |> String.replace("\\", "\\\\")
+          |> String.replace("%", "\\%")
+          |> String.replace("_", "\\_")
+
+        pattern = "%#{escaped}%"
 
         from(c in query,
           where:
-            like(fragment("lower(?)", c.name), ^pattern) or
-              like(fragment("lower(?)", c.description), ^pattern)
+            fragment("lower(?) LIKE ? ESCAPE '\\'", c.name, ^pattern) or
+              fragment("lower(?) LIKE ? ESCAPE '\\'", c.description, ^pattern)
         )
       else
         query

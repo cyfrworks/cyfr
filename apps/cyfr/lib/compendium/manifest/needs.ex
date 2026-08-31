@@ -4,7 +4,7 @@
 defmodule Compendium.Manifest.Needs do
   @moduledoc """
   The manifest `needs` block: named roles a component asks the operator
-  to satisfy with Connections.
+  to satisfy with vault entries.
 
   Two vocabularies meet only at consent — the developer names *roles*
   (`source`, `dest`, `api_key`); the operator names *credentials*;

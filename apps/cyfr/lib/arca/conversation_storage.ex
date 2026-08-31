@@ -311,9 +311,16 @@ defmodule Arca.ConversationStorage do
   @spec append(Context.t(), String.t(), map()) ::
           {:ok, Message.t()} | {:error, :not_found | :seq_conflict | Ecto.Changeset.t()}
   def append(%Context{} = ctx, conversation_id, attrs) when is_map(attrs) do
-    with {:ok, conv} <- get(ctx, conversation_id) do
-      do_append(ctx, conv, attrs, 3)
-    end
+    # Rescued like every other write here: the transaction is inside the
+    # private helper, where `Arca.DbRescueCoverageTest` (which inspects
+    # public heads for repo calls) could not see it — so an outage raised
+    # `DBConnection.ConnectionError` into the runner and the LiveView
+    # instead of the module's `{:error, :database_error}`.
+    Arca.Repo.Errors.with_db_rescue("Arca.ConversationStorage.append", fn ->
+      with {:ok, conv} <- get(ctx, conversation_id) do
+        do_append(ctx, conv, attrs, 3)
+      end
+    end)
   end
 
   defp do_append(_ctx, _conv, _attrs, 0), do: {:error, :seq_conflict}
@@ -540,8 +547,15 @@ defmodule Arca.ConversationStorage do
     if deletable == [] do
       {:ok, 0}
     else
-      Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
-      {count, _} = Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
+      # One transaction, like `do_delete/2`: a crash between the two
+      # deletes otherwise left an empty conversation row behind.
+      {:ok, count} =
+        Repo.transaction(fn ->
+          Repo.delete_all(from(m in Message, where: m.conversation_id in ^deletable))
+          {count, _} = Repo.delete_all(from(c in Conversation, where: c.id in ^deletable))
+          count
+        end)
+
       {:ok, count}
     end
   end
@@ -580,8 +594,8 @@ defmodule Arca.ConversationStorage do
   defp encode_json(value), do: Jason.encode!(value)
 
   defp decode_map(json) do
-    case Jason.decode(json) do
-      {:ok, %{} = map} -> map
+    case Cyfr.Json.decode_or(json, %{}, "Arca.ConversationStorage.decode_map") do
+      %{} = map -> map
       _ -> %{}
     end
   end

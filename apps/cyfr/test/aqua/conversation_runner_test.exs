@@ -385,14 +385,17 @@ defmodule Aqua.ConversationRunnerTest do
            )
   end
 
-  test "':always' on a destructive or external card is refused server-side", %{
+  test "standing scopes on a destructive or external card are refused server-side", %{
     alice: alice,
     bob: bob,
     conv: conv
   } do
-    # The card hides the button; the rule lives in the runner. A crafted
-    # scope=always on a destructive/external action must not write "auto"
-    # into the athanor's shared allowlist.
+    # The card hides the buttons; the rule lives in the runner. A crafted
+    # scope=always must not write "auto" into the athanor's shared
+    # allowlist — and scope=conversation is a standing grant too (the
+    # complete-turn fast path auto-runs later matching proposals for the
+    # rest of a multi-member chat), so it is refused the same way. Only
+    # :once may approve a destructive/external action.
     {_eid, _runner, _} = start_turn(alice, conv, "plant")
 
     for kind <- ["destructive", "external"] do
@@ -416,12 +419,15 @@ defmodule Aqua.ConversationRunnerTest do
       assert {:error, {:scope_not_permitted, ^kind}} =
                ConversationRunner.approve(bob, conv.id, apr.id, :always)
 
+      assert {:error, {:scope_not_permitted, ^kind}} =
+               ConversationRunner.approve(bob, conv.id, apr.id, :conversation)
+
       # The card is still pending — a refused scope decides nothing.
       {:ok, still} = Conversations.get_message(bob, apr.id)
       assert still.status == "pending"
 
-      # A scope that writes nothing shared is still every member's to give.
-      :ok = ConversationRunner.approve(bob, conv.id, apr.id, :conversation)
+      # This one action, this one time, remains every member's to give.
+      :ok = ConversationRunner.approve(bob, conv.id, apr.id, :once)
     end
   end
 
@@ -673,5 +679,162 @@ defmodule Aqua.ConversationRunnerTest do
 
     :ok = ConversationRunner.decline(alice, conv.id, apr.id, "no")
     assert_receive {:notify, _, :approval_resolved, %{status: "declined"}}, 5_000
+  end
+
+  # A turn module whose start exits (a GenServer timeout, a dead engine).
+  # Exits are not exceptions: uncaught, the start task died silently and
+  # the runner held `running: true` forever.
+  defmodule ExitingStartTurn do
+    def start(_ctx, _input), do: exit({:timeout, {GenServer, :call, [:engine, :start]}})
+    defdelegate engine_available?, to: Aqua.FakeTurn
+    defdelegate subscribe(eid, ctx), to: Aqua.FakeTurn
+    defdelegate unsubscribe(eid, ctx), to: Aqua.FakeTurn
+    defdelegate events_since(eid, athanor_id), to: Aqua.FakeTurn
+    defdelegate running?(ctx, eid), to: Aqua.FakeTurn
+    defdelegate cancel(ctx, eid), to: Aqua.FakeTurn
+    defdelegate cancel_for_restart(ctx, eid, payload), to: Aqua.FakeTurn
+    defdelegate run_approved(proposal, ctx), to: Aqua.FakeTurn
+  end
+
+  # A turn whose execution failed so fast its terminal event broadcast
+  # before the runner could subscribe — the event lives only in the buffer.
+  # The payload key is `:error`, the shape every producer writes
+  # (`Opus.ExecutionEventBuffer.push_terminal/5` callers).
+  defmodule FastFailTurn do
+    defdelegate start(ctx, input), to: Aqua.FakeTurn
+    defdelegate engine_available?, to: Aqua.FakeTurn
+    defdelegate subscribe(eid, ctx), to: Aqua.FakeTurn
+    defdelegate unsubscribe(eid, ctx), to: Aqua.FakeTurn
+    defdelegate running?(ctx, eid), to: Aqua.FakeTurn
+    defdelegate cancel(ctx, eid), to: Aqua.FakeTurn
+    defdelegate cancel_for_restart(ctx, eid, payload), to: Aqua.FakeTurn
+    defdelegate run_approved(proposal, ctx), to: Aqua.FakeTurn
+
+    def events_since(eid, _athanor_id) do
+      [
+        %{
+          execution_id: eid,
+          type: "error",
+          sequence: 1,
+          data: %{error: "Execution failed: the profile is missing a consent"}
+        }
+      ]
+    end
+  end
+
+  test "a failed turn keeps its task in history and drops the queue with a note", %{
+    alice: alice,
+    bob: bob,
+    conv: conv
+  } do
+    # fail_turn used to strand the queue (stale badge; a later send jumped
+    # it; the delayed launch regressed the cursor and fed consumed messages
+    # twice) and drop the consumed task from the agent's memory.
+    {eid, runner, _input} = start_turn(alice, conv, "remember this ask")
+
+    :ok = ConversationRunner.send_message(bob, conv.id, "me too")
+    assert_receive {:conversation, _, {:queued, 1}}, 5_000
+
+    send(runner, {:execution_event, %{execution_id: eid, type: "error", data: %{error: "boom"}}})
+
+    assert_receive {:conversation, _, {:message, %{kind: "error", content: err}}}, 5_000
+    assert err =~ "boom"
+
+    assert_receive {:conversation, _, {:message, %{kind: "system", content: note}}}, 5_000
+    assert note =~ "waiting turn was dropped"
+    assert_receive {:conversation, _, {:queued, 0}}, 5_000
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+
+    state = ConversationRunner.state(conv.id, conv.athanor_id)
+    refute state.running
+    assert state.queued == 0
+
+    # The failed turn's task stays in the agent's memory, like a cancel.
+    {:ok, row} = Conversations.get(alice, conv.id)
+
+    assert Enum.any?(Conversations.history(row), fn turn ->
+             turn["role"] == "user" and turn["content"] =~ "remember this ask"
+           end)
+
+    # And the next turn consumes only what came after — nothing re-fed.
+    {_eid2, _runner2, input2} = start_turn(alice, conv, "a fresh ask")
+    assert input2["task"] =~ "a fresh ask"
+    refute input2["task"] =~ "remember this ask"
+  end
+
+  test "an exit inside turn start fails the turn instead of wedging the runner", %{
+    alice: alice,
+    conv: conv
+  } do
+    Application.put_env(:cyfr, :aqua_turn, ExitingStartTurn)
+
+    :ok = ConversationRunner.send_message(alice, conv.id, "boom")
+
+    assert_receive {:conversation, _, {:message, %{kind: "error", content: content}}}, 5_000
+    assert content =~ "Execution failed to start"
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+
+    # Not wedged: the next send is accepted rather than answered :busy.
+    :ok = ConversationRunner.send_message(alice, conv.id, "again")
+    assert_receive {:conversation, _, {:message, %{kind: "error"}}}, 5_000
+  end
+
+  test "a terminal event broadcast before subscribe is replayed from the buffer", %{
+    alice: alice,
+    conv: conv
+  } do
+    Application.put_env(:cyfr, :aqua_turn, FastFailTurn)
+
+    :ok = ConversationRunner.send_message(alice, conv.id, "fail fast")
+    assert_receive {:fake_start, eid, _ctx, _input}, 10_000
+    assert_receive {:fake_subscribe, ^eid, _runner}, 5_000
+
+    # No live event is ever sent; the buffered terminal error must land —
+    # and as its `:error` text, never an inspected term.
+    assert_receive {:conversation, _, {:message, %{kind: "error", content: content}}}, 5_000
+    assert content == "Execution failed: the profile is missing a consent"
+    assert_receive {:conversation, _, {:turn_finished}}, 5_000
+  end
+
+  test "an event delivered by both the buffer and the live feed applies once", %{
+    alice: alice,
+    conv: conv
+  } do
+    {eid, runner, _} = start_turn(alice, conv, "stream")
+
+    live = fn seq, text ->
+      send(
+        runner,
+        {:execution_event,
+         %{
+           execution_id: eid,
+           type: "emit",
+           sequence: seq,
+           data: %{"kind" => "text_delta", "content" => text}
+         }}
+      )
+    end
+
+    live.(1, "Hi ")
+    assert_receive {:conversation, _, {:delta, "Hi "}}, 5_000
+
+    # The same sequence again — a buffered duplicate — must not double.
+    live.(1, "Hi ")
+    live.(2, "there")
+    assert_receive {:conversation, _, {:delta, "there"}}, 5_000
+    refute_received {:conversation, _, {:delta, "Hi "}}
+  end
+
+  test "a live error event reads the producers' :error key", %{alice: alice, conv: conv} do
+    {eid, runner, _} = start_turn(alice, conv, "hello")
+
+    send(
+      runner,
+      {:execution_event,
+       %{execution_id: eid, type: "error", sequence: 5, data: %{error: "It broke cleanly"}}}
+    )
+
+    assert_receive {:conversation, _, {:message, %{kind: "error", content: "It broke cleanly"}}},
+                   5_000
   end
 end

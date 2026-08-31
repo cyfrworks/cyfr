@@ -94,7 +94,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
                  create_args(%{"Authorization" => "Bearer sk-live-plaintext"})
                )
 
-      assert message =~ "vault:CONNECTION"
+      assert message =~ "vault:ENTRY"
       assert message =~ "Authorization"
     end
 

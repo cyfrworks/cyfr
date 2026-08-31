@@ -15,10 +15,12 @@ defmodule Cyfr.RecordSink do
   synchronous — a denial must be on disk before the refusal returns, and a
   started row must exist before its completion is queued.
 
-  `flush/0` drains synchronously (the retention scheduler and tests use
-  it); `terminate/2` flushes what is left. With `config :cyfr,
-  record_sink_inline: true` (the test env) every enqueue writes at once in
-  the caller — the sandbox never sees another process's writes.
+  `flush/0` drains synchronously (the retention scheduler runs it before a
+  sweep; tests use it for ordering); `terminate/2` drains the buffered
+  items — casts still in the mailbox at shutdown are lost, which is the
+  write-behind's honest cost. With `config :cyfr, record_sink_inline:
+  true` (the test env) every enqueue writes at once in the caller — the
+  sandbox never sees another process's writes.
   """
 
   use GenServer
@@ -131,7 +133,7 @@ defmodule Cyfr.RecordSink do
   def handle_info(:tick, state), do: {:noreply, drain(%{state | timer: nil})}
 
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -170,8 +172,27 @@ defmodule Cyfr.RecordSink do
       write_mcp_updates(Map.get(grouped, :mcp_log_update, []))
       write_vault_touches(Map.get(grouped, :vault_touch, []))
     end)
+    |> case do
+      {:ok, _} ->
+        :ok
 
-    :ok
+      # A rollback without a raise: on Postgres an inner failure aborts the
+      # transaction even when the write's own error was rescued, and the
+      # commit answers {:error, _}. Discarding that dropped the whole batch
+      # silently — no retry, no counter. Retry each row on its own
+      # transaction so one poisoned item cannot take the rest; a single row
+      # that still rolls back is counted as shed, not hidden.
+      {:error, reason} ->
+        Logger.error("[Cyfr.RecordSink] batch rolled back: #{inspect(reason)}")
+
+        if length(items) > 1 do
+          Enum.each(items, &write_single/1)
+        else
+          Enum.each(items, &shed/1)
+        end
+
+        :ok
+    end
   rescue
     # Database errors only: bookkeeping is best-effort during an outage,
     # but a structurally-bad queued item is a bug and must crash loudly —

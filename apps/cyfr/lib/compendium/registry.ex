@@ -959,17 +959,32 @@ defmodule Compendium.Registry do
   # Walks the tar-extract scratch dir into `{relative_segments, path}`
   # pairs for the unit commit — validation-side exclusions and the
   # symlink backstop live here; the write discipline is the commit's.
+  # The 256 MB gunzip ceiling bounds BYTES; this bounds files — a tarball
+  # of a million one-byte entries passed the size check and then got walked
+  # (quadratically, before the prepend-and-reverse below) with no ceiling.
+  @max_tincture_entries 5_000
+
   defp collect_tincture_entries(base_dir, current_dir) do
+    case do_collect_tincture_entries(base_dir, current_dir, {[], 0}) do
+      {:ok, {acc, _n}} -> {:ok, Enum.reverse(acc)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp do_collect_tincture_entries(base_dir, current_dir, acc) do
     current_dir
     # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
     # The validator owns which files a tincture excludes, so what is hashed
     # and what is stored cannot come apart.
     |> Enum.reject(&Compendium.TinctureValidator.excluded?/1)
-    |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
+    |> Enum.reduce_while({:ok, acc}, fn entry, {:ok, {list, n}} ->
       path = Path.join(current_dir, entry)
 
       cond do
+        n >= @max_tincture_entries ->
+          {:halt, {:error, {:tincture_too_many_files, @max_tincture_entries}}}
+
         # lstat, not stat: File.dir?/File.read follow symlinks, so a link
         # here would recurse into itself or copy a host file into Arca.
         # The validator refuses links too; this is the store-side backstop.
@@ -979,14 +994,14 @@ defmodule Compendium.Registry do
 
         # arca:bypass-ok=D — walk the scratch tree.
         File.dir?(path) ->
-          case collect_tincture_entries(base_dir, path) do
-            {:ok, sub} -> {:cont, {:ok, acc ++ sub}}
+          case do_collect_tincture_entries(base_dir, path, {list, n}) do
+            {:ok, sub_acc} -> {:cont, {:ok, sub_acc}}
             {:error, _} = error -> {:halt, error}
           end
 
         true ->
           rel = Path.relative_to(path, base_dir)
-          {:cont, {:ok, acc ++ [{String.split(rel, "/"), path}]}}
+          {:cont, {:ok, {[{String.split(rel, "/"), path} | list], n + 1}}}
       end
     end)
   end
@@ -1150,7 +1165,7 @@ defmodule Compendium.Registry do
   defp decode_manifest_json(value) when is_map(value), do: value
 
   defp decode_manifest_json(value) when is_binary(value) do
-    case Jason.decode(value) do
+    case Cyfr.Json.decode(value) do
       {:ok, map} when is_map(map) ->
         map
 

@@ -82,7 +82,7 @@ defmodule Cyfr.RouteAuthInventoryTest do
     {:get, "/a/:athanor/registry"} => :browser_authenticated,
     {:get, "/a/:athanor/reports"} => :browser_authenticated,
     {:get, "/a/:athanor/builds"} => :browser_authenticated,
-    {:get, "/a/:athanor/connections"} => :browser_authenticated,
+    {:get, "/a/:athanor/vault"} => :browser_authenticated,
     {:get, "/a/:athanor/api-keys"} => :browser_authenticated,
     {:get, "/a/:athanor/members"} => :browser_authenticated,
     {:get, "/a/:athanor/webhooks"} => :browser_authenticated,

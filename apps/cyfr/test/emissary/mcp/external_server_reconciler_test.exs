@@ -72,6 +72,34 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
     assert_receive {:reconciled, %{server: "refsrv"}}, 2_000
   end
 
+  test "a rename restarts the server still spelling the OLD name", %{ctx: ctx} do
+    # The reconciler used to match only the row's current name — the
+    # post-rename one — so the name-LOSING server kept dispensing its
+    # cached credential until an unrelated restart.
+    {:ok, entry} =
+      Vault.create(ctx, %{
+        name: "prod-token",
+        kind: "api_key",
+        fields: %{"token" => "ghp_prod"}
+      })
+
+    {:ok, _} =
+      Arca.McpServerStorage.put(ctx, %{
+        name: "oldnamesrv",
+        url: "https://127.0.0.1:9/mcp",
+        config_json:
+          Jason.encode!(%{
+            "headers" => %{"authorization" => "vault:prod-token"},
+            "timeout_ms" => 1_000
+          })
+      })
+
+    :ok = Vault.rename(ctx, entry.id, "prod-token-retired")
+
+    sync_reconciler()
+    assert_receive {:reconciled, %{server: "oldnamesrv"}}, 2_000
+  end
+
   test "unrelated entries and non-referencing servers are untouched", %{ctx: ctx} do
     {:ok, entry} =
       Vault.create(ctx, %{name: "unrelated", kind: "api_key", fields: %{"k" => "v"}})

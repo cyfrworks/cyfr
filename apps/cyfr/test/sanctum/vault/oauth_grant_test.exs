@@ -258,7 +258,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end
   end
 
-  describe "complete/3 — new connection" do
+  describe "complete/3 — new entry" do
     test "mints an active oauth entry holding the bundle", %{ctx: ctx} do
       bypass = Bypass.open()
 

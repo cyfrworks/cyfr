@@ -39,9 +39,11 @@ defmodule Opus.OAuthTokenTrackerTest do
     assert catch_error(:ets.lookup(@table, "exec_tracker_test"))
   end
 
-  test "the sweep drops rows past their TTL" do
+  test "a TTL below the execution ceiling is clamped — live rows survive the sweep" do
     original = Application.get_env(:cyfr, :oauth_token_ttl_ms)
-    # A negative TTL puts the cutoff in the future, so any existing row is stale.
+    # Below the 30-minute execution ceiling: unclamped, this swept tokens
+    # while their execution still ran, and the finalize-time collect had
+    # nothing left to mask.
     Application.put_env(:cyfr, :oauth_token_ttl_ms, -1)
 
     on_exit(fn ->
@@ -51,8 +53,8 @@ defmodule Opus.OAuthTokenTrackerTest do
     end)
 
     :ok = OAuthTokenTracker.put("exec_tracker_test", "tok-a")
-    assert OAuthTokenTracker.sweep_now() >= 1
-    assert [] = OAuthTokenTracker.collect("exec_tracker_test")
+    assert OAuthTokenTracker.sweep_now() == 0
+    assert ["tok-a"] = OAuthTokenTracker.collect("exec_tracker_test")
   end
 
   test "draining is collect-and-delete, so a second reader gets nothing" do

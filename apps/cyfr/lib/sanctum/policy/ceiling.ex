@@ -80,7 +80,8 @@ defmodule Sanctum.Policy.Ceiling do
 
   `Sanctum.Limits` locks its field set to this list by test. Note the
   asymmetry: the struct field is `:rate_limit` while the ceiling map keys
-  its bound as `:rate_limit_requests` (only the request count is clamped).
+  its bound as `:rate_limit_requests` — a per-minute rate and burst count
+  in one number (see `clamp_rate_limit/2`).
   """
   @spec clamped_fields() :: [atom()]
   def clamped_fields, do: @numeric_fields ++ @duration_fields ++ [:rate_limit]
@@ -147,13 +148,33 @@ defmodule Sanctum.Policy.Ceiling do
     end)
   end
 
+  # The ceiling bounds both the BURST and the RATE. Clamping the count
+  # alone let a shrunken window multiply it — `%{requests: 10_000,
+  # window: "1ms"}` passed a 10k ceiling as six hundred million a minute —
+  # so a sub-minute window also scales the count to hold the per-minute
+  # rate; a window longer than a minute keeps the plain count cap (the
+  # burst bound the ceiling always meant). The declared window is kept;
+  # one too small to hold even a single request under the ceiling, or one
+  # the parser refuses, is replaced with the ceiling itself at one
+  # minute — fail closed, like the duration clamp above.
   defp clamp_rate_limit(limits, ceiling) do
-    case {limits.rate_limit, Map.get(ceiling, :rate_limit_requests)} do
-      {%{requests: req} = rl, max_req} when is_number(max_req) and req > max_req ->
-        %{limits | rate_limit: %{rl | requests: max_req}}
+    with %{requests: req, window: window} = rl <- limits.rate_limit,
+         max_req when is_number(max_req) <- Map.get(ceiling, :rate_limit_requests) do
+      case Sanctum.Limits.parse_duration(window) do
+        {:ok, window_ms} when window_ms > 0 ->
+          max_for_window = min(max_req, div(max_req * window_ms, 60_000))
 
-      _ ->
-        limits
+          cond do
+            req <= max_for_window -> limits
+            max_for_window >= 1 -> %{limits | rate_limit: %{rl | requests: max_for_window}}
+            true -> %{limits | rate_limit: %{requests: max_req, window: "1m"}}
+          end
+
+        _ ->
+          %{limits | rate_limit: %{requests: max_req, window: "1m"}}
+      end
+    else
+      _ -> limits
     end
   end
 end

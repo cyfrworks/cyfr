@@ -159,5 +159,20 @@
       "name": "hello",
       "version": "1.0.0-rc.1+build.7"
     }
+  ],
+  "version_ordering_comment": "Ordering-level binding between Compendium.Semver.compare/2 (Elixir) and ref.CompareVersions (Go). The regex pin covers the grammar and `cases` covers parse verdicts; neither covered ORDERING, and the two sides once disagreed on every mixed pair (Go byte-compared when either side failed the grammar; the server ranks the parsable side higher and byte-compares only when both fail). expect is gt/lt/eq for a-versus-b.",
+  "version_ordering": [
+    { "a": "1.0.0", "b": "0.9.9", "expect": "gt" },
+    { "a": "0.9.9", "b": "1.0.0", "expect": "lt" },
+    { "a": "1.0.0", "b": "1.0.0", "expect": "eq" },
+    { "a": "1.0.0", "b": "1.0.0-rc.1", "expect": "gt" },
+    { "a": "1.0.0-rc.1", "b": "1.0.0", "expect": "lt" },
+    { "a": "1.0.0-alpha", "b": "1.0.0-1", "expect": "gt" },
+    { "a": "1.0.0+build.1", "b": "1.0.0+build.2", "expect": "eq" },
+    { "a": "1.0.0", "b": "not-semver", "expect": "gt" },
+    { "a": "not-semver", "b": "1.0.0", "expect": "lt" },
+    { "a": "abc", "b": "abd", "expect": "lt" },
+    { "a": "abd", "b": "abc", "expect": "gt" },
+    { "a": "garbage", "b": "garbage", "expect": "eq" }
   ]
 }

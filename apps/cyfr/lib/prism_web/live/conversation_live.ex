@@ -23,8 +23,6 @@ defmodule PrismWeb.ConversationLive do
   alias Phoenix.LiveView.JS
   alias Aqua.ConversationRunner
 
-  @list_models_ref "formula:local.list-models"
-
   @impl true
   def mount(_params, _session, socket) do
     ctx = socket.assigns[:context]
@@ -253,7 +251,13 @@ defmodule PrismWeb.ConversationLive do
         {:noreply, socket |> reload_athanor() |> put_flash(:info, "Set up — AQUA is ready.")}
 
       {:error, reason} ->
-        {:noreply, socket |> reload_athanor() |> put_flash(:error, "Still not set up: #{reason}")}
+        # error_message/1, not interpolation: the registry answers with
+        # tuple reasons ({:tool_auth_required, _}, {:timeout, _}, …) and
+        # interpolating one crashes the LiveView mid-render.
+        {:noreply,
+         socket
+         |> reload_athanor()
+         |> put_flash(:error, "Still not set up: #{error_message(reason)}")}
     end
   end
 
@@ -263,8 +267,11 @@ defmodule PrismWeb.ConversationLive do
       case call_tool(socket, "athanor/settings", %{
              "settings" => %{"aqua" => %{"answer_mode" => mode}}
            }) do
-        {:ok, _} -> {:noreply, assign(socket, :answer_mode, mode)}
-        {:error, reason} -> {:noreply, put_flash(socket, :error, "Could not save: #{reason}")}
+        {:ok, _} ->
+          {:noreply, assign(socket, :answer_mode, mode)}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Could not save: #{error_message(reason)}")}
       end
     else
       {:noreply, socket}
@@ -448,24 +455,11 @@ defmodule PrismWeb.ConversationLive do
   end
 
   def handle_info({:list_models_result, {:ok, result}}, socket) do
-    raw = result[:result] || result
-
-    decoded =
-      cond do
-        is_binary(raw) -> Jason.decode(raw) |> elem_or_empty()
-        is_map(raw) -> raw
-        true -> %{}
-      end
-
-    models_by_provider =
-      (decoded["models"] || %{})
-      |> Map.new(fn {provider, value} ->
-        {provider, PrismWeb.AgentsLive.Catalog.normalize_provider_models(value)}
-      end)
+    %{models: models} = PrismWeb.ModelCatalog.parse(result)
 
     {:noreply,
      socket
-     |> assign(:models_by_provider, models_by_provider)
+     |> assign(:models_by_provider, models)
      |> assign(:models_loaded, true)}
   end
 
@@ -495,7 +489,7 @@ defmodule PrismWeb.ConversationLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ConversationLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -802,33 +796,11 @@ defmodule PrismWeb.ConversationLive do
   # ---------------------------------------------------------------------------
 
   defp load_models(socket) do
-    ctx = socket.assigns.context
-    lv = self()
-
-    if Cyfr.Execution.available?() do
-      logger_metadata = Cyfr.LoggerContext.capture()
-
-      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
-
-        result =
-          call_tool(ctx, "execution/run", %{
-            "reference" => @list_models_ref,
-            "input" => %{}
-          })
-
-        send(lv, {:list_models_result, result})
-      end)
-
-      Process.send_after(lv, {:task_timeout, :models}, 15_000)
-      socket
-    else
-      assign(socket, :models_loaded, true)
+    case PrismWeb.ModelCatalog.load(socket.assigns.context) do
+      :ok -> socket
+      :unavailable -> assign(socket, :models_loaded, true)
     end
   end
-
-  defp elem_or_empty({:ok, %{} = m}), do: m
-  defp elem_or_empty(_), do: %{}
 
   defp member_labels(ctx) do
     case Sanctum.Tenancy.Members.list_by_athanor(ctx.athanor_id) do

@@ -93,7 +93,8 @@ defmodule Sanctum.MCP.AthanorTool do
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})
       when action in @person_only do
-    {:error, "athanor.#{action} is a person's act — sign in; an API key cannot do it"}
+    {:error,
+     {:invalid_argument, "athanor.#{action} is a person's act — sign in; an API key cannot do it"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
@@ -115,21 +116,24 @@ defmodule Sanctum.MCP.AthanorTool do
         {:ok, render(athanor)}
 
       {:error, :invalid_name} ->
-        {:error, "A group needs a name of 1–80 characters"}
+        {:error, {:invalid_argument, "A group needs a name of 1–80 characters"}}
 
       {:error, :slug_taken_or_invalid} ->
-        {:error, "That slug is taken or not a valid slug (lowercase letters, digits, hyphens)"}
+        {:error,
+         {:invalid_argument,
+          "That slug is taken or not a valid slug (lowercase letters, digits, hyphens)"}}
 
       {:error, {:limit_reached, key, cap}} ->
-        {:error, "Limit reached: #{key} = #{cap}"}
+        {:error, {:invalid_argument, "Limit reached: #{key} = #{cap}"}}
 
       {:error, reason} ->
         Logger.error("[AthanorTool] athanor.create failed: #{inspect(reason)}")
-        {:error, "Failed to create the group"}
+        {:error, {:unavailable, "Storage"}}
     end
   end
 
-  def handle(_ctx, %{"action" => "create"}), do: {:error, "Missing required argument: name"}
+  def handle(_ctx, %{"action" => "create"}),
+    do: {:error, {:invalid_argument, "Missing required argument: name"}}
 
   def handle(%Context{} = ctx, %{"action" => "rename", "name" => name} = args)
       when is_binary(name) do
@@ -140,7 +144,8 @@ defmodule Sanctum.MCP.AthanorTool do
     end
   end
 
-  def handle(_ctx, %{"action" => "rename"}), do: {:error, "Missing required argument: name"}
+  def handle(_ctx, %{"action" => "rename"}),
+    do: {:error, {:invalid_argument, "Missing required argument: name"}}
 
   def handle(%Context{} = ctx, %{"action" => "archive"} = args) do
     with {:ok, athanor, _focused} <- resolve(ctx, args) do
@@ -153,14 +158,14 @@ defmodule Sanctum.MCP.AthanorTool do
           {:ok, render(archived)}
 
         {:error, :home_cannot_be_archived} ->
-          {:error, "Home is the server's group and cannot be archived"}
+          {:error, {:invalid_argument, "Home is the server's group and cannot be archived"}}
 
         {:error, :person_athanor_cannot_be_archived} ->
-          {:error, "A person's own athanor is not archived here"}
+          {:error, {:invalid_argument, "A person's own athanor is not archived here"}}
 
         {:error, reason} ->
           Logger.error("[AthanorTool] athanor.archive failed: #{inspect(reason)}")
-          {:error, "Failed to archive the athanor"}
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -178,11 +183,12 @@ defmodule Sanctum.MCP.AthanorTool do
 
         {:error, :home_is_final} ->
           {:error,
-           "That Home is archived for the record; the server has already started a new one"}
+           {:invalid_argument,
+            "That Home is archived for the record; the server has already started a new one"}}
 
         {:error, reason} ->
           Logger.error("[AthanorTool] athanor.unarchive failed: #{inspect(reason)}")
-          {:error, "Failed to restore the athanor"}
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -199,15 +205,19 @@ defmodule Sanctum.MCP.AthanorTool do
             {:ok, Map.put(render(athanor), "purged", true)}
 
           {:error, :not_archived} ->
-            {:error, "Only an archived athanor's storage can be purged — archive it first"}
+            {:error,
+             {:invalid_argument,
+              "Only an archived athanor's storage can be purged — archive it first"}}
 
           {:error, reason} ->
             Logger.error("[AthanorTool] athanor.purge failed: #{inspect(reason)}")
-            {:error, "Failed to purge the athanor's storage"}
+            {:error, {:unavailable, "Storage"}}
         end
       end
     else
-      {:error, "athanor.purge is the operator's act — only a platform admin may do it"}
+      # The same refusal the dispatcher mints for a `scope: :platform` action,
+      # so the operator gate reads identically wherever it is applied.
+      {:error, :platform_admin_required}
     end
   end
 
@@ -220,7 +230,7 @@ defmodule Sanctum.MCP.AthanorTool do
 
         {:error, reason} ->
           Logger.error("[AthanorTool] athanor.settings failed: #{inspect(reason)}")
-          {:error, "Failed to update settings"}
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -239,16 +249,16 @@ defmodule Sanctum.MCP.AthanorTool do
 
         {:error, reason} ->
           Logger.error("[AthanorTool] athanor.provision failed: #{inspect(reason)}")
-          {:error, "Provisioning failed"}
+          {:error, {:unavailable, "Provisioning"}}
       end
     end
   end
 
   def handle(_ctx, %{"action" => "settings"}),
-    do: {:error, "Missing required argument: settings (an object to merge)"}
+    do: {:error, {:invalid_argument, "Missing required argument: settings (an object to merge)"}}
 
-  def handle(_ctx, %{"action" => action}), do: {:error, "Invalid athanor action: #{action}"}
-  def handle(_ctx, _args), do: {:error, "Missing required argument: action"}
+  def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "athanor.#{action}"}}
+  def handle(_ctx, _args), do: {:error, :action_missing}
 
   # The athanor an action names — `athanor` (an id or route slug), else the
   # caller's focused one — as long as the caller may work in it. An archived
@@ -284,17 +294,19 @@ defmodule Sanctum.MCP.AthanorTool do
         ctx.platform_admin ->
           case Context.focus(ctx, athanor) do
             {:ok, focused} -> {:ok, athanor, focused}
-            {:error, _} -> {:error, "Not a member of that athanor"}
+            {:error, _} -> {:error, {:invalid_argument, "Not a member of that athanor"}}
           end
 
         true ->
-          {:error, "Not a member of that athanor"}
+          {:error, {:invalid_argument, "Not a member of that athanor"}}
       end
     end
   end
 
   defp lookup(%Context{athanor_id: id}, nil, opts) when is_binary(id), do: get(id, opts)
-  defp lookup(%Context{}, nil, _opts), do: {:error, "No athanor in focus — pass athanor"}
+
+  defp lookup(%Context{}, nil, _opts),
+    do: {:error, {:invalid_argument, "No athanor in focus — pass athanor"}}
 
   defp lookup(%Context{}, segment, opts) when is_binary(segment) do
     if Athanors.athanor_id?(segment) do
@@ -302,7 +314,7 @@ defmodule Sanctum.MCP.AthanorTool do
     else
       segment
       |> Athanors.by_route_slug(include_archived: Keyword.get(opts, :include_archived, false))
-      |> or_not_found()
+      |> or_not_found(segment)
     end
   end
 
@@ -311,21 +323,24 @@ defmodule Sanctum.MCP.AthanorTool do
       {:ok, %{status: "archived"} = athanor} ->
         if Keyword.get(opts, :include_archived, false),
           do: {:ok, athanor},
-          else: {:error, "That athanor is archived"}
+          else: {:error, {:invalid_argument, "That athanor is archived"}}
 
       other ->
-        or_not_found(other)
+        or_not_found(other, id)
     end
   end
 
-  defp or_not_found({:ok, athanor}), do: {:ok, athanor}
-  defp or_not_found(_), do: {:error, "Athanor not found"}
+  # The refusal names what the caller named — an id or a route slug — and
+  # nothing else about the athanor.
+  defp or_not_found({:ok, athanor}, _named), do: {:ok, athanor}
+  defp or_not_found(_, named), do: {:error, {:not_found, "Athanor", named}}
 
   defp owner_admitted(%{kind: "person", owner_user_id: owner}) when is_binary(owner) do
     case Sanctum.Tenancy.Users.get(owner) do
       {:ok, %{status: "denied"}} ->
         {:error,
-         "That person is denied at the door — allow them first; that reopens their athanor"}
+         {:invalid_argument,
+          "That person is denied at the door — allow them first; that reopens their athanor"}}
 
       _ ->
         :ok
@@ -337,8 +352,8 @@ defmodule Sanctum.MCP.AthanorTool do
   defp rename(athanor, name) do
     case Athanors.rename(athanor, name) do
       {:ok, renamed} -> {:ok, renamed}
-      {:error, :invalid_name} -> {:error, "A name is 1–80 characters"}
-      {:error, _} -> {:error, "Failed to rename"}
+      {:error, :invalid_name} -> {:error, {:invalid_argument, "A name is 1–80 characters"}}
+      {:error, _} -> {:error, {:unavailable, "Storage"}}
     end
   end
 

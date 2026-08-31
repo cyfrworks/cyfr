@@ -79,4 +79,39 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     :ok = BudgetGuard.release(budget, self())
     assert Budget.snapshot(budget).in_flight == 0
   end
+
+  describe "release_after_exit/2 — what a failed release call means for the slot" do
+    test "a timeout does not release: the queued message still will", %{budget: budget} do
+      :ok = Budget.try_acquire(budget)
+
+      # The guard is alive and the `{:release, ...}` message is in its
+      # mailbox; only the reply was given up on. Releasing here as well
+      # decremented twice for one charge, handing a concurrent sibling's
+      # slot back early and letting the root outrun its consented cap.
+      assert :ok =
+               BudgetGuard.release_after_exit(
+                 budget,
+                 {:timeout, {GenServer, :call, [BudgetGuard, {:release, budget, self()}, 5000]}}
+               )
+
+      assert Budget.snapshot(budget).in_flight == 1
+
+      :ok = Budget.release(budget)
+      assert Budget.snapshot(budget).in_flight == 0
+    end
+
+    test "an exit that means the call never landed releases directly", %{budget: budget} do
+      :ok = Budget.try_acquire(budget)
+
+      assert :ok = BudgetGuard.release_after_exit(budget, {:noproc, {GenServer, :call, []}})
+      assert Budget.snapshot(budget).in_flight == 0
+    end
+
+    test "a guard that died mid-handling still gives the slot back", %{budget: budget} do
+      :ok = Budget.try_acquire(budget)
+
+      assert :ok = BudgetGuard.release_after_exit(budget, :shutdown)
+      assert Budget.snapshot(budget).in_flight == 0
+    end
+  end
 end

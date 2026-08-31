@@ -4,9 +4,8 @@
 package cmd
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"os"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -28,44 +27,30 @@ var removeCmd = &cobra.Command{
 	Args: cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		var normalized string
-
-		switch {
-		case len(args) >= 1:
-			args = joinTypeShorthand(args)
-			var err error
-			normalized, err = resolveComponentRef(cmd.Context(), client, args[0])
-			if err != nil {
-				return err
-			}
-		case prompt.IsInteractive(flagNoInteractive):
-			opts, err := prompt.FetchComponents(cmd.Context(), client)
-			if err != nil {
-				return handleToolError(err)
-			}
-			if len(opts) == 0 {
-				return errors.New("No components found. Nothing to remove.")
-			}
-			selected, err := prompt.SelectOne("Select a component to remove", opts)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			normalized = selected
-		default:
-			return errors.New("Usage: cyfr remove <reference>")
+		normalized, err := pickTarget(cmd.Context(), joinTypeShorthand(args), selector{
+			Title: "Select a component to remove",
+			Empty: "No components found. Nothing to remove.",
+			Usage: "Usage: cyfr remove <reference>",
+			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+				return prompt.FetchComponents(ctx, client)
+			},
+			Normalize: func(ctx context.Context, arg string) (string, error) {
+				return resolveComponentRef(ctx, client, arg)
+			},
+		})
+		if err != nil {
+			return err
 		}
 
-		// Confirm before removing
+		// Confirm before removing — for an argument-given ref too, not just
+		// a picked one.
 		if prompt.IsInteractive(flagNoInteractive) {
 			confirmed, err := prompt.Confirm(fmt.Sprintf("Remove component '%s'?", normalized))
 			if err != nil {
 				if prompt.IsAborted(err) {
-					os.Exit(130)
+					return prompt.ErrAborted
 				}
-				return fmt.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %w", err)
 			}
 			if !confirmed {
 				fmt.Println("Cancelled.")

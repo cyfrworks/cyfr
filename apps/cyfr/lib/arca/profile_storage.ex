@@ -21,7 +21,15 @@ defmodule Arca.ProfileStorage do
       _ = Map.fetch!(attrs, :athanor_id)
       row = Map.put_new(attrs, :id, Cyfr.UUID7.generate_id("prof"))
 
-      struct(Profile, row)
+      # Through a changeset carrying the active-identity index — see
+      # `Arca.VaultStorage.put/1`: a bare struct insert declares no
+      # constraint, so a race raised `Ecto.ConstraintError` past the
+      # db-error rescue instead of refusing typed.
+      %Profile{}
+      |> Ecto.Changeset.change(row)
+      |> Ecto.Changeset.unique_constraint([:athanor_id, :source_ref, :label, :kind],
+        name: :profiles_active_identity_index
+      )
       |> Arca.Repo.insert()
     end)
   end

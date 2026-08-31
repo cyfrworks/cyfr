@@ -12,10 +12,14 @@ import (
 	"github.com/cyfr/codex/internal/mcp"
 )
 
-// randomHex generates n random bytes as a hex string.
+// randomHex generates n random bytes as a hex string. The id only labels a
+// progress stream, so a failed read degrades to a fixed label rather than an
+// error path every caller would have to thread.
 func randomHex(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return "cli-unknown"
+	}
 	return hex.EncodeToString(b)
 }
 

@@ -4,7 +4,7 @@
 defmodule Cyfr.GmailOAuthSmokeTest do
   @moduledoc """
   The operator arc for the one OAuth exemplar, end to end against a stub
-  provider: mint a connection holding a token bundle, grant a profile
+  provider: mint a vault entry holding a token bundle, grant a profile
   binding it, dispense through the vault, refresh when it expires, and
   watch revocation bite.
 
@@ -85,7 +85,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     {:ok, ctx: ctx}
   end
 
-  defp mint_connection!(ctx, oauth, endpoints) do
+  defp mint_entry!(ctx, oauth, endpoints) do
     {:ok, view} =
       Vault.create(ctx, %{
         name: "my-gmail",
@@ -134,7 +134,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     # A live token dispenses without touching the provider at all — the
     # refresh arm is the next test.
     entry =
-      mint_connection!(
+      mint_entry!(
         ctx,
         %{"access_token" => "ya29.live", "refresh_token" => "1//rt", "token_type" => "Bearer"},
         %{"token_url" => "https://oauth2.googleapis.com/token", "auth_style" => "params"}
@@ -161,7 +161,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
              VaultReader.oauth_token(ctx, resource, @provider)
   end
 
-  test "the connection can arrive through the real grant flow", %{ctx: ctx} do
+  test "the entry can arrive through the real grant flow", %{ctx: ctx} do
     # The operator arc end to end: provider client credentials stored,
     # a browser grant completed against the token endpoint, the minted
     # entry bound through the consent walk, and the token dispensed from
@@ -237,7 +237,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     :ok = Sanctum.ProviderCredentials.put(ctx, @provider, "client-id", "client-secret")
 
     entry =
-      mint_connection!(
+      mint_entry!(
         ctx,
         %{
           "access_token" => "ya29.stale",
@@ -261,7 +261,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   test "a scope projection narrower than the grant is refused, not over-served",
        %{ctx: ctx} do
     entry =
-      mint_connection!(
+      mint_entry!(
         ctx,
         %{"access_token" => "ya29.live"},
         %{"token_url" => "https://oauth2.googleapis.com/token"}
@@ -278,7 +278,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
   test "material never appears in what the operator surfaces return", %{ctx: ctx} do
     entry =
-      mint_connection!(
+      mint_entry!(
         ctx,
         %{"access_token" => "ya29.super-secret"},
         %{"token_url" => "https://oauth2.googleapis.com/token"}

@@ -190,7 +190,7 @@ defmodule Aqua.Attachments do
       name
       |> String.normalize(:nfc)
       |> String.replace(~r/[\/\\]/, "_")
-      |> String.replace(~r/[\x00-\x1f\x7f]/, "")
+      |> strip_controls()
       |> String.trim()
 
     base =
@@ -213,6 +213,18 @@ defmodule Aqua.Attachments do
   end
 
   def safe_filename(_), do: "file"
+
+  @doc """
+  Strip C0 control characters and DEL — the character class no filename
+  context tolerates. The shared core of this module's storage-name rule
+  and the attachment controller's Content-Disposition rule (which adds
+  quote/backslash on top for the header): three near-copies of this strip
+  once carried three different ranges.
+  """
+  @spec strip_controls(String.t()) :: String.t()
+  def strip_controls(name) when is_binary(name) do
+    String.replace(name, ~r/[\x00-\x1f\x7f]/, "")
+  end
 
   # The cap is in BYTES (the filesystem's unit — NAME_MAX is 255 bytes, and
   # a grapheme cut of a multibyte name can run several times over it), so cut

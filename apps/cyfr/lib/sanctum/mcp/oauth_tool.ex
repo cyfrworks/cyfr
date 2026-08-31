@@ -123,7 +123,7 @@ defmodule Sanctum.MCP.OAuthTool do
     {:error, Emissary.MCP.ToolProvider.invalid_action("oauth", action_enum())}
   end
 
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
 
   # An authorization refusal stays a vocabulary term — the dispatcher
   # renders it with the auth code. `to_string/1` here used to crash on a

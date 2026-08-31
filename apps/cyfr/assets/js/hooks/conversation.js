@@ -7,7 +7,7 @@
 // the running turn; `aqua:intents` carries the intents parsed out of the
 // assistant's reply (navigate, copy) for this browser to act on.
 
-const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+import {isMac} from "../platform"
 
 function isHaltShortcut(event) {
   const modifier = isMac ? event.metaKey : event.ctrlKey

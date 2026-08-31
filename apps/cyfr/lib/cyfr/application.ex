@@ -150,10 +150,15 @@ defmodule Cyfr.Application do
         {DynamicSupervisor, name: Aqua.ConversationSupervisor, strategy: :one_for_one},
         maybe_conversation_recovery()
       ]),
-      # Last: mints Home's rows from the seed union on first boot (the
-      # overlay serves the bundle in place — no bytes are copied). Needs
-      # the repo, the tincture registry (the scan reloads it) and nothing
-      # else.
+      # Last, and synchronous: mints Home's rows from the seed union on first
+      # boot (the overlay serves the bundle in place — no bytes are copied)
+      # and reconciles the platform-admin roster against the env. Needs the
+      # repo, the tincture registry (the scan reloads it) and nothing else.
+      #
+      # It runs its work in `init/1` and answers `:ignore`, so this child
+      # finishing is what gates the web tier below — the endpoint must not
+      # answer requests while Home is half-seeded or while a de-listed
+      # operator's sessions are still live.
       Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
     ]
 
@@ -394,7 +399,10 @@ defmodule Cyfr.Application do
     # `Cyfr.RuntimeConfig.mcp_allowed_origins/0` the only place the localhost
     # default is spelled, and stops an explicit empty list reading as unset.
     cors_customized? = "*" not in cors
-    mcp_customized? = Application.get_env(:cyfr, :mcp_allowed_origins) != nil
+
+    mcp_customized? =
+      Application.get_env(:cyfr, :mcp_allowed_origins) != nil or
+        Application.get_env(:cyfr, :mcp_extra_origins, []) != []
 
     if cors_customized? and not mcp_customized? do
       Logger.warning(
@@ -543,12 +551,18 @@ defmodule Cyfr.Application do
     end
   end
 
-  defp parse_keyring_env!(json) do
+  @doc false
+  # Public for the same reason `cors_enforcement/3` is: boot policy that
+  # refuses a deployment should be testable without booting one.
+  @spec parse_keyring_env!(String.t()) :: %{primary: String.t(), keys: map()}
+  def parse_keyring_env!(json) do
     case Jason.decode(json) do
       {:ok, %{"primary" => primary, "keys" => keys}}
       when is_binary(primary) and primary != "" and is_map(keys) and map_size(keys) > 0 ->
         decoded =
           Map.new(keys, fn {label, b64} ->
+            validate_key_label!(label)
+
             case Base.decode64(b64) do
               {:ok, bin} when byte_size(bin) >= 32 ->
                 {label, bin}
@@ -562,11 +576,70 @@ defmodule Cyfr.Application do
           raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING primary #{inspect(primary)} is not in :keys"
         end
 
+        refuse_duplicate_key_material!(decoded)
+
         %{primary: primary, keys: decoded}
 
       _ ->
         raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING must be JSON of the form " <>
                 ~s({"primary": "label", "keys": {"label": "<base64-32-bytes>"}})
     end
+  end
+
+  # The envelope stores the label as `byte_size(label)::8`, so a label of 256
+  # bytes or more writes a length byte that does not describe it and produces
+  # ciphertext nothing can ever parse back. An empty label is refused for the
+  # matching reason at the other end: `Sanctum.Cipher.envelope/1` requires
+  # `llen > 0`, so a zero-length label decrypts fine but reads as `unknown` to
+  # the rotation audit and aborts a rotation run.
+  defp validate_key_label!(label) when is_binary(label) do
+    cond do
+      label == "" ->
+        raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING contains an empty key label"
+
+      byte_size(label) > 255 ->
+        raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING key label #{inspect(binary_part(label, 0, 32))}… " <>
+                "is #{byte_size(label)} bytes; the envelope stores the length in one byte, so " <>
+                "labels must be 1..255 bytes"
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_key_label!(label) do
+    raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING key label #{inspect(label)} is not a string"
+  end
+
+  # Two labels over the same bytes are not two keys. The derived key is a
+  # function of the master material and the purpose — not the label (the label
+  # is bound in the AAD, which is what stops a row from being read under
+  # another label, but it does not change the key). So "rotating" by adding a
+  # new label over the same material re-encrypts every row under the key it
+  # already had, while `Sanctum.Cipher.Rotation.audit/0` — which reports label
+  # distribution — calls the run a success. Refuse the shape at boot rather
+  # than let an operator believe they rotated.
+  defp refuse_duplicate_key_material!(decoded) do
+    duplicates =
+      decoded
+      |> Enum.group_by(fn {_label, material} -> material end, fn {label, _} -> label end)
+      |> Enum.filter(fn {_material, labels} -> length(labels) > 1 end)
+      |> Enum.map(fn {_material, labels} -> Enum.sort(labels) end)
+      |> Enum.sort()
+
+    if duplicates != [] do
+      raise """
+      [Cyfr] FATAL: CYFR_CRYPTO_KEYRING reuses the same key material under \
+      more than one label: #{inspect(duplicates)}.
+
+      The derived key depends on the material and the purpose, not on the \
+      label, so these labels are one key wearing several names. Re-encrypting \
+      onto one of them would report a completed rotation while leaving every \
+      row under the key it already had. Give the new label fresh material \
+      (32+ random bytes), or drop it.
+      """
+    end
+
+    :ok
   end
 end

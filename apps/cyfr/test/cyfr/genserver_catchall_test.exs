@@ -3,8 +3,15 @@
 
 defmodule Cyfr.GenServerCatchallTest do
   @moduledoc """
-  Tests that all GenServers in the cyfr app with catch-all handle_info/2
-  clauses survive unexpected messages and log a warning.
+  Every named GenServer with a catch-all `handle_info/2` survives an
+  unexpected message and logs it BOUNDED.
+
+  Two halves: a behavioral probe of the servers running under test, and a
+  derivation that finds every cyfr-app module spelling both
+  `Cyfr.UnexpectedMessage.log(__MODULE__` and `name: __MODULE__` — so a
+  new named server cannot adopt the helper without landing in a roster
+  here (probed, or excused with a reason). The old hand-kept list had
+  quietly fallen to seven of the adopters.
   """
   use ExUnit.Case, async: false
 
@@ -12,6 +19,7 @@ defmodule Cyfr.GenServerCatchallTest do
 
   @unexpected_msg :unexpected_test_message
 
+  # Probed live: named, started by the app under test.
   @genservers [
     {Emissary.MCP.ToolRegistry, "ToolRegistry"},
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
@@ -19,8 +27,22 @@ defmodule Cyfr.GenServerCatchallTest do
     {Prism.TelemetryBridge, "TelemetryBridge"},
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
-    {Cyfr.RecordSink, "RecordSink"}
+    {Cyfr.RecordSink, "RecordSink"},
+    {Cyfr.RateLimiter, "RateLimiter"}
   ]
+
+  # Named adopters not probed live, each with the reason it cannot be:
+  # gated off (returns :ignore) or not started in the test environment.
+  @not_probed %{
+    Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
+    Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
+    Emissary.MCP.RunningTasks => "probing would race real request tracking",
+    Emissary.MCP.Progress => "started per subscription, not app-named at boot",
+    Arca.Overlay.UnitLock => "holds live commit locks — a probe interleaves them",
+    Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
+    Sanctum.Consent.Source.Memory => "started only when the memory consent source is configured",
+    Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
+  }
 
   describe "catch-all handle_info/2" do
     for {mod, label} <- @genservers do
@@ -50,6 +72,51 @@ defmodule Cyfr.GenServerCatchallTest do
         assert log =~ inspect(@unexpected_msg),
                "Expected log to contain #{inspect(@unexpected_msg)}, got: #{inspect(log)}"
       end
+    end
+  end
+
+  describe "the roster derives from the adopters" do
+    # Static analysis over every lib file, like its sibling seam tests.
+    # They read the whole tree concurrently under a full-suite run and the
+    # default 60s deadline is a file-IO race, not a property of the check.
+    @tag timeout: :infinity
+    test "every named cyfr-app adopter is probed or excused" do
+      root = Path.expand("../../../..", __DIR__)
+
+      rostered =
+        MapSet.union(
+          MapSet.new(@genservers, fn {mod, _} -> mod end),
+          MapSet.new(Map.keys(@not_probed))
+        )
+
+      adopters =
+        for path <- Path.wildcard(Path.join(root, "apps/cyfr/lib/**/*.ex")),
+            source = File.read!(path),
+            String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
+            String.contains?(source, "name: __MODULE__"),
+            [_, mod] <-
+              Regex.scan(~r/defmodule ([\w.]+) do/, source, capture: :all) |> Enum.take(1),
+            do: Module.concat([mod])
+
+      missing = Enum.reject(adopters, &MapSet.member?(rostered, &1))
+
+      assert missing == [],
+             "named GenServers adopted Cyfr.UnexpectedMessage without joining this " <>
+               "test's roster (probe them, or excuse them with a reason): #{inspect(missing)}"
+    end
+  end
+
+  describe "the helper's inspect is bounded" do
+    test "a huge term logs a bounded line" do
+      huge = %{blob: String.duplicate("x", 1_000_000), list: Enum.to_list(1..100_000)}
+
+      log = capture_log(fn -> Cyfr.UnexpectedMessage.log(__MODULE__, huge) end)
+
+      assert log =~ "unexpected message"
+
+      assert String.length(log) < 2_000,
+             "the unexpected-message line is unbounded (#{String.length(log)} chars) — " <>
+               "the helper exists to keep a stray huge term out of the log"
     end
   end
 end

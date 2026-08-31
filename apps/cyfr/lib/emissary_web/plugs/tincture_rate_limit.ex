@@ -37,14 +37,13 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   (used by the test env so unrelated controller suites don't trip the limit).
   """
 
-  # The invoke budget both surfaces share as their DEFAULT (config override:
-  # :tincture_rate_limit_max). The HTTP pipeline keys it by IP through this
-  # plug; the console shell keys the same budget by person — deliberately
-  # separate buckets, one number.
-  @default_invoke_max 120
-
+  # The invoke budget both surfaces share lives in Cyfr.RuntimeConfig —
+  # glue both the transport plug and the console may name (the console
+  # naming THIS plug was the one console→transport back-edge). The HTTP
+  # pipeline keys it by IP through this plug; the console shell keys the
+  # same budget by person — deliberately separate buckets, one number.
   @doc "The default per-window invoke budget (both ingress surfaces)."
-  def default_invoke_max, do: @default_invoke_max
+  defdelegate default_invoke_max, to: Cyfr.RuntimeConfig, as: :tincture_default_invoke_max
 
   @doc """
   The effective invoke budget: the operator's override if set, else the
@@ -55,15 +54,10 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   key had two readers and the two could disagree about what "unset" means.
   """
   @spec invoke_max() :: pos_integer()
-  def invoke_max, do: Application.get_env(:cyfr, :tincture_rate_limit_max) || @default_invoke_max
-
-  # The window both surfaces share, for the same no-drift reason as the
-  # budget: the console shell keys the same capability by person and used
-  # to re-spell this literal.
-  @default_window_ms 60_000
+  defdelegate invoke_max, to: Cyfr.RuntimeConfig, as: :tincture_invoke_max
 
   @doc "The rate window (ms) both ingress surfaces share."
-  def default_window_ms, do: @default_window_ms
+  defdelegate default_window_ms, to: Cyfr.RuntimeConfig, as: :tincture_rate_window_ms
 
   def init(opts) do
     %{

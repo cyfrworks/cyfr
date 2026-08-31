@@ -60,6 +60,15 @@ defmodule Sanctum.JCSTest do
       assert {:error, {:invalid_value, [], :unsupported_type}} = JCS.encode({1, 2})
       assert {:error, {:invalid_value, [], :unsupported_type}} = JCS.encode(~D[2026-08-07])
       assert {:error, {:invalid_value, [], :unsupported_type}} = JCS.encode(<<0xFF, 0xFE>>)
+
+      # A KEY with the same invalid bytes used to sail through: the sort
+      # key degraded to an error tuple and the raw bytes were emitted —
+      # non-canonical output under {:ok, _}, in the consent-digest class.
+      assert {:error, {:invalid_value, [], :unsupported_type}} =
+               JCS.encode(%{<<0xFF, 0xFE>> => "x"})
+
+      assert {:error, {:invalid_value, ["outer"], :unsupported_type}} =
+               JCS.encode(%{"outer" => %{<<0xFF>> => 1}})
     end
 
     test "error paths locate the offending value" do

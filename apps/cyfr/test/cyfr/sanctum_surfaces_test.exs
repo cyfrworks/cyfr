@@ -28,20 +28,28 @@ defmodule Cyfr.SanctumSurfacesTest do
   #     `emissary` — domain code whose Sanctum reach should stay vocabulary
   #     and the tenancy carrier.
   @surfaces %{
+    # `Sanctum.Authority` is `Aqua.MCPHelpers` alone: the in-chain call an
+    # approved proposal runs under carries the chain's authority, and the
+    # seam's contract names its type.
     "aqua" => ~w(
-      Sanctum.ComponentRef Sanctum.Context Sanctum.Notify Sanctum.Sanitizer
-      Sanctum.Tenancy
+      Sanctum.Authority Sanctum.ComponentRef Sanctum.Context Sanctum.Notify
+      Sanctum.Sanitizer Sanctum.Tenancy
     ),
     "compendium" => ~w(
       Sanctum.Cipher Sanctum.CipherAAD Sanctum.ComponentRef Sanctum.Consent
       Sanctum.Context Sanctum.JCS Sanctum.Namespace Sanctum.Sanitizer
       Sanctum.SignIn Sanctum.ToolPattern Sanctum.VaultReader
     ),
+    # `Sanctum.Cipher` is here for `Cyfr.Release` alone: boot tells an
+    # operator with no explicit keyring that rotating their secret orphans
+    # every sealed blob, and that advice needs a rotation they can actually
+    # run. `Sanctum.Cipher.Rotation` had no caller outside its own tests, so
+    # the release task is what makes the warning actionable.
     "cyfr" => ~w(
-      Sanctum.Auth Sanctum.Authority Sanctum.Cidr Sanctum.Consent
-      Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
-      Sanctum.Provisioning Sanctum.ProvisioningSupervisor Sanctum.PubSub
-      Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy
+      Sanctum.Auth Sanctum.Authority Sanctum.Cidr Sanctum.Cipher
+      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
+      Sanctum.OAuth Sanctum.Provisioning Sanctum.ProvisioningSupervisor
+      Sanctum.PubSub Sanctum.Sanitizer Sanctum.Session Sanctum.Tenancy
     ),
     "emissary" => ~w(
       Sanctum.Atoms Sanctum.Authority Sanctum.ComponentRef Sanctum.Consent
@@ -74,31 +82,10 @@ defmodule Cyfr.SanctumSurfacesTest do
 
   defp reached(ns) do
     for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/#{ns}/**/*.ex")),
-        line <- path |> File.read!() |> code_lines(),
+        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
-  end
-
-  # Code only — heredoc prose, # comments, AND one-line @doc strings are
-  # about the dependency, not the dependency (a `@doc "pinned by
-  # Sanctum.VaultTest"` is not a reach).
-  defp code_lines(source) do
-    source
-    |> String.split("\n")
-    |> Enum.reduce({[], false}, fn line, {kept, in_heredoc?} ->
-      delimiters = line |> String.graphemes() |> Enum.chunk_every(3, 1, :discard)
-      toggles = Enum.count(delimiters, &(&1 == ["\"", "\"", "\""]))
-      now_inside? = if rem(toggles, 2) == 1, do: not in_heredoc?, else: in_heredoc?
-
-      keep? =
-        not in_heredoc? and not now_inside? and
-          not String.match?(line, ~r/^\s*#/) and
-          not String.match?(line, ~r/^\s*@(module)?doc\s+"/)
-
-      {if(keep?, do: [line | kept], else: kept), now_inside?}
-    end)
-    |> elem(0)
   end
 
   for {ns, surface} <- @surfaces do
@@ -137,5 +124,36 @@ defmodule Cyfr.SanctumSurfacesTest do
              readable here.
              """
     end
+  end
+
+  # Compendium's two SENSITIVE reaches get third-level pins on top of the
+  # namespace roster above: `Sanctum.Cipher` seals registry credentials at
+  # rest, and the `Sanctum.Consent` submodules it may touch are exactly the
+  # read-side trio below — the consent WRITE plane (Commit, Plan, Authz)
+  # must never be reachable from the Apache registry domain.
+  @compendium_consent_allowed ~w(
+    Sanctum.Consent.Bootstrap
+    Sanctum.Consent.ShapeDerivation
+    Sanctum.Consent.Source
+  )
+
+  test "lib/compendium touches only the allowed Sanctum.Consent submodules" do
+    deep =
+      for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/compendium/**/*.ex")),
+          line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
+          [module] <- Regex.scan(~r/\bSanctum\.Consent\.[A-Z]\w+/, line, capture: :first),
+          into: MapSet.new(),
+          do: module
+
+    extra = deep |> MapSet.difference(MapSet.new(@compendium_consent_allowed)) |> Enum.sort()
+
+    assert extra == [],
+           """
+           lib/compendium reaches Sanctum.Consent submodules outside its allowlist:
+
+           #{Enum.map_join(extra, "\n", &"  #{&1}")}
+
+           The consent write plane stays behind Sanctum's own surface.
+           """
   end
 end

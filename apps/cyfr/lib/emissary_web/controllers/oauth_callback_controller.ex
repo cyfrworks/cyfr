@@ -3,7 +3,7 @@
 
 defmodule EmissaryWeb.OAuthCallbackController do
   @moduledoc """
-  Handles the OAuth callback for Connection grants (`vault.authorize`).
+  Handles the OAuth callback for vault-entry grants (`vault.authorize`).
 
   This is separate from the user authentication OAuth flow (AuthController).
   It completes the code exchange into a vault entry's token bundle.
@@ -12,10 +12,12 @@ defmodule EmissaryWeb.OAuthCallbackController do
   unguessable `state` (256-bit, delete-on-read, 2-minute TTL) plus the
   server-held PKCE `code_verifier`. The pending record written when
   `vault.authorize` ran carries the originating athanor and target
-  Connection that the resulting tokens are stored under.
+  vault entry that the resulting tokens are stored under.
   """
 
   use EmissaryWeb, :controller
+
+  require Logger
 
   def callback(conn, %{"code" => code, "state" => state}) do
     # The whole URI has one owner now, not just the path: the exchange fails
@@ -46,7 +48,14 @@ defmodule EmissaryWeb.OAuthCallbackController do
 
   defp fmt_reason(reason) when is_binary(reason), do: reason
   defp fmt_reason(reason) when is_atom(reason), do: to_string(reason)
-  defp fmt_reason(reason), do: inspect(reason)
+
+  defp fmt_reason(reason) do
+    # The rule every other surface applies (`Emissary.MCP.Router`,
+    # `PrismWeb.MCPHelpers`): an unrecognized term is internal — an exit
+    # tuple, a changeset — and is logged, never reflected into the page.
+    Logger.warning("[OAuthCallback] grant completion failed: #{inspect(reason)}")
+    "the authorization could not be completed"
+  end
 
   # Override the endpoint's `default-src 'none'` CSP to allow inline styles
   # for this HTML response. This is a one-off browser-facing page (post-OAuth

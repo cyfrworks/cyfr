@@ -1010,8 +1010,6 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert Message.error_code(:execution_failed) == -33100
 
       # Registry: -33200 to -33299
-      assert Message.error_code(:component_not_found) == -33200
-      assert Message.error_code(:registry_unavailable) == -33202
 
       # An unknown atom falls back to the JSON-RPC internal error.
       assert Message.error_code(:no_such_error) == -32603

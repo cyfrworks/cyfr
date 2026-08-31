@@ -45,8 +45,8 @@ defmodule Opus.ComponentTypeTest do
       assert %Wasmex.Wasi.WasiP2Options{} = opts
       assert opts.allow_http == false
       assert opts.inherit_stdin == false
-      assert opts.inherit_stdout == true
-      assert opts.inherit_stderr == true
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
     end
 
     test "formula returns WasiP2Options with allow_http: false" do
@@ -54,8 +54,8 @@ defmodule Opus.ComponentTypeTest do
       assert %Wasmex.Wasi.WasiP2Options{} = opts
       assert opts.allow_http == false
       assert opts.inherit_stdin == false
-      assert opts.inherit_stdout == true
-      assert opts.inherit_stderr == true
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
     end
 
     test "catalyst returns WasiP2Options with allow_http: false (uses host function)" do
@@ -63,8 +63,8 @@ defmodule Opus.ComponentTypeTest do
       assert %Wasmex.Wasi.WasiP2Options{} = opts
       assert opts.allow_http == false
       assert opts.inherit_stdin == false
-      assert opts.inherit_stdout == true
-      assert opts.inherit_stderr == true
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
     end
 
     test "all types have empty args and env by default" do

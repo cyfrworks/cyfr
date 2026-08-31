@@ -51,6 +51,11 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     original_max = Application.get_env(:cyfr, :tincture_rate_limit_max)
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
 
+    # The shell no longer force-rescans on mount (the registry follows the
+    # tinctures topic in production); files planted directly on disk need
+    # the reload the AutoIndexer broadcast would otherwise trigger.
+    Prism.TinctureRegistry.reload_athanor(home.id)
+
     on_exit(fn ->
       Application.put_env(:cyfr, :base_path, original_path)
 

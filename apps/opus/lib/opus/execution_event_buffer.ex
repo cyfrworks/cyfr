@@ -105,18 +105,31 @@ defmodule Opus.ExecutionEventBuffer do
       origin: "host"
     }
 
-    deliver(execution_id, ctx, event)
+    result = deliver(execution_id, ctx, event)
+
+    # The terminal event is the last thing this stream numbers, so the
+    # counter can go with it. Dropping it any earlier — the buffer process
+    # used to forget on its own death — reset the numbering while the
+    # replay cache was still alive: an execution that idled two minutes
+    # and emitted again restarted at 1, and a client resuming with a
+    # pre-idle Last-Event-ID silently lost everything after the gap.
+    Opus.ExecutionEventBuffer.Sequence.forget(execution_id)
+
+    result
   end
 
-  # Broadcast + buffer, both keyed by the athanor the producer carries. A
-  # producer without one (a bug upstream — every execution belongs to an
-  # athanor) has nowhere to route to: the event is dropped and logged rather
+  # Buffer, then broadcast, both keyed by the athanor the producer carries.
+  # The buffered write must land first (and synchronously): broadcast-first
+  # left a window where a client that subscribed and replayed `since` saw
+  # neither the live event nor the buffered copy — a permanent gap. A
+  # producer without an athanor (a bug upstream — every execution belongs
+  # to one) has nowhere to route to: the event is dropped and logged rather
   # than misrouted into some default tenant.
   defp deliver(execution_id, ctx, event) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
-        broadcast(execution_id, athanor_id, event)
         buffer_event(execution_id, athanor_id, event)
+        broadcast(execution_id, athanor_id, event)
         :ok
 
       :error ->
@@ -155,8 +168,9 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   @doc """
-  Flush pending buffer writes for a given execution. Forces all prior casts
-  to be processed before returning. For test use.
+  Flush pending buffer writes for a given execution. Buffer writes are
+  synchronous calls now, so this is a round-trip that proves the queue is
+  drained; kept for test use.
   """
   def flush(execution_id) do
     case Registry.lookup(Opus.ExecutionEventBuffer.Registry, execution_id) do
@@ -249,6 +263,19 @@ defmodule Opus.ExecutionEventBuffer do
         _ -> []
       end
 
+    # If the counter table restarted while the cache survived (the
+    # ExecutionTree came back mid-run), a fresh counter would re-number
+    # from 1 under sequences already in the replay window. Floor it to the
+    # highest cached sequence so the next emit continues the stream.
+    max_seq =
+      events
+      |> Enum.map(&Map.get(&1, :sequence, 0))
+      |> Enum.max(fn -> 0 end)
+
+    if max_seq > 0 do
+      Opus.ExecutionEventBuffer.Sequence.reseed(execution_id, max_seq)
+    end
+
     {:ok, %{execution_id: execution_id, athanor_id: athanor_id, events: events}, @idle_timeout}
   end
 
@@ -257,8 +284,10 @@ defmodule Opus.ExecutionEventBuffer do
     {:reply, :ok, state, @idle_timeout}
   end
 
-  @impl true
-  def handle_cast({:buffer, event}, state) do
+  # A call, not a cast: `deliver/3` broadcasts only after this returns, so
+  # the replay buffer can never lag the live stream. The emit path is
+  # rate-limited; the round-trip is fine.
+  def handle_call({:buffer, event}, _from, state) do
     events = (state.events ++ [event]) |> Enum.take(-@max_events)
 
     Arca.Cache.put(
@@ -267,7 +296,7 @@ defmodule Opus.ExecutionEventBuffer do
       @buffer_ttl_ms
     )
 
-    {:noreply, %{state | events: events}, @idle_timeout}
+    {:reply, :ok, %{state | events: events}, @idle_timeout}
   end
 
   @impl true
@@ -277,12 +306,17 @@ defmodule Opus.ExecutionEventBuffer do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state, @idle_timeout}
   end
 
   @impl true
   def terminate(_reason, state) do
+    # The counter is NOT forgotten here. This process dies two minutes idle
+    # while the replay cache lives ten and the execution up to thirty —
+    # forgetting on death reset the numbering mid-window, and a client
+    # resuming with a pre-idle Last-Event-ID silently lost every post-idle
+    # event. The stream's terminal push is what retires the counter.
     if state.events != [] do
       key = Arca.Cache.Keys.exec_events(state.execution_id, state.athanor_id)
 
@@ -307,15 +341,20 @@ defmodule Opus.ExecutionEventBuffer do
   # ============================================================================
 
   # Route buffer writes through a per-execution GenServer to serialize them.
-  # Falls back to direct cache write if the GenServer can't be started
-  # (e.g., Registry not available in tests).
+  # Synchronous: the caller broadcasts only after the write landed. Falls
+  # back to direct cache write if the GenServer can't be started (e.g.,
+  # Registry not available in tests) or dies between lookup and call —
+  # non-atomic, but the event is never lost.
   defp buffer_event(execution_id, athanor_id, event) do
     case ensure_buffer(execution_id, athanor_id) do
       {:ok, pid} ->
-        GenServer.cast(pid, {:buffer, event})
+        try do
+          GenServer.call(pid, {:buffer, event})
+        catch
+          :exit, _reason -> buffer_event_direct(execution_id, athanor_id, event)
+        end
 
       :error ->
-        # Fallback: direct write (non-atomic but functional)
         buffer_event_direct(execution_id, athanor_id, event)
     end
   end

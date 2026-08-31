@@ -14,16 +14,55 @@ defmodule Cyfr.Bootstrap do
 
   Disabled by `config :cyfr, provisioning_boot_enabled: false` (the test
   environment, where a boot-time write would precede any sandbox checkout).
+
+  ## Why this runs synchronously
+
+  It is the last child of the infra tier, and the root supervisor is
+  `:rest_for_one` over `[infra, web]` — so finishing here is what holds the
+  endpoint back. As a `Task` it did not: `Task.start_link/3` returns the
+  moment the process spawns, so the supervisor moved on and
+  `EmissaryWeb.Endpoint` began accepting requests while Home was still being
+  seeded and, more to the point, while `reconcile_platform_admins/0` had yet
+  to revoke a de-listed operator's sessions. That is a window on every
+  restart, not only the first boot.
+
+  So the work happens in `init/1` and the child answers `:ignore`: nothing
+  lingers in the tree afterwards, and the next tier starts only once this
+  returned. Failure stays non-fatal — the rescues below, plus a top-level one,
+  keep a bad boot from taking the server down with it.
   """
 
-  use Task, restart: :temporary
+  use GenServer, restart: :temporary
   require Logger
   require Arca.Repo.Errors
 
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   def start_link(_opts) do
-    Task.start_link(__MODULE__, :run, [])
+    GenServer.start_link(__MODULE__, :ok)
+  end
+
+  @impl true
+  def init(:ok) do
+    run()
+
+    # One-shot: the work is done, so there is nothing to supervise. `:ignore`
+    # leaves no process behind and lets the supervisor carry on to the web
+    # tier — which is the point of doing this synchronously.
+    :ignore
+  rescue
+    # The per-step rescues below already absorb a database outage. This one
+    # exists so a genuine bug cannot turn "Home was not seeded" into "the
+    # server does not boot": before, a raise killed a temporary task and the
+    # app kept serving, and that property is worth keeping now that the raise
+    # would happen inside a supervisor's start.
+    e ->
+      Logger.error(
+        "[Cyfr.Bootstrap] boot provisioning raised: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      :ignore
   end
 
   @doc false

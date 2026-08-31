@@ -68,6 +68,10 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note: "an external tool's description changed under a standing consent (rug-pull signal)"
     },
+    [:cyfr, :sanctum, :tool_server, :description_drift_check_failed] => %{
+      consumers: [:audit],
+      note: "the drift check itself failed — a broken check must be distinguishable from no drift"
+    },
     [:cyfr, :sanctum, :provider_credentials, :fetch] => %{
       consumers: [:audit],
       note: "a stored provider credential was unsealed for use"
@@ -124,6 +128,13 @@ defmodule Cyfr.Telemetry.Catalog do
         "a timeout kill left a native thread spinning (no wasmex epoch interruption) — " <>
           "the one signal that a node is quietly losing cores; the semaphore refuses the " <>
           "tenant past a threshold"
+    },
+    [:cyfr, :opus, :execution, :unsigned] => %{
+      consumers: [:operator],
+      note:
+        "code with no verified signature ran because CYFR_REQUIRE_SIGNED_PULLS is off — " <>
+          "the operator's posture made visible at the moment it is exercised, so " <>
+          "'we allow unsigned pulls' does not read the same as 'we have none'"
     },
 
     # ——— guest activity (high-frequency observability) ———
@@ -193,6 +204,12 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :emissary, :webhook, :verify_succeeded] => %{consumers: [:metrics]},
     [:cyfr, :emissary, :webhook, :verify_failed] => %{consumers: [:metrics, :log]},
     [:cyfr, :emissary, :webhook, :dedup_unavailable] => %{consumers: [:metrics]},
+    [:cyfr, :emissary, :webhook, :dedup_release_failed] => %{
+      consumers: [:operator],
+      note:
+        "a failed delivery's idempotency claim could not be given back, so the sender's " <>
+          "retry will read as a duplicate and the target will never run for that key"
+    },
     [:cyfr, :emissary, :external_server, :reconciled] => %{
       consumers: [:operator],
       note: "external-server reconciler outcome; the reconciler logs the same fact"
@@ -230,7 +247,9 @@ defmodule Cyfr.Telemetry.Catalog do
     # ——— record sink ———
     [:cyfr, :record_sink, :dropped] => %{
       consumers: [:operator],
-      note: "the async record sink shed a write under pressure; the drop is counted, not hidden"
+      note:
+        "the async record sink shed a write — mailbox backpressure, or a row " <>
+          "still failing after a batch-rollback retry; the drop is counted, not hidden"
     }
   }
 

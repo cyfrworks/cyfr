@@ -271,7 +271,7 @@ defmodule Opus.Runtime do
           ctx,
           component_ref,
           execution_id,
-          oauth_resolver_opts(authority_info.authority, ctx)
+          [limits: limits] ++ oauth_resolver_opts(authority_info.authority, ctx)
         )
       else
         %{}
@@ -411,12 +411,20 @@ defmodule Opus.Runtime do
                 {:ok, result}
 
               {:error, decode_error} ->
-                Logger.warning(
-                  "[Opus.Runtime] Component output is not valid JSON: #{inspect(decode_error)}"
-                )
+                # Both halves of the old message were guest bytes: the raw
+                # output was spliced in whole, and `inspect/1` on a
+                # `Jason.DecodeError` prints its `data` field — the component's
+                # entire output — a second time. This string is persisted on
+                # the row, streamed as the terminal event and handed back to
+                # MCP clients and parent formulas, so a component that printed
+                # a credential and then returned malformed JSON published it.
+                # `Exception.message/1` is bounded to the position and the one
+                # offending byte, which is what makes the fault actionable.
+                detail = Exception.message(decode_error)
 
-                {:error,
-                 "Component returned invalid JSON output: #{inspect(decode_error)}. Raw output (first 200 chars): #{String.slice(json_output, 0, 200)}"}
+                Logger.warning("[Opus.Runtime] Component output is not valid JSON: #{detail}")
+
+                {:error, "Component returned invalid JSON output: #{detail}"}
             end
 
           {:ok, result} ->

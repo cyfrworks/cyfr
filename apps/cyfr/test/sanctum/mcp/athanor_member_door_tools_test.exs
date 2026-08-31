@@ -8,6 +8,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
   """
   use ExUnit.Case, async: false
 
+  alias Emissary.MCP.ToolError
   alias Emissary.MCP.ToolRegistry
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
@@ -70,7 +71,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(b, "member", %{"action" => "list", "athanor" => group.id})
 
-    assert msg =~ "Not a member"
+    assert ToolError.render(msg) =~ "Not a member"
 
     # add by user id, then bob sees it
     assert {:ok, %{state: "added"}} =
@@ -167,7 +168,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => shared})
 
-    assert msg =~ "More than one person"
+    assert ToolError.render(msg) =~ "More than one person"
 
     # An address the provider positively refuses cannot be seated by email:
     # a permanent invitation nobody could ever claim is the alternative.
@@ -184,7 +185,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => unverified})
 
-    assert msg =~ "not verified"
+    assert ToolError.render(msg) =~ "not verified"
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
     # By user id they are seatable — the id is the person.
@@ -217,9 +218,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
 
     assert {:error, msg} = call(k, "athanor", %{"action" => "create", "name" => "Nope"})
-    assert msg =~ "person's act"
+    assert ToolError.render(msg) =~ "person's act"
     assert {:error, msg} = call(k, "member", %{"action" => "add", "email" => "x@example.com"})
-    assert msg =~ "person's act"
+    assert ToolError.render(msg) =~ "person's act"
     # reads are fine
     assert {:ok, %{athanors: _}} = call(k, "athanor", %{"action" => "list"})
   end
@@ -230,7 +231,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: home.id)
     a = ctx.(alice, home.id, [])
     assert {:error, msg} = call(a, "athanor", %{"action" => "archive"})
-    assert msg =~ "Home"
+    assert ToolError.render(msg) =~ "Home"
 
     {:ok, personal} =
       Athanors.create(%{
@@ -243,9 +244,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
     assert {:error, msg} = call(a, "athanor", %{"action" => "archive", "athanor" => personal.id})
-    assert msg =~ "own athanor"
+    assert ToolError.render(msg) =~ "own athanor"
     assert {:error, msg} = call(a, "member", %{"action" => "leave", "athanor" => personal.id})
-    assert msg =~ "own athanor"
+    assert ToolError.render(msg) =~ "own athanor"
   end
 
   test "door.* is the operator's: refused for a member, hidden from tools/list, open to an admin",
@@ -285,7 +286,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(admin, "door", %{"action" => "deny", "value" => "ops@example.com"})
 
-    assert msg =~ "platform admin"
+    assert ToolError.render(msg) =~ "platform admin"
 
     # allowing again reverses the standing
     assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => email})
@@ -320,11 +321,11 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
     assert {:error, msg} = call(b, "session", %{"action" => "use", "athanor" => group.slug})
-    assert msg =~ "Not a member"
+    assert ToolError.render(msg) =~ "Not a member"
 
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
     assert {:error, msg} = call(k, "session", %{"action" => "use", "athanor" => group.slug})
-    assert msg =~ "needs a session"
+    assert ToolError.render(msg) =~ "needs a session"
   end
 
   test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
@@ -343,11 +344,11 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
 
     for target <- [%{"user_id" => bob}, %{"email" => "bob#{n}@example.com"}] do
       assert {:error, msg} = call(a, "member", Map.merge(%{"action" => "add"}, target))
-      assert msg =~ "one member"
+      assert ToolError.render(msg) =~ "one member"
     end
 
     assert {:error, msg} = call(a, "member", %{"action" => "remove", "user_id" => alice})
-    assert msg =~ "owner"
+    assert ToolError.render(msg) =~ "owner"
     assert Members.member?(alice, personal.id)
     assert Members.count_by_athanor(personal.id) == {:ok, 1}
 
@@ -375,7 +376,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
           {"member", %{"action" => "remove", "user_id" => alice}}
         ] do
       assert {:error, msg} = call(who, tool, Map.put(args, "athanor", group.id))
-      assert msg =~ "archived", "#{tool}.#{args["action"]} ran on an archived athanor"
+
+      assert ToolError.render(msg) =~ "archived",
+             "#{tool}.#{args["action"]} ran on an archived athanor"
     end
 
     {:ok, unchanged} = Athanors.get(group.id)
@@ -421,7 +424,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
 
-    assert msg =~ "denied at the door"
+    assert ToolError.render(msg) =~ "denied at the door"
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
     {:ok, user} = Users.get(alice)

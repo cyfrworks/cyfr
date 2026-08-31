@@ -115,8 +115,27 @@ func (c *Config) SaveTo(path string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	// Write-then-rename, never in place: a crash or full disk mid-write
+	// used to truncate the file and lose every stored token. The fresh
+	// temp file (0600 from CreateTemp) also fixes permissions for good —
+	// os.WriteFile applied its mode only on creation, so a pre-existing
+	// 0644 config kept a live bearer world-readable forever.
+	tmp, err := os.CreateTemp(dir, ".config-*.json")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("save config: %w", err)
 	}
 	return nil
 }
@@ -138,13 +157,18 @@ func (c *Config) CurrentURL() string {
 	return ctx.URL
 }
 
-// SetSessionID updates the session ID for the active context and saves.
-func (c *Config) SetSessionID(sessionID string) error {
+// SetToken stores the bearer credential for the active context and saves.
+// It writes the modern `token` field and clears the legacy `session_id`
+// spelling — the Context doc promises the legacy field is never written
+// anew, but this function (as SetSessionID) wrote exactly that on every
+// login, leaving `token` permanently dead.
+func (c *Config) SetToken(token string) error {
 	ctx := c.Current()
 	if ctx == nil {
 		return fmt.Errorf("no active context")
 	}
-	ctx.SessionID = sessionID
+	ctx.Token = token
+	ctx.SessionID = ""
 	return c.Save()
 }
 

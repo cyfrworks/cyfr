@@ -34,7 +34,7 @@ var upgradeCmd = &cobra.Command{
 		defer cancel()
 		latest, err := release.Latest(ctx)
 		if err != nil {
-			return fmt.Errorf("Failed to check for updates: %v", err)
+			return fmt.Errorf("Failed to check for updates: %w", err)
 		}
 
 		// Compare to the current version — only upgrade if not already current.
@@ -63,7 +63,7 @@ var upgradeCmd = &cobra.Command{
 				update.Stdout = os.Stdout
 				update.Stderr = os.Stderr
 				if err := update.Run(); err != nil {
-					return fmt.Errorf("brew update failed: %v", err)
+					return fmt.Errorf("brew update failed: %w", err)
 				}
 
 				upgrade := exec.Command("brew", "upgrade", "--cask", "cyfr")
@@ -128,7 +128,7 @@ var upgradeCmd = &cobra.Command{
 
 				shPath, err := exec.LookPath("sh")
 				if err != nil {
-					return fmt.Errorf("sh not found in PATH: %v", err)
+					return fmt.Errorf("sh not found in PATH: %w", err)
 				}
 				// syscall.Exec replaces this process; control never returns on
 				// success. The installer's stdout/stderr inherit our terminal.

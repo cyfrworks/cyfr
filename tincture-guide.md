@@ -6,7 +6,7 @@ Build, test, and deploy tinctures for CYFR. Tinctures are full-stack frontend ex
 
 ## Architecture
 
-Tinctures are served at `/t/:athanor/:publisher/:name` (the athanor segment is `@<namespace>` for a person's athanor, the group slug for a group's). They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving Connections, enforcing the consented authority), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
+Tinctures are served at `/t/:athanor/:publisher/:name` (the athanor segment is `@<namespace>` for a person's athanor, the group slug for a group's). They invoke backend components via `cyfr.invoke()` — CYFR validates the call against the manifest's dependency allowlist, executes the component server-side (resolving vault entries, enforcing the consented authority), and returns secret-masked output to the browser. Tinctures never see API keys, session tokens, or secrets.
 
 ### Private vs Public
 
@@ -135,8 +135,10 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 | `public` | boolean | `false` | Metadata hint. Actual public access is the stored `is_public` visibility flag — set with the `tincture_visibility.set` MCP tool |
 | `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
 | `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
-| `sandbox` | object | `{}` | iframe sandbox config — `allow_scripts` only (no `allow_same_origin`) |
 | `connect` | string[] | `[]` | External domains for CSP `connect-src` (e.g., `["*.supabase.co"]`). Enables client-side SDK access to external services |
+| `media` | object | — | Overrides for the auto-discovered media (e.g. `{"icon": "media/logo.svg"}`); the `public/media/` convention below needs no manifest fields |
+
+The iframe sandbox itself is fixed policy — `allow-scripts` only, never `allow-same-origin` — and is not a manifest field (a `sandbox` block is ignored).
 
 ### Media Convention
 

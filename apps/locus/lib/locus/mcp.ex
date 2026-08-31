@@ -101,33 +101,15 @@ defmodule Locus.MCP do
   # input bound so the two cannot drift apart.
   @max_base64_size Sanctum.Limits.default_max_memory_bytes()
 
-  def handle("build", %Context{} = _ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
+  # Validate stays deliberately public, but decoding and walking up to
+  # 48 MiB of WASM is real CPU with no build-slot accounting — so each
+  # caller identity gets a bucket, and the anonymous public shares one.
+  @validate_per_minute 10
+
+  def handle("build", %Context{} = ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
       when is_binary(wasm_base64) do
-    if byte_size(wasm_base64) > @max_base64_size do
-      {:error,
-       {:invalid_argument,
-        "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}}
-    else
-      case Base.decode64(wasm_base64) do
-        {:ok, bytes} ->
-          case Compendium.WasmValidator.validate(bytes) do
-            {:ok, meta} ->
-              {:ok,
-               %{
-                 valid: true,
-                 digest: meta.digest,
-                 size: meta.size,
-                 exports: meta.exports,
-                 suggested_type: to_string(meta.suggested_type)
-               }}
-
-            {:error, reason} ->
-              {:ok, %{valid: false, reason: to_string(reason)}}
-          end
-
-        :error ->
-          {:error, {:invalid_argument, "Invalid base64 encoding"}}
-      end
+    with :ok <- check_validate_rate(ctx) do
+      do_validate(wasm_base64)
     end
   end
 
@@ -137,12 +119,12 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    build_id = args["build_id"] || Cyfr.UUID7.generate_id("build")
-
-    if args["async"] == true do
-      start_async_compile(ctx, reference, build_id)
-    else
-      run_compile(ctx, reference, build_id)
+    with {:ok, build_id} <- settle_build_id(ctx, args["build_id"]) do
+      if args["async"] == true do
+        start_async_compile(ctx, reference, build_id)
+      else
+        run_compile(ctx, reference, build_id)
+      end
     end
   end
 
@@ -175,6 +157,67 @@ defmodule Locus.MCP do
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
   end
+
+  defp do_validate(wasm_base64) do
+    if byte_size(wasm_base64) > @max_base64_size do
+      {:error,
+       {:invalid_argument,
+        "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}}
+    else
+      case Base.decode64(wasm_base64) do
+        {:ok, bytes} ->
+          case Compendium.WasmValidator.validate(bytes) do
+            {:ok, meta} ->
+              {:ok,
+               %{
+                 valid: true,
+                 digest: meta.digest,
+                 size: meta.size,
+                 exports: meta.exports,
+                 suggested_type: to_string(meta.suggested_type)
+               }}
+
+            {:error, reason} ->
+              {:ok, %{valid: false, reason: to_string(reason)}}
+          end
+
+        :error ->
+          {:error, {:invalid_argument, "Invalid base64 encoding"}}
+      end
+    end
+  end
+
+  defp check_validate_rate(ctx) do
+    who = ctx.user_id || ctx.athanor_id || "public"
+
+    case Cyfr.RateLimiter.check("build:validate:#{who}", @validate_per_minute, 60_000) do
+      :ok -> :ok
+      {:deny, retry_s} -> {:error, "Validation rate limit reached — retry in #{retry_s}s"}
+    end
+  end
+
+  # The caller may mint the id — both consoles subscribe to the progress
+  # topic before starting — but it lands in topic names and rows, so its
+  # shape is bounded, and an id naming a build still in flight is refused
+  # rather than silently refreshing that build's row out from under its
+  # subscriber (`record_started/3` is an upsert by design).
+  defp settle_build_id(_ctx, nil), do: {:ok, Cyfr.UUID7.generate_id("build")}
+
+  defp settle_build_id(ctx, id) when is_binary(id) do
+    cond do
+      not Regex.match?(~r/^[A-Za-z0-9_-]{1,64}$/, id) ->
+        {:error, {:invalid_argument, "build_id must be 1-64 characters of [A-Za-z0-9_-]"}}
+
+      match?({:ok, %{"status" => "started"}}, Cyfr.BuildRecords.get(ctx, id)) ->
+        {:error, {:invalid_argument, "build_id names a build still in flight"}}
+
+      true ->
+        {:ok, id}
+    end
+  end
+
+  defp settle_build_id(_ctx, _other),
+    do: {:error, {:invalid_argument, "build_id must be a string"}}
 
   defp run_compile(ctx, reference, build_id) do
     case Locus.BuildLimiter.acquire(Locus.BuildLimiter, ctx.athanor_id) do
@@ -293,30 +336,47 @@ defmodule Locus.MCP do
             # Task.start.
             logger_metadata = Cyfr.LoggerContext.capture()
 
-            Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
-              Cyfr.LoggerContext.restore(logger_metadata)
+            registration_start =
+              Task.Supervisor.start_child(Locus.TaskSupervisor, fn ->
+                Cyfr.LoggerContext.restore(logger_metadata)
 
-              outcome =
-                case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
-                       "action" => "register"
-                     }) do
-                  {:ok, _} ->
-                    "done"
+                outcome =
+                  case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+                         "action" => "register"
+                       }) do
+                    {:ok, _} ->
+                      "done"
 
-                  {:error, reason} ->
-                    Logger.warning(
-                      "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
-                    )
+                    {:error, reason} ->
+                      Logger.warning(
+                        "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
+                      )
 
-                    Compendium.AutoIndexer.scan(ctx: ctx)
-                    "indexed"
-                end
+                      Compendium.AutoIndexer.scan(ctx: ctx)
+                      "indexed"
+                  end
 
-              # Async builds carry the outcome on their row, so build.status
-              # stops answering "pending" forever; sync builds have no row
-              # and this is a no-op.
-              Cyfr.BuildRecords.record_registration(ctx, build_id, outcome)
-            end)
+                # Async builds carry the outcome on their row, so build.status
+                # stops answering "pending" forever; sync builds have no row
+                # and this is a no-op.
+                Cyfr.BuildRecords.record_registration(ctx, build_id, outcome)
+              end)
+
+            # Same rule the async-compile site above spells out: a spawn the
+            # supervisor refused left the row reading `registration:
+            # "pending"` permanently, with nothing logged.
+            case registration_start do
+              {:ok, _pid} ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[Locus.MCP] could not start post-compile registration for " <>
+                    "#{build_id}: #{inspect(reason)}"
+                )
+
+                Cyfr.BuildRecords.record_registration(ctx, build_id, "failed")
+            end
 
             {:ok,
              %{
@@ -537,12 +597,16 @@ defmodule Locus.MCP do
     # One unit commit, like every other writer of this unit shape
     # (Registry, Fork): sentinel-last, rollback on failure — a file-by-file
     # loop once halted mid-way and left a partially-written version
-    # directory behind. Cap-exempt like the WASM save above — build
-    # outputs, same policy.
+    # directory behind. Cap-CHECKED like the WASM save above — the old
+    # blanket exemption let repeated tincture builds walk an athanor past
+    # its storage quota 64 MiB at a time (only the builder's per-build
+    # ceilings applied).
     files =
       Enum.map(output_files, fn {rel_path, content} -> {Path.split(rel_path), content} end)
 
-    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, cap: :exempt) do
+    total_bytes = Enum.reduce(files, 0, fn {_path, content}, acc -> acc + byte_size(content) end)
+
+    case Arca.Overlay.commit_unit(ctx, base, {:files, files}, cap: {:checked, total_bytes}) do
       {:ok, _written} -> :ok
       {:error, reason} -> {:error, reason}
     end

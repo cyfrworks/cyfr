@@ -58,7 +58,7 @@ defmodule Arca.Cache.Sweeper do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -107,11 +107,23 @@ defmodule Arca.Cache.Sweeper do
   # cache entries could sign other tenants out mid-flow or admit a
   # duplicate scan — the precise class the moduledoc promises this table
   # does not couple.
+  # The MCP catalogues are here for a different reason: they are not
+  # credentials, they are the *answer to `tools/list`*. `Emissary.MCP.
+  # ToolRegistry` and `ResourceRegistry` keep them under a 24h TTL and refresh
+  # on a 23h timer, so nearest-to-expiry eviction spared them only by
+  # accident — they happen to hold the longest TTL in the table. Any new
+  # long-lived key, or a shorter refresh, would have made a cap breach empty
+  # the server's tool catalogue until the next refresh, with `tools/list`
+  # answering an empty set in the meantime.
   @protected_key_heads [
     :vault_oauth_pending,
     :login_device_ticket,
     :established,
-    :tincture_scan_running
+    :tincture_scan_running,
+    :mcp_tool,
+    :mcp_tool_list,
+    :mcp_resource,
+    :mcp_resource_template
   ]
 
   # After expired rows are gone, if the table is still over the cap, drop the
@@ -134,6 +146,8 @@ defmodule Arca.Cache.Sweeper do
   defp protected?(key) when is_tuple(key) and tuple_size(key) > 0,
     do: elem(key, 0) in @protected_key_heads
 
+  defp protected?(key) when is_atom(key), do: key in @protected_key_heads
+
   defp protected?(_key), do: false
 
   # The entry cap counts rows, not bytes — 10k multi-MB WASM blobs is a very
@@ -144,11 +158,15 @@ defmodule Arca.Cache.Sweeper do
   defp enforce_binary_budget(table) do
     budget = Application.get_env(:cyfr, :cache_max_binary_bytes, 268_435_456)
 
+    # `protected?/1` applies here too. It did not, so a protected key whose
+    # value happened to be a binary was evictable by the byte budget even
+    # though the entry cap would never touch it — the protection has to hold
+    # in every enforcer or it is not a protection.
     binaries =
       :ets.foldl(
         fn
           {key, value, expires_at}, acc when is_binary(value) ->
-            [{key, byte_size(value), expires_at} | acc]
+            if protected?(key), do: acc, else: [{key, byte_size(value), expires_at} | acc]
 
           _entry, acc ->
             acc
@@ -188,6 +206,7 @@ defmodule Arca.Cache.Sweeper do
         {{Arca.Cache.Keys.match_compiled_component(), :_, :"$1"}, [], [{{:"$_", :"$1"}}]}
       ])
       |> Enum.map(fn {{key, _value, _expires}, expires_at} -> {key, expires_at} end)
+      |> Enum.reject(fn {key, _expires_at} -> protected?(key) end)
 
     excess = length(compiled) - cap
 

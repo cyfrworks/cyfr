@@ -265,6 +265,28 @@ defmodule Aqua.ActionsTest do
       assert AquaActions.kind_for("storage", "write") == :write
     end
 
+    test "a proposal for an external `server:tool` validates end to end" do
+      # The id-shape regex refused `:` while every other layer — docs,
+      # kind_for, the approval card, scope_permitted — spoke `server:tool`,
+      # so a policy that asked for approval on an external MCP tool told
+      # the agent to request a card that silently never appeared.
+      input = ~S(```aqua-actions
+[{"kind":"ui.request_approval","title":"Create page","summary":"in Notion","risk":"medium","action_description":"notion:create_page","proposal":{"tool":"notion:create_page","action":"call","args":{"title":"Hi"}}}]
+```)
+      result = AquaActions.parse(input, %{"notion:create_page.call" => "ask"})
+
+      assert result.drops == []
+      assert [intent] = result.intents
+
+      assert intent.proposal == %{
+               tool: "notion:create_page",
+               action: "call",
+               args: %{"title" => "Hi"}
+             }
+
+      assert intent.action_kind == :external
+    end
+
     test "kind_for/2 classifies any `server:tool`-namespaced external tool as :external" do
       # External upstream MCP tools are namespaced server:tool. They have
       # no enumerable action verbs, so AQUA returns :external regardless of

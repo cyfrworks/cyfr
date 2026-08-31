@@ -237,6 +237,34 @@ if config_env() != :test do
       config :cyfr, :secret_key_base, env_key_base
     end
 
+    # These knobs resolve identically in every env — this file's own contract
+    # (see the path-knob note below). They used to live inside the prod block,
+    # where CYFR_MCP_ALLOWED_ORIGINS / CYFR_BEHIND_PROXY /
+    # CYFR_TRUSTED_PROXY_* silently did nothing outside a release: rehearsing
+    # a proxied or embedded setup in dev behaved one way there and another in
+    # production. The extras key is ADDITIVE (Cyfr.RuntimeConfig appends it to
+    # whatever :mcp_allowed_origins resolves to) so setting it in dev extends
+    # the localhost default instead of replacing it.
+    config :cyfr, :mcp_extra_origins, env_list.("CYFR_MCP_ALLOWED_ORIGINS")
+
+    behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
+
+    if behind_proxy? do
+      # The client IP is taken right-to-left from the XFF chain, stripping the
+      # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
+      # Caddy) the default of 1 hop is correct; stacking more layers requires
+      # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
+      # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
+      config :cyfr, :trust_x_forwarded_for, true
+
+      config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
+
+      case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
+        [] -> :ok
+        cidrs -> config :cyfr, :trusted_proxy_cidrs, cidrs
+      end
+    end
+
     if config_env() == :prod do
       secret_key_base =
         env_key_base ||
@@ -300,12 +328,9 @@ if config_env() != :test do
         server: true
 
       # MCP origin allowlist (EmissaryWeb.Plugs.MCPOrigin). Same set as
-      # check_origin above, plus any extra origins listed in
-      # CYFR_MCP_ALLOWED_ORIGINS (comma-separated) for embedding the PWA on a
-      # different origin or running multiple frontends against the same server.
-      extra_mcp_origins = env_list.("CYFR_MCP_ALLOWED_ORIGINS")
-
-      config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins ++ extra_mcp_origins
+      # check_origin above; the CYFR_MCP_ALLOWED_ORIGINS extras are appended
+      # by Cyfr.RuntimeConfig in every env (hoisted above the prod block).
+      config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins
 
       # Derive signing salts from secret_key_base (or use explicit env overrides)
       emissary_salt =
@@ -327,17 +352,10 @@ if config_env() != :test do
       # Dev/test leave this false so http://localhost works.
       config :cyfr, :cookie_secure, true
 
-      # Read once, as the boolean it is. Read as a string and tested for
-      # truthiness — as both sites below did — `"false"` is truthy, so the
-      # shipped `CYFR_BEHIND_PROXY=false` (uncommented in .env.example, and
-      # compose's default) turned X-Forwarded-For trust ON for the one
-      # deployment that has no proxy in front of it, and silenced the
-      # plain-HTTP warning meant for exactly that deployment. With XFF
-      # trusted, the client picks its own address: API-key IP allowlists and
-      # every IP-keyed rate limiter answer to whatever it sends.
-      behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
-
-      # Warn if plain HTTP in production without a reverse proxy declaration
+      # `behind_proxy?` is settled once, above the prod block, as the boolean
+      # it is (`env_bool` — a truthiness read of the string once turned XFF
+      # trust ON for `CYFR_BEHIND_PROXY=false`). The proxy-trust knobs are
+      # hoisted with it; only this warning is prod's own.
       unless behind_proxy? do
         IO.puts(
           :stderr,
@@ -345,23 +363,6 @@ if config_env() != :test do
             "Set CYFR_BEHIND_PROXY=true if behind a TLS-terminating reverse proxy, " <>
             "and set CYFR_BIND_ADDRESS=127.0.0.1 to bind only to localhost."
         )
-      end
-
-      # If behind a proxy, enable X-Forwarded-For trust for IP-based API key allowlists.
-      # The client IP is taken right-to-left from the XFF chain, stripping the
-      # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
-      # Caddy) the default of 1 hop is correct; stacking more layers requires
-      # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
-      # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
-      if behind_proxy? do
-        config :cyfr, :trust_x_forwarded_for, true
-
-        config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
-
-        case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
-          [] -> :ok
-          cidrs -> config :cyfr, :trusted_proxy_cidrs, cidrs
-        end
       end
     end
 
@@ -387,11 +388,52 @@ if config_env() != :test do
     config :cyfr, :base_path, paths.base_path
     config :cyfr, :seed_path, paths.seed_path
 
+    # CYFR_DATABASE is the one variable `.env` cannot decide. The adapter is a
+    # BUILD-time choice (config/database_choice.exs, read with System.get_env
+    # before any app is compiled — Ecto cannot swap adapters at runtime),
+    # while everything else here comes from Dotenvy's merged sources. So an
+    # operator who put `CYFR_DATABASE=postgres` in `.env` — the documented
+    # home for every other setting — got a SQLite build, a SQLite branch
+    # below, CYFR_DATABASE_URL ignored, and no error at all. Say so instead.
+    built_adapter = Cyfr.RuntimeConfig.repo_adapter()
+
+    requested_database = getenv.("CYFR_DATABASE")
+
+    requested_adapter =
+      case requested_database && String.downcase(requested_database) do
+        nil ->
+          built_adapter
+
+        "" ->
+          built_adapter
+
+        "sqlite" ->
+          Ecto.Adapters.SQLite3
+
+        "postgres" ->
+          Ecto.Adapters.Postgres
+
+        other ->
+          raise ~s([Cyfr] FATAL: unknown CYFR_DATABASE=#{other}; expected "sqlite" or "postgres")
+      end
+
+    if requested_adapter != built_adapter do
+      raise """
+      [Cyfr] FATAL: CYFR_DATABASE asks for #{inspect(requested_adapter)} but this \
+      release was built for #{inspect(built_adapter)}.
+
+      The database adapter is chosen when the release is COMPILED, not when it \
+      boots, so it is the one setting `.env` cannot change. Set CYFR_DATABASE in \
+      the build environment and rebuild, or remove it from `.env`/the environment \
+      so the built adapter stands.
+      """
+    end
+
     # Database connection config. The adapter is selected at compile time in
     # config.exs from CYFR_DATABASE; here we supply connection parameters for
     # whichever adapter was built — gated so SQLite-only keys (journal_mode,
     # busy_timeout) never bleed into a Postgres build and vice versa.
-    case Cyfr.RuntimeConfig.repo_adapter() do
+    case built_adapter do
       Ecto.Adapters.SQLite3 ->
         pool_size =
           case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do

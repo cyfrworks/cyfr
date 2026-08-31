@@ -393,6 +393,12 @@ defmodule Sanctum.Tenancy.Members do
   def remove_member(%{id: athanor_id} = athanor, user_id: user_id) when is_binary(user_id) do
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          {:ok, _} <- remove(row) do
+      # The established-context memo would otherwise serve the removed
+      # member their cached, athanor-focused context on the stateless
+      # surfaces for its TTL — the one revocation path the door's
+      # session-revoking siblings didn't already cover. The sessions
+      # themselves stay; the next request re-derives via revalidate/1.
+      Sanctum.Session.invalidate_memo_for_user(user_id)
       broadcast_change(user_id, athanor_id, :left)
       Sanctum.Notify.member_changed(athanor_id)
       archive_when_empty(athanor)

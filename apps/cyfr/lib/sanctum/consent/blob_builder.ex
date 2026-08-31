@@ -66,8 +66,8 @@ defmodule Sanctum.Consent.BlobBuilder do
       Map.new(nodes, fn {node_key, node} ->
         edges =
           Map.new(node.edges, fn
-            {"@ingress", resources} ->
-              {"@ingress", finalize_edge(resources)}
+            {"@ingress" = key, resources} ->
+              {key, finalize_edge(resources)}
 
             {dep_key, %{"__dep__" => dep_key}} ->
               # A dep key the activation graph does not carry is a
@@ -121,7 +121,7 @@ defmodule Sanctum.Consent.BlobBuilder do
             |> Map.merge(extras)
             |> Map.put("__vault__", vault)
 
-          Map.put(edges, "@ingress", ingress)
+          Map.put(edges, Sanctum.Authority.Blob.ingress_key(), ingress)
         else
           edges
         end

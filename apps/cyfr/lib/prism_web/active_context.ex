@@ -9,10 +9,10 @@ defmodule PrismWeb.ActiveContext do
   process state. Derives the active context from the URL on every
   `handle_params` callback.
 
-  Single-user dev tool: there is no disconnect-survival concern.
-  Reconnects re-derive from the URL.
+  URL-derived, so it needs no disconnect survival: reconnects re-derive
+  from the URL.
 
-  ## Phase 1 consumer
+  ## Consumer
 
   The Cmd+K command palette (`PrismWeb.CommandPaletteLiveComponent`) reads
   `socket.assigns.active_context.focused_resource` to surface contextual

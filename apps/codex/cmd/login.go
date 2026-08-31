@@ -55,7 +55,10 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 				{Label: "Google", Value: "google"},
 			})
 			if err != nil {
-				return fmt.Errorf("Provider selection cancelled: %v", err)
+				if prompt.IsAborted(err) {
+					return prompt.ErrAborted
+				}
+				return fmt.Errorf("Provider selection cancelled: %w", err)
 			}
 			provider = choice
 		}
@@ -69,7 +72,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		// Confirm the server speaks a revision we understand before starting a
 		// device flow that would otherwise fail confusingly later.
 		if err := client.Discover(cmd.Context()); err != nil {
-			return fmt.Errorf("Failed to connect: %v", err)
+			return fmt.Errorf("Failed to connect: %w", err)
 		}
 
 		// Start device flow
@@ -78,7 +81,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 			"provider": provider,
 		})
 		if err != nil {
-			return fmt.Errorf("Failed to start login: %v", err)
+			return fmt.Errorf("Failed to start login: %w", err)
 		}
 
 		// Show user code and verification URL
@@ -104,208 +107,217 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		fmt.Printf("Open %s and enter code: %s\n", verifyURL, userCode)
 		fmt.Println("Waiting for authorization...")
 
-		// Poll for completion
-		for {
-			if time.Now().After(deadline) {
-				return fmt.Errorf("Login timed out after %.0f seconds. Run `cyfr login` to try again.", expiresIn)
-			}
+		pollResult, err := pollDeviceAuth(cmd.Context(), client, provider, deviceCode,
+			time.Duration(interval*float64(time.Second)), deadline, expiresIn)
+		if err != nil {
+			return err
+		}
 
-			time.Sleep(time.Duration(interval) * time.Second)
-
-			pollResult, err := client.CallTool(cmd.Context(), "session", map[string]any{
-				"action":      "device_poll",
-				"device_code": deviceCode,
-				"provider":    provider,
-			})
-			if err != nil {
-				// Network errors etc — keep trying
-				continue
-			}
-
-			status, _ := pollResult["status"].(string)
-			switch status {
-			case "complete":
-				// Save the session token from the auth response
-				sessionID, _ := pollResult["session_token"].(string)
-				cfg, _ := config.Load()
-				if cfg.Current() != nil {
-					if sessionID != "" {
-						cfg.Current().SessionID = sessionID
-					} else if client.SessionID != "" {
-						cfg.Current().SessionID = client.SessionID
-					}
-					if err := cfg.Save(); err != nil {
-						// Login already succeeded server-side; a failed local save
-						// must say so or the next command's "not authenticated"
-						// has no visible cause.
-						fmt.Fprintf(os.Stderr, "warning: could not persist session locally: %v\n", err)
-					}
-				}
-
-				// Swap the in-flight MCP client onto the newly issued Sanctum
-				// session token. Subsequent calls in this process (notably
-				// `registry.claim_personal`) then arrive with an authenticated
-				// context, which the server uses to persist the returned push
-				// token to CredentialStore. Without this swap, claim_personal
-				// rides with the unauthenticated bootstrap MCP session and
-				// the token is never cached locally.
-				if sessionID != "" {
-					client.SessionID = sessionID
-				}
-
-				if user, ok := pollResult["user"].(map[string]any); ok {
-					email, _ := user["email"].(string)
-					if email != "" {
-						fmt.Printf("Logged in as %s\n", email)
-					} else {
-						fmt.Println("Logged in successfully!")
-					}
-				} else {
-					fmt.Println("Logged in successfully!")
-				}
-
-				// `reauthenticate: true` — IdP access_token was rejected by
-				// cyfr.run's probe. The device_code is one-shot so there's no
-				// retry path; the user must run `cyfr login` again to mint a
-				// fresh access_token. Exit non-zero so CI pipelines notice.
-				if reauth, _ := pollResult["reauthenticate"].(bool); reauth {
-					fmt.Fprintln(os.Stderr,
-						"Login session expired during credential setup. "+
-							"Please run `cyfr login` again.")
-					os.Exit(1)
-				}
-
-				// Probe-gate: cyfr.run requires acceptance of the current
-				// bundled policy_version before any push-token mint. If the
-				// server returned `needs_policy_acceptance: true`, render the
-				// policies in the terminal, capture y/n per doc, then call
-				// registry.legal_accept and re-probe via registry.probe (which
-				// stores credentials too). After re-probe, fall through to the
-				// existing needs_personal_namespace handler if applicable.
-				if needsPolicyAccept, _ := pollResult["needs_policy_acceptance"].(bool); needsPolicyAccept {
-					accessToken, _ := pollResult["access_token"].(string)
-					if accessToken == "" {
-						fmt.Fprintln(os.Stderr,
-							"cyfr.run requires policy acceptance but the server did not "+
-								"return the access_token needed to record it. "+
-								"Upgrade cyfr (server) and try again.")
-						os.Exit(1)
-					}
-
-					if !runLegalAcceptInteractive(cmd.Context(), client, provider, accessToken) {
-						fmt.Fprintln(os.Stderr,
-							"Policy acceptance is required. Run `cyfr login` to try again.")
-						os.Exit(1)
-					}
-
-					// Re-probe to mint push tokens now that the gate passes.
-					// MCP `registry.probe` writes credentials to the local
-					// CredentialStore for authenticated callers, so a single
-					// call replaces what session.device_poll's internal probe
-					// would have done if acceptance had been current.
-					probeResult, perr := client.CallTool(cmd.Context(), "registry", map[string]any{
-						"action":       "probe",
-						"provider":     provider,
-						"access_token": accessToken,
-					})
-					if perr != nil {
-						fmt.Fprintf(os.Stderr,
-							"Acceptance recorded but token refresh failed: %v\n"+
-								"Please run `cyfr login` again.\n", perr)
-						os.Exit(1)
-					}
-
-					// Update the poll-result-derived view so the existing
-					// downstream handlers see the post-accept state. probe
-					// returns {personal_namespace, memberships}; absent
-					// personal_namespace means the user still needs to claim
-					// (handled by the existing block below).
-					if pn, _ := probeResult["personal_namespace"].(map[string]any); pn != nil {
-						pollResult["personal_namespace"] = pn
-						pollResult["needs_personal_namespace"] = false
-					} else {
-						pollResult["needs_personal_namespace"] = true
-						pollResult["access_token"] = accessToken
-					}
-				}
-
-				// If cyfr.run reports no personal namespace, prompt the user
-				// to claim one. This is a one-time choice per identity.
-				if needs, _ := pollResult["needs_personal_namespace"].(bool); needs {
-					accessToken, _ := pollResult["access_token"].(string)
-					suggested, _ := pollResult["suggested_username"].(string)
-
-					if accessToken == "" {
-						// Server-side Option X: access_token should be present
-						// whenever needs_personal_namespace is true. If it isn't,
-						// the server/client versions are mismatched — fail loud.
-						fmt.Fprintln(os.Stderr,
-							"cyfr.run requires a personal namespace but the server "+
-								"did not return the access_token needed to claim one. "+
-								"Upgrade cyfr (server) and try again.")
-						os.Exit(1)
-					}
-
-					if !promptAndClaimPersonalNamespace(cmd.Context(), client, provider, accessToken, suggested) {
-						// User declined or exhausted retries — login is incomplete.
-						fmt.Fprintln(os.Stderr,
-							"Personal namespace claim is required. Run `cyfr login` to try again.")
-						os.Exit(1)
-					}
-				}
-
-				// Credential-store warnings: push tokens were issued by cyfr.run
-				// but couldn't be cached locally. The user's session is still
-				// valid; they should re-run `cyfr whoami` once connectivity is
-				// restored to retry storage.
-				if warns, ok := pollResult["credential_store_warnings"].([]any); ok && len(warns) > 0 {
-					slugs := make([]string, 0, len(warns))
-					for _, w := range warns {
-						if s, ok := w.(string); ok {
-							slugs = append(slugs, s)
-						}
-					}
-					fmt.Fprintf(os.Stderr,
-						"Warning: could not cache push tokens for namespaces: %v. "+
-							"Run `cyfr whoami` later to retry.\n", slugs)
-				}
-
-				// Probe error (transient, non-reauthenticate). Session is
-				// valid; user may need to retry via `cyfr whoami` auto-probe.
-				if probeErr, _ := pollResult["probe_error"].(string); probeErr != "" {
-					fmt.Fprintf(os.Stderr,
-						"Warning: cyfr.run identity probe failed (%s). "+
-							"Run `cyfr whoami` to retry.\n", probeErr)
-				}
-
-				if flagJSON {
-					output.JSON(pollResult)
-				}
-				return nil
-
-			case "expired":
-				return errors.New("Device code expired. Run 'cyfr login' again.")
-
-			case "denied":
-				return errors.New("Authorization denied.")
-
-			case "registry_unavailable", "error":
-				// A first sign-in needs cyfr.run once, to find or claim the
-				// namespace that is this person's identity everywhere; the
-				// server set nothing up and issued no session. Say so and
-				// stop — the device code is one-shot.
-				msg, _ := pollResult["message"].(string)
-				if msg == "" {
-					msg = "cyfr.run could not be reached. Run `cyfr login` again in a moment."
-				}
-				return errors.New(msg)
-
-			default:
-				// "pending" or unknown — keep polling
-				continue
+		// Save the session token from the auth response — under the
+		// modern `token` field (SetToken also clears the legacy
+		// `session_id` spelling this flow used to re-create).
+		sessionID, _ := pollResult["session_token"].(string)
+		if sessionID == "" {
+			sessionID = client.SessionID
+		}
+		cfg, _ := config.Load()
+		if cfg.Current() != nil && sessionID != "" {
+			if err := cfg.SetToken(sessionID); err != nil {
+				// Login already succeeded server-side; a failed local save
+				// must say so or the next command's "not authenticated"
+				// has no visible cause.
+				fmt.Fprintf(os.Stderr, "warning: could not persist session locally: %v\n", err)
 			}
 		}
+
+		// Swap the in-flight MCP client onto the newly issued Sanctum
+		// session token. Subsequent calls in this process (notably
+		// `registry.claim_personal`) then arrive with an authenticated
+		// context, which the server uses to persist the returned push
+		// token to CredentialStore. Without this swap, claim_personal
+		// rides with the unauthenticated bootstrap MCP session and
+		// the token is never cached locally.
+		if sessionID != "" {
+			client.SessionID = sessionID
+		}
+
+		if user, ok := pollResult["user"].(map[string]any); ok {
+			email, _ := user["email"].(string)
+			if email != "" {
+				fmt.Printf("Logged in as %s\n", email)
+			} else {
+				fmt.Println("Logged in successfully!")
+			}
+		} else {
+			fmt.Println("Logged in successfully!")
+		}
+
+		// `reauthenticate: true` — IdP access_token was rejected by
+		// cyfr.run's probe. The device_code is one-shot so there's no
+		// retry path; the user must run `cyfr login` again to mint a
+		// fresh access_token. Fail so CI pipelines notice.
+		if reauth, _ := pollResult["reauthenticate"].(bool); reauth {
+			return errors.New("Login session expired during credential setup. " +
+				"Please run `cyfr login` again.")
+		}
+
+		// Probe-gate: cyfr.run requires acceptance of the current
+		// bundled policy_version before any push-token mint. If the
+		// server returned `needs_policy_acceptance: true`, render the
+		// policies in the terminal, capture y/n per doc, then call
+		// registry.legal_accept and re-probe via registry.probe (which
+		// stores credentials too). After re-probe, fall through to the
+		// existing needs_personal_namespace handler if applicable.
+		if needsPolicyAccept, _ := pollResult["needs_policy_acceptance"].(bool); needsPolicyAccept {
+			accessToken, _ := pollResult["access_token"].(string)
+			if accessToken == "" {
+				return errors.New("cyfr.run requires policy acceptance but the server did not " +
+					"return the access_token needed to record it. " +
+					"Upgrade cyfr (server) and try again.")
+			}
+
+			if !runLegalAcceptInteractive(cmd.Context(), client, provider, accessToken) {
+				return errors.New("Policy acceptance is required. Run `cyfr login` to try again.")
+			}
+
+			// Re-probe to mint push tokens now that the gate passes.
+			// MCP `registry.probe` writes credentials to the local
+			// CredentialStore for authenticated callers, so a single
+			// call replaces what session.device_poll's internal probe
+			// would have done if acceptance had been current.
+			probeResult, perr := client.CallTool(cmd.Context(), "registry", map[string]any{
+				"action":       "probe",
+				"provider":     provider,
+				"access_token": accessToken,
+			})
+			if perr != nil {
+				return fmt.Errorf("Acceptance recorded but token refresh failed: %w\n"+
+					"Please run `cyfr login` again.", perr)
+			}
+
+			// Update the poll-result-derived view so the existing
+			// downstream handlers see the post-accept state. probe
+			// returns {personal_namespace, memberships}; absent
+			// personal_namespace means the user still needs to claim
+			// (handled by the existing block below).
+			if pn, _ := probeResult["personal_namespace"].(map[string]any); pn != nil {
+				pollResult["personal_namespace"] = pn
+				pollResult["needs_personal_namespace"] = false
+			} else {
+				pollResult["needs_personal_namespace"] = true
+				pollResult["access_token"] = accessToken
+			}
+		}
+
+		// If cyfr.run reports no personal namespace, prompt the user
+		// to claim one. This is a one-time choice per identity.
+		if needs, _ := pollResult["needs_personal_namespace"].(bool); needs {
+			accessToken, _ := pollResult["access_token"].(string)
+			suggested, _ := pollResult["suggested_username"].(string)
+
+			if accessToken == "" {
+				// Server-side Option X: access_token should be present
+				// whenever needs_personal_namespace is true. If it isn't,
+				// the server/client versions are mismatched — fail loud.
+				return errors.New("cyfr.run requires a personal namespace but the server " +
+					"did not return the access_token needed to claim one. " +
+					"Upgrade cyfr (server) and try again.")
+			}
+
+			if !promptAndClaimPersonalNamespace(cmd.Context(), client, provider, accessToken, suggested) {
+				// User declined or exhausted retries — login is incomplete.
+				return errors.New("Personal namespace claim is required. Run `cyfr login` to try again.")
+			}
+		}
+
+		// Credential-store warnings: push tokens were issued by cyfr.run
+		// but couldn't be cached locally. The user's session is still
+		// valid; they should re-run `cyfr whoami` once connectivity is
+		// restored to retry storage.
+		if warns, ok := pollResult["credential_store_warnings"].([]any); ok && len(warns) > 0 {
+			slugs := make([]string, 0, len(warns))
+			for _, w := range warns {
+				if s, ok := w.(string); ok {
+					slugs = append(slugs, s)
+				}
+			}
+			fmt.Fprintf(os.Stderr,
+				"Warning: could not cache push tokens for namespaces: %v. "+
+					"Run `cyfr whoami` later to retry.\n", slugs)
+		}
+
+		// Probe error (transient, non-reauthenticate). Session is
+		// valid; user may need to retry via `cyfr whoami` auto-probe.
+		if probeErr, _ := pollResult["probe_error"].(string); probeErr != "" {
+			fmt.Fprintf(os.Stderr,
+				"Warning: cyfr.run identity probe failed (%s). "+
+					"Run `cyfr whoami` to retry.\n", probeErr)
+		}
+
+		if flagJSON {
+			output.JSON(pollResult)
+		}
+		return nil
 	},
+}
+
+// pollDeviceAuth polls session.device_poll every interval until the flow
+// completes (its result is returned), the device code expires or is denied,
+// the deadline passes, or ctx is cancelled. Transient errors — network blips
+// — keep the loop polling; a cancelled context ends it immediately. Ctrl-C
+// used to be read as one more transient error, spinning the loop until the
+// deadline.
+func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCode string, interval time.Duration, deadline time.Time, expiresIn float64) (map[string]any, error) {
+	for {
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("Login timed out after %.0f seconds. Run `cyfr login` to try again.", expiresIn)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(interval):
+		}
+
+		pollResult, err := client.CallTool(ctx, "session", map[string]any{
+			"action":      "device_poll",
+			"device_code": deviceCode,
+			"provider":    provider,
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil, err
+			}
+			// Network errors etc — keep trying
+			continue
+		}
+
+		status, _ := pollResult["status"].(string)
+		switch status {
+		case "complete":
+			return pollResult, nil
+
+		case "expired":
+			return nil, errors.New("Device code expired. Run 'cyfr login' again.")
+
+		case "denied":
+			return nil, errors.New("Authorization denied.")
+
+		case "registry_unavailable", "error":
+			// A first sign-in needs cyfr.run once, to find or claim the
+			// namespace that is this person's identity everywhere; the
+			// server set nothing up and issued no session. Say so and
+			// stop — the device code is one-shot.
+			msg, _ := pollResult["message"].(string)
+			if msg == "" {
+				msg = "cyfr.run could not be reached. Run `cyfr login` again in a moment."
+			}
+			return nil, errors.New(msg)
+
+		default:
+			// "pending" or unknown — keep polling
+		}
+	}
 }
 
 // promptAndClaimPersonalNamespace prompts the user for a personal-namespace

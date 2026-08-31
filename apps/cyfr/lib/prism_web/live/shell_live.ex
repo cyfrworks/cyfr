@@ -4,10 +4,6 @@
 defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
-  alias Phoenix.LiveView.JS
-
-  require Logger
-
   @moduledoc """
   Tincture browser for Prism shell — preview-first picker.
 
@@ -21,20 +17,6 @@ defmodule PrismWeb.ShellLive do
   (IframeBridge hook + cyfr.js SDK). Tinctures can invoke backend components
   declared in their manifest dependencies via `cyfr.invoke()`.
   """
-
-  @report_categories [
-    {"csam", "Child sexual abuse material"},
-    {"ncii", "Non-consensual intimate imagery"},
-    {"objectionable", "Violence / hate / sexual content"},
-    {"malware", "Malware / unsafe code"},
-    {"impersonation", "Impersonation"},
-    {"dmca", "Copyright (DMCA)"},
-    {"ip_infringement", "Trademark / patent infringement"},
-    {"security", "Security vulnerability"},
-    {"policy_violation", "Acceptable-use policy violation"},
-    {"spam", "Spam"},
-    {"other", "Other"}
-  ]
 
   # ============================================================================
   # Mount
@@ -51,9 +33,6 @@ defmodule PrismWeb.ShellLive do
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
-      |> assign(:report_tincture_id, nil)
-      |> assign(:report_submitting, false)
-      |> assign(:report_error, nil)
 
     socket =
       if connected?(socket) do
@@ -78,8 +57,9 @@ defmodule PrismWeb.ShellLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    # Reload tinctures on every navigation (not just mount) so deleted/added
-    # tinctures are reflected without needing the manual refresh button.
+    # Re-read the registry CACHE on navigation (cheap — the registry
+    # follows the tinctures topic for real changes), so a change that
+    # broadcast while another page was open shows without a manual refresh.
     socket = if connected?(socket), do: load_tinctures(socket), else: socket
     {:noreply, socket}
   end
@@ -145,7 +125,11 @@ defmodule PrismWeb.ShellLive do
           Cyfr.LoggerContext.restore(logger_metadata)
 
           try do
-            Compendium.AutoIndexer.scan(ctx: ctx)
+            # Through the tool surface, like ComponentsLive's register
+            # button — the scan writes registry rows, and the seam
+            # (ToolSeamTest) holds every console mutation to the same
+            # gates and audit row an agent's would get.
+            call_tool(ctx, "component", %{"action" => "register"})
             Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
           after
             Arca.Cache.delete_match(scan_key)
@@ -173,7 +157,7 @@ defmodule PrismWeb.ShellLive do
 
       {:noreply,
        socket
-       |> push_event("cyfr:copy-to-clipboard", %{text: url})
+       |> push_event("clipboard", %{text: url})
        |> put_flash(:info, "URL copied to clipboard")}
     else
       {:noreply, socket}
@@ -207,53 +191,12 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # The viewport is reported by the client and read by nobody — the assign
-  # existed, the template never used it, and the values were stored
-  # unvalidated. Acknowledged and dropped.
-  def handle_event("viewport_changed", _params, socket), do: {:noreply, socket}
-
   def handle_event("open_report", %{"tincture" => tincture_id}, socket) do
-    {:noreply,
-     socket
-     |> assign(:report_tincture_id, tincture_id)
-     |> assign(:report_error, nil)}
-  end
+    case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Tincture not found; refresh and try again.")}
 
-  def handle_event("close_report", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:report_tincture_id, nil)
-     |> assign(:report_error, nil)}
-  end
-
-  def handle_event("submit_report", params, socket) do
-    category = params |> Map.get("category", "") |> String.trim()
-    details = params |> Map.get("details", "") |> String.trim()
-    tincture_id = socket.assigns.report_tincture_id
-    tincture = tincture_id && Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
-
-    cond do
-      tincture == nil ->
-        {:noreply,
-         socket
-         |> assign(:report_tincture_id, nil)
-         |> put_flash(:error, "Tincture not found; refresh and try again.")}
-
-      # The allowlist is enforced, not just rendered: `category` is a client
-      # value forwarded to the registry, and `@report_categories` was used
-      # only to draw the select.
-      category not in Enum.map(@report_categories, &elem(&1, 0)) ->
-        {:noreply, assign(socket, :report_error, "Pick a category.")}
-
-      details == "" ->
-        {:noreply, assign(socket, :report_error, "Describe the issue.")}
-
-      String.length(details) > 4096 ->
-        {:noreply, assign(socket, :report_error, "Details too long (max 4096 chars).")}
-
-      true ->
-        socket = assign(socket, :report_submitting, true)
-
+      tincture ->
         ref =
           Sanctum.ComponentRef.build(
             "tincture",
@@ -262,34 +205,8 @@ defmodule PrismWeb.ShellLive do
             tincture.version
           )
 
-        args = %{
-          "action" => "report",
-          "category" => category,
-          "target_component_ref" => ref,
-          "details" => details
-        }
-
-        case call_tool(socket, "registry", args) do
-          {:ok, _body} ->
-            {:noreply,
-             socket
-             |> assign(:report_tincture_id, nil)
-             |> assign(:report_submitting, false)
-             |> assign(:report_error, nil)
-             |> put_flash(:info, "Report submitted. Thanks.")}
-
-          {:error, reason} ->
-            # `error_message/1`, whose whole contract is that internal terms
-            # never reach the page — this hand-rolled formatter ended in
-            # `inspect/1`, which is exactly what it exists to prevent, and
-            # its sibling in `component_detail_live.ex` already gets it right.
-            msg = PrismWeb.MCPHelpers.error_message(reason)
-
-            {:noreply,
-             socket
-             |> assign(:report_submitting, false)
-             |> assign(:report_error, msg)}
-        end
+        PrismWeb.ReportComponent.open("report", ref)
+        {:noreply, socket}
     end
   end
 
@@ -385,10 +302,13 @@ defmodule PrismWeb.ShellLive do
 
   defp load_tinctures(socket) do
     ctx = socket.assigns.context
-    # Scoped, not the whole-server walk a mount used to pay: one athanor's
-    # shell refreshes exactly that athanor's rows.
-    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
 
+    # No forced rescan here: `list_tinctures/2` lazily scans an athanor
+    # once and the registry then follows the tinctures topic on its own
+    # (AutoIndexer broadcasts every change), so this read is cached. The
+    # unconditional `reload_athanor` this used to make turned EVERY
+    # navigation into a 30s-budget storage walk — defeating the registry's
+    # documented lazy design. The refresh button still forces one.
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
@@ -610,13 +530,13 @@ defmodule PrismWeb.ShellLive do
   # limiter table, same bucket vocabulary, same config override, and the
   # default number comes from the plug so the two cannot drift.
   defp invoke_throttled?(ctx, tincture) do
-    max = EmissaryWeb.Plugs.TinctureRateLimit.invoke_max()
+    max = Cyfr.RuntimeConfig.tincture_invoke_max()
 
     key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}
 
     match?(
       {:deny, _},
-      Cyfr.RateLimiter.check(key, max, EmissaryWeb.Plugs.TinctureRateLimit.default_window_ms())
+      Cyfr.RateLimiter.check(key, max, Cyfr.RuntimeConfig.tincture_rate_window_ms())
     )
   end
 
@@ -666,6 +586,10 @@ defmodule PrismWeb.ShellLive do
   # (single source of truth, shared with the tincture controller).
 
   @impl true
+  def handle_info({:report_component, :submitted}, socket) do
+    {:noreply, put_flash(socket, :info, "Report submitted. Thanks.")}
+  end
+
   def handle_info(:tinctures_refreshed, socket) do
     {:noreply,
      socket
@@ -693,7 +617,7 @@ defmodule PrismWeb.ShellLive do
   def handle_info({:notify, _athanor_id, _kind, _payload}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
-    Logger.debug("[ShellLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -703,20 +627,10 @@ defmodule PrismWeb.ShellLive do
 
   @impl true
   def render(assigns) do
-    report_tincture =
-      assigns.report_tincture_id &&
-        Enum.find(assigns.tinctures, &(&1.id == assigns.report_tincture_id))
-
-    assigns =
-      assigns
-      |> assign(:report_tincture, report_tincture)
-      |> assign(:report_categories, @report_categories)
-
     ~H"""
     <div
       id="shell"
       class="h-full relative bg-surface-base"
-      phx-hook="ShellViewport"
       phx-window-keydown="keynav"
     >
       <%!-- Iframe overlay — fixed to cover entire viewport including sidebar --%>
@@ -780,80 +694,12 @@ defmodule PrismWeb.ShellLive do
         <% end %>
       </div>
 
-      <.modal
-        id="tincture-report-modal"
-        show={@report_tincture != nil}
-        on_cancel={JS.push("close_report")}
-      >
-        <div :if={@report_tincture} class="space-y-4">
-          <div>
-            <h3 class="text-base font-semibold text-white">Report this tincture</h3>
-            <p class="text-sm text-gray-400 mt-1">
-              <span class="font-mono text-gray-300">
-                tincture:{@report_tincture.publisher}.{@report_tincture.name}:{@report_tincture.version}
-              </span>
-            </p>
-            <p class="text-xs text-gray-500 mt-2">
-              Your report goes to cyfr.run moderators. Track status under <a
-                href="/reports"
-                class="underline hover:text-gray-400"
-              >My Reports</a>.
-            </p>
-          </div>
-
-          <form phx-submit="submit_report" class="space-y-3">
-            <div>
-              <label class="text-xs text-gray-500 uppercase">Category</label>
-              <select
-                name="category"
-                required
-                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
-              >
-                <option value="">Select…</option>
-                <option :for={{value, label} <- @report_categories} value={value}>{label}</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="text-xs text-gray-500 uppercase">Details</label>
-              <textarea
-                name="details"
-                required
-                rows="4"
-                maxlength="4096"
-                placeholder="What's wrong? Include URLs, commit hashes, screenshots…"
-                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
-                autofocus
-              ></textarea>
-            </div>
-
-            <div
-              :if={@report_error}
-              class="text-xs text-red-300 bg-red-900/40 border border-red-800 rounded px-3 py-2"
-            >
-              {@report_error}
-            </div>
-
-            <div class="flex justify-end gap-2">
-              <button
-                type="button"
-                phx-click="close_report"
-                class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={@report_submitting}
-                phx-disable-with="Sending…"
-                class="px-3 py-1.5 text-xs rounded bg-red-900 text-red-100 border border-red-700 hover:bg-red-800 disabled:opacity-50"
-              >
-                Submit report
-              </button>
-            </div>
-          </form>
-        </div>
-      </.modal>
+      <.live_component
+        module={PrismWeb.ReportComponent}
+        id="report"
+        ctx={@context}
+        athanor_route={@athanor_route}
+      />
     </div>
     """
   end

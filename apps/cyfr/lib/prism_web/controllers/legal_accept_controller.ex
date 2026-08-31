@@ -77,8 +77,12 @@ defmodule PrismWeb.LegalAcceptController do
   end
 
   defp do_submit(conn, params, version) do
-    with {:ok, conn, access_token} <- PendingProbe.pop(conn),
-         {:ok, provider} <- current_provider(conn, params),
+    # `popped` rather than rebinding `conn`: `with` does not export its
+    # bindings to `else`, so every arm below answers on the conn this
+    # function was called with. Naming them apart keeps that a decision
+    # instead of a surprise the day a clause above starts assigning.
+    with {:ok, popped, access_token} <- PendingProbe.pop(conn),
+         {:ok, provider} <- current_provider(popped, params),
          {:ok, _body} <-
            Client.accept_policies(provider, access_token, nil, version) do
       # Acceptance recorded server-side. Route to /auth/post-legal-accept
@@ -87,7 +91,7 @@ defmodule PrismWeb.LegalAcceptController do
       # or the dashboard based on the new probe result. This single
       # post-accept landing handles both the probe-gated and claim-gated
       # paths uniformly.
-      conn |> redirect(to: "/auth/post-legal-accept")
+      popped |> redirect(to: "/auth/post-legal-accept")
     else
       {:expired, conn} ->
         error_page(conn, 400, "Login session expired. Please re-authenticate and try again.")
@@ -195,11 +199,12 @@ defmodule PrismWeb.LegalAcceptController do
 
   defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
 
-  defp accept_error_message(%Compendium.OCI.Errors{} = err),
-    do: Compendium.MCP.Shared.to_error_string(err)
-
-  defp accept_error_message(msg) when is_binary(msg), do: msg
-  defp accept_error_message(_), do: "The acceptance could not be recorded — try again."
+  defp accept_error_message(reason) do
+    # One renderer (ToolError.render covers the OCI struct and crafted
+    # binaries too); nil means internal and stays out of the page.
+    Emissary.MCP.ToolError.render(reason) ||
+      "The acceptance could not be recorded — try again."
+  end
 
   # ============================================================================
   # Rendering — the two pages, in the Prism root layout

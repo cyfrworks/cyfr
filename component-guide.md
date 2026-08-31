@@ -30,7 +30,8 @@ your-project/
         │   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
         ├── aqua/          # The athanor's AQUA agent definitions
         ├── conversations/ # Chat attachment files
-        └── guest/         # Files WASM components store — their `data/` scope
+        ├── guest/         # Files WASM components store — their `data/` scope
+        └── meta/          # Overlay origin marks — system-plane only, never yours to write
 ```
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
@@ -251,7 +252,7 @@ impl Guest for Component {
             Err(e) => return serde_json::json!({"error": e.to_string()}).to_string(),
         };
 
-        // Read a credential field (projected from the bound Connection)
+        // Read a credential field (projected from the bound vault entry)
         let api_key = match bindings::cyfr::secrets::read::get("MY_API_KEY") {
             Ok(key) => key,
             Err(e) => return serde_json::json!({"error": e}).to_string(),
@@ -472,7 +473,7 @@ See the bundled `seed/components/formulas/local/list-models` formula for a produ
 
 ## Manifest (`cyfr-manifest.json`)
 
-The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Connections page).
+The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Vault page).
 
 > The retired `setup`, `oauth`, and `wasi` blocks are replaced by `needs` and `caps`. Registration rejects manifests still carrying them — see [Migrating from setup/oauth blocks](#migrating-from-setupoauth-blocks).
 
@@ -485,13 +486,17 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `version` | string | Yes | Semver version — must match the version directory |
 | `publisher` | string | No | Publisher identifier — defaults to `"local"`; when present it must MATCH the directory the component lives under (a disagreeing manifest is refused) |
 | `description` | string | Yes | Human-readable summary |
-| `needs` | object | Catalysts (if uses credentials) | Named roles the operator satisfies with Connections (see below) |
+| `needs` | object | Catalysts (if uses credentials) | Named roles the operator satisfies with vault entries (see below) |
 | `caps` | object | Catalysts/Formulas | The declared capability ask: egress, storage, tools, limits (see below) |
-| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `public`, `window`, `sandbox` |
+| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `tagline`, `public`, `build`, `window`, `connect`, `media` |
 | `schema` | object | See below | WASM types: input/output JSON Schema. Tinctures: `tables` + `queries` |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
 | `defaults` | object | Optional | Vendor-recommended defaults baked into the manifest (see below) |
 | `dependencies` | object | Formulas/Tinctures | Static and dynamic dependency declarations |
+| `license` | string | Optional | SPDX identifier for the component's own code |
+| `tags` | array | Optional | Free-form discovery tags shown in search |
+| `category` | string | Optional | Registry category for browsing |
+| `forked_from` | string | Optional | The ref this component was forked from (`component.fork` stamps it) |
 
 ### Fields by Type
 
@@ -508,14 +513,14 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 
 ### `needs` Section
 
-Named roles the component asks the operator to satisfy with **Connections**. Two vocabularies meet only at consent: the developer names *roles* (`api_key`, `google`, `source`, `dest`), the operator names *credentials*, and the consent maps them — a component never writes or learns a vault entry name.
+Named roles the component asks the operator to satisfy with **vault entries**. Two vocabularies meet only at consent: the developer names *roles* (`api_key`, `google`, `source`, `dest`), the operator names *credentials*, and the consent maps them — a component never writes or learns a vault entry name.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| (key) | string | Yes | The need name — the slot the operator binds a Connection to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
+| (key) | string | Yes | The need name — the slot the operator binds a vault entry to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
 | `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`) |
 | `reason` | string | Yes | Prose the operator sees on the consent sheet instead of your key names |
-| `fields` | string[] | No | The exact key names your binary already passes to `cyfr:vault/read.get` — served from the bound Connection's material as the projection. No interface change, no rebuild |
+| `fields` | string[] | No | The exact key names your binary already passes to `cyfr:vault/read.get` — served from the bound vault entry's material as the projection. No interface change, no rebuild |
 | `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
 | `required` | bool | No | Default `true`. Optional needs may be left unbound |
 
@@ -530,7 +535,7 @@ Named roles the component asks the operator to satisfy with **Connections**. Two
 }
 ```
 
-An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `"scopes": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & Connections](#needs--connections).
+An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `"scopes": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
 
 ### `caps` Section
 
@@ -783,16 +788,16 @@ streaming::close(handle);
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
-Returns `Ok(value)` or `Err("access-denied: {name}")`. Values are served from the bound Connection's material, projected to the `fields` the need declared — credentials live in host memory and never enter WASM at rest. Requires a granted profile whose Connection projection includes `name`.
+Returns `Ok(value)` or `Err("access-denied: {name}")`. Values are served from the bound vault entry's material, projected to the `fields` the need declared — credentials live in host memory and never enter WASM at rest. Requires a granted profile whose vault-entry projection includes `name`.
 
 ### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
 Returns `Ok(access_token)` or `Err("authorization_required: ...")`. The host manages the full OAuth lifecycle — client credentials, token exchange, and automatic refresh are handled transparently. WASM only sees short-lived access tokens (masked in output by SecretMasker).
 
-**Requirements**: a manifest need of type `oauth:<provider>` with the required `scopes`, and an OAuth Connection bound to it at grant time.
+**Requirements**: a manifest need of type `oauth:<provider>` with the required `scopes`, and an OAuth vault entry bound to it at grant time.
 
 **Error cases:**
-- `"authorization_required: ..."` — the bound Connection has no live grant; the operator re-authorizes it from the console's Connections page
-- provider mismatch — the requested provider doesn't match the bound Connection's provider; a consent for one provider never dispenses another's token
+- `"authorization_required: ..."` — the bound vault entry has no live grant; the operator re-authorizes it from the console's Vault page
+- provider mismatch — the requested provider doesn't match the bound vault entry's provider; a consent for one provider never dispenses another's token
 
 **Usage in Rust:**
 ```rust
@@ -899,22 +904,22 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 
 ---
 
-## Needs & Connections
+## Needs & the Vault
 
-Components never hold credentials. A **Connection** is a vault entry the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The mapping happens in the console's Connections page or `cyfr profile grant <ref>` — a component never writes or learns a vault entry name, and reads only the `fields` its need declared. Reagents cannot access credentials at all.
+Components never hold credentials. A **vault entry** is a credential the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The mapping happens in the console's Vault page or `cyfr profile grant <ref>` — a component never writes or learns a vault entry name, and reads only the `fields` its need declared. Reagents cannot access credentials at all.
 
-At runtime nothing changes for your binary: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` is served from the bound Connection's material, projected to the need's `fields`. Declare the key names your code already reads and no interface change or rebuild is needed.
+At runtime nothing changes for your binary: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` is served from the bound vault entry's material, projected to the need's `fields`. Declare the key names your code already reads and no interface change or rebuild is needed.
 
-**The credential rule**: *if a value can appear in a log, arguments are fine; otherwise use the sealed path.* Read configuration from input arguments if present, else fall back to the projected Connection fields (args-first, vault-fallback). A dev who owns both ends — say, their own Supabase project — needs no Connection at all: pass public-by-design values (URLs, anon keys) as call arguments.
+**The credential rule**: *if a value can appear in a log, arguments are fine; otherwise use the sealed path.* Read configuration from input arguments if present, else fall back to the projected vault-entry fields (args-first, vault-fallback). A dev who owns both ends — say, their own Supabase project — needs no vault entry at all: pass public-by-design values (URLs, anon keys) as call arguments.
 
-**OAuth**: declare a need of type `oauth:<provider>` plus the `scopes` your operations require — nothing else. Provider endpoints live on the Connection (operator side; `google` is a built-in preset), and the OAuth app's client credentials are operator configuration via the `oauth.set_client` action. Grants start from the operator surface — `vault.authorize` opens the browser consent and the callback completes it into a Connection; there is no component-keyed flow. Your binary still calls `cyfr:oauth/token.get-access-token("<provider>")` and receives short-lived access tokens only.
+**OAuth**: declare a need of type `oauth:<provider>` plus the `scopes` your operations require — nothing else. Provider endpoints live on the vault entry (operator side; `google` is a built-in preset), and the OAuth app's client credentials are operator configuration via the `oauth.set_client` action. Grants start from the operator surface — `vault.authorize` opens the browser consent and the callback completes it into a vault entry; there is no component-keyed flow. Your binary still calls `cyfr:oauth/token.get-access-token("<provider>")` and receives short-lived access tokens only.
 
 **When to use which need type:**
-- `api_key:*` — service accounts / API keys (e.g. Anthropic, Stripe). The operator pastes the value once into a Connection.
+- `api_key:*` — service accounts / API keys (e.g. Anthropic, Stripe). The operator pastes the value once into a vault entry.
 - `oauth:*` — user-scoped APIs that require browser consent (e.g. Gmail, Google Calendar, Slack). Host handles refresh automatically.
 
 **What the typed errors mean to you as an author:**
-- `setup_required` — a declared need has no live Connection bound. The payload names the need (`{profile_id, node_ref, need, reason}`); surfaces render your `reason` prose and prompt the operator to grant. Nothing to fix in code — it's the operator's move.
+- `setup_required` — a declared need has no live vault entry bound. The payload names the need (`{profile_id, node_ref, need, reason}`); surfaces render your `reason` prose and prompt the operator to grant. Nothing to fix in code — it's the operator's move.
 - `consent_required` — the component's declared shape (needs + caps) changed since the operator's last approval; the payload carries the shape diff. Publishing a version that asks for more never widens an existing grant — it asks again.
 
 **Anti-exfiltration**: Even after reading a credential, a catalyst cannot send it to an unauthorized server. The granted egress domains block unauthorized HTTP, private IP blocking prevents SSRF, rate limiting stops slow exfil, and SecretMasker scrubs credential variants from output.
@@ -1086,7 +1091,7 @@ After:
 }
 ```
 
-Note what vanished: the endpoints (`authorize_url`, `token_url`, `auth_style`, `extra_params`) moved to the Connection, and the client-credential secrets are gone entirely — the operator sets them once per provider via `oauth.set_client`.
+Note what vanished: the endpoints (`authorize_url`, `token_url`, `auth_style`, `extra_params`) moved to the vault entry, and the client-credential secrets are gone entirely — the operator sets them once per provider via `oauth.set_client`.
 
 ### Example: pure caps, no needs (the bundled http catalyst 1.1.0)
 
@@ -1208,8 +1213,8 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `DOMAIN_BLOCKED` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
 | `RATE_LIMITED` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
 | `EXECUTION_TIMEOUT` | Exceeded time limit | Optimize logic, or re-grant with a longer `limits.timeout` |
-| `SECRET_DENIED` | Name outside the Connection projection | Declare the name in the need's `fields`; operator re-grants |
-| `AUTHORIZATION_REQUIRED` | OAuth Connection has no live grant | Re-authorize the Connection (console Connections page) |
+| `SECRET_DENIED` | Name outside the vault-entry projection | Declare the name in the need's `fields`; operator re-grants |
+| `AUTHORIZATION_REQUIRED` | OAuth vault entry has no live grant | Re-authorize the entry (console Vault page) |
 | `DIGEST_MISMATCH` | Binary changed since register | `cyfr register` then re-run |
 | `STORAGE_DENIED` | Path outside the consent | Declare it in `caps.storage.paths` and re-grant |
 
@@ -1223,7 +1228,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 |------------|-------|
 | `invalid_json` | Request not valid JSON |
 | `invalid_request` | Missing required fields (`tool`, `action`, `args`) |
-| `setup_required` | A need with no live Connection bound — includes `remediation` field |
+| `setup_required` | A need with no live vault entry bound — includes `remediation` field |
 | `dispatch_error` | The dispatched call itself failed (bad reference, refused by the host, sub-component error) |
 | `spawn_failed` | An async task could not be started |
 | `task_failed` | A spawned task ended in failure (including a sub-component panic) |

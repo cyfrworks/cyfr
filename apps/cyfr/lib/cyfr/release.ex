@@ -16,6 +16,23 @@ defmodule Cyfr.Release do
 
   Both start only what a migration needs (no endpoint, no supervisors) and
   stop it again.
+
+  ## Key rotation
+
+  Boot warns an operator who has no explicit `CYFR_CRYPTO_KEYRING` that their
+  ciphertexts are keyed to `CYFR_SECRET_KEY_BASE` — advice that only means
+  something if rotating is a thing they can actually do. It was not:
+  `Sanctum.Cipher.Rotation` was reachable from its own tests and nowhere
+  else. These are the two verbs that make it real:
+
+      bin/cyfr eval "Cyfr.Release.cipher_audit()"
+      bin/cyfr eval "Cyfr.Release.rotate_cipher_keys()"
+
+  Add the new key to `CYFR_CRYPTO_KEYRING` and make it `primary`, restart, then
+  run the rotation: it re-encrypts every sealed row onto the primary key,
+  skipping rows already there. Read `cipher_audit/0` first to see the spread,
+  and again afterwards to confirm nothing is left on the old label — only then
+  is the old key safe to drop from the keyring.
   """
 
   @app :cyfr
@@ -56,6 +73,34 @@ defmodule Cyfr.Release do
 
       pending
     end)
+  end
+
+  @doc """
+  Report which key label every sealed row is encrypted under, without
+  decrypting anything.
+
+  Run it before a rotation to see the spread, and after one to confirm the old
+  label is gone. A non-zero `unknown`, or an `on_other` label the keyring no
+  longer carries, means the key is still load-bearing and must not be dropped.
+  """
+  @spec cipher_audit() :: {:ok, map()}
+  def cipher_audit do
+    load_app()
+    Sanctum.Cipher.Rotation.audit()
+  end
+
+  @doc """
+  Re-encrypt every sealed row onto the keyring's current primary key.
+
+  `dry_run: true` reports what would change and writes nothing. The run is
+  fail-closed and resumable: a row that cannot be decrypted aborts it rather
+  than being skipped into permanent unreadability, and rows already on the
+  primary are passed over, so re-running after fixing the cause is safe.
+  """
+  @spec rotate_cipher_keys(keyword()) :: {:ok, map()} | {:error, {atom(), term(), term()}}
+  def rotate_cipher_keys(opts \\ []) do
+    load_app()
+    Sanctum.Cipher.Rotation.reencrypt_all(opts)
   end
 
   defp repos, do: Application.fetch_env!(@app, :ecto_repos)

@@ -19,12 +19,14 @@ defmodule Opus.CronParser do
           dow: [non_neg_integer()]
         }
 
+  # dow admits 7 on the way in — the standard Sunday alias — and is
+  # normalized to 0 after expansion, so the struct only ever carries 0..6.
   @ranges %{
     minute: {0, 59},
     hour: {0, 23},
     dom: {1, 31},
     month: {1, 12},
-    dow: {0, 6}
+    dow: {0, 7}
   }
 
   @doc """
@@ -47,7 +49,7 @@ defmodule Opus.CronParser do
              hour: hour_vals,
              dom: dom_vals,
              month: month_vals,
-             dow: dow_vals
+             dow: normalize_dow(dow_vals)
            }}
         end
 
@@ -105,7 +107,9 @@ defmodule Opus.CronParser do
         "Etc/UTC"
       )
 
-    max_dt = DateTime.add(from, 4 * 365 * 86_400, :second)
+    # Consecutive Feb-29s are 1461 days apart, so a 4×365-day horizon
+    # declared a just-fired leap-day schedule impossible and orphaned it.
+    max_dt = DateTime.add(from, (4 * 366 + 1) * 86_400, :second)
     find_next(cron, candidate, max_dt)
   end
 
@@ -123,7 +127,7 @@ defmodule Opus.CronParser do
         # Advance to first valid month
         find_next(cron, advance_month(candidate), max_dt)
 
-      candidate.day not in cron.dom or day_of_week(candidate) not in cron.dow ->
+      not day_match?(cron, candidate) ->
         # Advance to next day
         find_next(cron, advance_day(candidate), max_dt)
 
@@ -182,6 +186,31 @@ defmodule Opus.CronParser do
 
   defp day_of_week(dt) do
     Date.day_of_week(dt) |> rem(7)
+  end
+
+  # POSIX/Vixie day matching: when BOTH day fields are restricted, a day
+  # matching EITHER fires — `0 0 13 * 5` is "the 13th OR any Friday",
+  # not Friday-the-13th. When at most one is restricted, the unrestricted
+  # field always matches and the conjunction is the same thing.
+  # "Restricted" is detected by expansion width, which is sound: an
+  # explicit full list behaves identically to `*` under either rule.
+  defp day_match?(cron, candidate) do
+    dom_match = candidate.day in cron.dom
+    dow_match = day_of_week(candidate) in cron.dow
+
+    if length(cron.dom) < 31 and length(cron.dow) < 7 do
+      dom_match or dow_match
+    else
+      dom_match and dow_match
+    end
+  end
+
+  # 7 is the standard Sunday alias; the struct speaks 0..6 only.
+  defp normalize_dow(values) do
+    values
+    |> Enum.map(&rem(&1, 7))
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   # Field parsing

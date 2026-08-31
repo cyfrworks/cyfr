@@ -10,7 +10,7 @@ defmodule PrismWeb.NavTest do
     keys = Enum.map(Nav.items("lite"), & &1.key)
 
     assert keys ==
-             ~w(chat agents tinctures members connections schedules webhooks mcp_servers settings legal)
+             ~w(chat agents tinctures members vault schedules webhooks mcp_servers settings legal)
 
     refute "executions" in keys
     refute "api_keys" in keys

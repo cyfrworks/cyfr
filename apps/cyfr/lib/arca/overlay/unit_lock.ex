@@ -31,6 +31,14 @@ defmodule Arca.Overlay.UnitLock do
   there is no clustering to be had (no distribution config, SQLite by
   default, bare-name singletons). A key is a storage path, so a
   deployment-wide version would only need a different holder.
+
+  **Single-writer-node is therefore an invariant of overlaid storage**, not
+  a convenience: `Arca.CronSchedule.claim/3` lets several nodes share one
+  Postgres and race for schedules, but nothing serializes `commit_unit`
+  across nodes — node B's clean-slate can delete files node A already
+  acknowledged. Until this lock has a shared holder (a Postgres advisory
+  lock is the natural one), a multi-node deployment must keep component
+  writes — registration, pulls, builds — on one node.
   """
 
   use GenServer
@@ -145,7 +153,7 @@ defmodule Arca.Overlay.UnitLock do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 

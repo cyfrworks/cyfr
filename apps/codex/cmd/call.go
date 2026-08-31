@@ -30,7 +30,7 @@ var callCmd = &cobra.Command{
 		var toolArgs map[string]any
 		if len(args) > 1 {
 			if err := json.Unmarshal([]byte(args[1]), &toolArgs); err != nil {
-				return fmt.Errorf("Invalid JSON: %v", err)
+				return fmt.Errorf("Invalid JSON: %w", err)
 			}
 		} else {
 			toolArgs = map[string]any{}

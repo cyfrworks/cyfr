@@ -63,7 +63,17 @@ defmodule Aqua.ConversationCompactor do
     else
       # Phase 2: Drop oldest message groups until under budget
       groups = group_messages(truncated_older)
-      drop_groups_until_fits(groups, recent)
+      compacted = drop_groups_until_fits(groups, recent)
+
+      # Phase 3: the preserved window can hold the budget many times over
+      # by itself — twenty messages each carrying a multi-hundred-KB tool
+      # result passed phases 1 and 2 untouched, and the row never shrank.
+      # Recent prose is always kept; oversized recent tool results are not.
+      if estimate_chars(compacted) <= @token_budget_chars do
+        compacted
+      else
+        Enum.map(compacted, &truncate_tool_results/1)
+      end
     end
   end
 

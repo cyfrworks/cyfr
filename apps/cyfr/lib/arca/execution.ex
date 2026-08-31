@@ -145,6 +145,14 @@ defmodule Arca.Execution do
   Records the completion of an execution in the database.
 
   Uses tenant-scoped lookup when a context is provided.
+
+  The write carries an atomic `status == "running"` precondition, like its
+  sibling `mark_failed_if_running/2`: cancel and the finishing runner race
+  on this row, and without the guard whichever wrote second won — a
+  `cancelled` row overwritten `completed` (with a second terminal event on
+  the wire), or a finished run stamped `cancelled` and its output
+  discarded. A row that already left `running` answers
+  `{:error, :not_running}` and the caller keeps its hands off the wire.
   """
   def record_complete(%Sanctum.Context{} = ctx, id, attrs) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_complete", fn ->
@@ -152,10 +160,28 @@ defmodule Arca.Execution do
         nil ->
           {:error, :not_found}
 
+        # get_tenant is itself db-rescued: an outage answers a tuple here,
+        # and binding it as the row would raise a non-DB error straight
+        # through this rescue — crashing the RecordSink's whole batch.
+        {:error, _} = err ->
+          err
+
         execution ->
-          execution
-          |> complete_changeset(attrs)
-          |> Arca.Repo.update()
+          changeset = complete_changeset(execution, attrs)
+
+          if changeset.valid? do
+            sets = Map.to_list(changeset.changes)
+
+            from(e in __MODULE__, where: e.id == ^id, where: e.status == "running")
+            |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+            |> Arca.Repo.update_all(set: sets)
+            |> case do
+              {1, _} -> {:ok, Ecto.Changeset.apply_changes(changeset)}
+              {0, _} -> {:error, :not_running}
+            end
+          else
+            {:error, changeset}
+          end
       end
     end)
   end
@@ -225,7 +251,8 @@ defmodule Arca.Execution do
   `where_tenant/2`, which raises for a context without an athanor (fail
   closed).
   """
-  @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
+  @spec get_tenant(Sanctum.Context.t(), String.t()) ::
+          %__MODULE__{} | nil | {:error, :database_error}
   def get_tenant(%Sanctum.Context{} = ctx, id) do
     Arca.Repo.Errors.with_db_rescue("Execution.get_tenant", fn ->
       from(e in __MODULE__, where: e.id == ^id)
@@ -312,7 +339,11 @@ defmodule Arca.Execution do
   end
 
   # Everything past the newest `keep` in the athanor — the one spelling
-  # both the delete and its dry-run count share.
+  # both the delete and its dry-run count share. A row still "running" is
+  # never stale whatever its age: deleting it mid-flight blinds the lease
+  # sweeper, makes its record_complete a :not_found, and loses its children
+  # from the cancel cascade. The sweeper fails a lease-lapsed row first;
+  # retention collects it on the next cycle.
   defp stale_query(keep, opts) do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
@@ -324,7 +355,10 @@ defmodule Arca.Execution do
       )
       |> Arca.QueryHelpers.where_athanor(athanor_id)
 
-    from(e in __MODULE__, where: e.id not in subquery(keep_ids_query))
+    from(e in __MODULE__,
+      where: e.id not in subquery(keep_ids_query),
+      where: e.status != "running"
+    )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
   end
 

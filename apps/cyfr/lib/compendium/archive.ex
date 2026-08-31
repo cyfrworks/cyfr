@@ -99,5 +99,5 @@ defmodule Compendium.Archive do
   shared temp dir — 64 bits from the CSPRNG, hex-encoded.
   """
   @spec scratch_id() :: String.t()
-  def scratch_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  defdelegate scratch_id, to: Cyfr.Hex, as: :short
 end

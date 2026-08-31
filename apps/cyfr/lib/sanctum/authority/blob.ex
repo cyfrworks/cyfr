@@ -83,6 +83,16 @@ defmodule Sanctum.Authority.Blob do
   @canonical "jcs-1"
   @ingress_key "@ingress"
 
+  @doc """
+  The reserved ingress edge-key STRING. This module reads the edge for you
+  (`ingress/2`), but the consent writers (blob builder, commit, plan) and
+  the profile tool construct nodes carrying the key — seven sites used to
+  hardcode the literal, so renaming the slot would compile everywhere and
+  silently split the consent graph in two.
+  """
+  @spec ingress_key() :: String.t()
+  def ingress_key, do: @ingress_key
+
   @type error ::
           {:invalid_json, term()}
           | {:unsupported_canonical, term()}

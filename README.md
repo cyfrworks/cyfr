@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes two surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: each athanor's chat with **AQUA** — your friendly assistant — (a shared thread every member sees, with approvals any member can decide), its Agents page, and the developer views — executions, components, builds, activities, enforcements, connections, API keys, schedules, MCP servers, tinctures.
+- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: each athanor's chat with **AQUA** — your friendly assistant — (a shared thread every member sees, with approvals any member can decide), its Agents page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
 
 ## Quick Start
 
@@ -77,8 +77,8 @@ cyfr login
 # Scan bundled components and auto-pull their dependencies
 cyfr register
 
-# Grant a component the Connections it needs
-# (or use the console's Connections page)
+# Grant a component the vault entries it needs
+# (or use the console's Vault page)
 cyfr profile grant c:moonmoon69.claude
 
 # Learn more about other commands
@@ -97,7 +97,7 @@ open http://localhost:4000
 Around the chat:
 
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
-- **The drawer** — off the chat, on every screen size: **Apps** (tinctures), **Members**, **Connections**, **Agents**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **Agents** — the grant sheet binds a sealed Connection to the model's catalyst — no developer view needed.
+- **The drawer** — off the chat, on every screen size: **Apps** (tinctures), **Members**, **Vault**, **Agents**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **Agents** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
@@ -122,9 +122,9 @@ your-project/
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── aqua/                   # AQUA agent template (agent.json + role prompts) every athanor is given
+├── aqua/                   # AQUA agent template (agents/ role prompts) every athanor is given
 └── data/                   # ALL runtime state — one directory, .gitignored
-    ├── cyfr.db             # Connections, consents, execution records
+    ├── cyfr.db             # Vault entries, consents, execution records
     ├── cache/              # Immutable cached artifacts (OCI blobs)
     ├── system/             # Server-internal scratch (health probes)
     ├── mcp-bridge/         # The mcp-bridge sidecar's own files (not managed by cyfr)
@@ -175,7 +175,7 @@ register time, or explicitly with `cyfr pull`. Use `cyfr list` / `cyfr search`
 to see what's available, then grant one:
 
 ```bash
-# Pick a connection for each thing the component needs, and approve it
+# Pick a vault entry for each thing the component needs, and approve it
 cyfr profile grant c:moonmoon69.claude
 
 # Run it
@@ -186,7 +186,7 @@ cyfr pull c:moonmoon69.supabase
 ```
 
 `cyfr profile grant` walks the consent flow: it shows what the component
-asks for, lets you pick a connection for each need, renders exactly what
+asks for, lets you pick a vault entry for each need, renders exactly what
 you are approving, and records it as an immutable consent revision. A grant
 covers every release of that component line by default; grant a specific
 version to pin it. `cyfr profile list <ref>` shows what is granted, and
@@ -295,7 +295,7 @@ cyfr mcp list
 # Server tools appear as github:tool_name in your tool list
 ```
 
-Header values support vault references (`vault:CONNECTION_NAME`) — the named Connection's
+Header values support vault references (`vault:ENTRY_NAME`) — the named vault entry's
 single field is resolved at request time, so credentials stay encrypted at rest and never
 appear in the server config.
 
@@ -628,7 +628,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr inspect <ref>` | Show component details, declared needs/caps, and dependency tree `[i]` |
 | `cyfr pull <ref>` | Fetch a component and its dependencies from the registry |
 | `cyfr register` | Scan and register all local components (auto-pulls dependencies) |
-| `cyfr profile grant <ref>` | Grant a component the connections it needs `[i]` |
+| `cyfr profile grant <ref>` | Grant a component the vault entries it needs `[i]` |
 | `cyfr profile list <ref>` | Show a component's profiles and consent revisions |
 | `cyfr profile revoke <id>` | Revoke a profile, effective on the next run |
 | `cyfr run <ref>` | Execute a component `[i]` |
@@ -663,9 +663,9 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr call vault '{"action":"list",…}'` | Manage Connections (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Connections page |
+| `cyfr call vault '{"action":"list",…}'` | Manage vault entries (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Vault page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
-| `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Connections page |
+| `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Vault page |
 
 ### Administration
 

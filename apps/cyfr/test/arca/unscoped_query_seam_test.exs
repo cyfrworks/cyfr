@@ -171,4 +171,67 @@ defmodule Arca.UnscopedQuerySeamTest do
            to ignore it.
            """
   end
+
+  # A schema with no athanor column is out of this seam's scope by
+  # construction — which is exactly why the set needs naming. Nothing was
+  # checking it, so a new tenant-adjacent table could be added with no
+  # athanor column and no scoping, and the seam test would report it as
+  # clean because it never saw the table at all.
+  #
+  # Each entry says what addresses the row instead of a tenant. The first
+  # four are the identity/platform plane. The fifth is the one that is
+  # genuinely tenant-*adjacent*: `webhook_deliveries` is keyed by a
+  # `webhooks` FK with `on_delete: :delete_all`, so a row is reachable only
+  # through a tenant-owned parent and dies with it — the same reasoning the
+  # baseline migration gives for `memberships` and `sessions`.
+  @athanor_less %{
+    "Arca.Schemas.Athanor" => "the tenant itself — it cannot carry a reference to itself",
+    "Arca.Schemas.User" => "a person, addressed by IdP subject; people are not tenant-owned",
+    "Arca.Schemas.RegistryToken" => "keyed by user_id — the identity plane, not a tenant's",
+    "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
+    "Arca.Schemas.WebhookDelivery" =>
+      "an idempotency claim keyed by a webhooks FK (on_delete: :delete_all), so it is " <>
+        "reachable only through its tenant-owned parent and cascade-deleted with it; the " <>
+        "unique index is (webhook_id, idempotency_key), so keys cannot collide across athanors"
+  }
+
+  test "every schema without an athanor column is classified" do
+    schemas =
+      for path <- sources(),
+          source = File.read!(path),
+          source =~ ~r/^\s*schema "/m,
+          not (source =~ ~r/^\s*(field :athanor_id|belongs_to :athanor)\b/m),
+          [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),
+          into: MapSet.new(),
+          do: module
+
+    unclassified = MapSet.difference(schemas, MapSet.new(Map.keys(@athanor_less)))
+
+    assert MapSet.to_list(unclassified) == [],
+           """
+           These schemas carry no athanor column, so every query over them is
+           invisible to this seam:
+
+           #{Enum.map_join(Enum.sort(unclassified), "\n", &"  #{&1}")}
+
+           If the table is tenant-owned, give it `athanor_id` and the seam
+           will hold its queries to scoping. If it is addressed by something
+           else — a person, a credential, a tenant-owned parent — add it to
+           `@athanor_less` with the line saying what addresses it, so the
+           choice is on the record instead of implied by an absence.
+           """
+
+    stale = MapSet.difference(MapSet.new(Map.keys(@athanor_less)), schemas)
+
+    assert MapSet.to_list(stale) == [],
+           """
+           `@athanor_less` names schemas that no longer exist or now carry an
+           athanor column:
+
+           #{Enum.map_join(Enum.sort(stale), "\n", &"  #{&1}")}
+
+           Remove them — a roster that outlives its rows misdescribes the
+           tenancy fabric.
+           """
+  end
 end

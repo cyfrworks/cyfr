@@ -80,6 +80,13 @@ defmodule Aqua.ConversationRunner do
   @window_bytes 60_000
   # The athanor's orchestrator names are an MCP round trip; cached briefly.
   @orchestrators_ttl_ms 60_000
+
+  # Ceiling on the async turn start reporting back. Every fault inside the
+  # task is converted to a `{:turn_start_result, ...}` message, so this
+  # fires only when the task itself was killed (supervisor shutdown, brutal
+  # kill) — without it, `running: true` with no execution id was permanent
+  # and the conversation answered `:busy` forever.
+  @turn_start_timeout_ms :timer.minutes(2)
   # A turn's streamed text and tool feed are model-driven — without caps
   # they were the only two unbounded accumulations in a module that bounds
   # its queue, its task window and its persisted history. Applied BEFORE
@@ -158,7 +165,7 @@ defmodule Aqua.ConversationRunner do
     do: Cyfr.Topics.conversation(conversation_id, athanor_id)
 
   @doc "Subscribe the calling process to a conversation's broadcasts."
-  @spec subscribe(String.t(), String.t()) :: :ok
+  @spec subscribe(String.t(), String.t()) :: :ok | {:error, {:already_registered, pid()}}
   def subscribe(conversation_id, athanor_id) do
     Phoenix.PubSub.subscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
   end
@@ -314,6 +321,10 @@ defmodule Aqua.ConversationRunner do
         # Set while a turn is starting: the async start has not yet
         # returned an execution id.
         starting: nil,
+        # Highest event sequence applied this turn. Events reach the runner
+        # twice — live via PubSub and replayed from the buffer (the
+        # subscribe-gap catch-up) — and this gate keeps each applied once.
+        last_event_seq: -1,
         cancel_requested: false,
         streaming_text: "",
         tool_activity: [],
@@ -483,12 +494,9 @@ defmodule Aqua.ConversationRunner do
       turn = state.turn
       turn.unsubscribe(exec_id, state.turn_ctx || ctx)
 
-      logger_metadata = Cyfr.LoggerContext.capture()
-
-      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
-        turn.cancel_for_restart(ctx, exec_id, payload)
-      end)
+      # A refused spawn is logged by start_task; the sweeper reaps the
+      # execution the cancel would have stopped.
+      _ = start_task(fn -> turn.cancel_for_restart(ctx, exec_id, payload) end)
 
       # The sender is asked to re-send; a queued turn firing now would send
       # for them.
@@ -617,6 +625,26 @@ defmodule Aqua.ConversationRunner do
   defp clear_queue(%{queue: []} = state), do: state
   defp clear_queue(state), do: %{state | queue: []} |> broadcast({:queued, 0})
 
+  # Engine work pushed out of the runner's loop (turn starts, cancels,
+  # approvals). The WORK reports back by message; the SPAWN is checked
+  # here — a supervisor at its ceiling used to drop the work silently,
+  # leaving whatever waited on the message waiting forever.
+  defp start_task(fun) do
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+           fun.()
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Aqua.ConversationRunner] task not started: #{inspect(reason)}")
+        :error
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Turn start
   # ---------------------------------------------------------------------------
@@ -625,8 +653,14 @@ defmodule Aqua.ConversationRunner do
   # including the one that addressed AQUA — bounded, mention-stripped, and
   # in a group prefixed with who said it. The cursor advances at start;
   # what a cancelled or failed turn consumed is folded into the history
-  # instead (`cancel_turn/2`), so nothing is lost and nothing is fed twice.
+  # instead (`cancel_turn/2`, `fail_turn/2`), so nothing is lost and
+  # nothing is fed twice.
   defp start_turn(state, %{ctx: ctx, orchestrator: orchestrator, seq: seq} = entry) do
+    # Belt: every turn-end path drains or clears the queue synchronously,
+    # so an entry should never carry a seq behind the cursor — but if one
+    # ever does, the cursor must not move backwards, or the next turn
+    # re-reads messages a finished turn already consumed.
+    seq = max(seq, state.turn_seq || 0)
     rows = window_rows(state, seq)
     {task, state} = task_of(state, rows)
     turn_attachments = Attachments.attachments_of(rows)
@@ -643,60 +677,83 @@ defmodule Aqua.ConversationRunner do
     group? = state.kind == "group"
     turn = state.turn
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    spawned =
+      start_task(fn ->
+        result =
+          try do
+            # A name-only pick resolves its run-time detail here, in the
+            # task — the MCP call this costs must never run inside the
+            # runner's handle_call.
+            with %{} = orchestrator <- resolve_orchestrator(ctx, orchestrator) do
+              attachments = Attachments.load(ctx, conv_id, turn_attachments)
 
-    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-      Cyfr.LoggerContext.restore(logger_metadata)
+              %{input: input, tool_policy: policy} =
+                AquaTurn.build_input(ctx, orchestrator, task,
+                  history: history,
+                  attachments: attachments,
+                  model: entry.model,
+                  group: group?
+                )
 
-      result =
-        try do
-          # A name-only pick resolves its run-time detail here, in the
-          # task — the MCP call this costs must never run inside the
-          # runner's handle_call.
-          with %{} = orchestrator <- resolve_orchestrator(ctx, orchestrator) do
-            attachments = Attachments.load(ctx, conv_id, turn_attachments)
-
-            %{input: input, tool_policy: policy} =
-              AquaTurn.build_input(ctx, orchestrator, task,
-                history: history,
-                attachments: attachments,
-                model: entry.model,
-                group: group?
-              )
-
-            case turn.start(ctx, input) do
-              {:ok, eid} -> {:ok, eid, policy, orchestrator}
-              {:error, reason} -> {:error, reason}
+              case turn.start(ctx, input) do
+                {:ok, eid} -> {:ok, eid, policy, orchestrator}
+                {:error, reason} -> {:error, reason}
+              end
+            else
+              nil -> {:error, :no_orchestrator}
             end
-          else
-            nil -> {:error, :no_orchestrator}
+          rescue
+            e -> {:error, Exception.message(e)}
+          catch
+            # The loads and `turn.start` reach GenServers and MCP: a call
+            # timeout or a dead process arrives as an exit, not an
+            # exception. Uncaught, the task died silently and the runner
+            # waited forever on a result that was never coming.
+            kind, reason ->
+              Logger.warning("[Aqua.ConversationRunner] turn start #{kind}: #{inspect(reason)}")
+              {:error, "the engine did not respond while starting the turn"}
           end
-        rescue
-          e -> {:error, Exception.message(e)}
-        end
 
-      send(runner, {:turn_start_result, ref, result})
-    end)
+        send(runner, {:turn_start_result, ref, result})
+      end)
 
-    state = %{
-      state
-      | turn_ctx: ctx,
-        running: true,
-        starting: ref,
-        execution_id: nil,
-        cancel_requested: false,
-        streaming_text: "",
-        tool_activity: [],
-        usage: %{input: 0, output: 0},
-        orchestrator: resolved_or_previous(orchestrator, state.orchestrator),
-        tool_policy: pre_policy(orchestrator),
-        turn_seq: seq,
-        last_task: task
-    }
+    case spawned do
+      :ok ->
+        # The task is the only thing that reports back; if it is killed
+        # mid-flight, the deadline turns the silence into a failed turn.
+        Process.send_after(self(), {:turn_start_timeout, ref}, @turn_start_timeout_ms)
 
-    state
-    |> broadcast({:turn_starting, ctx.user_id})
-    |> touch()
+        %{
+          state
+          | turn_ctx: ctx,
+            running: true,
+            starting: ref,
+            execution_id: nil,
+            last_event_seq: -1,
+            cancel_requested: false,
+            streaming_text: "",
+            tool_activity: [],
+            usage: %{input: 0, output: 0},
+            orchestrator: resolved_or_previous(orchestrator, state.orchestrator),
+            tool_policy: pre_policy(orchestrator),
+            turn_seq: seq,
+            last_task: task
+        }
+        |> broadcast({:turn_starting, ctx.user_id})
+        |> touch()
+
+      :error ->
+        # The supervisor refused the task: the turn never started, so the
+        # state must not say it did. Same shape as the dropped-member case
+        # above — tell the room, then keep draining the queue.
+        state
+        |> append_and_broadcast(%{
+          author: "system",
+          kind: "error",
+          content: "The turn could not start — the server is busy. Send the message again."
+        })
+        |> start_next()
+    end
   end
 
   # The human text rows a turn takes up: after the last cursor, up to the
@@ -820,20 +877,42 @@ defmodule Aqua.ConversationRunner do
           {:noreply, cancel_turn(state, state.turn_ctx)}
         else
           state.turn.subscribe(eid, state.turn_ctx)
-          {:noreply, broadcast(state, {:turn_started, eid})}
+
+          # The execution was live before this result arrived — a fast
+          # failure's terminal event broadcast before the subscribe above
+          # and would never be delivered. Replay the buffer through the
+          # same sequence gate live events pass: nothing missed, nothing
+          # applied twice.
+          state =
+            state.turn.events_since(eid, state.athanor_id)
+            |> Enum.reduce(
+              broadcast(state, {:turn_started, eid}),
+              &apply_sequenced_event(&2, &1)
+            )
+
+          {:noreply, state}
         end
 
       {:error, reason} ->
-        # Sanitize BEFORE inspect — this text persists as a conversation
-        # message every member reads, and a flattened string is past the
-        # sanitizer's reach.
-        safe = inspect(Sanctum.Sanitizer.sanitize(reason))
+        safe = Aqua.MCPHelpers.render_refusal(reason)
+
         {:noreply, fail_turn(state, "Execution failed to start: #{safe}")}
     end
   end
 
   # A start result for a turn that is no longer the current one.
   def handle_info({:turn_start_result, _ref, _result}, state), do: {:noreply, state}
+
+  # The deadline armed at turn start: firing while `starting` is still this
+  # ref means the start task died without reporting — end the turn rather
+  # than hold `running` forever. A result that already arrived cleared
+  # `starting`, so a stale deadline matches the clause below and is dropped.
+  def handle_info({:turn_start_timeout, ref}, %{starting: ref} = state) do
+    {:noreply,
+     fail_turn(%{state | starting: nil}, "The turn did not start. Send the message again.")}
+  end
+
+  def handle_info({:turn_start_timeout, _ref}, state), do: {:noreply, state}
 
   # An event only speaks for the turn it came from. `unsubscribe` happens
   # when a turn ends, but a message already in flight arrives after it —
@@ -843,7 +922,7 @@ defmodule Aqua.ConversationRunner do
   def handle_info({:execution_event, %{execution_id: id} = event}, state)
       when is_binary(id) do
     if id == state.execution_id do
-      {:noreply, apply_execution_event(state, event)}
+      {:noreply, apply_sequenced_event(state, event)}
     else
       {:noreply, state}
     end
@@ -906,9 +985,24 @@ defmodule Aqua.ConversationRunner do
   def handle_info(:idle, state), do: {:noreply, touch(state)}
 
   def handle_info(msg, state) do
-    Logger.warning("[Aqua.ConversationRunner] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
+
+  # One gate for every execution event, live or replayed: a finished turn
+  # takes no more events, and an event delivered twice (buffered AND live)
+  # must apply once — the producer's sequence is the dedup key.
+  defp apply_sequenced_event(%{running: false} = state, _event), do: state
+
+  defp apply_sequenced_event(state, %{sequence: seq} = event) when is_integer(seq) do
+    if seq <= state.last_event_seq do
+      state
+    else
+      apply_execution_event(%{state | last_event_seq: seq}, event)
+    end
+  end
+
+  defp apply_sequenced_event(state, event), do: apply_execution_event(state, event)
 
   defp apply_execution_event(state, %{type: "emit", data: data}) do
     handle_emit(state, data["kind"] || data[:kind], data)
@@ -917,7 +1011,21 @@ defmodule Aqua.ConversationRunner do
   defp apply_execution_event(state, %{type: "complete"}), do: complete_turn(state)
 
   defp apply_execution_event(state, %{type: "error", data: data}) do
-    fail_turn(state, data["message"] || data[:message] || inspect(data))
+    # Producers spell the reason under `:error` (every
+    # `ExecutionEventBuffer.push_terminal/5` caller); an unrecognized shape
+    # is logged, never inspected into a row every member reads.
+    case data[:error] || data["error"] do
+      msg when is_binary(msg) ->
+        fail_turn(state, msg)
+
+      _ ->
+        Logger.warning(
+          "[Aqua.ConversationRunner] error event with unrecognized data keys: " <>
+            inspect(if is_map(data), do: Map.keys(data), else: data)
+        )
+
+        fail_turn(state, "The turn failed.")
+    end
   end
 
   defp apply_execution_event(state, _other), do: state
@@ -1156,6 +1264,47 @@ defmodule Aqua.ConversationRunner do
         _ -> broadcast(state, {:error, text})
       end
 
+    # What this turn consumed stays in the agent's memory, the same fold
+    # cancel_turn does: the thread still shows the person's message, and a
+    # failed turn used to drop it from the history — so the next answer had
+    # amnesia about exactly the message that failed.
+    user_turn =
+      if state.last_task,
+        do: [%{"role" => "user", "content" => state.last_task}],
+        else: []
+
+    partial = state.streaming_text
+
+    assistant_turn =
+      if partial != "",
+        do: [%{"role" => "assistant", "content" => partial <> "\n\n(failed)"}],
+        else: []
+
+    state = %{
+      state
+      | history: state.history ++ user_turn ++ assistant_turn ++ state.notes_in_flight,
+        notes_in_flight: []
+    }
+
+    # A failure never launches what was queued (start_next's rule) — but it
+    # must not strand it either: stranded entries sat as a stale badge, a
+    # later send jumped them, and a delayed launch then regressed the
+    # cursor and fed consumed messages twice. Dropped, with a note.
+    state =
+      if state.queue != [] do
+        state
+        |> append_and_broadcast(%{
+          author: "system",
+          kind: "system",
+          content:
+            "The waiting turn was dropped because this one failed — the messages stay " <>
+              "in the thread; send again to continue."
+        })
+        |> clear_queue()
+      else
+        state
+      end
+
     finish_turn(state)
   end
 
@@ -1170,12 +1319,9 @@ defmodule Aqua.ConversationRunner do
     if exec_id do
       turn.unsubscribe(exec_id, turn_ctx)
 
-      logger_metadata = Cyfr.LoggerContext.capture()
-
-      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
-        turn.cancel(ctx, exec_id)
-      end)
+      # A refused spawn is logged by start_task; the sweeper reaps the
+      # execution the cancel would have stopped.
+      _ = start_task(fn -> turn.cancel(ctx, exec_id) end)
     end
 
     partial = state.streaming_text
@@ -1239,7 +1385,14 @@ defmodule Aqua.ConversationRunner do
         cancel_requested: false,
         streaming_text: "",
         tool_activity: [],
-        turn_ctx: nil
+        turn_ctx: nil,
+        # Cleared here, not only where a note happens to be merged. A note
+        # that landed between this turn's `conversation_complete` (which
+        # merges and clears) and its `complete` stayed in the list while
+        # already being part of `history`, so every later turn's merge
+        # appended it again — the same "[System: …]" line accreting once per
+        # turn for the rest of the conversation.
+        notes_in_flight: []
     }
     |> broadcast({:turn_finished})
     |> touch()
@@ -1268,36 +1421,57 @@ defmodule Aqua.ConversationRunner do
         id = msg.id
         turn = state.turn
 
-        logger_metadata = Cyfr.LoggerContext.capture()
+        spawned =
+          start_task(fn ->
+            result =
+              try do
+                turn.run_approved(proposal, ctx)
+              rescue
+                e -> {:error, Exception.message(e)}
+              catch
+                # The approved run reaches GenServers and MCP; an exit
+                # uncaught here died silently and the card read "running"
+                # forever.
+                kind, reason ->
+                  Logger.warning(
+                    "[Aqua.ConversationRunner] approval run #{kind}: #{inspect(reason)}"
+                  )
 
-        Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
+                  {:error, "the engine did not respond"}
+              end
 
-          result =
-            try do
-              turn.run_approved(proposal, ctx)
-            rescue
-              e -> {:error, Exception.message(e)}
+            case result do
+              {:ok, value} ->
+                send(runner, {:approval_result, id, ctx, :approved, %{result: value}})
+
+              {:error, reason} ->
+                send(runner, {:approval_result, id, ctx, :error, %{reason: reason}})
             end
+          end)
 
-          case result do
-            {:ok, value} ->
-              send(runner, {:approval_result, id, ctx, :approved, %{result: value}})
+        case spawned do
+          :ok ->
+            state
 
-            {:error, reason} ->
-              send(runner, {:approval_result, id, ctx, :error, %{reason: reason}})
-          end
-        end)
-
-        state
+          :error ->
+            # The card was already marked "running" by the caller's
+            # compare-and-set; without this it stayed there forever.
+            complete_approval(state, ctx, id, :error, %{
+              reason: "The action could not run — the server is busy. Approve again to retry."
+            })
+        end
     end
   end
 
   # `:always` writes "auto" into the athanor's SHARED agent allowlist —
-  # every member's future runs stop asking. The card hides that button for
-  # destructive/external actions, but the card is a client; the rule is
-  # decided here, on the kind the intent already carries.
-  defp scope_permitted(msg, :always) do
+  # every member's future runs stop asking — and `:conversation` grants the
+  # pair for the rest of a long-lived, multi-member chat (the fast path in
+  # `complete_turn/1` auto-runs a matching proposal with no second
+  # confirmation). Both are standing grants, so both are refused for
+  # destructive/external actions; only `:once` may approve those. The card
+  # hides these buttons, but the card is a client; the rule is decided
+  # here, on the kind the intent already carries.
+  defp scope_permitted(msg, scope) when scope in [:conversation, :always] do
     case approval_intent(msg)["action_kind"] do
       kind when kind in ["destructive", "external"] ->
         {:error, {:scope_not_permitted, kind}}
@@ -1486,6 +1660,10 @@ defmodule Aqua.ConversationRunner do
         interrupted(state, execution_id, "no execution engine")
 
       true ->
+        # Subscribe before reading the buffer: an event landing between the
+        # two reads would otherwise be lost, and the sequence gate drops
+        # any the buffer and the live feed both deliver.
+        turn.subscribe(execution_id, ctx)
         events = turn.events_since(execution_id, state.athanor_id)
         finished? = Enum.any?(events, &(&1.type in ["complete", "error"]))
 
@@ -1500,6 +1678,7 @@ defmodule Aqua.ConversationRunner do
           state
           | running: true,
             execution_id: execution_id,
+            last_event_seq: -1,
             turn_ctx: ctx,
             orchestrator: orchestrator,
             tool_policy: (orchestrator || %{})["tool_policy"] || %{}
@@ -1509,35 +1688,21 @@ defmodule Aqua.ConversationRunner do
 
         cond do
           finished? ->
+            # The replayed complete/error already unsubscribed.
             state
 
           turn.running?(ctx, execution_id) ->
-            turn.subscribe(execution_id, ctx)
             broadcast(state, {:turn_started, execution_id})
 
           true ->
+            turn.unsubscribe(execution_id, ctx)
             interrupted(state, execution_id, "the server restarted")
         end
     end
   end
 
-  defp replay(state, events) do
-    Enum.reduce(events, state, fn
-      %{type: "emit", data: data}, acc ->
-        if acc.running, do: handle_emit(acc, data["kind"] || data[:kind], data), else: acc
-
-      %{type: "complete"}, acc ->
-        if acc.running, do: complete_turn(acc), else: acc
-
-      %{type: "error", data: data}, acc ->
-        if acc.running,
-          do: fail_turn(acc, data["message"] || data[:message] || inspect(data)),
-          else: acc
-
-      _, acc ->
-        acc
-    end)
-  end
+  defp replay(state, events),
+    do: Enum.reduce(events, state, &apply_sequenced_event(&2, &1))
 
   defp interrupted(state, execution_id, why) do
     state =

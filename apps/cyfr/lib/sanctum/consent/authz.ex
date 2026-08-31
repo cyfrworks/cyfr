@@ -33,6 +33,8 @@ defmodule Sanctum.Consent.Authz do
 
   alias Sanctum.Context
 
+  require Logger
+
   defmodule Request do
     @moduledoc """
     What is being consented to, from the authorization plane's point of
@@ -158,7 +160,14 @@ defmodule Sanctum.Consent.Authz do
     do: "consent_class_required: overrides are always interactive"
 
   def message(:invalid_request), do: "consent_class_required: invalid consent request"
-  def message(other), do: "consent_class_required: #{inspect(other)}"
+
+  # This IS the vocabulary module — an unknown term here is a producer bug,
+  # logged and generalized, never inspected onto the wire (the catch-all
+  # `inspect/1` undid the closed union above).
+  def message(other) do
+    Logger.warning("[Sanctum.Consent.Authz] unrenderable consent refusal: #{inspect(other)}")
+    "consent_class_required: invalid consent request"
+  end
 
   # ============================================================================
   # Private

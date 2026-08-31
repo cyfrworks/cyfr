@@ -259,12 +259,24 @@ defmodule Sanctum.ApiKey do
 
   defp encode_allowlist(nil), do: {:ok, nil}
 
-  defp encode_allowlist(ip_allowlist) do
-    case Jason.encode(ip_allowlist) do
-      {:ok, json} -> {:ok, json}
-      {:error, _} -> {:error, :invalid_ip_allowlist}
+  # The shape is checked here, not only that it encodes. `ip_matches?/2` is
+  # guarded `is_binary(pattern)` and has no other clause, so a key created
+  # with `"ip_allowlist": [1, 2]` — which the MCP input validator admits,
+  # since it checks `type: array` and never descends into `items` — raised
+  # `FunctionClauseError` on every subsequent `validate/2`. That is a 500 on
+  # the authentication path and a key that can never be used again.
+  defp encode_allowlist(ip_allowlist) when is_list(ip_allowlist) do
+    if Enum.all?(ip_allowlist, &is_binary/1) do
+      case Jason.encode(ip_allowlist) do
+        {:ok, json} -> {:ok, json}
+        {:error, _} -> {:error, :invalid_ip_allowlist}
+      end
+    else
+      {:error, :invalid_ip_allowlist}
     end
   end
+
+  defp encode_allowlist(_), do: {:error, :invalid_ip_allowlist}
 
   defp store_key(attrs, key, name, key_type, scope_list, now) do
     case Arca.ApiKeyStorage.create_key(attrs) do
@@ -606,6 +618,19 @@ defmodule Sanctum.ApiKey do
       true ->
         false
     end
+  end
+
+  # An entry that is not a string cannot match an IP. `encode_allowlist/1`
+  # refuses to write one now, but a row stored before it did must fail the
+  # match rather than the request: raising here took down the whole
+  # authentication path, and did so on every call for that key.
+  defp ip_matches?(_client_ip, pattern) do
+    Logger.warning(
+      "[ApiKey] ignoring a non-string ip_allowlist entry (#{inspect(pattern)}); " <>
+        "the key's allowlist should be rewritten"
+    )
+
+    false
   end
 
   # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR

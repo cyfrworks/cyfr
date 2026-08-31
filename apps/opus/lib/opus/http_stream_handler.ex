@@ -247,8 +247,15 @@ defmodule Opus.HttpStreamHandler do
     # Task.async completion message nor a spawn_link EXIT signal (both
     # unhandled by Wasmex), and a bare spawn left the request outside every
     # tree at shutdown.
+    # Carry the tenant correlators into the task — the one spawn in the
+    # tree that skipped the capture/restore convention, so guest streaming
+    # logs arrived with no athanor_id or execution_id.
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     start =
       Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+
         try do
           perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size)
         rescue

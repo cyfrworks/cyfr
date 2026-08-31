@@ -9,17 +9,20 @@ on:
     paths:
       - 'apps/codex/**'
       # TestRenderEnvFileShippedTemplate binds `cyfr init` to the shipped
-      # template, and TestSharedFixtureVerdicts binds internal/ref to the
-      # shared component-ref fixture — an edit to either must run the Go
-      # tests.
+      # template, TestSharedFixtureVerdicts binds internal/ref to the
+      # shared component-ref fixture, and TestBundledPromptsMatchSeed binds
+      # the scaffold's managed-prompt roster to seed/aqua/agents — an edit
+      # to any of them must run the Go tests.
       - '.env.example'
       - 'tests/fixtures/**'
+      - 'seed/aqua/**'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
       - 'apps/codex/**'
       - '.env.example'
       - 'tests/fixtures/**'
+      - 'seed/aqua/**'
       - '.github/workflows/codex-ci.yml'
 
 permissions:

@@ -290,14 +290,34 @@ defmodule Locus.Builder do
         {:error, :no_tmp_dir}
 
       tmp ->
-        id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+        id = Cyfr.Hex.short()
         dir = Path.join(tmp, "locus_build_#{id}")
 
         case File.mkdir_p(dir) do
-          :ok -> {:ok, dir}
-          {:error, reason} -> {:error, {:mkdir_failed, reason}}
+          :ok ->
+            watch_tmp_dir(self(), dir)
+            {:ok, dir}
+
+          {:error, reason} ->
+            {:error, {:mkdir_failed, reason}}
         end
     end
+  end
+
+  # `do_compile/5` cleans its tree in an `after` — which never runs when the
+  # MCP tool layer brutal-kills the provider task on its own deadline, so a
+  # multi-hundred-MB node_modules/target tree outlived every build that was
+  # killed rather than finished. Same shape as `watch_for_orphans/2`: an
+  # unlinked janitor survives the kill and sweeps when the owner dies for
+  # any reason (a second rm_rf after the happy path's `after` is a no-op).
+  defp watch_tmp_dir(owner, dir) do
+    spawn(fn ->
+      ref = Process.monitor(owner)
+
+      receive do
+        {:DOWN, ^ref, :process, _pid, _reason} -> File.rm_rf(dir)
+      end
+    end)
   end
 
   defp write_source(tmp_dir, :rust, target_type, source_files) do
@@ -571,13 +591,33 @@ defmodule Locus.Builder do
         Cyfr.LoggerContext.restore(logger_metadata)
         executable = System.find_executable(command) || command
 
+        # Lead a fresh process group when the platform can (setsid ships in
+        # every Linux/util-linux image; macOS dev hosts have none): the
+        # timeout/orphan kill targets `-os_pid`, and without a group led by
+        # the child that kill was ESRCH on every invocation — grandchildren
+        # (npm, node, rustc, cargo's job servers) survived every timeout.
+        # setsid execs in place, so os_pid == pgid and the port's fds and
+        # exit_status are unchanged.
+        {spawn_exec, spawn_args} =
+          case System.find_executable("setsid") do
+            nil -> {executable, args}
+            setsid -> {setsid, [executable | args]}
+          end
+
         port =
-          Port.open({:spawn_executable, executable}, [
+          Port.open({:spawn_executable, spawn_exec}, [
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            {:args, args},
-            {:cd, cwd}
+            {:args, spawn_args},
+            {:cd, cwd},
+            # User-supplied code runs during a build (the project's own
+            # `npm run build` script, its build.rs) — and a port child
+            # inherits the BEAM's entire environment: database URL, keyring
+            # material, provider keys. Everything not on the allowlist is
+            # explicitly unset ({Name, false}); the toolchain needs only
+            # its own homes, locale, and the proxy knobs.
+            {:env, scrubbed_build_env()}
           ])
 
         # Store OS PID so the parent can kill the process tree on timeout
@@ -652,22 +692,50 @@ defmodule Locus.Builder do
     end
   end
 
+  # What a build's toolchain may see of this node's environment. The port
+  # would otherwise hand user-run build scripts every secret the BEAM was
+  # started with.
+  @build_env_allowlist ~w(
+    PATH HOME LANG LC_ALL LC_CTYPE TMPDIR TERM
+    CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR
+    HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+  )
+
+  defp scrubbed_build_env do
+    # A port's :env option MODIFIES the inherited environment rather than
+    # replacing it, so the scrub is spelled as explicit removals.
+    for {key, _} <- System.get_env(), key not in @build_env_allowlist do
+      {String.to_charlist(key), false}
+    end
+  end
+
   defp kill_os_process(nil), do: :ok
 
   defp kill_os_process(os_pid) do
-    # Kill the process group to clean up cargo and its children. ESRCH
-    # (exit 1, already gone) is the expected case; any other failure means
-    # a cargo/npm tree may have leaked, and that must not be silent — this
-    # is the one zombie-process risk in the tree.
+    # Kill the process group to clean up cargo and its children. With the
+    # setsid spawn the child leads a group whose pgid == os_pid; without it
+    # (macOS dev host, no setsid binary) no such group exists and the group
+    # kill is ESRCH — fall back to the direct child so at least sh/cargo
+    # itself dies. Any other failure means a cargo/npm tree may have
+    # leaked, and that must not be silent — this is the one zombie-process
+    # risk in the tree.
     case System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true) do
       {_, 0} ->
         :ok
 
       {out, code} ->
-        unless out =~ "No such process" do
+        {direct_out, direct_code} =
+          System.cmd("kill", ["-9", "#{os_pid}"], stderr_to_stdout: true)
+
+        already_gone? =
+          out =~ "No such process" and
+            (direct_code == 0 or direct_out =~ "No such process")
+
+        unless already_gone? or direct_code == 0 do
           Logger.warning(
-            "[Builder] process-group kill of #{os_pid} exited #{code}: #{String.trim(out)} — " <>
-              "a build toolchain process may have leaked"
+            "[Locus.Builder] process-group kill of #{os_pid} exited #{code} " <>
+              "(#{String.trim(out)}) and direct kill exited #{direct_code} " <>
+              "(#{String.trim(direct_out)}) — a build toolchain process may have leaked"
           )
         end
 
@@ -675,7 +743,7 @@ defmodule Locus.Builder do
     end
   rescue
     e ->
-      Logger.warning("[Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
+      Logger.warning("[Locus.Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
       :ok
   end
 

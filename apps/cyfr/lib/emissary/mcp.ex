@@ -50,6 +50,7 @@ defmodule Emissary.MCP do
     case Router.dispatch(ctx, message) do
       {:ok, result} -> {:ok, result, id}
       {:error, code, msg} -> {:error, code, msg, id}
+      {:error, code, msg, %{} = data} -> {:error, code, msg, data, id}
     end
   end
 

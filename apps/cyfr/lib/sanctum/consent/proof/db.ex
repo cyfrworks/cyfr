@@ -21,8 +21,6 @@ defmodule Sanctum.Consent.Proof.DB do
 
   alias Sanctum.Consent.Proof
 
-  @token_bytes 32
-
   # The only binding keys a stored proof may round-trip. String→atom
   # conversion at read is restricted to this list, so a tampered bindings
   # column cannot mint atoms.
@@ -33,7 +31,7 @@ defmodule Sanctum.Consent.Proof.DB do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     Arca.ConsentProofStorage.purge_expired(now)
 
-    token = Base.url_encode64(:crypto.strong_rand_bytes(@token_bytes), padding: false)
+    token = Sanctum.Consent.Proof.mint_token()
 
     row = %{
       token_hash: hash(token),

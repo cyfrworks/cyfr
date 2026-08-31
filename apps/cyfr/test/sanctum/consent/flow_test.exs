@@ -83,7 +83,7 @@ defmodule Sanctum.Consent.FlowTest do
   end
 
   describe "plan → preview → commit" do
-    test "mints a loadable first revision with a bound connection", %{ctx: ctx} do
+    test "mints a loadable first revision with a bound vault entry", %{ctx: ctx} do
       publish!(ctx, "flow-happy")
       entry = entry!(ctx)
 
@@ -501,7 +501,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert need.required
       # The declared ask sources the caps section.
       assert plan.caps["egress"]["domains"] == ["api.anthropic.com"]
-      # No api_key connection exists yet — the plan says so up front.
+      # No api_key entry exists yet — the plan says so up front.
       assert Enum.any?(plan.warnings, &(&1 =~ "api_key"))
     end
 

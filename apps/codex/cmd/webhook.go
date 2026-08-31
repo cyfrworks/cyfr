@@ -83,9 +83,9 @@ Run without --name for an interactive form.`,
 			form, err := prompt.RunWebhookCreateForm()
 			if err != nil {
 				if prompt.IsAborted(err) {
-					os.Exit(130)
+					return prompt.ErrAborted
 				}
-				return fmt.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %w", err)
 			}
 			name = form.Name
 			target = form.TargetRef
@@ -102,7 +102,7 @@ Run without --name for an interactive form.`,
 
 			parsed, err := parseInputTemplate(form.InputTemplate, "")
 			if err != nil {
-				return fmt.Errorf("Invalid input_template: %v", err)
+				return fmt.Errorf("Invalid input_template: %w", err)
 			}
 			inputTemplate = parsed
 		} else {
@@ -112,7 +112,7 @@ Run without --name for an interactive form.`,
 
 			parsed, err := parseInputTemplate(inputJSON, inputFile)
 			if err != nil {
-				return fmt.Errorf("Invalid input_template: %v", err)
+				return fmt.Errorf("Invalid input_template: %w", err)
 			}
 			inputTemplate = parsed
 		}
@@ -231,7 +231,7 @@ use 'cyfr webhook rotate' to replace it.`,
 		if inputJSON != "" || inputFile != "" {
 			parsed, err := parseInputTemplate(inputJSON, inputFile)
 			if err != nil {
-				return fmt.Errorf("Invalid input_template: %v", err)
+				return fmt.Errorf("Invalid input_template: %w", err)
 			}
 			if parsed != nil {
 				toolArgs["input_template"] = parsed
@@ -266,7 +266,7 @@ var webhookRevokeCmd = &cobra.Command{
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to revoke", "Revoke webhook '%s'? The URL stops accepting POSTs.")
-		if err != nil {
+		if err != nil || name == "" {
 			return err
 		}
 
@@ -295,7 +295,7 @@ var webhookRotateCmd = &cobra.Command{
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := selectWebhookName(cmd.Context(), args, "Select a webhook to rotate", "Rotate webhook '%s'? The old secret stops working immediately.")
-		if err != nil {
+		if err != nil || name == "" {
 			return err
 		}
 
@@ -362,41 +362,19 @@ func parseInputTemplate(inline, file string) (map[string]any, error) {
 	return obj, nil
 }
 
+// selectWebhookName resolves the webhook a command acts on — see pickTarget
+// for the argument/picker/confirm contract (a declined confirm returns ""
+// with a nil error; callers stop there).
 func selectWebhookName(ctx context.Context, args []string, promptTitle, confirmTemplate string) (string, error) {
-	switch {
-	case len(args) >= 1:
-		return args[0], nil
-	case prompt.IsInteractive(flagNoInteractive):
-		client := newClient()
-		opts, err := prompt.FetchWebhooks(ctx, client)
-		if err != nil {
-			return "", handleToolError(err)
-		}
-		if len(opts) == 0 {
-			return "", errors.New("No webhooks found. Create one with 'cyfr webhook create'.")
-		}
-		selected, err := prompt.SelectOne(promptTitle, opts)
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			return "", fmt.Errorf("Prompt failed: %v", err)
-		}
-		confirmed, err := prompt.Confirm(fmt.Sprintf(confirmTemplate, selected))
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			return "", fmt.Errorf("Prompt failed: %v", err)
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			os.Exit(0)
-		}
-		return selected, nil
-	default:
-		return "", errors.New("Usage: provide <name> or run interactively")
-	}
+	return pickTarget(ctx, args, selector{
+		Title:   promptTitle,
+		Confirm: confirmTemplate,
+		Empty:   "No webhooks found. Create one with 'cyfr webhook create'.",
+		Usage:   "Usage: provide <name> or run interactively",
+		Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+			return prompt.FetchWebhooks(ctx, newClient())
+		},
+	})
 }
 
 // renderWebhookCreated prints the human-readable result for `webhook create`,

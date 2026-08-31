@@ -52,6 +52,10 @@ defmodule Opus.Application do
              [
                {Registry, keys: :unique, name: Opus.ExecutionRegistry},
                {Registry, keys: :unique, name: Opus.ExecutionEventBuffer.Registry},
+               # Owns the per-stream emit counter. Before the buffers, so a
+               # restart of this group rebuilds the numbering source first —
+               # `:rest_for_one` then restarts the buffers that read it.
+               Opus.ExecutionEventBuffer.Sequence,
                {DynamicSupervisor,
                 name: Opus.ExecutionEventBuffer.Supervisor, strategy: :one_for_one}
              ],

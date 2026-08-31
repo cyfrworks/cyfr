@@ -4,9 +4,9 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -24,7 +24,7 @@ func init() {
 
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
 	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
-	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, vault_write, component_read, component_manage, storage_read, storage_write, users_read, users_manage, execution_write, admin)")
+	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, vault_write, component_read, component_manage, storage_read, storage_write, execution_write, admin)")
 	keyCreateCmd.Flags().String("rate-limit", "", "Rate limit (e.g., '100/1m')")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
 }
@@ -65,9 +65,9 @@ Default scopes per type (applied when --scope is omitted):
 			form, err := prompt.RunKeyCreateForm()
 			if err != nil {
 				if prompt.IsAborted(err) {
-					os.Exit(130)
+					return prompt.ErrAborted
 				}
-				return fmt.Errorf("Prompt failed: %v", err)
+				return fmt.Errorf("Prompt failed: %w", err)
 			}
 			name = form.Name
 			keyType = form.Type
@@ -102,12 +102,7 @@ Default scopes per type (applied when --scope is omitted):
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -126,12 +121,7 @@ var keyGetCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -148,12 +138,7 @@ var keyListCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -164,41 +149,17 @@ var keyRevokeCmd = &cobra.Command{
 	Example: "  cyfr key revoke my-service",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var name string
-
-		switch {
-		case len(args) >= 1:
-			name = args[0]
-		case prompt.IsInteractive(flagNoInteractive):
-			client := newClient()
-			opts, err := prompt.FetchKeys(cmd.Context(), client)
-			if err != nil {
-				return handleToolError(err)
-			}
-			if len(opts) == 0 {
-				return errors.New("No keys found. Create one with 'cyfr key create'.")
-			}
-			selected, err := prompt.SelectOne("Select a key to revoke", opts)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			confirmed, err := prompt.Confirm(fmt.Sprintf("Revoke key '%s'? This cannot be undone.", selected))
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			if !confirmed {
-				fmt.Println("Cancelled.")
-				return nil
-			}
-			name = selected
-		default:
-			return errors.New("Usage: cyfr key revoke <name>")
+		name, err := pickTarget(cmd.Context(), args, selector{
+			Title:   "Select a key to revoke",
+			Confirm: "Revoke key '%s'? This cannot be undone.",
+			Empty:   "No keys found. Create one with 'cyfr key create'.",
+			Usage:   "Usage: cyfr key revoke <name>",
+			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+				return prompt.FetchKeys(ctx, newClient())
+			},
+		})
+		if err != nil || name == "" {
+			return err
 		}
 
 		client := newClient()
@@ -225,41 +186,17 @@ var keyRotateCmd = &cobra.Command{
 	Example: "  cyfr key rotate my-service",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var name string
-
-		switch {
-		case len(args) >= 1:
-			name = args[0]
-		case prompt.IsInteractive(flagNoInteractive):
-			client := newClient()
-			opts, err := prompt.FetchKeys(cmd.Context(), client)
-			if err != nil {
-				return handleToolError(err)
-			}
-			if len(opts) == 0 {
-				return errors.New("No keys found. Create one with 'cyfr key create'.")
-			}
-			selected, err := prompt.SelectOne("Select a key to rotate", opts)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			confirmed, err := prompt.Confirm(fmt.Sprintf("Rotate key '%s'? The old value stops working immediately.", selected))
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			if !confirmed {
-				fmt.Println("Cancelled.")
-				return nil
-			}
-			name = selected
-		default:
-			return errors.New("Usage: cyfr key rotate <name>")
+		name, err := pickTarget(cmd.Context(), args, selector{
+			Title:   "Select a key to rotate",
+			Confirm: "Rotate key '%s'? The old value stops working immediately.",
+			Empty:   "No keys found. Create one with 'cyfr key create'.",
+			Usage:   "Usage: cyfr key rotate <name>",
+			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+				return prompt.FetchKeys(ctx, newClient())
+			},
+		})
+		if err != nil || name == "" {
+			return err
 		}
 
 		client := newClient()
@@ -270,11 +207,6 @@ var keyRotateCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }

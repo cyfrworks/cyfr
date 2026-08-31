@@ -118,15 +118,21 @@ defmodule Opus.FormulaHandler do
 
     max_tasks = if limits, do: limits.max_concurrent_tasks, else: 10
 
-    {:ok, tracker} =
-      Opus.AsyncTracker.start_link(
-        parent_execution_id: parent_execution_id,
-        max_tasks: max_tasks,
-        batch_timeout_ms: batch_timeout_ms
-      )
+    tracker =
+      case Opus.AsyncTracker.start_link(
+             parent_execution_id: parent_execution_id,
+             max_tasks: max_tasks,
+             batch_timeout_ms: batch_timeout_ms
+           ) do
+        {:ok, pid} ->
+          pid
 
-    # Atomics counter for emit sequence numbers
-    emit_counter = :atomics.new(1, signed: false)
+        {:error, reason} ->
+          # The executor's boundary rescues this into a failed execution; a
+          # bare MatchError here read as a host bug rather than the capacity
+          # condition it is.
+          raise "async tracker could not start: #{inspect(reason)}"
+      end
 
     authority_opts = [
       authority: authority,
@@ -138,13 +144,14 @@ defmodule Opus.FormulaHandler do
       [
         parent_execution_id: parent_execution_id,
         root_execution_id: root_execution_id,
-        emit_counter: emit_counter
+        limits: limits
       ] ++ authority_opts
 
     spawn_opts =
       [
         parent_execution_id: parent_execution_id,
-        root_execution_id: root_execution_id
+        root_execution_id: root_execution_id,
+        limits: limits
       ] ++ authority_opts
 
     imports = %{
@@ -152,59 +159,102 @@ defmodule Opus.FormulaHandler do
         "call" =>
           {:fn,
            fn json_request ->
-             execute(json_request, ctx, exec_opts)
+             guarded(parent_execution_id, "call", fn ->
+               execute(json_request, ctx, exec_opts)
+             end)
            end},
         "spawn" =>
           {:fn,
            fn json_request ->
-             handle_spawn(json_request, ctx, tracker, spawn_opts)
+             guarded(parent_execution_id, "spawn", fn ->
+               handle_spawn(json_request, ctx, tracker, spawn_opts)
+             end)
            end},
         "await" =>
           {:fn,
            fn task_id ->
-             handle_await(task_id, tracker, batch_timeout_ms)
+             guarded(parent_execution_id, "await", fn ->
+               handle_await(task_id, tracker, batch_timeout_ms)
+             end)
            end},
         "await-all" =>
           {:fn,
            fn json_request ->
-             handle_await_all(
-               json_request,
-               tracker,
-               batch_timeout_ms,
-               parent_execution_id,
-               max_tasks
-             )
+             guarded(parent_execution_id, "await-all", fn ->
+               handle_await_all(
+                 json_request,
+                 tracker,
+                 batch_timeout_ms,
+                 parent_execution_id,
+                 max_tasks,
+                 limits
+               )
+             end)
            end},
         "await-any" =>
           {:fn,
            fn json_request ->
-             handle_await_any(
-               json_request,
-               tracker,
-               batch_timeout_ms,
-               parent_execution_id,
-               max_tasks
-             )
+             guarded(parent_execution_id, "await-any", fn ->
+               handle_await_any(
+                 json_request,
+                 tracker,
+                 batch_timeout_ms,
+                 parent_execution_id,
+                 max_tasks,
+                 limits
+               )
+             end)
            end},
         "poll" =>
           {:fn,
            fn task_id ->
-             handle_poll(task_id, tracker)
+             guarded(parent_execution_id, "poll", fn ->
+               handle_poll(task_id, tracker)
+             end)
            end},
         "cancel" =>
           {:fn,
            fn task_id ->
-             handle_cancel(task_id, tracker, parent_execution_id)
+             guarded(parent_execution_id, "cancel", fn ->
+               handle_cancel(task_id, tracker, parent_execution_id)
+             end)
            end},
         "emit" =>
           {:fn,
            fn json_event ->
-             handle_emit(json_event, root_execution_id, emit_counter, ctx, authority, secrets)
+             guarded(parent_execution_id, "emit", fn ->
+               handle_emit(json_event, root_execution_id, ctx, authority, secrets)
+             end)
            end}
       }
     }
 
     {imports, tracker}
+  end
+
+  # The raise/exit boundary every other WIT import already has
+  # (`HttpHandler`, `StorageHandler.dispatch_caught/6`,
+  # `HttpStreamHandler.guarded/3`). These closures reach the tracker with
+  # default 5s call timeouts while it can be blocked in an await, and a
+  # dead tracker answers `:noproc` — both arrive as exits, and an uncaught
+  # one killed the Wasmex process and failed the whole execution where a
+  # typed error the guest can act on was available. The message stays
+  # generic; the fault goes to the host log.
+  defp guarded(parent_execution_id, name, fun) do
+    fun.()
+  rescue
+    exception ->
+      Logger.error(
+        "[FormulaHandler] #{parent_execution_id} #{name} raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      encode_error(:dispatch_error, "The #{name} call failed.")
+  catch
+    :exit, reason ->
+      Logger.error("[FormulaHandler] #{parent_execution_id} #{name} exited: #{inspect(reason)}")
+
+      encode_error(:dispatch_error, "The #{name} call failed.")
   end
 
   @doc """
@@ -213,9 +263,17 @@ defmodule Opus.FormulaHandler do
   Stops the tracker GenServer, which stops the Task.Supervisor,
   killing all orphaned tasks.
   """
+  # How long a graceful tracker stop may take before escalating. The
+  # tracker blocks inside its own handle_call for the whole await window
+  # (`Task.yield_many` up to the consented batch timeout, ceiling 30 min),
+  # and `GenServer.stop/2`'s default `:infinity` parked the CALLER behind
+  # it — on the cancel path, the exact moment the tracker is most likely
+  # to be mid-await.
+  @cleanup_stop_timeout_ms 5_000
+
   @spec cleanup_registry(pid()) :: :ok
   def cleanup_registry(tracker_pid) when is_pid(tracker_pid) do
-    GenServer.stop(tracker_pid, :normal)
+    GenServer.stop(tracker_pid, :normal, @cleanup_stop_timeout_ms)
     :ok
   rescue
     e in [ArgumentError, RuntimeError] ->
@@ -238,6 +296,13 @@ defmodule Opus.FormulaHandler do
     :exit, :noproc ->
       :ok
 
+    :exit, {:timeout, _} ->
+      # Still blocked in an await after the grace: a graceful stop cannot
+      # land, so kill it — the link tears down its Task.Supervisor and the
+      # spawned children with it, which is what stopping was for.
+      Process.exit(tracker_pid, :kill)
+      :ok
+
     :exit, reason ->
       Logger.warning("[FormulaHandler] cleanup_registry exited: #{inspect(reason)}")
       :ok
@@ -252,14 +317,13 @@ defmodule Opus.FormulaHandler do
   `Opus.Chain` for execution verbs), and returns a JSON response string.
 
   When a sub-component call fails due to a setup issue (missing consent,
-  missing connection), the error is enriched with a `remediation` field
+  missing vault entry), the error is enriched with a `remediation` field
   and a `setup_required` event is emitted to the ExecutionEventBuffer.
 
   ## Options
 
   - `:parent_execution_id` (required) - The formula's own execution ID for lineage tracking
   - `:root_execution_id` - The top-level execution ID for routing emit events (falls back to `parent_execution_id`)
-  - `:emit_counter` - Atomics ref for emit sequence numbers
   """
   @spec execute(String.t(), Context.t(), keyword()) :: String.t()
   def execute(json_request, %Context{} = ctx, opts \\ []) do
@@ -276,7 +340,7 @@ defmodule Opus.FormulaHandler do
   defp authority_execution_request(json_request, opts) do
     with authority when not is_nil(authority) <- opts[:authority],
          {:ok, %{tool: "execution", action: action, args: args}}
-         when action in ["run", "run_stream"] <- parse_mcp_request(json_request) do
+         when action in ["run", "run_stream"] <- parse_mcp_request(json_request, opts[:limits]) do
       {:intercept, action, args}
     else
       _ -> :registry
@@ -341,16 +405,16 @@ defmodule Opus.FormulaHandler do
     do: encode_error(:invalid_request, "Invocation denied: need #{why}")
 
   defp encode_child_error({:invoke_denied, reason}),
-    do: encode_error(:tool_denied, "Invocation denied: #{inspect(reason)}")
+    do: encode_error(:tool_denied, "Invocation denied: #{guest_reason(reason)}")
 
   defp encode_child_error({:invoke_invalid, reason}),
-    do: encode_error(:invalid_request, "Invalid invocation: #{inspect(reason)}")
+    do: encode_error(:invalid_request, "Invalid invocation: #{guest_reason(reason)}")
 
   defp encode_child_error({:invalid_need, need}),
-    do: encode_error(:invalid_request, "Invalid need: #{inspect(need)}")
+    do: encode_error(:invalid_request, "Invalid need: #{guest_reason(need)}")
 
   defp encode_child_error({:invalid_reference, reason}),
-    do: encode_error(:invalid_request, "Invalid reference: #{inspect(reason)}")
+    do: encode_error(:invalid_request, "Invalid reference: #{guest_reason(reason)}")
 
   defp encode_child_error({:setup_required, payload} = reason) do
     # One remediation shape on the wire, whichever dispatch path failed:
@@ -375,11 +439,10 @@ defmodule Opus.FormulaHandler do
   defp dispatch_via_registry(json_request, %Context{} = ctx, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
-    emit_counter = opts[:emit_counter]
 
     start_time = System.monotonic_time(:millisecond)
 
-    case parse_mcp_request(json_request) do
+    case parse_mcp_request(json_request, opts[:limits]) do
       {:ok, %{tool: tool, action: action, args: args}} ->
         tool_action =
           if String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}"
@@ -399,13 +462,7 @@ defmodule Opus.FormulaHandler do
             # structural cause, and stringifying first would hide it.
             case Opus.Remediation.analyze(reason) do
               {:setup_required, remediation} ->
-                maybe_emit_setup_event(
-                  root_execution_id,
-                  emit_counter,
-                  remediation,
-                  reason_str,
-                  ctx
-                )
+                maybe_emit_setup_event(root_execution_id, remediation, reason_str, ctx)
 
                 encode_error_with_remediation(:setup_required, reason_str, remediation)
 
@@ -426,17 +483,27 @@ defmodule Opus.FormulaHandler do
 
   defp handle_spawn(json_request, ctx, tracker, opts) do
     case authority_execution_request(json_request, opts) do
-      {:intercept, "run", args} -> spawn_child_async(args, ctx, tracker, opts)
-      {:intercept, "run_stream", args} -> dispatch_child_call("run_stream", args, ctx, opts)
-      :registry -> spawn_via_registry(json_request, ctx, tracker, opts)
+      {:intercept, "run", args} ->
+        spawn_child_async(args, ctx, tracker, opts)
+
+      # There is no async shape for run_stream: dispatched here it ran
+      # synchronously and handed the guest a stream envelope where spawn
+      # promises {"task_id": ...}.
+      {:intercept, "run_stream", _args} ->
+        encode_error(
+          :invalid_request,
+          "run_stream cannot be spawned — spawn execution.run, or call run_stream directly"
+        )
+
+      :registry ->
+        spawn_via_registry(json_request, ctx, tracker, opts)
     end
   end
 
   # An async spawn of a child: the transition decision (and its budget
   # charge) happens before the tracker task exists, so a denial consumes
   # no task slot; a tracker refusal after the charge releases it, and the
-  # task's own after releases it on completion. A spawned run_stream is
-  # already stream-shaped — it returns stream info directly, no task.
+  # task's own after releases it on completion.
   defp spawn_child_async(args, ctx, tracker, opts) do
     authority = Keyword.fetch!(opts, :authority)
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
@@ -473,7 +540,31 @@ defmodule Opus.FormulaHandler do
               end
             end
 
-            case Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run") do
+            # The budget is already charged; an exit from the tracker call
+            # (dead tracker, call timeout) would bypass the release arms
+            # below and leak the slot for the root's remaining life. A
+            # timed-out call has still landed in the tracker's mailbox —
+            # the task will run and its own `after` releases the charge, so
+            # releasing here too would free a concurrent sibling's slot
+            # (mirrors Sanctum.Authority.BudgetGuard.release_after_exit/2);
+            # any other exit means the spawn never landed.
+            spawn_result =
+              try do
+                Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run")
+              catch
+                :exit, reason ->
+                  unless match?({:timeout, _}, reason) do
+                    Sanctum.Authority.release_invoke(decision.authority)
+                  end
+
+                  Logger.warning(
+                    "[Opus.FormulaHandler] spawn tracker unreachable: #{inspect(reason)}"
+                  )
+
+                  :tracker_unreachable
+              end
+
+            case spawn_result do
               {:ok, task_id} ->
                 Opus.Telemetry.formula_spawn(parent_execution_id, task_id, "execution.run")
                 safe_encode(%{"task_id" => task_id})
@@ -484,7 +575,10 @@ defmodule Opus.FormulaHandler do
 
               {:error, reason} ->
                 Sanctum.Authority.release_invoke(decision.authority)
-                encode_error(:spawn_failed, inspect(reason))
+                encode_error(:spawn_failed, guest_reason(reason))
+
+              :tracker_unreachable ->
+                encode_error(:spawn_failed, "task tracker unavailable")
             end
 
           {:error, reason} ->
@@ -516,26 +610,43 @@ defmodule Opus.FormulaHandler do
   defp spawn_via_registry(json_request, ctx, tracker, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
 
-    case parse_mcp_request(json_request) do
+    case parse_mcp_request(json_request, opts[:limits]) do
       {:ok, %{tool: tool, action: action, args: args}} ->
         tool_action =
           if String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}"
 
         args_with_action = Map.put(args, "action", action)
 
+        # Rescued in the task, the way the synchronous `execute/3` path is
+        # wrapped by `guarded/3`. Without this a raise here became an exit
+        # reason that `Opus.AsyncTracker` stringified into the guest's
+        # response, which is the one route around the renderers that keep
+        # internal terms out of guest hands.
         fun = fn ->
           start_time = System.monotonic_time(:millisecond)
 
-          case dispatch_tool(tool, ctx, args_with_action, opts, :spawn) do
-            {:ok, result} ->
-              emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
-              {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
+          try do
+            case dispatch_tool(tool, ctx, args_with_action, opts, :spawn) do
+              {:ok, result} ->
+                emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+                {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
 
-            {:error, reason} ->
+              {:error, reason} ->
+                emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+
+                {encode_error(:dispatch_error, stringify_reason(reason)),
+                 %{tool: tool, action: action}}
+            end
+          rescue
+            e ->
               emit_telemetry(parent_execution_id, tool_action, :error, start_time)
 
-              {encode_error(:dispatch_error, stringify_reason(reason)),
-               %{tool: tool, action: action}}
+              Logger.error(
+                "[Opus.FormulaHandler] spawned #{tool_action} raised: " <>
+                  Exception.format(:error, e, __STACKTRACE__)
+              )
+
+              {encode_error(:dispatch_error, "The call failed."), %{tool: tool, action: action}}
           end
         end
 
@@ -548,7 +659,7 @@ defmodule Opus.FormulaHandler do
             encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
 
           {:error, reason} ->
-            encode_error(:spawn_failed, inspect(reason))
+            encode_error(:spawn_failed, guest_reason(reason))
         end
 
       {:error, type, message} ->
@@ -598,7 +709,15 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp handle_await_all(json_request, tracker, timeout_ms, parent_execution_id, max_tasks) do
+  defp handle_await_all(json_request, tracker, timeout_ms, parent_execution_id, max_tasks, limits) do
+    with :ok <- envelope_bound(json_request, limits) do
+      await_all_decoded(json_request, tracker, timeout_ms, parent_execution_id, max_tasks)
+    else
+      {:error, type, message} -> encode_error(type, message)
+    end
+  end
+
+  defp await_all_decoded(json_request, tracker, timeout_ms, parent_execution_id, max_tasks) do
     case Jason.decode(json_request) do
       # The spawn cap bounds live-plus-undrained entries at max_tasks, so no
       # honest await list is longer; a fabricated one would burn quadratic
@@ -612,6 +731,9 @@ defmodule Opus.FormulaHandler do
         )
 
       {:ok, %{"task_ids" => task_ids}} when is_list(task_ids) and task_ids != [] ->
+        # Deduped where the guest's ids enter, so the tracker (which answers
+        # once per distinct id) and this envelope's "count" agree.
+        task_ids = Enum.uniq(task_ids)
         start = System.monotonic_time(:millisecond)
 
         case Opus.AsyncTracker.await_all(tracker, task_ids, timeout_ms) do
@@ -649,7 +771,15 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp handle_await_any(json_request, tracker, timeout_ms, parent_execution_id, max_tasks) do
+  defp handle_await_any(json_request, tracker, timeout_ms, parent_execution_id, max_tasks, limits) do
+    with :ok <- envelope_bound(json_request, limits) do
+      await_any_decoded(json_request, tracker, timeout_ms, parent_execution_id, max_tasks)
+    else
+      {:error, type, message} -> encode_error(type, message)
+    end
+  end
+
+  defp await_any_decoded(json_request, tracker, timeout_ms, parent_execution_id, max_tasks) do
     case Jason.decode(json_request) do
       # Same bound as await-all, for the same reason.
       {:ok, %{"task_ids" => task_ids}}
@@ -660,6 +790,9 @@ defmodule Opus.FormulaHandler do
         )
 
       {:ok, %{"task_ids" => task_ids}} when is_list(task_ids) and task_ids != [] ->
+        # Same dedupe as await-all, and the timeout arm's "pending" echo
+        # then lists each task once.
+        task_ids = Enum.uniq(task_ids)
         start = System.monotonic_time(:millisecond)
 
         case Opus.AsyncTracker.await_any(tracker, task_ids, timeout_ms) do
@@ -733,7 +866,7 @@ defmodule Opus.FormulaHandler do
         encode_error(:invalid_request, "Unknown task_id: #{task_id}")
 
       {:error, reason} ->
-        encode_error(:cancel_failed, inspect(reason))
+        encode_error(:cancel_failed, guest_reason(reason))
     end
   end
 
@@ -746,7 +879,6 @@ defmodule Opus.FormulaHandler do
   defp handle_emit(
          json_event,
          execution_id,
-         counter,
          ctx,
          %Sanctum.Authority{} = authority,
          secrets
@@ -764,7 +896,11 @@ defmodule Opus.FormulaHandler do
           :untrusted -> [origin: "guest"]
         end
 
-      seq = :atomics.add_get(counter, 1, 1)
+      # Numbered by the stream these events are addressed to, not by this
+      # formula: a nested formula shares the root's id, so a per-formula
+      # counter made two producers emit the same sequence into one buffer and
+      # an SSE reconnect silently dropped the overlap.
+      seq = Opus.ExecutionEventBuffer.Sequence.next(execution_id)
       data = Opus.SecretMasker.mask(data, secrets)
       Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx, origin_opts)
       Opus.Telemetry.formula_emit(execution_id, seq)
@@ -780,7 +916,7 @@ defmodule Opus.FormulaHandler do
         encode_error(:invalid_request, "emit event must be a JSON object")
 
       other ->
-        encode_error(:invalid_request, "emit refused: #{inspect(other)}")
+        encode_error(:invalid_request, "emit refused: #{guest_reason(other)}")
     end
   end
 
@@ -831,25 +967,44 @@ defmodule Opus.FormulaHandler do
   # Private: Request Parsing (MCP format)
   # ============================================================================
 
-  defp parse_mcp_request(json_string) do
-    case Jason.decode(json_string) do
-      {:ok, %{"tool" => tool, "action" => action} = req}
-      when is_binary(tool) and is_binary(action) ->
-        args = Map.get(req, "args", %{})
+  defp parse_mcp_request(json_string, limits) do
+    with :ok <- envelope_bound(json_string, limits) do
+      case Jason.decode(json_string) do
+        {:ok, %{"tool" => tool, "action" => action} = req}
+        when is_binary(tool) and is_binary(action) ->
+          args = Map.get(req, "args", %{})
 
-        if is_map(args) do
-          {:ok, %{tool: tool, action: action, args: args}}
-        else
-          {:error, :invalid_request, "args must be a map"}
-        end
+          if is_map(args) do
+            {:ok, %{tool: tool, action: action, args: args}}
+          else
+            {:error, :invalid_request, "args must be a map"}
+          end
 
-      {:ok, _} ->
-        {:error, :invalid_request, "Request must include 'tool' (string) and 'action' (string)"}
+        {:ok, _} ->
+          {:error, :invalid_request, "Request must include 'tool' (string) and 'action' (string)"}
 
-      {:error, _} ->
-        {:error, :invalid_json, "Invalid JSON request"}
+        {:error, _} ->
+          {:error, :invalid_json, "Invalid JSON request"}
+      end
     end
   end
+
+  # Checked before `Jason.decode/1` sees the string. Only `emit` and the
+  # storage import had this: the guest's 64 MiB linear memory was the sole
+  # bound on what one `invoke.call`, `invoke.spawn` or await list could make
+  # the host parse, times the concurrency cap.
+  defp envelope_bound(json_string, %Limits{} = limits) do
+    case Opus.EdgeGuard.check_envelope_size(limits, json_string) do
+      :ok ->
+        :ok
+
+      {:error, :request_too_large} ->
+        {:error, :request_too_large,
+         "Request exceeds the consented max_request_size for this component."}
+    end
+  end
+
+  defp envelope_bound(_json_string, _limits), do: :ok
 
   # ============================================================================
   # Private: Response Encoding
@@ -878,13 +1033,8 @@ defmodule Opus.FormulaHandler do
     })
   end
 
-  defp maybe_emit_setup_event(target_id, emit_counter, remediation, message, ctx) do
-    seq =
-      if emit_counter do
-        :atomics.add_get(emit_counter, 1, 1)
-      else
-        System.unique_integer([:positive])
-      end
+  defp maybe_emit_setup_event(target_id, remediation, message, ctx) do
+    seq = Opus.ExecutionEventBuffer.Sequence.next(target_id)
 
     Opus.ExecutionEventBuffer.push(
       target_id,
@@ -973,7 +1123,7 @@ defmodule Opus.FormulaHandler do
   defp format_task_result(task_id, {:error, reason}) do
     %{
       "status" => "error",
-      "error" => %{"type" => "task_failed", "message" => inspect(reason)},
+      "error" => %{"type" => "task_failed", "message" => guest_reason(reason)},
       "task_id" => task_id
     }
   end
@@ -1012,6 +1162,27 @@ defmodule Opus.FormulaHandler do
   defp normalize_keys(data), do: data
 
   defp stringify_reason(reason), do: render_reason(reason)
+
+  # Guest-facing reason text for terms below the ToolError vocabulary: a
+  # crafted binary passes, a bare reason atom names itself verbatim (the
+  # "edge_only"/"depth_cap" class of transition denials is a token guests
+  # branch on), and anything structured renders through the shared seam or
+  # is logged and generalized — never `inspect/1`, which handed the guest
+  # whatever the term carried.
+  defp guest_reason(reason) when is_binary(reason), do: reason
+
+  defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp guest_reason(reason) do
+    case Emissary.MCP.ToolError.render(reason) do
+      nil ->
+        Logger.warning("[FormulaHandler] unrenderable guest reason: #{inspect(reason)}")
+        "the call failed"
+
+      msg ->
+        msg
+    end
+  end
 
   @doc """
   The guest's view of a refusal: the same sentence the wire and the console

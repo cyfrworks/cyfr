@@ -76,4 +76,19 @@ defmodule Cyfr.Json do
       {:error, _} -> @encode_failure
     end
   end
+
+  @doc """
+  Strict encode, the write-side twin of `decode/1`: the caller owns what an
+  unencodable value means, and the reason is this module's one atom rather
+  than a `%Jason.EncodeError{}` escaping into caller error tuples
+  (`Arca.put_json` used to answer with the library's struct while its
+  read side spoke `:invalid_json`).
+  """
+  @spec encode(term()) :: {:ok, String.t()} | {:error, :unencodable}
+  def encode(value) do
+    case Jason.encode(value) do
+      {:ok, json} -> {:ok, json}
+      {:error, _} -> {:error, :unencodable}
+    end
+  end
 end

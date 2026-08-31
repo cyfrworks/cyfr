@@ -74,7 +74,9 @@ defmodule Compendium.MCP do
   reach `POST /mcp` with an exact reference.
   """
   def read(%Context{authenticated: false}, "compendium://" <> _rest) do
-    {:error, "Authentication required to read components"}
+    # Typed, so the router renders the one auth prose AND answers with the
+    # auth_required code (the bare string was mislabeled resource_not_found).
+    {:error, :unauthenticated}
   end
 
   def read(%Context{} = ctx, "compendium://components/" <> reference) do

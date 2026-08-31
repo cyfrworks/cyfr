@@ -535,16 +535,20 @@ defmodule Compendium.OCI.Client do
   # ============================================================================
 
   # Verify OCI image signature via cosign. By default a verification failure
-  # is not fatal: the component is stored as unverified and the recorded
-  # attestation is checked again at execution time (Opus.SignatureAttestation).
-  # CYFR_REQUIRE_SIGNED_PULLS makes the failure refuse the pull instead.
+  # is not fatal: the component is stored as unverified, and what it may then
+  # do is decided at execution time by the same knob —
+  # `Opus.Executor.verify_attestation/1` reads the recorded attestation on
+  # every path and refuses an unsigned row when signed pulls are required, so
+  # a component pulled before the knob was turned on does not keep running.
+  # With the knob off, running unsigned is the operator's accepted posture and
+  # each such execution emits `[:cyfr, :opus, :execution, :unsigned]`.
   defp verify_signature(oci_ref) do
     case Compendium.Cosign.verify(oci_ref) do
       {:ok, %{identity: identity, issuer: issuer}} ->
         {:ok, %{verified: true, identity: identity, issuer: issuer}}
 
       {:error, reason} ->
-        if Application.get_env(:cyfr, :require_signed_pulls, false) do
+        if Cyfr.RuntimeConfig.require_signed_pulls?() do
           {:error,
            "Signature verification failed for #{oci_ref}: #{reason} — " <>
              "this server requires signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"}

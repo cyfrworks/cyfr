@@ -3,7 +3,7 @@
 
 defmodule Sanctum.Vault.OAuthGrant do
   @moduledoc """
-  The initial OAuth authorization for a Connection — connection-keyed,
+  The initial OAuth authorization for a vault entry — entry-keyed,
   never component-keyed. `authorize_url/2` starts a browser grant for a
   new or existing `kind: "oauth"` vault entry; `complete/3` (driven by
   the callback route) exchanges the code and seals the token bundle into
@@ -55,14 +55,14 @@ defmodule Sanctum.Vault.OAuthGrant do
   }
 
   @doc """
-  Start a browser authorization for a Connection.
+  Start a browser authorization for a vault entry.
 
   Two shapes:
 
     * `%{entry_id: id}` — re-authorize an existing oauth entry. Endpoints,
       scopes and provider come from the entry's own binding fields.
     * `%{name: n, provider: p, scopes: [...], endpoints: %{...}?}` — a new
-      Connection. `endpoints` may be omitted for a preset provider
+      entry. `endpoints` may be omitted for a preset provider
       (#{inspect(Map.keys(@presets))}); otherwise it must carry
       `authorize_url` + `token_url` (https), optional `auth_style` /
       `extra_params`.
@@ -94,7 +94,7 @@ defmodule Sanctum.Vault.OAuthGrant do
       Arca.Cache.put({:vault_oauth_pending, state}, pending, @pending_ttl_ms)
 
       # Provider-specific knobs go UNDER the parameters this server minted:
-      # `extra_params` is caller data (a Connection's stored endpoints), and
+      # `extra_params` is caller data (an entry's stored endpoints), and
       # merging it over the top would let it hand back its own `state`,
       # `redirect_uri` or a `code_challenge_method` of "plain" — downgrading
       # PKCE and substituting the very values the callback checks. Reserved
@@ -392,31 +392,43 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp retry_grant(%{target: target} = pending, bundle) do
     case Arca.VaultStorage.get(pending.athanor_id, target.entry_id) do
       {:ok, entry} ->
-        aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+        # The retry re-runs the first attempt's checks, not just its
+        # write: the conflicting writer may have been `vault.revoke` —
+        # skipping `still_living/1` here CAS'd fresh live tokens into an
+        # entry the owner had just revoked, re-arming it.
+        with :ok <- still_living(entry) do
+          aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
-        with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle),
-             {:ok, sealed} <- seal(json, aad) do
-          case Arca.VaultStorage.rotate_payload(
-                 entry.athanor_id,
-                 entry.id,
-                 entry.payload_rev,
-                 sealed
-               ) do
-            :ok ->
-              with {:ok, rebound} <- maybe_rebind(entry, target) do
-                broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
+          with {:ok, json} <- Payload.encode_material(current_fields(entry), bundle),
+               {:ok, sealed} <- seal(json, aad) do
+            case Arca.VaultStorage.rotate_payload(
+                   entry.athanor_id,
+                   entry.id,
+                   entry.payload_rev,
+                   sealed
+                 ) do
+              :ok ->
+                with {:ok, rebound} <- maybe_rebind(entry, target) do
+                  # The same clear apply_grant does: a successful re-auth
+                  # must not leave the entry stuck at needs_reauth.
+                  if entry.status == "needs_reauth" do
+                    Arca.VaultStorage.set_status(entry.athanor_id, entry.id, "active")
+                  end
 
-                {:ok,
-                 %{
-                   entry_id: entry.id,
-                   name: entry.name,
-                   provider: target.provider,
-                   rebound: rebound
-                 }}
-              end
+                  broadcast(pending, entry.id, if(rebound, do: :rebind, else: :rotate))
 
-            {:error, reason} ->
-              {:error, reason}
+                  {:ok,
+                   %{
+                     entry_id: entry.id,
+                     name: entry.name,
+                     provider: target.provider,
+                     rebound: rebound
+                   }}
+                end
+
+              {:error, reason} ->
+                {:error, reason}
+            end
           end
         end
 
@@ -505,7 +517,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Cyfr.Topics.vault_changed_global(),
-      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb}
+      {:vault_entry_changed_global, pending.athanor_id, entry_id, verb, %{}}
     )
   end
 

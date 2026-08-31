@@ -33,6 +33,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
      |> assign(:open, false)
      |> assign(:query, "")
      |> assign(:items, [])
+     |> assign(:all_items, [])
      |> assign(:loading, false)}
   end
 
@@ -53,14 +54,21 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   def handle_event("close", _params, socket), do: {:noreply, close(socket)}
 
   def handle_event("search", %{"value" => query}, socket) do
-    {:noreply, socket |> assign(:query, query) |> load_items()}
+    # The item SET is loaded once, on open — only the filter changes while
+    # typing. Reloading here re-ran two tool calls per (debounced)
+    # keystroke for a set that cannot change under the palette.
+    {:noreply, socket |> assign(:query, query) |> refilter()}
   end
 
   # Every target is a page of the athanor in focus: the palette speaks in
-  # page paths and the focus prefix is added here, once.
+  # page paths and the focus prefix is added here, once. `@athanor_route`
+  # is already in assigns — `Focus.route_of/1` re-read it from the DB on
+  # every pick.
   def handle_event("pick", %{"to" => path}, socket) when is_binary(path) do
-    route = PrismWeb.Focus.route_of(socket.assigns.context)
-    {:noreply, socket |> close() |> push_navigate(to: PrismWeb.Focus.path(route, path))}
+    {:noreply,
+     socket
+     |> close()
+     |> push_navigate(to: PrismWeb.Focus.path(socket.assigns.athanor_route, path))}
   end
 
   def handle_event("pick", _params, socket), do: {:noreply, close(socket)}
@@ -70,6 +78,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     |> assign(:open, false)
     |> assign(:query, "")
     |> assign(:items, [])
+    |> assign(:all_items, [])
   end
 
   # ============================================================================
@@ -98,9 +107,13 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
           nav_items(mode) ++ tincture_items(ctx)
       end
 
-    filtered = filter_items(items, socket.assigns.query)
+    socket
+    |> assign(:all_items, items)
+    |> refilter()
+  end
 
-    assign(socket, :items, filtered)
+  defp refilter(socket) do
+    assign(socket, :items, filter_items(socket.assigns.all_items, socket.assigns.query))
   end
 
   defp nav_items(mode) do

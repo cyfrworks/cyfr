@@ -68,23 +68,31 @@ defmodule Sanctum.ComponentRef do
   @valid_types ~w(catalyst reagent formula tincture)
   @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula", "t" => "tincture"}
 
-  @name_regex ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/
-  @single_char_name_regex ~r/^[a-z0-9]$/
+  # Anchored \A…\z, never ^…$: PCRE `$` also matches just before a final
+  # newline, so "alice\n" passed every one of these — and they are the
+  # cross-service SSOT called on untrimmed input (namespace corruption
+  # defense, scaffold paths).
+  @name_regex ~r/\A[a-z0-9][a-z0-9-]*[a-z0-9]\z/
+  @single_char_name_regex ~r/\A[a-z0-9]\z/
   # Strict semver (semver.org): no leading zeros in the numeric parts or
   # in numeric prerelease identifiers — the SAME grammar `Version.parse/1`
   # (the ordering authority in Compendium.Semver) accepts. The looser
   # spelling admitted `1.0.0-01`, which registered fine and then sorted by
   # the byte-compare fallback instead of semver.
-  @version_regex ~r/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$/
+  @version_regex ~r/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?\z/
 
   # Personal slug: GitHub-style. 1–39 chars, lowercase alphanumeric with
   # single-hyphen separators; no leading/trailing/consecutive hyphens.
-  @personal_regex ~r/^[a-z0-9]+(-[a-z0-9]+)*$/
+  # One unanchored source feeds both spellings: the server validator wraps
+  # it in \A…\z, and the HTML `pattern` attribute (which anchors implicitly
+  # and cannot parse \A/\z) takes it bare.
+  @personal_source "[a-z0-9]+(-[a-z0-9]+)*"
+  @personal_regex Regex.compile!("\\A#{@personal_source}\\z")
   @personal_max_length 39
 
   # Publisher label (single DNS label per RFC 1035): 1–63 chars, lowercase
   # alphanumeric + hyphens, cannot start/end with hyphen.
-  @publisher_label_regex ~r/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+  @publisher_label_regex ~r/\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z/
   @publisher_max_length 253
 
   # ============================================================================
@@ -605,6 +613,13 @@ defmodule Sanctum.ComponentRef do
   def personal_slug_regex, do: @personal_regex
 
   @doc """
+  The slug grammar for an HTML `pattern` attribute: the same source as
+  `personal_slug_regex/0`, unanchored — the attribute anchors implicitly
+  and a browser cannot parse `\\A`/`\\z`.
+  """
+  def personal_slug_html_pattern, do: @personal_source
+
+  @doc """
   True when `slug` satisfies the full personal-namespace rule: 1–39 bytes and
   `personal_slug_regex/0`.
   """
@@ -677,7 +692,7 @@ defmodule Sanctum.ComponentRef do
   defp looks_like_ipv4?(ns) do
     case String.split(ns, ".") do
       parts when length(parts) == 4 ->
-        Enum.all?(parts, fn p -> Regex.match?(~r/^\d+$/, p) end)
+        Enum.all?(parts, fn p -> Regex.match?(~r/\A\d+\z/, p) end)
 
       _ ->
         false

@@ -77,9 +77,11 @@ defmodule PrismWeb.AttachmentController do
   defp disposition(filename) do
     # More than quotes must go: a CR/LF here splits the header, and any
     # C0 control character has no place in one. Non-ASCII survives via
-    # the RFC 5987 filename* parameter.
+    # the RFC 5987 filename* parameter. The control strip is the shared
+    # `Aqua.Attachments.strip_controls/1`; the quote/backslash rule is
+    # this header's own.
     name = to_string(filename)
-    safe = String.replace(name, ~r/[\x00-\x1f\x7f"\\]/, "")
+    safe = name |> Aqua.Attachments.strip_controls() |> String.replace(~r/["\\]/, "")
 
     if safe == name do
       ~s(attachment; filename="#{safe}")

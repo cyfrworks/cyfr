@@ -16,11 +16,7 @@ defmodule PrismWeb.AgentsLive do
 
   use PrismWeb, :live_view
 
-  require Logger
-
   alias PrismWeb.AgentsLive.Catalog
-
-  @list_models_ref "formula:local.list-models"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -313,31 +309,12 @@ defmodule PrismWeb.AgentsLive do
 
   # list-models async result. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
   def handle_info({:list_models_result, {:ok, result}}, socket) do
-    raw = result[:result] || result
-
-    decoded =
-      cond do
-        is_binary(raw) ->
-          case Jason.decode(raw) do
-            {:ok, m} -> m
-            _ -> %{}
-          end
-
-        is_map(raw) ->
-          raw
-
-        true ->
-          %{}
-      end
-
-    models_by_provider =
-      (decoded["models"] || %{})
-      |> Map.new(fn {provider, value} -> {provider, Catalog.normalize_provider_models(value)} end)
+    %{models: models, refs: refs} = PrismWeb.ModelCatalog.parse(result)
 
     {:noreply,
      socket
-     |> assign(:models_by_provider, models_by_provider)
-     |> assign(:catalyst_refs, decoded["refs"] || %{})
+     |> assign(:models_by_provider, models)
+     |> assign(:catalyst_refs, refs)
      |> assign(:models_loaded, true)}
   end
 
@@ -350,7 +327,7 @@ defmodule PrismWeb.AgentsLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[AgentsLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -390,42 +367,26 @@ defmodule PrismWeb.AgentsLive do
   defp load_editor_agents(socket) do
     ctx = socket.assigns[:context]
 
+    # One call: list with detail carries every field this editor shows.
+    # The get-per-guide loop this replaces was an N+1 fired from eight
+    # handlers — renaming a title cost 1+N tool calls.
     agents =
-      case ctx && call_aqua(ctx, %{"action" => "list"}) do
+      case ctx && call_aqua(ctx, %{"action" => "list", "detail" => true}) do
         {:ok, result} ->
-          guides = result["guides"] || []
-
-          Enum.flat_map(guides, fn g ->
-            name = g["name"]
-            type = g["type"]
-
-            if type in ["orchestrator", "sub-agent"] do
-              case call_aqua(ctx, %{
-                     "action" => "get",
-                     "name" => name
-                   }) do
-                {:ok, detail} ->
-                  [
-                    %{
-                      "name" => name,
-                      "title" => detail["title"] || name,
-                      "type" => type,
-                      "parent" => detail["parent"],
-                      "description" => detail["description"] || "",
-                      "model" => detail["model"],
-                      "catalyst_ref" => detail["catalyst_ref"],
-                      "tool_policy" => detail["tool_policy"] || %{},
-                      "content" => detail["content"] || ""
-                    }
-                  ]
-
-                _ ->
-                  []
-              end
-            else
-              []
-            end
-          end)
+          for g <- result["guides"] || [],
+              g["type"] in ["orchestrator", "sub-agent"] do
+            %{
+              "name" => g["name"],
+              "title" => g["title"] || g["name"],
+              "type" => g["type"],
+              "parent" => g["parent"],
+              "description" => g["description"] || "",
+              "model" => g["model"],
+              "catalyst_ref" => g["catalyst_ref"],
+              "tool_policy" => g["tool_policy"] || %{},
+              "content" => g["content"] || ""
+            }
+          end
 
         _ ->
           []
@@ -476,30 +437,9 @@ defmodule PrismWeb.AgentsLive do
   end
 
   defp load_models(socket) do
-    if Cyfr.Execution.available?() do
-      lv = self()
-      ctx = socket.assigns.context
-
-      logger_metadata = Cyfr.LoggerContext.capture()
-
-      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
-
-        result =
-          call_tool(ctx, "execution/run", %{
-            "reference" => @list_models_ref,
-            "input" => %{}
-          })
-
-        send(lv, {:list_models_result, result})
-      end)
-
-      # Guard rail — if list-models hangs the picker still settles on the
-      # agent's stored model instead of staying empty.
-      Process.send_after(lv, {:task_timeout, :models}, 60_000)
-      socket
-    else
-      assign(socket, :models_loaded, true)
+    case PrismWeb.ModelCatalog.load(socket.assigns.context) do
+      :ok -> socket
+      :unavailable -> assign(socket, :models_loaded, true)
     end
   end
 
@@ -612,7 +552,7 @@ defmodule PrismWeb.AgentsLive do
         </div>
       <% end %>
       
-    <!-- Consent sheet: bind a Connection to an orchestrator's model -->
+    <!-- Consent sheet: bind a vault entry to an orchestrator's model -->
       <div :if={@consent_sheet_ref} class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-black/60"></div>
         <div class="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">

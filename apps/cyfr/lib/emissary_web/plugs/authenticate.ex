@@ -69,11 +69,17 @@ defmodule EmissaryWeb.Plugs.Authenticate do
           {:error, :missing_tenant} ->
             missing_tenant_error_response(conn, errors)
 
-          %Context{authenticated: false} when result == :unclaimed_bearer ->
+          %Context{authenticated: false, user_id: nil} when result == :unclaimed_bearer ->
             # A credential was presented, nothing claimed it, and nothing else
             # will. Serving the public surface here is a fail-open: the caller
             # gets a 200 for whatever happens to be public and never learns
             # their token is dead, which is indistinguishable from success.
+            #
+            # `user_id: nil` is the discriminator: a provider bearer that DID
+            # identify someone who is merely pre-claim or door-denied yields
+            # an unauthenticated context WITH identity fields, and
+            # `context_from_session/1` documents that shape as forwarded, not
+            # halted — the same person's session token already forwards it.
             error_response(conn, :invalid_bearer, errors)
 
           context ->
@@ -95,8 +101,8 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     errors.halt(
       conn,
       403,
-      :insufficient_permissions,
-      "User has no athanor. Contact your administrator."
+      Sanctum.Unauthorized.code({:missing_tenant, :no_membership}),
+      Sanctum.Unauthorized.message({:missing_tenant, :no_membership})
     )
   end
 

@@ -138,7 +138,7 @@ defmodule Sanctum.Consent.Plan do
       nil ->
         [
           %{
-            need: "@ingress",
+            need: Sanctum.Authority.Blob.ingress_key(),
             reason: "credentials this component may use when invoked",
             required: false
           }
@@ -160,14 +160,14 @@ defmodule Sanctum.Consent.Plan do
   end
 
   # A required need with no active candidate of its kind is satisfiable
-  # only after the operator creates a Connection — say so up front.
+  # only after the operator creates a vault entry — say so up front.
   defp need_warnings(needs, candidates) do
     kinds = candidates |> Enum.map(& &1.kind) |> MapSet.new()
 
     for %{required: true, kind: kind, need: name} <- needs,
         kind in ~w(api_key oauth bundle),
         not MapSet.member?(kinds, kind) do
-      "need '#{name}' wants a #{kind} connection and none exists yet — create one first"
+      "need '#{name}' wants a #{kind} vault entry and none exists yet — create one first"
     end
   end
 

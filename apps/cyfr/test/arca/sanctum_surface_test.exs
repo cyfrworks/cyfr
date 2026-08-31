@@ -46,26 +46,10 @@ defmodule Arca.SanctumSurfaceTest do
 
   defp reached do
     for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/arca/**/*.ex")),
-        line <- path |> File.read!() |> code_lines(),
+        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
-  end
-
-  # Code only — heredoc doc prose and comments are about the dependency,
-  # not the dependency (the same filter Opus.HostSurfaceTest uses).
-  defp code_lines(source) do
-    source
-    |> String.split("\n")
-    |> Enum.reduce({[], false}, fn line, {kept, in_heredoc?} ->
-      delimiters = line |> String.graphemes() |> Enum.chunk_every(3, 1, :discard)
-      toggles = Enum.count(delimiters, &(&1 == ["\"", "\"", "\""]))
-      now_inside? = if rem(toggles, 2) == 1, do: not in_heredoc?, else: in_heredoc?
-
-      keep? = not in_heredoc? and not now_inside? and not String.match?(line, ~r/^\s*#/)
-      {if(keep?, do: [line | kept], else: kept), now_inside?}
-    end)
-    |> elem(0)
   end
 
   test "the storage layer reaches only into the Sanctum namespaces this surface names" do

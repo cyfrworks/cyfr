@@ -23,22 +23,34 @@ defmodule Cyfr.CrossLanguageDriftTest do
     elixir = read!("apps/cyfr/lib/sanctum/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
 
-    # These three are byte-identical expressions on both sides; the name
-    # rule is structured differently per language (Go folds the length cap
-    # into the regex) and is covered by each side's own tests.
+    # The grammar BODIES are byte-identical on both sides; the anchors are
+    # not, and must not be. Go's RE2 anchors `^`/`$` to the whole text
+    # already, but PCRE's `$` also matches before a trailing newline — so
+    # `"alice\n"` passed every one of these on the Elixir side, which is
+    # where the untrusted, untrimmed input actually arrives. Elixir spells
+    # `\A…\z`; Go keeps `^…$`; both mean the same rule. The name rule is
+    # structured differently per language (Go folds the length cap into the
+    # regex) and is covered by each side's own tests.
     shared = [
-      "^[a-z0-9]+(-[a-z0-9]+)*$",
-      "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
-      "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-(0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(\\.(0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\\+[0-9a-zA-Z-]+(\\.[0-9a-zA-Z-]+)*)?$"
+      "[a-z0-9]+(-[a-z0-9]+)*",
+      "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?",
+      "(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-(0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(\\.(0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\\+[0-9a-zA-Z-]+(\\.[0-9a-zA-Z-]+)*)?"
     ]
 
-    for expr <- shared do
-      assert String.contains?(elixir, expr),
-             "expression missing from component_ref.ex: #{expr}"
+    for body <- shared do
+      assert String.contains?(elixir, body),
+             "expression missing from component_ref.ex: #{body}"
 
-      assert String.contains?(go, expr),
-             "expression missing from ref.go: #{expr}"
+      assert String.contains?(go, "^" <> body <> "$"),
+             "expression missing from ref.go (anchored ^..$): #{body}"
     end
+
+    # And the Elixir side anchors them the strict way, everywhere — the
+    # property the bodies above cannot show. `Sanctum.ComponentRefTest`
+    # covers the behaviour ("alice\n" is refused); this is the spelling.
+    refute elixir =~ ~r/~r\/\^/,
+           "component_ref.ex anchors a grammar with `^`; PCRE's `$` also " <>
+             "matches before a trailing newline — use \\A..\\z"
   end
 
   # ==========================================================================
@@ -74,6 +86,26 @@ defmodule Cyfr.CrossLanguageDriftTest do
         {:error, why} ->
           refute case_["valid"], "#{ref} refused (#{why}) but the fixture says valid"
       end
+    end
+  end
+
+  test "the shared version-ordering fixture ranks the same here as in Go" do
+    # Go's twin is TestVersionOrderingFixture in ref_fixture_test.go. The
+    # verdict cases above cover PARSING; this covers ORDERING — the two
+    # sides once disagreed on every mixed pair (Go byte-compared when
+    # either side failed the grammar; the server ranks the parsable side
+    # higher and byte-compares only when both fail).
+    %{"version_ordering" => cases} =
+      "tests/fixtures/component_refs.json"
+      |> (&Path.join(@root, &1)).()
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert cases != []
+
+    for %{"a" => a, "b" => b, "expect" => expect} <- cases do
+      assert Compendium.Semver.compare(a, b) == String.to_existing_atom(expect),
+             "compare(#{a}, #{b}) expected #{expect}"
     end
   end
 
@@ -115,23 +147,49 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # ==========================================================================
 
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
-    # Sanctum.Consent declares the vocabulary; Opus.MCP flattens the tuples
-    # to "tag: {json}" strings for the wire; codex parses that prefix back.
-    # A tag added or renamed on one side silently stops being explained (Go)
-    # or stops crossing the boundary (opus) — this pins all three rosters.
+    # Sanctum.Consent declares the vocabulary; the tuples stay TYPED to the
+    # wire router, which promotes them to protocol errors — one -335xx code
+    # per tag (Emissary.MCP.Message), the payload in error.data
+    # (Emissary.MCP.ConsentSignal) — and codex recovers them from the code
+    # and data (mcp.ConsentError). A tag or code renamed on one side
+    # silently stops being explained (Go) or stops crossing the boundary —
+    # this pins every roster.
     consent = read!("apps/cyfr/lib/sanctum/consent.ex")
     opus_mcp = read!("apps/opus/lib/opus/mcp.ex")
+    signal = read!("apps/cyfr/lib/emissary/mcp/consent_signal.ex")
+    message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
+    client_go = read!("apps/codex/internal/mcp/client.go")
 
     tags = ~w(setup_required consent_required consent_conflict restart_required)
+
+    codes = %{
+      "setup_required" => "-33501",
+      "consent_required" => "-33502",
+      "consent_conflict" => "-33503",
+      "restart_required" => "-33504"
+    }
 
     for tag <- tags do
       assert consent =~ "{:#{tag}, #{tag}()}",
              "tag #{tag} missing from Sanctum.Consent's authority_error union"
 
+      assert signal =~ ":#{tag}",
+             "tag #{tag} missing from Emissary.MCP.ConsentSignal's roster"
+
+      assert message =~ "#{tag}: #{codes[tag]}",
+             "code #{codes[tag]} for #{tag} missing from Emissary.MCP.Message"
+
+      assert client_go =~ ~s(#{codes[tag]}: "#{tag}"),
+             "code #{codes[tag]} for #{tag} missing from client.go's consentTagByCode"
+
       assert root_go =~ ~s("#{tag}"),
              "tag #{tag} missing from codex root.go's explain roster"
     end
+
+    # The error.data envelope keys, spelled the same on both ends.
+    assert signal =~ ~s("tag") and signal =~ ~s("payload")
+    assert client_go =~ ~s(data["tag"]) and client_go =~ ~s(data["payload"])
 
     # Opus.MCP spells the roster once, as the guard on format_root_result/1.
     assert opus_mcp =~

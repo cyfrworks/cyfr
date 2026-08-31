@@ -3,7 +3,7 @@
 
 defmodule Arca.Schemas.Athanor do
   @moduledoc """
-  An athanor: the furnace a person or a group runs in. It owns Connections,
+  An athanor: the furnace a person or a group runs in. It owns vault entries,
   components, consents, executions, schedules, keys and members; it is the
   isolation unit and the outbound principal.
 

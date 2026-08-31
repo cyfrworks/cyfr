@@ -43,21 +43,23 @@ func Update(version string) error {
 }
 
 // bundledAquaPrompts is the set of aqua/ prompt files we ship and own. These
-// get overwritten on `cyfr update` so users receive improvements to the default
-// agent prompts.
+// get overwritten on `cyfr update` so users receive improvements to the
+// default agent prompts. The v3 template keeps them under aqua/agents/ —
+// the flat v2 spelling matched nothing in the tarball, so `cyfr update`
+// silently stopped delivering prompt improvements while its test pinned
+// the stale paths (TestBundledPromptsMatchSeed now binds this list to the
+// shipped seed tree).
 //
-// Important: aqua/agent.json is NOT in this list — once init writes it, the
-// user owns it (e.g. they may add custom agents via `aqua create` (with
-// type=orchestrator) which mutates agent.json). User-created prompt files
-// (e.g. aqua_custom.md) are also preserved because they're not in this list.
+// Everything else under aqua/ is the user's — custom prompt files they add
+// (e.g. aqua/agents/aqua_custom.md) are not in this list and are preserved.
 var bundledAquaPrompts = map[string]bool{
-	"aqua/aqua.md":          true,
-	"aqua/aqua_builder.md":  true,
-	"aqua/aqua_artisan.md":  true,
-	"aqua/aqua_arcade.md":   true,
-	"aqua/aqua_explorer.md": true,
-	"aqua/aqua_planner.md":  true,
-	"aqua/aqua_web.md":      true,
+	"aqua/agents/aqua.md":          true,
+	"aqua/agents/aqua_builder.md":  true,
+	"aqua/agents/aqua_artisan.md":  true,
+	"aqua/agents/aqua_arcade.md":   true,
+	"aqua/agents/aqua_explorer.md": true,
+	"aqua/agents/aqua_planner.md":  true,
+	"aqua/agents/aqua_web.md":      true,
 }
 
 // isManaged returns true for files that are maintained by cyfr and should be
@@ -72,8 +74,8 @@ func isManaged(path string) bool {
 	if strings.HasPrefix(path, "wit/") || path == "wit" {
 		return true
 	}
-	// Specific bundled aqua prompts are managed; agent.json and any
-	// user-created prompts are preserved.
+	// Specific bundled aqua prompts are managed; user-created prompts are
+	// preserved.
 	if bundledAquaPrompts[path] {
 		return true
 	}

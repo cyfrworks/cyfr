@@ -227,6 +227,56 @@ defmodule Opus.CronMCPTest do
 
       assert resumed.status == "active"
     end
+
+    test "a paused schedule still occupies its cap slot", %{ctx: ctx} do
+      # The cap counts every non-deleted row, so pause → create-another
+      # cannot mint a 26th seat — and resume therefore needs no cap check.
+      {:ok, first} =
+        CronMCP.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "cap-pause-0",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      for i <- 1..24 do
+        assert {:ok, _} =
+                 CronMCP.handle("schedule", ctx, %{
+                   "action" => "create",
+                   "profile_id" => "prof-cron",
+                   "name" => "cap-pause-#{i}",
+                   "cron_expression" => "0 * * * *",
+                   "reference" => "reagent:local.test:1.0.0"
+                 })
+      end
+
+      assert {:ok, _} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "pause",
+                 "schedule_id" => first.schedule_id
+               })
+
+      assert {:error, msg} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "profile_id" => "prof-cron",
+                 "name" => "cap-pause-25",
+                 "cron_expression" => "0 * * * *",
+                 "reference" => "reagent:local.test:1.0.0"
+               })
+
+      assert msg =~ "limit reached"
+
+      # And the paused seat resumes cleanly at the cap.
+      assert {:ok, resumed} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "resume",
+                 "schedule_id" => first.schedule_id
+               })
+
+      assert resumed.status == "active"
+    end
   end
 
   describe "delete action" do
@@ -288,6 +338,62 @@ defmodule Opus.CronMCPTest do
                })
 
       assert message =~ "profile_id is required"
+    end
+
+    test "update that re-points the reference re-runs the binding gate", %{ctx: ctx} do
+      # Re-pointing is the same act as binding: the gate runs against the
+      # target the row will have after the update. It used to run only when
+      # the update ALSO carried a profile_id, so an update naming just a new
+      # reference moved a standing, timer-fired conduit onto a target its
+      # bound profile's consent never authorized.
+      Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "unblessed",
+        version: "1.0.0",
+        type: "reagent",
+        description: "No profile is bound to this one"
+      })
+
+      {:ok, created} =
+        CronMCP.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "repoint-gate",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      assert {:error, message} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => created.schedule_id,
+                 "reference" => "reagent:local.unblessed:1.0.0"
+               })
+
+      assert message =~ "profile binding refused"
+
+      # The row was not moved.
+      {:ok, row} = Arca.CronSchedule.get_by_id_or_name(ctx, created.schedule_id)
+      assert row.resolved_reference == "reagent:local.test:1.0.0"
+    end
+
+    test "update re-pointing within the profile's authorized target passes", %{ctx: ctx} do
+      {:ok, created} =
+        CronMCP.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "repoint-ok",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      assert {:ok, updated} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => created.schedule_id,
+                 "reference" => "reagent:local.test:1.0.0"
+               })
+
+      assert updated.resolved_reference == "reagent:local.test:1.0.0"
     end
   end
 
@@ -386,6 +492,36 @@ defmodule Opus.CronMCPTest do
                })
 
       assert msg =~ "Missing required argument: schedule_id"
+    end
+
+    test "re-resolve re-checks the profile binding against the new version", %{ctx: ctx} do
+      # Re-pointing a schedule is the same act as binding one, and answers to
+      # the same gates `create` and `update` run. It ran neither, so a bound
+      # schedule could be moved onto a version its consent had never been
+      # authorized for — the binding was checked once, at creation, against
+      # the version the schedule had then.
+      {:ok, created} =
+        CronMCP.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "re-resolve-rebinds",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      # A schedule bound to an authorized target still re-resolves: the two
+      # gates now run on this path, and they pass.
+      assert {:ok, after_} =
+               CronMCP.handle("schedule", ctx, %{
+                 "action" => "re_resolve",
+                 "schedule_id" => created.schedule_id
+               })
+
+      assert after_.resolved_reference == "reagent:local.test:1.0.0"
+
+      # And the row kept its binding rather than being re-pointed unbound.
+      {:ok, row} = Arca.CronSchedule.get_by_id_or_name(ctx, created.schedule_id)
+      assert row.profile_id == "prof-cron"
     end
   end
 

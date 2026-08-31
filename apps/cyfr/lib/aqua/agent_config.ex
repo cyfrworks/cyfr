@@ -7,9 +7,9 @@ defmodule Aqua.AgentConfig do
   @moduledoc """
   Builds agent configuration for formula input by querying the `aqua` MCP tool.
 
-  All prompt and metadata access goes through the aqua tool, which reads from
-  `aqua/agent.json` at runtime. This ensures a single canonical API for both
-  internal and external harnesses.
+  All prompt and metadata access goes through the aqua tool, which reads the
+  athanor's `aqua/agents/` tree at runtime. This ensures a single canonical
+  API for both internal and external harnesses.
   """
 
   alias Sanctum.Context
@@ -211,7 +211,7 @@ defmodule Aqua.AgentConfig do
   defp catalyst_status(ctx, listing, ref) do
     with {:ok, resolved} <- find_matching_catalyst(listing, ref),
          {:ok, plan} <-
-           Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+           Aqua.MCPHelpers.call_tool("component", ctx, %{
              "action" => "setup_plan",
              "reference" => resolved
            }) do
@@ -234,7 +234,7 @@ defmodule Aqua.AgentConfig do
   # used to fetch the full catalyst listing once per agent.
   defp catalyst_listing(ctx) do
     result =
-      Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
+      Aqua.MCPHelpers.call_tool("component", ctx, %{
         "action" => "list",
         "type" => "catalyst"
       })
@@ -277,7 +277,7 @@ defmodule Aqua.AgentConfig do
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_aqua(ctx, args) do
-    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
+    case Aqua.MCPHelpers.call_tool("aqua", ctx, args) do
       {:ok, result} -> {:ok, stringify_deep(result)}
       other -> other
     end

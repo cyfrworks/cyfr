@@ -61,7 +61,7 @@ defmodule PrismWeb.SignInResponse do
       conn
       |> delete_resp_cookie(@probe_cookie)
       |> flash_report(report)
-      |> EmissaryWeb.SafeRedirect.post_login()
+      |> PrismWeb.SafeRedirect.post_login()
     end)
   end
 

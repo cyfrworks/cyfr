@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/prompt"
 	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -35,7 +35,7 @@ var rootCmd = &cobra.Command{
 	Short: "CYFR CLI — sandboxed component runtime for AI agents",
 	Long: `cyfr is the command-line interface for CYFR — a sandboxed runtime
 where AI agents execute WASM tools and serve tincture frontends via MCP.
-Use cyfr to manage components, connections, consents, and executions
+Use cyfr to manage components, vault entries, consents, and executions
 from the terminal or scripts.`,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		// This transport has no server-side session to terminate — the
@@ -46,10 +46,12 @@ from the terminal or scripts.`,
 			_ = activeClient.Close()
 		}
 	},
-	// Commands report failures by returning an error (cobra prints it as
+	// Commands report failures by returning an error (Execute prints it as
 	// "Error: …" on stderr); a failure is not a usage mistake, so no help
-	// text dump rides along.
-	SilenceUsage: true,
+	// text dump rides along. Errors are printed by Execute rather than by
+	// cobra so a prompt abort (prompt.ErrAborted) can exit 130 silently.
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func init() {
@@ -74,9 +76,21 @@ func init() {
 }
 
 // Execute runs the root command under the process context, so every request
-// a command makes is cancellable by Ctrl-C / SIGTERM.
+// a command makes is cancellable by Ctrl-C / SIGTERM. It prints the failure
+// (cobra's own printing is silenced) — except a prompt abort, which the user
+// caused and needs no telling about — and returns it for main to map to an
+// exit code.
 func Execute(ctx context.Context) error {
-	return rootCmd.ExecuteContext(ctx)
+	err := rootCmd.ExecuteContext(ctx)
+	if err != nil && !errors.Is(err, prompt.ErrAborted) {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		// The one line SilenceErrors swallows beyond the error itself:
+		// cobra's help pointer after an unrecognized command.
+		if strings.HasPrefix(err.Error(), "unknown command ") {
+			fmt.Fprintf(os.Stderr, "Run '%s --help' for usage.\n", rootCmd.CommandPath())
+		}
+	}
+	return err
 }
 
 // newClient creates an MCP client from config.
@@ -126,50 +140,46 @@ func newClient() *mcp.Client {
 
 // handleToolError maps well-known error sentinels to a helpful message,
 // otherwise falls back to a contextual or generic error. Commands return the
-// result so cobra prints it and main exits non-zero.
-// Pass an optional context string (e.g. "Register failed") for the fallback.
-func handleToolError(err error, context ...string) error {
+// result so Execute prints it and main exits non-zero.
+// Pass an optional prefix string (e.g. "Register failed") for the fallback.
+func handleToolError(err error, prefix ...string) error {
 	// Capitalized, punctuated messages are deliberate here (staticcheck
 	// ST1005 would object): these errors ARE the CLI's user-facing output —
-	// cobra prints them verbatim as the command's final line.
+	// Execute prints them verbatim as the command's final line.
 	if errors.Is(err, mcp.ErrAuthRequired) {
 		return errors.New("Not logged in. Run 'cyfr login' to authenticate.")
 	}
 	if msg, ok := explainConsentError(err); ok {
 		return errors.New(msg)
 	}
-	if len(context) > 0 && context[0] != "" {
-		return fmt.Errorf("%s: %w", context[0], err)
+	if len(prefix) > 0 && prefix[0] != "" {
+		return fmt.Errorf("%s: %w", prefix[0], err)
 	}
 	return fmt.Errorf("Failed: %w", err)
 }
 
-// The four §4.3 payloads cross every boundary as "tag: {json}". Render
-// them as something an operator can act on instead of raw JSON.
-func explainConsentError(err error) (string, bool) {
-	text := err.Error()
-
-	for _, tag := range []string{
-		"setup_required",
-		"consent_required",
-		"consent_conflict",
-		"restart_required",
-	} {
-		prefix := tag + ": "
-		idx := strings.Index(text, prefix)
-		if idx < 0 {
-			continue
-		}
-
-		var payload map[string]any
-		if e := json.Unmarshal([]byte(text[idx+len(prefix):]), &payload); e != nil {
-			continue
-		}
-
-		return formatConsentError(tag, payload), true
+// renderResult prints a tool result in the format the invocation selected:
+// JSON under --json, the key/value layout otherwise. It returns nil so a
+// command's final render can be its return statement.
+func renderResult(result map[string]any) error {
+	if flagJSON {
+		output.JSON(result)
+	} else {
+		output.KeyValue(result)
 	}
+	return nil
+}
 
-	return "", false
+// The four §4.3 signals arrive as typed protocol errors (mcp.ConsentError,
+// codes -33501..-33504, payload from error.data). Render them as something
+// an operator can act on; they used to be "tag: {json}" grepped out of the
+// message text.
+func explainConsentError(err error) (string, bool) {
+	var ce *mcp.ConsentError
+	if !errors.As(err, &ce) {
+		return "", false
+	}
+	return formatConsentError(ce.Tag, ce.Payload), true
 }
 
 func formatConsentError(tag string, payload map[string]any) string {
@@ -178,7 +188,7 @@ func formatConsentError(tag string, payload map[string]any) string {
 		ref, _ := payload["node_ref"].(string)
 		need, _ := payload["need"].(string)
 		if need != "" {
-			return fmt.Sprintf("Setup required: %s needs a connection for %q.\n  Run: cyfr profile grant %s", ref, need, ref)
+			return fmt.Sprintf("Setup required: %s needs a vault entry for %q.\n  Run: cyfr profile grant %s", ref, need, ref)
 		}
 		return fmt.Sprintf("Setup required: %s is not ready.\n  Run: cyfr profile grant %s", ref, ref)
 
@@ -197,19 +207,4 @@ func formatConsentError(tag string, payload map[string]any) string {
 	}
 
 	return ""
-}
-
-// saveSessionID persists the session ID from the client to config.
-func saveSessionID(client *mcp.Client) {
-	if client.SessionID == "" {
-		return
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		output.Debugf("could not load config to persist session id: %v", err)
-		return
-	}
-	if err := cfg.SetSessionID(client.SessionID); err != nil {
-		output.Debugf("could not persist session id: %v", err)
-	}
 }

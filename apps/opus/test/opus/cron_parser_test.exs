@@ -128,6 +128,55 @@ defmodule Opus.CronParserTest do
       assert next.day == 6
       assert Date.day_of_week(next) |> rem(7) == 1
     end
+
+    test "dow 7 is the Sunday alias" do
+      {:ok, cron} = CronParser.parse("0 9 * * 7")
+      assert cron.dow == [0]
+
+      # 2025-01-01 is a Wednesday; the next Sunday is Jan 5.
+      assert {:ok, next} = CronParser.next_run(cron, ~U[2025-01-01 00:00:00Z])
+      assert next.day == 5
+      assert Date.day_of_week(next) == 7
+    end
+
+    test "restricted dom AND dow fire on either (POSIX)" do
+      # "0 0 13 * 5" is "the 13th OR any Friday", not Friday-the-13th.
+      {:ok, cron} = CronParser.parse("0 0 13 * 5")
+
+      # 2025-01-01 is a Wednesday: the first match is Friday Jan 3,
+      # before the 13th.
+      assert {:ok, next} = CronParser.next_run(cron, ~U[2025-01-01 00:00:00Z])
+      assert next.month == 1
+      assert next.day == 3
+
+      # And from Saturday the 11th, the 13th (a Monday) beats the next
+      # Friday (the 17th).
+      assert {:ok, next} = CronParser.next_run(cron, ~U[2025-01-11 00:00:00Z])
+      assert next.day == 13
+    end
+
+    test "one restricted day field keeps plain conjunction" do
+      # Only dow restricted: every Friday, any dom.
+      {:ok, cron} = CronParser.parse("0 0 * * 5")
+      assert {:ok, next} = CronParser.next_run(cron, ~U[2025-01-01 00:00:00Z])
+      assert next.day == 3
+
+      # Only dom restricted: the 13th, any weekday.
+      {:ok, cron} = CronParser.parse("0 0 13 * *")
+      assert {:ok, next} = CronParser.next_run(cron, ~U[2025-01-01 00:00:00Z])
+      assert next.day == 13
+    end
+
+    test "a leap-day schedule finds the next Feb 29 after firing" do
+      # Consecutive Feb-29s are 1461 days apart; the old 4x365-day horizon
+      # declared the next one unreachable and orphaned the schedule.
+      {:ok, cron} = CronParser.parse("0 0 29 2 *")
+
+      assert {:ok, next} = CronParser.next_run(cron, ~U[2028-03-01 00:00:00Z])
+      assert next.year == 2032
+      assert next.month == 2
+      assert next.day == 29
+    end
   end
 
   describe "min_interval_seconds/1" do

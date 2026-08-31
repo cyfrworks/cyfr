@@ -231,6 +231,28 @@ defmodule EmissaryWeb.MCPController do
 
         send_resp(conn, 202, "")
 
+      {:error, code, message, data, id} ->
+        duration_ms = duration_ms(start_time)
+
+        emit_telemetry(start_time, context, %{
+          method: method,
+          tool: tool,
+          status: :error,
+          action: action,
+          request_id: request_id
+        })
+
+        log_request_failed(
+          context,
+          request_id,
+          message,
+          Message.error_code(code),
+          duration_ms,
+          routed_to
+        )
+
+        respond_error(conn, code, Message.encode_error(id, code, message, data))
+
       {:error, code, message, id} ->
         duration_ms = duration_ms(start_time)
 

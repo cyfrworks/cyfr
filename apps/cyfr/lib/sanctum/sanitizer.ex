@@ -12,6 +12,13 @@ defmodule Sanctum.Sanitizer do
   may contain secrets that should not be persisted.
   """
 
+  # The `*_key` family is enumerated rather than matched by suffix, for the
+  # same reason `code` is exact-matched below: a `_key` rule would redact
+  # `sort_key`, `cache_key`, `partition_key` and `idempotency_key`, which are
+  # the values you most want to read when one of those goes wrong. What was
+  # missing is the crypto half — `keyring` names the boot config the entire
+  # at-rest scheme hangs on, and `master_key` / `encryption_key` / `hmac_key`
+  # are the material itself.
   @sensitive_keys ~w(
     password secret token api_key apikey access_token refresh_token
     private_key secret_key auth bearer credential credentials
@@ -19,6 +26,8 @@ defmodule Sanctum.Sanitizer do
     session_id registry_token cosign_key signing_key jwt client_secret
     device_code stripe basic_auth cookie signature code_verifier
     proof ticket
+    keyring crypto_keyring master_key encryption_key hmac_key
+    derived_key key_material keystore passphrase
   )
 
   # Keys sensitive only when they are the WHOLE key. `code` is the OAuth

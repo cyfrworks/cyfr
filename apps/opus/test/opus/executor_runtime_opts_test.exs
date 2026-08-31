@@ -63,6 +63,28 @@ defmodule Opus.ExecutorRuntimeOptsTest do
     assert out[:limits] == %{max_concurrent_tasks: 1}
   end
 
+  test "the pipeline's own keys are protected too, not just the consented four" do
+    # :ctx scopes every host import, :preloaded_fields is the unsealed
+    # vault map, :digest keys the compiled-component cache — a caller
+    # overwriting any of them would run under another tenant, other
+    # secrets, or another component's compiled bytes.
+    pipeline = consented() ++ [preloaded_fields: %{"key" => "sealed"}, digest: "sha256:real"]
+
+    caller = [
+      ctx: :attacker_context,
+      preloaded_fields: %{"key" => "injected"},
+      execution_id: "exec_other",
+      digest: "sha256:poisoned"
+    ]
+
+    out = Executor.runtime_opts(pipeline, caller)
+
+    assert out[:ctx] == :a_context
+    assert out[:preloaded_fields] == %{"key" => "sealed"}
+    assert out[:execution_id] == "exec_1"
+    assert out[:digest] == "sha256:real"
+  end
+
   test "with no authority-derived value, the caller's is used" do
     # A pipeline that never reached enforce_authority has nothing to protect,
     # so the guard must not turn into "the caller may never say".

@@ -4,7 +4,7 @@
 defmodule Sanctum.Cipher do
   @moduledoc """
   At-rest encryption of tenant-scoped credential blobs (secrets, OAuth token
-  bundles, webhook HMAC secrets, identity-link tokens): versioned, AAD-bound,
+  bundles, webhook HMAC secrets, registry push tokens): versioned, AAD-bound,
   keyring-rotatable AES-256-GCM.
 
   The keyring (`:crypto_keyring`) is resolved at boot by `Cyfr.Application`
@@ -173,6 +173,17 @@ defmodule Sanctum.Cipher do
         # key, so renaming it (even to match the envelope version) orphans every
         # blob encrypted so far. Pinned by test; change only with a
         # rotate-everything migration.
+        #
+        # Note what is NOT here: the key label. The derived key is a function
+        # of the master material and the purpose alone, so two labels over the
+        # same bytes are one key with two names — a "rotation" onto such a
+        # label re-encrypts every row under the key it already had. The label
+        # is bound in the AAD (so a row cannot be read under a different
+        # label), which is the property that matters at read time; the
+        # ineffective-rotation case is refused where it is detectable, at boot,
+        # by `Cyfr.Application.refuse_duplicate_key_material!/1`. Binding the
+        # label here would be defence in depth, and costs an envelope version
+        # plus a full re-encryption of every sealed row.
         info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
 
         # The iteration count is fixed on purpose: it is baked into every

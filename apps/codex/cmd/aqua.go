@@ -4,9 +4,8 @@
 package cmd
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"os"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -40,12 +39,7 @@ var aquaListCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -58,30 +52,16 @@ var aquaGetCmd = &cobra.Command{
   cyfr aqua get aqua_builder --json`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var name string
-
-		switch {
-		case len(args) >= 1:
-			name = args[0]
-		case prompt.IsInteractive(flagNoInteractive):
-			client := newClient()
-			opts, err := prompt.FetchGuides(cmd.Context(), client)
-			if err != nil {
-				return handleToolError(err)
-			}
-			if len(opts) == 0 {
-				return errors.New("No agents or guides found.")
-			}
-			selected, err := prompt.SelectOne("Select an agent or guide", opts)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			name = selected
-		default:
-			return errors.New("Usage: cyfr aqua get <name>")
+		name, err := pickTarget(cmd.Context(), args, selector{
+			Title: "Select an agent or guide",
+			Empty: "No agents or guides found.",
+			Usage: "Usage: cyfr aqua get <name>",
+			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+				return prompt.FetchGuides(ctx, newClient())
+			},
+		})
+		if err != nil || name == "" {
+			return err
 		}
 
 		client := newClient()

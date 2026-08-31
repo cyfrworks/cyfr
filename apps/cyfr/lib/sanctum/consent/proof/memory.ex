@@ -21,11 +21,8 @@ defmodule Sanctum.Consent.Proof.Memory do
 
   alias Sanctum.Consent.Proof
 
-  require Logger
-
   @table __MODULE__
   @sweep_interval_ms 60_000
-  @token_bytes 32
 
   # ============================================================================
   # Public API
@@ -66,7 +63,7 @@ defmodule Sanctum.Consent.Proof.Memory do
 
   @impl GenServer
   def handle_call({:mint, bindings, ttl_ms}, _from, state) do
-    token = Base.url_encode64(:crypto.strong_rand_bytes(@token_bytes), padding: false)
+    token = Sanctum.Consent.Proof.mint_token()
     expires_at = System.monotonic_time(:millisecond) + ttl_ms
 
     :ets.insert(@table, {token, bindings, expires_at})
@@ -107,7 +104,7 @@ defmodule Sanctum.Consent.Proof.Memory do
   end
 
   def handle_info(message, state) do
-    Logger.debug("[Consent.Proof.Memory] unexpected message: #{inspect(message)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, message)
     {:noreply, state}
   end
 

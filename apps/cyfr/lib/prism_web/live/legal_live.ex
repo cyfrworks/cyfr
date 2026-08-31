@@ -90,7 +90,7 @@ defmodule PrismWeb.LegalLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[LegalLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

@@ -133,6 +133,77 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotencyTest do
     end
   end
 
+  describe "a claim staked for a delivery that failed" do
+    # The row is written before the controller runs — that is what makes two
+    # concurrent deliveries of one key resolve to a single execution. But a
+    # failed delivery used to keep the claim, so the sender's retry (the whole
+    # reason it sends an idempotency key) got `{"status": "duplicate"}` while
+    # the target had never run once.
+
+    defp send_status(conn, status) do
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(status, "{}")
+    end
+
+    test "is released when the delivery answers a failure status", %{ctx: ctx} do
+      webhook = create_hook!(ctx, "rel-fail", %{idempotency_key_header: "X-Cyfr-Delivery"})
+      headers = [{"x-cyfr-delivery", "evt_failed"}]
+
+      build_conn_with_webhook(webhook, headers)
+      |> WebhookIdempotency.call([])
+      |> send_status(502)
+
+      # The retry is a fresh delivery, not a duplicate.
+      retry =
+        build_conn_with_webhook(webhook, headers)
+        |> WebhookIdempotency.call([])
+
+      refute retry.halted
+      assert retry.status == nil
+    end
+
+    test "is kept when the delivery succeeded", %{ctx: ctx} do
+      webhook = create_hook!(ctx, "rel-ok", %{idempotency_key_header: "X-Cyfr-Delivery"})
+      headers = [{"x-cyfr-delivery", "evt_ok"}]
+
+      build_conn_with_webhook(webhook, headers)
+      |> WebhookIdempotency.call([])
+      |> send_status(200)
+
+      replay =
+        build_conn_with_webhook(webhook, headers)
+        |> WebhookIdempotency.call([])
+
+      assert replay.halted
+      assert replay.status == 200
+      assert Jason.decode!(replay.resp_body)["status"] == "duplicate"
+    end
+
+    test "a duplicate does not release the original's claim", %{ctx: ctx} do
+      # The duplicate response is itself a 200, but even a non-2xx duplicate
+      # must not hand back a claim this request never staked.
+      webhook = create_hook!(ctx, "rel-dup", %{idempotency_key_header: "X-Cyfr-Delivery"})
+      headers = [{"x-cyfr-delivery", "evt_keep"}]
+
+      build_conn_with_webhook(webhook, headers)
+      |> WebhookIdempotency.call([])
+      |> send_status(200)
+
+      # A second delivery halts as a duplicate...
+      build_conn_with_webhook(webhook, headers)
+      |> WebhookIdempotency.call([])
+
+      # ...and a third still sees the original claim.
+      third =
+        build_conn_with_webhook(webhook, headers)
+        |> WebhookIdempotency.call([])
+
+      assert third.halted
+      assert Jason.decode!(third.resp_body)["status"] == "duplicate"
+    end
+  end
+
   describe "Arca.WebhookDeliveryStorage.sweep/1" do
     test "deletes rows older than the cutoff, keeps newer rows", %{ctx: ctx} do
       webhook = create_hook!(ctx, "sweep", %{idempotency_key_header: "X-Cyfr-Delivery"})

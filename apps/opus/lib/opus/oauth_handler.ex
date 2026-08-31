@@ -38,6 +38,8 @@ defmodule Opus.OAuthHandler do
   - `:resolver` (required) - `(provider -> {:ok, token} | {:error, term})`,
     vault-reader-backed from the consent edge. A component whose edge
     carries no vault binding gets a resolver that denies every request.
+  - `:limits` - the node's `Sanctum.Limits`; the consented rate limit meters
+    dispensing under its own bucket.
   """
   @spec build_oauth_imports(Context.t(), String.t(), String.t(), keyword()) :: map()
   def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, opts \\ []) do
@@ -46,14 +48,17 @@ defmodule Opus.OAuthHandler do
     # provider-checked at dispense and its endpoints are covered by the
     # consent's binding digest.
     resolver = Keyword.fetch!(opts, :resolver)
-    _ = ctx
+    limits = opts[:limits]
 
     %{
       "cyfr:oauth/token@0.1.0" => %{
         "get-access-token" =>
           {:fn,
            fn provider ->
-             get_access_token(provider, resolver, component_ref, execution_id)
+             case check_dispense_rate(ctx, component_ref, limits) do
+               :ok -> get_access_token(provider, resolver, component_ref, execution_id)
+               {:error, message} -> {:error, message}
+             end
            end}
       }
     }
@@ -71,6 +76,37 @@ defmodule Opus.OAuthHandler do
   # Internal
   # ============================================================================
 
+  # This import had no rate limit at all, so a guest loop drove one vault
+  # unseal — and a possible provider token refresh — per call, for as long as
+  # the execution ran. It meters under its own `"oauth:"` bucket rather than
+  # sharing the egress one, so a component that legitimately fetches a token
+  # and then makes many HTTP calls is not throttled by its own success.
+  #
+  # A dead limiter fails CLOSED, matching the executor and the egress gate: an
+  # unmetered dispense is the condition this exists to prevent.
+  defp check_dispense_rate(%Context{} = ctx, component_ref, %Sanctum.Limits{} = limits) do
+    case Opus.RateLimiter.check(ctx.athanor_id, "oauth:" <> component_ref, %{
+           rate_limit: limits.rate_limit
+         }) do
+      {:ok, _remaining} ->
+        :ok
+
+      {:error, :rate_limited, retry_after} ->
+        {:error, "token dispense rate limit exceeded; retry in #{retry_after}ms"}
+
+      {:error, :missing_tenant} ->
+        {:error, "token dispense refused: no resolved athanor"}
+    end
+  catch
+    :exit, _reason ->
+      {:error, "token dispense refused: rate limiter unavailable"}
+  end
+
+  # No limits means no consented rate to enforce (the capability-scoped import
+  # is only built when the edge carries a vault binding; a nil here is a
+  # direct caller, not a consented run).
+  defp check_dispense_rate(_ctx, _component_ref, _limits), do: :ok
+
   # The WIT declares `result<string, string>`, so both arms must be strings
   # and neither may raise: a fault here takes the Wasmex process and the guest
   # gets an opaque failure instead of the `err(…)` it was promised. The
@@ -83,17 +119,37 @@ defmodule Opus.OAuthHandler do
 
     case safe_resolve(resolver, provider) do
       {:ok, token} ->
-        Opus.OAuthTokenTracker.put(execution_id, token)
+        case Opus.OAuthTokenTracker.put(execution_id, token) do
+          :ok ->
+            duration = System.monotonic_time(:millisecond) - start_time
 
-        duration = System.monotonic_time(:millisecond) - start_time
+            :telemetry.execute(
+              [:cyfr, :opus, :oauth, :token_request],
+              %{duration_ms: duration},
+              %{component_ref: component_ref, provider: provider, status: :ok}
+            )
 
-        :telemetry.execute(
-          [:cyfr, :opus, :oauth, :token_request],
-          %{duration_ms: duration},
-          %{component_ref: component_ref, provider: provider, status: :ok}
-        )
+            {:ok, token}
 
-        {:ok, token}
+          {:error, :untracked} ->
+            # A token the tracker never saw can never be masked out of the
+            # execution's output, events or audit rows — the dispense fails
+            # closed rather than handing the guest an unmaskable secret.
+            duration = System.monotonic_time(:millisecond) - start_time
+
+            :telemetry.execute(
+              [:cyfr, :opus, :oauth, :token_request],
+              %{duration_ms: duration},
+              %{
+                component_ref: component_ref,
+                provider: provider,
+                status: :error,
+                reason: "token tracking unavailable"
+              }
+            )
+
+            {:error, "the credential store is unavailable"}
+        end
 
       {:error, reason} ->
         duration = System.monotonic_time(:millisecond) - start_time

@@ -4,24 +4,7 @@
 defmodule PrismWeb.ComponentDetailLive do
   use PrismWeb, :live_view
 
-  alias Phoenix.LiveView.JS
   require Logger
-
-  @report_categories [
-    {"csam", "Child sexual abuse material"},
-    {"ncii", "Non-consensual intimate imagery"},
-    {"objectionable", "Violence / hate / sexual content"},
-    {"malware", "Malware / unsafe code"},
-    {"impersonation", "Impersonation"},
-    {"dmca", "Copyright (DMCA)"},
-    {"ip_infringement", "Trademark / patent infringement"},
-    {"security", "Security vulnerability"},
-    {"policy_violation", "Acceptable-use policy violation"},
-    {"spam", "Spam"},
-    {"other", "Other"}
-  ]
-
-  @report_details_max 4096
 
   @impl true
   def mount(%{"ref" => ref}, _session, socket) do
@@ -37,10 +20,7 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:component, nil)
      |> assign(:readme, nil)
      |> assign(:loading, true)
-     |> assign(:execute_form, %{"input" => ""})
-     |> assign(:report_open, false)
-     |> assign(:report_submitting, false)
-     |> assign(:report_error, nil)}
+     |> assign(:execute_form, %{"input" => ""})}
   end
 
   @impl true
@@ -99,61 +79,8 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   def handle_event("open_report", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:report_open, true)
-     |> assign(:report_error, nil)}
-  end
-
-  def handle_event("close_report", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:report_open, false)
-     |> assign(:report_error, nil)}
-  end
-
-  def handle_event("submit_report", %{"category" => category, "details" => details}, socket) do
-    details = String.trim(details || "")
-    category = String.trim(category || "")
-
-    cond do
-      # Enforced, not just rendered — see `PrismWeb.ShellLive`.
-      category not in Enum.map(@report_categories, &elem(&1, 0)) ->
-        {:noreply, assign(socket, :report_error, "Pick a category.")}
-
-      details == "" ->
-        {:noreply, assign(socket, :report_error, "Describe the issue.")}
-
-      String.length(details) > @report_details_max ->
-        {:noreply,
-         assign(socket, :report_error, "Details too long (max #{@report_details_max} chars).")}
-
-      true ->
-        socket = assign(socket, :report_submitting, true)
-
-        args = %{
-          "action" => "report",
-          "category" => category,
-          "target_component_ref" => socket.assigns.ref,
-          "details" => details
-        }
-
-        case call_tool(socket, "registry", args) do
-          {:ok, _body} ->
-            {:noreply,
-             socket
-             |> assign(:report_open, false)
-             |> assign(:report_submitting, false)
-             |> assign(:report_error, nil)
-             |> put_flash(:info, "Report submitted. Thanks.")}
-
-          {:error, reason} ->
-            {:noreply,
-             socket
-             |> assign(:report_submitting, false)
-             |> assign(:report_error, error_message(reason))}
-        end
-    end
+    PrismWeb.ReportComponent.open("report", socket.assigns.ref)
+    {:noreply, socket}
   end
 
   @impl true
@@ -169,15 +96,17 @@ defmodule PrismWeb.ComponentDetailLive do
     {:noreply, assign(socket, :component, component)}
   end
 
+  def handle_info({:report_component, :submitted}, socket) do
+    {:noreply, put_flash(socket, :info, "Report submitted. Thanks.")}
+  end
+
   def handle_info(msg, socket) do
-    Logger.debug("[ComponentDetailLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :report_categories, @report_categories)
-
     ~H"""
     <div class="space-y-6">
       <div class="flex items-start justify-between gap-4">
@@ -281,79 +210,13 @@ defmodule PrismWeb.ComponentDetailLive do
         <.empty_state message="Component not found" />
       </div>
       
-    <!-- Report modal -->
-      <.modal
-        id="report-modal"
-        show={@report_open}
-        on_cancel={JS.push("close_report")}
-      >
-        <div class="space-y-4">
-          <div>
-            <h3 class="text-base font-semibold text-white">Report this component</h3>
-            <p class="text-sm text-gray-400 mt-1">
-              <span class="font-mono text-gray-300">{@ref}</span>
-            </p>
-            <p class="text-xs text-gray-500 mt-2">
-              Your report goes to cyfr.run moderators. Track status under <a
-                href="/reports"
-                class="underline hover:text-gray-400"
-              >My Reports</a>.
-            </p>
-          </div>
-
-          <form phx-submit="submit_report" class="space-y-3">
-            <div>
-              <label class="text-xs text-gray-500 uppercase">Category</label>
-              <select
-                name="category"
-                required
-                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
-              >
-                <option value="">Select…</option>
-                <option :for={{value, label} <- @report_categories} value={value}>{label}</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="text-xs text-gray-500 uppercase">Details</label>
-              <textarea
-                name="details"
-                required
-                rows="4"
-                maxlength="4096"
-                placeholder="What's wrong? Include URLs, commit hashes, screenshots…"
-                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
-                autofocus
-              ></textarea>
-            </div>
-
-            <div
-              :if={@report_error}
-              class="text-xs text-red-300 bg-red-900/40 border border-red-800 rounded px-3 py-2"
-            >
-              {@report_error}
-            </div>
-
-            <div class="flex justify-end gap-2">
-              <button
-                type="button"
-                phx-click="close_report"
-                class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={@report_submitting}
-                phx-disable-with="Sending…"
-                class="px-3 py-1.5 text-xs rounded bg-red-900 text-red-100 border border-red-700 hover:bg-red-800 disabled:opacity-50"
-              >
-                Submit report
-              </button>
-            </div>
-          </form>
-        </div>
-      </.modal>
+    <!-- Report modal — the shared component owns taxonomy, validation and submit -->
+      <.live_component
+        module={PrismWeb.ReportComponent}
+        id="report"
+        ctx={@context}
+        athanor_route={@athanor_route}
+      />
     </div>
     """
   end

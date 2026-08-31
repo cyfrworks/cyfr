@@ -23,7 +23,7 @@ defmodule Cyfr.Network do
   """
 
   import Bitwise
-  import Arca.QueryHelpers, only: [maybe_put: 3]
+  import Cyfr.MapUtil, only: [put_unless_nil: 3]
 
   # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
   @private_ranges [
@@ -145,8 +145,8 @@ defmodule Cyfr.Network do
           retry: false,
           connect_options:
             [hostname: uri.host]
-            |> maybe_put(:protocols, Keyword.get(opts, :protocols))
-            |> maybe_put(:transport_opts, Keyword.get(opts, :transport_opts)),
+            |> put_unless_nil(:protocols, Keyword.get(opts, :protocols))
+            |> put_unless_nil(:transport_opts, Keyword.get(opts, :transport_opts)),
           receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
         ]
 
@@ -202,8 +202,8 @@ defmodule Cyfr.Network do
           req_opts
           |> Keyword.put(:method, method)
           |> Keyword.put(:headers, headers)
-          |> maybe_put(:body, body)
-          |> maybe_put(:into, max_bytes && bounded_collector(max_bytes))
+          |> put_unless_nil(:body, body)
+          |> put_unless_nil(:into, max_bytes && bounded_collector(max_bytes))
 
         case Req.request(req_opts) do
           {:ok, %Req.Response{status: status, headers: resp_headers} = resp} ->

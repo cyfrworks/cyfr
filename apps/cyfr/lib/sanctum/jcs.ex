@@ -140,7 +140,16 @@ defmodule Sanctum.JCS do
 
   defp do_encode(_value, path), do: fail(path, :unsupported_type)
 
-  defp check_key(key, _path) when is_binary(key), do: key
+  # A key must be valid UTF-8, not merely a binary: invalid bytes made
+  # `utf16_sort_key/1` answer an error tuple that silently sorted as a
+  # term and `encode_string/1` emit the raw bytes — a non-canonical
+  # "canonical" form with `{:ok, _}`, in the digest class this restricted
+  # domain exists to protect. A value with the same bytes was already
+  # refused; keys are held to the same rule.
+  defp check_key(key, path) when is_binary(key) do
+    if String.valid?(key), do: key, else: fail(path, :unsupported_type)
+  end
+
   defp check_key(_key, path), do: fail(path, :non_string_key)
 
   # RFC 8785 §3.2.3: sort by UTF-16 code unit, which is byte order over the

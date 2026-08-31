@@ -117,11 +117,12 @@ defmodule EmissaryWeb.HealthController do
 
   @doc """
   Where the readiness probe writes — under the `system/` global root.
-  This controller is the writer and owns the spelling; the retention
-  sweep that reclaims stranded probe files consumes it.
+  The spelling lives in `Cyfr.HealthProbe` (glue): the retention sweep
+  consumes it too, and asking this controller for it was glue reaching
+  upward into the web layer.
   """
   @spec probe_dir() :: [String.t()]
-  def probe_dir, do: ["system", "health"]
+  defdelegate probe_dir, to: Cyfr.HealthProbe, as: :dir
 
   # Round-trips a tiny write through Arca so a full disk, a read-only volume,
   # or broken object-store credentials flip readiness — the boot-time raw-File
@@ -138,8 +139,8 @@ defmodule EmissaryWeb.HealthController do
     # the directory (this endpoint is unauthenticated — on an object store
     # a per-probe sweep was a billable LIST + batch DELETE per cache
     # window). Concurrent probes racing on the shared key are covered by
-    # the `:not_found` arm below; the retention sweep — which asks this
-    # writer where it writes, via `probe_dir/0` — is the belt for legacy
+    # the `:not_found` arm below; the retention sweep — which reads
+    # the same `Cyfr.HealthProbe.dir/0` spelling — is the belt for legacy
     # `.write_probe.<n>` strays. "system" is in
     # `Arca.Storage.global_prefixes/0` — witnessed in the controller test.
     path = probe_dir() ++ [".write_probe"]

@@ -222,7 +222,7 @@ defmodule Compendium.MCPTest do
       assert {:error, msg} =
                MCP.read(anon, "compendium://components/r:local.anon-read:1.0.0")
 
-      assert err_msg(msg) =~ "Authentication required"
+      assert err_msg(msg) =~ "Unauthorized: authentication required"
 
       assert {:error, _} =
                MCP.read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
@@ -1486,7 +1486,7 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("aqua", ctx, %{"action" => "get", "name" => "nonexistent"})
 
-      assert err_msg(msg) =~ "Unknown agent or guide"
+      assert err_msg(msg) =~ "Agent or guide not found"
       assert err_msg(msg) =~ "nonexistent"
     end
 
@@ -1688,19 +1688,19 @@ defmodule Compendium.MCPTest do
       refute Map.has_key?(result, :restored)
 
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "get", "name" => "my_agent"})
-      assert err_msg(msg) =~ "Unknown agent"
+      assert err_msg(msg) =~ "Agent or guide not found"
     end
   end
 
   describe "aqua tool - invalid action" do
     test "returns error for invalid action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "invalid"})
-      assert err_msg(msg) =~ "Invalid aqua action"
+      assert err_msg(msg) =~ "Unknown action: aqua.invalid"
     end
 
     test "returns error for missing action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("aqua", ctx, %{})
-      assert err_msg(msg) =~ "Invalid aqua action" or err_msg(msg) =~ "Missing required"
+      assert err_msg(msg) =~ "Missing required argument: action"
     end
   end
 

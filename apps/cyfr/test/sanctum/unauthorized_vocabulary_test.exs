@@ -26,6 +26,7 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
     :malformed_record,
     :untagged_tenant_resource,
     :platform_admin_required,
+    {:missing_tenant, :no_membership},
     {:missing_permission, :vault_read},
     {:guest_plane, :vault_read},
     {:guest_plane_call, "vault"},

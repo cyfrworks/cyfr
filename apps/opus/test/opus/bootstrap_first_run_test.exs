@@ -6,7 +6,7 @@ defmodule Opus.BootstrapFirstRunTest do
   The fresh-install acceptance arc over the REAL tracked bundle: the
   re-released components register from the repo tree, bootstrap mints
   their consents from the caps blocks, and a needs-declaring component
-  reads not-ready until a Connection is bound through the walk.
+  reads not-ready until a vault entry is bound through the walk.
 
   The moonmoon69 catalysts arrive only via registry pull, so on a tree
   without them AQUA and list-models register (a manifest's dependency
@@ -22,8 +22,8 @@ defmodule Opus.BootstrapFirstRunTest do
   alias Sanctum.Consent.Source
 
   @seed_root Path.expand("../../../../seed", __DIR__)
-  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.0"]
-  @pull_gated ["formulas/local/list-models/0.6.0", "formulas/local/aqua/1.0.5"]
+  @bundled ["catalysts/local/files/0.5.1", "catalysts/local/http/1.1.1"]
+  @pull_gated ["formulas/local/list-models/0.6.1", "formulas/local/aqua/1.0.5"]
 
   setup do
     Arca.Cache.init()
@@ -117,7 +117,7 @@ defmodule Opus.BootstrapFirstRunTest do
     assert Sanctum.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
   end
 
-  test "a needs-declaring catalyst is not ready until its Connection binds", %{ctx: ctx} do
+  test "a needs-declaring catalyst is not ready until its vault entry binds", %{ctx: ctx} do
     # The moonmoon69 re-release shape, published as a synthetic catalyst
     # so CI needs no registry pull.
     wasm = File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
@@ -154,7 +154,7 @@ defmodule Opus.BootstrapFirstRunTest do
     refute plan.ready
     assert Enum.any?(plan.consent.needs, &(&1[:need] == "api_key" and not &1.satisfied))
 
-    # The operator creates a Connection and binds it through the walk.
+    # The operator creates a vault entry and binds it through the walk.
     {:ok, entry} =
       Sanctum.Vault.create(ctx, %{
         name: "My Anthropic",

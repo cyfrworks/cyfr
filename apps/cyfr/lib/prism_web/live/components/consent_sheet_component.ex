@@ -4,10 +4,10 @@
 defmodule PrismWeb.ConsentSheetComponent do
   @moduledoc """
   The operator's consent sheet: the three §4.4 moments — grant, the
-  embedded connection picker, and the delta shown when a component asks
+  embedded vault-entry picker, and the delta shown when a component asks
   for something new — over one plan → preview → commit walk.
 
-  Vocabulary is the operator column of §4.4: Profile, Connection,
+  Vocabulary is the operator column of §4.4: Profile, Vault entry,
   Consent rev N, Grant. Copy never suggests a credential is hidden from
   the operator (§2.9 physics): what the sheet promises is that material
   is sealed at rest and that components see only what was granted.
@@ -19,7 +19,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   @impl true
   def mount(socket) do
-    {:ok, assign(socket, plan: nil, preview: nil, decisions: %{}, error: nil, busy: false)}
+    {:ok, assign(socket, plan: nil, preview: nil, decisions: %{}, error: nil)}
   end
 
   @impl true
@@ -39,17 +39,15 @@ defmodule PrismWeb.ConsentSheetComponent do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def handle_event("pick_connection", %{"need" => need, "entry_id" => entry_id}, socket) do
+  def handle_event("pick_entry", %{"need" => need, "entry_id" => entry_id}, socket) do
     decisions = Map.put(socket.assigns.decisions, need, entry_id)
     {:noreply, socket |> assign(decisions: decisions, preview: nil) |> preview()}
   end
 
-  def handle_event("clear_connection", %{"need" => need}, socket) do
+  def handle_event("clear_entry", %{"need" => need}, socket) do
     decisions = Map.delete(socket.assigns.decisions, need)
     {:noreply, socket |> assign(decisions: decisions, preview: nil) |> preview()}
   end
-
-  def handle_event("preview", _params, socket), do: {:noreply, preview(socket)}
 
   def handle_event("commit", _params, socket) do
     {:noreply, commit(socket)}
@@ -93,15 +91,22 @@ defmodule PrismWeb.ConsentSheetComponent do
     case call(socket, "profile/commit", args) do
       {:ok, result} ->
         send(self(), {:consent_granted, socket.assigns.ref, result})
-        assign(socket, busy: false, error: nil)
+
+        # The parent closes the sheet asynchronously; clearing the plan
+        # makes a second click in that gap find nothing to commit instead
+        # of re-sending the same plan_token/proof.
+        assign(socket, error: nil, plan: nil, preview: nil)
 
       {:error, message} ->
         # A conflict means the world moved under the sheet — re-plan so
         # the operator decides against what is true now, never against
-        # what they were shown a minute ago.
+        # what they were shown a minute ago. The refusal is assigned AFTER
+        # the re-plan: load_plan's success arm clears :error, which used to
+        # silently reset the sheet with no word on why.
         socket
-        |> assign(busy: false, error: message, plan: nil, preview: nil)
+        |> assign(plan: nil, preview: nil)
         |> load_plan(socket.assigns.ref)
+        |> assign(error: message)
     end
   end
 
@@ -132,7 +137,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     <div class="consent-sheet" id={"consent-sheet-#{@id}"}>
       <header class="consent-sheet__header">
         <h2>{title(@plan)}</h2>
-        <!-- Which furnace the grant lands in: a Connection is the athanor's,
+        <!-- Which furnace the grant lands in: a vault entry is the athanor's,
              and binding one in the wrong chat is the easy mistake. -->
         <p :if={@plan} class="consent-sheet__subtitle">
           {@ref}{if assigns[:athanor_name], do: " · in #{@athanor_name}"}
@@ -146,10 +151,10 @@ defmodule PrismWeb.ConsentSheetComponent do
           <p :for={warning <- warnings(@plan)}>{warning}</p>
           <p :if={assigns[:athanor_route]}>
             <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/connections")}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/vault")}
               class="consent-sheet__link"
             >
-              Add a Connection
+              Add a vault entry
             </.link>
             first, then come back here.
           </p>
@@ -167,7 +172,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         </section>
 
         <section class="consent-sheet__needs">
-          <h3>Connections</h3>
+          <h3>Vault entries</h3>
           <p :if={@plan.needs == []} class="consent-sheet__empty">
             This app asks for no credentials.
           </p>
@@ -179,7 +184,7 @@ defmodule PrismWeb.ConsentSheetComponent do
               <button
                 :for={candidate <- @plan.candidates}
                 type="button"
-                phx-click="pick_connection"
+                phx-click="pick_entry"
                 phx-target={@myself}
                 phx-value-need={need.need}
                 phx-value-entry_id={candidate.id}
@@ -193,12 +198,12 @@ defmodule PrismWeb.ConsentSheetComponent do
 
               <button
                 type="button"
-                phx-click="clear_connection"
+                phx-click="clear_entry"
                 phx-target={@myself}
                 phx-value-need={need.need}
                 class="consent-sheet__choice"
               >
-                No connection
+                No entry
               </button>
             </div>
           </div>
@@ -224,7 +229,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             <li :for={line <- @preview.summary}>{line}</li>
           </ul>
           <p class="consent-sheet__note">
-            Connections are sealed at rest. A component only ever receives the
+            Vault entries are sealed at rest. A component only ever receives the
             fields listed above.
           </p>
         </section>
@@ -237,7 +242,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             type="button"
             phx-click="commit"
             phx-target={@myself}
-            disabled={is_nil(@preview) or @busy}
+            disabled={is_nil(@preview)}
             class="btn-primary"
           >
             {commit_label(@plan)}

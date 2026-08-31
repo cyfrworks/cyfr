@@ -28,6 +28,9 @@ defmodule Opus.OAuthTokenTracker do
   # row still present after this is from a run that never drained.
   @ttl_ms :timer.hours(1)
   @sweep_interval_ms :timer.minutes(5)
+  # Headroom above the execution ceiling before a row may be swept: the
+  # finalize/failure drain sites run after the wall clock stops.
+  @drain_margin_ms :timer.minutes(5)
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -36,12 +39,21 @@ defmodule Opus.OAuthTokenTracker do
   @doc """
   Record a dispensed token for later masking. Synchronous so a last-instant
   dispense cannot race the drain.
+
+  Fails CLOSED: an unreachable tracker answers `{:error, :untracked}` and
+  the caller must not hand the token out — an untracked token can never be
+  masked from output, events or audit rows afterwards.
   """
-  @spec put(String.t(), String.t()) :: :ok
+  @spec put(String.t(), String.t()) :: :ok | {:error, :untracked}
   def put(execution_id, token) when is_binary(execution_id) and is_binary(token) do
     GenServer.call(__MODULE__, {:put, execution_id, token})
   catch
-    :exit, _ -> :ok
+    :exit, reason ->
+      Logger.warning(
+        "[OAuthTokenTracker] put unreachable (#{inspect(reason)}) — refusing the dispense"
+      )
+
+      {:error, :untracked}
   end
 
   @doc """
@@ -55,7 +67,15 @@ defmodule Opus.OAuthTokenTracker do
   def collect(execution_id) when is_binary(execution_id) do
     GenServer.call(__MODULE__, {:collect, execution_id})
   catch
-    :exit, _ -> []
+    :exit, reason ->
+      # Nothing to recover — the table died with the tracker — but the
+      # masking skip must be visible, not silent.
+      Logger.warning(
+        "[OAuthTokenTracker] collect unreachable (#{inspect(reason)}) — " <>
+          "dispensed tokens for #{execution_id} cannot be masked"
+      )
+
+      []
   end
 
   @doc "Run one sweep synchronously and return the count deleted (test seam)."
@@ -97,7 +117,7 @@ defmodule Opus.OAuthTokenTracker do
   end
 
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -114,5 +134,25 @@ defmodule Opus.OAuthTokenTracker do
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
   defp now_ms, do: System.monotonic_time(:millisecond)
-  defp ttl_ms, do: Application.get_env(:cyfr, :oauth_token_ttl_ms, @ttl_ms)
+
+  # Floored at the platform execution ceiling plus drain margin: a
+  # configured TTL below the ceiling swept tokens while their execution
+  # still ran, so the finalize-time `collect` answered `[]` and the
+  # dispensed token reached stored output and events UNMASKED. The config
+  # may lengthen residency, never shorten it below what masking needs.
+  defp ttl_ms do
+    configured = Application.get_env(:cyfr, :oauth_token_ttl_ms, @ttl_ms)
+    max(configured, ceiling_timeout_ms() + @drain_margin_ms)
+  end
+
+  defp ceiling_timeout_ms do
+    with %{timeout: timeout} <- Sanctum.Policy.Ceiling.platform_ceiling(),
+         {:ok, ms} <- Sanctum.Limits.parse_duration(timeout) do
+      ms
+    else
+      # An unparseable ceiling is a bug upstream; take the widest value the
+      # ceiling could mean rather than a TTL that sweeps early.
+      _ -> :timer.minutes(30)
+    end
+  end
 end

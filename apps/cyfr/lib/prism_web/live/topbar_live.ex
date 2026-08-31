@@ -36,8 +36,6 @@ defmodule PrismWeb.TopbarLive do
 
   alias Cyfr.Topics
 
-  require Logger
-
   @recent_requests_limit 5
   @recent_tincture_limit 5
   @max_in_flight_builds 5
@@ -252,7 +250,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[TopbarLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

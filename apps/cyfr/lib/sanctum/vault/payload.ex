@@ -64,7 +64,9 @@ defmodule Sanctum.Vault.Payload do
     end
   end
 
-  defp validate(other), do: {:error, {:invalid_payload, other}}
+  # The rejected term is decrypted material — shape names only, never the
+  # value, in the reason.
+  defp validate(_other), do: {:error, {:invalid_payload, :unrecognized_shape}}
 
   defp only_keys(map, allowed) do
     case Map.keys(map) -- allowed do

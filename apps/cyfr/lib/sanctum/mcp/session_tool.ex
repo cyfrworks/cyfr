@@ -82,7 +82,7 @@ defmodule Sanctum.MCP.SessionTool do
   end
 
   def handle(%Context{authenticated: false}, %{"action" => "whoami"}) do
-    {:error, "Not authenticated. Run 'cyfr login' to sign in."}
+    {:error, {:invalid_argument, "Not authenticated. Run 'cyfr login' to sign in."}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "whoami"}) do
@@ -108,26 +108,28 @@ defmodule Sanctum.MCP.SessionTool do
       {:ok, %{athanor: Sanctum.MCP.AthanorTool.render(resolved), scope: focused.scope}}
     else
       {:error, :not_member} ->
-        {:error, "Not a member of that athanor"}
+        {:error, {:invalid_argument, "Not a member of that athanor"}}
 
       {:error, :archived} ->
-        {:error, "That athanor is archived"}
+        {:error, {:invalid_argument, "That athanor is archived"}}
 
       {:error, :not_found} ->
-        {:error, "Athanor not found"}
+        {:error, {:not_found, "Athanor", athanor}}
 
       {:error, :no_session} ->
-        {:error, "session.use needs a session — a key is bound to one athanor"}
+        {:error,
+         {:invalid_argument, "session.use needs a session — a key is bound to one athanor"}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
 
       {:error, _} ->
-        {:error, "Failed to switch athanor"}
+        {:error, {:unavailable, "Storage"}}
     end
   end
 
-  def handle(_ctx, %{"action" => "use"}), do: {:error, "Missing required argument: athanor"}
+  def handle(_ctx, %{"action" => "use"}),
+    do: {:error, {:invalid_argument, "Missing required argument: athanor"}}
 
   def handle(%Context{} = _ctx, %{"action" => "login"}) do
     # Login requires browser redirect in Sanctum
@@ -145,7 +147,7 @@ defmodule Sanctum.MCP.SessionTool do
 
       {:error, reason} ->
         Logger.warning("[SessionTool] logout failed: #{inspect(reason)}")
-        {:error, "Logout failed"}
+        {:error, {:unavailable, "Storage"}}
     end
   end
 
@@ -153,11 +155,13 @@ defmodule Sanctum.MCP.SessionTool do
   # so rather than reporting a logout that did not happen — a key is
   # retired with `key.revoke`.
   def handle(%Context{authenticated: true}, %{"action" => "logout"}) do
-    {:error, "No session to log out: this call authenticated with an API key. Use key.revoke."}
+    {:error,
+     {:invalid_argument,
+      "No session to log out: this call authenticated with an API key. Use key.revoke."}}
   end
 
   def handle(%Context{}, %{"action" => "logout"}) do
-    {:error, "Not authenticated."}
+    {:error, {:invalid_argument, "Not authenticated."}}
   end
 
   def handle(%Context{} = _ctx, %{"action" => "device_init"} = args) do
@@ -190,14 +194,16 @@ defmodule Sanctum.MCP.SessionTool do
              "For Google, the OAuth client must be type \"TV and Limited Input devices\"."}
 
         {:error, {:device_code_request_failed, reason}} ->
+          # The reason is a transport term (a Req/Mint struct) — log it,
+          # never reflect it.
           Logger.warning("[SessionTool] Device flow network error: #{inspect(reason)}")
-          {:error, "Device flow request failed: #{inspect(reason)}"}
+          {:error, {:unavailable, "The sign-in provider"}}
 
         {:error, {:unknown_provider, name}} ->
-          {:error, unknown_provider_message(name)}
+          {:error, {:invalid_argument, unknown_provider_message(name)}}
       end
     else
-      {:error, device_flow_disabled_message()}
+      {:error, {:invalid_argument, device_flow_disabled_message()}}
     end
   end
 
@@ -233,26 +239,31 @@ defmodule Sanctum.MCP.SessionTool do
 
         {:error, {:token_request_failed, reason}} ->
           Logger.warning("[SessionTool] Token exchange network error: #{inspect(reason)}")
-          {:error, "Token exchange failed: #{inspect(reason)}"}
+          {:error, {:unavailable, "The sign-in provider"}}
 
         {:error, {:unknown_provider, name}} ->
-          {:error, unknown_provider_message(name)}
+          {:error, {:invalid_argument, unknown_provider_message(name)}}
 
         {:error, reason} ->
           Logger.warning("[SessionTool] Failed to poll for token: #{inspect(reason)}")
-          {:error, "Failed to poll for token: #{inspect(reason)}"}
+          {:error, {:unavailable, "The sign-in provider"}}
       end
     else
-      {:error, device_flow_disabled_message()}
+      {:error, {:invalid_argument, device_flow_disabled_message()}}
     end
   end
 
   def handle(_ctx, %{"action" => "device_poll"}) do
-    {:error, "Missing required argument: device_code"}
+    {:error, {:invalid_argument, "Missing required argument: device_code"}}
   end
 
-  def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("session", action_enum())}
+  # The terminal clause answers both shapes the dispatcher already
+  # distinguishes: no `action` at all, and one this tool does not know.
+  def handle(_ctx, args) do
+    case args do
+      %{"action" => action} -> {:error, {:unknown_action, "session.#{action}"}}
+      _ -> {:error, :action_missing}
+    end
   end
 
   # `provider` on device_init/device_poll comes straight from the caller. A
@@ -314,6 +325,4 @@ defmodule Sanctum.MCP.SessionTool do
       "This deployment is configured with a different auth provider; " <>
       "use the web flow at `/auth/<provider>` instead."
   end
-
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

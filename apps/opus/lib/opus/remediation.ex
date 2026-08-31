@@ -91,7 +91,7 @@ defmodule Opus.Remediation do
     do: "This app needs setup before it can run (#{inspect(reason)})"
 
   defp setup_message(need, reason),
-    do: "This app needs a connection for #{inspect(need)} (#{inspect(reason)})"
+    do: "This app needs a vault entry for #{inspect(need)} (#{inspect(reason)})"
 
   defp grant_command(""), do: "cyfr profile grant"
   defp grant_command(ref), do: "cyfr profile grant #{ref}"

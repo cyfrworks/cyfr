@@ -116,6 +116,14 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
+  # The OAuth grant callback serves a BROWSER page (PrismWeb.MinimalPage,
+  # no session) — `:api`'s `accepts ["json"]` 406'd any client that sent a
+  # strict `Accept: text/html`, which is what a browser redirect carries.
+  pipeline :oauth_callback do
+    plug :accepts, ["html", "json"]
+    plug EmissaryWeb.Plugs.ApiSecurityHeaders
+  end
+
   # A device ticket is 32 random bytes and browser-bound, so guessing one is
   # not a takeover path — but `apply_device_ticket` CONSUMES the ticket it
   # looks up, so an unmetered guesser can burn other people's pending
@@ -240,7 +248,7 @@ defmodule EmissaryWeb.Router do
   # OAuth callback for catalyst OAuth providers (not user auth)
   # Must be defined before the /:provider wildcard below
   scope "/auth/oauth", EmissaryWeb do
-    pipe_through [:api, :oauth_callback_throttle]
+    pipe_through [:oauth_callback, :oauth_callback_throttle]
 
     get "/callback", OAuthCallbackController, :callback
   end
@@ -408,7 +416,7 @@ defmodule EmissaryWeb.Router do
         live "/registry", RegistryLive, :index
         live "/reports", MyReportsLive, :index
         live "/builds", BuildsLive, :index
-        live "/connections", ConnectionsLive, :index
+        live "/vault", VaultLive, :index
         live "/api-keys", ApiKeysLive, :index
         live "/members", MembersLive, :index
         live "/webhooks", WebhooksLive, :index

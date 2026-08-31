@@ -159,15 +159,25 @@ defmodule Compendium.OCI.Manifest do
         annotations = manifest["annotations"] || %{}
         artifact_type = manifest["artifactType"]
 
-        {:ok,
-         %{
-           config: config,
-           layers: layers,
-           annotations: annotations,
-           artifact_type: artifact_type,
-           media_type: manifest["mediaType"],
-           raw: manifest
-         }}
+        # Every descriptor digest is checked against the same grammar a
+        # *reference's* digest has always been held to. These strings are
+        # interpolated straight into `/v2/…/blobs/<digest>` and into cache
+        # path segments, so a registry that answered with `../` or a `?` in a
+        # layer digest could steer the fetch elsewhere on its own host. The
+        # post-download hash comparison stops content substitution, but only
+        # after the request has been made, and `PathSafety` refuses the cache
+        # write by raising rather than by a typed refusal.
+        with :ok <- validate_descriptor_digests(config, layers) do
+          {:ok,
+           %{
+             config: config,
+             layers: layers,
+             annotations: annotations,
+             artifact_type: artifact_type,
+             media_type: manifest["mediaType"],
+             raw: manifest
+           }}
+        end
 
       {:ok, %{"schemaVersion" => v}} ->
         {:error, "Unsupported manifest schema version: #{v}"}
@@ -178,6 +188,29 @@ defmodule Compendium.OCI.Manifest do
       {:error, reason} ->
         {:error, "Invalid manifest JSON: #{inspect(reason)}"}
     end
+  end
+
+  # A descriptor with no digest is left to the caller that needs one (the
+  # config descriptor is optional in some artifact shapes); a descriptor that
+  # *has* one must spell it correctly.
+  defp validate_descriptor_digests(config, layers) do
+    [config | layers]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reduce_while(:ok, fn descriptor, :ok ->
+      case descriptor do
+        %{"digest" => digest} ->
+          if Compendium.OCI.Reference.valid_digest?(digest) do
+            {:cont, :ok}
+          else
+            {:halt,
+             {:error,
+              "Manifest descriptor digest must be sha256:<64 hex chars>, got: " <> inspect(digest)}}
+          end
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
   end
 
   @type_media_type_values Map.values(@type_media_types) |> MapSet.new()

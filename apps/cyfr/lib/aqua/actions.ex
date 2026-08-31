@@ -67,7 +67,12 @@ defmodule Aqua.Actions do
   # the action's `kind`; the hinted value stays part of the intent shape.
   @allowed_risks ~w(low medium high)
 
-  @id_re ~r/^[\w.\-]+$/
+  # One optional colon: an external MCP server's tool is proposed as
+  # `server:tool` — the shape `kind_for/2`'s `:external` branch and the
+  # approval card already speak, but which this regex silently refused, so
+  # the card never appeared for a policy that asked for one. Anchored
+  # `\A…\z`, not `^…$` — `$` matches before a trailing newline.
+  @id_re ~r/\A[\w.\-]+(:[\w.\-]+)?\z/
 
   # A generous ceiling for a pasted code block, and a bound on what a model
   # can push through the LiveView channel into a browser in one action.
@@ -369,12 +374,7 @@ defmodule Aqua.Actions do
 
   def kind_for(_, _), do: nil
 
-  defp lookup_internal_kind(tool, action) do
-    case Emissary.MCP.ToolRegistry.get_tool(tool) do
-      {:ok, tool_def} -> Emissary.MCP.ActionAnnotations.kind(tool_def, action)
-      _ -> nil
-    end
-  end
+  defp lookup_internal_kind(tool, action), do: Aqua.MCPHelpers.action_kind(tool, action)
 
   defp ensure_object(value, _label) when is_map(value), do: :ok
   defp ensure_object(_, label), do: {:error, "#{label}: must be a JSON object"}
@@ -586,7 +586,7 @@ defmodule Aqua.Actions do
     if Aqua.VirtualTools.virtual_tool?(tool) do
       is_nil(Aqua.VirtualTools.kind_for(tool, action))
     else
-      Emissary.MCP.ToolRegistry.in_chain_refused?(tool, action)
+      Aqua.MCPHelpers.in_chain_refused?(tool, action)
     end
   end
 end

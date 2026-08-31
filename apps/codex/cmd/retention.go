@@ -6,7 +6,6 @@ package cmd
 import (
 	"errors"
 
-	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -43,12 +42,7 @@ var retentionShowCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -82,12 +76,7 @@ var retentionSetCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -117,11 +106,6 @@ var retentionCleanupCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err)
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }

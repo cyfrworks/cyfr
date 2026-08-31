@@ -42,7 +42,12 @@ defmodule EmissaryWeb.ExecutionEventsController do
           |> stream_events(execution_id, last_seq, exec)
         else
           {:auth, _} ->
-            EmissaryWeb.ApiError.send(conn, 401, :auth_required, "Authentication required")
+            EmissaryWeb.ApiError.send(
+              conn,
+              401,
+              :auth_required,
+              Sanctum.Unauthorized.message(:unauthenticated)
+            )
 
           # Non-existent and not-yours both return 404 to avoid leaking which
           # execution IDs exist in the system via 403/404 distinction.

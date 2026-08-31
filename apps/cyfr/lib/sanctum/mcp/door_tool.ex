@@ -104,7 +104,7 @@ defmodule Sanctum.MCP.DoorTool do
 
         {:error, reason} ->
           Logger.error("[DoorTool] door.allow failed: #{inspect(reason)}")
-          {:error, "Failed to write the entry"}
+          {:error, {:unavailable, "The door"}}
       end
     end
   end
@@ -139,14 +139,16 @@ defmodule Sanctum.MCP.DoorTool do
           end
 
         {:error, :platform_admin} ->
-          {:error, "That email is a platform admin (CYFR_PLATFORM_ADMIN_EMAILS); remove it there"}
+          {:error,
+           {:invalid_argument,
+            "That email is a platform admin (CYFR_PLATFORM_ADMIN_EMAILS); remove it there"}}
 
         {:error, :wildcard_cannot_be_denied} ->
-          {:error, "Remove the * entry instead of denying it"}
+          {:error, {:invalid_argument, "Remove the * entry instead of denying it"}}
 
         {:error, reason} ->
           Logger.error("[DoorTool] door.deny failed: #{inspect(reason)}")
-          {:error, "Failed to write the entry"}
+          {:error, {:unavailable, "The door"}}
       end
     end
   end
@@ -179,11 +181,11 @@ defmodule Sanctum.MCP.DoorTool do
        |> with_restore_note(restored)}
     else
       {:error, :not_found} ->
-        {:error, "Entry not found"}
+        {:error, {:not_found, "Allowlist entry", id}}
 
       {:error, reason} ->
         Logger.error("[DoorTool] door.remove failed: #{inspect(reason)}")
-        {:error, "Failed to remove the entry"}
+        {:error, {:unavailable, "The door"}}
     end
   end
 
@@ -193,24 +195,34 @@ defmodule Sanctum.MCP.DoorTool do
     Sanctum.Notify.allowlist_changed()
 
     case result do
-      {:ok, entry} -> {:ok, render(entry)}
-      :ok -> {:ok, %{id: id, rejected: true}}
-      {:error, :not_found} -> {:error, "Request not found"}
-      {:error, :not_a_request} -> {:error, "That entry is not a pending request"}
-      {:error, _} -> {:error, "Failed to resolve the request"}
+      {:ok, entry} ->
+        {:ok, render(entry)}
+
+      :ok ->
+        {:ok, %{id: id, rejected: true}}
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "Request", id}}
+
+      {:error, :not_a_request} ->
+        {:error, {:invalid_argument, "That entry is not a pending request"}}
+
+      {:error, _} ->
+        {:error, {:unavailable, "The door"}}
     end
   end
 
   def handle(_ctx, %{"action" => action}) when action in ["allow", "deny"],
-    do: {:error, "Missing required argument: value"}
+    do: {:error, {:invalid_argument, "Missing required argument: value"}}
 
-  def handle(_ctx, %{"action" => "remove"}), do: {:error, "Missing required argument: id"}
+  def handle(_ctx, %{"action" => "remove"}),
+    do: {:error, {:invalid_argument, "Missing required argument: id"}}
 
   def handle(_ctx, %{"action" => "resolve"}),
-    do: {:error, "Missing required arguments: id, decision (allow | reject)"}
+    do: {:error, {:invalid_argument, "Missing required arguments: id, decision (allow | reject)"}}
 
-  def handle(_ctx, %{"action" => action}), do: {:error, "Invalid door action: #{action}"}
-  def handle(_ctx, _args), do: {:error, "Missing required argument: action"}
+  def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "door.#{action}"}}
+  def handle(_ctx, _args), do: {:error, :action_missing}
 
   # The people an entry names, when they are already known here.
   # Allowing a denied person back reopens their own athanor only; the
@@ -256,7 +268,8 @@ defmodule Sanctum.MCP.DoorTool do
     {:ok, if(String.contains?(value, "@"), do: "email", else: "user_id")}
   end
 
-  defp kind_for(_value, kind), do: {:error, "Invalid kind: #{kind} (email | user_id)"}
+  defp kind_for(_value, kind),
+    do: {:error, {:invalid_argument, "Invalid kind: #{kind} (email | user_id)"}}
 
   defp render(entry) do
     %{

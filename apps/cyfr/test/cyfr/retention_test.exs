@@ -237,6 +237,23 @@ defmodule Cyfr.RetentionTest do
       assert {:ok, 2} = Retention.cleanup(ctx, "executions", value: 3, dry_run: true)
       assert length(Arca.Execution.list(limit: 100, athanor_id: ctx.athanor_id)) == 5
     end
+
+    test "a running execution is never stale, whatever its age", %{ctx: ctx} do
+      # Retention used to delete running rows past the keep window: the
+      # runner's record_complete then answered :not_found, the lease
+      # sweeper went blind, and the cancel cascade lost its children.
+      create_execution_with_timestamp(ctx, "exec_live", "2025-01-01T10:00:00Z", "running")
+
+      for i <- 2..5 do
+        create_execution_with_timestamp(ctx, "exec_#{i}", "2025-01-0#{i}T10:00:00Z")
+      end
+
+      assert {:ok, 1} = Retention.cleanup(ctx, "executions", value: 3)
+
+      ids = Arca.Execution.list(limit: 100, athanor_id: ctx.athanor_id) |> Enum.map(& &1.id)
+      assert "exec_live" in ids, "retention deleted a running execution mid-flight"
+      refute "exec_2" in ids
+    end
   end
 
   describe "cleanup/3 builds" do
@@ -260,6 +277,28 @@ defmodule Cyfr.RetentionTest do
 
       assert {:ok, 2} = Retention.cleanup(ctx, "builds", value: 2, dry_run: true)
       assert length(build_ids(ctx)) == 4
+    end
+
+    test "a build still running is never pruned", %{ctx: ctx} do
+      # A "started" build past the keep window used to be deleted; its
+      # record_finished/record_registration then answered :not_found.
+      :ok = Cyfr.BuildRecords.record_started(ctx, "build_live", "reagent:local.test:0.1.0")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(b in Arca.Schemas.BuildRecord, where: b.id == "build_live"),
+          set: [started_at: ~U[2025-01-01 09:00:00.000000Z]]
+        )
+
+      for i <- 2..5 do
+        create_build_with_timestamp(ctx, "build_#{i}", "2025-01-0#{i}T10:00:00Z")
+      end
+
+      assert {:ok, 1} = Retention.cleanup(ctx, "builds", value: 3)
+
+      ids = build_ids(ctx)
+      assert "build_live" in ids, "retention pruned a build still running"
+      refute "build_2" in ids
     end
   end
 
@@ -349,9 +388,11 @@ defmodule Cyfr.RetentionTest do
   # Test Helpers
   # ============================================================================
 
-  defp create_execution_with_timestamp(ctx, id, timestamp) do
+  defp create_execution_with_timestamp(ctx, id, timestamp, status \\ "completed") do
     {:ok, dt, _} = DateTime.from_iso8601(timestamp)
 
+    # Terminal by default: retention never touches a row still "running",
+    # so a fixture that should be prunable must have finished.
     Arca.Execution.record_start(%{
       id: id,
       request_id: "req_test",
@@ -360,20 +401,21 @@ defmodule Cyfr.RetentionTest do
       reference: "reagent:local.test:0.1.0",
       component_type: "reagent",
       started_at: dt,
-      status: "running"
+      status: status
     })
   end
 
   defp create_build_with_timestamp(ctx, id, timestamp) do
     :ok = Cyfr.BuildRecords.record_started(ctx, id, "reagent:local.test:0.1.0")
 
-    # Pin started_at so ordering is the fixture's, not the insert order's.
+    # Pin started_at so ordering is the fixture's, not the insert order's,
+    # and finish the build — retention never prunes a row still "started".
     {:ok, pinned, 0} = DateTime.from_iso8601(timestamp)
 
     {1, _} =
       Arca.Repo.update_all(
         from(b in Arca.Schemas.BuildRecord, where: b.id == ^id),
-        set: [started_at: pinned]
+        set: [started_at: pinned, status: "compiled"]
       )
 
     :ok

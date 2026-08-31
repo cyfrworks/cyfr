@@ -191,7 +191,7 @@ defmodule PrismWeb.ExecutionsLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ExecutionsLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -386,19 +386,26 @@ defmodule PrismWeb.ExecutionsLive do
             class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"
           >
             <option value="" selected={is_nil(@status_filter)}>All statuses</option>
-            <option value="running" selected={@status_filter == "running"}>running</option>
-            <option value="completed" selected={@status_filter == "completed"}>completed</option>
-            <option value="failed" selected={@status_filter == "failed"}>failed</option>
-            <option value="cancelled" selected={@status_filter == "cancelled"}>cancelled</option>
+            <option
+              :for={status <- Arca.Execution.statuses()}
+              value={status}
+              selected={@status_filter == status}
+            >
+              {status}
+            </option>
           </select>
           <select
             name="type"
             class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"
           >
             <option value="" selected={is_nil(@type_filter)}>All types</option>
-            <option value="catalyst" selected={@type_filter == "catalyst"}>catalyst</option>
-            <option value="reagent" selected={@type_filter == "reagent"}>reagent</option>
-            <option value="formula" selected={@type_filter == "formula"}>formula</option>
+            <option
+              :for={type <- Sanctum.ComponentRef.executable_types()}
+              value={type}
+              selected={@type_filter == type}
+            >
+              {type}
+            </option>
           </select>
         </form>
       </div>
@@ -500,6 +507,15 @@ defmodule PrismWeb.ExecutionsLive do
                     </td>
                     <td class="px-4 py-2 text-sm whitespace-nowrap">
                       <.status_indicator status={to_string(f(exec, :status) || "unknown")} />
+                      <button
+                        :if={to_string(f(exec, :status)) == "running"}
+                        phx-click="cancel"
+                        phx-value-id={eid}
+                        onclick="event.stopPropagation()"
+                        class="ml-2 text-xs text-red-400 underline hover:text-red-300"
+                      >
+                        cancel
+                      </button>
                     </td>
                     <td class="px-4 py-2 text-sm text-gray-300 whitespace-nowrap">
                       {format_duration(f(exec, :duration_ms))}

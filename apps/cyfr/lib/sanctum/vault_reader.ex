@@ -52,7 +52,8 @@ defmodule Sanctum.VaultReader do
           | {:entry_unavailable, String.t()}
           | :binding_mismatch
           | :unseal_failed
-          | {:invalid_payload, term()}
+          | :invalid_payload
+          | {:invalid_payload, atom() | tuple()}
           | {:provider_mismatch, String.t()}
           | {:scope_projection_unsatisfiable, [String.t()]}
           | :no_oauth_material
@@ -143,6 +144,38 @@ defmodule Sanctum.VaultReader do
     end
   end
 
+  @doc """
+  Would this athanor's entry resolve for the given consent binding right
+  now? The read-side half of `load_and_unseal/2` — status `active`, and the
+  entry's derived binding digest equal to the consent's — exposed so the
+  readiness projections stop re-implementing the decision
+  (`Compendium.ConsentSetupPlan` carried its own copy, which was also the
+  only non-Sanctum reach into `Arca.VaultStorage`).
+  """
+  @spec usable(String.t(), String.t(), String.t()) ::
+          {:ok, map()}
+          | {:error, :not_found}
+          | {:error, {:entry_unavailable, name :: String.t() | nil, status :: String.t()}}
+          | {:error, {:binding_mismatch, name :: String.t() | nil}}
+  def usable(athanor_id, entry_id, binding_digest) when is_binary(binding_digest) do
+    case Arca.VaultStorage.get(athanor_id, entry_id) do
+      {:ok, entry} ->
+        with :ok <- check_status(entry),
+             :ok <- check_binding(entry, %{binding_digest: binding_digest}) do
+          {:ok, entry}
+        else
+          {:error, {:entry_unavailable, status}} ->
+            {:error, {:entry_unavailable, entry.name, status}}
+
+          {:error, :binding_mismatch} ->
+            {:error, {:binding_mismatch, entry.name}}
+        end
+
+      {:error, _} ->
+        {:error, :not_found}
+    end
+  end
+
   defp check_status(%{status: "active"}), do: :ok
   defp check_status(%{status: status}), do: {:error, {:entry_unavailable, status}}
 
@@ -195,7 +228,10 @@ defmodule Sanctum.VaultReader do
     {:ok, projected}
   end
 
-  defp resolve_secrets(_ctx, _entry, payload, _fields), do: {:error, {:invalid_payload, payload}}
+  # The payload never rides in the tuple: it is decrypted material, and a
+  # defensive error one refactor away from an `inspect` must not be the
+  # thing that leaks it.
+  defp resolve_secrets(_ctx, _entry, _payload, _fields), do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------
   # OAuth
@@ -232,7 +268,7 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp resolve_oauth(_ctx, _entry, payload, _provider), do: {:error, {:invalid_payload, payload}}
+  defp resolve_oauth(_ctx, _entry, _payload, _provider), do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -244,8 +280,8 @@ defmodule Sanctum.VaultReader do
   defp decode_list(nil), do: []
 
   defp decode_list(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
+    case Cyfr.Json.decode_or(json, [], "Sanctum.VaultReader.decode_list") do
+      list when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
       _ -> []
     end
   end
@@ -253,8 +289,8 @@ defmodule Sanctum.VaultReader do
   defp decode_map(nil), do: %{}
 
   defp decode_map(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, %{} = map} -> map
+    case Cyfr.Json.decode_or(json, %{}, "Sanctum.VaultReader.decode_map") do
+      %{} = map -> map
       _ -> %{}
     end
   end

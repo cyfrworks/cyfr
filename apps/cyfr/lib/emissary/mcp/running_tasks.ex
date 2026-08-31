@@ -14,6 +14,22 @@ defmodule Emissary.MCP.RunningTasks do
   evicted the first and a cancellation reached whichever task happened to own
   the key. A server-minted id cannot collide.
 
+  ## Why one request may hold several tasks
+
+  A server-minted id cannot collide *across* requests, but one request can
+  hold more than one task at a time: an in-chain tool call inherits its
+  root's `request_id` rather than minting a new one (`ToolRegistry.do_call/4`
+  — `own_root?` is false when a transport already set it), which is what
+  keeps a whole chain attributable to the ingress that started it.
+
+  With a `:set` table that made nesting destructive: registering the nested
+  task overwrote the outer task's row and demonitored it, and the nested
+  call's `unregister` then deleted the row outright. A caller who hung up
+  during a nested call killed the inner task and left the outer one running;
+  after it returned, cancelling reached nothing at all. The table is a `:bag`
+  keyed on the request, `unregister/2` removes one task rather than the key,
+  and `cancel/1` stops every task the request still holds.
+
   Uses a GenServer to monitor task processes and auto-clean ETS entries when
   tasks die. The main ETS table remains `:public` for fast reads from any process.
 
@@ -28,8 +44,6 @@ defmodule Emissary.MCP.RunningTasks do
   """
 
   use GenServer
-  require Logger
-
   @table __MODULE__
 
   # ============================================================================
@@ -43,10 +57,14 @@ defmodule Emissary.MCP.RunningTasks do
   @doc """
   Register the process doing the work for `request_id`.
 
+  A request may hold several tasks at once — an in-chain call runs under its
+  root's request id — so this adds one, it does not replace what is there.
+
   The GenServer monitors it and auto-cleans on exit, so a caller that never
-  reaches `unregister/1` — because it crashed, or was killed — leaves nothing
+  reaches `unregister/2` — because it crashed, or was killed — leaves nothing
   behind.
   """
+  @spec register(String.t(), Task.t()) :: :ok
   def register(request_id, %Task{pid: pid}) when is_binary(request_id) do
     :ets.insert(@table, {request_id, pid})
     GenServer.cast(__MODULE__, {:monitor, request_id, pid})
@@ -54,31 +72,49 @@ defmodule Emissary.MCP.RunningTasks do
   end
 
   @doc """
-  Unregister a task after it completes.
+  Unregister one task after it completes, leaving any sibling or parent task
+  of the same request registered.
   """
-  def unregister(request_id) when is_binary(request_id) do
-    GenServer.cast(__MODULE__, {:unregister, request_id})
+  @spec unregister(String.t(), Task.t() | pid()) :: :ok
+  def unregister(request_id, %Task{pid: pid}), do: unregister(request_id, pid)
+
+  def unregister(request_id, pid) when is_binary(request_id) and is_pid(pid) do
+    GenServer.cast(__MODULE__, {:unregister, request_id, pid})
     :ok
   end
 
   @doc """
-  Stop the work registered for `request_id`.
+  Stop every task still registered for `request_id`.
 
-  Returns `:ok` when a task was found and killed, `{:error, :not_found}`
-  otherwise — which is the ordinary outcome when the work had already finished
-  by the time the caller hung up.
+  Returns `:ok` when at least one task was found and killed, `{:error,
+  :not_found}` otherwise — which is the ordinary outcome when the work had
+  already finished by the time the caller hung up.
   """
   @spec cancel(String.t()) :: :ok | {:error, :not_found}
   def cancel(request_id) when is_binary(request_id) do
     case :ets.lookup(@table, request_id) do
-      [{^request_id, pid}] ->
-        Process.exit(pid, :cancelled)
-        GenServer.cast(__MODULE__, {:unregister, request_id})
-        :ok
-
       [] ->
         {:error, :not_found}
+
+      entries ->
+        # Every task under the request, innermost included: the caller has
+        # gone, so nothing this request started should keep running.
+        Enum.each(entries, fn {^request_id, pid} ->
+          Process.exit(pid, :cancelled)
+          GenServer.cast(__MODULE__, {:unregister, request_id, pid})
+        end)
+
+        :ok
     end
+  end
+
+  @doc false
+  # The tasks currently registered for a request — for tests and diagnostics.
+  @spec pids(String.t()) :: [pid()]
+  def pids(request_id) when is_binary(request_id) do
+    @table
+    |> :ets.lookup(request_id)
+    |> Enum.map(fn {^request_id, pid} -> pid end)
   end
 
   # ============================================================================
@@ -89,41 +125,43 @@ defmodule Emissary.MCP.RunningTasks do
   def init(_opts) do
     if :ets.whereis(@table) == :undefined do
       # Written on every MCP request from the request processes themselves;
-      # both flags, like the limiter tables.
+      # both flags, like the limiter tables. A `:bag` because one request may
+      # hold a chain of tasks, not a single one.
       :ets.new(@table, [
         :named_table,
         :public,
-        :set,
+        :bag,
         read_concurrency: true,
         write_concurrency: true
       ])
     end
 
-    # monitors: %{monitor_ref => request_id}
-    # pids: %{request_id => monitor_ref}
-    {:ok, %{monitors: %{}, pids: %{}}}
+    # monitors: %{monitor_ref => {request_id, pid}}
+    # refs:     %{{request_id, pid} => monitor_ref}
+    {:ok, %{monitors: %{}, refs: %{}}}
   end
 
   @impl true
   def handle_cast({:monitor, request_id, pid}, state) do
-    # Clean up any existing monitor for this request_id
-    state = do_demonitor(request_id, state)
+    # Only a re-registration of this exact task replaces a monitor; a sibling
+    # or nested task of the same request keeps its own.
+    state = do_demonitor({request_id, pid}, state)
 
     ref = Process.monitor(pid)
 
     state = %{
       state
-      | monitors: Map.put(state.monitors, ref, request_id),
-        pids: Map.put(state.pids, request_id, ref)
+      | monitors: Map.put(state.monitors, ref, {request_id, pid}),
+        refs: Map.put(state.refs, {request_id, pid}, ref)
     }
 
     {:noreply, state}
   end
 
   @impl true
-  def handle_cast({:unregister, request_id}, state) do
-    :ets.delete(@table, request_id)
-    state = do_demonitor(request_id, state)
+  def handle_cast({:unregister, request_id, pid}, state) do
+    :ets.delete_object(@table, {request_id, pid})
+    state = do_demonitor({request_id, pid}, state)
     {:noreply, state}
   end
 
@@ -133,13 +171,13 @@ defmodule Emissary.MCP.RunningTasks do
       nil ->
         {:noreply, state}
 
-      request_id ->
-        :ets.delete(@table, request_id)
+      {request_id, pid} = key ->
+        :ets.delete_object(@table, {request_id, pid})
 
         state = %{
           state
           | monitors: Map.delete(state.monitors, ref),
-            pids: Map.delete(state.pids, request_id)
+            refs: Map.delete(state.refs, key)
         }
 
         {:noreply, state}
@@ -148,7 +186,7 @@ defmodule Emissary.MCP.RunningTasks do
 
   @impl true
   def handle_info(msg, state) do
-    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -163,8 +201,8 @@ defmodule Emissary.MCP.RunningTasks do
   # Private
   # ============================================================================
 
-  defp do_demonitor(request_id, state) do
-    case Map.get(state.pids, request_id) do
+  defp do_demonitor(key, state) do
+    case Map.get(state.refs, key) do
       nil ->
         state
 
@@ -174,7 +212,7 @@ defmodule Emissary.MCP.RunningTasks do
         %{
           state
           | monitors: Map.delete(state.monitors, ref),
-            pids: Map.delete(state.pids, request_id)
+            refs: Map.delete(state.refs, key)
         }
     end
   end

@@ -772,8 +772,22 @@ defmodule Sanctum.ComponentRefTest do
       refute ComponentRef.valid_personal_slug?(42)
     end
 
-    test "personal_slug_regex/0 keeps its anchored source (HTML pattern consumers)" do
-      assert Regex.source(ComponentRef.personal_slug_regex()) == "^[a-z0-9]+(-[a-z0-9]+)*$"
+    test "a trailing newline never validates — these anchor \\A..\\z, not ^..$" do
+      # PCRE `$` matches just before a final newline, so "alice\n" passed
+      # every grammar regex here — and they are the cross-service SSOT
+      # called on untrimmed input (namespace corruption defense, scaffold
+      # paths).
+      refute ComponentRef.valid_personal_slug?("alice\n")
+      assert {:error, _} = ComponentRef.validate_name("tool\n")
+      assert {:error, _} = ComponentRef.validate_namespace("acme.com\n")
+    end
+
+    test "personal_slug_html_pattern/0 stays browser-parsable and unanchored" do
+      # The HTML `pattern` attribute anchors implicitly and cannot parse
+      # \A/\z; the server regex wraps this same source in them.
+      pattern = ComponentRef.personal_slug_html_pattern()
+      assert pattern == "[a-z0-9]+(-[a-z0-9]+)*"
+      assert Regex.source(ComponentRef.personal_slug_regex()) == "\\A#{pattern}\\z"
     end
   end
 end

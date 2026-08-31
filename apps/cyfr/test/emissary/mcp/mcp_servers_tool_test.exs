@@ -231,13 +231,13 @@ defmodule Emissary.MCP.McpServersToolTest do
       refute inspect(config) =~ "super-secret-literal"
     end
 
-    test "a vault reference is still shown — it names a Connection", %{ctx: ctx} do
+    test "a vault reference is still shown — it names a vault entry", %{ctx: ctx} do
       McpServersTool.handle("mcp_servers", ctx, %{
         "action" => "create",
         "name" => "hdr-vault",
         "config" => %{
           "url" => "https://localhost:99999/mcp",
-          "headers" => %{"authorization" => "vault:my_connection"}
+          "headers" => %{"authorization" => "vault:my_entry"}
         }
       })
 
@@ -247,7 +247,7 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "name" => "hdr-vault"
                })
 
-      assert config["headers"]["authorization"] == "vault:my_connection"
+      assert config["headers"]["authorization"] == "vault:my_entry"
     end
   end
 

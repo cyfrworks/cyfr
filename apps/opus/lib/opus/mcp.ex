@@ -64,7 +64,10 @@ defmodule Opus.MCP do
   end
 
   def read(%Context{authenticated: false}, "opus://executions/" <> _rest) do
-    {:error, "Authentication required to read executions"}
+    # Typed (a bare atom, keeping opus off Sanctum's vocabulary module):
+    # the router renders the one auth prose and answers auth_required —
+    # the bare string was mislabeled resource_not_found.
+    {:error, :unauthenticated}
   end
 
   def read(%Context{} = ctx, "opus://executions/" <> rest) do
@@ -606,11 +609,11 @@ defmodule Opus.MCP do
     case Cyfr.Execution.run_root(ctx, selector, reference, input, opts) do
       {:error, :no_profile} when is_nil(selector) ->
         {:error,
-         "consent_required: " <>
-           Jason.encode!(%{
-             "ref" => reference,
-             "detail" => "no profile — grant it first (profile.plan, or cyfr profile grant)"
-           })}
+         {:consent_required,
+          %{
+            "ref" => reference,
+            "detail" => "no profile — grant it first (profile.plan, or cyfr profile grant)"
+          }}}
 
       other ->
         format_root_result(other)
@@ -624,12 +627,14 @@ defmodule Opus.MCP do
     end
   end
 
-  # Authority errors are tuples; the MCP boundary speaks strings. The tag
-  # prefix is stable and the payload rides as JSON for callers that parse.
+  # The §4.3 signals stay TYPED to the boundary: the wire router promotes
+  # them to protocol-level errors (-335xx + error.data), the console and
+  # the guest render them through the shared seam. They used to be
+  # stringified here as "tag: {json}" for the CLI to grep back out.
   defp format_root_result({:error, {tag, payload}})
        when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
               is_map(payload) do
-    {:error, "#{tag}: #{Jason.encode!(payload)}"}
+    {:error, {tag, payload}}
   end
 
   defp format_root_result({:error, {:ambiguous, ids}}) do
@@ -644,8 +649,24 @@ defmodule Opus.MCP do
     {:error, "profile_unavailable: #{status}"}
   end
 
+  # The chain wraps a ref-grammar refusal (`Sanctum.ComponentRef`'s crafted
+  # prose) — client-safe by construction.
+  defp format_root_result({:error, {:invalid_reference, reason}}) when is_binary(reason) do
+    {:error, "invalid_reference: #{reason}"}
+  end
+
   defp format_root_result({:error, reason}) when not is_binary(reason) do
-    {:error, "authority_error: #{inspect(reason)}"}
+    # A typed refusal renders through the shared seam; an internal term is
+    # logged, never reflected to the MCP client (`inspect/1` here was the
+    # one place this module put Elixir terms on the wire).
+    case Emissary.MCP.ToolError.render(reason) do
+      nil ->
+        Logger.warning("[Opus.MCP] unrenderable authority error: #{inspect(reason)}")
+        {:error, "authority_error: the request could not be authorized"}
+
+      msg ->
+        {:error, "authority_error: #{msg}"}
+    end
   end
 
   defp format_root_result(other), do: other

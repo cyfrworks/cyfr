@@ -70,8 +70,15 @@ defmodule Opus.HostSurfaceTest do
     "Cyfr.MediaType",
     "Cyfr.Network",
     "Cyfr.PathSafety",
+    # The signed-pulls posture, read at execution as well as at pull so a
+    # component stored before the knob was turned on cannot keep running. A
+    # worker would need this value from its client, not re-read it locally.
+    "Cyfr.RuntimeConfig",
     "Cyfr.Time",
     "Cyfr.Topics",
+    # The shared unexpected-message catch-all spelling — a log-line SSOT,
+    # not a capability.
+    "Cyfr.UnexpectedMessage",
     "Cyfr.UUID7"
   ]
 
@@ -81,27 +88,10 @@ defmodule Opus.HostSurfaceTest do
 
   defp reached do
     for path <- Path.wildcard(Path.join(root(), "apps/opus/lib/**/*.ex")),
-        line <- path |> File.read!() |> code_lines(),
+        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
         [_, module] <- Regex.scan(@namespace, line),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
-  end
-
-  # Code only: a `@moduledoc` naming a namespace is prose about the
-  # dependency, not the dependency. (This module's own docs say `Cyfr.`,
-  # which is exactly the sentence that would otherwise register as one.)
-  defp code_lines(source) do
-    source
-    |> String.split("\n")
-    |> Enum.reduce({[], false}, fn line, {kept, in_heredoc?} ->
-      delimiters = line |> String.graphemes() |> Enum.chunk_every(3, 1, :discard)
-      toggles = Enum.count(delimiters, &(&1 == ["\"", "\"", "\""]))
-      now_inside? = if rem(toggles, 2) == 1, do: not in_heredoc?, else: in_heredoc?
-
-      keep? = not in_heredoc? and not now_inside? and not String.match?(line, ~r/^\s*#/)
-      {if(keep?, do: [line | kept], else: kept), now_inside?}
-    end)
-    |> elem(0)
   end
 
   test "opus reaches only into the namespaces this surface names" do

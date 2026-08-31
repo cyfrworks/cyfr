@@ -22,7 +22,16 @@ defmodule Arca.VaultStorage do
       _ = Map.fetch!(attrs, :athanor_id)
       row = Map.put_new(attrs, :id, Cyfr.UUID7.generate_id("vlt"))
 
-      struct(VaultEntry, row)
+      # Through a changeset carrying the living-name index, so a race on
+      # the name answers `{:error, changeset}` like every other refusal.
+      # A bare `struct |> insert` declares no constraint, so a violation
+      # raised `Ecto.ConstraintError` — which `db_errors()` deliberately
+      # does not rescue — straight past this wrapper.
+      %VaultEntry{}
+      |> Ecto.Changeset.change(row)
+      |> Ecto.Changeset.unique_constraint([:athanor_id, :name],
+        name: :vault_entries_active_name_index
+      )
       |> Arca.Repo.insert()
     end)
   end

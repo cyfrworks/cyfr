@@ -15,6 +15,8 @@ defmodule Compendium.MCP.AquaTool do
   open Agent Skills convention under `aqua/skills/<name>/SKILL.md`.
   """
 
+  require Logger
+
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
   alias Sanctum.Context
@@ -129,6 +131,12 @@ defmodule Compendium.MCP.AquaTool do
             "enum" => ["orchestrator", "sub-agent"],
             "description" => "Filter by type (for list action)"
           },
+          "detail" => %{
+            "type" => "boolean",
+            "description" =>
+              "For list: include each agent's full fields (model, tool_policy, " <>
+                "catalyst_ref, content) — one call instead of a get per agent"
+          },
           "parent" => %{
             "type" => "string",
             "description" => "Parent orchestrator name (for create sub-agent action)"
@@ -205,6 +213,12 @@ defmodule Compendium.MCP.AquaTool do
     agent_guides =
       case AquaAgent.list(ctx) do
         {:ok, agents, _errors} ->
+          # `AquaAgent.list/1` already read every file — the detail flag
+          # only widens the projection. Without it the console fetched the
+          # summary and then re-read each agent with a get, an N+1 the
+          # server paid twice for data it was already holding.
+          detail? = args["detail"] == true
+
           agents
           |> Enum.reject(& &1.disabled)
           |> Enum.map(fn agent ->
@@ -215,7 +229,18 @@ defmodule Compendium.MCP.AquaTool do
               description: agent.description
             }
 
-            if agent.parent, do: Map.put(base, :parent, agent.parent), else: base
+            base = if agent.parent, do: Map.put(base, :parent, agent.parent), else: base
+
+            if detail? do
+              Map.merge(base, %{
+                model: agent.model,
+                catalyst_ref: agent.catalyst_ref,
+                tool_policy: agent.tool_policy,
+                content: agent.prompt
+              })
+            else
+              base
+            end
           end)
 
         _ ->
@@ -265,18 +290,18 @@ defmodule Compendium.MCP.AquaTool do
        }}
     else
       {:error, :not_found} ->
-        {:error, "Unknown agent or guide: #{name}. Use aqua(list) to see available agents."}
+        {:error, {:not_found, "Agent or guide", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
 
       {:error, reason} ->
-        {:error, "Failed to read agent '#{name}': #{inspect(reason)}"}
+        passthrough_or_unavailable(reason, "aqua.get #{name}")
     end
   end
 
   def handle(_ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: name"}
+    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # --- create ---
@@ -291,13 +316,13 @@ defmodule Compendium.MCP.AquaTool do
       case inferred_aqua_create_type(args) do
         "sub-agent" -> create_agent(ctx, name, args, :sub_agent)
         "orchestrator" -> create_agent(ctx, name, args, :orchestrator)
-        other -> {:error, "Unsupported aqua create type: #{inspect(other)}"}
+        other -> {:error, {:invalid_argument, "Unsupported aqua create type: #{inspect(other)}"}}
       end
     end
   end
 
   def handle(_ctx, %{"action" => "create"}) do
-    {:error, "Missing required argument: name"}
+    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # --- update ---
@@ -310,14 +335,19 @@ defmodule Compendium.MCP.AquaTool do
          :ok <- Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(updated)) do
       {:ok, %{updated: name}}
     else
-      {:error, :not_found} -> {:error, "Agent '#{name}' not found"}
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, "Failed to update: #{inspect(reason)}"}
+      {:error, :not_found} ->
+        {:error, {:not_found, "Agent", name}}
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, reason}
+
+      {:error, reason} ->
+        passthrough_or_unavailable(reason, "aqua.update #{name}")
     end
   end
 
   def handle(_ctx, %{"action" => "update"}) do
-    {:error, "Missing required argument: name"}
+    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # --- delete ---
@@ -341,20 +371,22 @@ defmodule Compendium.MCP.AquaTool do
 
         {:error, :bundled} ->
           {:error,
-           "Agent '#{name}' ships with the server and cannot be deleted — " <>
-             "disable it instead (update name=#{name} disabled=true)"}
+           {:invalid_argument,
+            "Agent '#{name}' ships with the server and cannot be deleted — " <>
+              "disable it instead (update name=#{name} disabled=true)"}}
 
         {:error, :not_found} ->
-          {:error, "Agent '#{name}' not found"}
+          {:error, {:not_found, "Agent", name}}
 
         {:error, reason} ->
-          {:error, "Failed to delete: #{inspect(reason)}"}
+          Logger.error("[AquaTool] aqua.delete #{name} failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
 
   def handle(_ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: name"}
+    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # --- reset ---
@@ -366,7 +398,8 @@ defmodule Compendium.MCP.AquaTool do
         {:ok, %{reset: true, reverted: reverted, kept: kept, files: files}}
 
       {:error, reason} ->
-        {:error, "Failed to reset: #{inspect(reason)}"}
+        Logger.error("[AquaTool] aqua.reset failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Storage"}}
     end
   end
 
@@ -383,7 +416,8 @@ defmodule Compendium.MCP.AquaTool do
         {:ok, %{files: files, count: length(files)}}
 
       {:error, reason} ->
-        {:error, "Failed to read status: #{inspect(reason)}"}
+        Logger.error("[AquaTool] aqua.status failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Storage"}}
     end
   end
 
@@ -453,25 +487,41 @@ defmodule Compendium.MCP.AquaTool do
        }}
     else
       {:error, :not_found} ->
-        {:error, "Unknown skill: #{name}. Use aqua(skill_list) to see available skills."}
+        {:error, {:not_found, "Skill", name}}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
 
       {:error, reason} ->
-        {:error, "Failed to read skill '#{name}': #{inspect(reason)}"}
+        passthrough_or_unavailable(reason, "aqua.skill_get #{name}")
     end
   end
 
   def handle(_ctx, %{"action" => "skill_get"}) do
-    {:error, "Missing required argument: name"}
+    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
-  def handle(_ctx, _args) do
-    {:error, Emissary.MCP.ToolProvider.invalid_action("aqua", action_enum())}
+  # The terminal clause answers both shapes the dispatcher already
+  # distinguishes: no `action` at all, and one this tool does not know.
+  def handle(_ctx, args) do
+    case args do
+      %{"action" => action} -> {:error, {:unknown_action, "aqua.#{action}"}}
+      _ -> {:error, :action_missing}
+    end
   end
 
   # --- helpers ---
+
+  # A refusal the `with` head already typed is the caller's answer; anything
+  # else reaching an else arm is a storage term — logged, never reflected.
+  defp passthrough_or_unavailable(reason, where) do
+    if Emissary.MCP.ToolError.reason?(reason) do
+      {:error, reason}
+    else
+      Logger.error("[AquaTool] #{where} failed: #{inspect(reason)}")
+      {:error, {:unavailable, "Storage"}}
+    end
+  end
 
   defp type_name(:orchestrator), do: "orchestrator"
   defp type_name(:sub_agent), do: "sub-agent"
@@ -507,7 +557,8 @@ defmodule Compendium.MCP.AquaTool do
           {:ok, if(parent, do: Map.put(base, :parent, parent), else: base)}
 
         {:error, reason} ->
-          {:error, "Failed to create agent: #{inspect(reason)}"}
+          Logger.error("[AquaTool] aqua.create #{name} failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Storage"}}
       end
     end
   end
@@ -519,12 +570,13 @@ defmodule Compendium.MCP.AquaTool do
       parent when is_binary(parent) and parent != "" ->
         case AquaAgent.get(ctx, parent) do
           {:ok, %{role: :orchestrator}} -> {:ok, parent}
-          {:ok, _} -> {:error, "'#{parent}' is not an orchestrator"}
-          {:error, _} -> {:error, "Parent orchestrator '#{parent}' not found"}
+          {:ok, _} -> {:error, {:invalid_argument, "'#{parent}' is not an orchestrator"}}
+          {:error, _} -> {:error, {:not_found, "Parent orchestrator", parent}}
         end
 
       _ ->
-        {:error, "Missing required argument: parent (required for type=sub-agent)"}
+        {:error,
+         {:invalid_argument, "Missing required argument: parent (required for type=sub-agent)"}}
     end
   end
 
@@ -532,7 +584,7 @@ defmodule Compendium.MCP.AquaTool do
   # either kind holds is taken.
   defp refute_name_taken(ctx, name) do
     if Arca.exists?(ctx, AquaPath.agent_file(name)),
-      do: {:error, "Agent '#{name}' already exists"},
+      do: {:error, {:invalid_argument, "Agent '#{name}' already exists"}},
       else: :ok
   end
 
@@ -574,7 +626,9 @@ defmodule Compendium.MCP.AquaTool do
   defp validate_name(name) do
     if AquaPath.valid_name?(name),
       do: :ok,
-      else: {:error, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}
+      else:
+        {:error,
+         {:invalid_argument, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}}
   end
 
   # The policy vocabulary is exactly "ask" | "auto" and keys are
@@ -589,11 +643,13 @@ defmodule Compendium.MCP.AquaTool do
       cond do
         value not in ["ask", "auto"] ->
           {:error,
-           "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""}
+           {:invalid_argument,
+            "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""}}
 
         not valid_policy_key?(key) ->
           {:error,
-           "Invalid tool_policy key #{inspect(key)} — use \"tool.action\", \"tool.*\", or \"native_search\""}
+           {:invalid_argument,
+            "Invalid tool_policy key #{inspect(key)} — use \"tool.action\", \"tool.*\", or \"native_search\""}}
 
         true ->
           nil
@@ -601,7 +657,8 @@ defmodule Compendium.MCP.AquaTool do
     end)
   end
 
-  defp validate_tool_policy(_), do: {:error, "tool_policy must be an object"}
+  defp validate_tool_policy(_),
+    do: {:error, {:invalid_argument, "tool_policy must be an object"}}
 
   defp valid_policy_key?("native_search"), do: true
 
@@ -613,6 +670,4 @@ defmodule Compendium.MCP.AquaTool do
   end
 
   defp valid_policy_key?(_), do: false
-
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
 end

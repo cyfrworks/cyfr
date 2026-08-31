@@ -75,6 +75,11 @@ defmodule Opus.CronMCP do
               "type" => "string",
               "description" => "Component reference string (create/update)"
             },
+            "profile_id" => %{
+              "type" => "string",
+              "description" =>
+                "Profile the schedule fires under; its consent authorizes the binding (create, required; update/re_resolve)"
+            },
             "input" => %{
               "type" => "object",
               "description" => "Input data to pass to the component (create/update)"
@@ -265,6 +270,8 @@ defmodule Opus.CronMCP do
         {:error, format_store_error(reason, id)}
 
       {:ok, schedule} ->
+        # No cap check here: the cap counts every non-deleted row, so a
+        # paused schedule still occupies its slot and resume never mints one.
         next_run =
           case compute_next_run(schedule.cron_expression) do
             {:ok, dt} -> dt
@@ -320,14 +327,7 @@ defmodule Opus.CronMCP do
       {:ok, schedule} ->
         case Compendium.Resolver.resolve(ctx, schedule.reference) do
           {:ok, pinned, _metadata} ->
-            case Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
-              {:ok, updated} ->
-                Opus.CronScheduler.update(updated.id)
-                {:ok, format_schedule(updated)}
-
-              {:error, reason} ->
-                {:error, format_store_error(reason, id)}
-            end
+            re_resolve_to(ctx, schedule, pinned, id)
 
           {:error, reason} ->
             {:error, "Failed to re-resolve '#{schedule.reference}': #{reason}"}
@@ -455,6 +455,25 @@ defmodule Opus.CronMCP do
     end
   end
 
+  # Re-pointing a schedule at a newly resolved version is the same act as
+  # binding one, so it answers to the same two gates `create` and `update`
+  # run. It ran neither: a schedule could be silently moved onto a component
+  # version that does not exist, or onto one its bound profile's consent was
+  # never authorized for — the binding was checked once, against the version
+  # the schedule had when it was created.
+  defp re_resolve_to(ctx, schedule, pinned, id) do
+    with :ok <- verify_component_exists(ctx, pinned),
+         :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id),
+         {:ok, updated} <-
+           Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
+      Opus.CronScheduler.update(updated.id)
+      {:ok, format_schedule(updated)}
+    else
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, format_store_error(reason, id)}
+    end
+  end
+
   defp verify_component_exists(ctx, resolved_reference) do
     case Compendium.Component.inspect_component(ctx, resolved_reference) do
       {:ok, _} ->
@@ -501,15 +520,24 @@ defmodule Opus.CronMCP do
   defp authorize_profile_binding(_ctx, _target_ref, _), do: {:error, "invalid profile_id"}
 
   # Re-pointing is the same act as binding: the gate runs against the
-  # target the row will have after this update. An explicit nil is an
-  # unbind, and an unbound schedule can never fire — refuse it here the
-  # same way create does.
+  # target the row will have after this update — whether the update moves
+  # the profile, the reference, or both. An explicit nil is an unbind,
+  # and an unbound schedule can never fire — refuse it here the same way
+  # create does.
   defp maybe_authorize_profile_binding(ctx, schedule, args, update_attrs) do
+    repointed? = Map.has_key?(update_attrs, :resolved_reference)
+
     case Map.fetch(args, "profile_id") do
-      :error ->
+      :error when not repointed? ->
         :ok
 
-      {:ok, profile_id} ->
+      fetched ->
+        profile_id =
+          case fetched do
+            {:ok, profile_id} -> profile_id
+            :error -> schedule.profile_id
+          end
+
         target =
           Map.get(update_attrs, :resolved_reference) || schedule.resolved_reference ||
             schedule.reference

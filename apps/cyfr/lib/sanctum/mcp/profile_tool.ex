@@ -282,7 +282,7 @@ defmodule Sanctum.MCP.ProfileTool do
     decoded =
       Enum.map(list, fn binding ->
         %{
-          need: Map.get(binding, "need", "@ingress"),
+          need: Map.get(binding, "need", Sanctum.Authority.Blob.ingress_key()),
           entry_id: binding["entry_id"],
           fields: Map.get(binding, "fields", []),
           scopes: Map.get(binding, "scopes", [])
@@ -328,10 +328,13 @@ defmodule Sanctum.MCP.ProfileTool do
   # Error rendering — §4.3 payloads verbatim in the tag: json convention
   # ---------------------------------------------------------------------------
 
-  defp fmt({:consent_conflict, payload}), do: "consent_conflict: " <> Jason.encode!(payload)
-  defp fmt({:setup_required, payload}), do: "setup_required: " <> Jason.encode!(payload)
-  defp fmt({:consent_required, payload}), do: "consent_required: " <> Jason.encode!(payload)
-  defp fmt({:restart_required, payload}), do: "restart_required: " <> Jason.encode!(payload)
+  # The §4.3 signals pass through TYPED — the wire router promotes them to
+  # protocol errors (-335xx + error.data); the console renders them via the
+  # shared seam. This fmt used to stringify them as "tag: {json}".
+  defp fmt({tag, payload} = signal)
+       when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
+              is_map(payload),
+       do: signal
 
   defp fmt({:plan_token, reason}),
     do: "plan_token_invalid: #{inspect(reason)} — re-run plan to stage fresh facts"
@@ -365,5 +368,5 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
   defp fmt(reason), do: inspect(reason)
 
-  defp action_enum, do: get_in(definition(), [:input_schema, "properties", "action", "enum"])
+  defp action_enum, do: Emissary.MCP.ToolProvider.action_enum(definition())
 end

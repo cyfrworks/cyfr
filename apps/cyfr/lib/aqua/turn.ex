@@ -38,9 +38,11 @@ defmodule Aqua.Turn do
         |> Enum.reject(fn g -> is_nil(g["name"]) end)
 
       # Fail-open BY CHOICE: a broken aqua tool reads as "no orchestrators"
-      # — the chat still renders and a send still runs on the fallback
-      # prompt, which beats refusing the whole conversation for a catalog
-      # read. The runner logs the underlying failure when it matters.
+      # — the chat still renders, which beats refusing the whole
+      # conversation for a catalog read. (A SEND with an empty roster and
+      # no prior orchestrator is still refused `:no_orchestrator` by the
+      # runner; the generic fallback prompt covers only a name that
+      # resolves but whose content read fails.)
       _ ->
         []
     end
@@ -212,7 +214,7 @@ defmodule Aqua.Turn do
   @spec start(Context.t(), map()) :: {:ok, String.t()} | {:error, term()}
   def start(%Context{} = ctx, input) when is_map(input) do
     result =
-      Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
+      Aqua.MCPHelpers.call_tool("execution", ctx, %{
         "action" => "run_stream",
         "reference" => @agent_ref,
         "input" => input
@@ -246,12 +248,14 @@ defmodule Aqua.Turn do
   def unsubscribe(execution_id, %Context{} = ctx),
     do: Cyfr.Execution.unsubscribe_events(execution_id, ctx)
 
+  # The port answers `{:ok, map()}`, not `:ok` — the spec said the opposite
+  # in both directions, so a caller matching on it was matching on fiction.
   @doc "Cancel a running turn."
-  @spec cancel(Context.t(), String.t()) :: :ok | {:error, term()}
+  @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id), do: Cyfr.Execution.cancel(ctx, execution_id)
 
   @doc "Cancel a running turn because a consent delta applies to future roots."
-  @spec cancel_for_restart(Context.t(), String.t(), map()) :: :ok | {:error, term()}
+  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def cancel_for_restart(%Context{} = ctx, execution_id, payload),
     do: Cyfr.Execution.cancel_for_restart(ctx, execution_id, payload)
 
@@ -288,8 +292,15 @@ defmodule Aqua.Turn do
     %{stripped: stripped, intents: intents, drops: drops} =
       Aqua.Actions.parse(String.trim(raw), tool_policy)
 
+    # `drop.raw` is the model's verbatim entry — a rejected clipboard write
+    # alone can carry 100KB — so the log gets the refusal and a bounded
+    # kind, never the content.
     Enum.each(drops, fn drop ->
-      Logger.warning("[Aqua.Turn] dropped aqua-actions intent: #{inspect(drop)}")
+      kind = if is_map(drop.raw), do: drop.raw["kind"], else: nil
+
+      Logger.warning(
+        "[Aqua.Turn] dropped aqua-actions intent kind=#{inspect(kind)} reason=#{drop.reason}"
+      )
     end)
 
     {approvals, client} = Enum.split_with(intents, &(&1.kind == "request_approval"))
@@ -363,14 +374,14 @@ defmodule Aqua.Turn do
       |> Map.put("action", action)
       |> Map.drop(["parent_execution_id", "root_execution_id"])
 
-    Emissary.MCP.ToolRegistry.call_external("execution", ctx, launch_args)
+    Aqua.MCPHelpers.call_tool("execution", ctx, launch_args)
   end
 
   def run_approved(%{tool: tool, action: action, args: args}, %Context{} = ctx)
       when is_binary(tool) and is_binary(action) do
     case Cyfr.Execution.authority_for(ctx, nil, @agent_ref) do
       {:ok, authority} ->
-        Emissary.MCP.ToolRegistry.call_in_chain(
+        Aqua.MCPHelpers.call_in_chain(
           tool,
           Context.enter_guest(ctx),
           Map.put(args || %{}, "action", action),
@@ -404,7 +415,15 @@ defmodule Aqua.Turn do
   end
 
   def outcome_summary(:error, %{reason: reason}, title) do
-    short = inspect(reason) |> String.slice(0, 200)
+    # This text becomes history the model reads on the next turn — sanitize
+    # BEFORE flattening, since a flattened string is past the sanitizer's
+    # reach. A binary reason is a crafted, client-safe diagnosis as-is.
+    short =
+      case reason do
+        r when is_binary(r) -> String.slice(r, 0, 200)
+        r -> Sanctum.Sanitizer.sanitize(r) |> inspect() |> String.slice(0, 200)
+      end
+
     {short, "[System: action '#{title}' failed: #{short}]"}
   end
 

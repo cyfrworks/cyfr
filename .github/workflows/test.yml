@@ -69,6 +69,11 @@ on:
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
+  # Callable, so the tag-triggered publish workflows can require this
+  # suite before they build or release. They trigger on tags, which this
+  # workflow's own push filter does not match — so a tag could publish a
+  # commit no CI run had ever gone green on.
+  workflow_call:
 permissions:
   contents: read
 env:

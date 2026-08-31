@@ -217,9 +217,13 @@ defmodule Arca.WebhookStorage do
   The outgoing secret is retained as `previous_secret_encrypted` until
   `previous_expires_at`, so in-flight requests signed with it keep verifying
   during the grace window (see `Sanctum.Webhook.verify_with_grace/4`).
+
+  Compare-and-swap on the secret being replaced: a concurrent rotation
+  answers `{:error, :conflict}` rather than overwriting the grace secret
+  the other one just installed.
   """
   @spec rotate_secret(String.t(), String.t(), binary(), DateTime.t()) ::
-          :ok | {:error, :not_found | :database_error}
+          :ok | {:error, :not_found | :conflict | :database_error}
   def rotate_secret(athanor_id, name, new_secret_encrypted, previous_expires_at) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.rotate_secret", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -234,8 +238,14 @@ defmodule Arca.WebhookStorage do
           {:error, :not_found}
 
         current_secret ->
+          # Compare-and-swap on the secret this call read: two concurrent
+          # rotations both wrote `previous_secret_encrypted: S0` from the
+          # same stale read, so the intermediate secret's grace window
+          # vanished and requests signed with it failed verification. The
+          # loser of the race sees zero rows and answers `:conflict`.
           result =
-            Arca.Repo.update_all(query,
+            from(w in query, where: w.secret_encrypted == ^current_secret)
+            |> Arca.Repo.update_all(
               set: [
                 secret_encrypted: new_secret_encrypted,
                 previous_secret_encrypted: current_secret,
@@ -246,7 +256,7 @@ defmodule Arca.WebhookStorage do
             )
 
           case result do
-            {0, _} -> {:error, :not_found}
+            {0, _} -> {:error, :conflict}
             {_, _} -> :ok
           end
       end

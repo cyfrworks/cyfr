@@ -58,6 +58,16 @@ defmodule Sanctum.Consent.Proof do
 
   @required_bindings [:kind, :commit_digest, :athanor_id]
 
+  # One spelling of the token mint for BOTH stores: the two
+  # implementations of this behaviour each carried their own
+  # `@token_bytes` + encode line — the one place the stores could
+  # silently diverge on token strength.
+  @token_bytes 32
+
+  @doc "Mint a fresh single-use proof token — the one spelling both stores use."
+  @spec mint_token() :: String.t()
+  def mint_token, do: Base.url_encode64(:crypto.strong_rand_bytes(@token_bytes), padding: false)
+
   @doc "The default proof time-to-live in milliseconds."
   @spec default_ttl_ms() :: pos_integer()
   def default_ttl_ms, do: @default_ttl_ms

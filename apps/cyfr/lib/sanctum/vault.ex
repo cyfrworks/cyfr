@@ -33,6 +33,8 @@ defmodule Sanctum.Vault do
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
 
+  require Logger
+
   @kinds ~w(api_key oauth bundle)
 
   @type entry_view :: %{
@@ -82,12 +84,11 @@ defmodule Sanctum.Vault do
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
          :ok <- check_name_free(ctx, name),
-         {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)) do
-      id = Cyfr.UUID7.generate_id("vlt")
-      hint = Map.get(params, :provider_hint, "")
-      aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint)
-      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-
+         {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)),
+         id = Cyfr.UUID7.generate_id("vlt"),
+         hint = Map.get(params, :provider_hint, ""),
+         aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint),
+         {:ok, sealed} <- seal(json, aad) do
       attrs = %{
         id: id,
         athanor_id: Context.athanor!(ctx),
@@ -131,10 +132,14 @@ defmodule Sanctum.Vault do
   @spec rename(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def rename(%Context{} = ctx, id, new_name) when is_binary(new_name) and new_name != "" do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
-         {:ok, _entry} <- get_living(ctx, id),
+         {:ok, entry} <- get_living(ctx, id),
          :ok <- check_name_free(ctx, new_name),
          :ok <- Arca.VaultStorage.update_meta(Context.athanor!(ctx), id, %{name: new_name}) do
-      broadcast(ctx, id, :rename)
+      # The signal carries the name being VACATED: header templates
+      # reference entries by name, so the servers a rename breaks are the
+      # ones still spelling the old one — a post-hoc read of the row can
+      # only ever see the new name.
+      broadcast(ctx, id, :rename, %{old_name: entry.name})
       :ok
     end
   end
@@ -160,10 +165,9 @@ defmodule Sanctum.Vault do
          :ok <- check_schema(entry, fields),
          {:ok, current} <- unseal(entry),
          {:ok, oauth} <- rotation_oauth(current, Map.get(params, :oauth)),
-         {:ok, json} <- Payload.encode_material(fields, oauth) do
-      aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
-      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-
+         {:ok, json} <- Payload.encode_material(fields, oauth),
+         aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint),
+         {:ok, sealed} <- seal(json, aad) do
       case Arca.VaultStorage.rotate_payload(Context.athanor!(ctx), id, expected, sealed) do
         :ok ->
           if entry.status == "needs_reauth" do
@@ -324,6 +328,18 @@ defmodule Sanctum.Vault do
     end
   end
 
+  # `Sanctum.Cipher.encrypt/2` raises rather than returning errors — boot
+  # validates the keyring, so a raise here is a mid-flight misconfiguration
+  # (a rotated-away label, a truncated key). The request path answers with
+  # a typed refusal instead of a bare MatchError taking the caller down.
+  defp seal(json, aad) do
+    Sanctum.Cipher.encrypt(json, aad)
+  rescue
+    e ->
+      Logger.error("[Sanctum.Vault] sealing failed: #{Exception.message(e)}")
+      {:error, :seal_failed}
+  end
+
   defp unseal(entry) do
     aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
 
@@ -364,13 +380,15 @@ defmodule Sanctum.Vault do
   defp decode_list(nil), do: []
 
   defp decode_list(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
+    # Through `Cyfr.Json`: corruption in a stored column is logged under a
+    # label, never silently flattened to the default.
+    case Cyfr.Json.decode_or(json, [], "Sanctum.Vault.decode_list") do
+      list when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
       _ -> []
     end
   end
 
-  defp broadcast(ctx, entry_id, verb) do
+  defp broadcast(ctx, entry_id, verb, meta \\ %{}) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Cyfr.Topics.vault_changed(ctx),
@@ -383,7 +401,7 @@ defmodule Sanctum.Vault do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Cyfr.Topics.vault_changed_global(),
-      {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb}
+      {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb, meta}
     )
   end
 end

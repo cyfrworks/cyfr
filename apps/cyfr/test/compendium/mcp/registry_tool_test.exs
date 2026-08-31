@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Compendium.MCP.RegistryToolTest do
+  use ExUnit.Case, async: false
+
+  alias Compendium.MCP.RegistryTool
+  alias Emissary.MCP.ToolError
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  # The four gated mutations' success clauses were once shadowed by the
+  # @identity_mutations dispatch head: valid args still answered the
+  # arg-missing error, so token revocation and publisher member management
+  # were dead over MCP. These pin that valid args reach the real handler —
+  # with no stored push token that is the credential refusal, never the
+  # arg-missing sentence.
+  describe "gated identity mutations reach their handlers with valid args" do
+    test "tokens_revoke", %{ctx: ctx} do
+      assert {:error, reason} =
+               RegistryTool.handle(ctx, %{
+                 "action" => "tokens_revoke",
+                 "slug" => "someslug",
+                 "token_id" => "tok_1"
+               })
+
+      assert ToolError.render(reason) =~ "no push token"
+    end
+
+    test "members_add", %{ctx: ctx} do
+      assert {:error, reason} =
+               RegistryTool.handle(ctx, %{
+                 "action" => "members_add",
+                 "slug" => "someslug",
+                 "target_personal_slug" => "bob",
+                 "role" => "member"
+               })
+
+      assert ToolError.render(reason) =~ "no push token"
+    end
+
+    test "members_update", %{ctx: ctx} do
+      assert {:error, reason} =
+               RegistryTool.handle(ctx, %{
+                 "action" => "members_update",
+                 "slug" => "someslug",
+                 "target_personal_slug" => "bob",
+                 "role" => "admin"
+               })
+
+      assert ToolError.render(reason) =~ "no push token"
+    end
+
+    test "members_remove", %{ctx: ctx} do
+      assert {:error, reason} =
+               RegistryTool.handle(ctx, %{
+                 "action" => "members_remove",
+                 "slug" => "someslug",
+                 "target_personal_slug" => "bob"
+               })
+
+      assert ToolError.render(reason) =~ "no push token"
+    end
+  end
+
+  describe "gated identity mutations still refuse incomplete args" do
+    test "each arg-missing arm answers its own sentence", %{ctx: ctx} do
+      for {action, sentence} <- [
+            {"tokens_revoke", "requires 'slug' and 'token_id'"},
+            {"members_add", "requires 'slug', 'target_personal_slug', and 'role'"},
+            {"members_update", "requires 'slug', 'target_personal_slug', and 'role'"},
+            {"members_remove", "requires 'slug' and 'target_personal_slug'"}
+          ] do
+        assert {:error, reason} = RegistryTool.handle(ctx, %{"action" => action}),
+               "expected a refusal for bare #{action}"
+
+        assert ToolError.render(reason) =~ sentence,
+               "expected the arg-missing sentence for #{action}, got: #{inspect(reason)}"
+      end
+    end
+  end
+end

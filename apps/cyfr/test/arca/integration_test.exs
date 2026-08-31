@@ -117,7 +117,8 @@ defmodule Arca.IntegrationTest do
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
-          status: "running"
+          # Terminal: retention never prunes a row still running.
+          status: "completed"
         })
       end
 
@@ -178,7 +179,8 @@ defmodule Arca.IntegrationTest do
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
-          status: "running"
+          # Terminal: retention never prunes a row still running.
+          status: "completed"
         })
       end
 
@@ -296,7 +298,8 @@ defmodule Arca.IntegrationTest do
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
-          status: "running"
+          # Terminal: retention never prunes a row still running.
+          status: "completed"
         })
 
         Arca.Execution.record_start(%{
@@ -307,7 +310,8 @@ defmodule Arca.IntegrationTest do
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
-          status: "running"
+          # Terminal: retention never prunes a row still running.
+          status: "completed"
         })
       end
 

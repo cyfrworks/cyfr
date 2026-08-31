@@ -117,14 +117,28 @@ defmodule Sanctum.Auth.OAuth do
     end
   end
 
-  defp provider_configured?(:github), do: github_config() != nil
-  defp provider_configured?(:google), do: google_config() != nil
-  defp provider_configured?(_), do: false
+  @doc """
+  Whether the web-OAuth strategy for `provider` is fully configured — both
+  client id and secret present AND non-blank. The one answer to this
+  question: `EmissaryWeb.Plugs.ConfiguredUeberauth` carried its own copy
+  with trim semantics while this one accepted `" "`, so the sign-in page
+  and the callback route could disagree about the same env. (Device flow
+  asks its own, deliberately asymmetric question —
+  `Sanctum.Auth.DeviceFlow.configured?/1`.)
+  """
+  @spec web_configured?(atom()) :: boolean()
+  def web_configured?(:github), do: github_config() != nil
+  def web_configured?(:google), do: google_config() != nil
+  def web_configured?(_), do: false
+
+  defp provider_configured?(provider), do: web_configured?(provider)
 
   defp github_config do
     case Application.get_env(:ueberauth, Ueberauth.Strategy.Github.OAuth) do
       config when is_list(config) ->
-        if config[:client_id] && config[:client_secret], do: config, else: nil
+        if present?(config[:client_id]) and present?(config[:client_secret]),
+          do: config,
+          else: nil
 
       _ ->
         nil
@@ -134,12 +148,17 @@ defmodule Sanctum.Auth.OAuth do
   defp google_config do
     case Application.get_env(:ueberauth, Ueberauth.Strategy.Google.OAuth) do
       config when is_list(config) ->
-        if config[:client_id] && config[:client_secret], do: config, else: nil
+        if present?(config[:client_id]) and present?(config[:client_secret]),
+          do: config,
+          else: nil
 
       _ ->
         nil
     end
   end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_), do: false
 
   defp extract_user_info(%{provider: provider, uid: uid, info: info} = auth)
        when provider in [:github, :google] do

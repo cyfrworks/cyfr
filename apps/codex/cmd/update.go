@@ -57,7 +57,7 @@ var updateCmd = &cobra.Command{
 
 		// Update scaffold files
 		if err := scaffold.Update(version.Version); err != nil {
-			return fmt.Errorf("Failed to update scaffold files: %v", err)
+			return fmt.Errorf("Failed to update scaffold files: %w", err)
 		}
 
 		fmt.Println("Scaffold files updated (component-guide.md, tincture-guide.md, integration-guide.md, wit/, aqua/).")
@@ -144,7 +144,7 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("docker-compose.yml is not valid YAML: %v", err)
+		return nil, fmt.Errorf("docker-compose.yml is not valid YAML: %w", err)
 	}
 	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
 		return nil, fmt.Errorf("docker-compose.yml is empty")
@@ -229,13 +229,13 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
 	if err := enc.Encode(&root); err != nil {
-		return nil, fmt.Errorf("failed to re-serialize docker-compose.yml: %v", err)
+		return nil, fmt.Errorf("failed to re-serialize docker-compose.yml: %w", err)
 	}
 	if err := enc.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close encoder: %v", err)
+		return nil, fmt.Errorf("failed to close encoder: %w", err)
 	}
 	if err := os.WriteFile(path, []byte(buf.String()), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write docker-compose.yml: %v", err)
+		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)
 	}
 	return added, nil
 }

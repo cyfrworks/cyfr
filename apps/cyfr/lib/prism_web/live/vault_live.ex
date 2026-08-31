@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.ConnectionsLive do
+defmodule PrismWeb.VaultLive do
   @moduledoc """
-  The operator's Connections (vault entries): list, create, rotate,
-  re-authorize, rename, revoke, delete — all through the vault MCP verbs,
-  so this surface holds no rules of its own. Material flows one way:
-  forms accept field values; nothing here ever displays them.
+  The operator's vault entries: list, create, rotate, re-authorize,
+  revoke, delete — all through the vault MCP verbs (rename exists as a
+  vault verb but has no control here yet), so this
+  surface holds no rules of its own. Material flows one way: forms
+  accept field values; nothing here ever displays them.
 
-  OAuth connections start a browser grant via `vault.authorize`; the
+  OAuth entries start a browser grant via `vault.authorize`; the
   callback completes it server-side and the vault PubSub topic refreshes
   this view when the entry lands.
   """
@@ -28,8 +29,8 @@ defmodule PrismWeb.ConnectionsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Connections")
-      |> assign(:active_nav, "connections")
+      |> assign(:page_title, "Vault")
+      |> assign(:active_nav, "vault")
       |> assign(:entries, [])
       |> assign(:used_by, %{})
       |> assign(:clients, [])
@@ -58,8 +59,8 @@ defmodule PrismWeb.ConnectionsLive do
      assign(socket, :show_add, if(socket.assigns.show_add == mode, do: nil, else: mode))}
   end
 
-  # The operator's OAuth app for a provider — the client id/secret a
-  # Connection's OAuth grant is obtained with. Stored per athanor; listed by
+  # The operator's OAuth app for a provider — the client id/secret an
+  # entry's OAuth grant is obtained with. Stored per athanor; listed by
   # provider name only, never the secret.
   def handle_event(
         "set_client",
@@ -106,7 +107,7 @@ defmodule PrismWeb.ConnectionsLive do
              socket
              |> fetch_entries()
              |> assign(:show_add, nil)
-             |> put_flash(:info, "Connection created.")}
+             |> put_flash(:info, "Entry created.")}
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, "Create failed: #{fmt(reason)}")}
@@ -180,16 +181,6 @@ defmodule PrismWeb.ConnectionsLive do
     end
   end
 
-  def handle_event("rename", %{"id" => id, "name" => name}, socket) do
-    case call_tool(socket, "vault/rename", %{"id" => id, "name" => name}) do
-      {:ok, _} ->
-        {:noreply, socket |> fetch_entries() |> put_flash(:info, "Renamed.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Rename failed: #{fmt(reason)}")}
-    end
-  end
-
   def handle_event("revoke", %{"id" => id}, socket) do
     case call_tool(socket, "vault/revoke", %{"id" => id}) do
       {:ok, result} ->
@@ -197,8 +188,8 @@ defmodule PrismWeb.ConnectionsLive do
 
         message =
           case affected do
-            [] -> "Connection revoked."
-            list -> "Connection revoked — #{length(list)} profile(s) lose access at next run."
+            [] -> "Entry revoked."
+            list -> "Entry revoked — #{length(list)} profile(s) lose access at next run."
           end
 
         {:noreply, socket |> fetch_entries() |> put_flash(:info, message)}
@@ -211,7 +202,7 @@ defmodule PrismWeb.ConnectionsLive do
   def handle_event("delete", %{"id" => id}, socket) do
     case call_tool(socket, "vault/delete", %{"id" => id}) do
       {:ok, _} ->
-        {:noreply, socket |> fetch_entries() |> put_flash(:info, "Connection deleted.")}
+        {:noreply, socket |> fetch_entries() |> put_flash(:info, "Entry deleted.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Delete failed: #{fmt(reason)}")}
@@ -233,7 +224,7 @@ defmodule PrismWeb.ConnectionsLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ConnectionsLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -262,12 +253,12 @@ defmodule PrismWeb.ConnectionsLive do
         assign(socket, :entries, Enum.map(list, &normalize_entry/1))
 
       {:error, message} ->
-        Logger.warning("[ConnectionsLive] vault/list failed: #{message}")
+        Logger.warning("[VaultLive] vault/list failed: #{message}")
         assign(socket, :entries, [])
     end
   end
 
-  # Which MCP servers draw on each Connection (`vault:<name>` headers) —
+  # Which MCP servers draw on each entry (`vault:<name>` headers) —
   # shown on the row, so revoking one is done knowing what it breaks.
   defp fetch_used_by(socket) do
     used_by =
@@ -346,13 +337,13 @@ defmodule PrismWeb.ConnectionsLive do
   def render(assigns) do
     ~H"""
     <div class="space-y-6">
-      <.page_header title="Connections">
+      <.page_header title="Vault">
         <:actions>
           <.button variant="ghost" phx-click="show_add" phx-value-mode="oauth">
-            Connect OAuth
+            Authorize OAuth
           </.button>
           <.button phx-click="show_add" phx-value-mode="fields">
-            Add Connection
+            Add entry
           </.button>
         </:actions>
       </.page_header>
@@ -405,7 +396,7 @@ defmodule PrismWeb.ConnectionsLive do
               class="w-full rounded-md border-gray-600 bg-transparent font-mono text-sm"
             ></textarea>
           </div>
-          <.button type="submit">Create Connection</.button>
+          <.button type="submit">Create entry</.button>
         </form>
       </.card>
       
@@ -454,13 +445,13 @@ defmodule PrismWeb.ConnectionsLive do
         </form>
       </.card>
       
-    <!-- Connections list -->
+    <!-- Entries list -->
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @entries == []} class="py-8">
-          <.empty_state message="No connections yet" />
+          <.empty_state message="No vault entries yet" />
         </div>
-        <.table :if={!@loading && @entries != []} id="connections" rows={@entries}>
+        <.table :if={!@loading && @entries != []} id="vault-entries" rows={@entries}>
           <:col :let={entry} label="Name">
             <div class="space-y-1">
               <span class="font-medium">{entry.name}</span>
@@ -519,7 +510,7 @@ defmodule PrismWeb.ConnectionsLive do
                 variant="ghost"
                 phx-click="delete"
                 phx-value-id={entry.id}
-                data-confirm="Delete this connection and erase its sealed material?"
+                data-confirm="Delete this entry and erase its sealed material?"
               >
                 Delete
               </.button>
@@ -562,7 +553,7 @@ defmodule PrismWeb.ConnectionsLive do
           </.button>
         </div>
         <p class="text-xs text-gray-500 mb-3">
-          The OAuth app (client id and secret) an OAuth Connection is authorized through, one
+          The OAuth app (client id and secret) an OAuth vault entry is authorized through, one
           per provider. Stored sealed in this athanor; only the provider name is ever shown.
         </p>
 
@@ -600,7 +591,7 @@ defmodule PrismWeb.ConnectionsLive do
               variant="ghost"
               phx-click="delete_client"
               phx-value-provider={c[:provider]}
-              data-confirm="Remove these client credentials? OAuth Connections for this provider cannot refresh until new ones are stored."
+              data-confirm="Remove these client credentials? OAuth entries for this provider cannot refresh until new ones are stored."
             >
               Remove
             </.button>
@@ -615,7 +606,7 @@ defmodule PrismWeb.ConnectionsLive do
   defp used_by_line(servers), do: "used by MCP servers #{Enum.join(Enum.sort(servers), ", ")}"
 
   defp revoke_confirm(entry, used_by) do
-    base = "Profiles bound to this connection stop receiving it at their next run."
+    base = "Profiles bound to this entry stop receiving it at their next run."
 
     case Map.get(used_by, entry.name, []) do
       [] -> base <> " Revoke?"

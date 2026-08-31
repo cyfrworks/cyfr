@@ -90,12 +90,26 @@ defmodule Sanctum.OAuth.RefreshLock do
         {:error, {:authorization_required, "timed out waiting for a concurrent token refresh"}}
 
       {:exit, reason} ->
-        # The exit reason is the host's to log, not the caller's to read.
-        Logger.warning("[Sanctum.OAuth.RefreshLock] refresh exited: #{inspect(reason)}")
+        # The exit reason is the host's to log, not the caller's to read —
+        # and not the log's to spell out either: a crashed refresh's reason
+        # can embed the very material this module guards (a
+        # FunctionClauseError carries the oauth map with its refresh_token
+        # in the failing frame's args; a KeyError from the cipher path
+        # carries the keyring, under labels no key-roster sanitizer knows).
+        # An exception exit is named by type only; anything else is
+        # sanitized and bounded.
+        Logger.warning("[Sanctum.OAuth.RefreshLock] refresh exited: #{describe_exit(reason)}")
         {:error, {:authorization_required, "the token refresh failed"}}
 
       nil ->
         {:error, {:authorization_required, "the token refresh timed out"}}
     end
   end
+
+  defp describe_exit({%{__struct__: mod}, _stacktrace}), do: inspect(mod)
+  defp describe_exit(%{__struct__: mod}), do: inspect(mod)
+  defp describe_exit(reason) when is_atom(reason), do: inspect(reason)
+
+  defp describe_exit(other),
+    do: inspect(Sanctum.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
 end

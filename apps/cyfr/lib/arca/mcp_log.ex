@@ -111,8 +111,17 @@ defmodule Arca.McpLog do
   def record_update(%Sanctum.Context{} = ctx, id, attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record_update", fn ->
       case get_tenant(ctx, id) do
-        nil -> {:error, :not_found}
-        log -> log |> update_changeset(attrs) |> Arca.Repo.update()
+        nil ->
+          {:error, :not_found}
+
+        # get_tenant is itself db-rescued: an outage answers a tuple here,
+        # and binding it as the row would raise a non-DB error straight
+        # through this rescue — crashing the RecordSink's whole batch.
+        {:error, _} = err ->
+          err
+
+        log ->
+          log |> update_changeset(attrs) |> Arca.Repo.update()
       end
     end)
   end
@@ -163,7 +172,8 @@ defmodule Arca.McpLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
+  @spec get_tenant(Sanctum.Context.t(), String.t()) ::
+          %__MODULE__{} | nil | {:error, :database_error}
   def get_tenant(%Sanctum.Context{} = ctx, id) do
     Arca.Repo.Errors.with_db_rescue("McpLog.get_tenant", fn ->
       from(l in __MODULE__, where: l.id == ^id)

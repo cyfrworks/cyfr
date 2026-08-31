@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -14,8 +13,11 @@ import (
 )
 
 func init() {
+	profileGrantCmd.Flags().StringSlice("entry", nil,
+		"Bind a need to a vault entry non-interactively: need=entry_id (repeatable)")
 	profileGrantCmd.Flags().StringSlice("connection", nil,
-		"Bind a need to a connection non-interactively: need=entry_id (repeatable)")
+		"Deprecated alias for --entry")
+	_ = profileGrantCmd.Flags().MarkDeprecated("connection", "use --entry")
 
 	profileCmd.AddCommand(profileGrantCmd)
 	profileCmd.AddCommand(profileListCmd)
@@ -27,7 +29,7 @@ var profileCmd = &cobra.Command{
 	Use:     "profile",
 	Short:   "Grant, inspect and revoke app profiles",
 	GroupID: "security",
-	Long: "A profile is a component you granted: which connections it may use, " +
+	Long: "A profile is a component you granted: which vault entries it may use, " +
 		"what it may reach, recorded as an immutable consent revision.\n\n" +
 		"Nothing is granted outside this walk — plan shows what would be " +
 		"granted, preview renders exactly what you are approving, and commit " +
@@ -106,11 +108,11 @@ var profileRevokeCmd = &cobra.Command{
 
 var profileGrantCmd = &cobra.Command{
 	Use:   "grant <reference>",
-	Short: "Grant a component the connections it needs [interactive]",
+	Short: "Grant a component the vault entries it needs [interactive]",
 	Long: "Walks plan → preview → commit. You see what would be granted, pick " +
-		"a connection for each need, then approve exactly what was rendered.",
+		"a vault entry for each need, then approve exactly what was rendered.",
 	Example: `  cyfr profile grant c:moonmoon69.gmail
-  cyfr profile grant f:local.daily-report --connection @ingress=vlt_abc123`,
+  cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -127,7 +129,7 @@ var profileGrantCmd = &cobra.Command{
 		bindings, err := collectBindings(cmd, plan)
 		if err != nil {
 			if prompt.IsAborted(err) {
-				os.Exit(130)
+				return prompt.ErrAborted
 			}
 			return err
 		}
@@ -174,17 +176,18 @@ var profileGrantCmd = &cobra.Command{
 	},
 }
 
-// One connection per need: from --connection need=entry_id flags, or asked
-// for interactively. A need left unbound is a deliberate choice — an app
-// can be granted with no credentials at all.
+// One vault entry per need: from --entry need=entry_id flags (--connection
+// is the deprecated alias), or asked for interactively. A need left unbound
+// is a deliberate choice — an app can be granted with no credentials at all.
 func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any, error) {
 	preset := map[string]string{}
 
-	flags, _ := cmd.Flags().GetStringSlice("connection")
-	for _, pair := range flags {
+	flags, _ := cmd.Flags().GetStringSlice("entry")
+	legacy, _ := cmd.Flags().GetStringSlice("connection")
+	for _, pair := range append(flags, legacy...) {
 		parts := strings.SplitN(pair, "=", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("--connection expects need=entry_id, got %q", pair)
+			return nil, fmt.Errorf("--entry expects need=entry_id, got %q", pair)
 		}
 		preset[parts[0]] = parts[1]
 	}
@@ -210,7 +213,7 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any,
 			continue
 		}
 
-		entryID, err := askForConnection(need, candidates)
+		entryID, err := askForEntry(need, candidates)
 		if err != nil {
 			return nil, err
 		}
@@ -222,13 +225,13 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any,
 	return bindings, nil
 }
 
-func askForConnection(need map[string]any, candidates []any) (string, error) {
+func askForEntry(need map[string]any, candidates []any) (string, error) {
 	if len(candidates) == 0 {
-		fmt.Println("No connections yet — create one first, or grant without a connection.")
+		fmt.Println("No vault entries yet — create one first, or grant without one.")
 		return "", nil
 	}
 
-	options := []prompt.Option{{Label: "No connection", Value: ""}}
+	options := []prompt.Option{{Label: "No entry", Value: ""}}
 	for _, entry := range candidates {
 		c, ok := entry.(map[string]any)
 		if !ok {
@@ -245,7 +248,7 @@ func askForConnection(need map[string]any, candidates []any) (string, error) {
 
 	title := str(need["reason"])
 	if title == "" {
-		title = fmt.Sprintf("Connection for %s", str(need["need"]))
+		title = fmt.Sprintf("Vault entry for %s", str(need["need"]))
 	}
 
 	return prompt.SelectOne(title, options)
@@ -263,7 +266,7 @@ func renderPreview(preview map[string]any) {
 		fmt.Printf("  %s\n", str(line))
 	}
 
-	fmt.Print("\n  Connections are sealed at rest; a component receives only the fields listed.\n\n")
+	fmt.Print("\n  Vault entries are sealed at rest; a component receives only the fields listed.\n\n")
 }
 
 func str(value any) string {

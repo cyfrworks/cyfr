@@ -211,7 +211,10 @@ defmodule Cyfr.Topics do
   @doc """
   A vault entry changed anywhere on this server.
 
-  Messages: `{:vault_entry_changed_global, athanor_id, entry_id, verb}`.
+  Messages: `{:vault_entry_changed_global, athanor_id, entry_id, verb, meta}`
+  — `meta` is `%{old_name: name}` on a rename (the name being vacated is
+  what a live server's header template still spells; the row only ever
+  shows the new one) and `%{}` otherwise.
 
   Unscoped on purpose: `Emissary.MCP.ExternalServerReconciler` is a single
   server-wide process that must restart any external MCP server whose headers

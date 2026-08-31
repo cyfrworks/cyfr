@@ -141,6 +141,44 @@ defmodule Sanctum.Policy.CeilingTest do
       assert clamped.rate_limit.window == "1m"
     end
 
+    test "a shrunken window cannot multiply the rate past the ceiling" do
+      # %{requests: 10_000, window: "1ms"} used to pass untouched — the
+      # count was under the ceiling while the rate was 600M/minute.
+      limits = limits(rate_limit: %{requests: 10_000, window: "1s"})
+      ceiling = %{rate_limit_requests: 10_000}
+
+      clamped = Ceiling.clamp(limits, ceiling)
+      # One second holds a sixtieth of the per-minute ceiling.
+      assert clamped.rate_limit.requests == div(10_000, 60)
+      assert clamped.rate_limit.window == "1s"
+    end
+
+    test "a window too small for one request falls back to the ceiling itself" do
+      limits = limits(rate_limit: %{requests: 10_000, window: "1ms"})
+      ceiling = %{rate_limit_requests: 10_000}
+
+      clamped = Ceiling.clamp(limits, ceiling)
+      assert clamped.rate_limit == %{requests: 10_000, window: "1m"}
+    end
+
+    test "a long window keeps the burst count cap" do
+      # The rate over an hour would fit, but the ceiling also bounds the
+      # burst a single window may hold.
+      limits = limits(rate_limit: %{requests: 500_000, window: "1h"})
+      ceiling = %{rate_limit_requests: 10_000}
+
+      clamped = Ceiling.clamp(limits, ceiling)
+      assert clamped.rate_limit.requests == 10_000
+      assert clamped.rate_limit.window == "1h"
+    end
+
+    test "a sub-minute rate within the ceiling is untouched" do
+      limits = limits(rate_limit: %{requests: 100, window: "1s"})
+      ceiling = %{rate_limit_requests: 10_000}
+
+      assert Ceiling.clamp(limits, ceiling).rate_limit == %{requests: 100, window: "1s"}
+    end
+
     test "no-op when within ceiling" do
       limits =
         limits(

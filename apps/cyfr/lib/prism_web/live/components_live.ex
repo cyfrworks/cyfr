@@ -32,6 +32,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:type_filter, nil)
       |> assign(:loading, true)
       |> assign(:expanded_ref, nil)
+      |> assign(:expanded_loading, false)
       |> assign(:expanded_detail, nil)
       |> assign(:expanded_plan, nil)
       |> assign(:consent_sheet_ref, nil)
@@ -45,14 +46,75 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:search_note, nil)
       |> assign(:search_expanded, nil)
       |> assign(:pulling, MapSet.new())
+      |> assign(:installed_refs, MapSet.new())
+      |> assign(:installed_digests, %{})
       |> assign(:pull_results, %{})
       |> assign(:registering, false)
       |> assign(:register_log, [])
       |> assign(:register_id, nil)
       |> assign(:progress_log, [])
       |> assign(:progress_id, nil)
+      |> assign(:task_timeouts, %{})
 
     {:ok, socket}
+  end
+
+  # Arm a per-kind deadline carrying a generation token: a stale deadline —
+  # one whose operation completed, or that belongs to an earlier operation
+  # of the same kind — matches nothing and is dropped, instead of wiping a
+  # LATER operation's state (pull A's 120s timer used to fire mid-pull-B).
+  defp arm_task_timeout(socket, kind) do
+    token = make_ref()
+    Process.send_after(self(), {:task_timeout, kind, token}, 120_000)
+    assign(socket, :task_timeouts, Map.put(socket.assigns.task_timeouts, kind, token))
+  end
+
+  defp clear_task_timeout(socket, kind),
+    do: assign(socket, :task_timeouts, Map.delete(socket.assigns.task_timeouts, kind))
+
+  # Pulls run several-at-a-time (one MapSet entry per ref, one shared
+  # deadline kind); the deadline stands until the LAST pull lands.
+  defp clear_pull_timeout_when_idle(socket) do
+    if MapSet.size(socket.assigns.pulling) == 0,
+      do: clear_task_timeout(socket, :pull),
+      else: socket
+  end
+
+  defp handle_task_timeout(:pull, socket) do
+    if socket.assigns.pulling != false and MapSet.size(socket.assigns.pulling) > 0 do
+      Logger.warning("[ComponentsLive] Pull task timed out after 120s")
+      {:noreply, socket |> assign(:pulling, MapSet.new()) |> put_flash(:error, "Pull timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp handle_task_timeout(:register, socket) do
+    if socket.assigns.registering do
+      Logger.warning("[ComponentsLive] Register task timed out after 120s")
+
+      {:noreply,
+       socket
+       |> assign(:registering, false)
+       |> put_flash(:error, "Registration timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp handle_task_timeout(:push, socket) do
+    if socket.assigns.pushing do
+      Logger.warning("[ComponentsLive] Push task timed out after 120s")
+
+      {:noreply,
+       socket
+       |> assign(:pushing, false)
+       |> assign(:progress_id, nil)
+       |> assign(:progress_log, [])
+       |> put_flash(:error, "Push timed out")}
+    else
+      {:noreply, socket}
+    end
   end
 
   # --- Registry search events ---
@@ -95,7 +157,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("pull", %{"ref" => ref}, socket) do
-    progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    progress_id = Cyfr.Hex.short()
 
     socket =
       resubscribe(
@@ -131,12 +193,15 @@ defmodule PrismWeb.ComponentsLive do
            send(lv, {:pull_complete, ref, result})
          end) do
       {:ok, _pid} ->
-        Process.send_after(self(), {:task_timeout, :pull}, 120_000)
-        {:noreply, socket}
+        {:noreply, arm_task_timeout(socket, :pull)}
 
       {:error, reason} ->
         Logger.error("[ComponentsLive] Failed to start pull task: #{inspect(reason)}")
-        {:noreply, socket |> assign(:pulling, false) |> put_flash(:error, "Failed to start pull")}
+
+        # :pulling is a MapSet everywhere (the templates call
+        # MapSet.member?); assigning `false` here crashed the next render.
+        {:noreply,
+         socket |> assign(:pulling, MapSet.new()) |> put_flash(:error, "Failed to start pull")}
     end
   end
 
@@ -152,7 +217,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("register", _params, socket) do
-    register_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    register_id = Cyfr.Hex.short()
 
     socket =
       resubscribe(
@@ -186,8 +251,7 @@ defmodule PrismWeb.ComponentsLive do
            send(lv, {:register_complete, result})
          end) do
       {:ok, _pid} ->
-        Process.send_after(self(), {:task_timeout, :register}, 120_000)
-        {:noreply, socket}
+        {:noreply, arm_task_timeout(socket, :register)}
 
       {:error, reason} ->
         Logger.error("[ComponentsLive] Failed to start register task: #{inspect(reason)}")
@@ -207,36 +271,17 @@ defmodule PrismWeb.ComponentsLive do
         Enum.find(socket.assigns.component_groups, fn g -> g.name_ref == name_ref end)
 
       if group do
-        latest_ref = comp_ref(group.latest)
-
-        detail =
-          case call_tool(socket, "component/inspect", %{"reference" => latest_ref}) do
-            {:ok, result} ->
-              result
-
-            other ->
-              Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(other)}")
-              nil
-          end
-
-        plan =
-          case call_tool(socket, "component", %{
-                 "action" => "setup_plan",
-                 "reference" => latest_ref
-               }) do
-            {:ok, result} ->
-              result
-
-            other ->
-              Logger.warning("[ComponentsLive] setup_plan failed: #{inspect(other)}")
-              nil
-          end
+        # The row opens NOW; the two tool calls it needs run off the
+        # LiveView loop (the same discipline ExecutionsLive's expansion
+        # follows — this one used to block the whole page on them).
+        send(self(), {:load_expand, group})
 
         {:noreply,
          socket
          |> assign(:expanded_ref, name_ref)
-         |> assign(:expanded_detail, detail)
-         |> assign(:expanded_plan, plan)
+         |> assign(:expanded_loading, true)
+         |> assign(:expanded_detail, nil)
+         |> assign(:expanded_plan, nil)
          |> assign(:expanded_versions, group.versions)
          |> assign(:pushing, false)
          |> assign(:progress_log, [])
@@ -254,7 +299,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("push", %{"ref" => ref}, socket) do
-    progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    progress_id = Cyfr.Hex.short()
 
     socket =
       resubscribe(
@@ -290,8 +335,7 @@ defmodule PrismWeb.ComponentsLive do
            send(lv, {:push_complete, ref, result})
          end) do
       {:ok, _pid} ->
-        Process.send_after(self(), {:task_timeout, :push}, 120_000)
-        {:noreply, socket}
+        {:noreply, arm_task_timeout(socket, :push)}
 
       {:error, reason} ->
         Logger.error("[ComponentsLive] Failed to start push task: #{inspect(reason)}")
@@ -351,6 +395,43 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, socket |> fetch_components() |> assign(:loading, false)}
   end
 
+  # The expansion's data, fetched off the event path. Guarded by the ref
+  # still being the expanded one — a row collapsed (or swapped) while the
+  # fetch ran must not repaint.
+  def handle_info({:load_expand, group}, socket) do
+    latest_ref = comp_ref(group.latest)
+
+    detail =
+      case call_tool(socket, "component/inspect", %{"reference" => latest_ref}) do
+        {:ok, result} ->
+          result
+
+        other ->
+          Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(other)}")
+          nil
+      end
+
+    plan =
+      case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => latest_ref}) do
+        {:ok, result} ->
+          result
+
+        other ->
+          Logger.warning("[ComponentsLive] setup_plan failed: #{inspect(other)}")
+          nil
+      end
+
+    if socket.assigns.expanded_ref == group.name_ref do
+      {:noreply,
+       socket
+       |> assign(:expanded_loading, false)
+       |> assign(:expanded_detail, detail)
+       |> assign(:expanded_plan, plan)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:consent_granted, _ref, _result}, socket) do
     {:noreply,
      socket
@@ -372,6 +453,8 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:register_complete, {:ok, result}}, socket) do
+    socket = clear_task_timeout(socket, :register)
+
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
@@ -392,6 +475,8 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:register_complete, {:error, reason}}, socket) do
+    socket = clear_task_timeout(socket, :register)
+
     if socket.assigns.register_id do
       Phoenix.PubSub.unsubscribe(
         Emissary.PubSub,
@@ -422,6 +507,7 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply,
      socket
      |> assign(:pulling, MapSet.delete(socket.assigns.pulling, ref))
+     |> clear_pull_timeout_when_idle()
      |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:ok, result}))
      |> assign(:progress_id, nil)
      |> assign(:progress_log, [])
@@ -435,6 +521,7 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply,
      socket
      |> assign(:pulling, MapSet.delete(socket.assigns.pulling, ref))
+     |> clear_pull_timeout_when_idle()
      |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:error, reason}))
      |> assign(:progress_id, nil)
      |> assign(:progress_log, [])
@@ -442,6 +529,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:push_complete, _ref, {:ok, result}}, socket) do
+    socket = clear_task_timeout(socket, :push)
     unsubscribe_progress(socket)
     oci_ref = comp_field(result, :oci_reference) || result[:oci_reference]
 
@@ -460,6 +548,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:push_complete, _ref, {:error, reason}}, socket) do
+    socket = clear_task_timeout(socket, :push)
     unsubscribe_progress(socket)
 
     error_msg = Editor.format_push_error(reason)
@@ -478,38 +567,9 @@ defmodule PrismWeb.ComponentsLive do
      |> put_flash(:error, error_msg)}
   end
 
-  def handle_info({:task_timeout, :pull}, socket) do
-    if socket.assigns.pulling != false and MapSet.size(socket.assigns.pulling) > 0 do
-      Logger.warning("[ComponentsLive] Pull task timed out after 120s")
-      {:noreply, socket |> assign(:pulling, MapSet.new()) |> put_flash(:error, "Pull timed out")}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_info({:task_timeout, :register}, socket) do
-    if socket.assigns.registering do
-      Logger.warning("[ComponentsLive] Register task timed out after 120s")
-
-      {:noreply,
-       socket
-       |> assign(:registering, false)
-       |> put_flash(:error, "Registration timed out")}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_info({:task_timeout, :push}, socket) do
-    if socket.assigns.pushing do
-      Logger.warning("[ComponentsLive] Push task timed out after 120s")
-
-      {:noreply,
-       socket
-       |> assign(:pushing, false)
-       |> assign(:progress_id, nil)
-       |> assign(:progress_log, [])
-       |> put_flash(:error, "Push timed out")}
+  def handle_info({:task_timeout, kind, token}, socket) do
+    if socket.assigns.task_timeouts[kind] == token do
+      handle_task_timeout(kind, clear_task_timeout(socket, kind))
     else
       {:noreply, socket}
     end
@@ -531,27 +591,14 @@ defmodule PrismWeb.ComponentsLive do
 
     if group do
       latest_ref = comp_ref(group.latest)
-
-      detail =
-        case call_tool(socket, "component/inspect", %{"reference" => latest_ref}) do
-          {:ok, result} -> result
-          _ -> nil
-        end
-
-      plan =
-        case call_tool(socket, "component", %{
-               "action" => "setup_plan",
-               "reference" => latest_ref
-             }) do
-          {:ok, result} -> result
-          _ -> nil
-        end
+      send(self(), {:load_expand, group})
 
       {:noreply,
        socket
        |> assign(:expanded_ref, group.name_ref)
-       |> assign(:expanded_detail, detail)
-       |> assign(:expanded_plan, plan)
+       |> assign(:expanded_loading, true)
+       |> assign(:expanded_detail, nil)
+       |> assign(:expanded_plan, nil)
        |> assign(:expanded_versions, group.versions)
        |> assign(:consent_sheet_ref, latest_ref)
        |> assign(:loading, false)}
@@ -568,7 +615,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ComponentsLive] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -598,6 +645,7 @@ defmodule PrismWeb.ComponentsLive do
   defp collapse(socket) do
     socket
     |> assign(:expanded_ref, nil)
+    |> assign(:expanded_loading, false)
     |> assign(:expanded_detail, nil)
     |> assign(:expanded_plan, nil)
     |> assign(:expanded_versions, [])
@@ -714,8 +762,22 @@ defmodule PrismWeb.ComponentsLive do
     # Group versions under name-level refs
     groups = group_by_component(all_components)
 
+    # Derived views computed WHERE the data changes, not per render — the
+    # render used to rebuild this MapSet and digest map on every diff,
+    # including ones an unrelated progress line triggered.
+    installed_refs = all_components |> Enum.map(&comp_ref/1) |> MapSet.new()
+
+    installed_digests =
+      Enum.reduce(all_components, %{}, fn c, acc ->
+        ref = comp_ref(c)
+        digest = comp_field(c, :digest)
+        if ref != "-", do: Map.put(acc, ref, digest), else: acc
+      end)
+
     socket
     |> assign(:all_components, all_components)
+    |> assign(:installed_refs, installed_refs)
+    |> assign(:installed_digests, installed_digests)
     |> assign(:component_groups, groups)
     |> assign(:setup_readiness, %{})
     |> collapse()
@@ -930,25 +992,7 @@ defmodule PrismWeb.ComponentsLive do
       assigns.grouped
       |> Enum.sort_by(fn {type, _} -> Editor.type_sort_order(type) end)
 
-    all_comps = assigns[:all_components] || []
-
-    inst_refs =
-      all_comps
-      |> Enum.map(&comp_ref/1)
-      |> MapSet.new()
-
-    inst_digests =
-      Enum.reduce(all_comps, %{}, fn c, acc ->
-        ref = comp_ref(c)
-        digest = comp_field(c, :digest)
-        if ref != "-", do: Map.put(acc, ref, digest), else: acc
-      end)
-
-    assigns =
-      assigns
-      |> assign(:sorted_groups, sorted_groups)
-      |> assign(:installed_refs, inst_refs)
-      |> assign(:installed_digests, inst_digests)
+    assigns = assign(assigns, :sorted_groups, sorted_groups)
 
     ~H"""
     <div class="space-y-6">
@@ -1169,25 +1213,12 @@ defmodule PrismWeb.ComponentsLive do
             All
           </button>
           <button
+            :for={type <- Sanctum.ComponentRef.valid_types()}
             phx-click="filter_type"
-            phx-value-type="catalyst"
-            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "catalyst", do: "bg-purple-900 text-purple-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
+            phx-value-type={type}
+            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == type, do: type_badge_color(type), else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
           >
-            Catalysts
-          </button>
-          <button
-            phx-click="filter_type"
-            phx-value-type="reagent"
-            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "reagent", do: "bg-blue-900 text-blue-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-          >
-            Reagents
-          </button>
-          <button
-            phx-click="filter_type"
-            phx-value-type="formula"
-            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "formula", do: "bg-amber-900 text-amber-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-          >
-            Formulas
+            {String.capitalize(type)}s
           </button>
         </div>
         <.button variant="secondary" phx-click="register" disabled={@registering}>
@@ -1290,6 +1321,7 @@ defmodule PrismWeb.ComponentsLive do
                     <!-- Expanded detail row -->
                     <tr :if={@expanded_ref == group.name_ref} class="bg-gray-900/60">
                       <td colspan="3" class="px-4 py-4">
+                        <.live_loading :if={@expanded_loading} message="Loading…" />
                         <div :if={@expanded_detail} class="space-y-4">
                           <!-- Description -->
                           <div :if={comp_field(@expanded_detail, :description)}>
@@ -1509,7 +1541,7 @@ defmodule PrismWeb.ComponentsLive do
                                 :if={(plan_field(@expanded_plan, :needs) || []) == []}
                                 class="text-sm text-gray-500"
                               >
-                                This component asks for no Connections.
+                                This component asks for no vault entries.
                               </p>
                               <dl
                                 :if={(plan_field(@expanded_plan, :needs) || []) != []}

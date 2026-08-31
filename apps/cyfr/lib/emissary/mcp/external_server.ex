@@ -324,7 +324,7 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   def handle_info(msg, state) do
-    Logger.warning("[ExternalServer] unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -437,37 +437,57 @@ defmodule Emissary.MCP.ExternalServer do
     handshake_timeout = min(state.timeout_ms, @initialize_timeout_ms)
     call_timeout = state.timeout_ms
 
-    with {:ok, resolved_headers} <-
-           resolve_headers(state.raw_headers, state.athanor_id),
-         state <- %{state | headers: resolved_headers, timeout_ms: handshake_timeout},
-         :ok <- validate_server_url(state.url),
-         {:ok, tools, server_info, state} <- connect(state) do
-      state = %{
-        state
-        | timeout_ms: call_timeout,
-          status: :ready,
-          tools: tools,
-          server_info: server_info,
-          error: nil
-      }
-
-      Logger.info(
-        "[ExternalServer] Connected to #{state.name} (#{state.era}): " <>
-          "#{length(tools)} tools discovered"
-      )
-
-      {:ok, state}
-    else
+    # Headers are resolved before the `with`, not inside it: `with` does not
+    # export its bindings to `else`, so the failure arm masked with the
+    # *outer* state, whose `headers` is the struct's empty default (and is
+    # reset to empty on every `:reinitialize`). `sensitive_header_values/1`
+    # requires a resolved binary per key, found none, and masked nothing — so
+    # on a first connect, an upstream that echoed the Authorization header
+    # into its error body carried it out whole through `state.error`.
+    case resolve_headers(state.raw_headers, state.athanor_id) do
       {:error, reason} ->
-        # state.error surfaces to callers and the status view — the same
-        # egress rule as results: mask the credentials this plane injected
-        # before a transport exception that echoed them can carry one out.
-        state = %{state | status: :error, error: mask_credentials(inspect(reason), state)}
+        fail_initialize(state, reason)
 
-        Logger.error("[ExternalServer] Failed to initialize #{state.name}: #{inspect(reason)}")
+      {:ok, resolved_headers} ->
+        state = %{state | headers: resolved_headers, timeout_ms: handshake_timeout}
 
-        {:error, reason, state}
+        # `connected` rather than rebinding `state`: the else arm below must
+        # see the headers-resolved state, and a `with` pattern binding would
+        # leave it looking at whatever the enclosing scope still holds.
+        with :ok <- validate_server_url(state.url),
+             {:ok, tools, server_info, connected} <- connect(state) do
+          state = %{
+            connected
+            | timeout_ms: call_timeout,
+              status: :ready,
+              tools: tools,
+              server_info: server_info,
+              error: nil
+          }
+
+          Logger.info(
+            "[ExternalServer] Connected to #{state.name} (#{state.era}): " <>
+              "#{length(tools)} tools discovered"
+          )
+
+          {:ok, state}
+        else
+          {:error, reason} -> fail_initialize(state, reason)
+        end
     end
+  end
+
+  # `state.error` surfaces to callers and the status view — the same egress
+  # rule as results: mask the credentials this plane injected before a
+  # transport exception that echoed them can carry one out. The log gets the
+  # masked sentence too; the credential is never the diagnostic part.
+  defp fail_initialize(state, reason) do
+    masked = mask_credentials(inspect(reason), state)
+    state = %{state | status: :error, error: masked}
+
+    Logger.error("[ExternalServer] Failed to initialize #{state.name}: #{masked}")
+
+    {:error, reason, state}
   end
 
   # Try the current protocol first; fall back to the handshake only when the
@@ -616,7 +636,7 @@ defmodule Emissary.MCP.ExternalServer do
               # only complaint is the bearer token. Say what it is.
               status in [401, 403] ->
                 {:error,
-                 "HTTP #{status} — the server refused this connection's " <>
+                 "HTTP #{status} — the server refused the configured " <>
                    "credentials; check the registered Authorization header"}
 
               state.era == :modern and status in 400..499 and not modern_error?(resp_body) ->
@@ -799,7 +819,7 @@ defmodule Emissary.MCP.ExternalServer do
   #
   # Two things are checked because the values do not all come from the
   # operator's own typing: a `vault:` reference resolves to whatever the
-  # Connection holds. A CR or LF in a name or value is a header-injection
+  # vault entry holds. A CR or LF in a name or value is a header-injection
   # primitive against the upstream — it would split one header into
   # several, or forge a body — and a name that is not a valid HTTP token
   # cannot be sent at all. Neither belongs on the wire, and dropping the

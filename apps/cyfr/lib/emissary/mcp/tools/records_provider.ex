@@ -92,7 +92,10 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   Read a resource by URI.
   """
   def read(%Context{authenticated: false}, "arca://files/" <> _path) do
-    {:error, "Authentication required to read storage"}
+    # Typed, so the router renders the one auth prose AND answers with the
+    # auth_required code — the bare string used to ride out mislabeled as
+    # resource_not_found.
+    {:error, :unauthenticated}
   end
 
   def read(%Context{} = ctx, "arca://files/" <> path) do
@@ -357,8 +360,13 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         |> maybe_put(:status, args["status"])
         |> maybe_put(:parent_execution_id, args["parent_execution_id"])
 
-      records = Arca.Execution.list(opts)
-      {:ok, %{executions: Enum.map(records, &execution_to_map/1)}}
+      # `list/1` answers a tuple on an outage; mapping over it raised a
+      # 500 where the sibling log arms answer the storage refusal.
+      case Arca.Execution.list(opts) do
+        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
+        {:error, _} = err -> err
+        records -> {:ok, %{executions: Enum.map(records, &execution_to_map/1)}}
+      end
     end
   end
 
@@ -416,10 +424,14 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
           {:error, _} -> []
         end
 
+      # Correlation is a best-effort join of three sources: a storage
+      # outage on one leaves that leg empty, the way the mcp_log leg above
+      # already does, rather than raising on the error tuple.
       executions =
-        ctx
-        |> Arca.Execution.list_by_request(request_id)
-        |> Enum.map(&execution_to_map/1)
+        case Arca.Execution.list_by_request(ctx, request_id) do
+          rows when is_list(rows) -> Enum.map(rows, &execution_to_map/1)
+          {:error, _} -> []
+        end
 
       policy_log_opts =
         [

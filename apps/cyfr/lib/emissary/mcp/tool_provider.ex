@@ -241,6 +241,16 @@ defmodule Emissary.MCP.ToolProvider do
     "Invalid #{tool} action. Use: #{humanize_enum(enum)}"
   end
 
+  @doc """
+  The action enum out of a tool's own wire definition — the one place that
+  knows where the schema keeps it. Eight providers carried the identical
+  `get_in(definition(), ["properties", "action", "enum"])` line; the path
+  is this module's knowledge, not theirs.
+  """
+  @spec action_enum(map()) :: [String.t()] | nil
+  def action_enum(definition) when is_map(definition),
+    do: get_in(definition, [:input_schema, "properties", "action", "enum"])
+
   defp humanize_enum([one]), do: one
   defp humanize_enum([a, b]), do: "#{a} or #{b}"
 

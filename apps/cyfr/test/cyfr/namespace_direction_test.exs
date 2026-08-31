@@ -128,27 +128,6 @@ defmodule Cyfr.NamespaceDirectionTest do
     {"apps/cyfr/lib/aqua/actions.ex", "EmissaryWeb.Router"}
   ]
 
-  # Code only — a moduledoc that NAMES the controller it serves is describing
-  # the dependency, not taking one. Same filter the surface tests use.
-  defp code_lines(source) do
-    source
-    |> String.split("\n")
-    |> Enum.with_index(1)
-    |> Enum.reduce({[], false}, fn {line, n}, {kept, in_heredoc?} ->
-      toggles =
-        line
-        |> String.graphemes()
-        |> Enum.chunk_every(3, 1, :discard)
-        |> Enum.count(&(&1 == ["\"", "\"", "\""]))
-
-      now_inside? = if rem(toggles, 2) == 1, do: not in_heredoc?, else: in_heredoc?
-
-      keep? = not in_heredoc? and not now_inside? and not String.match?(line, ~r/^\s*#/)
-      {if(keep?, do: [{line, n} | kept], else: kept), now_inside?}
-    end)
-    |> elem(0)
-  end
-
   test "the domain namespaces reach the web layer only where it is written down" do
     allowed = MapSet.new(@domain_web_calls)
 
@@ -156,7 +135,7 @@ defmodule Cyfr.NamespaceDirectionTest do
       for dir <- @domain_dirs,
           path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
           rel = Path.relative_to(path, root()),
-          {line, n} <- path |> File.read!() |> code_lines(),
+          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
           [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),
           not MapSet.member?(allowed, {rel, module}),
           do: "#{rel}:#{n}: #{module}"

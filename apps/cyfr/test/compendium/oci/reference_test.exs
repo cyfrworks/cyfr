@@ -18,12 +18,17 @@ defmodule Compendium.OCI.ReferenceTest do
 
     test "parses reference with digest" do
       assert {:ok, ref} =
-               Reference.parse("ghcr.io/cyfr/reagents/data-processor@sha256:abc123def456")
+               Reference.parse(
+                 "ghcr.io/cyfr/reagents/data-processor@sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+               )
 
       assert ref.registry == "ghcr.io"
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == nil
-      assert ref.digest == "sha256:abc123def456"
+
+      assert ref.digest ==
+               "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
       assert ref.default_registry == false
     end
 

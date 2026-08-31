@@ -100,11 +100,15 @@ defmodule Opus.SecurityTest do
       assert opts.inherit_stdin == false
     end
 
-    test "catalyst inherits stdout/stderr for logging" do
+    test "no component type inherits the host's stdout/stderr" do
+      # Inheriting them was an unbounded write from every guest straight into
+      # the operator's console and log aggregation, around `Opus.SecretMasker`,
+      # the emit rate limit and the emit size cap. `emit` is the channel that
+      # carries those bounds.
       opts = ComponentType.wasi_options(:catalyst)
 
-      assert opts.inherit_stdout == true
-      assert opts.inherit_stderr == true
+      assert opts.inherit_stdout == false
+      assert opts.inherit_stderr == false
     end
 
     test "component type defaults to :reagent when nil" do
@@ -415,8 +419,8 @@ defmodule Opus.SecurityTest do
           "input" => %{}
         })
 
-      assert msg =~ "consent_required: "
-      refute msg =~ "Signature verification"
+      assert {:consent_required, %{}} = msg
+      refute Emissary.MCP.ToolError.render(msg) =~ "Signature verification"
     end
   end
 end

@@ -57,7 +57,7 @@ defmodule Emissary.MCP.RunningTasksTest do
       :ok = RunningTasks.register("req_done", task)
       Task.await(task)
 
-      RunningTasks.unregister("req_done")
+      RunningTasks.unregister("req_done", task)
       :sys.get_state(RunningTasks)
 
       assert {:error, :not_found} = RunningTasks.cancel("req_done")
@@ -81,19 +81,59 @@ defmodule Emissary.MCP.RunningTasksTest do
       Task.shutdown(b, :brutal_kill)
     end
 
-    test "re-registering the same id replaces the previous entry" do
-      first = forever()
-      %Task{ref: ref_second} = second = forever()
+    test "a nested call registers alongside its parent — one request, several tasks" do
+      # An in-chain tool call inherits its root's request id (that is what
+      # keeps a chain attributable to its ingress). Under the old `:set`
+      # table the nested registration evicted the parent's row AND
+      # demonitored it, so a caller hanging up mid-chain killed the inner
+      # task and left the outer one running forever.
+      %Task{ref: ref_outer} = outer = forever()
+      %Task{ref: ref_inner} = inner = forever()
 
-      :ok = RunningTasks.register("req_replace", first)
-      :ok = RunningTasks.register("req_replace", second)
+      :ok = RunningTasks.register("req_chain", outer)
+      :ok = RunningTasks.register("req_chain", inner)
       :sys.get_state(RunningTasks)
 
-      assert :ok == RunningTasks.cancel("req_replace")
-      assert_receive {:DOWN, ^ref_second, :process, _pid, :cancelled}, 1_000
+      assert length(RunningTasks.pids("req_chain")) == 2
 
-      assert Process.alive?(first.pid), "the evicted entry must not be killed"
-      Task.shutdown(first, :brutal_kill)
+      # The caller hung up: everything the request started stops.
+      assert :ok == RunningTasks.cancel("req_chain")
+
+      assert_receive {:DOWN, ^ref_inner, :process, _pid, :cancelled}, 1_000
+      assert_receive {:DOWN, ^ref_outer, :process, _pid, :cancelled}, 1_000
+    end
+
+    test "a finished nested call leaves its parent cancellable" do
+      # The other half of the same bug: the nested call's `unregister`
+      # deleted the whole key, so after an in-chain call returned, cancelling
+      # the request reached nothing at all.
+      %Task{ref: ref_outer} = outer = forever()
+      inner = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+
+      :ok = RunningTasks.register("req_chain_done", outer)
+      :ok = RunningTasks.register("req_chain_done", inner)
+      Task.await(inner)
+
+      RunningTasks.unregister("req_chain_done", inner)
+      :sys.get_state(RunningTasks)
+
+      assert RunningTasks.pids("req_chain_done") == [outer.pid]
+
+      assert :ok == RunningTasks.cancel("req_chain_done")
+      assert_receive {:DOWN, ^ref_outer, :process, _pid, :cancelled}, 1_000
+    end
+
+    test "re-registering the very same task does not stack monitors" do
+      %Task{ref: ref} = task = forever()
+
+      :ok = RunningTasks.register("req_same", task)
+      :ok = RunningTasks.register("req_same", task)
+      :sys.get_state(RunningTasks)
+
+      assert RunningTasks.pids("req_same") == [task.pid]
+
+      assert :ok == RunningTasks.cancel("req_same")
+      assert_receive {:DOWN, ^ref, :process, _pid, :cancelled}, 1_000
     end
 
     test "ETS entry is auto-cleaned when the task process dies" do

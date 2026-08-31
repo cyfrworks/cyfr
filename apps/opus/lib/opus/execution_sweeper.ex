@@ -53,7 +53,7 @@ defmodule Opus.ExecutionSweeper do
   end
 
   def handle_info(msg, state) do
-    Logger.warning("[Opus.ExecutionSweeper] Unexpected message: #{inspect(msg)}")
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
     {:noreply, state}
   end
 

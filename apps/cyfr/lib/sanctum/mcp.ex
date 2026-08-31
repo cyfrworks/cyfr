@@ -9,10 +9,14 @@ defmodule Sanctum.MCP do
 
   - `session` - Session management (login, logout, whoami, use)
   - `key` - API key management (create, get, list, revoke, rotate)
-  - `tincture_visibility` - Tincture public/private visibility (set, get)
+  - `tincture_visibility` - Tincture public/private visibility (get)
   - `athanor` - The athanors a person belongs to (list, create a group, rename, archive)
   - `member` - Who is in an athanor (list, add, remove, leave)
   - `door` - The server allowlist, platform admins only (allow, deny, list, requests)
+  - `vault` - The athanor's credential entries (Connections)
+  - `profile` - Consent profiles: plan, preview, commit, grant, revoke
+  - `oauth` - OAuth grant flow for vault entries
+  - `webhook` - Inbound webhook management
 
   ## Resources
 

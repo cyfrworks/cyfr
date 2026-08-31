@@ -185,6 +185,14 @@ defmodule Compendium.OCI.Reference do
   # Private
   # ============================================================================
 
+  # OCI distribution grammar for the two segments this parser used to take
+  # on faith. Both flow into registry URL paths (`/v2/…/manifests/<ref>`)
+  # and cache filenames, so the parser is where a `/`, `?` or any other
+  # injection-shaped byte is refused — not the layers downstream that
+  # happen to block some of them.
+  @tag_pattern ~r/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/
+  @digest_pattern ~r/^sha256:[0-9a-f]{64}$/
+
   defp do_parse(ref) do
     # Split off @digest if present
     {ref_without_digest, digest} =
@@ -202,20 +210,48 @@ defmodule Compendium.OCI.Reference do
       end
 
     # Parse registry and repository from the path
-    case split_registry_repo(ref_without_tag) do
-      {:ok, registry, repository, defaulted} ->
-        {:ok,
-         %__MODULE__{
-           registry: registry,
-           repository: repository,
-           tag: tag,
-           digest: digest,
-           default_registry: defaulted
-         }}
-
-      {:error, _} = error ->
-        error
+    with :ok <- validate_digest(digest),
+         :ok <- validate_tag(tag),
+         {:ok, registry, repository, defaulted} <- split_registry_repo(ref_without_tag) do
+      {:ok,
+       %__MODULE__{
+         registry: registry,
+         repository: repository,
+         tag: tag,
+         digest: digest,
+         default_registry: defaulted
+       }}
     end
+  end
+
+  @doc """
+  Whether a string is a well-formed OCI digest (`sha256:` + 64 lowercase hex).
+
+  The grammar lives here because a digest is a path segment: it is
+  interpolated into `/v2/…/blobs/<digest>` and into cache filenames. A
+  reference's own digest was checked at parse; the digests inside a *manifest*
+  were not, so a hostile or compromised registry could put `..`, `?` or `#` in
+  a layer descriptor and steer the blob GET elsewhere on its own host.
+  `Compendium.OCI.Manifest.parse/1` checks every descriptor through this.
+  """
+  @spec valid_digest?(term()) :: boolean()
+  def valid_digest?(digest) when is_binary(digest), do: Regex.match?(@digest_pattern, digest)
+  def valid_digest?(_), do: false
+
+  defp validate_digest(nil), do: :ok
+
+  defp validate_digest(d) when is_binary(d) do
+    if valid_digest?(d),
+      do: :ok,
+      else: {:error, "OCI digest must be sha256:<64 hex chars>, got: #{inspect(d)}"}
+  end
+
+  defp validate_tag(nil), do: :ok
+
+  defp validate_tag(t) when is_binary(t) do
+    if Regex.match?(@tag_pattern, t),
+      do: :ok,
+      else: {:error, "OCI tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}, got: #{inspect(t)}"}
   end
 
   # Split tag from the last path segment.

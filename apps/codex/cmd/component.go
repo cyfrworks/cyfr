@@ -199,36 +199,24 @@ var inspectCmd = &cobra.Command{
 	Args: cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		var normalized string
+		args = joinTypeShorthand(args)
 		var originalInput string
-
-		switch {
-		case len(args) >= 1:
-			args = joinTypeShorthand(args)
+		if len(args) >= 1 {
 			originalInput = args[0]
-			var err error
-			normalized, err = resolveComponentRef(cmd.Context(), client, args[0])
-			if err != nil {
-				return err
-			}
-		case prompt.IsInteractive(flagNoInteractive):
-			opts, err := prompt.FetchComponents(cmd.Context(), client)
-			if err != nil {
-				return handleToolError(err)
-			}
-			if len(opts) == 0 {
-				return errors.New("No components found. Register one first.")
-			}
-			selected, err := prompt.SelectOne("Select a component to inspect", opts)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					os.Exit(130)
-				}
-				return fmt.Errorf("Prompt failed: %v", err)
-			}
-			normalized = selected
-		default:
-			return errors.New("Usage: cyfr inspect <reference>")
+		}
+		normalized, err := pickTarget(cmd.Context(), args, selector{
+			Title: "Select a component to inspect",
+			Empty: "No components found. Register one first.",
+			Usage: "Usage: cyfr inspect <reference>",
+			Fetch: func(ctx context.Context) ([]prompt.Option, error) {
+				return prompt.FetchComponents(ctx, client)
+			},
+			Normalize: func(ctx context.Context, arg string) (string, error) {
+				return resolveComponentRef(ctx, client, arg)
+			},
+		})
+		if err != nil {
+			return err
 		}
 
 		callArgs := map[string]any{
@@ -330,12 +318,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		if err != nil {
 			return handleToolError(err, "Push failed")
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -579,12 +562,7 @@ var registryDiscoverCmd = &cobra.Command{
 		if err != nil {
 			return handleToolError(err, "Discover failed")
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
-		}
-		return nil
+		return renderResult(result)
 	},
 }
 
@@ -809,7 +787,7 @@ func resolveComponentRef(ctx context.Context, client *mcp.Client, s string) (str
 
 	versions, err := prompt.FetchVersions(ctx, client, parsed.Name, parsed.Namespace, componentType)
 	if err != nil {
-		return "", fmt.Errorf("Failed to fetch versions: %v", err)
+		return "", fmt.Errorf("Failed to fetch versions: %w", err)
 	}
 
 	if len(versions) == 0 {
