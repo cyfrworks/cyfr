@@ -268,12 +268,28 @@ jobs:
       # never edited it — and a silent miss for every one that did. New
       # bytes mean a NEW version directory. (Adding or removing whole
       # versions is a release decision; modifying files inside one is not.)
+      #
+      # This ran on `pull_request` only, which left the one path that needs
+      # no review — a direct push to main — as the one path that could do it.
       - name: Existing seed component versions are unmodified
-        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "${{ github.base_ref }}"
-          base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          else
+            # A push names the commit it moved from. A new branch or a
+            # force-push reports the null SHA, and the very first commit has
+            # no parent — nothing to diff against, so nothing to guard.
+            base="${{ github.event.before }}"
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="$(git rev-parse --verify --quiet HEAD^ || true)"
+            fi
+            if [ -z "$base" ]; then
+              echo "no comparable base for this push — nothing to check"
+              exit 0
+            fi
+          fi
           bad="$(git diff --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
           # A deletion or rename inside a version directory that still
           # ships is a mutation too; retiring the WHOLE directory is a
