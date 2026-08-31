@@ -209,17 +209,6 @@ defmodule Sanctum.Consent.Normalize do
     do: {:error, {tag, :caps, "key must be a string, got: #{inspect(key)}"}}
 
   @doc false
-  def duration(map, key, tag) do
-    with {:ok, value} <- required_string(map, key, tag) do
-      if Regex.match?(@duration_re, value) do
-        {:ok, value}
-      else
-        {:error, {tag, key, "must be an exact duration like \"30s\", got: #{inspect(value)}"}}
-      end
-    end
-  end
-
-  @doc false
   def put_optional(map, _key, nil), do: map
   def put_optional(map, key, value), do: Map.put(map, key, value)
 end

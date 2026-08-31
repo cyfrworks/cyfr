@@ -65,9 +65,21 @@ defmodule Prism.AquaTemplatePolicyTest do
 
   defp refused?(key) do
     case String.split(key, ".", parts: 2) do
-      [_tool, "*"] -> false
-      [tool, action] -> not AquaVirtualTools.virtual_tool?(tool) and refused_action?(tool, action)
-      _ -> false
+      [_tool, "*"] ->
+        false
+
+      [tool, action] ->
+        if AquaVirtualTools.virtual_tool?(tool) do
+          # A virtual tool's ACTION has to exist too. Accepting the whole
+          # namespace on the strength of its name let `storage.frobnicate`
+          # through — granted in the template, dispatched by nothing.
+          is_nil(AquaVirtualTools.kind_for(tool, action))
+        else
+          refused_action?(tool, action)
+        end
+
+      _ ->
+        false
     end
   end
 
