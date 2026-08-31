@@ -61,6 +61,7 @@ defmodule PrismWeb.ActivitiesLive do
       |> assign(:source_filter, normalize_filter(params["source"]))
       |> assign(:status_filter, normalize_filter(params["status"]))
       |> assign(:time_filter, normalize_filter(params["time"]))
+      |> focus_request(params["id"])
 
     if connected?(socket) do
       send(self(), :load_data)
@@ -69,6 +70,30 @@ defmodule PrismWeb.ActivitiesLive do
       {:noreply, socket}
     end
   end
+
+  # `ui.activity.focus` navigates here with `?id=req_…` — the agent's half
+  # of the act a person performs by clicking the row, so it lands in the
+  # same state. Reading the key is also what makes the palette honest:
+  # `PrismWeb.ActiveContext` already derives `{:request, id}` from this URL,
+  # so without this the palette offered "rerun current request" over a page
+  # showing a bare list.
+  #
+  # Absent key leaves the socket alone: a filter `push_patch` carries no
+  # `id`, and must not collapse a row the person opened by hand.
+  defp focus_request(socket, id) when is_binary(id) and id != "" do
+    if socket.assigns.expanded_id == id do
+      socket
+    else
+      if connected?(socket), do: send(self(), {:load_correlate, id})
+
+      socket
+      |> assign(:expanded_id, id)
+      |> assign(:expanded_tree, nil)
+      |> assign(:expanded_loading, connected?(socket))
+    end
+  end
+
+  defp focus_request(socket, _id), do: socket
 
   @impl true
   def handle_event("filter", %{"source" => source, "status" => status}, socket) do

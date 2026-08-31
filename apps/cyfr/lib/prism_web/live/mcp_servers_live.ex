@@ -241,46 +241,40 @@ defmodule PrismWeb.McpServersLive do
        |> assign(:expanded_name, nil)
        |> assign(:detail, nil)}
     else
-      detail =
-        case call_tool(socket, "mcp_servers/get", %{"name" => name}) do
-          {:ok, result} -> normalize_keys(result)
-          {:error, _} -> nil
-        end
-
-      # Sync the list row with fresh status/tool_count from the detail
-      servers =
-        if detail do
-          Enum.map(socket.assigns.servers, fn s ->
-            if s[:name] == name do
-              s
-              |> Map.put(:status, detail[:status])
-              |> Map.put(:tool_count, length(detail[:tools] || []))
-            else
-              s
-            end
-          end)
-        else
-          socket.assigns.servers
-        end
-
-      {:noreply,
-       socket
-       |> assign(:servers, servers)
-       |> assign(:expanded_name, name)
-       |> assign(:detail, detail)}
+      {:noreply, expand_server(socket, name)}
     end
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
     # Paint the frame first — refresh_servers probes every server.
-    if connected?(socket), do: send(self(), :load)
+    if connected?(socket) do
+      send(self(), :load)
+
+      # `ui.mcp_server.focus` navigates here with `?name=`, the agent's half
+      # of the act a person performs by clicking the row. Deferred behind
+      # `:load` for the same reason as the list itself: the detail read
+      # probes the server, and `handle_params` must not hold the paint.
+      case params["name"] do
+        name when is_binary(name) and name != "" -> send(self(), {:focus, name})
+        _ -> :ok
+      end
+    end
+
     {:noreply, socket}
   end
 
   @impl true
   def handle_info(:load, socket) do
     {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
+  end
+
+  def handle_info({:focus, name}, socket) do
+    if socket.assigns.expanded_name == name do
+      {:noreply, socket}
+    else
+      {:noreply, expand_server(socket, name)}
+    end
   end
 
   def handle_info(:mcp_servers_changed, socket) do
@@ -290,6 +284,37 @@ defmodule PrismWeb.McpServersLive do
   def handle_info(msg, socket) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
+  end
+
+  # Open one server's detail row. Shared by the click and by the
+  # `?name=` focus intent so both land in exactly the same state.
+  defp expand_server(socket, name) do
+    detail =
+      case call_tool(socket, "mcp_servers/get", %{"name" => name}) do
+        {:ok, result} -> normalize_keys(result)
+        {:error, _} -> nil
+      end
+
+    # Sync the list row with fresh status/tool_count from the detail
+    servers =
+      if detail do
+        Enum.map(socket.assigns.servers, fn s ->
+          if s[:name] == name do
+            s
+            |> Map.put(:status, detail[:status])
+            |> Map.put(:tool_count, length(detail[:tools] || []))
+          else
+            s
+          end
+        end)
+      else
+        socket.assigns.servers
+      end
+
+    socket
+    |> assign(:servers, servers)
+    |> assign(:expanded_name, name)
+    |> assign(:detail, detail)
   end
 
   defp refresh_servers(socket) do

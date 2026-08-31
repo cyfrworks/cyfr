@@ -42,6 +42,7 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:cron_preset, "")
       |> assign(:cron_custom, "")
       |> assign(:form, to_form(%{"name" => "", "reference" => "", "input" => ""}))
+      |> assign(:focused_id, nil)
 
     {:ok, socket}
   end
@@ -144,10 +145,18 @@ defmodule PrismWeb.SchedulesLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
     if connected?(socket), do: send(self(), :load)
-    {:noreply, socket}
+
+    # `ui.schedule.focus` navigates here with `?id=sched_…`. This page has
+    # no detail row to open — a schedule IS its row — so focus marks the
+    # row instead of expanding it. Unlike the pages with a click-driven
+    # expansion, nothing else sets this, so an absent key clears it.
+    {:noreply, assign(socket, :focused_id, focused_id(params["id"]))}
   end
+
+  defp focused_id(id) when is_binary(id) and id != "", do: id
+  defp focused_id(_id), do: nil
 
   @impl true
   def handle_info(:load, socket) do
@@ -378,7 +387,12 @@ defmodule PrismWeb.SchedulesLive do
             </thead>
             <tbody class="divide-y divide-gray-800">
               <%= for sched <- @schedules do %>
-                <tr class="hover:bg-gray-800/50">
+                <tr class={[
+                  if(f(sched, :id) == @focused_id,
+                    do: "bg-gray-800/80",
+                    else: "hover:bg-gray-800/50"
+                  )
+                ]}>
                   <td class="px-4 py-3 text-sm text-white font-medium truncate">{f(sched, :name)}</td>
                   <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
                     <span class="font-mono text-xs text-blue-400">{f(sched, :reference)}</span>

@@ -40,6 +40,10 @@ defmodule PrismWeb.TopbarLive do
   @recent_tincture_limit 5
   @max_in_flight_builds 5
 
+  # The indicator refresh window and drain order; see `refresh/2`.
+  @refresh_window_ms 250
+  @refresh_order [:requests, :executions, :log_stats, :schedules]
+
   @impl true
   def mount(_params, session, socket) do
     token = session[to_string(PrismWeb.SignInResponse.session_key())]
@@ -110,7 +114,8 @@ defmodule PrismWeb.TopbarLive do
      |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
      |> assign(:upcoming_schedules, [])
      |> assign(:in_flight_builds, [])
-     |> assign(:recent_tinctures, []), layout: false}
+     |> assign(:recent_tinctures, [])
+     |> assign(:refresh_pending, MapSet.new()), layout: false}
   end
 
   # The live indicators are dev's: their fan-in is subscribed only there.
@@ -181,31 +186,42 @@ defmodule PrismWeb.TopbarLive do
 
   @impl true
   def handle_info({:request, _meta, _meas}, socket) do
-    {:noreply, socket |> load_running_requests() |> load_log_stats()}
+    {:noreply, refresh(socket, [:requests, :log_stats])}
   end
 
   def handle_info({:tincture_invoke_started, metadata, _meas}, socket) do
-    {:noreply, socket |> add_recent_tincture(metadata, :started) |> load_running_requests()}
+    {:noreply, socket |> add_recent_tincture(metadata, :started) |> refresh([:requests])}
   end
 
   def handle_info({:tincture_invoke_stopped, metadata, _meas}, socket) do
-    {:noreply, socket |> add_recent_tincture(metadata, :stopped) |> load_running_requests()}
+    {:noreply, socket |> add_recent_tincture(metadata, :stopped) |> refresh([:requests])}
   end
 
   def handle_info({:execution_started, _meta, _meas}, socket) do
-    {:noreply, load_running_executions(socket)}
+    {:noreply, refresh(socket, [:executions])}
   end
 
   def handle_info({:execution_completed, _meta, _meas}, socket) do
-    {:noreply, load_running_executions(socket)}
+    {:noreply, refresh(socket, [:executions])}
   end
 
   def handle_info({:execution_failed, _meta, _meas}, socket) do
-    {:noreply, load_running_executions(socket)}
+    {:noreply, refresh(socket, [:executions])}
   end
 
   def handle_info({:schedule_fired, _meta, _meas}, socket) do
-    {:noreply, socket |> load_upcoming_schedules() |> load_running_requests()}
+    {:noreply, refresh(socket, [:schedules, :requests])}
+  end
+
+  def handle_info(:do_refresh, socket) do
+    pending = socket.assigns.refresh_pending
+
+    socket =
+      Enum.reduce(@refresh_order, socket, fn key, acc ->
+        if MapSet.member?(pending, key), do: reload(key, acc), else: acc
+      end)
+
+    {:noreply, assign(socket, :refresh_pending, MapSet.new())}
   end
 
   def handle_info({:build_started, metadata, _meas}, socket) do
@@ -257,6 +273,24 @@ defmodule PrismWeb.TopbarLive do
   # ============================================================================
   # Loaders
   # ============================================================================
+
+  # Telemetry arrives in bursts — one request fans out to several events —
+  # and this bar is mounted on EVERY page, so an unthrottled reload here is
+  # the most-multiplied read in the console. Each event marks the indicators
+  # its data invalidates; one timer drains the set 250 ms later, so a burst
+  # costs one round of tool calls instead of two per event. `ActivitiesLive`
+  # and `ExecutionsLive` coalesce their own refreshes the same way.
+  defp refresh(socket, keys) do
+    was_idle = MapSet.size(socket.assigns.refresh_pending) == 0
+    if was_idle, do: Process.send_after(self(), :do_refresh, @refresh_window_ms)
+
+    update(socket, :refresh_pending, &MapSet.union(&1, MapSet.new(keys)))
+  end
+
+  defp reload(:requests, socket), do: load_running_requests(socket)
+  defp reload(:executions, socket), do: load_running_executions(socket)
+  defp reload(:log_stats, socket), do: load_log_stats(socket)
+  defp reload(:schedules, socket), do: load_upcoming_schedules(socket)
 
   defp load_initial_state(socket) do
     if socket.assigns[:authenticated] and socket.assigns[:ui_mode] == "dev" do

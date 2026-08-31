@@ -73,6 +73,7 @@ defmodule PrismWeb.ExecutionsLive do
       socket
       |> assign(:status_filter, normalize(params["status"]))
       |> assign(:type_filter, normalize(params["type"]))
+      |> focus_execution(params["id"])
 
     if connected?(socket) do
       {:noreply, fetch_executions(socket)}
@@ -80,6 +81,24 @@ defmodule PrismWeb.ExecutionsLive do
       {:noreply, socket}
     end
   end
+
+  # `ui.execution.focus` navigates here with `?id=exec_…`; expanding the row
+  # is the same act as clicking it. See `ActivitiesLive.focus_request/2` for
+  # why an absent key must leave the socket alone.
+  defp focus_execution(socket, id) when is_binary(id) and id != "" do
+    if socket.assigns.expanded_id == id do
+      socket
+    else
+      if connected?(socket), do: send(self(), {:load_detail, id})
+
+      socket
+      |> assign(:expanded_id, id)
+      |> assign(:expanded_detail, nil)
+      |> assign(:expanded_loading, connected?(socket))
+    end
+  end
+
+  defp focus_execution(socket, _id), do: socket
 
   # ============================================================================
   # Events

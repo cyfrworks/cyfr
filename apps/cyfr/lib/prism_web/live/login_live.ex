@@ -74,7 +74,7 @@ defmodule PrismWeb.LoginLive do
   defp start_device_flow(socket, provider) do
     provider_atom = String.to_existing_atom(provider)
 
-    case device_flow().init_device_flow(provider_atom) do
+    case DeviceFlow.impl().init_device_flow(provider_atom) do
       {:ok, info} ->
         if connected?(socket), do: schedule_poll(info.interval)
 
@@ -113,7 +113,7 @@ defmodule PrismWeb.LoginLive do
       :waiting ->
         finish_poll(
           socket,
-          device_flow().poll_for_session(socket.assigns.provider, socket.assigns.device_code)
+          DeviceFlow.impl().poll_for_session(socket.assigns.provider, socket.assigns.device_code)
         )
 
       _ ->
@@ -225,13 +225,6 @@ defmodule PrismWeb.LoginLive do
       end
 
     Process.send_after(self(), :login_poll, ms)
-  end
-
-  defp device_flow do
-    # A test seam, not an operator knob: suites stand in a fake flow.
-    # Deliberately undeclared in config — declaring it would publish a
-    # module-swap hook as a supported setting.
-    Application.get_env(:cyfr, :device_flow, DeviceFlow)
   end
 
   # The built-in provider offers GitHub and Google device flow; a deployment

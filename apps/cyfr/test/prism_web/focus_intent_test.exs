@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule PrismWeb.FocusIntentTest do
+  @moduledoc """
+  A `ui.*.focus` intent is only real if the page it lands on reads the key
+  it carries.
+
+  `Aqua.Actions` mints a navigation for each focus intent — `?id=req_…`,
+  `?name=…`, `?publisher=&tincture_name=` — and `PrismWeb.ActiveContext`
+  parses exactly those keys back out of the URL to tell the command palette
+  which resource is in focus. Between those two ends sits the page, and for
+  five of the six intents the page's `handle_params/3` never looked: the
+  agent navigated, the palette believed a resource was focused, and the
+  person saw a bare list. Nothing failed, which is why it lasted.
+
+  This walks the seam end to end for every intent, without a hand-kept list
+  of pages: mint the path through `Aqua.Actions`, ask the router which
+  LiveView serves it, and require that module's source to read every query
+  key the mint produced. The roster below is the intents, not the wiring —
+  and the first test fails if an intent is added without one.
+  """
+
+  use ExUnit.Case, async: true
+
+  # Each `ui.*.focus` kind with arguments good enough to mint its path. The
+  # values are shape-checked by `Aqua.Actions` (id prefixes, id-safe
+  # characters), so they cannot be arbitrary.
+  @intents [
+    %{kind: "ui.activity.focus", args: %{"id" => "req_abc123"}},
+    %{kind: "ui.execution.focus", args: %{"id" => "exec_abc123"}},
+    %{kind: "ui.schedule.focus", args: %{"id" => "sched_abc123"}},
+    %{kind: "ui.component.focus", args: %{"ref" => "tincture:acme/widget@1.0.0"}},
+    %{kind: "ui.tincture.focus", args: %{"publisher" => "acme", "name" => "widget"}},
+    %{kind: "ui.mcp_server.focus", args: %{"name" => "filesystem"}}
+  ]
+
+  defp root, do: Path.expand("../../../..", __DIR__)
+
+  test "every focus intent the assistant can mint is on the roster" do
+    minted =
+      Path.join(root(), "apps/cyfr/lib/aqua/actions.ex")
+      |> Cyfr.Test.SourceTree.read()
+      |> then(&Regex.scan(~r/validate_kind\("(ui\.[a-z_]+\.focus)"/, &1))
+      |> Enum.map(fn [_, kind] -> kind end)
+      |> Enum.sort()
+
+    rostered = @intents |> Enum.map(& &1.kind) |> Enum.sort()
+
+    assert minted == rostered,
+           """
+           `Aqua.Actions` mints focus intents this test does not check:
+
+             only in actions.ex: #{inspect(minted -- rostered)}
+             only on the roster:  #{inspect(rostered -- minted)}
+
+           Add the new intent to `@intents` with arguments that pass its own
+           validation. A focus intent whose page ignores its key navigates
+           and does nothing, which is the defect this test exists to catch.
+           """
+  end
+
+  for %{kind: kind, args: args} <- @intents do
+    test "#{kind} lands on a page that reads what it carries" do
+      assert {:ok, %{kind: "navigate", to: path}} =
+               Aqua.Actions.validate(Map.put(unquote(Macro.escape(args)), "kind", unquote(kind)))
+
+      # `Aqua.Actions` mints the page-relative path; `ConversationLive`
+      # prefixes the athanor in focus before handing it to the client, the
+      # same split `PrismWeb.ActiveContext.strip_focus/1` undoes. Routing
+      # the bare path would 404, so the test follows the real pipeline.
+      uri = URI.parse(PrismWeb.Focus.path("home", path))
+
+      # The router is the SSOT for which module serves the path — naming the
+      # module here would let a re-route silently move the page out from
+      # under the intent.
+      assert %{plug: Phoenix.LiveView.Plug, log_module: module} =
+               Phoenix.Router.route_info(EmissaryWeb.Router, "GET", uri.path, "example.com"),
+             "#{unquote(kind)} navigates to #{uri.path}, which no live route serves"
+
+      source =
+        root()
+        |> Path.join(Path.relative_to(module.__info__(:compile)[:source], root()))
+        |> Cyfr.Test.SourceTree.read()
+
+      # A path-segment intent (`/components/:ref`) needs no query key: the
+      # route itself carries the resource and Phoenix hands it over.
+      for {key, _value} <- URI.decode_query(uri.query || "") do
+        assert source =~ ~s|params["#{key}"]|,
+               """
+               #{unquote(kind)} navigates to #{path}, but #{inspect(module)}
+               never reads `params[#{inspect(key)}]`.
+
+               The intent is inert: the agent moves the person to a page that
+               shows the same list it showed before, while
+               `PrismWeb.ActiveContext` tells the command palette a resource
+               IS focused. Read the key in `handle_params/3` and put the page
+               in the state a click on that row would have produced.
+               """
+      end
+    end
+  end
+end

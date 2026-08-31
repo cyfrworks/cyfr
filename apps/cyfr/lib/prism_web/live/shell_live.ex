@@ -56,13 +56,29 @@ defmodule PrismWeb.ShellLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
     # Re-read the registry CACHE on navigation (cheap — the registry
     # follows the tinctures topic for real changes), so a change that
     # broadcast while another page was open shows without a manual refresh.
     socket = if connected?(socket), do: load_tinctures(socket), else: socket
-    {:noreply, socket}
+    {:noreply, focus_named(socket, params["publisher"], params["tincture_name"])}
   end
+
+  # `ui.tincture.focus` navigates here with `?publisher=&tincture_name=`.
+  # The picker is index-addressed, so the pair is resolved against the list
+  # that was just loaded; a pair matching nothing leaves the current
+  # selection alone rather than snapping the person to the first card.
+  defp focus_named(socket, publisher, name) when is_binary(publisher) and is_binary(name) do
+    case Enum.find_index(
+           socket.assigns.tinctures,
+           &(&1.publisher == publisher and &1.name == name)
+         ) do
+      nil -> socket
+      idx -> focus_tincture(socket, idx)
+    end
+  end
+
+  defp focus_named(socket, _publisher, _name), do: socket
 
   # ============================================================================
   # Picker navigation events

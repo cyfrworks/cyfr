@@ -82,6 +82,22 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
 
   @doc """
+  The module the callers actually dispatch through.
+
+  A test seam, not an operator knob: suites stand in a fake flow rather
+  than reach a provider over the network. Deliberately undeclared in
+  config — declaring it would publish a module-swap hook as a supported
+  setting. Same shape as `Sanctum.Consent.Source.impl/0`.
+
+  Every caller that starts or polls a flow goes through this, so a suite
+  that swaps it covers all of them; a caller that names this module
+  directly is one the fake cannot reach, which is what left the registry
+  appeal flow untestable while sign-in was covered.
+  """
+  @spec impl() :: module()
+  def impl, do: Application.get_env(:cyfr, :device_flow, __MODULE__)
+
+  @doc """
   Initialize device flow - request device code from provider.
 
   Returns device code info that should be displayed to the user.

@@ -9,10 +9,15 @@ defmodule PrismWeb.TopbarLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Cyfr.Test.Wait
+
   alias Sanctum.Tenancy.Athanors
 
   # The topbar is a nested LiveView; find it inside the page.
   defp topbar(view), do: find_live_child(view, "topbar")
+
+  # The indicators the bar has been told to reload but has not reloaded yet.
+  defp pending(bar), do: :sys.get_state(bar.pid).socket.assigns.refresh_pending
 
   test "one athanor: no list, but New group… — which creates and opens the group", %{conn: conn} do
     alice = test_user()
@@ -128,5 +133,33 @@ defmodule PrismWeb.TopbarLiveTest do
 
     :sys.get_state(bar.pid)
     refute has_element?(bar, "#door-requests")
+  end
+
+  test "a burst of telemetry costs one round of reads, not one per event", %{conn: conn} do
+    conn = log_in_user(conn, test_user())
+    {view, _html} = mount_athanor(conn, "")
+    bar = topbar(view)
+
+    # This bar is mounted on every page and a single request fans out to
+    # several telemetry events, so a reload here is the most-multiplied read
+    # in the console. Each event used to reload on arrival: ten of them cost
+    # twenty tool calls per open page.
+    for _ <- 1..10, do: send(bar.pid, {:request, %{}, %{}})
+    :sys.get_state(bar.pid)
+
+    # All ten have been seen and none has been served — that is the whole
+    # claim. The two indicators a request invalidates are marked once.
+    assert pending(bar) == MapSet.new([:requests, :log_stats])
+
+    # One timer drains the set, and only `:do_refresh` empties it.
+    wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the coalesced refresh to drain")
+
+    # And the window re-arms: a burst after a drain is coalesced too, rather
+    # than the bar going unthrottled or silent for the rest of the session.
+    for _ <- 1..5, do: send(bar.pid, {:execution_started, %{}, %{}})
+    :sys.get_state(bar.pid)
+    assert pending(bar) == MapSet.new([:executions])
+
+    wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the second burst to drain")
   end
 end

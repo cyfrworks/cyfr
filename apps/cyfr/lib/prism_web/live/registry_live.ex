@@ -123,7 +123,7 @@ defmodule PrismWeb.RegistryLive do
       true ->
         provider_atom = String.to_existing_atom(provider)
 
-        case DeviceFlow.init_device_flow(provider_atom) do
+        case DeviceFlow.impl().init_device_flow(provider_atom) do
           {:ok, info} ->
             if connected?(socket), do: schedule_appeal_poll(info.interval)
 
@@ -218,7 +218,7 @@ defmodule PrismWeb.RegistryLive do
   def handle_info(:appeal_poll, socket) do
     case socket.assigns.appeal_state do
       :waiting ->
-        case DeviceFlow.poll_for_access_token(
+        case DeviceFlow.impl().poll_for_access_token(
                socket.assigns.appeal_provider,
                socket.assigns.appeal_device_code
              ) do
@@ -243,7 +243,17 @@ defmodule PrismWeb.RegistryLive do
 
           {:error, reason} ->
             Logger.warning("[RegistryLive] appeal poll error: #{inspect(reason)}")
-            {:noreply, assign(socket, :appeal_error, error_message(reason))}
+
+            # Back to :form, like the denied arm above. Leaving it :waiting
+            # wedged the flow permanently: nothing reschedules the poll, and
+            # `start-appeal` refuses to retry while the state says a device
+            # flow is still out — so one transient blip meant a page reload
+            # was the only way back. `LoginLive.finish_poll/2` is the same
+            # decision on the same shape.
+            {:noreply,
+             socket
+             |> assign(:appeal_state, :form)
+             |> assign(:appeal_error, error_message(reason))}
         end
 
       _ ->
