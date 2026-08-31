@@ -961,9 +961,9 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 A consent covers every release of the component line unless the operator pins a version. This is safe because the resolved capability is an allowlist: a newer release can only receive less than the consent names, never more. A release that asks for *more* triggers `consent_required` with the shape diff — the operator approves a new revision or the component doesn't run.
 
 > **Restricted tools** — permanently blocked for formulas even with `"tools": ["*"]`:
-> `session.*`, `key.*`, `permission.*`, policy and secret mutation, `vault.*`, `profile.*`,
+> `session.*`, `key.*`, policy and secret mutation, `vault.*`, `profile.*`,
 > `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*`, `component.push/delete`,
-> registry identity mutation, webhook/schedule mutation, `tincture_visibility.set`,
+> registry identity mutation, webhook/schedule mutation, `profile.publish`,
 > `execution.force_release`, `system.notify`, and MCP-server management.
 > Formulas cannot touch auth, credentials, or the consent plane.
 

@@ -369,44 +369,62 @@ so a shared cache must not serve one caller's list to another.
 }
 ```
 
-**Common error codes:**
+**CYFR error codes.** This is the whole set — every code the server can put
+on the wire.
 
 | Code | Name | Meaning |
 |------|------|---------|
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
-| -33003 | `auth_expired` | Session expired |
-| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, or IP not in allowlist |
+| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, or the IP is not in the allowlist |
 | -33100 | `execution_failed` | Component execution failed |
-| -33101 | `execution_timeout` | Component exceeded time limit |
-| -33200 | `component_not_found` | Component reference doesn't resolve |
-| -33102 | `capability_denied` | Component tried to use a capability it doesn't have |
-| -33201 | `component_invalid` | Component failed validation (invalid WASM, missing exports, etc.) |
-| -33202 | `registry_unavailable` | Registry is unreachable or returned an error |
-| -33301 | `session_required` | Stateful request without session ID |
-| -33302 | `session_expired` | Session not found or expired |
-| -33303 | `invalid_protocol` | Invalid or missing MCP protocol version header |
-| -33400 | `signature_invalid` | Component signature verification failed |
-| -33401 | `signature_expired` | Component signature has expired |
-| -33402 | `signature_missing` | Component requires a signature but none was found |
+| -33304 | `rate_limited` | Too many requests — back off and retry. Honour `Retry-After` when present |
+| -33501 | `setup_required` | A dependency needs configuring before this can run ([Readiness and typed errors](#readiness-and-typed-errors)) |
+| -33502 | `consent_required` | The caller has no consent for this component |
+| -33503 | `consent_conflict` | Consent exists but does not cover what was asked |
+| -33504 | `restart_required` | Consent changed under a running execution |
+
+`-33304` is the one to branch on for backoff; the `-335xx` band is the
+remediation vocabulary, whose `error.data` payload is described under
+[Readiness and typed errors](#readiness-and-typed-errors).
+
+Everything else a tool refuses arrives as a **successful** JSON-RPC response
+whose `result.isError` is `true` and whose content carries the sentence —
+including a component that does not resolve, a registry that is unreachable,
+and a failed validation. Branch on `result.isError` for those, not on a code.
+
+Two protocol-level codes are also in play, both standard JSON-RPC:
+`-32601` for an unknown method and `-32022` (`UnsupportedProtocolVersion`),
+which carries the supported list in `error.data`.
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 
 ### Public Tools (No Auth Required)
 
-Most tool calls require authentication (session login or API key). The following tools and actions are accessible without authentication — they support discovery and the login flow itself:
+Almost every tool call requires authentication. An uncredentialed caller
+reaches exactly the actions annotated `auth: :anonymous`, and no others —
+the same set `tools/list` shows them, because discovery and dispatch read
+one annotation. It is short:
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | all (`login`, `logout`, `whoami`, `device_init`, `device_poll`) | Needed to authenticate in the first place |
-| `registry` | `probe`, `claim-personal`, `get-namespace` | Identity discovery and the first-login namespace claim. Other `registry` actions (`claim-publisher`, `verify-publisher`, `tokens-*`, `members-*`) require authentication. |
-| `aqua` | `list`, `get` | Read-only access to the agent catalog and documentation |
-| `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
+| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll` | Needed to authenticate in the first place |
 | `system` | `status` | Health checks |
 
-When an auth provider **is** configured, this anonymous surface narrows: component browsing requires sign-in, so only `component` `categories` and `setup_plan` stay public (alongside `session`, `aqua` `list`/`get`, the registry bootstrap actions, and `system status`).
+That is the whole list, and it does **not** widen on a server without an
+auth provider: a request with no credential is an unauthenticated context
+either way. In particular `component.search`/`inspect`/`categories`,
+`aqua.list`/`get`, and the `registry` identity actions all need a session
+or an API key, and `session.use` — switching which athanor you work in —
+needs one too, since there has to be a session to switch.
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `permission.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+A second tier sits between public and fully authenticated: actions
+annotated `auth: :signed_in` serve a caller holding a live session that
+has not yet claimed a namespace, which is how the first-login flow
+(`registry.probe`, `registry.claim_personal`) completes. Those are not
+public — they need the session — but they do not need a claimed identity.
+
+Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -973,7 +991,7 @@ GET /t/home/local/stock-dashboard/style.css → static asset
 
 ### Public (Unauthenticated)
 
-Public tinctures use the same `/t/` path — no authentication needed. Set `tincture_visibility.set` to make a tincture public.
+Public tinctures use the same `/t/` path — no authentication needed. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get`.
 
 ```
 GET /t/home/local/stock-dashboard              → index.html (no auth needed if public)

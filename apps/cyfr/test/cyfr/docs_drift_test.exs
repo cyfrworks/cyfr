@@ -86,6 +86,129 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # ==========================================================================
+  # integration-guide's two reference tables
+  #
+  # These are what an integrator writes their client against, and both had
+  # drifted into fiction: the error table listed twelve codes that no
+  # producer mints (`auth_expired`, `component_not_found`, a whole `-334xx`
+  # signature band) while omitting `-33304 rate_limited` — the one code a
+  # client needs to back off — and the public-tools table said `session`
+  # "all", which quietly published `session.use`, the tenancy switch.
+  #
+  # A wrong reference is worse than a missing one: it is followed. So both
+  # tables are now derived from the code and checked in both directions.
+  # ==========================================================================
+
+  @integration_guide Path.join(@repo_root, "integration-guide.md")
+
+  defp guide_error_codes do
+    @integration_guide
+    |> File.read!()
+    |> then(&Regex.scan(~r/^\| (-33\d{3}) \| `(\w+)`/m, &1))
+    |> Map.new(fn [_, code, name] -> {String.to_integer(code), name} end)
+  end
+
+  test "every CYFR error code in the guide's table is one the server can mint" do
+    for {code, name} <- guide_error_codes() do
+      atom = String.to_existing_atom(name)
+
+      assert Emissary.MCP.Message.error_code(atom) == code,
+             "integration-guide documents #{code} `#{name}`, which " <>
+               "Emissary.MCP.Message does not define under that name — a client " <>
+               "branching on it waits for a code that never arrives"
+    end
+  end
+
+  test "every code a client could receive is in the guide's table" do
+    documented = guide_error_codes() |> Map.keys() |> MapSet.new()
+
+    # `request_cancelled` is recorded, never sent: by the time it exists the
+    # caller has closed the stream. It is the one code with no reader.
+    internal = [:request_cancelled]
+
+    missing =
+      for {name, code} <- Emissary.MCP.Message.cyfr_error_codes(),
+          name not in internal,
+          not MapSet.member?(documented, code),
+          do: "#{code} #{name}"
+
+    assert missing == [],
+           "these codes reach clients but integration-guide's error table omits " <>
+             "them: #{inspect(Enum.sort(missing))}"
+  end
+
+  # Every action a provider annotates `auth: :anonymous` — the actions that
+  # answer without a session, which is exactly what the table claims to list.
+  defp anonymous_actions do
+    for provider <- Emissary.MCP.ToolRegistry.available_providers(),
+        tool <- provider.tools(),
+        {action, meta} <- get_in(tool, [Access.key(:annotations, %{}), :actions]) || %{},
+        meta[:auth] == :anonymous,
+        do: {tool.name, action}
+  end
+
+  # Just the "Public Tools" section's table, so the check reads the rows
+  # that make the claim and not every pipe-delimited row in the document
+  # (permission scopes and HTTP headers are tables too).
+  defp public_tools_rows do
+    [_, section] =
+      Regex.run(
+        ~r/### Public Tools \(No Auth Required\)\n(.*?)\n### /s,
+        File.read!(@integration_guide)
+      )
+
+    section
+    |> then(&Regex.scan(~r/^\| `(\w+)` \| (.+?) \|/m, &1))
+    |> Map.new(fn [_, tool, actions] -> {tool, actions} end)
+  end
+
+  test "the guide's public-tools table lists exactly the actions that need no session" do
+    rows = public_tools_rows()
+    anonymous = MapSet.new(anonymous_actions())
+
+    # A guard against the check quietly matching nothing: the anonymous
+    # surface is small but it is never empty, and neither is the table.
+    assert MapSet.size(anonymous) > 0
+    assert map_size(rows) > 0
+
+    undocumented =
+      for {tool, action} <- anonymous,
+          row = Map.get(rows, tool),
+          is_nil(row) or not String.contains?(row, "`#{action}`"),
+          do: "#{tool}.#{action}"
+
+    assert undocumented == [],
+           """
+           These actions answer with no credential at all, and
+           integration-guide's "Public Tools" table does not list them:
+
+           #{Enum.map_join(Enum.sort(undocumented), "\n", &"  #{&1}")}
+
+           Either document them or drop the `auth: :anonymous` annotation —
+           an anonymous action nobody wrote down is a surface nobody reviews.
+           """
+
+    # The other direction, which is the one that had gone wrong: the table
+    # published `registry`, `aqua` and `component` reads as needing no auth
+    # when all three need a credential, so a client written from it got
+    # `-33001` on its first call. `auth: :signed_in` is NOT public — it
+    # serves a live session that has not claimed a namespace yet.
+    overclaimed =
+      for {tool, row} <- rows,
+          [_, action] <- Regex.scan(~r/`(\w+)`/, row),
+          not MapSet.member?(anonymous, {tool, action}),
+          do: "#{tool}.#{action}"
+
+    assert overclaimed == [],
+           """
+           These are listed as needing no authentication, but the dispatcher
+           refuses them to an uncredentialed caller:
+
+           #{Enum.map_join(Enum.sort(overclaimed), "\n", &"  #{&1}")}
+           """
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # The truth roster: what the validator shape-checks plus what the
     # registry/controller consume (entry, icon, tagline, public, build,

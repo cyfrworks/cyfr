@@ -99,6 +99,16 @@ defmodule Emissary.MCP.Message do
                     |> Map.merge(@cyfr_consent_codes)
 
   @doc """
+  The CYFR-specific error codes, `name => code`.
+
+  The set an integrator writes against, so it is readable rather than only
+  lookup-able: `Cyfr.DocsDriftTest` checks integration-guide's error table
+  against it in both directions. Standard JSON-RPC codes are not here.
+  """
+  @spec cyfr_error_codes() :: %{atom() => integer()}
+  def cyfr_error_codes, do: @cyfr_error_codes
+
+  @doc """
   Decode a JSON-RPC message from a map (already parsed from JSON).
 
   One message, never a batch: "The body of the HTTP POST **MUST** be a single

@@ -15,11 +15,11 @@ Tinctures are **private by default** — only authenticated users can access the
 | | Private | Public |
 |---|---|---|
 | **Access** | Authenticated users only | Anyone |
-| **How to set** | Default | `tincture_visibility.set` MCP tool |
+| **How to set** | Default | `profile.publish` (the consent walk) |
 | **Invoke rate limit** | Consent-configured (default 100/min per user) | Consent-configured (default 100/min per IP) |
 | **`cyfr.invoke()`** | Works the same | Works the same |
 
-The `tincture.public` field in the manifest is a **metadata hint only** — actual access control is the stored `is_public` visibility flag. Set it with the `tincture_visibility.set` MCP tool (or `cyfr tincture visibility set`).
+The `tincture.public` field in the manifest is a **metadata hint only**. Public-ness is a published profile, not a policy bit: a tincture is public when it has an active public consent profile. Publish with `profile.publish` — the proof-bound consent walk — and unpublish by revoking that profile with `profile.revoke`. `tincture_visibility.get` reports the current answer.
 
 ---
 
@@ -132,7 +132,7 @@ Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injecte
 | `entry` | string | `"index.html"` | Entry point file |
 | `icon` | string | `"palette"` | Glyph fallback used by the picker when no `public/media/icon.{svg,png}` exists. Accepts an emoji (e.g. `"🎮"`) or a Lucide icon name (e.g. `"palette"`) |
 | `tagline` | string | — | Short one-line tagline shown under the title in the tincture picker. Distinct from `description`, which is used as the card title |
-| `public` | boolean | `false` | Metadata hint. Actual public access is the stored `is_public` visibility flag — set with the `tincture_visibility.set` MCP tool |
+| `public` | boolean | `false` | Metadata hint. Actual public access is an active public consent profile — published with `profile.publish` |
 | `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
 | `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
 | `connect` | string[] | `[]` | External domains for CSP `connect-src` (e.g., `["*.supabase.co"]`). Enables client-side SDK access to external services |
@@ -434,7 +434,7 @@ All tinctures are served from a unified `/t/` path. Public tinctures are accessi
 - **No secrets in responses** — component output is secret-masked before returning to the browser
 - **Sandbox iframe** — `allow-scripts` only, no `allow-same-origin`
 - **Sensitive file denylist** — `cyfr-manifest.json`, `schema.sql`, dotfiles never served
-- **Visibility- and rate-managed** — invoke rate limits come from the consented node limits; visibility (`is_public`) is set with the `tincture_visibility.set` MCP tool
+- **Visibility- and rate-managed** — invoke rate limits come from the consented node limits; public-ness is an active public consent profile, published with `profile.publish`
 - **No `sessionStorage`/`localStorage`** — sandboxed iframes without `allow-same-origin` cannot access browser storage; store state in memory or via backend components
 - **Rate limited** — default 100 req/min (consent-configured). Public: per IP. Private: per user. Clamped by platform ceiling
 
@@ -487,7 +487,7 @@ Why formulas are safer:
 - [ ] **No inline `<script>` blocks** — all JS in external `.js` files loaded via `<script src="...">`
 - [ ] `cyfr.ready()` called in the external JS (SDK is auto-injected — no `<script>` tag needed for SDK)
 - [ ] All queries use named params (`:param`), never string concatenation
-- [ ] `tincture.public` matches intended visibility (actual access controlled via the `tincture_visibility.set` MCP tool)
+- [ ] `tincture.public` matches intended visibility (actual access is a published public profile — `profile.publish`)
 - [ ] If public: tested both authenticated and unauthenticated access at `/t/:athanor/:publisher/:name`
 - [ ] For React tinctures: `vite.config.ts` uses `base: "./"` (required for subpath serving)
 - [ ] For React tinctures: `cyfr build compile t:local.<name>:<version>` succeeds before registering
