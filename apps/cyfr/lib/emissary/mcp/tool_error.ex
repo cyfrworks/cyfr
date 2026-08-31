@@ -15,11 +15,17 @@ defmodule Emissary.MCP.ToolError do
   member (compiler output, remediation hints, an upstream provider's own
   error code, a partial-failure count) deliberately stay strings, as does
   the registry's "Unknown tool" spelling.
-  Remaining string-heavy surfaces: `Opus.MCP` (out of scope while the
-  engine's host surface is pinned) and `Sanctum.ComponentRef`'s parse
-  prose (pinned by exact-string tests; convert with its own renderer when
-  a caller needs to branch). `Sanctum.Unauthorized` and
-  `Compendium.OCI.Errors` prove the same shape end-to-end.
+  What is left is NOT listed here. A migration in progress cannot be
+  recorded in prose — this paragraph named `Opus.MCP` as the remaining
+  surface long after two larger ones had appeared — so the worklist lives
+  in `Emissary.MCP.ToolErrorAdoptionTest`, where every module and its
+  count are checked against the tree and may only go down. Read it for the
+  real number and the order worth working in.
+
+  `Sanctum.ComponentRef`'s parse prose stays as it is (pinned by
+  exact-string tests; convert with its own renderer when a caller needs to
+  branch). `Sanctum.Unauthorized` and `Compendium.OCI.Errors` prove the
+  same shape end-to-end.
 
   Adoption stays incremental — a provider converts an action by returning
   one of these tuples instead of a sentence; unconverted strings keep
