@@ -7,6 +7,22 @@ defmodule PrismWeb.DisplayHelpers do
   """
 
   @doc """
+  Read `key` from a map that may carry atom keys or string keys.
+
+  Tool results arrive decoded from JSON with string keys; the same shapes
+  built in Elixir carry atoms, and a page renders both. Five LiveViews had
+  defined this privately, byte for byte, and `SettingsLive` had a sixth
+  spelling under another name — so it lives here, where
+  `PrismWeb.__using__` already imports it into every one of them.
+
+  Nil-tolerant, as all six were: a page that renders before its data has
+  loaded reads `nil` rather than raising.
+  """
+  @spec f(map() | nil, atom()) :: term()
+  def f(nil, _key), do: nil
+  def f(map, key) when is_map(map) and is_atom(key), do: map[key] || map[to_string(key)]
+
+  @doc """
   A short human label for a principal id as it appears on executions, logs
   and messages: a person (their display name, else email, else a shortened
   id) or one of the server's synthetic principals — `system`, `_seed`,

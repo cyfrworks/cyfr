@@ -360,8 +360,6 @@ defmodule PrismWeb.ExecutionsLive do
   defp normalize(""), do: nil
   defp normalize(v), do: v
 
-  defp f(m, k), do: m[k] || m[to_string(k)]
-
   defp type_class("catalyst"), do: "bg-purple-900/30 text-purple-300"
   defp type_class("reagent"), do: "bg-blue-900/30 text-blue-300"
   defp type_class("formula"), do: "bg-emerald-900/30 text-emerald-300"

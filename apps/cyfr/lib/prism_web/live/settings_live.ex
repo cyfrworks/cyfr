@@ -181,9 +181,6 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  defp status_field(nil, _key), do: nil
-  defp status_field(status, key), do: status[key] || status[to_string(key)]
-
   defp services_map(nil), do: %{}
   defp services_map(services) when is_map(services), do: services
   defp services_map(_), do: %{}
@@ -221,8 +218,8 @@ defmodule PrismWeb.SettingsLive do
 
   @impl true
   def render(assigns) do
-    services = services_map(status_field(assigns.system_status, :services))
-    mcp = status_field(assigns.system_status, :mcp) || %{}
+    services = services_map(f(assigns.system_status, :services))
+    mcp = f(assigns.system_status, :mcp) || %{}
 
     assigns =
       assigns
@@ -253,22 +250,22 @@ defmodule PrismWeb.SettingsLive do
             <div>
               <dt class="text-xs text-gray-500 uppercase">Version</dt>
               <dd class="text-2xl font-bold text-white mt-1">
-                {status_field(@system_status, :version) || "-"}
+                {f(@system_status, :version) || "-"}
               </dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Uptime</dt>
               <dd class="text-2xl font-bold text-white mt-1">
-                {format_uptime(status_field(@system_status, :uptime_seconds))}
+                {format_uptime(f(@system_status, :uptime_seconds))}
               </dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">MCP Protocol</dt>
               <dd class="text-sm text-white mt-1 font-mono">
-                {status_field(@mcp, :protocol_version) || "-"}
+                {f(@mcp, :protocol_version) || "-"}
               </dd>
               <dd class="text-xs text-gray-500 mt-0.5">
-                {status_field(@mcp, :tools_count) || 0} tools, {status_field(@mcp, :resources_count) ||
+                {f(@mcp, :tools_count) || 0} tools, {f(@mcp, :resources_count) ||
                   0} resources
               </dd>
             </div>

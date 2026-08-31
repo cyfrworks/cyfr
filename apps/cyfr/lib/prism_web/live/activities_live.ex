@@ -295,8 +295,6 @@ defmodule PrismWeb.ActivitiesLive do
 
   defp time_filter_to_since(_), do: nil
 
-  defp f(m, k), do: m[k] || m[to_string(k)]
-
   defp source_badge(tool) do
     case tool do
       "tincture" -> {"Tincture", "bg-pink-900/30 text-pink-300 border-pink-800/50"}

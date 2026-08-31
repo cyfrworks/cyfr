@@ -190,8 +190,6 @@ defmodule PrismWeb.EnforcementsLive do
   defp normalize_filter(""), do: nil
   defp normalize_filter(value), do: value
 
-  defp f(m, k), do: m[k] || m[to_string(k)]
-
   defp event_type_chip(event_type) do
     case to_string(event_type || "") do
       "policy_consultation" -> "bg-emerald-900/30 text-emerald-300 border-emerald-800/50"

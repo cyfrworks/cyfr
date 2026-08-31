@@ -233,8 +233,6 @@ defmodule PrismWeb.SchedulesLive do
     assign(socket, :components, refs)
   end
 
-  defp f(m, k), do: m[k] || m[to_string(k)]
-
   defp status_badge_color("active"), do: "green"
   defp status_badge_color("paused"), do: "yellow"
   defp status_badge_color(_), do: "gray"

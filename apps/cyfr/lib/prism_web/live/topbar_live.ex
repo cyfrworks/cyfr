@@ -417,14 +417,9 @@ defmodule PrismWeb.TopbarLive do
   # Display helpers
   # ============================================================================
 
-  defp f(m, k), do: m[k] || m[to_string(k)]
-
   defp services_map(nil), do: %{}
   defp services_map(s) when is_map(s), do: s
   defp services_map(_), do: %{}
-
-  defp status_field(nil, _key), do: nil
-  defp status_field(s, k), do: s[k] || s[to_string(k)]
 
   defp schedule_active?(s) do
     enabled = s[:enabled]
@@ -483,7 +478,7 @@ defmodule PrismWeb.TopbarLive do
 
   @impl true
   def render(assigns) do
-    services = services_map(status_field(assigns.system_status, :services))
+    services = services_map(f(assigns.system_status, :services))
 
     assigns =
       assigns
@@ -823,7 +818,7 @@ defmodule PrismWeb.TopbarLive do
           <.indicator
             name="health"
             open={@open_popover == "health"}
-            label={status_field(@system_status, :version) || "—"}
+            label={f(@system_status, :version) || "—"}
             dot_class={health_dot_class(@services)}
           >
             <:popover>
@@ -841,10 +836,10 @@ defmodule PrismWeb.TopbarLive do
                 <% end %>
               </ul>
               <div class="mt-2 pt-2 border-t border-gray-800 text-xs text-gray-500 space-y-0.5">
-                <div :if={status_field(@system_status, :version)}>
+                <div :if={f(@system_status, :version)}>
                   version:
                   <span class="text-gray-300 font-mono">
-                    {status_field(@system_status, :version)}
+                    {f(@system_status, :version)}
                   </span>
                 </div>
               </div>
