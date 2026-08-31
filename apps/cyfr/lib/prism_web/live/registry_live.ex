@@ -47,6 +47,10 @@ defmodule PrismWeb.RegistryLive do
      |> assign(:error, nil)
      |> assign(:deprecate_pending, nil)
      |> assign(:yank_pending, nil)
+     # The appeal flow is an anonymous device flow on a socket that passes
+     # no rate-limit plug, exactly like sign-in; `connect_info` is readable
+     # only at mount, so the address it budgets against is captured here.
+     |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
      |> assign_appeal_idle()}
   end
 
@@ -123,7 +127,7 @@ defmodule PrismWeb.RegistryLive do
       true ->
         provider_atom = String.to_existing_atom(provider)
 
-        case DeviceFlow.impl().init_device_flow(provider_atom) do
+        case DeviceFlow.impl().init_device_flow(provider_atom, socket.assigns.client_ip) do
           {:ok, info} ->
             if connected?(socket), do: schedule_appeal_poll(info.interval)
 
@@ -220,7 +224,8 @@ defmodule PrismWeb.RegistryLive do
       :waiting ->
         case DeviceFlow.impl().poll_for_access_token(
                socket.assigns.appeal_provider,
-               socket.assigns.appeal_device_code
+               socket.assigns.appeal_device_code,
+               socket.assigns.client_ip
              ) do
           {:ok, %{status: "complete", access_token: access_token, provider: provider}} ->
             submit_appeal(socket, provider, access_token)

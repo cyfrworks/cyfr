@@ -28,13 +28,13 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     {:ok, test_dir: test_dir}
   end
 
-  describe "init_device_flow/1" do
+  describe "init_device_flow/2" do
     test "returns error when github client_id not configured" do
       Application.delete_env(:cyfr, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow("github")
+               DeviceFlow.init_device_flow("github", nil)
     end
 
     test "normalizes string provider to atom" do
@@ -43,20 +43,20 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       # Both string and atom should work the same way
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow("github")
+               DeviceFlow.init_device_flow("github", nil)
 
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow(:github)
+               DeviceFlow.init_device_flow(:github, nil)
     end
   end
 
-  describe "poll_for_session/2" do
+  describe "poll_for_session/3" do
     test "returns error when client_id not configured" do
       Application.delete_env(:cyfr, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.poll_for_session("github", "fake_device_code")
+               DeviceFlow.poll_for_session("github", "fake_device_code", nil)
     end
 
     test "polls beyond the per-code budget answer slow_down without provider contact" do
@@ -71,21 +71,89 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       # client id — no provider is ever contacted in this suite).
       for _ <- 1..30 do
         assert {:error, {:client_id_not_configured, :github}} =
-                 DeviceFlow.poll_for_session("github", code)
+                 DeviceFlow.poll_for_session("github", code, nil)
       end
 
       # The 31st answers the protocol's own back-pressure shape, before
       # any config or provider is consulted.
       assert {:ok, %{status: "pending", slow_down: true}} =
-               DeviceFlow.poll_for_session("github", code)
+               DeviceFlow.poll_for_session("github", code, nil)
 
       # A different device code has its own budget.
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.poll_for_session("github", "another_code")
+               DeviceFlow.poll_for_session("github", "another_code", nil)
 
       # The appeal-path poll shares the same budget vocabulary.
       assert {:ok, %{status: "pending", slow_down: true}} =
-               DeviceFlow.poll_for_access_token("github", code)
+               DeviceFlow.poll_for_access_token("github", code, nil)
+    end
+  end
+
+  # The defect these pin: the server-wide `device_init` ceiling was 60/min
+  # while `EmissaryWeb.Plugs.MCPRateLimit` already lets ONE address send
+  # 120/min, so a single unauthenticated IP could exhaust the global budget
+  # without tripping any limiter and answer "Too many sign-in attempts" to
+  # every user on the server. The console was worse: `/live` is handled by
+  # the endpoint before the router, so it passes no limiter at all.
+  describe "anonymous sign-in budgets are per-address, and the global sits above them" do
+    setup do
+      Application.delete_env(:cyfr, :github_client_id)
+      System.delete_env("CYFR_GITHUB_CLIENT_ID")
+      Cyfr.RateLimiter.reset()
+      on_exit(fn -> Cyfr.RateLimiter.reset() end)
+      :ok
+    end
+
+    # A budget-denied init is refused BEFORE the client id is consulted, so
+    # the two outcomes are distinguishable without contacting a provider.
+    defp init_from(ip), do: DeviceFlow.init_device_flow("github", ip)
+
+    defp admitted?({:error, {:client_id_not_configured, :github}}), do: true
+    defp admitted?({:error, "Too many sign-in attempts" <> _}), do: false
+
+    test "one address exhausts only its own init budget" do
+      noisy = "198.51.100.9"
+
+      # Hammer well past any plausible per-address ceiling. Whatever the
+      # number is, it must run out.
+      outcomes = for _ <- 1..200, do: admitted?(init_from(noisy))
+      assert false in outcomes, "one address must not be able to init without bound"
+    end
+
+    test "a second address still signs in after the first is exhausted" do
+      noisy = "198.51.100.9"
+      innocent = "203.0.113.4"
+
+      for _ <- 1..200, do: init_from(noisy)
+
+      # THE invariant. Before the fix this failed: the noisy address spent
+      # the one server-wide bucket and everyone else got the refusal.
+      assert admitted?(init_from(innocent)),
+             "a second address must still be able to start a sign-in"
+    end
+
+    test "the poll budget is per-address too, above and beyond the per-code one" do
+      noisy = "198.51.100.9"
+      innocent = "203.0.113.4"
+
+      # Each code has its own 30/min, so a swarm of fabricated codes from
+      # one address is only bounded by the per-address bucket.
+      for n <- 1..200 do
+        DeviceFlow.poll_for_session("github", "code_#{n}", noisy)
+      end
+
+      assert {:ok, %{status: "pending", slow_down: true}} =
+               DeviceFlow.poll_for_session("github", "code_fresh", noisy)
+
+      assert {:error, {:client_id_not_configured, :github}} =
+               DeviceFlow.poll_for_session("github", "code_other", innocent)
+    end
+
+    test "a surface with no address of its own still passes the global ceiling" do
+      # `nil` is the MCP route, metered per IP by its own plug. It must not
+      # crash and must not be exempt from the server-wide breaker.
+      assert {:error, {:client_id_not_configured, :github}} =
+               DeviceFlow.init_device_flow("github", nil)
     end
   end
 
@@ -100,10 +168,10 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       # Both should fail with same error
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow("github")
+               DeviceFlow.init_device_flow("github", nil)
 
       assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow(:github)
+               DeviceFlow.init_device_flow(:github, nil)
     end
   end
 

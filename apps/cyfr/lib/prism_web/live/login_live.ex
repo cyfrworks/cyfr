@@ -30,6 +30,11 @@ defmodule PrismWeb.LoginLive do
      # on that browser; the ticket is bound to it at mint and checked at
      # /auth/device/complete.
      |> assign(:browser_binding, session["_csrf_token"])
+     # `connect_info` is readable only here, so the address the device-flow
+     # budget is charged to has to be captured at mount and carried. This
+     # socket never passes a rate-limit plug — the endpoint handles /live
+     # before the router — so this assign IS the per-address bound.
+     |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
      |> assign(:page_title, "Sign in")
      |> assign(:providers, available_providers())
      |> assign(:login_state, :idle)
@@ -74,7 +79,7 @@ defmodule PrismWeb.LoginLive do
   defp start_device_flow(socket, provider) do
     provider_atom = String.to_existing_atom(provider)
 
-    case DeviceFlow.impl().init_device_flow(provider_atom) do
+    case DeviceFlow.impl().init_device_flow(provider_atom, socket.assigns.client_ip) do
       {:ok, info} ->
         if connected?(socket), do: schedule_poll(info.interval)
 
@@ -113,7 +118,11 @@ defmodule PrismWeb.LoginLive do
       :waiting ->
         finish_poll(
           socket,
-          DeviceFlow.impl().poll_for_session(socket.assigns.provider, socket.assigns.device_code)
+          DeviceFlow.impl().poll_for_session(
+            socket.assigns.provider,
+            socket.assigns.device_code,
+            socket.assigns.client_ip
+          )
         )
 
       _ ->

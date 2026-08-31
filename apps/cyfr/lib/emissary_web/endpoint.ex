@@ -44,9 +44,15 @@ defmodule EmissaryWeb.Endpoint do
     ]
   end
 
+  # `:peer_data` and `:x_headers` are what `Sanctum.ClientIp.from_connect_info/1`
+  # needs: this socket is handled here, before the router, so it passes no
+  # rate-limit plug and a LiveView that starts an anonymous flow (sign-in,
+  # registry appeal) has to budget by IP itself.
+  @live_connect_info [:peer_data, :x_headers, session: {__MODULE__, :session_options, []}]
+
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: {__MODULE__, :session_options, []}]],
-    longpoll: [connect_info: [session: {__MODULE__, :session_options, []}]]
+    websocket: [connect_info: @live_connect_info],
+    longpoll: [connect_info: @live_connect_info]
 
   # Serve at "/" the static files from "priv/static" directory.
   #

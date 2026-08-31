@@ -11,7 +11,13 @@ defmodule PrismWeb.LoginLiveTest do
   use PrismWeb.ConnCase, async: false
 
   defmodule FakeDeviceFlow do
-    def init_device_flow(provider) when provider in [:github, :google] do
+    # Records the address it was handed. The `/live` socket passes no
+    # rate-limit plug, so the LiveView supplying a real client IP is the
+    # only per-address bound this surface has — a `nil` here would compile,
+    # run, and silently leave sign-in exhaustible by one caller again.
+    def init_device_flow(provider, client_ip) when provider in [:github, :google] do
+      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
+
       {:ok,
        %{
          device_code: "dev-code",
@@ -22,7 +28,8 @@ defmodule PrismWeb.LoginLiveTest do
        }}
     end
 
-    def poll_for_session(_provider, _code) do
+    def poll_for_session(_provider, _code, client_ip) do
+      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
       Application.get_env(:cyfr, :device_flow_poll_result, {:ok, %{status: "pending"}})
     end
   end
@@ -99,6 +106,36 @@ defmodule PrismWeb.LoginLiveTest do
       assert html =~ "WXYZ-1234"
       assert html =~ "https://github.com/login/device"
       assert html =~ "Waiting for authorization"
+    end
+
+    test "the flow is budgeted against a resolved client address", %{conn: conn} do
+      Application.delete_env(:cyfr, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      view
+      |> element("button[phx-click=start][phx-value-provider=github]")
+      |> render_click()
+
+      # `/live` is handled by the endpoint before the router, so no plug
+      # meters this socket: if the LiveView hands the flow a `nil` address,
+      # one caller can exhaust the server-wide sign-in budget again.
+      #
+      # This covers the LiveView half only. `Phoenix.LiveViewTest` builds
+      # `connect_info` from the test conn rather than from the endpoint's
+      # socket declaration, so removing `:peer_data` from the endpoint
+      # would NOT fail here — that half is pinned in
+      # `EmissaryWeb.EndpointSocketTest`.
+      ip = Application.get_env(:cyfr, :device_flow_last_ip)
+
+      assert is_binary(ip), "the LiveView must budget the device flow by client address"
+
+      assert {:ok, _} = :inet.parse_address(String.to_charlist(ip)),
+             "expected a real address, got #{inspect(ip)}"
+
+      refute ip == "0.0.0.0",
+             "a connected socket must resolve a peer, not the fail-closed placeholder"
     end
 
     test "a completed poll redirects through the device-complete handshake", %{conn: conn} do

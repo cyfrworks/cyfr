@@ -22,7 +22,12 @@ defmodule PrismWeb.RegistryLiveTest do
   defmodule FakeDeviceFlow do
     @moduledoc false
 
-    def init_device_flow(provider) when provider in [:github, :google] do
+    # See LoginLiveTest's fake: the appeal flow is the second anonymous
+    # device flow on a socket that passes no rate-limit plug, so the
+    # address it budgets against is recorded and asserted.
+    def init_device_flow(provider, client_ip) when provider in [:github, :google] do
+      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
+
       {:ok,
        %{
          device_code: "dev-code",
@@ -33,7 +38,8 @@ defmodule PrismWeb.RegistryLiveTest do
        }}
     end
 
-    def poll_for_access_token(_provider, _code) do
+    def poll_for_access_token(_provider, _code, client_ip) do
+      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
       Application.get_env(:cyfr, :device_flow_poll_result, {:ok, %{status: "pending"}})
     end
   end

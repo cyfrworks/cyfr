@@ -62,11 +62,28 @@ defmodule Sanctum.Auth.DeviceFlow do
   @default_poll_interval 5
 
   # Anonymous-surface budgets (checked before any provider round-trip;
-  # rationale at check_poll_budget/1 and check_init_budget/0).
+  # rationale at check_poll_budget/2 and check_init_budget/1).
+  #
+  # The invariant every number here keeps: THE GLOBAL CEILING SITS ABOVE
+  # WHAT ONE CLIENT IS ALLOWED TO SEND. It used to be inverted — a 60/min
+  # server-wide `device_init` ceiling under a 120/min per-IP transport
+  # budget (`EmissaryWeb.Plugs.MCPRateLimit`) — so one unauthenticated
+  # address could exhaust it without ever tripping the limiter and answer
+  # "Too many sign-in attempts" to every user on the server. The console
+  # was worse: `/live` is handled by the endpoint before the router, so it
+  # passes no limiter at all and a per-socket debounce is not a bound.
+  #
+  # `Cyfr.RateLimiter` is ETS and node-local, like every other limiter
+  # here, so on a multi-node deployment each of these is a per-node
+  # budget and the effective ceilings multiply by the node count. That is
+  # the same property the transport limiter has; it is recorded, not
+  # relied on.
   @poll_per_code_max 30
-  @poll_global_max 300
+  @poll_per_ip_max 90
+  @poll_global_max 1_800
   @poll_window_ms 60_000
-  @init_global_max 60
+  @init_per_ip_max 20
+  @init_global_max 600
 
   @type provider :: :github | :google | String.t()
   @type device_code_response :: %{
@@ -102,31 +119,51 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   Returns device code info that should be displayed to the user.
 
+  `client_ip` is the address the budget is charged to, from
+  `Sanctum.ClientIp`. Pass `nil` only from a surface that is already
+  metered per address by the transport — today that is the MCP route
+  behind `EmissaryWeb.Plugs.MCPRateLimit`, and nothing else. It is a
+  required argument rather than an option because a caller that has no
+  answer has to say so, and the next anonymous surface must not inherit
+  "unbudgeted" by omission.
+
   ## Examples
 
-      {:ok, info} = DeviceFlow.init_device_flow("github")
+      {:ok, info} = DeviceFlow.init_device_flow("github", "203.0.113.7")
       # info contains: device_code, user_code, verification_uri, expires_in, interval
 
   """
-  @spec init_device_flow(provider()) :: {:ok, device_code_response()} | {:error, term()}
-  def init_device_flow(provider) do
+  @spec init_device_flow(provider(), String.t() | nil) ::
+          {:ok, device_code_response()} | {:error, term()}
+  def init_device_flow(provider, client_ip) do
     # The init round-trip is the same anonymous POST with this server's
-    # client id that the polls are budgeted for — reachable from the
-    # session tool and the login page, where a per-socket debounce is the
-    # only other bound and an abuser just opens more sockets. Same
-    # server-wide ceiling, same reason: the client id's reputation at the
+    # client id that the polls are budgeted for. Two buckets, and the order
+    # matters: the per-address one is what an abuser actually hits, and the
+    # server-wide one is a circuit breaker for a distributed attempt —
+    # never the other way round, because the client id's reputation at the
     # provider is spent by whoever asks.
-    with :ok <- check_init_budget(),
+    with :ok <- check_init_budget(client_ip),
          {:ok, provider, client_id} <- usable(provider) do
       request_device_code(provider, client_id)
     end
   end
 
-  defp check_init_budget do
-    case Cyfr.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
-      :ok -> :ok
+  defp check_init_budget(client_ip) do
+    with :ok <- check_ip_budget({:device_init, client_ip}, @init_per_ip_max),
+         :ok <-
+           Cyfr.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
+      :ok
+    else
       {:deny, _retry_ms} -> {:error, "Too many sign-in attempts — try again shortly"}
     end
+  end
+
+  # A surface with no address of its own (the MCP route, metered per IP by
+  # its own plug) has no bucket to charge; it still passes the global one.
+  defp check_ip_budget({_bucket, nil}, _max), do: :ok
+
+  defp check_ip_budget({bucket, client_ip}, max) when is_binary(client_ip) do
+    Cyfr.RateLimiter.check({bucket, client_ip}, max, @poll_window_ms)
   end
 
   @doc """
@@ -160,7 +197,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   ## Examples
 
-      case DeviceFlow.poll_for_session("github", device_code) do
+      case DeviceFlow.poll_for_session("github", device_code, client_ip) do
         {:ok, %{status: "pending"}} ->
           # Keep polling
         {:ok, %{status: "complete", session_token: token}} ->
@@ -170,9 +207,10 @@ defmodule Sanctum.Auth.DeviceFlow do
       end
 
   """
-  @spec poll_for_session(provider(), String.t()) :: {:ok, map()} | {:error, term()}
-  def poll_for_session(provider, device_code) do
-    with :ok <- check_poll_budget(device_code),
+  @spec poll_for_session(provider(), String.t(), String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def poll_for_session(provider, device_code, client_ip) do
+    with :ok <- check_poll_budget(device_code, client_ip),
          {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
         {:ok, tokens} ->
@@ -229,14 +267,16 @@ defmodule Sanctum.Auth.DeviceFlow do
   - `{:ok, %{status: "denied"}}`
   - `{:error, reason}`
   """
-  @spec poll_for_access_token(provider(), String.t()) :: {:ok, map()} | {:error, term()}
-  def poll_for_access_token(provider, device_code) do
+  @spec poll_for_access_token(provider(), String.t(), String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def poll_for_access_token(provider, device_code, client_ip) do
     # The appeal flow's raw-token poll deliberately bypasses the Door — an
     # appellant is by definition someone the takedown cascade already
     # revoked, and they must still be able to prove who they are to
     # cyfr.run. The Door exemption is the point; the poll BUDGET below is
-    # not exempt.
-    with :ok <- check_poll_budget(device_code),
+    # not exempt, and neither is its per-address half: this flow's only
+    # caller is a LiveView, which passes no rate-limit plug.
+    with :ok <- check_poll_budget(device_code, client_ip),
          {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
         {:ok, tokens} ->
@@ -275,18 +315,22 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   # Both poll surfaces are anonymous, and every poll POSTs to the IdP
   # with THIS server's client id — unbudgeted, an abuser could spend the
-  # client id's reputation at the provider. A well-behaved client polls
-  # every 5s, so 30/min per device code leaves generous headroom; the
-  # server-wide ceiling keeps a swarm of fabricated codes from
-  # multiplying the per-code budget. An over-budget poll answers the
-  # protocol's own back-pressure shape without contacting the provider.
-  # (The budget attributes live at the top of the module — init reads
-  # them too, and attributes must be defined before use.)
-  defp check_poll_budget(device_code) do
+  # client id's reputation at the provider. Three buckets, narrowest
+  # first: a well-behaved client polls every 5s, so 30/min per device code
+  # leaves generous headroom; the per-address budget bounds a swarm of
+  # fabricated codes from one origin, which the per-code bucket cannot
+  # see; and the server-wide ceiling is the distributed-attempt circuit
+  # breaker, deliberately far above what any one address may spend. An
+  # over-budget poll answers the protocol's own back-pressure shape
+  # without contacting the provider. (The budget attributes live at the
+  # top of the module — init reads them too, and attributes must be
+  # defined before use.)
+  defp check_poll_budget(device_code, client_ip) do
     per_code_key = {:device_poll, Cyfr.Digest.sha256_hex(device_code)}
 
-    with :ok <- Cyfr.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms),
-         :ok <- Cyfr.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms) do
+    with :ok <- Cyfr.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms),
+         :ok <- check_ip_budget({:device_poll, client_ip}, @poll_per_ip_max),
+         :ok <- Cyfr.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms) do
       :ok
     else
       {:deny, _retry_ms} -> {:budget, :slow_down}

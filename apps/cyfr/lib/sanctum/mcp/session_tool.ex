@@ -172,7 +172,11 @@ defmodule Sanctum.MCP.SessionTool do
     if device_flow_enabled?() do
       provider = Map.get(args, "provider", "github")
 
-      case Sanctum.Auth.DeviceFlow.init_device_flow(provider) do
+      # No address to charge: this action reaches us only over the `/mcp`
+      # route, which `EmissaryWeb.Plugs.MCPRateLimit` already meters per
+      # client IP. The device-flow global ceiling sits above that budget,
+      # so one address cannot exhaust it.
+      case Sanctum.Auth.DeviceFlow.init_device_flow(provider, nil) do
         {:ok, device_info} ->
           {:ok,
            %{
@@ -218,7 +222,8 @@ defmodule Sanctum.MCP.SessionTool do
     if device_flow_enabled?() do
       provider = Map.get(args, "provider", "github")
 
-      case Sanctum.Auth.DeviceFlow.poll_for_session(provider, device_code) do
+      # Metered per IP by `MCPRateLimit`, as `device_init` above.
+      case Sanctum.Auth.DeviceFlow.poll_for_session(provider, device_code, nil) do
         {:ok, result} ->
           {:ok, Sanctum.Auth.DeviceFlow.wire(result)}
 

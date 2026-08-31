@@ -45,9 +45,9 @@ defmodule Sanctum.DeviceFlowProvidersTest do
   describe "an unknown provider" do
     test "is refused by name rather than crashing" do
       for verb <- [
-            fn p -> DeviceFlow.init_device_flow(p) end,
-            fn p -> DeviceFlow.poll_for_session(p, "dc") end,
-            fn p -> DeviceFlow.poll_for_access_token(p, "dc") end
+            fn p -> DeviceFlow.init_device_flow(p, nil) end,
+            fn p -> DeviceFlow.poll_for_session(p, "dc", nil) end,
+            fn p -> DeviceFlow.poll_for_access_token(p, "dc", nil) end
           ] do
         assert {:error, {:unknown_provider, "okta"}} = verb.("okta")
       end
@@ -57,9 +57,9 @@ defmodule Sanctum.DeviceFlowProvidersTest do
       put(:github_client_id, "gh_id")
 
       assert {:error, {:client_id_not_configured, :google}} =
-               DeviceFlow.init_device_flow("google")
+               DeviceFlow.init_device_flow("google", nil)
 
-      assert {:error, {:unknown_provider, "azure"}} = DeviceFlow.init_device_flow("azure")
+      assert {:error, {:unknown_provider, "azure"}} = DeviceFlow.init_device_flow("azure", nil)
     end
   end
 

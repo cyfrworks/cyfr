@@ -18,7 +18,7 @@ defmodule Sanctum do
   - the browser flow — `EmissaryWeb.AuthController.callback/2` after the
     configured `:auth_provider` (`Sanctum.Auth.OAuth` or `Sanctum.Auth.OIDC`)
     proves the identity;
-  - the CLI flow — `Sanctum.Auth.DeviceFlow.poll_for_session/2` behind the
+  - the CLI flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the
     `session` MCP tool (`cyfr login`).
 
   Providers prove who someone is; they never mint sessions themselves.

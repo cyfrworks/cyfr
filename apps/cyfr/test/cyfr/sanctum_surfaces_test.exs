@@ -68,11 +68,19 @@ defmodule Cyfr.SanctumSurfacesTest do
     "prism" => ~w(
       Sanctum.Context Sanctum.Notify Sanctum.Sanitizer Sanctum.Tenancy
     ),
+    # `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone,
+    # and it is here for the same reason `emissary_web` has it: the console
+    # is an ingress that must resolve its caller's address. The `/live`
+    # socket is handled by the endpoint BEFORE the router, so it passes no
+    # rate-limit plug — which makes the console, not a plug, the only
+    # per-address bound on the anonymous device flows it starts
+    # (`LoginLive`, `RegistryLive`). Assembling `connect_info` is a web
+    # concern; the hop rules stay in the auth domain, spelled once.
     "prism_web" => ~w(
-      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ComponentRef
-      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
-      Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
-      Sanctum.Webhook
+      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
+      Sanctum.ComponentRef Sanctum.Consent Sanctum.Context Sanctum.Door
+      Sanctum.Notify Sanctum.Session Sanctum.SignIn Sanctum.Tenancy
+      Sanctum.TinctureAuth Sanctum.Webhook
     )
   }
 

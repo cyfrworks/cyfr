@@ -51,7 +51,7 @@ defmodule EmissaryWeb.AuthController do
 
   @doc """
   Finishes GitHub/Google device-flow sign-in: the LiveView minted a
-  one-time ticket after `DeviceFlow.poll_for_session/2` created the
+  one-time ticket after `DeviceFlow.poll_for_session/3` created the
   Sanctum session; this sets the cookie and routes the same way the
   Ueberauth callback does (home, claim, or legal-accept).
   """

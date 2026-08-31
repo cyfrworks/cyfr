@@ -57,6 +57,34 @@ defmodule PrismWeb.AuthHelpers do
 
   def disposition(_), do: :sign_in
 
+  @doc """
+  The client address behind a LiveView socket, for the anonymous flows
+  that must budget by IP themselves.
+
+  The `/live` socket is handled by `EmissaryWeb.Endpoint` before the
+  router, so it passes no rate-limit plug: a LiveView that starts a device
+  flow (sign-in, the registry appeal) is the only thing standing between
+  one address and the server-wide budget. `connect_info` is readable only
+  during `mount/3`, and only on the connected mount — the static render
+  answers `"0.0.0.0"`, which no flow can reach, since starting one takes a
+  click on a live socket.
+
+  One spelling for both call sites: the hop rules live in
+  `Sanctum.ClientIp` and the assembly of the two `connect_info` keys they
+  need lives here, rather than once per LiveView.
+  """
+  @spec socket_client_ip(Phoenix.LiveView.Socket.t()) :: String.t()
+  def socket_client_ip(socket) do
+    if Phoenix.LiveView.connected?(socket) do
+      Sanctum.ClientIp.from_connect_info(%{
+        peer_data: Phoenix.LiveView.get_connect_info(socket, :peer_data),
+        x_headers: Phoenix.LiveView.get_connect_info(socket, :x_headers)
+      })
+    else
+      "0.0.0.0"
+    end
+  end
+
   @doc "The one spelling of the sign-in path."
   def sign_in_path, do: "/login"
 
