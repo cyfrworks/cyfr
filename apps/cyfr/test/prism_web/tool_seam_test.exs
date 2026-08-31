@@ -70,10 +70,13 @@ defmodule PrismWeb.ToolSeamTest do
     # in; `Compendium.MCP.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
      "Compendium.Registry.CredentialStore.put_push_token"},
-    # The conversation is the console's own surface (docs/0.6.0.md §2.2 item
-    # 5): AQUA participates in a thread, it does not own the thread. There is
-    # deliberately no `conversation.*` tool — an agent posts by being
-    # addressed, not by creating threads on someone's behalf.
+    # The conversation is the console's own surface: AQUA participates in a
+    # thread, it does not own the thread. There is deliberately no
+    # `conversation.*` tool — an agent posts by being addressed, not by
+    # creating threads on someone's behalf. (A `conversation.read` tool
+    # would put private chat history inside the agent-reachable surface,
+    # which is the opposite of what a private console is for —
+    # `PrismWeb.MCPHelpers` states the rule.)
     {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.create"},
     {"apps/cyfr/lib/prism_web/live/conversation_live.ex", "Arca.ConversationStorage.delete"},
     # Withdrawing an approval the person was shown. The grant belongs to the

@@ -7,6 +7,19 @@ defmodule Cyfr.DocsDriftTest do
   the tree; a storage root it does not name is a root nobody defends.
   This binds its storage-tree sentence to the layout SSOT the same way
   the drift guards bind the protocol literals.
+
+  ## One of these guards is local-only, on purpose
+
+  `CLAUDE.md` is gitignored — it is the operator's own agent contract, not
+  repo content — so a fresh checkout does not have it and **CI never runs
+  that first test** (`:requires_local_docs`, excluded by `test_helper.exs`
+  when the file is absent). Do not mistake it for CI protection: it
+  catches drift on the machine that owns the file, and nowhere else.
+
+  The other four read tracked files (README and the three guides) and do
+  run everywhere. Before this tag the CLAUDE.md test was an unguarded
+  `File.read!`, so a clean clone raised `File.Error` and the whole module
+  — including those four — protected nothing.
   """
   use ExUnit.Case, async: true
 
@@ -14,6 +27,7 @@ defmodule Cyfr.DocsDriftTest do
   @claude_md Path.join(@repo_root, "CLAUDE.md")
   @readme Path.join(@repo_root, "README.md")
 
+  @tag :requires_local_docs
   test "CLAUDE.md's storage tree names every tenant root and global prefix" do
     doc = File.read!(@claude_md)
 

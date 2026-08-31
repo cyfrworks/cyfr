@@ -15,7 +15,7 @@ on:
       - '**/*.ex'
       - '**/*.exs'
       - 'apps/codex/**'
-      - 'apps/mcp-bridge/server.mjs'
+      - 'apps/mcp-bridge/**/*.mjs'
       - 'wit/**'
       - 'LICENSES/**'
       - '.github/workflows/license-lint.yml'
@@ -25,7 +25,7 @@ on:
       - '**/*.ex'
       - '**/*.exs'
       - 'apps/codex/**'
-      - 'apps/mcp-bridge/server.mjs'
+      - 'apps/mcp-bridge/**/*.mjs'
       - 'wit/**'
       - 'LICENSES/**'
 
@@ -40,7 +40,7 @@ jobs:
       # tests; everything else (including the tenancy migrations under
       # priv/repo/migrations) is Apache-2.0. This one gate covers every tracked
       # .ex/.exs in the repo — root mix.exs, config/, priv/, and all apps —
-      # plus the Go CLI (apps/codex), the mcp-bridge server, the WIT ABI
+      # plus the Go CLI (apps/codex), the mcp-bridge sources and tests, the WIT ABI
       # definitions under wit/, and the console's own JavaScript
       # (apps/cyfr/assets/js) — all of which sit outside the moat. The JS was
       # the last first-party source in the repo carrying no licence marking
@@ -80,7 +80,7 @@ jobs:
                 fail=1
               fi
             fi
-          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/server.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

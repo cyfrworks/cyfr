@@ -192,10 +192,16 @@ function spawnBackend(name, command, env) {
   validateBackendName(name);
 
   // Children never see the bridge's own admin bearer: any npx backend that
-  // inherited it could re-enter /mcp as an administrator. Everything else
-  // in the environment passes through (PATH, HOME, npm caches).
+  // inherited it could re-enter /mcp as an administrator. Nor its own
+  // configuration — MCP_BRIDGE_DATA points at the 0600 backends.json the
+  // child's uid owns, so passing it through handed every backend the
+  // third-party API keys in every OTHER backend's `env` block, which is
+  // exactly what that file mode is for. Everything else passes through
+  // (PATH, HOME, npm caches).
   const childEnv = { ...process.env, ...(env || {}) };
   delete childEnv.MCP_BRIDGE_TOKEN;
+  delete childEnv.MCP_BRIDGE_DATA;
+  delete childEnv.MCP_BRIDGE_ALLOW_INSECURE;
 
   const proc = spawn("sh", ["-c", command], {
     env: childEnv,
@@ -218,19 +224,6 @@ function spawnBackend(name, command, env) {
   proc.stdout.on("data", (chunk) => {
     backend.buffer += chunk;
 
-    // A child emitting an endless line with no newline would grow this
-    // string without bound; no legitimate MCP frame approaches 10MB.
-    if (backend.buffer.length > MAX_FRAME_BYTES) {
-      console.error(
-        `[${name}] stdout frame exceeded ${MAX_FRAME_BYTES} bytes without a newline; killing backend`
-      );
-      backend.buffer = "";
-      backend.status = "error";
-      backend.error = "stdout frame overflow";
-      proc.kill("SIGKILL");
-      return;
-    }
-
     let idx;
     while ((idx = backend.buffer.indexOf("\n")) >= 0) {
       const line = backend.buffer.slice(0, idx).trim();
@@ -243,14 +236,61 @@ function spawnBackend(name, command, env) {
         console.error(`[${name}] non-JSON stdout: ${line.slice(0, 200)}`);
         continue;
       }
-      if (msg.id != null && backend.pending.has(msg.id)) {
-        const { resolve, reject, timer } = backend.pending.get(msg.id);
-        backend.pending.delete(msg.id);
+
+      // A `method` means the child is TALKING, not answering: MCP servers
+      // are bidirectional peers and send their own requests
+      // (sampling/createMessage, roots/list, elicitation/create) with their
+      // own id counter, which — like ours — starts at 1. Matching on id
+      // alone resolved our pending `initialize` with a child's `roots/list`,
+      // handing `undefined` to the handshake and skewing every id after it.
+      if (msg.method !== undefined) {
+        // A request expects an answer; a notification does not.
+        if (msg.id != null) {
+          writeFrame(backend, {
+            jsonrpc: "2.0",
+            id: msg.id,
+            error: { code: -32601, message: `method not supported by bridge: ${msg.method}` },
+          });
+        }
+        continue;
+      }
+
+      // Pending calls are keyed by the NUMBER we minted (`++nextId`), and
+      // `Map.has` is strict. Ids round-trip through a string type in more
+      // than one stdio server, so an echoed "1" for 1 matched nothing and
+      // the call hung for the full RPC timeout with no log line.
+      let key = msg.id;
+
+      if (!backend.pending.has(key) && typeof key === "string" && key.trim() !== "") {
+        const asNumber = Number(key);
+        if (Number.isFinite(asNumber) && backend.pending.has(asNumber)) key = asNumber;
+      }
+
+      if (msg.id != null && backend.pending.has(key)) {
+        const { resolve, reject, timer } = backend.pending.get(key);
+        backend.pending.delete(key);
         if (timer) clearTimeout(timer);
         if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
         else resolve(msg.result);
+      } else if (msg.id != null) {
+        console.error(`[${name}] response for unknown id ${JSON.stringify(msg.id)}; dropped`);
       }
-      // Ignore unsolicited notifications from the child for now.
+      // Unsolicited notifications from the child are ignored.
+    }
+
+    // Checked AFTER draining, on what is left: this bounds a partial frame
+    // with no newline, which is what the cap is for. Applied to the whole
+    // buffer it also killed healthy backends mid-answer — a large
+    // legitimate result arrives across many chunks and only becomes a
+    // frame once its newline lands.
+    if (backend.buffer.length > MAX_FRAME_BYTES) {
+      console.error(
+        `[${name}] stdout frame exceeded ${MAX_FRAME_BYTES} bytes without a newline; killing backend`
+      );
+      backend.buffer = "";
+      backend.status = "error";
+      backend.error = "stdout frame overflow";
+      proc.kill("SIGKILL");
     }
   });
 
@@ -258,6 +298,27 @@ function spawnBackend(name, command, env) {
   proc.stderr.on("data", (chunk) => {
     process.stderr.write(`[${name}] ${chunk}`);
   });
+
+  // Every child stream needs its own 'error' listener. A stream error with
+  // no listener is re-thrown as an uncaughtException, and this file's
+  // handler answers that with process.exit(1) — so one EPIPE on a dying
+  // child's stdin killed the bridge and every OTHER backend with it. The
+  // window is real: stdin closes an event-loop turn or more before the
+  // 'exit' event flips `status` to "crashed", and `rpc()` guards on status.
+  for (const [label, stream] of [
+    ["stdin", proc.stdin],
+    ["stdout", proc.stdout],
+    ["stderr", proc.stderr],
+  ]) {
+    stream.on("error", (err) => {
+      if (backend.status !== "removed") {
+        backend.status = "error";
+        backend.error = `${label}: ${err.message}`;
+      }
+      console.error(`[${name}] ${label} error: ${err.message}`);
+      failPending(backend, new Error(backend.error || `${label} error`));
+    });
+  }
 
   proc.on("error", (err) => {
     backend.status = "error";
@@ -284,6 +345,22 @@ function failPending(backend, err) {
   backend.pending.clear();
 }
 
+// The one place anything is written to a child. Every caller used to have
+// its own `proc.stdin.write` in a try/catch, which cannot see the failure
+// that actually matters: a write to a closed pipe reports EPIPE
+// ASYNCHRONOUSLY on the stream, and `spawnBackend` registers no 'error'
+// listener — so it surfaced as an uncaughtException and took the whole
+// bridge (every other backend with it) down via process.exit(1).
+function writeFrame(backend, msg) {
+  try {
+    backend.proc.stdin.write(JSON.stringify(msg) + "\n");
+    return true;
+  } catch (e) {
+    console.error(`[${backend.name}] stdin write failed: ${e.message}`);
+    return false;
+  }
+}
+
 function rpc(backend, method, params, timeoutMs = RPC_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     if (backend.status === "removed" || backend.status === "crashed") {
@@ -308,12 +385,10 @@ function rpc(backend, method, params, timeoutMs = RPC_TIMEOUT_MS) {
       method,
       ...(params !== undefined ? { params } : {}),
     };
-    try {
-      backend.proc.stdin.write(JSON.stringify(req) + "\n");
-    } catch (e) {
+    if (!writeFrame(backend, req)) {
       backend.pending.delete(id);
       clearTimeout(timer);
-      reject(e);
+      reject(new Error(`backend stdin unavailable: ${method}`));
     }
   });
 }
@@ -324,11 +399,7 @@ function notify(backend, method, params) {
     method,
     ...(params !== undefined ? { params } : {}),
   };
-  try {
-    backend.proc.stdin.write(JSON.stringify(msg) + "\n");
-  } catch (e) {
-    console.error(`[notify ${method}] write failed: ${e.message}`);
-  }
+  writeFrame(backend, msg);
 }
 
 async function initializeBackend(name) {
@@ -488,8 +559,24 @@ async function adminAddBackend(args) {
 
   spawnBackend(name, command, env);
   await initializeBackend(name);
-  await persist();
+
+  // A handshake that failed leaves a live child nobody manages, an entry
+  // that blocks re-adding the same name, and — once persisted — a row the
+  // revival loop re-spawns on every restart, walking `backends` toward
+  // MAX_BACKENDS with corpses. `initializeBackend` swallows its error and
+  // only sets status, so this is where it has to be caught: reap the
+  // child, drop the entry, persist nothing, and tell the caller.
   const b = backends.get(name);
+
+  if (b.status === "error") {
+    const reason = b.error || "initialize failed";
+    stopBackend(name);
+    backends.delete(name);
+    throw new RpcRefusal(`backend '${name}' failed to start: ${reason}`);
+  }
+
+  await persist();
+
   return wrapResult({
     name,
     status: b.status,
@@ -564,7 +651,12 @@ const app = express();
 // is the 20 MB attachment cap both chat UIs enforce, base64-expanded). At
 // 10 MB the bridge rejected attachments cyfr itself accepts, so the same
 // request succeeded or 413'd depending on whether it went through the bridge.
-app.use(express.json({ limit: "28mb" }));
+// `type: () => true` so a body with the wrong Content-Type still parses —
+// and, when it is not JSON, reaches the SyntaxError branch of the error
+// middleware below. Registered without it, express left `req.body` as `{}`
+// for a text/plain POST, which then read as a notification and answered
+// 202 for what was a malformed request.
+app.use(express.json({ limit: "28mb", type: () => true }));
 
 // Constant-time bearer check. Returns true when no token is configured
 // (open mode) or when the request carries the matching bearer.
@@ -622,9 +714,14 @@ app.post("/mcp", async (req, res) => {
     return rpcError(res, 400, null, -32600, "Expected a single JSON-RPC message");
   }
 
-  // Notifications carry no id and get 202 with no body. This revision defines
-  // no header requirements for them, so they skip the checks below.
-  if (msg.id === undefined || msg.id === null) {
+  // Notifications carry NO id and get 202 with no body. This revision
+  // defines no header requirements for them, so they skip the checks below.
+  //
+  // An explicit `"id": null` is a request, not a notification — JSON-RPC
+  // permits it, and answering 202 left such a caller waiting on a result
+  // that was never coming, bounded only by its own timeout. `rpcError`
+  // already echoes `id ?? null`.
+  if (msg.id === undefined) {
     return res.status(202).end();
   }
 
@@ -815,7 +912,15 @@ async function handleRpc(msg) {
         // Surface tool-level failures as a successful JSON-RPC result with
         // isError=true so the upstream MCP client (cyfr) reports it to the
         // caller without treating the whole RPC as a protocol error.
-        return wrapError(err?.message || String(err));
+        //
+        // Only a REFUSAL is client-safe. Anything else reaching here is an
+        // internal fault whose message can carry filesystem paths, spawn
+        // arguments or upstream stderr — the same boundary the outer
+        // handler states, which this arm used to bypass by catching first.
+        if (err instanceof RpcRefusal) return wrapError(err.message);
+
+        console.error(`[tools/call ${name}] internal error: ${err?.stack || err}`);
+        return wrapError("tool call failed");
       }
     }
     default:

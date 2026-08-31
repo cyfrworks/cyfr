@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+// A stand-in for an npx MCP server, with one deliberately awkward
+// behaviour per mode. Real MCP servers are bidirectional peers and real
+// children die at inconvenient moments; both used to take the bridge down.
+
+const mode = process.argv[2] || "well-behaved";
+
+function send(msg) {
+  process.stdout.write(JSON.stringify(msg) + "\n");
+}
+
+let buffer = "";
+
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+
+  let idx;
+  while ((idx = buffer.indexOf("\n")) >= 0) {
+    const line = buffer.slice(0, idx).trim();
+    buffer = buffer.slice(idx + 1);
+    if (!line) continue;
+
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (msg.method === "initialize") {
+      // A peer's OWN request, with an id counter that — like the bridge's —
+      // starts at 1. Sent HERE, after initialize arrived and before it is
+      // answered, so it is guaranteed to land while the bridge's own id 1
+      // is pending. (Emitting it at startup instead raced ahead of that
+      // and the bridge simply dropped it — a test that could not fail.)
+      if (mode === "rogue-request") {
+        send({ jsonrpc: "2.0", id: 1, method: "roots/list" });
+      }
+
+      send({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          serverInfo: { name: "fake-child", version: "0.0.0" },
+        },
+      });
+      continue;
+    }
+
+    if (msg.method === "tools/list") {
+      // The second collision, and the one with observable damage: the
+      // bridge is waiting on id 2 for THIS answer, so a peer request
+      // carrying id 2 resolves it with `undefined` and the catalogue is
+      // lost. (Colliding only on the handshake's id 1 is invisible here —
+      // tools/list still answers on its own id, which is why a test that
+      // stopped at id 1 passed with the guard removed.)
+      if (mode === "rogue-request") {
+        send({ jsonrpc: "2.0", id: 2, method: "roots/list" });
+      }
+
+      send({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: { tools: [{ name: "ping", description: "pong", inputSchema: { type: "object" } }] },
+      });
+
+      // Handshake done, then gone — so the NEXT write from the bridge
+      // lands on a closed pipe. That EPIPE arrives asynchronously on the
+      // stream, which is the shape that used to reach uncaughtException
+      // and take every other backend down with it.
+      if (mode === "die-after-handshake") {
+        setTimeout(() => process.exit(0), 20);
+      }
+      continue;
+    }
+
+    if (msg.method === "tools/call") {
+      // Echo the id back as a STRING. Legal, and emitted by more than one
+      // stdio server; a strict Map lookup dropped it and hung the call.
+      send({
+        jsonrpc: "2.0",
+        id: String(msg.id),
+        result: { content: [{ type: "text", text: "pong" }] },
+      });
+      continue;
+    }
+
+    if (msg.id != null) {
+      send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "unknown" } });
+    }
+  }
+});

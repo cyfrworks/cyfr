@@ -14,12 +14,21 @@
 # app-scoped run), instead of crashing on an UndefinedFunctionError.
 # `:s3_integration` needs a live MinIO — the `s3-minio` CI job (and a local
 # `mix test --only s3_integration`) opts in; ordinary runs skip it.
+# `:requires_local_docs` is the same shape for a file that is deliberately
+# NOT in the repo: `CLAUDE.md` is gitignored (it is the operator's own
+# agent contract), so a fresh checkout — every CI run — does not have it.
+# The guard that binds its storage tree to the layout SSOT is therefore a
+# LOCAL check by design. It used to be an unguarded `File.read!`, which
+# meant CI could not be green on a clean clone.
 excludes =
   [:s3_integration] ++
     Enum.concat(
       if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
       if(Code.ensure_loaded?(Opus.MCP), do: [], else: [:requires_opus_modules])
-    )
+    ) ++
+    if File.exists?(Path.expand("../../../CLAUDE.md", __DIR__)),
+      do: [],
+      else: [:requires_local_docs]
 
 ExUnit.configure(exclude: excludes)
 

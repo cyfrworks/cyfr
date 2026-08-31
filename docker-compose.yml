@@ -115,6 +115,22 @@ services:
       target: mcp-bridge
     expose:
       - "8001"
+    # node is PID 1 in this image (the entrypoint `exec`s it), and the
+    # children are `sh -c npx …` — so when an intermediate sh or npx exits,
+    # its still-running descendants reparent to node, which reaps only what
+    # it spawned itself. Those orphans became permanent zombies, one per
+    # restart_backend and per failed download, until the container hit its
+    # PID limit. Docker's own init is the reaper, and forwards signals.
+    init: true
+    # The bridge's other knobs (MCP_BRIDGE_ALLOW_INSECURE, _DATA,
+    # _RPC_TIMEOUT_MS, _INIT_TIMEOUT_MS, _MAX_IN_FLIGHT, _MAX_BACKENDS) and
+    # CYFR_LOG_FORMAT are documented in .env.example but had no way in:
+    # this service passed exactly one variable and read no env file, so the
+    # documented ALLOW_INSECURE escape hatch and the JSON logging the
+    # bridge implements for this compose stack were both dead.
+    env_file:
+      - path: .env
+        required: false
     environment:
       # /mcp requires `Authorization: Bearer <token>`. `cyfr init` generates
       # this token. Register the bridge in Prism with header

@@ -42,6 +42,14 @@ jobs:
       - name: Syntax check
         run: node --check server.mjs
 
+      # Framing, correlation and child lifecycle against a fake stdio child.
+      # The smoke test below boots the bridge and checks auth; it never
+      # exercises a child, which is where the process-killing bugs lived: a
+      # peer's own JSON-RPC request resolving the bridge's pending call, and
+      # a call to a child that has gone away.
+      - name: Unit tests
+        run: npm test
+
       # Boot the bridge with a token and assert the two security-load-bearing
       # behaviours: /health answers open, and /mcp refuses a missing/wrong
       # bearer. Also assert the fail-closed boot: no token => exit 1.
