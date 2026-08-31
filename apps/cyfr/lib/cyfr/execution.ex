@@ -24,8 +24,18 @@ defmodule Cyfr.Execution do
               {:ok, map()} | {:error, term()}
   @callback authority_for(Context.t(), term(), String.t(), keyword()) ::
               {:ok, term()} | {:error, term()}
-  @callback subscribe_events(String.t(), Context.t()) :: :ok | {:error, term()}
-  @callback unsubscribe_events(String.t(), Context.t()) :: :ok | {:error, term()}
+  # The second argument is anything carrying an `:athanor_id` — a
+  # `Sanctum.Context` OR the execution record itself, which is the natural
+  # source wherever the OWNING athanor is what the topic must resolve to
+  # and the viewer's context carries a different one. Both the buffer's
+  # `topic/2` and `Opus.subscribe_events/2` document that; typing it
+  # `Context.t()` here contradicted them, and made the whole SSE stream
+  # loop in `EmissaryWeb.ExecutionEventsController` read as unreachable to
+  # static analysis — a function nobody could check.
+  @type event_scope :: Context.t() | %{:athanor_id => String.t(), optional(atom()) => any()}
+
+  @callback subscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
+  @callback unsubscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   @callback events_since(String.t(), non_neg_integer(), String.t()) :: [map()]
   @callback cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   @callback cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
@@ -69,10 +79,10 @@ defmodule Cyfr.Execution do
   def authority_for(ctx, profile_selector, reference, opts \\ []),
     do: call(:authority_for, [ctx, profile_selector, reference, opts])
 
-  @spec subscribe_events(String.t(), Context.t()) :: :ok | {:error, term()}
+  @spec subscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   def subscribe_events(execution_id, ctx), do: call(:subscribe_events, [execution_id, ctx])
 
-  @spec unsubscribe_events(String.t(), Context.t()) :: :ok | {:error, term()}
+  @spec unsubscribe_events(String.t(), event_scope()) :: :ok | {:error, term()}
   def unsubscribe_events(execution_id, ctx), do: call(:unsubscribe_events, [execution_id, ctx])
 
   @spec events_since(String.t(), non_neg_integer(), String.t()) :: [map()]

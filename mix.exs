@@ -38,7 +38,11 @@ defmodule Cyfr.MixProject do
       plt_local_path: "_build/plts",
       plt_core_path: "_build/plts",
       plt_add_apps: [:mix, :ex_unit, :eex],
-      flags: [:error_handling, :extra_return, :missing_return]
+      flags: [:error_handling, :extra_return, :missing_return],
+      # The findings standing when the gate was turned on, so the job can be
+      # green today and red on anything new. See `.dialyzer_ignore.exs`.
+      ignore_warnings: ".dialyzer_ignore.exs",
+      list_unused_filters: true
     ]
   end
 

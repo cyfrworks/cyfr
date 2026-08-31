@@ -10,6 +10,8 @@ defmodule Arca.Schemas.Webhook do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "webhooks" do
     field :name, :string
     field :slug, :string

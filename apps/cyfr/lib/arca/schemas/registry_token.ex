@@ -21,6 +21,8 @@ defmodule Arca.Schemas.RegistryToken do
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts [type: :utc_datetime_usec]
 
+  @type t :: %__MODULE__{}
+
   schema "registry_tokens" do
     field(:user_id, :string)
     field(:registry, :string)

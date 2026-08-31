@@ -76,12 +76,14 @@ defmodule Opus do
   and pass the same value to `unsubscribe_events/2`, or the unsubscribe
   targets a different topic and silently no-ops.
   """
+  @spec subscribe_events(String.t(), Cyfr.Execution.event_scope()) :: :ok | {:error, term()}
   @impl Cyfr.Execution
   defdelegate subscribe_events(execution_id, ctx),
     to: Opus.ExecutionEventBuffer,
     as: :subscribe
 
   @doc "Unsubscribe from an execution's event stream (same ctx as subscribe)."
+  @spec unsubscribe_events(String.t(), Cyfr.Execution.event_scope()) :: :ok | {:error, term()}
   @impl Cyfr.Execution
   defdelegate unsubscribe_events(execution_id, ctx),
     to: Opus.ExecutionEventBuffer,

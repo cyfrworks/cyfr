@@ -12,6 +12,8 @@ defmodule Arca.Schemas.ConsentProof do
   use Ecto.Schema
 
   @primary_key {:token_hash, :string, autogenerate: false}
+  @type t :: %__MODULE__{}
+
   schema "consent_proofs" do
     field :kind, :string
     field :digest, :string

@@ -11,6 +11,8 @@ defmodule Arca.Schemas.Consent do
   use Ecto.Schema
 
   @primary_key {:id, :string, autogenerate: false}
+  @type t :: %__MODULE__{}
+
   schema "consents" do
     field :athanor_id, :string
     field :profile_id, :string

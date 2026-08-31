@@ -12,6 +12,8 @@ defmodule Arca.Schemas.ConsentVaultRef do
   use Ecto.Schema
 
   @primary_key false
+  @type t :: %__MODULE__{}
+
   schema "consent_vault_refs" do
     field :consent_id, :string
     field :athanor_id, :string

@@ -22,6 +22,8 @@ defmodule Arca.Schemas.Membership do
 
   @statuses ["active", "invited"]
 
+  @type t :: %__MODULE__{}
+
   schema "memberships" do
     field :user_id, :string
     field :email, :string

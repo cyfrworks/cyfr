@@ -12,6 +12,8 @@ defmodule Arca.Schemas.Profile do
   use Ecto.Schema
 
   @primary_key {:id, :string, autogenerate: false}
+  @type t :: %__MODULE__{}
+
   schema "profiles" do
     field :athanor_id, :string
     field :source_ref, :string

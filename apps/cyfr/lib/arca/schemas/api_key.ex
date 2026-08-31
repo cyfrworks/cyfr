@@ -10,6 +10,8 @@ defmodule Arca.Schemas.ApiKey do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "api_keys" do
     field :name, :string
     field :key_hash, :binary

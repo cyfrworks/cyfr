@@ -113,7 +113,8 @@ defmodule Arca.ApiKeyStorage do
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key(String.t(), String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
+  @spec get_key(String.t(), String.t()) ::
+          {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
   def get_key(athanor_id, name) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key", fn ->
       query =
@@ -183,7 +184,7 @@ defmodule Arca.ApiKeyStorage do
   @doc """
   List all non-revoked keys of an athanor, sorted by inserted_at.
   """
-  @spec list_keys(String.t()) :: {:ok, [ApiKey.t()]}
+  @spec list_keys(String.t()) :: {:ok, [ApiKey.t()]} | {:error, :database_error}
   def list_keys(athanor_id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.list_keys", fn ->
       query =
@@ -201,7 +202,7 @@ defmodule Arca.ApiKeyStorage do
   @doc """
   Revoke a key by name within an athanor.
   """
-  @spec revoke_key(String.t(), String.t()) :: :ok | {:error, :not_found}
+  @spec revoke_key(String.t(), String.t()) :: :ok | {:error, :not_found | :database_error}
   def revoke_key(athanor_id, name) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_key", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -248,7 +249,8 @@ defmodule Arca.ApiKeyStorage do
   @doc """
   Rotate a key: update key_hash, key_prefix, and rotated_at.
   """
-  @spec rotate_key(String.t(), String.t(), binary(), String.t()) :: :ok | {:error, :not_found}
+  @spec rotate_key(String.t(), String.t(), binary(), String.t()) ::
+          :ok | {:error, :not_found | :database_error}
   def rotate_key(athanor_id, name, new_key_hash, new_key_prefix) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.rotate_key", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

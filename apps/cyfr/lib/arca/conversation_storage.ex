@@ -37,7 +37,7 @@ defmodule Arca.ConversationStorage do
   # ---------------------------------------------------------------------------
 
   @doc "The athanor's conversations, most recently active first."
-  @spec list(Context.t(), keyword()) :: [Conversation.t()]
+  @spec list(Context.t(), keyword()) :: [Conversation.t()] | {:error, :database_error}
   def list(%Context{} = ctx, opts \\ []) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.list", fn ->
       limit = Keyword.get(opts, :limit, 200)
@@ -52,7 +52,8 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc "One conversation of the context's athanor."
-  @spec get(Context.t(), String.t()) :: {:ok, Conversation.t()} | {:error, :not_found}
+  @spec get(Context.t(), String.t()) ::
+          {:ok, Conversation.t()} | {:error, :not_found | :database_error}
   def get(%Context{} = ctx, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.get", fn ->
       from(c in Conversation, where: c.id == ^id)
@@ -66,7 +67,8 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc "Open a new conversation in the context's athanor, attributed to its user."
-  @spec create(Context.t(), map()) :: {:ok, Conversation.t()} | {:error, Ecto.Changeset.t()}
+  @spec create(Context.t(), map()) ::
+          {:ok, Conversation.t()} | {:error, Ecto.Changeset.t() | :database_error}
   def create(%Context{} = ctx, attrs \\ %{}) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.create", fn ->
       Context.require_tenant!(ctx)
@@ -87,7 +89,7 @@ defmodule Arca.ConversationStorage do
   or turn cursor.
   """
   @spec update(Context.t(), String.t(), map()) ::
-          {:ok, Conversation.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Conversation.t()} | {:error, :not_found | :database_error | Ecto.Changeset.t()}
   def update(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.update", fn ->
       with {:ok, conv} <- get(ctx, id) do
@@ -214,7 +216,8 @@ defmodule Arca.ConversationStorage do
   bound the window (exclusive / inclusive) — a turn's task is the human
   rows between the last turn's cursor and the message that started it.
   """
-  @spec messages(Context.t(), String.t(), keyword()) :: [Message.t()]
+  @spec messages(Context.t(), String.t(), keyword()) ::
+          [Message.t()] | {:error, :database_error}
   def messages(%Context{} = ctx, conversation_id, opts \\ []) when is_binary(conversation_id) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.messages", fn ->
       query =
@@ -271,7 +274,8 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc "One message of the context's athanor."
-  @spec get_message(Context.t(), String.t()) :: {:ok, Message.t()} | {:error, :not_found}
+  @spec get_message(Context.t(), String.t()) ::
+          {:ok, Message.t()} | {:error, :not_found | :database_error}
   def get_message(%Context{} = ctx, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.get_message", fn ->
       from(m in Message, where: m.id == ^id)
@@ -285,7 +289,8 @@ defmodule Arca.ConversationStorage do
   end
 
   @doc "The approval rows of a conversation still waiting on a decision."
-  @spec pending_approvals(Context.t(), String.t()) :: [Message.t()]
+  @spec pending_approvals(Context.t(), String.t()) ::
+          [Message.t()] | {:error, :database_error}
   def pending_approvals(%Context{} = ctx, conversation_id) when is_binary(conversation_id) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.pending_approvals", fn ->
       from(m in Message,
@@ -410,7 +415,7 @@ defmodule Arca.ConversationStorage do
 
   @doc "Replace a message's content/payload (the runner finalising a streamed turn)."
   @spec update_message(Context.t(), String.t(), map()) ::
-          {:ok, Message.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Message.t()} | {:error, :not_found | :database_error | Ecto.Changeset.t()}
   def update_message(%Context{} = ctx, id, attrs) when is_binary(id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.update_message", fn ->
       with {:ok, msg} <- get_message(ctx, id) do
@@ -434,7 +439,7 @@ defmodule Arca.ConversationStorage do
   marked `"running"`.
   """
   @spec resolve_approval(Context.t(), String.t(), [String.t()] | String.t(), String.t(), map()) ::
-          {:ok, Message.t()} | {:error, :not_found | :already_resolved}
+          {:ok, Message.t()} | {:error, :not_found | :already_resolved | :database_error}
   def resolve_approval(%Context{} = ctx, id, from, to, attrs \\ %{})
       when is_binary(id) and to in ~w(running approved declined error) do
     Arca.Repo.Errors.with_db_rescue("ConversationStorage.resolve_approval", fn ->

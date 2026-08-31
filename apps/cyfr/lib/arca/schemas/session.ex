@@ -10,6 +10,8 @@ defmodule Arca.Schemas.Session do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "sessions" do
     field :token_hash, :binary
     field :token_prefix, :string

@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The tree carries ~1,000 `@spec`s. Dialyzer was configured in `mix.exs` —
+# PLT paths, a curated flag set (`:error_handling`, `:extra_return`,
+# `:missing_return`) — and then never run by anything: no CI job, no alias,
+# no mention in CONTRIBUTING. So the specs went unchecked, and a wrong one
+# misleads a reader with the authority of a type.
+#
+# Turning it on found 184 warnings. Most were one root cause — 18 of 20 Ecto
+# schemas never declared `@type t`, so every spec naming `Arca.Schemas.X.t()`
+# referenced a type that did not exist — and two were real defects: a
+# `count_by_request/2` outage shipped to clients as `counts: ["error",
+# "database_error"]`, and a callback typed `Context.t()` where the code
+# documents and passes an execution record, which made the whole SSE stream
+# loop read as unreachable. What is left is recorded in
+# `.dialyzer_ignore.exs`, so this job is green today and red on anything new.
+name: Dialyzer
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**/lib/**'
+      - 'mix.exs'
+      - 'mix.lock'
+      - '.dialyzer_ignore.exs'
+      - '.github/workflows/dialyzer.yml'
+  pull_request:
+    paths:
+      - 'apps/**/lib/**'
+      - 'mix.exs'
+      - 'mix.lock'
+      - '.dialyzer_ignore.exs'
+      - '.github/workflows/dialyzer.yml'
+permissions:
+  contents: read
+env:
+  MIX_ENV: dev
+  ERL_CRASH_DUMP_SECONDS: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+jobs:
+  dialyzer:
+    name: Specs agree with the code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-dialyzer-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      # The PLT is the expensive part (minutes on a cold build, seconds
+      # after) and changes only with OTP, Elixir or deps — never with the
+      # tree's own code, so it is keyed separately from the build cache and
+      # survives every ordinary commit.
+      - name: Cache PLT
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: _build/plts
+          key: ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - run: mix deps.get
+      - run: mix compile --warnings-as-errors
+      - name: Build PLT
+        run: mix dialyzer --plt
+      # `list_unused_filters: true` (mix.exs) fails on a recorded finding
+      # that no longer exists, so fixing one without deleting its line is
+      # also a red build. The record cannot drift from the tree either way.
+      - name: Dialyzer
+        run: mix dialyzer

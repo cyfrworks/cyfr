@@ -486,9 +486,15 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     with :ok <- tenant_gate(ctx) do
       ids = Enum.filter(ids, &is_binary/1)
 
-      counts = Arca.Execution.count_by_request(ctx, ids)
-
-      {:ok, %{counts: counts}}
+      # `count_by_request/2` refuses rather than defaulting, so an outage
+      # answers `{:error, :database_error}` — which was being wrapped and
+      # shipped as `counts: ["error", "database_error"]`, a structured
+      # falsehood a client would render as a fan-out count. Same refusal
+      # the other arms give.
+      case Arca.Execution.count_by_request(ctx, ids) do
+        counts when is_map(counts) -> {:ok, %{counts: counts}}
+        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
+      end
     end
   end
 

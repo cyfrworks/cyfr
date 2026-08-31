@@ -11,6 +11,8 @@ defmodule Arca.Schemas.WebhookDelivery do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "webhook_deliveries" do
     field :webhook_id, :string
     field :idempotency_key, :string

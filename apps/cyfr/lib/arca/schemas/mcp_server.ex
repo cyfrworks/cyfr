@@ -10,6 +10,8 @@ defmodule Arca.Schemas.McpServer do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "mcp_servers" do
     field :name, :string
     field :url, :string

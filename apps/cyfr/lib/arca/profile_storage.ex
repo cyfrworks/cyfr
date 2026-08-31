@@ -34,7 +34,7 @@ defmodule Arca.ProfileStorage do
     end)
   end
 
-  @spec get(String.t(), String.t()) :: {:ok, Profile.t()} | {:error, :not_found}
+  @spec get(String.t(), String.t()) :: {:ok, Profile.t()} | {:error, :not_found | :database_error}
   def get(athanor_id, id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.get", fn ->
       case Arca.Repo.get_by(Profile, id: id, athanor_id: athanor_id) do

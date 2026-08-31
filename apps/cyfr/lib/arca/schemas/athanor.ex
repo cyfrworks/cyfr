@@ -21,6 +21,8 @@ defmodule Arca.Schemas.Athanor do
   @kinds ["person", "group"]
   @statuses ["active", "archived"]
 
+  @type t :: %__MODULE__{}
+
   schema "athanors" do
     field :kind, :string
     field :name, :string

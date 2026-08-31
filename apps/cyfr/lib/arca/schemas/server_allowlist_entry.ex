@@ -21,6 +21,8 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
   @effects ["allow", "deny"]
   @statuses ["allowed", "requested"]
 
+  @type t :: %__MODULE__{}
+
   schema "server_allowlist" do
     field :kind, :string
     field :value, :string

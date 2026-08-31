@@ -103,7 +103,8 @@ defmodule Arca.WebhookStorage do
   @doc """
   Look up a webhook by name within an athanor. Excludes disabled rows.
   """
-  @spec get_by_name(String.t(), String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
+  @spec get_by_name(String.t(), String.t()) ::
+          {:ok, Webhook.t()} | {:error, :not_found | :database_error}
   def get_by_name(athanor_id, name) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_name", fn ->
       query =
@@ -158,7 +159,8 @@ defmodule Arca.WebhookStorage do
   Update mutable fields on an existing webhook (target_ref, signature_header,
   input_template, description, rate_limit). Does NOT change the secret or slug.
   """
-  @spec update_webhook(String.t(), String.t(), map()) :: :ok | {:error, :not_found}
+  @spec update_webhook(String.t(), String.t(), map()) ::
+          :ok | {:error, :not_found | :database_error}
   def update_webhook(athanor_id, name, fields) when is_map(fields) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.update_webhook", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -195,7 +197,7 @@ defmodule Arca.WebhookStorage do
   @doc """
   Soft-disable a webhook. Returns `{:error, :not_found}` if no enabled row matches.
   """
-  @spec set_disabled(String.t(), String.t()) :: :ok | {:error, :not_found}
+  @spec set_disabled(String.t(), String.t()) :: :ok | {:error, :not_found | :database_error}
   def set_disabled(athanor_id, name) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.set_disabled", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

@@ -111,7 +111,7 @@ defmodule Sanctum.Door.Store do
   defp names_platform_admin?(_kind, _value), do: false
 
   @doc "Delete an entry by id."
-  @spec remove(String.t()) :: :ok | {:error, :not_found}
+  @spec remove(String.t()) :: :ok | {:error, :not_found | :database_error}
   def remove(id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.remove", fn ->
       case Arca.Repo.delete_all(from(e in Entry, where: e.id == ^id)) do

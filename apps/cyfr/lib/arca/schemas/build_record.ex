@@ -13,6 +13,8 @@ defmodule Arca.Schemas.BuildRecord do
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
 
+  @type t :: %__MODULE__{}
+
   schema "build_records" do
     field :athanor_id, :string
     field :user_id, :string

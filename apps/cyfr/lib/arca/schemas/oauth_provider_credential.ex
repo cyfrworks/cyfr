@@ -16,6 +16,8 @@ defmodule Arca.Schemas.OauthProviderCredential do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "oauth_provider_credentials" do
     field :athanor_id, :string
     field :provider, :string

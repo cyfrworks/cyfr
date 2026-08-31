@@ -15,6 +15,8 @@ defmodule Arca.Schemas.Component do
 
   @primary_key {:id, :string, autogenerate: false}
 
+  @type t :: %__MODULE__{}
+
   schema "components" do
     field :name, :string
     field :version, :string

@@ -23,6 +23,8 @@ defmodule Arca.Schemas.User do
 
   @statuses ["active", "denied"]
 
+  @type t :: %__MODULE__{}
+
   schema "users" do
     field :email, :string
     field :email_verified, :boolean

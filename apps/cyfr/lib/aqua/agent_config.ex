@@ -313,12 +313,11 @@ defmodule Aqua.AgentConfig do
   """
   @spec build_system_prompt(Context.t(), String.t()) :: String.t()
   def build_system_prompt(%Context{} = ctx, orchestrator_name \\ "aqua") do
+    # `build_dynamic_context/1` always answers at least the current date, so
+    # the runtime section is never optional. The `if dynamic != ""` that
+    # stood here read as though it could be, and its else branch was dead.
     base = fetch_base_prompt(ctx, orchestrator_name)
-    dynamic = build_dynamic_context(ctx)
-
-    if dynamic != "",
-      do: base <> "\n\n---\n\n## Runtime Context\n\n" <> dynamic,
-      else: base
+    base <> "\n\n---\n\n## Runtime Context\n\n" <> build_dynamic_context(ctx)
   end
 
   defp fetch_base_prompt(ctx, orchestrator_name) do

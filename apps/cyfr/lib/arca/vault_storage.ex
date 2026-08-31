@@ -36,7 +36,8 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  @spec get(String.t(), String.t()) :: {:ok, VaultEntry.t()} | {:error, :not_found}
+  @spec get(String.t(), String.t()) ::
+          {:ok, VaultEntry.t()} | {:error, :not_found | :database_error}
   def get(athanor_id, id) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.get", fn ->
       case Arca.Repo.get_by(VaultEntry, id: id, athanor_id: athanor_id) do
@@ -47,7 +48,8 @@ defmodule Arca.VaultStorage do
   end
 
   @doc "The living entry with this name in an athanor, if any."
-  @spec get_by_name(String.t(), String.t()) :: {:ok, VaultEntry.t()} | {:error, :not_found}
+  @spec get_by_name(String.t(), String.t()) ::
+          {:ok, VaultEntry.t()} | {:error, :not_found | :database_error}
   def get_by_name(athanor_id, name) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.get_by_name", fn ->
       row =
@@ -165,7 +167,7 @@ defmodule Arca.VaultStorage do
   `{:error, :payload_conflict}` and must re-read.
   """
   @spec rotate_payload(String.t(), String.t(), non_neg_integer(), binary()) ::
-          :ok | {:error, :payload_conflict}
+          :ok | {:error, :payload_conflict | :database_error}
   def rotate_payload(athanor_id, id, expected_rev, sealed)
       when is_integer(expected_rev) and is_binary(sealed) do
     Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.rotate_payload", fn ->

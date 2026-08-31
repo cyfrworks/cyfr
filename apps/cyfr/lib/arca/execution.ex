@@ -272,7 +272,8 @@ defmodule Arca.Execution do
   layer, and the only place in the transport namespace that touched the
   Repo besides the health check's `SELECT 1`.
   """
-  @spec list_by_request(Sanctum.Context.t(), String.t(), non_neg_integer()) :: [%__MODULE__{}]
+  @spec list_by_request(Sanctum.Context.t(), String.t(), non_neg_integer()) ::
+          [%__MODULE__{}] | {:error, :database_error}
   def list_by_request(%Sanctum.Context{} = ctx, request_id, limit \\ 100)
       when is_binary(request_id) do
     Arca.Repo.Errors.with_db_rescue("Execution.list_by_request", fn ->
@@ -294,7 +295,8 @@ defmodule Arca.Execution do
   count `mcp_log.fan_outs` reports. Same tenant scoping as
   `list_by_request/3`.
   """
-  @spec count_by_request(Sanctum.Context.t(), [String.t()]) :: %{String.t() => non_neg_integer()}
+  @spec count_by_request(Sanctum.Context.t(), [String.t()]) ::
+          %{String.t() => non_neg_integer()} | {:error, :database_error}
   def count_by_request(%Sanctum.Context{} = ctx, request_ids) when is_list(request_ids) do
     Arca.Repo.Errors.with_db_rescue("Execution.count_by_request", fn ->
       case Enum.filter(request_ids, &is_binary/1) do
