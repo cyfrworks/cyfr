@@ -37,13 +37,26 @@ defmodule Cyfr.Release do
 
   @app :cyfr
 
-  @doc "Run every pending migration."
+  @doc """
+  Run every pending migration, then assert the tenant roster still covers
+  the schema.
+
+  The roster check belongs here as much as at boot. `Cyfr.Application`
+  runs it only under `CYFR_AUTO_MIGRATE`, and an operator who migrates by
+  hand — the documented path, and the deployment most likely to be running
+  a schema its developer never booted — would otherwise never run it at
+  all. A table that carries `athanor_id` and is not in
+  `Arca.TenantTables` survives `destroy/1` silently.
+  """
   @spec migrate() :: :ok
   def migrate do
     load_app()
 
     for repo <- repos() do
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn _ -> Arca.TenantTables.verify_roster!() end)
     end
 
     :ok

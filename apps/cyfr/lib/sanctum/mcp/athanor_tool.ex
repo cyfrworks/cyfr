@@ -18,7 +18,7 @@ defmodule Sanctum.MCP.AthanorTool do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  @person_only ~w(create rename archive unarchive settings provision purge)
+  @person_only ~w(create rename archive unarchive settings provision purge destroy)
 
   # An `athanor` argument names the athanor an action works on: an id, a
   # group slug, or `@<namespace>`; absent, the caller's focused athanor.
@@ -52,7 +52,8 @@ defmodule Sanctum.MCP.AthanorTool do
           "unarchive" => %{kind: :write, planes: [:external]},
           "settings" => %{kind: :write, planes: [:external]},
           "provision" => %{kind: :write, planes: [:external]},
-          "purge" => %{kind: :destructive, planes: [:external]}
+          "purge" => %{kind: :destructive, planes: [:external]},
+          "destroy" => %{kind: :destructive, planes: [:external]}
         }
       },
       input_schema: %{
@@ -69,11 +70,14 @@ defmodule Sanctum.MCP.AthanorTool do
               "unarchive",
               "settings",
               "provision",
-              "purge"
+              "purge",
+              "destroy"
             ],
             "description" =>
               "Action to perform (provision: retry a seeding that failed — idempotent; " <>
-                "purge: platform admin deletes an archived athanor's storage tree — final)"
+                "purge: platform admin deletes an archived athanor's storage tree; " <>
+                "destroy: platform admin ERASES an archived athanor — storage AND every " <>
+                "row it owns, irreversibly, leaving only the archived tombstone)"
           },
           "athanor" => @athanor_arg,
           "name" => %{"type" => "string", "description" => "Group name (create, rename)"},
@@ -196,7 +200,8 @@ defmodule Sanctum.MCP.AthanorTool do
   # Purging is the operator's act: it deletes an archived athanor's whole
   # storage tree — the one thing archive deliberately leaves in place so
   # unarchive reopens a furnace intact. Blobs only; the rows remain, and a
-  # purged athanor that reopens comes back with empty storage.
+  # purged athanor that reopens comes back with empty storage. `destroy`
+  # below is the verb that also deletes the rows.
   def handle(%Context{} = ctx, %{"action" => "purge"} = args) do
     if ctx.platform_admin do
       with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
@@ -225,6 +230,39 @@ defmodule Sanctum.MCP.AthanorTool do
       # sees the refusal on the transport instead — which is the correct
       # place for an authorization failure, and is why the gate was moved
       # onto the shared vocabulary.
+      {:error, :platform_admin_required}
+    end
+  end
+
+  # The erasure verb. `purge` reclaims the volume and leaves every row;
+  # this deletes both, and only the archived tombstone survives. It refuses
+  # a personal athanor — `users.personal_athanor_id` would go on naming a
+  # row whose data is gone, and erasing a person is a different act.
+  def handle(%Context{} = ctx, %{"action" => "destroy"} = args) do
+    if ctx.platform_admin do
+      with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
+        case Athanors.destroy(athanor) do
+          {:ok, counts} ->
+            {:ok,
+             render(athanor)
+             |> Map.put("destroyed", true)
+             |> Map.put("rows_deleted", Enum.sum(Map.values(counts)))}
+
+          {:error, :not_archived} ->
+            {:error,
+             {:invalid_argument, "Only an archived athanor can be destroyed — archive it first"}}
+
+          {:error, :personal_athanor} ->
+            {:error,
+             {:invalid_argument,
+              "A person's own athanor is not destroyed here — deny them at the door instead"}}
+
+          {:error, reason} ->
+            Logger.error("[AthanorTool] athanor.destroy failed: #{inspect(reason)}")
+            {:error, {:unavailable, "Storage"}}
+        end
+      end
+    else
       {:error, :platform_admin_required}
     end
   end

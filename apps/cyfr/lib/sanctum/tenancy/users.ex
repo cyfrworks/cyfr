@@ -114,6 +114,26 @@ defmodule Sanctum.Tenancy.Users do
     end)
   end
 
+  @doc """
+  Whether this athanor is somebody's personal furnace.
+
+  `Athanors.destroy/1` refuses one. `personal_athanor_id` is not an
+  athanor-scoped column, so erasure would leave it naming a tombstone:
+  the unique index would block minting a replacement, and
+  `unarchive_personal/1` would try to reopen a wiped shell.
+
+  Fail-CLOSED on an unanswerable read — the default is `true`, so a
+  database fault refuses an irreversible delete rather than permitting it.
+  """
+  @spec personal_athanor?(String.t()) :: boolean()
+  def personal_athanor?(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.personal_athanor?", true, fn ->
+      Arca.Repo.exists?(from(u in User, where: u.personal_athanor_id == ^athanor_id))
+    end)
+  end
+
+  def personal_athanor?(_), do: true
+
   @doc "The identity whose cyfr.run namespace this is, if any."
   @spec get_by_namespace(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
   def get_by_namespace(namespace) when is_binary(namespace) and namespace != "" do

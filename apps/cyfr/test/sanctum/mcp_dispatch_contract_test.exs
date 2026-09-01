@@ -30,7 +30,8 @@ defmodule Sanctum.MCPDispatchContractTest do
       "unarchive",
       "settings",
       "provision",
-      "purge"
+      "purge",
+      "destroy"
     ],
     "member" => ["list", "add", "remove", "leave"],
     "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],

@@ -355,6 +355,69 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
+  Erase an archived athanor: its blobs AND its rows. Final.
+
+  The one verb that actually deletes a tenant's data.
+  `purge_storage/1` above reclaims the volume and leaves every row
+  standing; `Cyfr.Retention` skips archived athanors because purging is
+  supposed to be the reclaim. So nothing deleted rows at all, and after
+  archive + purge every sealed vault payload, webhook secret, OAuth
+  ciphertext, execution, message and log stayed in the database and in
+  every backup taken afterwards.
+
+  ## What it keeps, and why
+
+  The `athanors` row itself survives as an archived tombstone. Home
+  succession reads it (`home!/0` matches `home AND status = 'active'`, so
+  a tombstoned Home already lets `ensure_home/0` mint a successor), and an
+  audit trail that loses the fact an athanor ever existed cannot answer
+  "what happened to it". Everything the tombstone owned is gone.
+
+  ## What it refuses
+
+  A **personal** athanor. `users.personal_athanor_id` is not an
+  athanor-scoped column and would still name the tombstone: the unique
+  index would then block minting a replacement, and
+  `Users.unarchive_personal/1` would try to reopen a wiped shell. Erasing
+  a person is a different act with different consequences —
+  `Sanctum.Door`'s deny and `archive/1` are the person-level verbs.
+
+  An athanor that is not archived, for the same reason `purge_storage/1`
+  does: archiving is the reviewable step that precedes the irreversible
+  one.
+  """
+  @spec destroy(Athanor.t()) :: {:ok, map()} | {:error, term()}
+  def destroy(%Athanor{} = athanor) do
+    with {:ok, current} <- get(athanor.id),
+         :ok <- check_destroyable(current),
+         :ok <- Arca.delete_tree(internal_ctx(current), []),
+         {:ok, counts} <- Arca.TenantTables.delete_all_for(current.id) do
+      Arca.Usage.invalidate(current.id)
+
+      Logger.warning(
+        "[Sanctum.Tenancy.Athanors] destroyed #{current.id}: " <>
+          "#{counts |> Map.values() |> Enum.sum()} rows across #{map_size(counts)} tables"
+      )
+
+      {:ok, counts}
+    end
+  end
+
+  defp check_destroyable(%Athanor{status: status}) when status != "archived",
+    do: {:error, :not_archived}
+
+  defp check_destroyable(%Athanor{id: id}) do
+    if Sanctum.Tenancy.Users.personal_athanor?(id) do
+      {:error, :personal_athanor}
+    else
+      :ok
+    end
+  end
+
+  defp internal_ctx(%Athanor{id: id}),
+    do: Sanctum.internal_context(athanor_id: id, scope: :athanor)
+
+  @doc """
   Reopen an archived athanor, if the server still has room for it. A retired
   Home never reopens — it is the record of a furnace that ended;
   `ensure_home/0` mints its successor.

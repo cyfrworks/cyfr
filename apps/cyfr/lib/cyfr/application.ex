@@ -266,6 +266,15 @@ defmodule Cyfr.Application do
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
+      # Right after the migrations, while the repo that ran them is still
+      # up and the schema is definitive: every table carrying `athanor_id`
+      # must be one `Sanctum.Tenancy.Athanors.destroy/1` deletes. A new
+      # athanor-scoped table that nobody added to the roster would
+      # otherwise survive an erasure that reported success — which is
+      # precisely how the original gap went unnoticed. Raises: a boot that
+      # fails is recoverable, a backup full of data somebody was told was
+      # deleted is not.
+      Arca.TenantTables.verify_roster!()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
     end
