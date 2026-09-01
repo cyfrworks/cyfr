@@ -57,6 +57,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "github-push",
+          "replay_protection" => "none",
           "target_ref" => "f:local.handler",
           "profile_id" => "prof-handler"
         })
@@ -77,6 +78,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "stripe",
+          "replay_protection" => "none",
           "target_ref" => "f:local.handler",
           "profile_id" => "prof-handler"
         })
@@ -95,6 +97,7 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "dup",
+        "replay_protection" => "none",
         "target_ref" => "f:local.handler",
         "profile_id" => "prof-handler"
       })
@@ -103,6 +106,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "dup",
+          "replay_protection" => "none",
           "target_ref" => "f:local.handler",
           "profile_id" => "prof-handler"
         })
@@ -115,6 +119,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "reserved",
+          "replay_protection" => "none",
           "target_ref" => "f:local.handler",
           "profile_id" => "prof-handler",
           "input_template" => %{"_webhook" => "no"}
@@ -128,6 +133,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "github-style",
+          "replay_protection" => "none",
           "target_ref" => "f:local.handler",
           "profile_id" => "prof-handler",
           "signature_header" => "X-Hub-Signature-256"
@@ -142,6 +148,7 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "g",
+        "replay_protection" => "none",
         "target_ref" => "f:local.handler",
         "profile_id" => "prof-handler"
       })
@@ -168,6 +175,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "u",
+          "replay_protection" => "none",
           "target_ref" => "f:local.original",
           "profile_id" => "prof-original"
         })
@@ -199,6 +207,7 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "x",
+        "replay_protection" => "none",
         "target_ref" => "f:local.handler",
         "profile_id" => "prof-handler"
       })
@@ -218,6 +227,7 @@ defmodule Sanctum.WebhookMCPTest do
       MCP.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "r",
+        "replay_protection" => "none",
         "target_ref" => "f:local.handler",
         "profile_id" => "prof-handler"
       })
@@ -245,6 +255,7 @@ defmodule Sanctum.WebhookMCPTest do
         MCP.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "rot",
+          "replay_protection" => "none",
           "target_ref" => "f:local.handler",
           "profile_id" => "prof-handler"
         })

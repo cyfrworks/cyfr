@@ -59,6 +59,7 @@ defmodule Sanctum.CipherIntegrationTest do
       {:ok, %{secret: secret, slug: slug}} =
         Webhook.create(ctx, %{
           name: "h",
+          replay_protection: "none",
           target_ref: "catalyst:local.x:1.0.0",
           profile_id: profile
         })
@@ -72,8 +73,13 @@ defmodule Sanctum.CipherIntegrationTest do
                Webhook.verify_with_grace(row, body, sign("wrong", body))
 
       # Cross-tenant: same ciphertext, AAD rebuilt for another athanor → the
-      # cipher's tag check fails → 401-class :signature_mismatch (not 500).
-      assert {:error, :signature_mismatch} =
+      # cipher's tag check fails. Still fails closed, but as
+      # `:secret_unreadable`, not `:signature_mismatch`: the sender's
+      # signature is fine and the SERVER cannot read the secret under this
+      # AAD. Reporting it as a signature failure told the sender to fix
+      # something on their side and hid a server-side fault — the same
+      # collapse a keyring rotated without re-sealing produces.
+      assert {:error, :secret_unreadable} =
                Webhook.verify_with_grace(%{row | athanor_id: "ath_b"}, body, sign(secret, body))
 
       {:ok, %{secret: new_secret}} = Webhook.rotate(ctx, "h")

@@ -68,20 +68,24 @@ defmodule Sanctum.Webhook do
   `%{}`), `signature_header` (default `x-cyfr-signature`), `description`,
   `rate_limit`.
 
-  `timestamp_header` and `idempotency_key_header` are unset by default,
-  which means replay protection is off: an HMAC signature over a raw body
-  stays valid forever, so a delivery captured from a proxy log or mirrored
-  traffic re-fires the bound component as often as it is replayed. They
-  cannot be defaulted on — the sender decides which headers it emits, and
-  naming one it does not send would reject every real delivery — so a
-  webhook that faces the internet should name whatever its sender provides.
+  Replay protection is a REQUIRED decision, not a default. Name a
+  `timestamp_header`, an `idempotency_key_header`, or pass
+  `replay_protection: "none"` to state that this webhook accepts replays.
+  Neither header can be defaulted on — the sender decides which headers it
+  emits, and naming one it does not send would reject every real delivery
+  — but "off" was reached by omission, and an HMAC over a raw body stays
+  valid forever, so a delivery captured from a proxy log or mirrored
+  traffic re-fires the bound component as often as it is replayed. This
+  used to be a `Logger.warning` emitted AFTER the row was committed, which
+  could inform but never refuse.
   """
   @spec create(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def create(%Context{} = ctx, %{name: name, target_ref: target_ref} = opts)
       when is_binary(name) and is_binary(target_ref) do
     athanor_id = athanor!(ctx)
 
-    with :ok <- validate_target_ref(ctx, target_ref),
+    with :ok <- check_replay_decision(opts),
+         :ok <- validate_target_ref(ctx, target_ref),
          :ok <- authorize_profile_binding(ctx, target_ref, Map.get(opts, :profile_id)),
          {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
          {:ok, secret} <- generate_secret(),
@@ -101,7 +105,6 @@ defmodule Sanctum.Webhook do
            ),
          :ok <- WebhookStorage.create_webhook(attrs) do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
-      warn_if_replayable(name, attrs)
 
       {:ok,
        %{
@@ -143,16 +146,32 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  defp warn_if_replayable(name, attrs) do
-    if replay_protection(attrs) == "none" do
-      Logger.warning(
-        "[Sanctum.Webhook] #{name} has no replay protection: set timestamp_header " <>
-          "(skew window) or idempotency_key_header (per-delivery id) — a signed body " <>
-          "captured off the wire stays valid indefinitely without one"
-      )
-    end
+  # The decision, taken BEFORE the row exists.
+  #
+  # This was a warning logged after `create_webhook/1` had already
+  # committed — it could describe the exposure but never refuse it, so a
+  # webhook that faces the internet with no replay protection was the
+  # default outcome of not thinking about it. Now not thinking about it is
+  # the one thing that fails.
+  #
+  # `"none"` remains entirely legal: plenty of senders emit neither header,
+  # and an internal webhook behind a trusted network may not care. It just
+  # has to be said.
+  defp check_replay_decision(opts) do
+    named_header? =
+      present?(Map.get(opts, :timestamp_header)) or
+        present?(Map.get(opts, :idempotency_key_header))
 
-    :ok
+    case {named_header?, Map.get(opts, :replay_protection)} do
+      {true, _} ->
+        :ok
+
+      {false, "none"} ->
+        :ok
+
+      {false, _absent_or_other} ->
+        {:error, :replay_protection_required}
+    end
   end
 
   defp present?(value), do: is_binary(value) and value != ""
@@ -192,8 +211,52 @@ defmodule Sanctum.Webhook do
     with {:ok, normalized} <- normalize_update_attrs(attrs),
          :ok <- maybe_validate_target_ref(ctx, normalized),
          :ok <- maybe_authorize_profile_binding(ctx, name, athanor_id, normalized),
+         :ok <- check_replay_transition(athanor_id, name, normalized, attrs),
          :ok <- WebhookStorage.update_webhook(athanor_id, name, normalized) do
       get(ctx, name)
+    end
+  end
+
+  # The create-time decision is a one-shot unless this runs too. Clearing a
+  # header is spelled `""` (see `maybe_normalize_timestamp_header/1`), so a
+  # webhook created with `timestamp_header: "x-timestamp"` — which passed
+  # the gate — could be updated to neither header and silently return to
+  # accepting replays forever. Nothing recorded that it happened: there is
+  # no `replay_protection` column, only the two header fields, so the row
+  # afterwards is indistinguishable from one created with `"none"`.
+  #
+  # Judged on the RESULTING row, not the patch: an update that touches
+  # neither header changes nothing to decide, and one that names a header
+  # is its own answer.
+  defp check_replay_transition(athanor_id, name, normalized, attrs) do
+    touches_headers? =
+      Map.has_key?(normalized, :timestamp_header) or
+        Map.has_key?(normalized, :idempotency_key_header)
+
+    if touches_headers? do
+      case WebhookStorage.get_by_name(athanor_id, name) do
+        {:ok, row} ->
+          resulting = %{
+            timestamp_header: resulting_header(normalized, row, :timestamp_header),
+            idempotency_key_header: resulting_header(normalized, row, :idempotency_key_header),
+            replay_protection: Map.get(attrs, :replay_protection)
+          }
+
+          check_replay_decision(resulting)
+
+        # Nothing to transition from; `update_webhook/3` reports the miss.
+        _ ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp resulting_header(normalized, row, key) do
+    case Map.fetch(normalized, key) do
+      {:ok, value} -> value
+      :error -> Map.get(row, key)
     end
   end
 
@@ -303,10 +366,25 @@ defmodule Sanctum.Webhook do
   # failure, not an internal error — normalize to :signature_mismatch so the
   # signature plug responds 401 and the {:error, atom()} contract holds (the
   # cipher may return a tuple reason).
+  # A cipher failure is OURS, not the sender's.
+  #
+  # This used to answer `:signature_mismatch`, which the plug renders as
+  # 401 "Signature verification failed" — so a keyring rotated without
+  # re-sealing, or a restored backup carrying the wrong key, told every
+  # sender their signature was wrong while the server simply could not
+  # read its own secret. Two very different incidents, one message, and
+  # the one that needs an operator looked like the one that needs the
+  # sender. (`VerifyWebhookSignature` still carried a
+  # `{:decryption_failed, _}` arm for exactly this, matching a shape that
+  # by then could never arrive.)
+  #
+  # Still an error, so the rotation grace window still retries with the
+  # previous secret: a secret this key cannot read is precisely the case
+  # the previous one may cover.
   defp decrypt_secret(secret_encrypted, aad) do
     case Sanctum.Cipher.decrypt(secret_encrypted, aad) do
       {:ok, secret} -> {:ok, secret}
-      {:error, _} -> {:error, :signature_mismatch}
+      {:error, _} -> {:error, :secret_unreadable}
     end
   end
 

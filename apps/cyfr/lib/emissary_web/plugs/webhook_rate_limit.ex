@@ -12,6 +12,28 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
     * **Unknown OR disabled slug** → keyed on `{:ip_unknown, ip}` with a
       smaller cap (`10/1m`). This defends against slug-enumeration scans
       without giving every random slug attempt a fresh per-slug bucket.
+    * **Every request, whatever the slug** → also keyed on `{:ip, ip}` at
+      a much higher ceiling (`600/1m`). One address cannot mint unbounded
+      per-slug buckets, and bulk probing is throttled the same whether the
+      slugs it tries are real or not.
+
+  ## What the buckets do NOT hide
+
+  A valid slug with a bad signature answers 401; an unknown or disabled
+  one answers 404 (`VerifyWebhookSignature`, deliberately — that plug's
+  moduledoc scopes its "no enumeration leakage" claim to not-found vs
+  disabled, not to valid vs invalid). So the two ARE distinguishable, from
+  the first request, and the bucket split above is a second signal that
+  appears after ten.
+
+  That is accepted rather than overlooked. Slugs are 144 bits of CSPRNG
+  (`Sanctum.Webhook`), so the distinction confirms a slug someone already
+  holds and cannot help them find one; closing it would mean either
+  charging legitimate deliveries to the 10/min scan bucket or making a
+  real 404 indistinguishable from a signature failure, and both cost more
+  than the leak. The uniform per-IP ceiling is the part worth having: it
+  bounds the damage of bulk probing and the ETS key cardinality one
+  address can create.
 
   We perform the slug lookup here (and not just in
   `EmissaryWeb.Plugs.VerifyWebhookSignature`) because rate-limiting must
@@ -31,17 +53,32 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   @unknown_max 10
   @unknown_window_ms 60_000
 
+  # Applies to every request regardless of slug validity. Far above what
+  # any single sender needs (the per-slug default is 100/min), so it is a
+  # circuit breaker for bulk probing rather than a delivery throttle.
+  @per_ip_max 600
+  @per_ip_window_ms 60_000
+
   def init(_opts), do: %{}
 
   def call(conn, _opts) do
     {conn, bucket_id, max_requests, window_ms} = bucket_for(conn)
-    key = {:rate_limit, :webhook, bucket_id}
 
-    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
-      :ok ->
+    checks = [
+      {{:rate_limit, :webhook, {:ip, ip(conn)}}, @per_ip_max, @per_ip_window_ms},
+      {{:rate_limit, :webhook, bucket_id}, max_requests, window_ms}
+    ]
+
+    case Enum.find_value(checks, fn {key, max, window} ->
+           case Cyfr.RateLimiter.check(key, max, window) do
+             :ok -> nil
+             {:deny, retry_after} -> retry_after
+           end
+         end) do
+      nil ->
         conn
 
-      {:deny, retry_after} ->
+      retry_after ->
         EmissaryWeb.RateLimitRefusal.halt(conn, retry_after, EmissaryWeb.ApiError)
     end
   end

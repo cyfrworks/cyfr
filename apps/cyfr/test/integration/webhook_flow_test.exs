@@ -65,6 +65,8 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
       Webhook.create(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
+        # After the merge, so a fixture naming a real header still wins.
+        |> Map.put_new(:replay_protection, "none")
       )
 
     result

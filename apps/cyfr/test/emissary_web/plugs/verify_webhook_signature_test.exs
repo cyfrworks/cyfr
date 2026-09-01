@@ -26,6 +26,7 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
           %{name: name, target_ref: "f:local.handler", profile_id: profile},
           Map.new(opts)
         )
+        |> Map.put_new(:replay_protection, "none")
       )
 
     result
@@ -129,7 +130,8 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
     assert result.status == 401
   end
 
-  test "500 when raw_body assign is missing (defensive)", %{ctx: ctx} do
+  test "400 when raw_body assign is missing — a malformed request, not a server fault",
+       %{ctx: ctx} do
     %{slug: slug, secret: secret} = create_hook!(ctx, "no-raw-body")
     body = "{}"
     sig = "sha256=" <> hmac_hex(secret, body)
@@ -143,8 +145,13 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
 
     result = VerifyWebhookSignature.call(conn, [])
 
+    # This is what a sender using an unsupported content type produces:
+    # `Plug.Parsers`' `pass: ["*/*"]` means no parser matches, so
+    # `RawBodyReader` never runs and there is nothing to verify against.
+    # Answering 500 logged an error for every mis-configured sender and
+    # told them to retry something that can never succeed.
     assert result.halted
-    assert result.status == 500
+    assert result.status == 400
   end
 
   describe "replay protection (timestamp_header set)" do

@@ -56,6 +56,7 @@ defmodule PrismWeb.SecretRevealTest do
     {:ok, _} =
       Sanctum.Webhook.create(ctx, %{
         name: name,
+        replay_protection: "none",
         target_ref: "reagent:local.reveal-echo",
         profile_id: profile_id
       })

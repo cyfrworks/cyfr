@@ -147,6 +147,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert {:error, message} =
                Sanctum.Webhook.create(key_ctx, %{
                  name: "bound-hook",
+                 replay_protection: "none",
                  target_ref: "#{@target}:1.0.0",
                  profile_id: "prof-bind"
                })
@@ -156,6 +157,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert {:ok, created} =
                Sanctum.Webhook.create(ctx, %{
                  name: "bound-hook",
+                 replay_protection: "none",
                  target_ref: "#{@target}:1.0.0",
                  profile_id: "prof-bind"
                })
@@ -168,7 +170,11 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
     test "an unbound webhook cannot be created at all", %{ctx: ctx} do
       assert {:error, message} =
-               Sanctum.Webhook.create(ctx, %{name: "unbound", target_ref: "#{@target}:1.0.0"})
+               Sanctum.Webhook.create(ctx, %{
+                 name: "unbound",
+                 replay_protection: "none",
+                 target_ref: "#{@target}:1.0.0"
+               })
 
       assert message =~ "profile_id is required"
     end
@@ -177,6 +183,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       {:ok, _} =
         Sanctum.Webhook.create(ctx, %{
           name: "plain-hook",
+          replay_protection: "none",
           target_ref: "#{@target}:1.0.0",
           profile_id: "prof-bind"
         })

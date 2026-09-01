@@ -23,6 +23,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotencyTest do
       Webhook.create(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.handler", profile_id: profile}, opts)
+        |> Map.put_new(:replay_protection, "none")
       )
 
     {:ok, row} = Arca.WebhookStorage.get_by_slug(slug)

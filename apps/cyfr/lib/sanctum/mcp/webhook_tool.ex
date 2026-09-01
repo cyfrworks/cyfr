@@ -71,10 +71,16 @@ defmodule Sanctum.MCP.WebhookTool do
             "description" =>
               "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
           },
+          "replay_protection" => %{
+            "type" => "string",
+            "enum" => ["none"],
+            "description" =>
+              "Required on create when NEITHER timestamp_header NOR idempotency_key_header is set, and on any update that would clear the last one: pass 'none' to state that this webhook accepts replayed deliveries. There is no default — the decision has to be made rather than fallen into."
+          },
           "timestamp_header" => %{
             "type" => "string",
             "description" =>
-              "HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. LEFT UNSET, A CAPTURED DELIVERY CAN BE REPLAYED INDEFINITELY — a signature stays valid forever, so anyone who reads one off a proxy log or mirrored traffic can re-fire the bound component. Set it to whatever the sender emits ('stripe-signature' carries its own; GitHub has no timestamp header). Empty string clears the field."
+              "HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Without it (and without idempotency_key_header) a captured delivery replays indefinitely — a signature stays valid forever — so create refuses unless you pass replay_protection: 'none'. Set it to whatever the sender emits ('stripe-signature' carries its own; GitHub has no timestamp header). Empty string clears the field."
           },
           "idempotency_key_header" => %{
             "type" => "string",
@@ -143,6 +149,12 @@ defmodule Sanctum.MCP.WebhookTool do
 
       {:error, :invalid_input_template} ->
         {:error, "input_template is invalid"}
+
+      {:error, :replay_protection_required} ->
+        {:error,
+         "Name a timestamp_header or an idempotency_key_header, or pass " <>
+           "replay_protection: \"none\" to accept replayed deliveries. Without one, a " <>
+           "signed body captured off the wire re-fires the bound component indefinitely."}
 
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -257,6 +269,10 @@ defmodule Sanctum.MCP.WebhookTool do
         {"signature_header", :signature_header},
         {"timestamp_header", :timestamp_header},
         {"idempotency_key_header", :idempotency_key_header},
+        # Not a stored column — the caller's explicit acknowledgement that
+        # this webhook accepts replays, which `Sanctum.Webhook.create/2`
+        # requires when neither header above is named.
+        {"replay_protection", :replay_protection},
         {"description", :description},
         {"rate_limit", :rate_limit}
       ],

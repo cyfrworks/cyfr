@@ -105,14 +105,17 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
     emit_telemetry(webhook.slug, webhook.id, reason)
 
     case reason do
-      :missing_raw_body -> deny_500(conn)
+      :missing_raw_body -> deny_400(conn)
       :missing_signature -> deny_401(conn)
       :missing_timestamp -> deny_401(conn)
       :malformed_signature -> deny_401(conn)
       :malformed_timestamp -> deny_401(conn)
       :timestamp_skew -> deny_401(conn)
       :signature_mismatch -> deny_401(conn)
-      {:decryption_failed, _} -> deny_500(conn)
+      # The server cannot read its own secret — a keyring rotated without
+      # re-sealing, or a restored backup. Not the sender's fault and not
+      # fixable by them, so it must not read as a signature failure.
+      :secret_unreadable -> deny_500(conn)
       _ -> deny_500(conn)
     end
   end
@@ -165,6 +168,20 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
 
   defp deny_401(conn) do
     EmissaryWeb.ApiError.halt(conn, 401, :unauthorized, "Signature verification failed")
+  end
+
+  # The sender used a content type no parser matches, so `RawBodyReader`
+  # never ran and there is no raw body to verify a signature over. That is
+  # a malformed REQUEST, not a server fault: answering 500 logged an error
+  # for every mis-configured sender and told them to retry something that
+  # can never succeed.
+  defp deny_400(conn) do
+    EmissaryWeb.ApiError.halt(
+      conn,
+      400,
+      :bad_request,
+      "Unsupported content type — send the delivery as application/json"
+    )
   end
 
   defp deny_500(conn) do

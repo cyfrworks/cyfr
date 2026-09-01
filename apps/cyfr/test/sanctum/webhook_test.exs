@@ -35,7 +35,118 @@ defmodule Sanctum.WebhookTest do
         _ -> "prof-handler"
       end
 
-    Webhook.create(ctx, Map.put_new(opts, :profile_id, profile))
+    Webhook.create(
+      ctx,
+      opts
+      |> Map.put_new(:profile_id, profile)
+      # These fixtures name no timestamp/idempotency header, so they must
+      # say so: `create/2` refuses a webhook whose replay posture was
+      # never decided.
+      |> Map.put_new(:replay_protection, "none")
+    )
+  end
+
+  describe "replay protection is a decision, not a default" do
+    # `prof-handler` is seeded for `f:local.handler` in the setup above;
+    # these call `Webhook.create/2` directly rather than through the
+    # `create/2` helper, which now supplies the decision by default.
+    @profile "prof-handler"
+
+    test "a webhook with no replay protection is refused unless it says so", %{ctx: ctx} do
+      profile = @profile
+      # No timestamp header, no idempotency header, no acknowledgement.
+      # This used to succeed and log a warning AFTER the row was already
+      # committed — informative, but unable to refuse. An HMAC over a raw
+      # body stays valid forever, so a delivery captured off a proxy log
+      # re-fires the bound component as often as it is replayed.
+      assert {:error, :replay_protection_required} =
+               Sanctum.Webhook.create(ctx, %{
+                 name: "unstated",
+                 target_ref: "f:local.handler",
+                 profile_id: profile
+               })
+
+      # And nothing was written — the refusal precedes the insert.
+      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, "unstated")
+    end
+
+    test "saying 'none' explicitly is allowed", %{ctx: ctx} do
+      profile = @profile
+
+      assert {:ok, %{replay_protection: "none"}} =
+               Sanctum.Webhook.create(ctx, %{
+                 name: "stated-none",
+                 target_ref: "f:local.handler",
+                 profile_id: profile,
+                 replay_protection: "none"
+               })
+    end
+
+    test "naming a header is its own decision", %{ctx: ctx} do
+      profile = @profile
+
+      assert {:ok, %{replay_protection: "timestamp"}} =
+               Sanctum.Webhook.create(ctx, %{
+                 name: "stated-ts",
+                 target_ref: "f:local.handler",
+                 profile_id: profile,
+                 timestamp_header: "x-timestamp"
+               })
+
+      assert {:ok, %{replay_protection: "idempotency_key"}} =
+               Sanctum.Webhook.create(ctx, %{
+                 name: "stated-idem",
+                 target_ref: "f:local.handler",
+                 profile_id: profile,
+                 idempotency_key_header: "x-delivery-id"
+               })
+    end
+
+    # The create gate is a one-shot unless update is gated too. Clearing a
+    # header is spelled `""`, so a webhook that passed the gate could be
+    # walked back to accepting replays with nothing recording it — there is
+    # no `replay_protection` column, only the two header fields, so the row
+    # afterwards is indistinguishable from one created with "none".
+    test "update cannot clear the last header without saying so", %{ctx: ctx} do
+      {:ok, _} =
+        Sanctum.Webhook.create(ctx, %{
+          name: "walked-back",
+          target_ref: "f:local.handler",
+          profile_id: @profile,
+          timestamp_header: "x-timestamp"
+        })
+
+      assert {:error, :replay_protection_required} =
+               Sanctum.Webhook.update(ctx, "walked-back", %{timestamp_header: ""})
+
+      # Still protected.
+      assert {:ok, %{timestamp_header: "x-timestamp"}} = Sanctum.Webhook.get(ctx, "walked-back")
+
+      # Stated, and it goes through.
+      assert {:ok, _} =
+               Sanctum.Webhook.update(ctx, "walked-back", %{
+                 timestamp_header: "",
+                 replay_protection: "none"
+               })
+
+      assert {:ok, %{timestamp_header: nil}} = Sanctum.Webhook.get(ctx, "walked-back")
+    end
+
+    test "update that swaps one header for the other needs no restatement", %{ctx: ctx} do
+      {:ok, _} =
+        Sanctum.Webhook.create(ctx, %{
+          name: "swapped",
+          target_ref: "f:local.handler",
+          profile_id: @profile,
+          timestamp_header: "x-timestamp"
+        })
+
+      assert {:ok, _} =
+               Sanctum.Webhook.update(ctx, "swapped", %{
+                 timestamp_header: "",
+                 idempotency_key_header: "x-delivery-id"
+               })
+    end
   end
 
   describe "create/2" do
@@ -402,7 +513,12 @@ defmodule Sanctum.WebhookTest do
       assert hook.timestamp_header == nil
     end
 
-    test "update can clear timestamp_header by passing empty string", %{ctx: ctx} do
+    # Clearing still works — an empty string is still how you spell it —
+    # but it is now a decision rather than a side effect, because clearing
+    # the LAST header returns the webhook to accepting replays and nothing
+    # in the row would afterwards say that had happened.
+    test "update clears timestamp_header on an empty string, once the decision is stated",
+         %{ctx: ctx} do
       {:ok, %{slug: slug}} =
         create(ctx, %{
           name: "clear-ts",
@@ -413,7 +529,14 @@ defmodule Sanctum.WebhookTest do
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
       assert hook.timestamp_header == "x-cyfr-timestamp"
 
-      assert {:ok, _} = Webhook.update(ctx, "clear-ts", %{timestamp_header: ""})
+      assert {:error, :replay_protection_required} =
+               Webhook.update(ctx, "clear-ts", %{timestamp_header: ""})
+
+      assert {:ok, _} =
+               Webhook.update(ctx, "clear-ts", %{
+                 timestamp_header: "",
+                 replay_protection: "none"
+               })
 
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
       assert hook.timestamp_header == nil

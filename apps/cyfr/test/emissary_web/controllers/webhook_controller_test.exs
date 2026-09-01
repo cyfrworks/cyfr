@@ -43,6 +43,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       Webhook.create(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
+        |> Map.put_new(:replay_protection, "none")
       )
 
     result
@@ -112,6 +113,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       {:ok, %{slug: slug, secret: secret}} =
         Webhook.create(in_group, %{
           name: "channel",
+          replay_protection: "none",
           target_ref: "f:local.#{comp}",
           profile_id: profile
         })

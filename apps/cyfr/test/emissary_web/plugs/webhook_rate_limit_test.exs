@@ -24,7 +24,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimitTest do
     Sanctum.Test.ConsentFixtures.start_source!()
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
     attrs = Map.merge(%{name: name, target_ref: "f:local.h", profile_id: profile}, opts)
-    {:ok, result} = Sanctum.Webhook.create(ctx, attrs)
+    {:ok, result} = Sanctum.Webhook.create(ctx, Map.put_new(attrs, :replay_protection, "none"))
     result.slug
   end
 

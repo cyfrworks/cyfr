@@ -63,7 +63,12 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
 
       {:ok, %{name: "h1"}} =
-        Webhook.create(ctx, %{name: "h1", target_ref: "f:local.h", profile_id: profile})
+        Webhook.create(ctx, %{
+          name: "h1",
+          replay_protection: "none",
+          target_ref: "f:local.h",
+          profile_id: profile
+        })
 
       assert {:ok, _} = Webhook.get(ctx, "h1")
       {:ok, list} = Webhook.list(ctx)

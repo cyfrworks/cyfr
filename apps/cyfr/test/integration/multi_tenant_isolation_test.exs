@@ -78,6 +78,7 @@ defmodule MultiTenantIsolationTest do
       {:ok, _} =
         Sanctum.Webhook.create(ctx_a, %{
           name: "hk_a",
+          replay_protection: "none",
           target_ref: "f:local.h",
           profile_id: "prof-h"
         })
@@ -85,6 +86,7 @@ defmodule MultiTenantIsolationTest do
       {:ok, _} =
         Sanctum.Webhook.create(ctx_b, %{
           name: "hk_b",
+          replay_protection: "none",
           target_ref: "f:local.h",
           profile_id: "prof-h"
         })
@@ -107,6 +109,7 @@ defmodule MultiTenantIsolationTest do
       {:ok, _} =
         Sanctum.Webhook.create(ctx_b, %{
           name: "private",
+          replay_protection: "none",
           target_ref: "f:local.h",
           profile_id: "prof-h"
         })
@@ -119,6 +122,7 @@ defmodule MultiTenantIsolationTest do
       assert {:ok, %{slug: slug_a}} =
                Sanctum.Webhook.create(ctx_a, %{
                  name: "shared",
+                 replay_protection: "none",
                  target_ref: "f:local.h",
                  profile_id: "prof-h"
                })
@@ -126,6 +130,7 @@ defmodule MultiTenantIsolationTest do
       assert {:ok, %{slug: slug_b}} =
                Sanctum.Webhook.create(ctx_b, %{
                  name: "shared",
+                 replay_protection: "none",
                  target_ref: "f:local.h",
                  profile_id: "prof-h"
                })
@@ -342,7 +347,11 @@ defmodule MultiTenantIsolationTest do
 
     test "Sanctum.Webhook.create raises at the chokepoint", %{unresolved: ctx} do
       assert_raise Sanctum.UnauthorizedError, fn ->
-        Sanctum.Webhook.create(ctx, %{name: "wh", target_ref: "f:local.h"})
+        Sanctum.Webhook.create(ctx, %{
+          name: "wh",
+          replay_protection: "none",
+          target_ref: "f:local.h"
+        })
       end
     end
 

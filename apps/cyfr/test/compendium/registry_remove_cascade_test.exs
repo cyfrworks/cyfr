@@ -106,6 +106,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     {:ok, _} =
       Sanctum.Webhook.create(ctx, %{
         name: "cascade-hook",
+        replay_protection: "none",
         target_ref: "reagent:local.cascade-hooked:1.0.0",
         profile_id: profile
       })

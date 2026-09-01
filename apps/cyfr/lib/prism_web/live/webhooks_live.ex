@@ -45,6 +45,7 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_signature_header, @default_signature_header)
      |> assign(:form_timestamp_header, "")
      |> assign(:form_idempotency_key_header, "")
+     |> assign(:form_accept_replays, false)
      |> assign(:form_description, "")
      |> assign(:form_rate_limit, "")
      |> assign(:form_input_template, "{}")
@@ -110,6 +111,13 @@ defmodule PrismWeb.WebhooksLive do
          |> assign(:form_signature_header, hook[:signature_header] || @default_signature_header)
          |> assign(:form_timestamp_header, hook[:timestamp_header] || "")
          |> assign(:form_idempotency_key_header, hook[:idempotency_key_header] || "")
+         # A row that names neither header already accepts replays, so the
+         # box opens ticked — editing it must not silently re-refuse on
+         # save, and the operator should see the state they are in.
+         |> assign(
+           :form_accept_replays,
+           blank?(hook[:timestamp_header]) and blank?(hook[:idempotency_key_header])
+         )
          |> assign(:form_description, hook[:description] || "")
          |> assign(:form_rate_limit, hook[:rate_limit] || "")
          |> assign(:form_input_template, encode_template_for_form(hook[:input_template]))
@@ -136,6 +144,11 @@ defmodule PrismWeb.WebhooksLive do
        :form_idempotency_key_header,
        params["idempotency_key_header"] || socket.assigns.form_idempotency_key_header
      )
+     # An unchecked box submits no parameter at all, so this reads
+     # presence rather than falling back to the previous assign the way
+     # the text fields do — otherwise it could be ticked and never
+     # un-ticked.
+     |> assign(:form_accept_replays, params["accept_replays"] == "on")
      |> assign(:form_description, params["description"] || socket.assigns.form_description)
      |> assign(:form_rate_limit, params["rate_limit"] || socket.assigns.form_rate_limit)
      |> assign(
@@ -239,7 +252,12 @@ defmodule PrismWeb.WebhooksLive do
       "timestamp_header" => default_or_value(params["timestamp_header"]),
       "idempotency_key_header" => default_or_value(params["idempotency_key_header"]),
       "description" => default_or_value(params["description"]),
-      "rate_limit" => default_or_value(params["rate_limit"])
+      "rate_limit" => default_or_value(params["rate_limit"]),
+      # `create/2` refuses a webhook that names neither replay header
+      # unless the decision is stated. Without this the console could not
+      # create one at all: the form has no way to say "yes, replays are
+      # acceptable here", and the refusal names a key it never sent.
+      "replay_protection" => if(params["accept_replays"] == "on", do: "none")
     }
     |> Enum.reject(fn {_k, v} -> v in [nil, ""] end)
     |> Map.new()
@@ -262,11 +280,14 @@ defmodule PrismWeb.WebhooksLive do
     # create form.
     |> assign(:form_timestamp_header, "")
     |> assign(:form_idempotency_key_header, "")
+    |> assign(:form_accept_replays, false)
     |> assign(:form_description, "")
     |> assign(:form_rate_limit, "")
     |> assign(:form_input_template, "{}")
     |> assign(:form_error, nil)
   end
+
+  defp blank?(value), do: is_nil(value) or value == ""
 
   defp decode_template_param(nil), do: {:ok, %{}}
   defp decode_template_param(""), do: {:ok, %{}}
@@ -454,8 +475,8 @@ defmodule PrismWeb.WebhooksLive do
                 placeholder="X-Cyfr-Timestamp"
               />
               <p class="mt-1 text-xs text-amber-500">
-                Left unset, a captured delivery can be replayed indefinitely — its
-                signature stays valid forever.
+                Set one of these two, or tick the box below. A signature stays
+                valid forever, so a captured delivery replays indefinitely.
               </p>
             </div>
             <div>
@@ -473,6 +494,27 @@ defmodule PrismWeb.WebhooksLive do
               </p>
             </div>
           </div>
+
+          <label class={[
+            "flex items-start gap-3 rounded-lg border px-4 py-3",
+            if(@form_accept_replays,
+              do: "border-amber-500/40 bg-amber-500/5",
+              else: "border-gray-700 bg-gray-800/40"
+            )
+          ]}>
+            <input
+              type="checkbox"
+              name="accept_replays"
+              checked={@form_accept_replays}
+              class="mt-0.5 h-4 w-4 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500"
+            />
+            <span class="text-xs text-gray-400">
+              <span class="block text-gray-200">Accept replayed deliveries</span>
+              Only needed when neither header above is set. The sender emits no
+              timestamp and no delivery id, so a captured request can be re-sent
+              and will run the target again.
+            </span>
+          </label>
 
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Description</label>
