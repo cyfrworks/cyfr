@@ -126,6 +126,49 @@ defmodule Compendium.RegisterMintsNothingTest do
     end
   end
 
+  describe "the attack this closes" do
+    # The scenario the whole change exists for. A catalyst holding a
+    # storage write grant over `components/` can put bytes on the athanor's
+    # own overlay tree — `Compendium.Source`'s own doc says `"filesystem"`
+    # means "bundled seed OR the athanor's own overlay", so the scanner
+    # could not tell them from the operator's. With `register` minting,
+    # writing bytes and calling it was a self-service owner consent over
+    # caps the component's own manifest declared.
+    #
+    # Bytes are written here through `Arca.put` under the internal-writes
+    # scope, which is what a storage grant reduces to at the seam.
+    test "bytes written straight onto the overlay tree earn no consent", %{ctx: ctx} do
+      unit = ["components", "reagents", "local", "self-served", "1.0.0"]
+
+      manifest =
+        Jason.encode!(%{
+          "name" => "self-served",
+          "version" => "1.0.0",
+          "type" => "reagent",
+          "caps" => %{"egress" => %{"domains" => ["*"]}}
+        })
+
+      {:ok, _} =
+        Arca.Overlay.commit_unit(
+          ctx,
+          unit,
+          {:files, [{["cyfr-manifest.json"], manifest}, {["reagent.wasm"], @wasm}]},
+          cap: :exempt
+        )
+
+      ref = "reagent:local.self-served"
+      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref)
+
+      # The scanner runs and indexes it — that is its job.
+      {:ok, _} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
+
+      # But it consents to nothing. An `egress.domains: ["*"]` a catalyst
+      # wrote for itself is exactly what must not arrive pre-approved.
+      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref),
+             "bytes a catalyst could have written earned an owner consent"
+    end
+  end
+
   test "Bootstrap exposes no ref-targeted mint" do
     # `run_for/2` took caller-named refs and minted owner consent for them.
     # That is the shape the hole had; a new caller would reopen it.

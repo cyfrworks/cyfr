@@ -146,4 +146,102 @@ defmodule Opus.CronSchedulerTest do
       assert Opus.CronScheduler.failed_run?({%RuntimeError{message: "boom"}, []})
     end
   end
+
+  describe "the occurrence is the mutual exclusion" do
+    # Two nodes, one due occurrence. `claim/4` advances `next_run_at`
+    # inside the compare-and-set that takes it, so the loser's CAS matches
+    # nothing. Before that, the claim guarded the EXECUTION: node A could
+    # claim, fire, finish and release before node B's jittered timer
+    # arrived, and B would find a free claim and an unadvanced cursor and
+    # run the same occurrence again.
+    test "only one of two claimants wins, and the cursor moved" do
+      {:ok, schedule} = create_schedule("race-#{System.unique_integer([:positive])}")
+
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+      due!(schedule.id, past)
+
+      next = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      results =
+        for node <- ["node-a", "node-b", "node-c"] do
+          CronSchedule.claim(schedule.id, node, 60, next)
+        end
+
+      assert Enum.count(results, &(&1 == :claimed)) == 1
+      assert Enum.count(results, &(&1 == :held)) == 2
+
+      {:ok, row} = CronSchedule.get_for_daemon(schedule.id)
+      assert DateTime.compare(row.next_run_at, past) == :gt
+    end
+
+    # The marker is given back as soon as the occurrence is won, so it can
+    # never serialize LATER occurrences across nodes. Held for the run it
+    # would have — the stall `claim/4`'s doc says was declined.
+    test "the winner does not hold the marker across the run" do
+      {:ok, schedule} = create_schedule("release-#{System.unique_integer([:positive])}")
+      due!(schedule.id, DateTime.add(DateTime.utc_now(), -60, :second))
+
+      assert :claimed =
+               CronSchedule.claim(
+                 schedule.id,
+                 "node-a",
+                 60,
+                 DateTime.add(DateTime.utc_now(), 3600, :second)
+               )
+
+      :ok = CronSchedule.release_claim(schedule.id, "node-a")
+
+      {:ok, row} = CronSchedule.get_for_daemon(schedule.id)
+      assert is_nil(row.claimed_by)
+
+      # Still not re-claimable: the OCCURRENCE is gone, which is the point.
+      assert :held =
+               CronSchedule.claim(
+                 schedule.id,
+                 "node-b",
+                 60,
+                 DateTime.add(DateTime.utc_now(), 3600, :second)
+               )
+    end
+
+    test "terminate/2 leaves no claim behind" do
+      {:ok, schedule} = create_schedule("term-#{System.unique_integer([:positive])}")
+      due!(schedule.id, DateTime.add(DateTime.utc_now(), -60, :second))
+
+      assert :claimed =
+               CronSchedule.claim(
+                 schedule.id,
+                 Atom.to_string(node()),
+                 60,
+                 DateTime.add(DateTime.utc_now(), 3600, :second)
+               )
+
+      # The scheduler releases what it still holds on the way down, so a
+      # rolling deploy does not park a schedule behind a claimant that no
+      # longer exists.
+      :ok =
+        Opus.CronScheduler.terminate(:shutdown, %{
+          timers: %{},
+          running: MapSet.new([schedule.id]),
+          tasks: %{},
+          load_retry_count: 0
+        })
+
+      {:ok, row} = CronSchedule.get_for_daemon(schedule.id)
+      assert is_nil(row.claimed_by)
+    end
+  end
+
+  # Force the cursor into the past so the occurrence is due.
+  defp due!(id, at) do
+    import Ecto.Query
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(s in Arca.CronSchedule, where: s.id == ^id),
+        set: [next_run_at: at, claimed_by: nil, claim_expires_at: nil]
+      )
+
+    :ok
+  end
 end

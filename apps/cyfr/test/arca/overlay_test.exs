@@ -842,6 +842,69 @@ defmodule Arca.OverlayTest do
              "late.txt was acknowledged and then cleared by a concurrent commit"
     end
 
+    test "a delete_tree cannot land inside a commit's window", %{ctx: ctx} do
+      # The third external caller shape: `component.delete` and the publish
+      # rollback both reach `Arca.delete_tree` on a version dir. Unlocked,
+      # one interleaving between a commit's file writes and its sentinel
+      # left a unit that read COMPLETE while holding only its manifest —
+      # and `commit_unit/4` returned `{:ok, written}` naming files that no
+      # longer existed. The unit must end whole or absent, never partial.
+      #
+      # A dir with NO seed behind it, so `unit_status/2` cannot answer
+      # `:seed` and leave "gone" and "partial under a shadow"
+      # indistinguishable.
+      dir = ["components", "catalysts", "local", "race-target", "1.0.0"]
+
+      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
+
+      on_exit(fn ->
+        Arca.OverlayTest.GatedCleanSlateAdapter.disarm()
+        Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+      end)
+
+      Arca.OverlayTest.GatedCleanSlateAdapter.arm(self())
+
+      committer =
+        Task.async(fn ->
+          Arca.Overlay.commit_unit(
+            ctx,
+            dir,
+            {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["a.txt"], "A"}]},
+            cap: :exempt
+          )
+        end)
+
+      assert_receive {:at_clean_slate, committer_pid}, 10_000
+
+      deleter = Task.async(fn -> Arca.delete_tree(ctx, dir) end)
+
+      wait_until(
+        fn -> queued_on_unit_lock?() or not Process.alive?(deleter.pid) end,
+        5_000,
+        "the deleter to queue behind the commit on the unit lock"
+      )
+
+      send(committer_pid, :proceed)
+
+      assert {:ok, _} = Task.await(committer, 30_000)
+      assert :ok = Task.await(deleter, 30_000)
+
+      # Serialised either way the unit is whole or gone, and because this
+      # dir has no seed behind it the two states are unambiguous: `:own`
+      # means a complete tenant unit, `:absent` means the delete won.
+      # A sentinel with no content is the corrupt state PR C prevents — it
+      # reads COMPLETE while holding nothing.
+      case Arca.Overlay.unit_status(ctx, dir) do
+        {:ok, :absent} ->
+          refute Arca.exists?(ctx, dir ++ ["a.txt"])
+          refute Arca.exists?(ctx, dir ++ [@sentinel])
+
+        {:ok, :own} ->
+          assert Arca.exists?(ctx, dir ++ [@sentinel])
+          assert Arca.exists?(ctx, dir ++ ["a.txt"])
+      end
+    end
+
     test "a nested write inside a held unit passes through instead of self-blocking", %{ctx: ctx} do
       # `Arca.Overlay.UnitLock` is not reentrant — it logs an error and can
       # only time out. `commit_unit/4` holds the unit lock and then writes
@@ -1223,6 +1286,49 @@ defmodule Arca.OverlayTest do
       message = Emissary.MCP.ToolError.render(:unit_locked)
       assert is_binary(message)
       assert message =~ "retry"
+    end
+  end
+
+  describe "a partial aqua skill is not a skill" do
+    # Aqua is the stated reason the read plane had to agree with the
+    # listing plane. `compendium/mcp/aqua_tool.ex` reads the tree directly
+    # — `list_typed`, `list_recursive`, `get` — so a half-written skill
+    # that read as whole put its instructions in front of the agent.
+    #
+    # A skill is a DIRECTORY unit whose sentinel is `SKILL.md` itself
+    # (`Compendium.AquaPath.locate/1`), which is the load-bearing detail:
+    # a crashed write leaves the manifest absent, so there is nothing to
+    # read even if the directory lists.
+    test "a skill dir whose SKILL.md never landed cannot be read", %{ctx: ctx} do
+      name = "half-written"
+      dir = Compendium.AquaPath.skill_dir(name)
+
+      # A crashed `commit_unit`: the body files landed, the sentinel did not.
+      :ok = Arca.put(ctx, dir ++ ["reference.md"], "step one: do the thing")
+
+      # The unit is not complete, and says so rather than passing for one.
+      assert {:ok, status} = Arca.Overlay.unit_status(ctx, dir)
+      refute status == :materialized
+
+      # And the instructions are unreachable: SKILL.md IS the sentinel.
+      assert {:error, :not_found} =
+               Arca.get(ctx, Compendium.AquaPath.skill_manifest(name))
+    end
+
+    test "a completed skill reads and lists normally", %{ctx: ctx} do
+      name = "whole-skill"
+      dir = Compendium.AquaPath.skill_dir(name)
+
+      {:ok, _} =
+        Arca.Overlay.commit_unit(
+          ctx,
+          dir,
+          {:files, [{["SKILL.md"], "# Whole"}, {["reference.md"], "detail"}]},
+          cap: :exempt
+        )
+
+      assert {:ok, "# Whole"} = Arca.get(ctx, Compendium.AquaPath.skill_manifest(name))
+      assert {:ok, :own} = Arca.Overlay.unit_status(ctx, dir)
     end
   end
 end

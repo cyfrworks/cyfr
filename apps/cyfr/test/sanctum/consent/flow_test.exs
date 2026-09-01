@@ -784,4 +784,72 @@ defmodule Sanctum.Consent.FlowTest do
       assert plan.ready
     end
   end
+
+  describe "the digest covers which profile the grant lands on" do
+    # Two labels on one source_ref can produce byte-identical blobs, and on
+    # a FIRST consent `Plan.locate_profile/4` answers `{:ok, nil, 0}` for
+    # both — so `profile_id` is dropped by `put_present` and
+    # `expected_revision` is 0 either way. Without `label` in the commit
+    # input the proof bound nothing that told them apart, and one minted
+    # for "prod" was spendable on "staging".
+    test "a proof minted for one label does not commit under another", %{ctx: ctx} do
+      publish!(ctx, "flow-labelled")
+      ref = "reagent:local.flow-labelled"
+
+      prod = %{ref: ref, label: "prod"}
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref, label: "prod"})
+      {:ok, preview} = Commit.preview(ctx, prod)
+
+      # Same everything, different label. The blob is byte-identical.
+      staging = %{ref: ref, label: "staging"}
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               Commit.commit(ctx, %{
+                 decisions: staging,
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+
+      # And the honest walk still works.
+      assert {:ok, %{revision: 1}} = walk!(ctx, ref, %{label: "prod"})
+    end
+
+    test "the label is part of the digest, so the two differ", %{ctx: ctx} do
+      publish!(ctx, "flow-label-digest")
+      ref = "reagent:local.flow-label-digest"
+
+      {:ok, prod} = Commit.preview(ctx, %{ref: ref, label: "prod"})
+      {:ok, staging} = Commit.preview(ctx, %{ref: ref, label: "staging"})
+
+      refute prod.commit_digest == staging.commit_digest
+    end
+  end
+
+  describe "every minted revision carries a blob digest" do
+    # The X1 regression pair. `Commit.persist/6` and
+    # `Consent.Bootstrap.insert/6` are the only two writers, and Bootstrap
+    # never reaches `persist/6` — so hashing on the commit path alone would
+    # have left every provisioning mint undigested and unverifiable.
+    test "an operator walk and a machine mint both store one", %{ctx: ctx} do
+      publish!(ctx, "flow-walked")
+      {:ok, _} = walk!(ctx, "reagent:local.flow-walked")
+
+      publish!(ctx, "flow-machine")
+      {:ok, %{minted: minted}} = Sanctum.Consent.Bootstrap.run(ctx)
+      assert "reagent:local.flow-machine" in minted
+
+      for ref <- ["reagent:local.flow-walked", "reagent:local.flow-machine"] do
+        {:ok, [profile]} = Source.DB.profiles(ctx, ref)
+        {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+
+        assert is_binary(consent.blob_digest) and consent.blob_digest != "",
+               "#{ref} was minted without a blob digest"
+
+        assert consent.blob_digest == Sanctum.JCS.hash_binary(consent.resolved_policy),
+               "#{ref}'s stored digest does not describe its stored policy"
+      end
+    end
+  end
 end
