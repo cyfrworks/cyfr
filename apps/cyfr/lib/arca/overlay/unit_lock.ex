@@ -3,7 +3,12 @@
 
 defmodule Arca.Overlay.UnitLock do
   @moduledoc """
-  Serializes whole-unit replacement, one unit at a time.
+  Serializes writes to one unit, one unit at a time.
+
+  Every mutating callback on `Arca.Overlay` takes this — `put`, `append`,
+  `delete`, `delete_tree` — not only whole-unit replacement. The
+  replacement case below is why it exists; the rest are why it is on the
+  callbacks rather than on `commit_unit/4` alone.
 
   `Arca.Overlay.commit_unit/4` replaces a unit wholesale: it clears what is
   there, writes the new content, and lands the sentinel last. Two of those

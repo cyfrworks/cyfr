@@ -146,38 +146,53 @@ defmodule Arca.Overlay do
 
   @impl true
   def get(%Context{} = ctx, path) do
-    case tenant().get(ctx, path) do
-      {:error, :not_found} = miss ->
-        if fall_through?(ctx, path) do
-          case seed_get(path) do
-            {:ok, _content} = hit -> hit
-            {:error, _} -> miss
+    if seed_shadows_tenant?(ctx, path) do
+      # An incomplete copy of a shipped unit: the listing plane already
+      # serves the seed here, so the read plane must too, or a subtree read
+      # splices tenant bytes into seed file names.
+      seed_get(path)
+    else
+      case tenant().get(ctx, path) do
+        {:error, :not_found} = miss ->
+          if fall_through?(ctx, path) do
+            case seed_get(path) do
+              {:ok, _content} = hit -> hit
+              {:error, _} -> miss
+            end
+          else
+            miss
           end
-        else
-          miss
-        end
 
-      other ->
-        other
+        other ->
+          other
+      end
     end
   end
 
   @impl true
   def put(%Context{} = ctx, path, content) do
-    with :ok <- prepare_write(ctx, path) do
-      tenant().put(ctx, path, content)
-    end
+    with_unit_lock(ctx, path, fn ->
+      with :ok <- prepare_write(ctx, path) do
+        tenant().put(ctx, path, content)
+      end
+    end)
   end
 
   @impl true
   def append(%Context{} = ctx, path, content) do
-    with :ok <- prepare_write(ctx, path) do
-      tenant().append(ctx, path, content)
-    end
+    with_unit_lock(ctx, path, fn ->
+      with :ok <- prepare_write(ctx, path) do
+        tenant().append(ctx, path, content)
+      end
+    end)
   end
 
   @impl true
   def delete(%Context{} = ctx, path) do
+    with_unit_lock(ctx, path, fn -> do_delete(ctx, path) end)
+  end
+
+  defp do_delete(%Context{} = ctx, path) do
     with :ok <- deletable(ctx, path),
          :ok <- tenant().delete(ctx, path) do
       # A single-object delete can only retire a file-shaped unit; a file
@@ -191,6 +206,10 @@ defmodule Arca.Overlay do
 
   @impl true
   def delete_tree(%Context{} = ctx, path) do
+    with_unit_lock(ctx, path, fn -> do_delete_tree(ctx, path) end)
+  end
+
+  defp do_delete_tree(%Context{} = ctx, path) do
     with :ok <- deletable(ctx, path),
          :ok <- tenant().delete_tree(ctx, path) do
       clear_origin_after_delete_tree(ctx, path)
@@ -199,8 +218,12 @@ defmodule Arca.Overlay do
 
   @impl true
   def exists?(%Context{} = ctx, path) do
-    tenant().exists?(ctx, path) or
-      (fall_through?(ctx, path) and seed_exists?(path))
+    if seed_shadows_tenant?(ctx, path) do
+      seed_exists?(path)
+    else
+      tenant().exists?(ctx, path) or
+        (fall_through?(ctx, path) and seed_exists?(path))
+    end
   end
 
   # Deliberately NOT unioned: the union costs the athanor nothing until it
@@ -210,19 +233,23 @@ defmodule Arca.Overlay do
 
   @impl true
   def serve_to_conn(conn, %Context{} = ctx, path, opts) do
-    case tenant().serve_to_conn(conn, ctx, path, opts) do
-      {:error, :not_found} = miss ->
-        if fall_through?(ctx, path) do
-          case Arca.Adapters.Local.serve_to_conn(conn, seed_ctx(), seed(path), opts) do
-            {:ok, _conn} = served -> served
-            {:error, _} -> miss
+    if seed_shadows_tenant?(ctx, path) do
+      Arca.Adapters.Local.serve_to_conn(conn, seed_ctx(), seed(path), opts)
+    else
+      case tenant().serve_to_conn(conn, ctx, path, opts) do
+        {:error, :not_found} = miss ->
+          if fall_through?(ctx, path) do
+            case Arca.Adapters.Local.serve_to_conn(conn, seed_ctx(), seed(path), opts) do
+              {:ok, _conn} = served -> served
+              {:error, _} -> miss
+            end
+          else
+            miss
           end
-        else
-          miss
-        end
 
-      other ->
-        other
+        other ->
+          other
+      end
     end
   end
 
@@ -511,7 +538,7 @@ defmodule Arca.Overlay do
         # Emptiness check and clear ride ONE lock hold: a write landing
         # between the diff and the delete must not be destroyed as part
         # of a "pristine" collapse.
-        Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit_of(loc)), fn ->
+        with_unit_lock_at(ctx, unit_of(loc), fn ->
           case diff_unit(ctx, unit_of(loc)) do
             {:ok, %{added: [], removed: [], changed: []}} ->
               case delete_unit(ctx, loc) do
@@ -631,7 +658,7 @@ defmodule Arca.Overlay do
   # including files a caller has already been told were written. Nothing
   # inside a single commit can detect that; they simply must not overlap.
   defp commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
-    Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit), fn ->
+    with_unit_lock_at(ctx, unit, fn ->
       do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override)
     end)
   end
@@ -639,6 +666,62 @@ defmodule Arca.Overlay do
   # The lock is per athanor and per unit: two athanors publishing the same
   # component name are different trees and never contend.
   defp lock_key(%Context{athanor_id: athanor_id}, unit), do: {athanor_id, unit}
+
+  # ---------------------------------------------------------------------------
+  # The unit lock, taken by the mutating callbacks themselves
+  # ---------------------------------------------------------------------------
+
+  # Every write, append and delete at or inside a unit runs under that
+  # unit's lock. It did not before: only `commit_unit/4`, `materialize/2`
+  # and the two revert paths took it, so a plain `Arca.delete_tree` on a
+  # component version dir (`Compendium.Registry`'s publish rollback and its
+  # cleanup) could interleave with another member's commit and leave a unit
+  # reading COMPLETE while holding only its manifest — the exact scenario
+  # `do_commit_dir_unit/7` says the lock exists to prevent. A `put` was
+  # worse: `prepare_write/2` materialized under the lock and RELEASED it
+  # before the caller's `tenant().put`, so the write could land inside a
+  # unit someone else had clean-slated in between, with `:ok` already
+  # returned.
+  #
+  # `Arca.Overlay.UnitLock` is deliberately NOT reentrant — it logs an
+  # error and can only time out. The commit path writes every file of a
+  # unit through the public `Arca.put`, so taking the lock in the callback
+  # would make `clean_slate/2` queue behind its own holder for 30s. Hence
+  # this process-local register: a nested write into a unit this process
+  # already holds passes straight through, and the outer acquisition is
+  # what serialises against other processes.
+  #
+  # Scope is one unit. A `delete_tree` ABOVE units (the aqua root reset,
+  # the empty-parent tidy) takes no lock and cannot: covering it would mean
+  # locking every unit beneath, in an order two processes could invert.
+  @held_units_key {__MODULE__, :held_unit_locks}
+
+  defp with_unit_lock(%Context{} = ctx, path, fun) do
+    case Arca.Storage.locate(path) do
+      {:file, unit} -> with_unit_lock_at(ctx, unit, fun)
+      {:dir, unit, _sentinel} -> with_unit_lock_at(ctx, unit, fun)
+      _not_overlaid_or_above_unit -> fun.()
+    end
+  end
+
+  defp with_unit_lock_at(%Context{} = ctx, unit, fun) do
+    key = lock_key(ctx, unit)
+    held = Process.get(@held_units_key, MapSet.new())
+
+    if MapSet.member?(held, key) do
+      fun.()
+    else
+      Arca.Overlay.UnitLock.with_lock(key, fn ->
+        Process.put(@held_units_key, MapSet.put(held, key))
+
+        try do
+          fun.()
+        after
+          Process.put(@held_units_key, held)
+        end
+      end)
+    end
+  end
 
   defp do_commit_dir_unit(ctx, unit, sentinel, source, cap, origin, override) do
     internal = internal_ctx(ctx)
@@ -875,6 +958,34 @@ defmodule Arca.Overlay do
     end
   end
 
+  # Whether the SEED side owns this path, so the athanor's own bytes at it
+  # must not be served.
+  #
+  # The read plane and the listing plane disagreed about a half-written
+  # copy of a shipped unit. `at_unit_result/4` is seed-first for one (an
+  # incomplete copy reads through, so listings show the seed's leaves)
+  # while `get/2` was tenant-first unconditionally (any tenant hit
+  # answered). Since `read_subtree/2` is `list_recursive/2` composed with
+  # `get/2`, a half-materialized unit came back as the SEED's file names
+  # carrying TENANT bytes — a tree that exists on neither layer.
+  #
+  # Deciding it once is the fix. The rule is `at_unit_result/4`'s: a
+  # completed copy answers alone, an incomplete copy under a seed unit
+  # reads through to the seed, and a tenant-only partial (a crashed
+  # `commit_unit/4` with no shipped counterpart) still answers its own
+  # content — there is nothing else to serve, and hiding it would make a
+  # failed commit's remains invisible to the repair paths that must see
+  # them (`unit_status/2`, `diff_unit/2`, `drop_unit/2`).
+  defp seed_shadows_tenant?(ctx, path) do
+    case Arca.Storage.locate(path) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        false
+
+      loc ->
+        not completed?(ctx, loc) and seed_unit_present?(loc)
+    end
+  end
+
   # The above-unit merge the leaf walks share: seed items are shadowed
   # where their unit holds a completed tenant copy, partial tenant copies
   # under a seed unit stay hidden, everything else unions.
@@ -1015,7 +1126,7 @@ defmodule Arca.Overlay do
     # and materializing again would clear that file on the way to copying a
     # seed the athanor already has. Whoever loses this race has nothing left
     # to do.
-    Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit_dir), fn ->
+    with_unit_lock_at(ctx, unit_dir, fn ->
       if completed?(ctx, loc) do
         :ok
       else
@@ -1103,9 +1214,7 @@ defmodule Arca.Overlay do
   # commit had already written, then let the commit land its sentinel —
   # a unit that read COMPLETE while holding little more than the sentinel.
   defp delete_unit_locked(ctx, loc) do
-    Arca.Overlay.UnitLock.with_lock(lock_key(ctx, unit_of(loc)), fn ->
-      delete_unit(ctx, loc)
-    end)
+    with_unit_lock_at(ctx, unit_of(loc), fn -> delete_unit(ctx, loc) end)
   end
 
   # ---------------------------------------------------------------------------

@@ -341,6 +341,35 @@ defmodule Arca.OverlayTest do
       assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
     end
 
+    test "a crashed copy's BYTES never splice into the seed's file names", %{ctx: ctx} do
+      # The half of the crash window the test above does not reach. It
+      # checks that the seed's file NAMES still list; this checks whose
+      # BYTES come back for them.
+      #
+      # `read_subtree/2` is `list_recursive/2` composed with `get/2`, and
+      # the two planes disagreed: the listing was seed-first for an
+      # incomplete copy of a shipped unit, while `get/2` answered any
+      # tenant hit unconditionally. So a half-materialized unit came back
+      # as the seed's file names carrying the partial copy's bytes — a
+      # tree that exists on neither layer, and for an Aqua skill
+      # (`Compendium.MCP.AquaTool` reads the tree directly) that is
+      # instructions reaching the agent.
+      :ok = lay_raw(ctx, @version_dir ++ ["src", "lib.rs"], "fn pwned() {}")
+
+      refute Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
+
+      assert {:ok, "fn main() {}"} == Arca.get(ctx, @version_dir ++ ["src", "lib.rs"]),
+             "an incomplete copy's bytes were served under the seed's listing"
+
+      {:ok, pairs} = Arca.read_subtree(ctx, @version_dir)
+      assert {["src", "lib.rs"], "fn main() {}"} in pairs
+
+      # And once the unit completes, the athanor's own bytes take over —
+      # the shadowing rule is unchanged for a whole copy.
+      assert :ok = Arca.put(ctx, @version_dir ++ ["src", "lib.rs"], "fn mine() {}")
+      assert {:ok, "fn mine() {}"} == Arca.get(ctx, @version_dir ++ ["src", "lib.rs"])
+    end
+
     @tag :unix
     test "an unreadable seed subtree refuses materialization instead of raising", %{
       ctx: ctx,
@@ -760,6 +789,90 @@ defmodule Arca.OverlayTest do
       # And the seed content came along exactly once.
       assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
+    end
+
+    test "a commit cannot clear an ALREADY-materialized unit under a live write", %{ctx: ctx} do
+      # The gap the first-write test above cannot reach. Once a unit is
+      # materialized, `prepare_write/2` is a no-op — so before the mutating
+      # callbacks took the lock themselves, an ordinary `Arca.put` into a
+      # materialized unit ran with NO lock at all, and a concurrent commit's
+      # `clean_slate/2` could delete a write that had already returned `:ok`.
+      assert :ok = Arca.put(ctx, @version_dir ++ ["seed_it.txt"], "x")
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :materialized}
+
+      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
+
+      on_exit(fn ->
+        Arca.OverlayTest.GatedCleanSlateAdapter.disarm()
+        Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+      end)
+
+      Arca.OverlayTest.GatedCleanSlateAdapter.arm(self())
+
+      # A commit that will replace the whole unit, parked at clean_slate.
+      committer =
+        Task.async(fn ->
+          Arca.Overlay.commit_unit(
+            ctx,
+            @version_dir,
+            {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["fresh.txt"], "fresh"}]},
+            cap: :exempt
+          )
+        end)
+
+      assert_receive {:at_clean_slate, committer_pid}, 10_000
+
+      # A plain write into the same, already-materialized unit.
+      writer = Task.async(fn -> Arca.put(ctx, @version_dir ++ ["late.txt"], "late") end)
+
+      wait_until(
+        fn -> queued_on_unit_lock?() or not Process.alive?(writer.pid) end,
+        5_000,
+        "the writer to queue behind the commit on the unit lock"
+      )
+
+      send(committer_pid, :proceed)
+
+      assert {:ok, _written} = Task.await(committer, 30_000)
+      assert Task.await(writer, 30_000) == :ok
+
+      # Whichever order they serialised in, a write that returned `:ok`
+      # must still be there. Unlocked, the commit's clean_slate deleted it.
+      assert {:ok, "late"} == Arca.get(ctx, @version_dir ++ ["late.txt"]),
+             "late.txt was acknowledged and then cleared by a concurrent commit"
+    end
+
+    test "a nested write inside a held unit passes through instead of self-blocking", %{ctx: ctx} do
+      # `Arca.Overlay.UnitLock` is not reentrant — it logs an error and can
+      # only time out. `commit_unit/4` holds the unit lock and then writes
+      # every file of the unit back through the PUBLIC `Arca.put`, which now
+      # takes that same lock. Without the process-local held-lock register
+      # the first `clean_slate/2` would queue behind its own holder for the
+      # full 30s timeout and fail.
+      unit = ["components", "catalysts", "local", "reentrant", "1.0.0"]
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          started = System.monotonic_time(:millisecond)
+
+          assert {:ok, _written} =
+                   Arca.Overlay.commit_unit(
+                     ctx,
+                     unit,
+                     {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["a.txt"], "A"}]},
+                     cap: :exempt
+                   )
+
+          elapsed = System.monotonic_time(:millisecond) - started
+
+          assert elapsed < 5_000,
+                 "commit took #{elapsed}ms — a self-block waits out the 30s lock timeout"
+        end)
+
+      refute log =~ "not reentrant",
+             "the unit lock was re-acquired by its own holder: #{log}"
+
+      assert {:ok, "A"} = Arca.get(ctx, unit ++ ["a.txt"])
     end
 
     test "no context outside the overlay's own scope can forge a mark — meta/ is reserved",
