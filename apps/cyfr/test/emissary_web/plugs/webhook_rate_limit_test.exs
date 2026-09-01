@@ -82,6 +82,48 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimitTest do
       assert accepted >= 4
       assert accepted <= 5
     end
+
+    # The per-IP bucket is checked FIRST, so it clamps whatever the row
+    # configures. It was a hard-coded 600 with no knob, and one provider
+    # delivering from one stable address is the ordinary case — so an
+    # operator who set a higher rate_limit was held to 600 with nothing
+    # saying why.
+    test "a per-slug limit above the per-IP ceiling is not silently clamped", %{ctx: ctx} do
+      prev = Application.get_env(:cyfr, :webhook_per_ip_rate_limit_max)
+      Application.put_env(:cyfr, :webhook_per_ip_rate_limit_max, 3)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:cyfr, :webhook_per_ip_rate_limit_max, prev),
+          else: Application.delete_env(:cyfr, :webhook_per_ip_rate_limit_max)
+      end)
+
+      name = "rl-clamped-#{:rand.uniform(1_000_000)}"
+      slug = create_webhook!(ctx, name, %{rate_limit: "50/1m"})
+      conn = build_conn(slug, {10, 1, 2, 3})
+
+      statuses = for _ <- 1..6, do: WebhookRateLimit.call(conn, %{}).status
+
+      # The ceiling bites at 3, well before the row's 50 — proving the
+      # per-IP bucket is the binding constraint and therefore has to be a
+      # knob rather than a constant.
+      assert Enum.count(statuses, &is_nil/1) == 3
+      assert Enum.count(statuses, &(&1 == 429)) == 3
+    end
+
+    test "an unparseable rate_limit falls back loudly, not silently", %{ctx: ctx} do
+      import ExUnit.CaptureLog
+
+      name = "rl-typo-#{:rand.uniform(1_000_000)}"
+
+      log =
+        capture_log(fn ->
+          slug = create_webhook!(ctx, name, %{rate_limit: "100 per minute"})
+          WebhookRateLimit.call(build_conn(slug, {10, 9, 9, 9}), %{})
+        end)
+
+      assert log =~ "unparseable rate_limit"
+    end
   end
 
   describe "unknown or disabled slug — scan-evasion bucket" do

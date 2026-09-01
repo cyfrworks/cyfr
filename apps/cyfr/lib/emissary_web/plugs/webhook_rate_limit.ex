@@ -13,9 +13,11 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
       smaller cap (`10/1m`). This defends against slug-enumeration scans
       without giving every random slug attempt a fresh per-slug bucket.
     * **Every request, whatever the slug** → also keyed on `{:ip, ip}` at
-      a much higher ceiling (`600/1m`). One address cannot mint unbounded
-      per-slug buckets, and bulk probing is throttled the same whether the
-      slugs it tries are real or not.
+      a much higher ceiling (`6_000/1m`, `:webhook_per_ip_rate_limit_max`).
+      One address cannot mint unbounded per-slug buckets, and bulk probing
+      is throttled the same whether the slugs it tries are real or not.
+      Configurable because it is checked FIRST and so clamps every
+      per-slug limit beneath it.
 
   ## What the buckets do NOT hide
 
@@ -46,6 +48,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   """
 
   import Plug.Conn
+  require Logger
 
   @default_max 100
   @default_window_ms 60_000
@@ -53,11 +56,22 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   @unknown_max 10
   @unknown_window_ms 60_000
 
-  # Applies to every request regardless of slug validity. Far above what
-  # any single sender needs (the per-slug default is 100/min), so it is a
-  # circuit breaker for bulk probing rather than a delivery throttle.
-  @per_ip_max 600
+  # Applies to every request regardless of slug validity — a circuit
+  # breaker for bulk probing rather than a delivery throttle.
+  #
+  # It is a KNOB, because it is checked before the per-slug bucket and
+  # therefore clamps it. An operator who sets `rate_limit: "1000/1m"` on a
+  # webhooks row — which `Sanctum.Webhook` accepts with no upper bound —
+  # was silently held to this number for any single sender, and one
+  # provider egressing from one stable address is the ordinary case, not
+  # an attack. Raise it when a real sender needs more; it only has to stay
+  # above the per-slug limits actually configured.
+  @default_per_ip_max 6_000
   @per_ip_window_ms 60_000
+
+  defp per_ip_max do
+    Application.get_env(:cyfr, :webhook_per_ip_rate_limit_max, @default_per_ip_max)
+  end
 
   def init(_opts), do: %{}
 
@@ -65,7 +79,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
     {conn, bucket_id, max_requests, window_ms} = bucket_for(conn)
 
     checks = [
-      {{:rate_limit, :webhook, {:ip, ip(conn)}}, @per_ip_max, @per_ip_window_ms},
+      {{:rate_limit, :webhook, {:ip, ip(conn)}}, per_ip_max(), @per_ip_window_ms},
       {{:rate_limit, :webhook, bucket_id}, max_requests, window_ms}
     ]
 
@@ -139,14 +153,23 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   defp ip(conn), do: Sanctum.ClientIp.resolve(conn)
 
   # Parse "<count>/<window>" — e.g. "100/1m", "1000/1h", "60/30s".
-  # Falls back to defaults on any parse failure.
+  # Falls back to defaults on any parse failure — and SAYS SO. A typo'd
+  # `rate_limit` on a webhooks row is an operator who believes they set a
+  # budget and did not; silently serving them the default is how they find
+  # out from a 429 instead of from the log.
   defp parse_rate_limit(spec) do
     with [count_str, window_str] <- String.split(spec, "/", parts: 2),
          {count, ""} when count > 0 <- Integer.parse(count_str),
          {:ok, window_ms} <- parse_window(window_str) do
       {count, window_ms}
     else
-      _ -> {@default_max, @default_window_ms}
+      _ ->
+        Logger.warning(
+          "[WebhookRateLimit] unparseable rate_limit #{inspect(spec)} — " <>
+            "falling back to #{@default_max}/#{@default_window_ms}ms"
+        )
+
+        {@default_max, @default_window_ms}
     end
   end
 

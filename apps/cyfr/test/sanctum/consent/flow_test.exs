@@ -569,6 +569,31 @@ defmodule Sanctum.Consent.FlowTest do
     "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
   }
 
+  # A manifest whose egress reaches private space and names its schemes —
+  # the two fields the sheet used to compute and never show.
+  @private_egress_manifest %{
+    "caps" => %{
+      "egress" => %{
+        "domains" => ["internal.corp"],
+        "methods" => ["GET"],
+        "schemes" => ["http"],
+        "private_ips" => ["10.0.0.0/8"]
+      }
+    }
+  }
+
+  defp publish_private_egress!(ctx, name) do
+    publish!(ctx, name, "1.0.0", %{
+      manifest:
+        Jason.encode!(
+          Map.merge(
+            %{"name" => name, "version" => "1.0.0", "type" => "reagent"},
+            @private_egress_manifest
+          )
+        )
+    })
+  end
+
   defp publish_needs!(ctx, name) do
     publish!(ctx, name, "1.0.0", %{
       manifest:
@@ -600,6 +625,24 @@ defmodule Sanctum.Consent.FlowTest do
     # same value "no narrowing declared" carries — so the declared subset
     # was overwritten with "all fields" for every MCP-minted consent. This
     # walks the tool, not `Commit`, because that is where the widening was.
+    # The sheet is what the operator approves. A grant it computes and does
+    # not print is a grant nobody agreed to — which is how an egress reaching
+    # RFC1918 space, and every node's limits, stayed invisible.
+    test "the summary discloses private egress, schemes and the node's limits",
+         %{ctx: ctx} do
+      publish_private_egress!(ctx, "flow-private-egress")
+      ref = "reagent:local.flow-private-egress"
+
+      {:ok, preview} = Commit.preview(ctx, %{ref: ref})
+      sheet = Enum.join(preview.summary, "\n")
+
+      assert sheet =~ "internal.corp"
+      assert sheet =~ "INCLUDING PRIVATE"
+      assert sheet =~ "10.0.0.0/8"
+      assert sheet =~ "via http"
+      assert sheet =~ "limits "
+    end
+
     test "an MCP binding that omits fields still gets the manifest's subset",
          %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-wire")

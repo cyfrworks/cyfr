@@ -975,9 +975,39 @@ defmodule Sanctum.Consent.Commit do
       |> Enum.flat_map(fn {_key, edge} -> render_edge(edge) end)
       |> Enum.uniq()
 
-    case grants do
+    # `limits` is an @enforce_keys field of every node and was rendered
+    # nowhere, so a publish — whose entire attenuation story is dropping the
+    # source node to `@public_limits` — showed the operator the narrowed
+    # storage and egress and nothing about the budget they were approving.
+    lines = grants ++ render_limits(node.limits)
+
+    case lines do
       [] -> ["#{ref}: no capabilities"]
       lines -> Enum.map(lines, fn line -> "#{ref}: #{line}" end)
+    end
+  end
+
+  defp render_limits(nil), do: []
+
+  defp render_limits(%Sanctum.Limits{} = limits) do
+    rate =
+      case limits.rate_limit do
+        %{requests: requests, window: window} -> "#{requests}/#{window}"
+        _ -> nil
+      end
+
+    parts =
+      [
+        limits.timeout && "timeout #{limits.timeout}",
+        limits.max_memory_bytes && "memory #{limits.max_memory_bytes}B",
+        rate && "rate #{rate}",
+        limits.max_concurrent_tasks && "concurrency #{limits.max_concurrent_tasks}"
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    case parts do
+      [] -> []
+      parts -> ["limits #{Enum.join(parts, ", ")}"]
     end
   end
 
@@ -996,7 +1026,26 @@ defmodule Sanctum.Consent.Commit do
 
   defp render_egress(%{domains: domains} = egress) do
     methods = egress |> Map.get(:methods, []) |> render_list("any method")
-    ["network #{Enum.join(domains, ", ")} (#{methods})"]
+
+    # Schemes and private_ips were computed into the blob and shown
+    # nowhere. `private_ips` is the one that matters: an operator
+    # approving "network internal.corp (GET)" was not told the grant
+    # reaches RFC1918 space, which is the whole SSRF question.
+    schemes =
+      case Map.get(egress, :schemes, []) do
+        [] -> nil
+        schemes -> "via #{Enum.join(Enum.sort(schemes), ", ")}"
+      end
+
+    private =
+      case Map.get(egress, :private_ips, []) do
+        [] -> nil
+        ranges -> "INCLUDING PRIVATE #{Enum.join(Enum.sort(ranges), ", ")}"
+      end
+
+    qualifiers = Enum.reject([methods, schemes, private], &is_nil/1)
+
+    ["network #{Enum.join(domains, ", ")} (#{Enum.join(qualifiers, "; ")})"]
   end
 
   defp render_storage(nil), do: []

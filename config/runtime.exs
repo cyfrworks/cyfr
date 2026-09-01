@@ -177,6 +177,14 @@ if config_env() != :test do
       config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
     end
 
+    # Inbound webhooks, per client IP, across every slug (default: 6000/60s).
+    # Checked BEFORE the per-slug bucket, so it clamps any `rate_limit` set
+    # on a webhooks row above it — raise it when one real sender, egressing
+    # from one address, legitimately needs more than this in a minute.
+    if hook_ip_max = env_int.("CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", nil) do
+      config :cyfr, :webhook_per_ip_rate_limit_max, hook_ip_max
+    end
+
     # The :api bucket's own budget (GET /api/executions/:id/events — SSE
     # reconnects). Unset, it shares the MCP values above; the counters were
     # always separate, the budgets silently were not.
