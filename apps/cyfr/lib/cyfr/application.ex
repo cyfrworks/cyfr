@@ -507,6 +507,19 @@ defmodule Cyfr.Application do
 
   # Resolve and pin `:cyfr, :crypto_keyring`. Idempotent — re-runs on app
   # restart simply re-derive (or re-parse) the same keyring.
+  #
+  # KNOWN GAP, deliberately not fixed here: nothing records WHICH material
+  # a deployment booted with. `nil` and `""` both fall through to
+  # derivation, and the derived key is also labelled "default" — so an
+  # explicit keyring that goes missing is replaced by a different key under
+  # the same label, and the athanor forks into two key generations with no
+  # boundary event. Rows sealed before fail `:aad_or_key_mismatch` while new
+  # writes succeed, which reads as corruption rather than as configuration.
+  #
+  # The fix is a persisted fingerprint and a boot refuse, and a boot refuse
+  # can brick a volume restore — so `design/keyring-fingerprint.md` settles
+  # where the fingerprint lives, what each restore case must do, and why the
+  # obvious `..._MIGRATE=1` flag would be a lie, before any of it is built.
   defp resolve_crypto_keyring! do
     case Application.get_env(:cyfr, :crypto_keyring) do
       %{primary: _, keys: _} = keyring when map_size(keyring.keys) > 0 ->
