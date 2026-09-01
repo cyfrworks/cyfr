@@ -225,4 +225,83 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotencyTest do
       assert :fresh = Arca.WebhookDeliveryStorage.record(webhook.id, "key1")
     end
   end
+
+  describe "the claim follows the work, not the response" do
+    test "a failed delivery is re-deliverable; a succeeded one is not", %{ctx: ctx} do
+      hook =
+        create_hook!(ctx, "idem-life-#{:rand.uniform(1_000_000)}", %{
+          idempotency_key_header: "x-delivery-id"
+        })
+
+      conn = build_conn_with_webhook(hook, [{"x-delivery-id", "evt-1"}])
+
+      # First delivery claims.
+      assert %{halted: false} = WebhookIdempotency.call(conn, %{})
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-1")
+
+      # The task reports it failed — the sender is entitled to retry.
+      :ok = Arca.WebhookDeliveryStorage.settle(hook.id, "evt-1", :failed)
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-1")
+
+      # This time it ran. Now a retry really is a duplicate.
+      :ok = Arca.WebhookDeliveryStorage.settle(hook.id, "evt-1", :succeeded)
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-1")
+    end
+
+    test "a claim in flight is a duplicate — settling is not the same as never having run",
+         %{ctx: ctx} do
+      hook =
+        create_hook!(ctx, "idem-inflight-#{:rand.uniform(1_000_000)}", %{
+          idempotency_key_header: "x-delivery-id"
+        })
+
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-2")
+      # Still `claimed`: another node must not run it concurrently.
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-2")
+    end
+
+    test "the plug hands the claim to the controller", %{ctx: ctx} do
+      hook =
+        create_hook!(ctx, "idem-claim-#{:rand.uniform(1_000_000)}", %{
+          idempotency_key_header: "x-delivery-id"
+        })
+
+      conn =
+        hook
+        |> build_conn_with_webhook([{"x-delivery-id", "evt-3"}])
+        |> WebhookIdempotency.call(%{})
+
+      assert conn.assigns[:webhook_delivery_claim] == {hook.id, "evt-3"}
+    end
+  end
+
+  describe "the timestamp path dedupes on the signature" do
+    test "a replay inside the skew window is refused without an idempotency header",
+         %{ctx: ctx} do
+      hook =
+        create_hook!(ctx, "idem-nonce-#{:rand.uniform(1_000_000)}", %{
+          timestamp_header: "x-timestamp"
+        })
+
+      headers = [{"x-timestamp", "1234567890"}, {"x-cyfr-signature", "sha256=deadbeef"}]
+
+      first = hook |> build_conn_with_webhook(headers) |> WebhookIdempotency.call(%{})
+      refute first.halted
+      assert first.assigns[:webhook_delivery_claim]
+
+      # Same signature — same (timestamp, body) — is the same delivery.
+      second = hook |> build_conn_with_webhook(headers) |> WebhookIdempotency.call(%{})
+      assert second.halted
+      assert second.status == 200
+      assert second.resp_body =~ "duplicate"
+    end
+
+    test "a webhook with neither header still dedupes nothing", %{ctx: ctx} do
+      hook = create_hook!(ctx, "idem-none-#{:rand.uniform(1_000_000)}")
+
+      conn = hook |> build_conn_with_webhook([]) |> WebhookIdempotency.call(%{})
+      refute conn.halted
+      refute conn.assigns[:webhook_delivery_claim]
+    end
+  end
 end

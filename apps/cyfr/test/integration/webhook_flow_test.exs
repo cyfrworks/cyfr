@@ -122,7 +122,7 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
   end
 
   @tag :requires_opus
-  test "idempotency dedup returns 200 with status:duplicate on repeat delivery",
+  test "a failed delivery is retryable; a delivery that ran is a duplicate",
        %{conn: conn, ctx: ctx} do
     %{slug: slug, secret: secret} =
       create_hook!(ctx, "idem-edge", %{idempotency_key_header: "X-Cyfr-Delivery"})
@@ -144,15 +144,36 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     assert first_response["status"] == "accepted"
     await_invoke_stop(first_response["request_id"])
 
-    # Second delivery → idempotency plug short-circuits before the controller
-    # to 200 with status:duplicate. The plug runs *before* the controller
-    # (router pipeline order: rate limit → verify → idempotency → controller)
-    # so dedup happens regardless of async vs sync execution.
-    second =
+    # This fixture's execution FAILS, and a failed delivery is one the
+    # sender is entitled to retry — so the claim was released and the
+    # repeat is accepted, not deduped. That is the whole point of the
+    # claim following the work: the response said `accepted` when the task
+    # merely spawned, so a claim released on the response could never be
+    # released for something that failed after it.
+    {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(slug)
+
+    retry_after_failure =
       build_conn()
       |> put_req_header("content-type", "application/json")
       |> put_req_header("x-cyfr-signature", sig)
       |> put_req_header("x-cyfr-delivery", delivery_id)
+      |> post("/hooks/" <> slug, body)
+
+    assert json_response(retry_after_failure, 200)["status"] == "accepted"
+    await_invoke_stop(json_response(retry_after_failure, 200)["request_id"])
+
+    # And a delivery whose claim is live — staked here rather than raced
+    # for — is still deduped over the real HTTP path. `claimed` means "in
+    # flight somewhere", which is exactly when a second delivery must not
+    # run the target again.
+    live_id = "evt_live_#{System.unique_integer([:positive])}"
+    assert :fresh = Arca.WebhookDeliveryStorage.record(hook_row.id, live_id)
+
+    second =
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-cyfr-signature", sig)
+      |> put_req_header("x-cyfr-delivery", live_id)
       |> post("/hooks/" <> slug, body)
 
     assert second.status == 200

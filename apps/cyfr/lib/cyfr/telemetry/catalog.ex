@@ -210,6 +210,12 @@ defmodule Cyfr.Telemetry.Catalog do
         "a failed delivery's idempotency claim could not be given back, so the sender's " <>
           "retry will read as a duplicate and the target will never run for that key"
     },
+    [:cyfr, :emissary, :webhook, :dedup_settle_failed] => %{
+      consumers: [:operator],
+      note:
+        "a delivery finished but its idempotency claim could not be marked succeeded or " <>
+          "failed, so a retry may read as a duplicate (or re-run) against a stale claim"
+    },
     [:cyfr, :emissary, :external_server, :reconciled] => %{
       consumers: [:operator],
       note: "external-server reconciler outcome; the reconciler logs the same fact"

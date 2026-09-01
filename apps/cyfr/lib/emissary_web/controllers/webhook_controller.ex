@@ -212,9 +212,11 @@ defmodule EmissaryWeb.WebhookController do
     # window instead of accepting work that noproc-crashes in the task.
     spawn_result =
       if Cyfr.Execution.available?() do
+        claim = conn.assigns[:webhook_delivery_claim]
+
         Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
           Cyfr.LoggerContext.restore(logger_metadata)
-          run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time)
+          run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time, claim)
         end)
       else
         {:error, :engine_starting}
@@ -256,7 +258,38 @@ defmodule EmissaryWeb.WebhookController do
   # `:invoke, :stop` telemetry) closes whether `Cyfr.Execution.run_root/5` returns
   # `{:ok, _}`, `{:error, _}`, or raises. The supervisor would log a crash
   # otherwise, but the structured audit row would dangle in `pending`.
-  defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time) do
+  defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time, claim) do
+    outcome = run_and_audit(ctx, request_id, webhook, input, telemetry_meta, start_time)
+    settle_claim(claim, outcome)
+  end
+
+  # The claim the idempotency plug staked, settled by the only code that
+  # knows how the delivery ended. `succeeded` keeps it — the sender's retry
+  # is a genuine duplicate. `failed` makes it re-deliverable, which is the
+  # case the plug's `register_before_send` could never reach: the response
+  # went out as `200 accepted` when this task SPAWNED.
+  defp settle_claim(nil, _outcome), do: :ok
+
+  defp settle_claim({webhook_id, key}, outcome) do
+    case Arca.WebhookDeliveryStorage.settle(webhook_id, key, outcome) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Webhook] could not settle idempotency claim for #{webhook_id}: " <>
+            "#{inspect(reason)} — a retry of this delivery may read as a duplicate"
+        )
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :webhook, :dedup_settle_failed],
+          %{count: 1},
+          %{webhook_id: webhook_id, outcome: outcome}
+        )
+    end
+  end
+
+  defp run_and_audit(ctx, request_id, webhook, input, telemetry_meta, start_time) do
     try do
       # A webhook fires under its bound profile's consent — the binding is
       # enforced at create/update and by the NOT NULL column.
@@ -281,6 +314,8 @@ defmodule EmissaryWeb.WebhookController do
             Map.put(telemetry_meta, :status, :ok)
           )
 
+          :succeeded
+
         {:error, reason} ->
           duration_ms = duration_ms(start_time)
           Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
@@ -304,6 +339,8 @@ defmodule EmissaryWeb.WebhookController do
             %{duration_ms: duration_ms},
             telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "execution_failed")
           )
+
+          :failed
       end
     rescue
       e ->

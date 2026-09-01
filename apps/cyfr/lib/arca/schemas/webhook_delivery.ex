@@ -17,5 +17,11 @@ defmodule Arca.Schemas.WebhookDelivery do
     field :webhook_id, :string
     field :idempotency_key, :string
     field :first_seen_at, :utc_datetime_usec
+    # `claimed` while the delivery is in flight, then `succeeded` or
+    # `failed`. A failed claim is re-deliverable — the sender's retry
+    # re-claims it — which is the whole reason the claim outlives the
+    # response it used to be released by.
+    field :status, :string, default: "claimed"
+    field :settled_at, :utc_datetime_usec
   end
 end

@@ -10,6 +10,14 @@ defmodule Arca.WebhookDeliveryStorage do
   inserts safe — the second one fails with a unique-constraint violation
   and the caller treats it as a duplicate.
 
+  A claim has a `status`, because the delivery it guards outlives the HTTP
+  response. The controller answers `200 accepted` when the task SPAWNS, so
+  a claim released on a non-2xx response could never be released for work
+  that failed inside the task — the retry was answered `"duplicate"` for
+  the full TTL instead. `settle/3` is called by the task that knows the
+  outcome: `succeeded` keeps the claim, `failed` makes the delivery
+  re-deliverable so the sender's retry re-claims it.
+
   Rows are swept UNCONDITIONALLY on the `Cyfr.RetentionScheduler` cadence
   (its sweep roster runs whether or not per-kind retention policy is set),
   past `:webhook_idempotency_ttl_seconds` — an authenticated sender cannot
@@ -21,9 +29,11 @@ defmodule Arca.WebhookDeliveryStorage do
   alias Arca.Schemas.WebhookDelivery
 
   @doc """
-  Attempt to record an inbound delivery. Returns:
-    * `:fresh` if this is the first time we've seen `(webhook_id, key)`.
-    * `{:duplicate, first_seen_at}` if a row already exists.
+  Attempt to claim an inbound delivery. Returns:
+    * `:fresh` if this is the first time we've seen `(webhook_id, key)`,
+      or if the previous attempt is recorded `failed` and may be retried.
+    * `{:duplicate, first_seen_at}` if a live claim already exists —
+      `claimed` (in flight) or `succeeded` (already ran).
     * `{:error, reason}` for unexpected DB errors.
   """
   @spec record(String.t(), String.t()) ::
@@ -45,13 +55,55 @@ defmodule Arca.WebhookDeliveryStorage do
           :fresh
 
         {0, _} ->
-          # Conflict — fetch the existing row's timestamp.
-          case lookup_first_seen(webhook_id, idempotency_key) do
-            {:ok, ts} -> {:duplicate, ts}
+          # Conflict — the outcome depends on how the previous attempt ended.
+          case lookup_existing(webhook_id, idempotency_key) do
+            # Re-deliverable: the sender is retrying something that did not
+            # run. Re-stake rather than answering "duplicate" to a delivery
+            # that never happened.
+            {:ok, %{status: "failed"}} ->
+              reclaim(webhook_id, idempotency_key, now)
+
+            {:ok, %{first_seen_at: ts}} ->
+              {:duplicate, ts}
+
             # Defensive: row vanished between insert and lookup. Treat as fresh.
-            :missing -> :fresh
+            :missing ->
+              :fresh
           end
       end
+    end)
+  end
+
+  @doc """
+  Record how a claimed delivery ended.
+
+  `:succeeded` keeps the claim — the sender's retry is a genuine
+  duplicate. `:failed` makes the delivery re-deliverable: the row stays,
+  so the sweep still bounds the table, but `record/2` will re-claim it,
+  because a delivery that did not run is one the sender is entitled to
+  retry.
+
+  This exists because `release/2` cannot be reached for the case it was
+  written for. The controller answers `200 accepted` when the task spawns,
+  so the plug's `register_before_send` — gated on a non-2xx — never fires
+  for work that failed inside the task. Only the task knows.
+  """
+  @spec settle(String.t(), String.t(), :succeeded | :failed) :: :ok | {:error, term()}
+  def settle(webhook_id, idempotency_key, outcome)
+      when is_binary(webhook_id) and is_binary(idempotency_key) and
+             outcome in [:succeeded, :failed] do
+    Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.settle", fn ->
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      query =
+        from d in WebhookDelivery,
+          where:
+            d.webhook_id == ^webhook_id and d.idempotency_key == ^idempotency_key and
+              d.status == "claimed"
+
+      Arca.Repo.update_all(query, set: [status: Atom.to_string(outcome), settled_at: now])
+
+      :ok
     end)
   end
 
@@ -91,16 +143,40 @@ defmodule Arca.WebhookDeliveryStorage do
     end)
   end
 
-  defp lookup_first_seen(webhook_id, key) do
+  defp lookup_existing(webhook_id, key) do
     query =
       from d in WebhookDelivery,
         where: d.webhook_id == ^webhook_id and d.idempotency_key == ^key,
-        select: d.first_seen_at,
+        select: %{first_seen_at: d.first_seen_at, status: d.status},
         limit: 1
 
     case Arca.Repo.one(query) do
       nil -> :missing
-      ts -> {:ok, ts}
+      row -> {:ok, row}
+    end
+  end
+
+  # Only from `failed` — a concurrent claimer that already won leaves the
+  # row `claimed`, and this must not steal it.
+  defp reclaim(webhook_id, idempotency_key, now) do
+    query =
+      from d in WebhookDelivery,
+        where:
+          d.webhook_id == ^webhook_id and d.idempotency_key == ^idempotency_key and
+            d.status == "failed"
+
+    case Arca.Repo.update_all(query,
+           set: [status: "claimed", first_seen_at: now, settled_at: nil]
+         ) do
+      {1, _} ->
+        :fresh
+
+      # Someone else re-claimed it between the lookup and here.
+      {0, _} ->
+        case lookup_existing(webhook_id, idempotency_key) do
+          {:ok, %{first_seen_at: ts}} -> {:duplicate, ts}
+          :missing -> :fresh
+        end
     end
   end
 end

@@ -59,10 +59,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
       is_nil(webhook) ->
         conn
 
-      is_nil(webhook.idempotency_key_header) ->
-        conn
-
-      true ->
+      is_binary(webhook.idempotency_key_header) ->
         case fetch_key(conn, webhook.idempotency_key_header) do
           nil ->
             missing_key(conn, webhook.idempotency_key_header)
@@ -70,6 +67,30 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
           key ->
             handle_lookup(conn, webhook.id, key)
         end
+
+      # A timestamp bounds a replay to the skew window; it does not stop
+      # one inside it. The sender emits no event id to dedupe on, so the
+      # signature is the nonce: it is unique per (timestamp, body) and the
+      # sender cannot forge a second one for the same pair without the
+      # secret. Hashed rather than stored, because the column is the
+      # signature itself otherwise.
+      is_binary(webhook.timestamp_header) ->
+        case signature_nonce(conn, webhook) do
+          nil -> conn
+          nonce -> handle_lookup(conn, webhook.id, nonce)
+        end
+
+      true ->
+        conn
+    end
+  end
+
+  defp signature_nonce(conn, webhook) do
+    header = webhook.signature_header || Sanctum.Webhook.default_signature_header()
+
+    case fetch_key(conn, header) do
+      nil -> nil
+      signature -> "sig:" <> Cyfr.Digest.sha256(signature)
     end
   end
 
@@ -93,7 +114,13 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
   defp handle_lookup(conn, webhook_id, key) do
     case Arca.WebhookDeliveryStorage.record(webhook_id, key) do
       :fresh ->
-        release_claim_unless_delivered(conn, webhook_id, key)
+        conn
+        # The claim is settled by whoever learns the outcome. For a
+        # delivery that reaches the task that is the task
+        # (`WebhookController.run_in_task/6`); the before_send below
+        # covers only the synchronous refusals that never get there.
+        |> assign(:webhook_delivery_claim, {webhook_id, key})
+        |> release_claim_unless_delivered(webhook_id, key)
 
       {:duplicate, first_seen_at} ->
         body =
@@ -125,6 +152,14 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
   # Registered on the fresh path only: a duplicate never staked a claim in
   # this request, and must not release the one the original delivery holds.
+  #
+  # This can only see SYNCHRONOUS refusals — a 503 when the engine is not
+  # up, a 500 from a spawn failure. The controller answers `200 accepted`
+  # the moment the task spawns, so a 2xx here means "handed off", never
+  # "delivered", and every execution outcome happens afterwards. That is
+  # why the task settles the claim itself; without it, a component that
+  # raised kept its claim and the sender's retry read as a duplicate for
+  # the full TTL.
   defp release_claim_unless_delivered(conn, webhook_id, key) do
     register_before_send(conn, fn sent ->
       if sent.status in 200..299 do
