@@ -33,7 +33,14 @@ defmodule Arca.UnscopedQuerySeamTest do
   # count too: an unscoped `insert_all`/`update`/`delete` into a tenant
   # table is exactly as tenant-relevant as a read, and the original verb
   # list silently exempted them.
-  @repo_verbs ~r/\bRepo\.(all|one|update_all|delete_all|aggregate|exists\?|get|get_by|insert|insert_all|update|delete|transaction)\b/
+  # `exists?` and `query!` need their own alternative WITHOUT the trailing
+  # `\b`: after `?` or `!` the next character is `(`, and two non-word
+  # characters assert no boundary — so `Repo.exists?(` could never match
+  # this at all, and `query`/`query!` were simply absent. The first
+  # `Repo.exists?` in the tree arrived with `Users.personal_athanor?/1`
+  # and the first raw `Repo.query!` with `Arca.TenantTables`; both were
+  # invisible here.
+  @repo_verbs ~r/\bRepo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|update|delete|transaction)\b|exists\?|query!?)/
   # Scoped means the athanor column is USED — compared, bound or set —
   # not merely mentioned (a `select:` naming athanor_id once counted).
   # `stamp_tenant!` is the write-side spelling (Arca.QueryHelpers).

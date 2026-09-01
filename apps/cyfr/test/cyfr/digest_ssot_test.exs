@@ -16,6 +16,16 @@ defmodule Cyfr.DigestSSOTTest do
   # apps/cyfr/test/cyfr -> umbrella root
   @umbrella_root Path.expand("../../../..", __DIR__)
 
+  # Migrations are scanned too, and exempted BY NAME rather than by not
+  # being looked at. A migration is frozen history: it must keep producing
+  # the bytes it produced the day it ran, even if `Cyfr.Digest`'s spelling
+  # is ever revised — so inlining is correct there and nowhere else. The
+  # glob used to stop at `lib/`, which meant this exemption was invisible
+  # rather than argued.
+  @frozen_history [
+    "apps/cyfr/priv/repo/migrations/20260901000000_consents_blob_digest.exs"
+  ]
+
   # Construction = concatenating the prefix onto a computed value. Pattern
   # matches (`"sha256:" <> hex` in a function head) and prose are consumers
   # of the spelling, not producers, and stay allowed.
@@ -27,12 +37,32 @@ defmodule Cyfr.DigestSSOTTest do
   # base64url) are different conventions and don't match.
   @bare_hex ~r/:crypto\.hash\(:sha256.*(\n.*)?\|>\s*Base\.encode16|Base\.encode16\(\s*:crypto\.hash\(:sha256/
 
+  defp scanned do
+    Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex")) ++
+      Path.wildcard(Path.join(@umbrella_root, "apps/cyfr/priv/repo/migrations/*.exs"))
+  end
+
+  test "every frozen-history exemption still exists and still inlines a digest" do
+    for rel <- @frozen_history do
+      path = Path.join(@umbrella_root, rel)
+
+      assert File.exists?(path),
+             "#{rel} is exempted from the digest SSOT and no longer exists — drop the entry"
+
+      source = Cyfr.Test.SourceTree.read(path)
+
+      assert Regex.match?(@construction, source) or Regex.match?(@bare_hex, source),
+             "#{rel} no longer inlines a digest — drop the exemption rather than leaving it"
+    end
+  end
+
   test ~s(the "sha256:" spelling is constructed only in Cyfr.Digest) do
     offenders =
-      Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+      scanned()
       |> Enum.filter(fn path -> Regex.match?(@construction, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
+      |> Enum.reject(&(&1 in @frozen_history))
 
     assert offenders == [],
            "digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"
@@ -40,10 +70,11 @@ defmodule Cyfr.DigestSSOTTest do
 
   test "the bare-hex spelling is constructed only in Cyfr.Digest" do
     offenders =
-      Path.wildcard(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+      scanned()
       |> Enum.filter(fn path -> Regex.match?(@bare_hex, Cyfr.Test.SourceTree.read(path)) end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
       |> Enum.reject(&(&1 == "apps/cyfr/lib/cyfr/digest.ex"))
+      |> Enum.reject(&(&1 in @frozen_history))
 
     assert offenders == [],
            "bare-hex digest spelling constructed outside Cyfr.Digest: #{inspect(offenders)}"

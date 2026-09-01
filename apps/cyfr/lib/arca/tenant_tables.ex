@@ -165,6 +165,13 @@ defmodule Arca.TenantTables do
   happened to find. The column is the fact.
   """
   @spec athanor_scoped_tables() :: [String.t()]
+  # arca:unscoped-ok a boot-time schema read over the catalog, not tenant
+  # rows — there is no athanor to scope it to.
+  #
+  # arca:db-raise-ok raising IS the contract. This backs `verify_roster!/1`,
+  # whose entire job is to fail a boot rather than let an athanor-scoped
+  # table survive an erasure that reported success; answering
+  # `{:error, :database_error}` would turn that into a shrug.
   def athanor_scoped_tables do
     %{rows: rows} = Arca.Repo.query!(@athanor_column_sql, [])
 

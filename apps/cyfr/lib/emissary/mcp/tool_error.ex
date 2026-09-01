@@ -61,6 +61,7 @@ defmodule Emissary.MCP.ToolError do
   def reason?({:crashed, message}) when is_binary(message), do: true
   def reason?({:exit, message}) when is_binary(message), do: true
   def reason?({:timeout, message}) when is_binary(message), do: true
+  def reason?(:unit_locked), do: true
   def reason?(:action_missing), do: true
   def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
   def reason?(_), do: false
@@ -85,6 +86,16 @@ defmodule Emissary.MCP.ToolError do
   def message({:crashed, message}), do: message
   def message({:exit, message}), do: message
   def message({:timeout, message}), do: message
+
+  # `Arca.Overlay.UnitLock` timed out waiting for another writer on the
+  # same unit. It escapes every overlay `put`/`append`/`delete`/
+  # `delete_tree` now that the lock sits on the callbacks, and it rendered
+  # as `nil` — so a caller saw whatever generic "failed" sentence its
+  # surface had, on exactly the paths (component publish, aqua edit) where
+  # concurrent contention is the expected case. Contention is retryable
+  # and an outage is not; the two must not read the same.
+  def message(:unit_locked),
+    do: "Another write to this component is in progress — retry shortly"
 
   # The registry's own dispatch refusals. They used to be rendered by the
   # wire router alone, so the console and the guest showed a generic

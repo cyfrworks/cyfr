@@ -24,7 +24,9 @@ defmodule Arca.DbRescueCoverageTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  @repo_call ~r/\b(?:Arca\.)?Repo\.(all|one|update_all|delete_all|aggregate|exists\?|get|get_by|insert|insert_all|update|delete|transaction|rollback)\b/
+  # Same boundary fix as `Arca.UnscopedQuerySeamTest`: `exists?` and
+  # `query!` cannot carry a trailing `\b`.
+  @repo_call ~r/\b(?:Arca\.)?Repo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|update|delete|transaction|rollback)\b|exists\?|query!?)/
   @covered ~r/with_db_rescue|rescuing_db|^\s*rescue\b/m
   @tag_marker ~r/#\s*arca:db-raise-ok\s+\S/
 

@@ -1210,4 +1210,19 @@ defmodule Arca.OverlayTest do
                "run under with_internal_writes/1, which no child process inherits"
     end
   end
+
+  describe "the lock's refusal reaches a caller as something actionable" do
+    # `:unit_locked` escapes every overlay mutator now that the lock is on
+    # the callbacks, not just `commit_unit/4`. It rendered as `nil`, so
+    # each surface fell back to its own generic "failed" sentence — on
+    # exactly the paths where concurrent contention is expected. Contention
+    # is retryable; an outage is not.
+    test "unit_locked is a recognised refusal with a retry sentence" do
+      assert Emissary.MCP.ToolError.reason?(:unit_locked)
+
+      message = Emissary.MCP.ToolError.render(:unit_locked)
+      assert is_binary(message)
+      assert message =~ "retry"
+    end
+  end
 end
