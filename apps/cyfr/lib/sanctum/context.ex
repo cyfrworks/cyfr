@@ -87,6 +87,13 @@ defmodule Sanctum.Context do
     # identifier as :api_key_id, and what `session.logout` needs to retire
     # exactly the session that called it.
     :session_token_hash,
+    # The caller's resolved address, where the ingress knew one
+    # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
+    # is what an anonymous, per-action budget can be charged to. Without
+    # it the `/mcp` device flows had no address of their own and rode the
+    # transport's shared 120/min bucket, so several addresses could still
+    # exhaust the global sign-in ceiling between them.
+    :client_ip,
     authenticated: false,
     # True when the ORIGINATING caller presented no credentials (public
     # tincture invocation). Ingress adapters may still mint an authenticated
@@ -206,7 +213,8 @@ defmodule Sanctum.Context do
           :namespace,
           :athanor_id,
           :request_id,
-          :api_key_id
+          :api_key_id,
+          :client_ip
         ] do
       val = Map.get(attrs, field)
 
@@ -264,6 +272,7 @@ defmodule Sanctum.Context do
       api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
       api_key_id: Map.get(attrs, :api_key_id),
+      client_ip: Map.get(attrs, :client_ip),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
       platform_admin: Map.get(attrs, :platform_admin, false) == true,

@@ -53,7 +53,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         Cyfr.LoggerContext.set_from_context(context)
 
         conn
-        |> assign(:context, context)
+        |> assign(:context, stamp_client_ip(conn, context))
         |> assign(:auth_method, kind)
 
       # No credential this plug recognises. Either none was presented — the
@@ -83,6 +83,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
             error_response(conn, :invalid_bearer, errors)
 
           context ->
+            context = stamp_client_ip(conn, context)
             Cyfr.LoggerContext.set_from_context(context)
             assign(conn, :context, context)
         end
@@ -153,6 +154,19 @@ defmodule EmissaryWeb.Plugs.Authenticate do
           {:error, :auth_provider_error}
       end
     end
+  end
+
+  # The caller's address, carried on the context so an ANONYMOUS action can
+  # charge a per-address budget without a conn. `Sanctum.MCP.SessionTool`'s
+  # device flows are the case: they are `auth: :anonymous` and reached only
+  # over `/mcp`, where the transport meters all methods together — so
+  # several addresses could still exhaust the global sign-in ceiling
+  # between them while none tripped the shared bucket.
+  #
+  # Not identity, and it authorizes nothing. `Sanctum.ClientIp.resolve/1`
+  # is the same trust boundary every limiter uses.
+  defp stamp_client_ip(conn, %Context{} = context) do
+    %{context | client_ip: Sanctum.ClientIp.resolve(conn)}
   end
 
   defp unauthenticated_context do

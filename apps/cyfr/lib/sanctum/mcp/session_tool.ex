@@ -168,15 +168,15 @@ defmodule Sanctum.MCP.SessionTool do
     {:error, {:invalid_argument, "Not authenticated."}}
   end
 
-  def handle(%Context{} = _ctx, %{"action" => "device_init"} = args) do
+  def handle(%Context{} = ctx, %{"action" => "device_init"} = args) do
     if device_flow_enabled?() do
       provider = Map.get(args, "provider", "github")
 
-      # No address to charge: this action reaches us only over the `/mcp`
-      # route, which `EmissaryWeb.Plugs.MCPRateLimit` already meters per
-      # client IP. The device-flow global ceiling sits above that budget,
-      # so one address cannot exhaust it.
-      case Sanctum.Auth.DeviceFlow.init_device_flow(provider, nil) do
+      # The caller's address, so this anonymous action has a budget of its
+      # own. The transport meters every `/mcp` method together, which
+      # bounds one address but not several between them — the global
+      # ceiling is a circuit breaker, not a per-caller budget.
+      case Sanctum.Auth.DeviceFlow.impl().init_device_flow(provider, ctx.client_ip) do
         {:ok, device_info} ->
           {:ok,
            %{
@@ -216,14 +216,14 @@ defmodule Sanctum.MCP.SessionTool do
   end
 
   def handle(
-        %Context{} = _ctx,
+        %Context{} = ctx,
         %{"action" => "device_poll", "device_code" => device_code} = args
       ) do
     if device_flow_enabled?() do
       provider = Map.get(args, "provider", "github")
 
-      # Metered per IP by `MCPRateLimit`, as `device_init` above.
-      case Sanctum.Auth.DeviceFlow.poll_for_session(provider, device_code, nil) do
+      # Charged to the caller's address, as `device_init` above.
+      case Sanctum.Auth.DeviceFlow.impl().poll_for_session(provider, device_code, ctx.client_ip) do
         {:ok, result} ->
           {:ok, Sanctum.Auth.DeviceFlow.wire(result)}
 

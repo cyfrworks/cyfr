@@ -285,4 +285,55 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       end
     end
   end
+
+  defmodule IpRecordingDeviceFlow do
+    # Records the address it was handed, the way `PrismWeb.LoginLiveTest`'s
+    # fake does for the console surface.
+    def init_device_flow(_provider, client_ip) do
+      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
+
+      {:ok,
+       %{
+         device_code: "dev-code",
+         user_code: "WXYZ-1234",
+         verification_uri: "https://github.com/login/device",
+         expires_in: 900,
+         interval: 60
+       }}
+    end
+  end
+
+  describe "the MCP surface charges an address too" do
+    # `/mcp` meters every method together at 120/min per IP, so one address
+    # was bounded but several between them were not: the global sign-in
+    # ceiling is a circuit breaker, not a per-caller budget. The context
+    # carries the resolved address now, so `device_init` gets its own
+    # bucket on every surface rather than only in the console.
+    test "session.device_init charges the context's client_ip" do
+      ctx = %{Sanctum.TestContext.local() | client_ip: "203.0.113.9", authenticated: false}
+
+      prev_flow = Application.get_env(:cyfr, :device_flow)
+      prev_provider = Application.get_env(:cyfr, :auth_provider)
+      Application.put_env(:cyfr, :device_flow, IpRecordingDeviceFlow)
+      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+      Application.delete_env(:cyfr, :device_flow_last_ip)
+
+      on_exit(fn ->
+        if prev_flow,
+          do: Application.put_env(:cyfr, :device_flow, prev_flow),
+          else: Application.delete_env(:cyfr, :device_flow)
+
+        if prev_provider,
+          do: Application.put_env(:cyfr, :auth_provider, prev_provider),
+          else: Application.delete_env(:cyfr, :auth_provider)
+
+        Application.delete_env(:cyfr, :device_flow_last_ip)
+      end)
+
+      Sanctum.MCP.SessionTool.handle(ctx, %{"action" => "device_init", "provider" => "github"})
+
+      assert Application.get_env(:cyfr, :device_flow_last_ip) == "203.0.113.9",
+             "the MCP device flow was charged no address"
+    end
+  end
 end
