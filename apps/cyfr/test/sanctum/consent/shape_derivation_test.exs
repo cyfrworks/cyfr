@@ -105,6 +105,99 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     assert stamp.activation_graph == live.graph
   end
 
+  describe "the activation closure is part of the shape" do
+    # The two halves of the same rule, and neither implies the other:
+    # re-releasing the SOURCE must still ride an existing versionless
+    # consent (that is what versionless means), while re-releasing a
+    # DEPENDENCY must not (that is new code under an old grant).
+    # The dep ref carries NO version. `Activation.resolve_dependency/2`
+    # pins an explicit one and follows `latest_row/4` only for a
+    # versionless ref — so a pinned dep cannot drift at all, and it is the
+    # versionless one this rule is about.
+    defp with_dep!(ctx, root_name, dep_name, dep_version, dep_reason) do
+      publish!(ctx, dep_name, dep_version, %{
+        manifest: Jason.encode!(roll_manifest(dep_reason))
+      })
+
+      publish!(ctx, root_name, "1.0.0", %{
+        type: "formula",
+        manifest:
+          Jason.encode!(%{
+            "dependencies" => %{
+              "static" => [%{"ref" => "reagent:local.#{dep_name}"}]
+            }
+          })
+      })
+    end
+
+    defp formula_head!(ctx, source_ref) do
+      {:ok, [profile]} = Source.DB.profiles(ctx, source_ref)
+      {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+      {profile, consent}
+    end
+
+    test "a dependency re-released with different code demands fresh consent", %{ctx: ctx} do
+      with_dep!(ctx, "dep-root", "dep-leaf", "1.0.0", "original")
+      {:ok, _} = Bootstrap.run(ctx)
+      {profile, _consent} = formula_head!(ctx, "formula:local.dep-root")
+
+      # The dependency's release digest moves; the ROOT's manifest is
+      # untouched. Before the closure entered the shape this was
+      # indistinguishable from a source re-release: the live shape came
+      # from the root's registry row alone, so `Decision.compare/6`
+      # answered `{:allow_record, …}` and ran the new leaf under the blob
+      # frozen at consent time.
+      publish!(ctx, "dep-leaf", "1.0.1", %{manifest: Jason.encode!(roll_manifest("reworded"))})
+
+      {:ok, root} = Compendium.Registry.get_latest(ctx, "dep-root", "local", "formula")
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, root)
+      {:ok, digest} = ShapeDerivation.live_digest(ctx, "formula:local.dep-root")
+
+      assert {:error, {:consent_required, payload}} =
+               Loader.load_root(ctx, profile,
+                 source: Source.DB,
+                 live: {:ok, live},
+                 live_shape_digest: digest
+               )
+
+      assert payload.profile_id == profile.id
+    end
+
+    test "re-releasing the source itself still rides the consent", %{ctx: ctx} do
+      with_dep!(ctx, "src-root", "src-leaf", "1.0.0", "original")
+      {:ok, _} = Bootstrap.run(ctx)
+      {profile, _consent} = formula_head!(ctx, "formula:local.src-root")
+
+      # Same dependency, new root release. The activation digest moves and
+      # the shape does not, so this is the `{:allow_record, …}` arm — the
+      # one the closure change must NOT break, or every versionless
+      # consent would re-prompt on every publish.
+      publish!(ctx, "src-root", "1.0.1", %{
+        type: "formula",
+        manifest:
+          Jason.encode!(%{
+            "description" => "reworded",
+            "dependencies" => %{
+              "static" => [%{"ref" => "reagent:local.src-leaf"}]
+            }
+          })
+      })
+
+      {:ok, root} = Compendium.Registry.get_latest(ctx, "src-root", "local", "formula")
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, root)
+      {:ok, digest} = ShapeDerivation.live_digest(ctx, "formula:local.src-root")
+
+      assert {:ok, _authority, stamp} =
+               Loader.load_root(ctx, profile,
+                 source: Source.DB,
+                 live: {:ok, live},
+                 live_shape_digest: digest
+               )
+
+      assert stamp.activation_graph == live.graph
+    end
+  end
+
   test "without a live shape the same drift fails closed to consent_required", %{ctx: ctx} do
     publish!(ctx, "shape-dark", "1.0.0", %{manifest: Jason.encode!(roll_manifest("original"))})
     {:ok, _} = Bootstrap.run(ctx)

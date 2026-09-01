@@ -41,7 +41,8 @@ defmodule Sanctum.Consent.ShapeDigest do
           optional(:needs) => [map()],
           optional(:caps) => map(),
           optional(:tool_actions) => [String.t()],
-          optional(:slots) => [String.t()]
+          optional(:slots) => [String.t()],
+          optional(:dependency_releases) => [String.t()]
         }
 
   @type error :: {:invalid_shape, atom(), String.t()} | {:invalid_digest_input, JCS.error()}
@@ -53,6 +54,15 @@ defmodule Sanctum.Consent.ShapeDigest do
   when it is `:versionless` — a pinned consent that does not name what it
   pins would be pinned to nothing, and a versionless one that names a
   release would change digest on every release and so never be versionless.
+
+  `:dependency_releases` names the activation closure's releases **except
+  the source's own** (`Sanctum.Consent.ShapeDerivation.dependency_releases/3`).
+  It is what stops a dependency from being re-released with different code
+  under an existing consent: without it the shape came from one registry
+  row, so `Loader.Decision` saw "activation digest moved, shape matched"
+  and recorded the new graph without asking anyone. Excluding the source's
+  own release is deliberate and is what keeps versionless versionless —
+  re-publishing the source still matches the shape.
 
   ## Examples
 
@@ -87,7 +97,8 @@ defmodule Sanctum.Consent.ShapeDigest do
     with :ok <-
            Normalize.only_keys(
              shape,
-             ~w(scope source_ref release_identity needs caps tool_actions slots)a,
+             ~w(scope source_ref release_identity needs caps tool_actions slots
+                dependency_releases)a,
              :invalid_shape
            ),
          {:ok, scope} <- Normalize.enum(shape, :scope, [:versionless, :pinned], :invalid_shape),
@@ -96,7 +107,9 @@ defmodule Sanctum.Consent.ShapeDigest do
          {:ok, needs} <- Normalize.needs(shape, :needs, :invalid_shape),
          {:ok, caps} <- Normalize.caps(shape, :caps, :invalid_shape),
          {:ok, tool_actions} <- Normalize.tool_actions(shape, :tool_actions, :invalid_shape),
-         {:ok, slots} <- Normalize.string_set(shape, :slots, :invalid_shape) do
+         {:ok, slots} <- Normalize.string_set(shape, :slots, :invalid_shape),
+         {:ok, dependency_releases} <-
+           Normalize.string_set(shape, :dependency_releases, :invalid_shape) do
       canonical =
         %{
           "scope" => Atom.to_string(scope),
@@ -104,7 +117,8 @@ defmodule Sanctum.Consent.ShapeDigest do
           "needs" => needs,
           "caps" => caps,
           "tool_actions" => tool_actions,
-          "slots" => slots
+          "slots" => slots,
+          "dependency_releases" => dependency_releases
         }
         |> Normalize.put_optional("release_identity", release_identity)
 

@@ -77,6 +77,22 @@ defmodule Sanctum.Consent.Loader.Decision do
   defp compare(:pinned, _granted, _live, _graph, _shape, true), do: :needs_consent_repin
   defp compare(:pinned, _granted, _live, _graph, _shape, false), do: :needs_consent
 
+  # "The activation moved but the shape did not" — a re-release of the
+  # SOURCE under an unchanged manifest. That is what versionless means, and
+  # it is why this arm exists.
+  #
+  # It used to cover a second, unintended case: a DEPENDENCY re-released
+  # with different code. The shape was derived from the source's registry
+  # row alone, so the closure could change underneath a consent and land
+  # here — new code running under the blob frozen at consent time, with
+  # capabilities the operator was never shown. `ShapeDerivation` now folds
+  # the closure's other releases into the shape, so that case moves to
+  # `:needs_consent` below while this one keeps working.
+  #
+  # Note the graph is returned, not persisted: `Loader.build_root/5` runs
+  # `activation: running.graph` against the STORED blob (D2 keys
+  # self-invocation on what is actually running). So the widening this
+  # closed was never "the blob grows" — it was "new code, old grant".
   defp compare(:versionless, _granted, live_digest, graph, :match, _local?),
     do: {:allow_record, %{digest: live_digest, graph: graph}}
 

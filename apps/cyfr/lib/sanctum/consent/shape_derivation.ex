@@ -12,11 +12,20 @@ defmodule Sanctum.Consent.ShapeDerivation do
   record" checkable at all — two implementations would drift and either
   re-consent every release (worst case) or falsely allow (unacceptable).
 
-  The shape is manifest-sourced, always: it carries the declared needs,
-  the flattened caps, the caps tools expanded against the live catalog,
-  and the slot vocabulary (sorted need names). A manifest with no `needs`
-  or `caps` blocks derives the empty ask — deny-all resources, no needs —
+  The shape is manifest-sourced: it carries the declared needs, the
+  flattened caps, the caps tools expanded against the live catalog, and
+  the slot vocabulary (sorted need names). A manifest with no `needs` or
+  `caps` blocks derives the empty ask — deny-all resources, no needs —
   exactly as if it declared empty blocks.
+
+  It also carries the activation closure's other releases
+  (`dependency_releases/3`) — the source's own is excluded. That is not a
+  manifest fact but a *world* fact, and it is here because the shape was
+  otherwise derived from ONE registry row: a versionless dependency could
+  be re-released with different code, the shape would match, and the
+  loader would run it under the grant frozen at consent time. Excluding
+  the source's own release is what keeps a versionless consent
+  versionless.
 
   The canonical caps encoding is dotted flat keys (`"egress.domains"`,
   `"limits.rate_limit.requests"`, …) over the digest's existing flat caps
@@ -69,7 +78,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc "The `ShapeDigest.compute/1` input derived from live state."
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref) do
-    with {:ok, needs, caps} <- manifest_blocks(ctx, source_ref) do
+    with {:ok, row, needs, caps} <- manifest_row(ctx, source_ref) do
       needs = needs || []
       caps = caps || Caps.from_manifest(%{"caps" => %{}})
 
@@ -80,8 +89,51 @@ defmodule Sanctum.Consent.ShapeDerivation do
          needs: digest_needs(needs),
          caps: digest_caps(caps),
          tool_actions: expand_tools(caps.tools),
-         slots: Enum.sort(Enum.map(needs, & &1.name))
+         slots: Enum.sort(Enum.map(needs, & &1.name)),
+         dependency_releases: dependency_releases(ctx, row, source_ref)
        }}
+    end
+  end
+
+  @doc """
+  The activation closure's releases, EXCLUDING the source's own.
+
+  Encoded as sorted `"<node_key>@<release_digest>"` strings — node keys are
+  `type:publisher.name` and digests are `sha256:…`, so neither can contain
+  the separator.
+
+  ## Why the source is excluded, and why that keeps versionless working
+
+  The shape derived here used to come from ONE registry row: the source
+  ref's. So a dependency could be re-released with different code and the
+  shape did not move — `Sanctum.Consent.Loader.Decision` saw "activation
+  digest changed, shape matched" and answered `{:allow_record, …}`, which
+  records the new graph and runs the new code under the blob frozen at
+  consent time. New code, no re-consent, and the operator was never shown
+  the dependency's capabilities in the first place.
+
+  Excluding the source's own release is what preserves the point of a
+  versionless consent: re-publishing the source itself still moves the
+  activation digest while leaving the shape alone, so it still lands on
+  `{:allow_record, …}`. That arm stays live and load-bearing — only the
+  DEPENDENCY case moves to `:needs_consent`.
+
+  A closure that cannot be resolved contributes nothing rather than
+  failing the shape: the loader has its own `{:incomplete, …}` path for an
+  unresolvable world (`setup_required`), and a shape that errored here
+  would report the wrong thing.
+  """
+  @spec dependency_releases(Sanctum.Context.t(), map(), String.t()) :: [String.t()]
+  def dependency_releases(ctx, row, source_ref) do
+    case Compendium.Activation.resolve(ctx, row) do
+      {:ok, %{graph: graph}} when is_map(graph) ->
+        graph
+        |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
+        |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
+        |> Enum.sort()
+
+      _unresolvable ->
+        []
     end
   end
 
@@ -94,10 +146,19 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @spec manifest_blocks(Sanctum.Context.t(), String.t()) ::
           {:ok, [map()] | nil, map() | nil} | {:error, term()}
   def manifest_blocks(ctx, source_ref) do
+    with {:ok, _row, needs, caps} <- manifest_row(ctx, source_ref) do
+      {:ok, needs, caps}
+    end
+  end
+
+  # The row rides along for `shape_input/2`, which needs it to resolve the
+  # activation closure; `manifest_blocks/2` above keeps the narrower shape
+  # its other callers read.
+  defp manifest_row(ctx, source_ref) do
     with {:ok, ref} <- Sanctum.ComponentRef.parse(source_ref),
          {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       manifest = Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
-      {:ok, Needs.from_manifest(manifest), Caps.from_manifest(manifest)}
+      {:ok, row, Needs.from_manifest(manifest), Caps.from_manifest(manifest)}
     end
   end
 
