@@ -38,7 +38,7 @@ defmodule Arca.Overlay.UnitLock do
   deployment-wide version would only need a different holder.
 
   **Single-writer-node is therefore an invariant of overlaid storage**, not
-  a convenience: `Arca.CronSchedule.claim/3` lets several nodes share one
+  a convenience: `Arca.CronSchedule.claim/4` lets several nodes share one
   Postgres and race for schedules, but nothing serializes `commit_unit`
   across nodes — node B's clean-slate can delete files node A already
   acknowledged. Until this lock has a shared holder (a Postgres advisory

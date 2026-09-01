@@ -228,16 +228,55 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Take the schedule for one firing: a compare-and-set that succeeds only when
-  no live claim is held. Several nodes sharing the database race here and
-  exactly one wins; a claimant that dies is superseded once its claim lapses.
-  Returns `:claimed` or `:held`.
+  Take the schedule for one OCCURRENCE: a compare-and-set that advances
+  `next_run_at` in the same statement that records the claim. Several nodes
+  sharing the database race here and exactly one wins. Returns `:claimed` or
+  `:held`.
+
+  `next_run` is the occurrence after the one being taken — the caller
+  computes it from the cron expression.
+
+  ## Why the advance is part of the CAS
+
+  It used to set only `claimed_by`/`claim_expires_at`, and `next_run_at`
+  moved later in a separate `update/3` from the scheduler. So the claim
+  guarded the EXECUTION, not the occurrence: node A could claim, fire,
+  finish and release inside a second, and node B's jittered timer for the
+  SAME occurrence then found a free claim and ran it again. Only the
+  per-node `running` MapSet stood in the way, and that is per node.
+
+  With `next_run_at <= now` in the `where` and the advance in the `set`,
+  the loser's CAS matches nothing and answers `:held`.
+
+  ## The trade this makes: at-least-once becomes at-most-once
+
+  The occurrence is consumed at claim time, so a node that claims and
+  advances and then dies before its task runs SKIPS that occurrence rather
+  than having another node repeat it. That is the deliberate choice — a
+  duplicate side effect is worse here than a missed one — and it is why
+  `Opus.CronScheduler` releases claims in `terminate/2`: a clean shutdown
+  should not leave a stale claimant behind, even though the occurrence
+  itself has already moved on.
+
+  A run that outlives its own interval can still overlap the next
+  occurrence on ANOTHER node; the per-node `running` set prevents it on
+  the same one. Serialising across nodes would mean holding the claim for
+  the whole run, which trades the overlap for a stall whenever a node dies
+  mid-execution.
+
+  That is not hypothetical bookkeeping: `Opus.CronScheduler` gives the
+  marker back in `run_claimed_schedule/6`, immediately after this returns
+  `:claimed` and before the task is spawned. Held for the run instead, the
+  `claim_expires_at` guard above would make every LATER occurrence answer
+  `:held` cluster-wide until the run finished — the stall this paragraph
+  says was declined — so the release point is what keeps it honest.
   """
-  @spec claim(String.t(), String.t(), pos_integer()) ::
+  @spec claim(String.t(), String.t(), pos_integer(), DateTime.t()) ::
           :claimed | :held | {:error, :database_error}
   # arca:unscoped-ok a claim races nodes over one known schedule id, before
   # any context exists; the id came from `active_schedules/0`.
-  def claim(id, node_name, ttl_seconds) when is_binary(id) and is_binary(node_name) do
+  def claim(id, node_name, ttl_seconds, %DateTime{} = next_run)
+      when is_binary(id) and is_binary(node_name) do
     Errors.with_db_rescue("CronSchedule.claim", fn ->
       now = DateTime.utc_now()
       expires = DateTime.add(now, ttl_seconds, :second)
@@ -245,9 +284,13 @@ defmodule Arca.CronSchedule do
       {count, _} =
         from(s in __MODULE__,
           where: s.id == ^id and s.status == "active",
-          where: is_nil(s.claim_expires_at) or s.claim_expires_at < ^now
+          where: is_nil(s.claim_expires_at) or s.claim_expires_at < ^now,
+          # The occurrence itself. Whoever advances it first has taken it.
+          where: not is_nil(s.next_run_at) and s.next_run_at <= ^now
         )
-        |> Arca.Repo.update_all(set: [claimed_by: node_name, claim_expires_at: expires])
+        |> Arca.Repo.update_all(
+          set: [claimed_by: node_name, claim_expires_at: expires, next_run_at: next_run]
+        )
 
       if count == 1, do: :claimed, else: :held
     end)
@@ -274,21 +317,27 @@ defmodule Arca.CronSchedule do
           {:ok, %__MODULE__{}}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
+  #
+  # `inc:` rather than read-then-write. `schedule.run_count + 1` over a row
+  # read a moment earlier is a lost update whenever two nodes fire two
+  # schedules' runs concurrently — and this file already argues the
+  # pattern: `claim/4` above is a compare-and-set precisely because
+  # "several nodes sharing the database race here". There are no row locks
+  # anywhere in this repo (a deliberate SQLite+Postgres choice), so
+  # read-then-write is never safe; `update_all` with `inc:` is atomic in
+  # one round-trip and drops the SELECT.
   def record_run(%Context{} = ctx, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do
-        schedule
-        |> cast(
-          %{
-            last_run_at: DateTime.utc_now(),
-            last_execution_id: execution_id,
-            run_count: schedule.run_count + 1,
-            updated_at: DateTime.utc_now()
-          },
-          [:last_run_at, :last_execution_id, :run_count, :updated_at]
+        now = DateTime.utc_now()
+
+        from(s in __MODULE__, where: s.id == ^schedule.id)
+        |> Arca.Repo.update_all(
+          set: [last_run_at: now, last_execution_id: execution_id, updated_at: now],
+          inc: [run_count: 1]
         )
-        |> Arca.Repo.update()
-        |> mapped_validation()
+
+        get_tenant(ctx, id)
       end
     end)
   end
@@ -298,19 +347,17 @@ defmodule Arca.CronSchedule do
           {:ok, %__MODULE__{}}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
+  # Atomic increment, for the reason spelled out at `record_run/3`.
   def record_error(%Context{} = ctx, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
       with {:ok, schedule} <- get_tenant(ctx, id) do
-        schedule
-        |> cast(
-          %{
-            error_count: schedule.error_count + 1,
-            updated_at: DateTime.utc_now()
-          },
-          [:error_count, :updated_at]
+        from(s in __MODULE__, where: s.id == ^schedule.id)
+        |> Arca.Repo.update_all(
+          set: [updated_at: DateTime.utc_now()],
+          inc: [error_count: 1]
         )
-        |> Arca.Repo.update()
-        |> mapped_validation()
+
+        get_tenant(ctx, id)
       end
     end)
   end

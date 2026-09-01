@@ -5,9 +5,19 @@ defmodule Opus.CronScheduler do
   @moduledoc """
   OTP-native cron scheduler for recurring WASM component execution.
 
-  Uses `Process.send_after/3` for timer management. Skips missed runs on
-  restart — only computes next future run. Prevents overlapping executions
-  of the same schedule.
+  Uses `Process.send_after/3` for timer management.
+
+  Each occurrence fires at most once across the cluster:
+  `Arca.CronSchedule.claim/4` takes it by advancing `next_run_at` in the
+  same compare-and-set, and the loser answers `:held`. `claimed_by` is a
+  liveness marker, released as soon as the occurrence is won — not held
+  for the run.
+
+  Overlap is therefore per NODE, not per cluster: the `running` MapSet
+  stops a schedule overlapping itself here, while a run that outlives its
+  own interval can overlap the next occurrence on another node. Restart
+  arms timers and writes no cursor; a missed occurrence is skipped by the
+  CAS rather than by a boot-time recompute.
   """
 
   use GenServer
@@ -19,35 +29,18 @@ defmodule Opus.CronScheduler do
   @db_fire_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError]
   @db_timer_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, ArgumentError]
 
-  # A claim must outlive the longest execution a schedule may run, or a
-  # still-running fire loses its claim and another node picks the schedule up
-  # and fires it again. This was a flat 900s while the platform ceiling
-  # permits a 30-minute timeout (`Sanctum.Policy.Ceiling`), so any schedule
-  # running past 15 minutes was double-fireable on a multi-node deployment —
-  # single-node was saved only by the in-memory `running` set.
+  # The claim no longer has to outlive the execution: `Arca.CronSchedule.claim/4`
+  # advances `next_run_at` in the same compare-and-set, so the OCCURRENCE is
+  # what is taken and `claimed_by` is only a liveness marker. It is released
+  # as soon as the occurrence is won (`run_claimed_schedule/6`), which is why
+  # this is a short lease rather than `ceiling + headroom`: it now covers the
+  # gap between the CAS and that release, not a 30-minute run.
   #
-  # Derived from the ceiling, plus headroom for the semaphore wait and the
-  # record write that bracket the execution itself, so raising the ceiling
-  # cannot silently reintroduce the gap.
-  @claim_headroom_seconds 300
-  def claim_ttl_seconds do
-    ceiling_timeout_seconds() + @claim_headroom_seconds
-  end
-
-  defp ceiling_timeout_seconds do
-    case Sanctum.Policy.Ceiling.platform_ceiling() do
-      %{timeout: timeout} ->
-        case Sanctum.Limits.parse_duration(timeout) do
-          {:ok, ms} -> div(ms, 1000)
-          # An unparseable ceiling is a bug upstream; take the widest value
-          # the ceiling could mean rather than a claim that expires early.
-          _ -> 30 * 60
-        end
-
-      _ ->
-        30 * 60
-    end
-  end
+  # A node that dies inside that window strands the marker for this long —
+  # and strands nothing else, because the occurrence has already moved and
+  # the next one is a different row value.
+  @claim_lease_seconds 60
+  def claim_ttl_seconds, do: @claim_lease_seconds
 
   @max_timer_ms 60 * 60 * 1_000
 
@@ -241,6 +234,20 @@ defmodule Opus.CronScheduler do
       Logger.info("[CronScheduler] shutting down with running schedules: #{ids}")
     end
 
+    # A belt for anything still marked: the firing path gives the marker
+    # back as soon as it wins the occurrence, so in the ordinary case this
+    # finds nothing. It matters for a schedule killed between the CAS and
+    # that release. The occurrence has already advanced either way, so this
+    # re-runs nothing; it clears a claimant that is gone.
+    #
+    # Best-effort by construction: `release_claim/2` matches on
+    # `claimed_by`, so it can only release this node's own, and it
+    # fail-opens on a database error because the lease is still the
+    # backstop.
+    Enum.each(state.running, fn schedule_id ->
+      Arca.CronSchedule.release_claim(schedule_id, node_name())
+    end)
+
     :ok
   end
 
@@ -295,22 +302,19 @@ defmodule Opus.CronScheduler do
   # and can never be cancelled. One bad schedule now logs and the rest keep
   # their timers.
   defp load_one_schedule(schedule, acc) do
-    # Recompute next_run from now (skip missed runs)
+    # `next_run_at` is the occurrence cursor the claim CAS competes over, so
+    # this no longer writes it. It used to recompute from `now` on every boot
+    # and every `:reload`, with a plain `update/3` and no compare — the same
+    # separate-writer shape `Arca.CronSchedule.claim/4` was introduced to
+    # remove. On a multi-node deployment a restarting node could move the
+    # cursor out from under another node's in-flight firing, and on any node
+    # it silently skipped an occurrence that was already due.
+    #
+    # A schedule whose cursor is NULL or stale is repaired by the claim
+    # itself: the CAS refuses it, and `Opus.CronMcp` sets the cursor on
+    # create and resume. Booting only arms the timer.
     case compute_next_run(schedule.cron_expression) do
-      {:ok, next_run} ->
-        ctx =
-          Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
-
-        case Arca.CronSchedule.update(ctx, schedule.id, %{next_run_at: next_run}) do
-          {:ok, _} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning(
-              "[CronScheduler] failed to update next_run_at for #{schedule.id}: #{inspect(reason)}"
-            )
-        end
-
+      {:ok, _next_run} ->
         schedule_timer(schedule.id, acc)
 
       {:error, reason} ->
@@ -477,14 +481,17 @@ defmodule Opus.CronScheduler do
             schedule_timer(schedule_id, state)
 
           {:ok, input} ->
-            case Arca.CronSchedule.claim(schedule_id, node_name(), claim_ttl_seconds()) do
+            case claim_occurrence(schedule_id, schedule) do
               {:error, :database_error} ->
                 retry_later(schedule_id, state)
 
               :held ->
-                # Another node holds this firing; take the next one.
+                # The occurrence is gone: either another node advanced it
+                # first, or it was not due. NOT necessarily a rival node —
+                # saying "claimed elsewhere" sent single-node operators
+                # looking for a second scheduler that does not exist.
                 Logger.debug(
-                  "[CronScheduler] schedule #{schedule_id} claimed elsewhere — skipping"
+                  "[CronScheduler] schedule #{schedule_id} occurrence already taken — skipping"
                 )
 
                 schedule_timer(schedule_id, state)
@@ -496,8 +503,39 @@ defmodule Opus.CronScheduler do
     end
   end
 
+  # Claiming and advancing are one statement: the occurrence is what is
+  # being taken, not the right to execute. An expression that no longer
+  # parses cannot yield a next occurrence — refuse the claim rather than
+  # fire an occurrence nothing can advance past, which would re-fire on
+  # every tick forever.
+  defp claim_occurrence(schedule_id, schedule) do
+    case compute_next_run(schedule.cron_expression) do
+      {:ok, next_run} ->
+        Arca.CronSchedule.claim(schedule_id, node_name(), claim_ttl_seconds(), next_run)
+
+      _unparseable ->
+        Logger.warning(
+          "[CronScheduler] schedule #{schedule_id} has an unusable cron expression — not claiming"
+        )
+
+        :held
+    end
+  end
+
   defp run_claimed_schedule(schedule_id, schedule, ctx, exec_reference, input, state) do
     execution_id = Opus.ExecutionRecord.generate_id()
+
+    # The occurrence is already ours — `claim_occurrence/2` advanced
+    # `next_run_at` in the same statement that took it, so no other node can
+    # win this firing whatever `claimed_by` says. Give the marker back now
+    # rather than at :DOWN: held for the whole run it would serialize every
+    # LATER occurrence across nodes too, which is the stall the moduledoc
+    # says was declined, and a hard kill would strand it for the lease.
+    #
+    # Same-node overlap is still prevented by the `running` MapSet; a run
+    # that outlives its own interval can overlap the next occurrence on
+    # ANOTHER node, which is the trade `Arca.CronSchedule.claim/4` states.
+    _ = Arca.CronSchedule.release_claim(schedule_id, node_name())
 
     # Record execution start on schedule
     case Arca.CronSchedule.record_run(ctx, schedule_id, execution_id) do
@@ -510,22 +548,12 @@ defmodule Opus.CronScheduler do
         )
     end
 
-    # Compute and persist next_run_at
-    case compute_next_run(schedule.cron_expression) do
-      {:ok, next_run} ->
-        case Arca.CronSchedule.update(ctx, schedule_id, %{next_run_at: next_run}) do
-          {:ok, _} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning(
-              "[CronScheduler] failed to update next_run_at for #{schedule_id}: #{inspect(reason)}"
-            )
-        end
-
-      _ ->
-        :ok
-    end
+    # `next_run_at` is NOT advanced here any more: `claim_occurrence/2`
+    # moved it in the same compare-and-set that took the occurrence. Doing
+    # it separately was the double-fire — the claim guarded the execution,
+    # so a run shorter than the inter-node jitter released before another
+    # node's timer for the same occurrence arrived, and that node found a
+    # free claim and an unadvanced `next_run_at`.
 
     # Spawn monitored task
     logger_metadata = Cyfr.LoggerContext.capture()
