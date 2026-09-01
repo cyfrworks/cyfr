@@ -299,6 +299,21 @@ jobs:
             vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
             if [ -d "$vdir" ]; then bad="$bad"$'\n'"$f"; fi
           done <<< "$(git diff --name-only --diff-filter=DR "$base"..HEAD -- 'seed/components/**')"
+          # An ADDED file inside a version directory that ALREADY SHIPPED is
+          # new bytes under a frozen version — the overlay serves it straight
+          # from the seed to every athanor that never materialized that unit,
+          # and misses every one that did. Only M, D and R were filtered, so
+          # the one mutation the guard's own comment describes as "new bytes"
+          # was the one it did not look for. A file added inside a
+          # brand-new version directory is the supported way to ship changes,
+          # so the test is whether the directory existed at `base`.
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
+            if git rev-parse --verify --quiet "$base:$vdir" >/dev/null 2>&1; then
+              bad="$bad"$'\n'"$f"
+            fi
+          done <<< "$(git diff --name-only --diff-filter=A "$base"..HEAD -- 'seed/components/**')"
           bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
           if [ -n "$bad" ]; then
             echo "::error::files changed inside existing seed/components version directories — ship a new version instead"
@@ -439,7 +454,12 @@ jobs:
             echo "::error::.gitignore must ignore /data/ and carry no components/* allowlist pair"; fail=1
           fi
           # The template `cyfr init` writes must agree with the repo's own.
-          if ! grep -q '/data/' apps/codex/cmd/lifecycle.go || grep -qE 'components/\*$|!components/_bundle/' apps/codex/cmd/lifecycle.go; then
+          # Anchored the way the .gitignore check above is: an unanchored
+          # '/data/' also matched the config template's `./data/cyfr.db` and a
+          # code comment, so the ignore entry this guards could be deleted —
+          # every `cyfr init` project then committing its runtime state — with
+          # the gate still green.
+          if ! grep -q '^/data/$' apps/codex/cmd/lifecycle.go || grep -qE 'components/\*$|!components/_bundle/' apps/codex/cmd/lifecycle.go; then
             echo "::error::lifecycle.go .gitignore template must ignore /data/ and carry no components/* allowlist pair"; fail=1
           fi
           # Operator-facing docs describe the unified athanor layout — not the
@@ -470,8 +490,14 @@ jobs:
           # — compose mounts, the Docker seed bake, the init template, the
           # scaffold tarball. Witness each spelling so a layout rename in
           # Arca.Storage cannot silently drift past them.
+          # A comment that MENTIONS the spelling is not the spelling. Strip
+          # whole-line comments first, or deleting the code a guard names is
+          # masked by the paragraph explaining it — which is exactly what
+          # `docker-entrypoint.sh '/app/seed/aqua'` did: the string sits in
+          # three header comments above the seeding block it guards, so the
+          # block could go and the gate would stay green.
           assert_spelling() {
-            if ! grep -qF -- "$2" "$1"; then
+            if ! grep -vE '^[[:space:]]*(#|//)' "$1" | grep -qF -- "$2"; then
               echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1
             fi
           }

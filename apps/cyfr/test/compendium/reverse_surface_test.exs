@@ -45,8 +45,15 @@ defmodule Compendium.ReverseSurfaceTest do
     "Compendium.Registry",
     "Compendium.Resolver",
 
-    # Provisioning seeds a new athanor's AQUA from the install template.
+    # Provisioning seeds a new athanor's AQUA from the install template,
+    # scans the overlay tree it just wrote, and pulls the bundle's
+    # dependency closure. These two were reached through
+    # `alias Compendium.{AutoIndexer, Pull}` (`Sanctum.Provisioning`), which
+    # no roster regex could see, so they were absent from this list while
+    # being called five times.
     "Compendium.AquaTemplate",
+    "Compendium.AutoIndexer",
+    "Compendium.Pull",
 
     # First sign-in talks to cyfr.run: the legal-acceptance refusal is an
     # OCI error the door has to read, and the registry host is where the

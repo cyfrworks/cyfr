@@ -119,24 +119,26 @@ defmodule Cyfr.NamespaceDirectionTest do
   @domain_dirs ["apps/cyfr/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
 
   @domain_web_calls [
-    # The local fallback for the OAuth redirect origin. `CYFR_PUBLIC_URL` is
-    # the configured answer (and the only one carrying a scheme); this is what
-    # a dev box with nothing set uses.
-    {"apps/cyfr/lib/sanctum/vault/oauth_grant.ex", "EmissaryWeb.Endpoint"},
     # `Aqua.Actions` validates an agent's navigation intents against the
     # console's real route table, so a link it emits cannot 404.
     {"apps/cyfr/lib/aqua/actions.ex", "EmissaryWeb.Router"}
   ]
 
+  # `{rel, module}` for every live domain→web reach, with its line.
+  defp domain_web_reaches do
+    for dir <- @domain_dirs,
+        path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
+        rel = Path.relative_to(path, root()),
+        {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
+        [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),
+        do: {{rel, module}, n}
+  end
+
   test "the domain namespaces reach the web layer only where it is written down" do
     allowed = MapSet.new(@domain_web_calls)
 
     found =
-      for dir <- @domain_dirs,
-          path <- Path.wildcard(Path.join(root(), dir <> "/**/*.ex")),
-          rel = Path.relative_to(path, root()),
-          {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
-          [module] <- Regex.scan(~r/\bEmissaryWeb\.[A-Z]\w+/, line, capture: :first),
+      for {{rel, module}, n} <- domain_web_reaches(),
           not MapSet.member?(allowed, {rel, module}),
           do: "#{rel}:#{n}: #{module}"
 
@@ -150,6 +152,28 @@ defmodule Cyfr.NamespaceDirectionTest do
            The auth domain reads key material and the public origin from
            CONFIG, not from the endpoint (`Sanctum.TinctureAuth` says why).
            If a new reach is right, add it above with a line saying so.
+           """
+  end
+
+  # The inverse the siblings already assert (`Cyfr.EmissarySurfaceTest`,
+  # `Compendium.ReverseSurfaceTest`, `Opus.HostSurfaceTest`) and this one did
+  # not. An exemption whose call is gone stops describing the tree and starts
+  # holding the door open for it: the `oauth_grant.ex → EmissaryWeb.Endpoint`
+  # row outlived its call by a refactor to `Cyfr.RuntimeConfig.origin/0`,
+  # and nothing here noticed.
+  test "every domain→web exemption still names a live reach" do
+    reached = MapSet.new(domain_web_reaches(), fn {pair, _n} -> pair end)
+
+    stale = Enum.reject(@domain_web_calls, &MapSet.member?(reached, &1))
+
+    assert stale == [],
+           """
+           These exemptions no longer match any reach in the tree:
+
+           #{Enum.map_join(stale, "\n", fn {rel, module} -> "  #{rel} → #{module}" end)}
+
+           The call was removed or moved. Delete the row — a standing
+           exemption readmits the reach it was written to allow.
            """
   end
 

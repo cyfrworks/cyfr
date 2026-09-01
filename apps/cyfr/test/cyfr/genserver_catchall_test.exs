@@ -37,12 +37,19 @@ defmodule Cyfr.GenServerCatchallTest do
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
     Emissary.MCP.RunningTasks => "probing would race real request tracking",
-    Emissary.MCP.Progress => "started per subscription, not app-named at boot",
     Arca.Overlay.UnitLock => "holds live commit locks — a probe interleaves them",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
-    Sanctum.Consent.Source.Memory => "started only when the memory consent source is configured",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
+
+  # Two rows were removed from `@not_probed` because neither module could
+  # ever have reached the derivation below, so each excused nothing:
+  # `Emissary.MCP.Progress` is a Registry wrapper, not a GenServer (its
+  # `child_spec/1` returns `Registry.child_spec/1`), and
+  # `Sanctum.Consent.Source.Memory` is a named GenServer that spells no
+  # catch-all at all — unlike its sibling `Sanctum.Consent.Proof.Memory`,
+  # which has one. If that catch-all is ever added, the derivation will ask
+  # for a row and the reason can be written then.
 
   describe "catch-all handle_info/2" do
     for {mod, label} <- @genservers do
@@ -93,7 +100,11 @@ defmodule Cyfr.GenServerCatchallTest do
         for path <- Path.wildcard(Path.join(root, "apps/cyfr/lib/**/*.ex")),
             source = Cyfr.Test.SourceTree.read(path),
             String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
-            String.contains?(source, "name: __MODULE__"),
+            # Two spellings register the app-wide name, and matching only the
+            # first hid `Sanctum.Authority.BudgetGuard` — a real adopter —
+            # from this roster entirely, which made its `@not_probed` row
+            # inert rather than load-bearing.
+            String.match?(source, ~r/name: __MODULE__|:name, __MODULE__/),
             [_, mod] <-
               Regex.scan(~r/defmodule ([\w.]+) do/, source, capture: :all) |> Enum.take(1),
             do: Module.concat([mod])

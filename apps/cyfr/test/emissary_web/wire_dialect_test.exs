@@ -21,11 +21,10 @@ defmodule EmissaryWeb.WireDialectTest do
   @allowed %{
     # 202 with an empty body for JSON-RPC notifications — nothing to render.
     "controllers/mcp_controller.ex" => "202 empty body for notifications",
-    # The Prometheus scrape surface speaks text/plain in both arms — its
-    # clients are scrapers, not API consumers.
+    # The Prometheus scrape surface speaks text/plain in all three arms —
+    # its clients are scrapers, not API consumers. (404 disabled, 401
+    # unauthorized once `CYFR_METRICS_TOKEN` is set, 200 metrics.)
     "metrics_plug.ex" => "the Prometheus scrape surface speaks text/plain",
-    # The one no-session HTML shell — a browser page, not an API answer.
-    "minimal_page.ex" => "renders the console's no-session HTML shell",
     # 204 empty preflight body.
     "plugs/cors.ex" => "204 empty preflight body",
     # A browser hitting a headless node reads a sentence, not JSON.

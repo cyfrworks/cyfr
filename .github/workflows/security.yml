@@ -69,25 +69,29 @@ jobs:
       - name: Check retired packages
         # Newer Hex also checks security advisories in hex.audit (an id here
         # matches the advisory's primary ID or any alias). Same accepted
-        # no-fix advisories as the deps.audit step below — see its comment.
+        # no-fix advisory as the deps.audit step below — see its comment.
         env:
-          HEX_IGNORE_ADVISORIES: "CVE-2026-32686,CVE-2026-43969,CVE-2026-43966"
+          HEX_IGNORE_ADVISORIES: "CVE-2026-32686"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
-        # Three advisories have no actionable fix and are explicitly accepted
-        # (each listed under BOTH its GHSA and EEF-CVE ids — the advisory DB
-        # re-keyed existing entries under EEF ids in 2026-07, which un-ignored
-        # them):
+        # ONE advisory has no actionable fix and is explicitly accepted, listed
+        # under BOTH its GHSA and EEF-CVE ids (the advisory DB re-keyed existing
+        # entries under EEF ids in 2026-07, which un-ignored them):
         #   GHSA-rhv4-8758-jx7v / EEF-CVE-2026-32686 (decimal, moderate DoS) —
         #     fixed only in decimal 3.x, which ecto's `decimal ~> 2.0`
         #     requirement disallows; revisit when ecto supports decimal 3.
-        #   GHSA-g2wm-735q-3f56 / EEF-CVE-2026-43969 (cowlib, low cookie
-        #     injection) — no patched cowlib release exists yet.
-        #   EEF-CVE-2026-43966 (cowlib, medium response splitting via non-VCHAR
-        #     bytes) — no patched cowlib release exists yet (2.18.0 is latest);
-        #     cowlib is transitive and Bandit serves HTTP in production.
-        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56,EEF-CVE-2026-32686,EEF-CVE-2026-43969,EEF-CVE-2026-43966"
+        #     Verified still binding: mix.lock pins decimal 2.4.1, and ecto is
+        #     the only dependency in the lock that does not allow `~> 3.0`.
+        #
+        # The two cowlib entries that stood here — GHSA-g2wm-735q-3f56 /
+        # EEF-CVE-2026-43969 and EEF-CVE-2026-43966 — were justified with "no
+        # patched cowlib release exists yet (2.18.0 is latest)". That stopped
+        # being true when cowlib went to 2.19.0, and the suppressions outlived
+        # the fix by three weeks: an ignore list with no expiry keeps a gate
+        # quiet about the thing it was told to watch, and would have stayed
+        # quiet through a downgrade back under the patch.
+        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,EEF-CVE-2026-32686"
 
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused

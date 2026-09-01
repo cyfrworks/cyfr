@@ -12,21 +12,38 @@ defmodule Cyfr.WebDirectionTest do
   out, so this crossing had no guard and carried five back-edges:
   `SafeRedirect` (now a prism_web module — its only callers were console
   flows) and the tincture rate-limit knobs (now `Cyfr.RuntimeConfig`).
-  The one deliberate exception is the endpoint itself: there is exactly one
-  (`EmissaryWeb.Endpoint`), and building the public URL for a copy-link is
-  reading a global fact, not reaching into the transport.
+
+  Two deliberate exceptions, and the second is the wider one. Building the
+  public URL for a copy-link reads a global fact off `EmissaryWeb.Endpoint`
+  rather than reaching into the transport. And `PrismWeb.verified_routes/0`
+  names the endpoint, the router AND `EmissaryWeb.static_paths/0`, because
+  that is the triple `use Phoenix.VerifiedRoutes` takes — injected by
+  `use PrismWeb, :live_view` into every console LiveView, which makes it the
+  widest crossing here.
+
+  This file's glob used to be `prism_web/**/*.ex`, which never matches the
+  sibling root module `prism_web.ex` — so the three-name reach lived in the
+  one file the guard could not see, and the paragraph above used to claim
+  there was exactly one.
   """
 
   use ExUnit.Case, async: true
 
-  @allowed ~w(EmissaryWeb.Endpoint)
+  @allowed ~w(EmissaryWeb EmissaryWeb.Endpoint EmissaryWeb.Router)
 
   @namespace ~r/\bEmissaryWeb(?:\.[A-Z]\w+)*\b/
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
+  # The namespace is a directory AND a sibling root module; `dir/**/*.ex`
+  # matches only the first.
+  defp sources do
+    Path.wildcard(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")) ++
+      Path.wildcard(Path.join(root(), "apps/cyfr/lib/prism_web.ex"))
+  end
+
   defp reached do
-    for path <- Path.wildcard(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")),
+    for path <- sources(),
         line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new() do

@@ -818,13 +818,14 @@ defmodule Compendium.Registry do
     # into it, with the `rm_rf!` below removing their tree instead of ours.
     tmp_dir = Path.join(System.tmp_dir!(), "cyfr_tincture_#{Compendium.Archive.scratch_id()}")
 
-    # arca:bypass-ok=D — `:erl_tar.extract` requires a real local FS to write
-    # to. After extraction we validate the bundle and write the validated
-    # files back through Arca via `store_tincture_files/4`. Entry-path
-    # traversal is OTP's own guarantee, not ours: erl_tar routes every
-    # entry through `filelib:safe_relative_path/2` and throws
-    # `unsafe_path`/`unsafe_symlink` — an invisible dependency worth
-    # naming, since nothing here re-checks it.
+    # `:erl_tar.extract` requires a real local FS to write to. After
+    # extraction we validate the bundle and write the validated files back
+    # through Arca via `store_tincture_files/4`. Entry-path traversal is
+    # OTP's own guarantee, not ours: erl_tar routes every entry through
+    # `filelib:safe_relative_path/2` and throws `unsafe_path`/`unsafe_symlink`
+    # — an invisible dependency worth naming, since nothing here re-checks it.
+    #
+    # arca:bypass-ok=D — the scratch dir those extracted bytes land in.
     File.mkdir_p!(tmp_dir)
 
     try do
