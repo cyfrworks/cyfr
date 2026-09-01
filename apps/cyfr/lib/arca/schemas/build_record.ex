@@ -45,6 +45,14 @@ defmodule Arca.Schemas.BuildRecord do
     # The id is caller-supplied, so a collision is an ordinary answer, not an
     # exception: `Cyfr.BuildRecords.record_started/3` reads it as "that id
     # belongs to another athanor" after its own tenant-scoped update missed.
+    #
+    # Both spellings, because `id` is the PRIMARY KEY (see the
+    # 20260825 migration) and the two backends name that constraint
+    # differently: Postgres reports `build_records_pkey`, SQLite the
+    # index-shaped name. Declaring only the latter made this raise an
+    # `Ecto.ConstraintError` on Postgres instead of answering — the one
+    # thing the comment above says it must not do.
     |> unique_constraint(:id, name: "build_records_id_index")
+    |> unique_constraint(:id, name: "build_records_pkey")
   end
 end
