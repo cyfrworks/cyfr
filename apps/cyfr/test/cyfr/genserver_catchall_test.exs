@@ -39,17 +39,16 @@ defmodule Cyfr.GenServerCatchallTest do
     Emissary.MCP.RunningTasks => "probing would race real request tracking",
     Arca.Overlay.UnitLock => "holds live commit locks — a probe interleaves them",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
+    Sanctum.Consent.Source.Memory => "never supervised — a test starts it per case",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
 
-  # Two rows were removed from `@not_probed` because neither module could
-  # ever have reached the derivation below, so each excused nothing:
-  # `Emissary.MCP.Progress` is a Registry wrapper, not a GenServer (its
-  # `child_spec/1` returns `Registry.child_spec/1`), and
-  # `Sanctum.Consent.Source.Memory` is a named GenServer that spells no
-  # catch-all at all — unlike its sibling `Sanctum.Consent.Proof.Memory`,
-  # which has one. If that catch-all is ever added, the derivation will ask
-  # for a row and the reason can be written then.
+  # `Emissary.MCP.Progress` left `@not_probed`: it is a Registry wrapper, not
+  # a GenServer (its `child_spec/1` returns `Registry.child_spec/1`), so it
+  # could never have reached the derivation below and its row excused
+  # nothing. `Sanctum.Consent.Source.Memory` stayed, but for the other
+  # reason: it had no catch-all at all, so the row described a protection
+  # the module did not have. It has one now, and the row is load-bearing.
 
   describe "catch-all handle_info/2" do
     for {mod, label} <- @genservers do

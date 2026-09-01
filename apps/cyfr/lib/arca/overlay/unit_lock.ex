@@ -61,8 +61,11 @@ defmodule Arca.Overlay.UnitLock do
   holds it.
 
   Returns whatever `fun` returns, or `{:error, :unit_locked}` if the wait
-  times out. The lock is released when `fun` returns and when the caller
-  dies, so a crash mid-commit cannot strand it.
+  times out. The lock is released three ways, and it needs all three: when
+  `fun` returns, when the caller dies, and when a caller that timed out is
+  handed the turn anyway — `acquire/2`'s `catch :exit` says so, and the
+  server acts on it whether the abandoning process was still queued or had
+  just become the holder.
   """
   @spec with_lock(term(), (-> result), non_neg_integer()) :: result | {:error, :unit_locked}
         when result: term()
@@ -137,6 +140,19 @@ defmodule Arca.Overlay.UnitLock do
   @impl true
   def handle_cast({:abandon, key, pid}, state) do
     case state[key] do
+      # The hand-off won the race: `hand_over/3` replied `:ok` and installed
+      # this process as the holder while its `GenServer.call` was already
+      # timing out, so the grant went to a caller that had stopped waiting.
+      # `with_lock/3` took its `{:error, :unit_locked}` branch, so it will
+      # never cast `{:release, …}`, and the monitor is all that is left —
+      # which held the unit until the caller PROCESS died rather than until
+      # its commit finished. For a long-lived caller (a conversation runner,
+      # a LiveView, the cron scheduler) that is the rest of the node's life.
+      # Filtering only the waiter queue could not see this case at all.
+      {^pid, ref, waiters} ->
+        Process.demonitor(ref, [:flush])
+        {:noreply, hand_over(state, key, waiters)}
+
       {holder, ref, waiters} ->
         kept = :queue.filter(fn {waiter, _tag} -> waiter != pid end, waiters)
         {:noreply, Map.put(state, key, {holder, ref, kept})}

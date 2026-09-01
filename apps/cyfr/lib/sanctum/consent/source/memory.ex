@@ -102,5 +102,11 @@ defmodule Sanctum.Consent.Source.Memory do
     end
   end
 
+  @impl GenServer
+  def handle_info(message, state) do
+    Cyfr.UnexpectedMessage.log(__MODULE__, message)
+    {:noreply, state}
+  end
+
   defp tenant(%Context{athanor_id: athanor_id}), do: athanor_id
 end

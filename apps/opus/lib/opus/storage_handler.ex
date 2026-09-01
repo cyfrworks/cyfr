@@ -533,7 +533,7 @@ defmodule Opus.StorageHandler do
         {:error, :not_found, "File not found: #{path}"}
 
       {:error, reason} ->
-        {:error, :storage_error, "Failed to read file: #{inspect(reason)}"}
+        storage_fault("read file", reason)
     end
   end
 
@@ -610,7 +610,7 @@ defmodule Opus.StorageHandler do
         end
 
       {:error, reason} ->
-        {:error, :storage_error, "Failed to list path: #{inspect(reason)}"}
+        storage_fault("list path", reason)
     end
   end
 
@@ -629,7 +629,7 @@ defmodule Opus.StorageHandler do
         {:error, :not_found, "File not found: #{path}"}
 
       {:error, reason} ->
-        {:error, :storage_error, "Failed to delete file: #{inspect(reason)}"}
+        storage_fault("delete file", reason)
     end
   end
 
@@ -689,8 +689,17 @@ defmodule Opus.StorageHandler do
      "Athanor storage usage cannot be verified right now — try again"}
   end
 
-  defp write_error(reason) do
-    {:error, :storage_error, "Failed to write file: #{inspect(reason)}"}
+  defp write_error(reason), do: storage_fault("write file", reason)
+
+  # `Arca.Storage.error/0` is the adapter's own vocabulary — `:symlink_denied`,
+  # `{:s3_error, 403}`, a raw `File.posix()` atom — so interpolating it told a
+  # guest which storage backend the operator configured and how it failed.
+  # Same rule `dispatch_caught/6` keeps for a raise, and the same one this
+  # module's own comments state twice: the detail goes to the host log, the
+  # guest gets the verb that failed.
+  defp storage_fault(what, reason) do
+    Logger.error("[Opus.StorageHandler] #{what} failed: #{inspect(reason)}")
+    {:error, :storage_error, "Failed to #{what}"}
   end
 
   defp check_read_size(%Limits{} = limits, content),

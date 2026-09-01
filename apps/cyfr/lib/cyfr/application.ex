@@ -516,10 +516,15 @@ defmodule Cyfr.Application do
   # boundary event. Rows sealed before fail `:aad_or_key_mismatch` while new
   # writes succeed, which reads as corruption rather than as configuration.
   #
-  # The fix is a persisted fingerprint and a boot refuse, and a boot refuse
-  # can brick a volume restore — so `design/keyring-fingerprint.md` settles
-  # where the fingerprint lives, what each restore case must do, and why the
-  # obvious `..._MIGRATE=1` flag would be a lie, before any of it is built.
+  # The fix is a persisted fingerprint and a boot refuse. It is staged rather
+  # than written here because a boot refuse can brick a volume restore:
+  # record the fingerprint first, warn on mismatch for one release to find
+  # the deployments already forked, and only then refuse. The fingerprint
+  # belongs in the database, not a per-volume file — two nodes sharing one
+  # database would disagree the moment they each kept their own — and the
+  # obvious `..._MIGRATE=1` escape hatch would be a lie while
+  # `Sanctum.Cipher` has no bulk re-seal: it would promise a migration it
+  # cannot perform.
   defp resolve_crypto_keyring! do
     case Application.get_env(:cyfr, :crypto_keyring) do
       %{primary: _, keys: _} = keyring when map_size(keyring.keys) > 0 ->
