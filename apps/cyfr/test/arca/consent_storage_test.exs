@@ -199,4 +199,40 @@ defmodule Arca.ConsentStorageTest do
       refute Enum.any?(exported, &String.starts_with?(&1, "update"))
     end
   end
+
+  describe "the 20260901 backfill" do
+    # CI migrates an EMPTY database, so the backfill branch has no
+    # coverage there at all. What it has to guarantee is that re-hashing a
+    # stored `resolved_policy` reproduces exactly the digest a writer would
+    # have stored — the migration inlines the spelling deliberately (frozen
+    # history), so the two can drift with nothing noticing.
+    test "the inlined spelling matches Cyfr.Digest for arbitrary stored policies" do
+      for policy <- ["{}", ~s({"canonical":"jcs-1","nodes":{}}), String.duplicate("x", 5_000)] do
+        inlined = "sha256:" <> Base.encode16(:crypto.hash(:sha256, policy), case: :lower)
+
+        assert inlined == Sanctum.JCS.hash_binary(policy),
+               "the migration's frozen spelling drifted from Cyfr.Digest"
+      end
+    end
+
+    test "a backfilled row verifies through the loader's own check" do
+      policy = ~s({"canonical":"jcs-1","nodes":{}})
+
+      # Exactly what the migration writes.
+      digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, policy), case: :lower)
+
+      assert :ok = verify_blob_digest(%{resolved_policy: policy, blob_digest: digest})
+
+      # And a row altered in place after the backfill does not.
+      assert {:error, :blob_digest_mismatch} =
+               verify_blob_digest(%{resolved_policy: policy <> " ", blob_digest: digest})
+    end
+
+    # The loader's rule, restated here so this test fails if it changes.
+    defp verify_blob_digest(%{blob_digest: stored, resolved_policy: policy}) do
+      if Plug.Crypto.secure_compare(Sanctum.JCS.hash_binary(policy), stored),
+        do: :ok,
+        else: {:error, :blob_digest_mismatch}
+    end
+  end
 end

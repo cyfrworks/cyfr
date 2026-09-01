@@ -102,9 +102,29 @@ defmodule Compendium.AquaTemplate do
     with :ok <- seed_check(),
          {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
       if Keyword.get(opts, :all, false) do
-        with :ok <- Arca.delete_tree(ctx, AquaPath.root()) do
-          gone = for {unit, state} <- statuses, state != :seed, do: Enum.join(unit, "/")
-          {:ok, %{reverted: Enum.sort(gone), kept: []}}
+        # Unit by unit, not one `delete_tree` on the aqua root. That root is
+        # ABOVE units, so `Arca.Overlay`'s lock does not cover it — the
+        # decorator locks a unit, and locking every unit beneath a tree
+        # would mean taking them in an order two processes could invert.
+        # `drop_unit/2` takes each unit's own lock in turn, so a reset can
+        # no longer land inside a concurrent `commit_unit/4` and leave a
+        # skill holding its manifest and nothing else.
+        statuses
+        |> Enum.sort_by(fn {unit, _state} -> unit end)
+        |> Enum.reduce_while({:ok, []}, fn
+          {_unit, :seed}, acc ->
+            {:cont, acc}
+
+          {unit, _state}, {:ok, gone} ->
+            case Arca.Overlay.drop_unit(ctx, unit) do
+              {:ok, _} -> {:cont, {:ok, gone ++ [Enum.join(unit, "/")]}}
+              {:error, :not_found} -> {:cont, {:ok, gone}}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+        end)
+        |> case do
+          {:ok, gone} -> {:ok, %{reverted: Enum.sort(gone), kept: []}}
+          error -> error
         end
       else
         statuses

@@ -81,6 +81,55 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
       })
 
     :ok = Arca.put(ctx, ["guest", "notes.txt"], "kept until destroy")
+
+    # The rest of the roster, written straight through the row plane. Going
+    # via each domain API would need a component, a consent walk and a
+    # webhook target apiece; what this test has to prove is that
+    # `delete_all_for/1` reaches every table, and for that the rows only
+    # have to exist. Four of them arrive above through their real APIs,
+    # which is what proves the roster describes the real schema.
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    a = ctx.athanor_id
+
+    insert_row!("api_keys", %{
+      id: "key_#{uniq()}",
+      athanor_id: a,
+      name: "erase-me",
+      key_hash: "hash_#{uniq()}",
+      key_prefix: "cyk_test",
+      type: "application",
+      scope: "[]",
+      created_by: ctx.user_id,
+      revoked: false,
+      inserted_at: now,
+      updated_at: now
+    })
+
+    insert_row!("mcp_logs", %{
+      id: "mcp_#{uniq()}",
+      athanor_id: a,
+      user_id: ctx.user_id,
+      tool: "component",
+      status: "completed",
+      timestamp: now
+    })
+
+    insert_row!("policy_logs", %{
+      id: "pol_#{uniq()}",
+      athanor_id: a,
+      user_id: ctx.user_id,
+      event_type: "decision",
+      decision: "allow",
+      timestamp: now
+    })
+
+    :ok
+  end
+
+  defp uniq, do: System.unique_integer([:positive])
+
+  defp insert_row!(table, row) do
+    {1, _} = Arca.Repo.insert_all(table, [row])
     :ok
   end
 
@@ -95,10 +144,10 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   test "erases every athanor-scoped row and the blob tree", %{group: group, ctx: ctx} do
     :ok = seed_rows!(ctx)
 
-    assert count("vault_entries", group.id) == 1
-    assert count("conversations", group.id) == 1
-    assert count("messages", group.id) == 1
-    assert count("memberships", group.id) == 1
+    for table <-
+          ~w(vault_entries conversations messages memberships api_keys mcp_logs policy_logs) do
+      assert count(table, group.id) >= 1, "#{table} was not seeded — the erasure proves nothing"
+    end
 
     {:ok, archived} = Athanors.archive(group)
     assert {:ok, _counts} = Athanors.destroy(archived)
@@ -106,12 +155,10 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     # Every table on the roster, not just the ones this test seeded — a
     # table left behind is data somebody was told had been deleted.
     #
-    # Stated plainly: only the four counted above were non-zero going in,
-    # so for the other fifteen this loop proves the query runs and the
-    # roster is walked, not that rows were removed. `verify_roster!/1`'s
-    # two negative tests below are what cover the roster being complete;
-    # seeding all nineteen through their real APIs is the coverage still
-    # owed here.
+    # Seven of the nineteen are non-zero going in (asserted above), so for
+    # those this is a real before/after. For the remaining twelve it proves
+    # the query runs and the roster is walked; `verify_roster!/1`'s two
+    # negative tests below are what cover the roster being complete.
     for table <- Arca.TenantTables.roster() do
       assert count(table, group.id) == 0,
              "#{table} still holds rows for a destroyed athanor"

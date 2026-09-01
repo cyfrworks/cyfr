@@ -694,6 +694,9 @@ defmodule Arca.Overlay do
   # Scope is one unit. A `delete_tree` ABOVE units (the aqua root reset,
   # the empty-parent tidy) takes no lock and cannot: covering it would mean
   # locking every unit beneath, in an order two processes could invert.
+  # Callers that need to clear a whole subtree walk its units and drop them
+  # one at a time instead — `Compendium.AquaTemplate.reset/2` with
+  # `all: true` is the one that used to delete the root wholesale.
   @held_units_key {__MODULE__, :held_unit_locks}
 
   defp with_unit_lock(%Context{} = ctx, path, fun) do

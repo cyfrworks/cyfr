@@ -108,4 +108,24 @@ defmodule PrismWeb.RegistryLiveTest do
     assert render(view) =~ "Authorization was denied."
     assert has_element?(view, "form[phx-submit=start-appeal]")
   end
+
+  # The fake has recorded the address since the budget landed; nothing read
+  # it back, so a `nil` would have passed. The appeal is the second
+  # anonymous device flow on a socket that passes no rate-limit plug —
+  # `/live` is handled by the endpoint before the router — which makes this
+  # assign the only per-address bound the surface has.
+  test "the appeal flow is charged to a resolved address, not nil", %{view: view} do
+    Application.delete_env(:cyfr, :device_flow_last_ip)
+
+    open_appeal(view)
+    start_appeal(view)
+
+    ip = Application.get_env(:cyfr, :device_flow_last_ip)
+
+    assert is_binary(ip), "the appeal device flow was charged no address"
+    assert {:ok, _} = ip |> to_charlist() |> :inet.parse_address()
+
+    refute ip == "0.0.0.0",
+           "the appeal fell back to the unresolved address, so every caller shares one bucket"
+  end
 end
