@@ -1371,4 +1371,41 @@ defmodule Aqua.ConversationRunnerTest do
     assert_receive {:conversation, _, {:message, %{kind: "error", content: "It broke cleanly"}}},
                    5_000
   end
+
+  test "a `:context` rides the turn's prompt only — never the task, a row, or what the turn remembers",
+       %{alice: alice, conv: conv} do
+    excerpt = ~s(Read from the room "Team · Plans" — for context only:\nBob: ship friday)
+
+    :ok =
+      ConversationRunner.send_message(alice, conv.id, "@aqua what do they mean?",
+        context: excerpt
+      )
+
+    assert_receive {:conversation, _, {:message, row}}, 5_000
+    refute row.content =~ "ship friday"
+    assert_receive {:fake_start, eid, _ctx, input, _profile}, 10_000
+    assert_receive {:fake_subscribe, ^eid, runner}, 5_000
+
+    assert input["system"] =~ "## Read from the room"
+    assert input["system"] =~ "Bob: ship friday"
+    refute input["task"] =~ "ship friday"
+    refute :sys.get_state(runner).last_task =~ "ship friday"
+
+    refute Enum.any?(
+             Conversations.latest_messages(alice, conv.id, 10),
+             &(&1.content =~ "ship friday")
+           )
+  end
+
+  test "a `:context` past the message cap is refused, and nothing is written",
+       %{alice: alice, conv: conv} do
+    before = length(Conversations.latest_messages(alice, conv.id, 100))
+    too_long = String.duplicate("x", 32 * 1024 + 1)
+
+    assert {:error, :context_too_long} =
+             ConversationRunner.send_message(alice, conv.id, "@aqua hi", context: too_long)
+
+    assert length(Conversations.latest_messages(alice, conv.id, 100)) == before
+    refute_receive {:fake_start, _, _, _, _}, 200
+  end
 end

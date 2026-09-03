@@ -182,6 +182,21 @@ defmodule Aqua.ConversationRunner do
     Phoenix.PubSub.subscribe(Emissary.PubSub, topic(conversation_id, athanor_id))
   end
 
+  @doc """
+  Tell a thread's viewers about a row appended outside the runner — a line
+  said aloud onto it (`Aqua.Aloud`). The runner reads the thread's rows by
+  sequence when a turn starts, so the row is already the thread's; this is
+  the fan-out the runner's own appends get.
+  """
+  @spec announce(Arca.Schemas.Message.t()) :: :ok | {:error, term()}
+  def announce(%{conversation_id: conversation_id, athanor_id: athanor_id} = row) do
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      topic(conversation_id, athanor_id),
+      {:conversation, conversation_id, {:message, row}}
+    )
+  end
+
   # ---------------------------------------------------------------------------
   # API — every call carries the acting member's context
   # ---------------------------------------------------------------------------
@@ -204,8 +219,12 @@ defmodule Aqua.ConversationRunner do
 
   `opts`: `:id` (a pre-minted message id — the sender wrote its
   attachments under it first), `:attachments` (their refs), `:model`,
-  `:orchestrator` (a name; an `@name` mention in the text wins).
+  `:orchestrator` (a name; an `@name` mention in the text wins),
+  `:context` (text the turn reads beside the task — a room read into the
+  person's own thread by `Aqua.RoomExcerpt`; it rides that one turn's
+  prompt and is never a row, never history).
   `{:error, :busy}` when the queue is full (nothing is written);
+  `{:error, :context_too_long}` when the context is past the message cap;
   `{:error, :no_orchestrator}` when the athanor has none;
   `{:error, :not_member}` when the sender no longer belongs here;
   `{:error, :archived}` when the athanor has been archived.
@@ -406,6 +425,10 @@ defmodule Aqua.ConversationRunner do
         # fan-out to every viewer, and the stored history all ride on this
         # bound once a sender can be a machine.
         {:reply, {:error, :message_too_long}, state}
+
+      byte_size(Keyword.get(opts, :context) || "") > @max_message_bytes ->
+        # The same bound as the message: the room read is prompt bytes too.
+        {:reply, {:error, :context_too_long}, state}
 
       (refusal = standing(ctx, state)) != :ok ->
         {:reply, refusal, state}
@@ -667,6 +690,9 @@ defmodule Aqua.ConversationRunner do
       seq: row.seq,
       message_id: row.id,
       model: Keyword.get(opts, :model),
+      # What the sender had open beside this thread, for this turn alone —
+      # it is not in the row, so it has to travel with the entry.
+      context: Keyword.get(opts, :context),
       # This sender's roster, carried with the message it belongs to. A
       # queued turn may start long after the send, and it must still strip
       # the mention against the roster of whoever wrote that line.
@@ -813,7 +839,8 @@ defmodule Aqua.ConversationRunner do
                   # has to be composed after the pin, not before it.
                   authority: authority,
                   owner: agent_owner_id,
-                  focus: ctx.athanor_id
+                  focus: ctx.athanor_id,
+                  room_context: entry.context
                 )
 
               with {:ok, %{input: input, tool_policy: policy}} <- build,

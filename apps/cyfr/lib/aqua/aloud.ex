@@ -178,8 +178,10 @@ defmodule Aqua.Aloud do
   end
 
   # The id is minted first so the blobs can be written under it before the
-  # row exists — the same order `PrismWeb.ConversationLive.send_message/3`
-  # uses, and the reason `append/3` takes an `:id`.
+  # row exists — the same order `PrismWeb.ConversationPaneLive`
+  # uses, and the reason `append/3` takes an `:id`. The target's viewers
+  # hear of the row the way they hear of the runner's own — the copy has
+  # to appear on the tape it was said onto.
   defp say(source_ctx, target_ctx, source_id, target_id, row) do
     message_id = Cyfr.UUID7.generate_id("msg")
 
@@ -198,6 +200,7 @@ defmodule Aqua.Aloud do
              payload: payload
            }) do
         {:ok, appended} ->
+          Aqua.ConversationRunner.announce(appended)
           {:ok, appended}
 
         {:error, _} = err ->

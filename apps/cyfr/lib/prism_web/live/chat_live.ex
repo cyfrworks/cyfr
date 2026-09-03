@@ -22,7 +22,8 @@ defmodule PrismWeb.ChatLive do
 
   The page owns what is the page's: the selection, the lists and what is
   followed, the say-aloud picker, and the selected estate's own
-  notifications. The pane owns the thread.
+  notifications. The pane owns the thread. What is in view is announced
+  (`PrismWeb.RoomFeed`) for the person's own AQUA beside the page.
   """
 
   use PrismWeb, :live_view
@@ -41,6 +42,9 @@ defmodule PrismWeb.ChatLive do
     {:ok,
      socket
      |> assign(:tray_key, token && Prism.Tray.session_hash(token))
+     |> assign(:mine, personal_athanor(socket.assigns.context))
+     |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
+     |> assign(:room, nil)
      |> assign(:page_title, "Chat")
      |> assign(:active_nav, "chat")
      |> assign(:estates, [])
@@ -164,11 +168,21 @@ defmodule PrismWeb.ChatLive do
 
   # The rail follows the open thread's rows (titles, last activity), so the
   # page listens on that thread too — for the message events alone; the
-  # pane applies the rest in its own process.
+  # pane applies the rest in its own process. The thread in view is told
+  # to the person's own AQUA beside the page, by name and id only.
   defp select(socket, target) do
     socket = unsubscribe_current(socket)
     if target, do: ConversationRunner.subscribe(target.id, target.athanor_id)
-    assign(socket, :conversation, target)
+    %{athanor: athanor, mine: mine, context: ctx} = socket.assigns
+
+    room =
+      target && PrismWeb.RoomFeed.room(athanor, target, estate_label(athanor, mine, ctx))
+
+    PrismWeb.RoomFeed.announce(socket.assigns.room_feed, room)
+
+    socket
+    |> assign(:conversation, target)
+    |> assign(:room, room)
   end
 
   defp unsubscribe_current(
@@ -184,8 +198,7 @@ defmodule PrismWeb.ChatLive do
   # `Context.focus/2` for its own list, sorted own athanor, DMs, groups;
   # and the people they share an estate with, for a DM.
   defp load_rail(socket) do
-    ctx = socket.assigns.context
-    mine = personal_athanor(ctx)
+    %{context: ctx, mine: mine} = socket.assigns
 
     estates =
       for athanor <- Sanctum.Tenancy.list_athanors(ctx),

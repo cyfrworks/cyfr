@@ -221,8 +221,9 @@ defmodule PrismWeb.ChatLiveTest do
     [apr] = Conversations.pending_approvals(start_ctx, conv.id)
 
     # Bob approves from his tab.
+    # The card's DOM id carries the pane's own; the message id is its own attribute.
     pane(bob_view)
-    |> element("#" <> apr.id <> " button[phx-value-scope=once]")
+    |> element("#" <> pane(bob_view).id <> "-card-" <> apr.id <> " button[phx-value-scope=once]")
     |> render_click()
 
     assert_receive {:fake_run_approved, %{tool: "component", action: "pull"}, run_ctx, _profile},

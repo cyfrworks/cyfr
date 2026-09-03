@@ -7,7 +7,7 @@ defmodule PrismWeb.AquaApprovalCard do
 
   The agent ends a reply with a `ui.request_approval` block carrying a
   `proposal: {tool, action, args}` payload. `Aqua.ConversationRunner`
-  stores the intent as an approval message and `PrismWeb.ConversationLive`
+  stores the intent as an approval message and `PrismWeb.ConversationPaneLive`
   renders this component for it. On approve/decline the parent LiveView
   dispatches the member's decision to the runner.
 
@@ -252,17 +252,17 @@ defmodule PrismWeb.AquaApprovalCard do
 
   @impl true
   def handle_event("approval:approve", %{"scope" => scope}, socket) do
-    send(self(), {:approval_approve, socket.assigns.id, parse_scope(scope)})
+    send(self(), {:approval_approve, socket.assigns.message_id, parse_scope(scope)})
     {:noreply, socket}
   end
 
   def handle_event("approval:decline", %{"reason" => reason}, socket) do
-    send(self(), {:approval_decline, socket.assigns.id, reason, :once})
+    send(self(), {:approval_decline, socket.assigns.message_id, reason, :once})
     {:noreply, assign(socket, :decline_reason_open, false)}
   end
 
   def handle_event("approval:decline_never", _params, socket) do
-    send(self(), {:approval_decline, socket.assigns.id, "removed from allowlist", :never})
+    send(self(), {:approval_decline, socket.assigns.message_id, "removed from allowlist", :never})
     {:noreply, socket}
   end
 

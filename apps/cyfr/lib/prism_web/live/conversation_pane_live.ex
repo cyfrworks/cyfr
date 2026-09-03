@@ -21,6 +21,12 @@ defmodule PrismWeb.ConversationPaneLive do
   The host names the conversation at mount; a different conversation is a
   different pane (`id: "pane-<conversation id>"`). What the host must know
   travels back as `{:pane, id, message}` to `socket.parent_pid`.
+
+  In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
+  the pane sits beside a room: it hears what the host page shows
+  (`PrismWeb.RoomFeed`), reads that room into each send as the turn's
+  context (`Aqua.RoomExcerpt` — under the person's own membership, never
+  kept), and offers to paste a line onto it (`conversation.aloud`).
   """
 
   use PrismWeb, :live_view
@@ -34,14 +40,30 @@ defmodule PrismWeb.ConversationPaneLive do
   @impl true
   def mount(_params, session, socket) do
     token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    # Every DOM id here carries the pane's own: a page may hold two panes.
+    socket = assign(socket, :dom, socket.id)
 
     case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
       {:ok, ctx} ->
-        {:ok, socket |> assign(:context, ctx) |> open(ctx, session), layout: false}
+        {:ok, socket |> assign(:context, ctx) |> beside(session) |> open(ctx, session),
+         layout: false}
 
       {:error, _} ->
         {:ok, assign(socket, :context, nil), layout: false}
     end
+  end
+
+  # A pane in the person's own panel sits beside a room: it hears what the
+  # host page shows and reads it into each send.
+  defp beside(socket, session) do
+    room_feed = session["room_feed"]
+
+    if connected?(socket) and is_binary(room_feed), do: PrismWeb.RoomFeed.subscribe(room_feed)
+
+    socket
+    |> assign(:panel?, session["panel"] == true)
+    |> assign(:room, session["room"])
+    |> assign(:read_room?, true)
   end
 
   # Everything the pane knows, from its own context: the athanor row, the
@@ -49,6 +71,8 @@ defmodule PrismWeb.ConversationPaneLive do
   # state. A `nil` conversation is the blank slate — the first message
   # creates the row.
   defp open(socket, ctx, session) do
+    dom = socket.assigns.dom
+
     athanor =
       case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
         {:ok, athanor} -> athanor
@@ -84,6 +108,7 @@ defmodule PrismWeb.ConversationPaneLive do
       |> assign(:models_by_provider, %{})
       |> assign(:models_loaded, false)
       |> assign(:input, "")
+      |> stream_configure(:messages, dom_id: &(dom <> "-m-" <> &1.id))
       |> stream(:messages, [])
       |> assign(:pending_approvals, [])
       |> assign(:any_messages, false)
@@ -266,6 +291,43 @@ defmodule PrismWeb.ConversationPaneLive do
     {:noreply, socket}
   end
 
+  # Beside a room: whether each send reads it.
+  def handle_event("toggle_read_room", _params, socket) do
+    {:noreply, assign(socket, :read_room?, not socket.assigns.read_room?)}
+  end
+
+  # A line from this thread onto the room beside it — the same
+  # `conversation.aloud` verb as the picker, its target already known.
+  # `Aqua.Aloud` decides what may be said and attributes the copy.
+  def handle_event("paste", %{"id" => msg_id}, socket) do
+    case {socket.assigns.room, socket.assigns.conversation} do
+      {%{} = room, %{} = conv} ->
+        result =
+          call_tool(socket.assigns.context, "conversation/aloud", %{
+            "conversation" => conv.id,
+            "message_ids" => [msg_id],
+            "target_athanor" => room["athanor_id"],
+            "target_conversation" => room["conversation_id"]
+          })
+
+        case result do
+          {:ok, _} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :info,
+               "Pasted onto #{PrismWeb.RoomFeed.label(room)} — attributed to you."
+             )}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not paste: #{error_message(reason)}")}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("validate_upload", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
@@ -327,6 +389,9 @@ defmodule PrismWeb.ConversationPaneLive do
   def handle_info({:task_timeout, :models}, socket) do
     {:noreply, assign(socket, :models_loaded, true)}
   end
+
+  # The host page opened another thread: the room this pane reads changed.
+  def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
 
   def handle_info(msg, socket) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
@@ -478,8 +543,9 @@ defmodule PrismWeb.ConversationPaneLive do
     message_id = Cyfr.UUID7.generate_id("msg")
 
     with {:ok, conv, created?} <- current_or_new(socket),
+         {room, socket} = room_context(socket, conv),
          {:ok, refs} <- Aqua.Attachments.store(ctx, conv.id, message_id, files),
-         :ok <- send_or_discard(ctx, conv, message, message_id, refs, socket) do
+         :ok <- send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
       # A conversation this send created is the host's to select — the
       # URL is the host's, the pane only asked for a row.
       if created?, do: tell_host(socket, {:opened, conv})
@@ -530,15 +596,18 @@ defmodule PrismWeb.ConversationPaneLive do
   # reads them, and they count against the athanor's quota. The runner is
   # where the refusal is decided (membership, archive, a full queue), so
   # the cleanup belongs on its answer.
-  defp send_or_discard(ctx, conv, message, message_id, refs, socket) do
-    case ConversationRunner.send_message(ctx, conv.id, message,
-           id: message_id,
-           attachments: refs,
-           model: socket.assigns.model_override,
-           # The whole entry, not the name: the runner must know whose tree
-           # the picked agent lives in.
-           orchestrator: socket.assigns.orchestrator
-         ) do
+  defp send_or_discard(ctx, conv, message, message_id, refs, room, socket) do
+    opts =
+      [
+        id: message_id,
+        attachments: refs,
+        model: socket.assigns.model_override,
+        # The whole entry, not the name: the runner must know whose tree
+        # the picked agent lives in.
+        orchestrator: socket.assigns.orchestrator
+      ] ++ room
+
+    case ConversationRunner.send_message(ctx, conv.id, message, opts) do
       :ok ->
         :ok
 
@@ -547,6 +616,44 @@ defmodule PrismWeb.ConversationPaneLive do
         error
     end
   end
+
+  # What the room beside this pane shows, read for this send — the panel
+  # alone, and not a thread reading itself. A room the person can no
+  # longer read is said so; the message still goes.
+  defp room_context(
+         %{assigns: %{panel?: true, read_room?: true, room: %{} = room}} = socket,
+         conv
+       ) do
+    if reads_room?(room, conv) do
+      case Aqua.RoomExcerpt.read(socket.assigns.context, PrismWeb.RoomFeed.excerpt_room(room)) do
+        {:ok, text} ->
+          {[context: text], socket}
+
+        {:error, :nothing_said} ->
+          {[], socket}
+
+        {:error, reason} ->
+          {[],
+           put_flash(
+             socket,
+             :error,
+             "Could not read #{PrismWeb.RoomFeed.label(room)} (#{error_message(reason)}) — sent without it."
+           )}
+      end
+    else
+      {[], socket}
+    end
+  end
+
+  defp room_context(socket, _conv), do: {[], socket}
+
+  # Beside a room, and not the room itself: a thread never reads itself,
+  # and nothing is pasted onto where it already is.
+  defp reads_room?(%{"conversation_id" => room_id}, conversation) do
+    is_nil(conversation) or conversation.id != room_id
+  end
+
+  defp reads_room?(_room, _conversation), do: false
 
   defp current_or_new(%{assigns: %{conversation: %{} = conv}}), do: {:ok, conv, false}
 
@@ -703,16 +810,17 @@ defmodule PrismWeb.ConversationPaneLive do
   @impl true
   def render(%{context: nil} = assigns) do
     ~H"""
-    <section id="pane" class="flex flex-1 min-w-0 flex-col"></section>
+    <section id={@dom <> "-pane"} class="flex flex-1 min-w-0 flex-col"></section>
     """
   end
 
   def render(assigns) do
     ~H"""
-    <section id="pane" phx-hook="Conversation" class="flex flex-1 min-w-0 flex-col">
+    <section id={@dom <> "-pane"} phx-hook="Conversation" class="flex flex-1 min-w-0 flex-col">
       <header class="flex items-center justify-between gap-2 border-b border-gray-800 px-4 py-2">
         <div class="flex items-center gap-2 min-w-0">
           <button
+            :if={not @panel?}
             type="button"
             phx-click={JS.toggle_class("max-md:hidden", to: "#conversation-list")}
             class="md:hidden rounded px-1.5 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
@@ -798,8 +906,26 @@ defmodule PrismWeb.ConversationPaneLive do
         </div>
       </header>
 
+      <%!-- The pane's own flash: a nested view's shows nowhere else. --%>
       <div
-        id="pane-thread"
+        :for={
+          {kind, style} <- [
+            {:error, "border-red-900/60 bg-red-950/40 text-red-200"},
+            {:info, "border-emerald-900/60 bg-emerald-950/40 text-emerald-200"}
+          ]
+        }
+        :if={Phoenix.Flash.get(@flash, kind)}
+        id={"#{@dom}-flash-#{kind}"}
+        role="alert"
+        phx-click={JS.push("lv:clear-flash", value: %{key: kind})}
+        title="Dismiss"
+        class={["cursor-pointer border-b px-4 py-1.5 text-xs", style]}
+      >
+        {Phoenix.Flash.get(@flash, kind)}
+      </div>
+
+      <div
+        id={@dom <> "-thread"}
         phx-hook="ScrollBottom"
         class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
       >
@@ -867,7 +993,7 @@ defmodule PrismWeb.ConversationPaneLive do
           </button>
         </div>
 
-        <div id="pane-messages" phx-update="stream" class="space-y-3">
+        <div id={@dom <> "-messages"} phx-update="stream" class="space-y-3">
           <%= for {dom_id, msg} <- @streams.messages do %>
             <div id={dom_id}>
               <%= if msg.kind == "approval" do %>
@@ -875,7 +1001,8 @@ defmodule PrismWeb.ConversationPaneLive do
                 <% resolution = Conversations.resolution(msg) %>
                 <.live_component
                   module={PrismWeb.AquaApprovalCard}
-                  id={msg.id}
+                  id={@dom <> "-card-" <> msg.id}
+                  message_id={msg.id}
                   payload={intent}
                   status={msg.status}
                   decided_at={msg.resolved_at}
@@ -889,7 +1016,7 @@ defmodule PrismWeb.ConversationPaneLive do
               <% else %>
                 <div class="group/aloud">
                   <.message_bubble
-                    id={"msg-" <> msg.id}
+                    id={@dom <> "-msg-" <> msg.id}
                     role={role_of(msg)}
                     content={msg.content}
                     author={author_label(msg, @members, @context)}
@@ -897,15 +1024,26 @@ defmodule PrismWeb.ConversationPaneLive do
                     attachment_href={&attachment_path(@athanor_route, msg.id, &1)}
                   />
                   <%!-- A line you may say aloud: yours, or your assistant's
-                        in your own athanor. The host owns the picker. --%>
+                        in your own athanor. The host owns the picker — in
+                        the panel the target is the room beside it. --%>
                   <div :if={sayable?(msg, @context, @athanor)} class="flex justify-end">
                     <button
+                      :if={not @panel?}
                       type="button"
                       phx-click="aloud_open"
                       phx-value-id={msg.id}
                       class="opacity-0 group-hover/aloud:opacity-100 text-[10px] text-gray-500 hover:text-gray-300 px-1"
                     >
                       Say aloud…
+                    </button>
+                    <button
+                      :if={@panel? and reads_room?(@room, @conversation)}
+                      type="button"
+                      phx-click="paste"
+                      phx-value-id={msg.id}
+                      class="opacity-0 group-hover/aloud:opacity-100 text-[10px] text-gray-500 hover:text-gray-300 px-1"
+                    >
+                      Paste to {PrismWeb.RoomFeed.label(@room)}
                     </button>
                   </div>
                 </div>
@@ -926,7 +1064,7 @@ defmodule PrismWeb.ConversationPaneLive do
 
         <.message_bubble
           :if={@streaming_text != ""}
-          id="pane-streaming"
+          id={@dom <> "-streaming"}
           role="assistant"
           content={@streaming_text}
         />
@@ -975,6 +1113,21 @@ defmodule PrismWeb.ConversationPaneLive do
         </button>
       </div>
 
+      <label
+        :if={@panel? and reads_room?(@room, @conversation)}
+        id={@dom <> "-read-room"}
+        title="Each message you send here carries what the room shows — read for you, never kept"
+        class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-[11px] text-gray-500"
+      >
+        <input
+          type="checkbox"
+          phx-click="toggle_read_room"
+          checked={@read_room?}
+          class="h-3 w-3 rounded border-gray-700 bg-gray-900"
+        />
+        <span class="truncate">Read {PrismWeb.RoomFeed.label(@room)} with each message</span>
+      </label>
+
       <form
         phx-submit="submit"
         phx-change="validate_upload"
@@ -1009,7 +1162,7 @@ defmodule PrismWeb.ConversationPaneLive do
             📎 <.live_file_input upload={@uploads.attachments} class="hidden" />
           </label>
           <textarea
-            id="pane-textarea"
+            id={@dom <> "-textarea"}
             phx-hook="AquaChat"
             name="message"
             phx-change="update_input"

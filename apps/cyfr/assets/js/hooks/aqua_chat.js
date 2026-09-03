@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Chat composer textarea hook (ConversationLive).
+// Chat composer textarea hook (ConversationPaneLive).
 //
 // - Auto-grows from one row up to a max height (then scrolls).
 // - Enter (no modifiers) submits the composer form.

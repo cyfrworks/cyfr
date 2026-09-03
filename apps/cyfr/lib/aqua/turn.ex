@@ -231,7 +231,8 @@ defmodule Aqua.Turn do
         authority: Keyword.get(opts, :authority),
         owner: Keyword.get(opts, :owner),
         focus: Keyword.get(opts, :focus),
-        several_people?: Keyword.get(opts, :group, false)
+        several_people?: Keyword.get(opts, :group, false),
+        room_context: Keyword.get(opts, :room_context)
       )
 
     # Resolved against the estate the turn RUNS in — see the doc. Fails

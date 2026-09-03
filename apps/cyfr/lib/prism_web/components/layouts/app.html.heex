@@ -31,6 +31,18 @@
         active_context={assigns[:active_context]}
         ui_mode={mode}
       />
+      <%!-- The person's own AQUA, on every page: a floating button, and a
+            panel over the page onto their own athanor. --%>
+      <%= if assigns[:context] do %>
+        {live_render(@socket, PrismWeb.AquaPanelLive,
+          id: "aqua-panel",
+          session: %{
+            "ui_mode" => mode,
+            "room_feed" => assigns[:room_feed],
+            "room" => assigns[:room]
+          }
+        )}
+      <% end %>
 
       <!-- Page content -->
       <main class={[
